@@ -1412,6 +1412,61 @@ pub fn sync_queue(
     Ok(())
 }
 
+pub fn append_queue(app_handle: &AppHandle, queue: Vec<String>) -> Result<(), String> {
+    emitter::ensure_started(app_handle);
+    if queue.is_empty() {
+        return Ok(());
+    }
+
+    let paths = queue.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    let mut engine = ENGINE
+        .lock()
+        .map_err(|_| "Audio engine is locked".to_string())?;
+    engine.append_queue_state(paths);
+    Ok(())
+}
+
+pub fn clear_queue(app_handle: &AppHandle) -> Result<(), String> {
+    emitter::ensure_started(app_handle);
+    let mut engine = ENGINE
+        .lock()
+        .map_err(|_| "Audio engine is locked".to_string())?;
+    engine.clear_queue_state();
+    Ok(())
+}
+
+pub fn remove_queue_item(app_handle: &AppHandle, index: i32) -> Result<(), String> {
+    emitter::ensure_started(app_handle);
+    let mut engine = ENGINE
+        .lock()
+        .map_err(|_| "Audio engine is locked".to_string())?;
+    engine.remove_queue_entry_at(index)
+}
+
+pub fn move_queue_item(
+    app_handle: &AppHandle,
+    from_index: i32,
+    to_index: i32,
+) -> Result<(), String> {
+    emitter::ensure_started(app_handle);
+    let mut engine = ENGINE
+        .lock()
+        .map_err(|_| "Audio engine is locked".to_string())?;
+    engine.move_queue_entry(from_index, to_index)
+}
+
+pub fn replace_queue_item_path(
+    app_handle: &AppHandle,
+    index: i32,
+    path: String,
+) -> Result<(), String> {
+    emitter::ensure_started(app_handle);
+    let mut engine = ENGINE
+        .lock()
+        .map_err(|_| "Audio engine is locked".to_string())?;
+    engine.replace_queue_entry_path(index, PathBuf::from(path))
+}
+
 pub fn sync_queue_index(app_handle: &AppHandle, current_index: i32) -> Result<(), String> {
     emitter::ensure_started(app_handle);
     {
@@ -1421,6 +1476,56 @@ pub fn sync_queue_index(app_handle: &AppHandle, current_index: i32) -> Result<()
         engine.sync_queue_index_state(current_index);
     }
     Ok(())
+}
+
+pub fn load_and_play_queue_index(
+    app_handle: &AppHandle,
+    index: i32,
+    replay_gain_db: Option<f32>,
+) -> Result<(), String> {
+    emitter::ensure_started(app_handle);
+    let track_path = {
+        let engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        engine
+            .queued_track_path_at(index)
+            .ok_or_else(|| format!("Queue index out of range: {index}"))?
+    };
+    let execution = crate::audio::kernel::execute_load_and_play(track_path, replay_gain_db)?;
+    emit_transport_execution(app_handle, execution)
+}
+
+pub fn load_queue_index(app_handle: &AppHandle, index: i32) -> Result<(), String> {
+    emitter::ensure_started(app_handle);
+    let track_path = {
+        let engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        engine
+            .queued_track_path_at(index)
+            .ok_or_else(|| format!("Queue index out of range: {index}"))?
+    };
+    let execution = crate::audio::kernel::execute_load(track_path)?;
+    emit_transport_execution(app_handle, execution)
+}
+
+pub fn crossfade_to_queue_index(
+    app_handle: &AppHandle,
+    index: i32,
+    duration_ms: u64,
+) -> Result<(), String> {
+    emitter::ensure_started(app_handle);
+    let track_path = {
+        let engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        engine
+            .queued_track_path_at(index)
+            .ok_or_else(|| format!("Queue index out of range: {index}"))?
+    };
+    let executions = crate::audio::kernel::execute_crossfade_or_load(track_path, duration_ms)?;
+    emit_transport_executions(app_handle, executions)
 }
 
 pub fn seek(app_handle: &AppHandle, time: f64, seek_seq: Option<u64>) -> Result<(), String> {

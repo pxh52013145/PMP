@@ -226,6 +226,9 @@ mod tests {
         assert!(parsed.telemetry.enabled);
         assert_eq!(parsed.telemetry.batch_flush_ms, 250);
         assert_eq!(parsed.telemetry.batch_max_items, 64);
-        assert_eq!(parsed.telemetry.persist_min_level, crate::telemetry_contract::TelemetryLevel::Warn);
+        assert_eq!(
+            parsed.telemetry.persist_min_level,
+            crate::telemetry_contract::TelemetryLevel::Warn
+        );
     }
 }

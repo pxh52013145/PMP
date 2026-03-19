@@ -348,6 +348,126 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
     });
   });
 
+  it('keeps builtin numeric filters on the native base query path', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockResolvedValue({ items: [], total: 0 });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const result = await service.queryLocalTracksPageByBase({
+      searchQuery: '',
+      baseQuery: {
+        filterOperator: 'and',
+        filterGroups: [
+          {
+            id: 'filter-group-year',
+            operator: 'and',
+            filters: [
+              {
+                id: 'filter-year-gte',
+                field: 'year',
+                operator: 'gte',
+                value: '2020',
+              },
+            ],
+          },
+        ],
+        groupByRules: [],
+        sortRules: [],
+      },
+      limit: 120,
+      offset: 0,
+      includeMissing: false,
+      visibleOnly: true,
+    });
+
+    expect(result).toEqual({ tracks: [], total: 0 });
+    expect(invokeMock).toHaveBeenCalledWith(
+      'music_library_db_query_tracks_page',
+      expect.objectContaining({
+        query: expect.objectContaining({
+          baseQuery: expect.objectContaining({
+            filterGroups: [
+              {
+                operator: 'and',
+                filters: [{ field: 'year', operator: 'gte', value: '2020' }],
+              },
+            ],
+          }),
+        }),
+      })
+    );
+  });
+
+  it('maps numeric native extension filters without falling back to query-page cache', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockResolvedValue({ items: [], total: 0 });
+
+    replaceMusicLibraryBaseFieldCapabilities(
+      [
+        {
+          id: 'energyScore',
+          label: 'Energy',
+          kind: 'number',
+          filterable: true,
+          sortable: true,
+          groupable: false,
+          nativeFilterField: 'energyScore',
+          nativeSortField: 'energyScore',
+        },
+      ],
+      { source: 'extension' }
+    );
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const result = await service.queryLocalTracksPageByBase({
+      searchQuery: '',
+      baseQuery: {
+        filterOperator: 'and',
+        filterGroups: [
+          {
+            id: 'filter-group-energy',
+            operator: 'and',
+            filters: [
+              {
+                id: 'filter-energy-gte',
+                field: 'energyScore',
+                operator: 'gte',
+                value: '42',
+              },
+            ],
+          },
+        ],
+        groupByRules: [],
+        sortRules: [],
+      },
+      limit: 120,
+      offset: 0,
+      includeMissing: false,
+      visibleOnly: true,
+    });
+
+    expect(result).toEqual({ tracks: [], total: 0 });
+    expect(invokeMock).toHaveBeenCalledWith(
+      'music_library_db_query_tracks_page',
+      expect.objectContaining({
+        query: expect.objectContaining({
+          baseQuery: expect.objectContaining({
+            filterGroups: [
+              {
+                operator: 'and',
+                filters: [{ field: 'energyScore', operator: 'gte', value: '42' }],
+              },
+            ],
+          }),
+        }),
+      })
+    );
+  });
+
   it('replaces stale pmp coverUrl in http dev runtime with asset url fallback', async () => {
     const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
     invokeMock.mockResolvedValue({

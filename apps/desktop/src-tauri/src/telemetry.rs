@@ -1,14 +1,14 @@
 use crate::telemetry_contract::{
-    TelemetryClearSessionResult, TelemetryCountBucket, TelemetryIngestBatchResult,
-    TelemetryPolicy, TelemetryQueryInput, TelemetryQueryResult, TelemetryReadSessionResult,
-    TelemetryRecord, TelemetryStatus,
+    TelemetryClearSessionResult, TelemetryCountBucket, TelemetryIngestBatchResult, TelemetryPolicy,
+    TelemetryQueryInput, TelemetryQueryResult, TelemetryReadSessionResult, TelemetryRecord,
+    TelemetryStatus,
 };
 use crate::telemetry_policy::should_accept_record;
 use crate::telemetry_store::TelemetryStore;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
 
@@ -106,14 +106,16 @@ impl TelemetryCore {
             if let Some(store) = guard.store.as_ref() {
                 match store.append_records(&accepted_records) {
                     Ok(bytes_written) => {
-                        guard.flushed_records = guard.flushed_records.saturating_add(accepted_count);
+                        guard.flushed_records =
+                            guard.flushed_records.saturating_add(accepted_count);
                         guard.current_file_bytes =
                             guard.current_file_bytes.saturating_add(bytes_written);
                         guard.last_error = None;
                     }
                     Err(error) => {
                         dropped_count = dropped_count.saturating_add(accepted_count);
-                        guard.dropped_records = guard.dropped_records.saturating_add(accepted_count);
+                        guard.dropped_records =
+                            guard.dropped_records.saturating_add(accepted_count);
                         guard.last_error = Some(error);
                         return TelemetryIngestBatchResult {
                             accepted_count: 0,
@@ -235,7 +237,9 @@ impl TelemetryCoreInner {
     }
 }
 
-fn lock_inner<'a>(inner: &'a Mutex<TelemetryCoreInner>) -> std::sync::MutexGuard<'a, TelemetryCoreInner> {
+fn lock_inner<'a>(
+    inner: &'a Mutex<TelemetryCoreInner>,
+) -> std::sync::MutexGuard<'a, TelemetryCoreInner> {
     match inner.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
@@ -280,16 +284,14 @@ fn normalize_query_input(input: TelemetryQueryInput) -> NormalizedTelemetryQuery
         })
         .collect::<BTreeSet<_>>();
 
-    let search_text = input
-        .search_text
-        .and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_lowercase())
-            }
-        });
+    let search_text = input.search_text.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_lowercase())
+        }
+    });
 
     let limit = input
         .limit
@@ -360,7 +362,9 @@ fn record_matches_search(record: &TelemetryRecord, search_text: &str) -> bool {
         }
     }
 
-    haystacks.into_iter().any(|value| value.contains(search_text))
+    haystacks
+        .into_iter()
+        .any(|value| value.contains(search_text))
 }
 
 fn push_count(map: &mut BTreeMap<String, u64>, key: String) {
@@ -407,7 +411,10 @@ fn build_query_result(
         first_matched_ts = Some(first_matched_ts.unwrap_or(record.ts));
         last_matched_ts = Some(record.ts);
         push_count(&mut module_counts, record.module_id.clone());
-        push_count(&mut level_counts, format!("{:?}", record.level).to_lowercase());
+        push_count(
+            &mut level_counts,
+            format!("{:?}", record.level).to_lowercase(),
+        );
         push_count(&mut event_counts, record.event.clone());
 
         if latest_records.len() == query.limit {
@@ -471,7 +478,10 @@ mod tests {
         let root_dir = test_root_dir();
         let core = TelemetryCore::new_for_tests(root_dir.clone(), policy);
 
-        let result = core.ingest_batch(vec![record(TelemetryLevel::Info), record(TelemetryLevel::Error)]);
+        let result = core.ingest_batch(vec![
+            record(TelemetryLevel::Info),
+            record(TelemetryLevel::Error),
+        ]);
         assert_eq!(result.accepted_count, 1);
         assert_eq!(result.dropped_count, 1);
         assert_eq!(result.status.flushed_records, 1);

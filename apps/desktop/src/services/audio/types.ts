@@ -34,6 +34,20 @@ export interface PlaylistCreateOptions {
   smartRuleJson?: string;
 }
 
+export type PlaylistTrackSortField = 'default' | 'title' | 'artist' | 'album' | 'duration';
+
+export type PlaylistTrackSortDirection = 'asc' | 'desc';
+
+export interface PlaylistTrackPageEntry {
+  playlistIndex: number;
+  track: Track;
+}
+
+export interface PlaylistTrackPageResult {
+  items: PlaylistTrackPageEntry[];
+  total: number;
+}
+
 export interface Track {
   id: string;
   path?: string; // 文件路径或URL（Blob URL用于播放）
@@ -542,6 +556,17 @@ export interface IAudioService {
    * 按需加载播放列表曲目
    */
   hydratePlaylistTracks?(playlistId: string): Promise<Playlist | null>;
+
+  queryPlaylistTracksPage?(
+    playlistId: string,
+    options?: {
+      searchQuery?: string;
+      sortField?: PlaylistTrackSortField;
+      sortDirection?: PlaylistTrackSortDirection;
+      limit?: number;
+      offset?: number;
+    }
+  ): Promise<PlaylistTrackPageResult | null>;
 
   resolvePlaylistCoverPreview?(
     playlistId: string,

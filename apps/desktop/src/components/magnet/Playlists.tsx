@@ -48,12 +48,18 @@ type PopupMenuState = {
   items: ContextMenuItem[];
 };
 
+type SelectedPlaylistHeroCoverState = {
+  playlistId: string | null;
+  url: string;
+};
+
 const makeTrackKey = (track: Track, index: number): string => `${track.id}::${index}`;
 
 const BILIBILI_BVID_PATTERN = /BV[0-9A-Za-z]{10}/i;
 const PLAYLIST_LIST_VIRTUAL_ROW_HEIGHT = 72;
 const PLAYLIST_LIST_VIRTUAL_OVERSCAN_ROWS = 8;
 const PLAYLIST_COVER_RESOLVE_BATCH_SIZE = 8;
+const PLAYLIST_TRACK_PAGE_MAX_ITEMS = 2000;
 const EMPTY_PLAYLISTS: Playlist[] = [];
 const EMPTY_TRACKS: Track[] = [];
 const EMPTY_NUMBERS: number[] = [];
@@ -61,6 +67,10 @@ const RECENT_SMART_PLAYLIST_ID = 'smart-recently-played';
 const PLAYLIST_FALLBACK_GLYPH = '\u266B';
 const PLAYLIST_CLOSE_GLYPH = '\u00D7';
 const PLAYLIST_PLAY_GLYPH = '\u25B6';
+const EMPTY_SELECTED_PLAYLIST_HERO_COVER: SelectedPlaylistHeroCoverState = {
+  playlistId: null,
+  url: '',
+};
 
 const isBilibiliConnectorId = (value: string | null | undefined): boolean => {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -250,8 +260,13 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const [playlistBatchMode, setPlaylistBatchMode] = useState(false);
   const [isSelectedPlaylistLoading, setIsSelectedPlaylistLoading] = useState(false);
   const [selectedTrackIndexes, setSelectedTrackIndexes] = useState<number[]>([]);
+  const [selectedPlaylistTrackPage, setSelectedPlaylistTrackPage] = useState<
+    Array<{ playlistIndex: number; track: Track }>
+  >([]);
+  const [selectedPlaylistTrackPageTotal, setSelectedPlaylistTrackPageTotal] = useState(0);
   const [resolvedPlaylistCoverMap, setResolvedPlaylistCoverMap] = useState<Record<string, string>>({});
-  const [selectedPlaylistHeroCoverUrl, setSelectedPlaylistHeroCoverUrl] = useState('');
+  const [selectedPlaylistHeroCover, setSelectedPlaylistHeroCover] =
+    useState<SelectedPlaylistHeroCoverState>(EMPTY_SELECTED_PLAYLIST_HERO_COVER);
   const [playlistCoverDecodedStats, setPlaylistCoverDecodedStats] = useState({
     entryCount: 0,
     totalBytes: 0,
@@ -355,10 +370,104 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
 
     if (!isOpen || !selectedPlaylist?.id) {
       setIsSelectedPlaylistLoading(false);
+      setSelectedPlaylistTrackPage([]);
+      setSelectedPlaylistTrackPageTotal(0);
       return () => {
         cancelled = true;
       };
     }
+
+    const supportsTrackPageQuery = typeof audioService.queryPlaylistTracksPage === 'function';
+    const shouldUseTrackPageQuery =
+      supportsTrackPageQuery &&
+      selectedPlaylist.tracksHydrated === false &&
+      (selectedPlaylist.trackCount ?? 0) > 0;
+
+    if (shouldUseTrackPageQuery) {
+      const queryPlaylistTracksPage = audioService.queryPlaylistTracksPage;
+      if (!queryPlaylistTracksPage) {
+        setIsSelectedPlaylistLoading(false);
+        setSelectedPlaylistTrackPage([]);
+        setSelectedPlaylistTrackPageTotal(0);
+        return () => {
+          cancelled = true;
+        };
+      }
+
+      const pageLimit = Math.max(
+        1,
+        Math.min(
+          PLAYLIST_TRACK_PAGE_MAX_ITEMS,
+          Math.max(1, Math.floor(selectedPlaylist.trackCount ?? PLAYLIST_TRACK_PAGE_MAX_ITEMS))
+        )
+      );
+
+      setIsSelectedPlaylistLoading(true);
+      telemetry.info('playlists.tracks.page-query.start', {
+        fields: {
+          playlistId: selectedPlaylist.id,
+          trackCountHint: selectedPlaylist.trackCount ?? 0,
+          searchQueryLength: playlistTrackSearchQuery.trim().length,
+          sortField: playlistTrackSortField,
+          sortDirection: playlistTrackSortDirection,
+          limit: pageLimit,
+          kind: selectedPlaylist.kind ?? null,
+        },
+      });
+
+      void queryPlaylistTracksPage
+        .call(audioService, selectedPlaylist.id, {
+          searchQuery: playlistTrackSearchQuery,
+          sortField: playlistTrackSortField,
+          sortDirection: playlistTrackSortDirection,
+          limit: pageLimit,
+          offset: 0,
+        })
+        .then((page) => {
+          if (cancelled) return;
+          setSelectedPlaylistTrackPage(page?.items ?? []);
+          setSelectedPlaylistTrackPageTotal(page?.total ?? 0);
+          telemetry.info('playlists.tracks.page-query.completed', {
+            fields: {
+              playlistId: selectedPlaylist.id,
+              itemCount: page?.items.length ?? 0,
+              total: page?.total ?? 0,
+              searchQueryLength: playlistTrackSearchQuery.trim().length,
+              sortField: playlistTrackSortField,
+              sortDirection: playlistTrackSortDirection,
+              kind: selectedPlaylist.kind ?? null,
+            },
+          });
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          telemetry.warn('playlists.tracks.page-query.failed', {
+            message: readTelemetryErrorMessage(error),
+            fields: {
+              playlistId: selectedPlaylist.id,
+              trackCountHint: selectedPlaylist.trackCount ?? 0,
+              searchQueryLength: playlistTrackSearchQuery.trim().length,
+              sortField: playlistTrackSortField,
+              sortDirection: playlistTrackSortDirection,
+              kind: selectedPlaylist.kind ?? null,
+            },
+          });
+          setSelectedPlaylistTrackPage([]);
+          setSelectedPlaylistTrackPageTotal(0);
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setIsSelectedPlaylistLoading(false);
+          }
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setSelectedPlaylistTrackPage([]);
+    setSelectedPlaylistTrackPageTotal(0);
 
     const requiresHydration =
       selectedPlaylist.tracksHydrated === false && (selectedPlaylist.trackCount ?? 0) > 0;
@@ -419,7 +528,11 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     isOpen,
     selectedPlaylist?.id,
     selectedPlaylist?.trackCount,
+    selectedPlaylist?.updatedAt,
     selectedPlaylist?.tracksHydrated,
+    playlistTrackSearchQuery,
+    playlistTrackSortDirection,
+    playlistTrackSortField,
     telemetry,
   ]);
 
@@ -813,28 +926,47 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
 
   useEffect(() => {
     if (!selectedPlaylist || isFixedRecentSmartPlaylist(selectedPlaylist)) {
-      setSelectedPlaylistHeroCoverUrl('');
+      setSelectedPlaylistHeroCover((previous) =>
+        previous.playlistId === null && previous.url.length === 0
+          ? previous
+          : EMPTY_SELECTED_PLAYLIST_HERO_COVER
+      );
       return;
     }
 
     const explicitPlaylistCover = sanitizeRenderablePlaylistCoverUrl(selectedPlaylist.coverUrl);
     if (isStableExplicitPlaylistCoverUrl(explicitPlaylistCover)) {
-      setSelectedPlaylistHeroCoverUrl('');
+      setSelectedPlaylistHeroCover((previous) =>
+        previous.playlistId === selectedPlaylist.id && previous.url.length === 0
+          ? previous
+          : { playlistId: selectedPlaylist.id, url: '' }
+      );
       return;
     }
 
     let cancelled = false;
+    setSelectedPlaylistHeroCover((previous) =>
+      previous.playlistId === selectedPlaylist.id && previous.url.length === 0
+        ? previous
+        : { playlistId: selectedPlaylist.id, url: '' }
+    );
     void resolveRenderablePlaylistPreviewCoverUrl(selectedPlaylist.id, 'medium')
       .then((resolvedUrl) => {
         if (cancelled) return;
         const normalizedUrl = sanitizeRenderablePlaylistCoverUrl(resolvedUrl);
-        setSelectedPlaylistHeroCoverUrl((previous) =>
-          previous === normalizedUrl ? previous : normalizedUrl
+        setSelectedPlaylistHeroCover((previous) =>
+          previous.playlistId === selectedPlaylist.id && previous.url === normalizedUrl
+            ? previous
+            : { playlistId: selectedPlaylist.id, url: normalizedUrl }
         );
       })
       .catch(() => {
         if (cancelled) return;
-        setSelectedPlaylistHeroCoverUrl('');
+        setSelectedPlaylistHeroCover((previous) =>
+          previous.playlistId === selectedPlaylist.id && previous.url.length === 0
+            ? previous
+            : { playlistId: selectedPlaylist.id, url: '' }
+        );
       });
 
     return () => {
@@ -1099,7 +1231,9 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const selectedPlaylistReadonly = isReadonlyPlaylist(selectedPlaylist);
   const selectedPlaylistBaseCoverUrl = resolveDisplayPlaylistCoverUrl(selectedPlaylist);
   const selectedPlaylistCoverUrl =
-    sanitizeRenderablePlaylistCoverUrl(selectedPlaylistHeroCoverUrl) || selectedPlaylistBaseCoverUrl;
+    (selectedPlaylist && selectedPlaylistHeroCover.playlistId === selectedPlaylist.id
+      ? sanitizeRenderablePlaylistCoverUrl(selectedPlaylistHeroCover.url)
+      : '') || selectedPlaylistBaseCoverUrl;
 
   const activePlaylistCoverUrls = useMemo(() => {
     const urls = new Set<string>();
@@ -1353,7 +1487,9 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
         setPlaylistToRenameId(null);
         setPlaylistToClear(null);
         setIsSelectedPlaylistLoading(false);
-        setSelectedPlaylistHeroCoverUrl('');
+        setSelectedPlaylistTrackPage([]);
+        setSelectedPlaylistTrackPageTotal(0);
+        setSelectedPlaylistHeroCover(EMPTY_SELECTED_PLAYLIST_HERO_COVER);
         setResolvedPlaylistCoverMap({});
         setPlaylistListScrollTop(0);
         setPlaylistListViewportHeight(0);
@@ -1386,20 +1522,40 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     };
   }, [releasePlaylistOverlayRuntimeResources]);
 
-  const selectedPlaylistTracks = selectedPlaylist?.tracks ?? EMPTY_TRACKS;
+  const shouldUseSelectedPlaylistTrackPage =
+    !!selectedPlaylist &&
+    selectedPlaylist.tracksHydrated === false &&
+    typeof audioService.queryPlaylistTracksPage === 'function';
+
+  const selectedPlaylistTrackEntries = shouldUseSelectedPlaylistTrackPage
+    ? selectedPlaylistTrackPage
+    : (selectedPlaylist?.tracks ?? EMPTY_TRACKS).map((track, playlistIndex) => ({
+        playlistIndex,
+        track,
+      }));
+
+  const selectedPlaylistTracks = selectedPlaylistTrackEntries.map((entry) => entry.track);
+  const selectedPlaylistTrackEntryMap = useMemo(
+    () => new Map(selectedPlaylistTrackEntries.map((entry) => [entry.playlistIndex, entry.track])),
+    [selectedPlaylistTrackEntries]
+  );
 
   const filteredPlaylistTrackIndexes = useMemo(
     () =>
-      resolvePlaylistTrackIndexes({
-        tracks: selectedPlaylistTracks,
-        searchQuery: playlistTrackSearchQuery,
-        sortField: playlistTrackSortField,
-        sortDirection: playlistTrackSortDirection,
-      }),
+      shouldUseSelectedPlaylistTrackPage
+        ? selectedPlaylistTrackEntries.map((entry) => entry.playlistIndex)
+        : resolvePlaylistTrackIndexes({
+            tracks: selectedPlaylistTracks,
+            searchQuery: playlistTrackSearchQuery,
+            sortField: playlistTrackSortField,
+            sortDirection: playlistTrackSortDirection,
+          }),
     [
+      shouldUseSelectedPlaylistTrackPage,
       playlistTrackSearchQuery,
       playlistTrackSortDirection,
       playlistTrackSortField,
+      selectedPlaylistTrackEntries,
       selectedPlaylistTracks,
     ]
   );
@@ -1416,14 +1572,21 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
 
     const next = Array.from(
       new Set(
-        selectedTrackIndexes.filter(
-          (index) => Number.isInteger(index) && index >= 0 && index < selectedPlaylistTracks.length
+        selectedTrackIndexes.filter((index) =>
+          shouldUseSelectedPlaylistTrackPage
+            ? selectedPlaylistTrackEntryMap.has(index)
+            : Number.isInteger(index) && index >= 0 && index < selectedPlaylistTracks.length
         )
       )
     ).sort((left, right) => left - right);
 
     return next.length > 0 ? next : EMPTY_NUMBERS;
-  }, [selectedPlaylistTracks, selectedTrackIndexes]);
+  }, [
+    selectedPlaylistTrackEntryMap,
+    selectedPlaylistTracks,
+    selectedTrackIndexes,
+    shouldUseSelectedPlaylistTrackPage,
+  ]);
 
   const selectedTrackCount = selectedPlaylistTrackIndexes.length;
   const resolvedCoverValues = useMemo(
@@ -1446,8 +1609,10 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     [playlists]
   );
   const loadedPlaylistTrackCount = useMemo(
-    () => playlists.reduce((total, playlist) => total + playlist.tracks.length, 0),
-    [playlists]
+    () =>
+      playlists.reduce((total, playlist) => total + playlist.tracks.length, 0) +
+      (shouldUseSelectedPlaylistTrackPage ? selectedPlaylistTrackPage.length : 0),
+    [playlists, selectedPlaylistTrackPage.length, shouldUseSelectedPlaylistTrackPage]
   );
   const selectedCoverDecodedBytes = useMemo(() => {
     const normalizedUrl = toNonEmptyString(selectedPlaylistCoverUrl);
@@ -1459,6 +1624,8 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       measureJsonBytes({
         selectedPlaylistId,
         selectedTrackIndexes,
+        selectedPlaylistTrackPage,
+        selectedPlaylistTrackPageTotal,
         resolvedPlaylistCoverMap,
         filteredPlaylistTrackIndexes,
         playlistBatchMode,
@@ -1475,6 +1642,8 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       playlistTrackSortField,
       resolvedPlaylistCoverMap,
       selectedPlaylistId,
+      selectedPlaylistTrackPage,
+      selectedPlaylistTrackPageTotal,
       selectedTrackIndexes,
       showPlaylistTrackSearch,
     ]
@@ -2144,7 +2313,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                     ) : (
                       <>
                         {filteredPlaylistTrackIndexes.map((index) => {
-                          const track = selectedPlaylistTracks[index];
+                          const track = selectedPlaylistTrackEntryMap.get(index);
                           if (!track) return null;
                           const trackKey = makeTrackKey(track, index);
                           const isSelected = selectedTrackIndexSet.has(index);

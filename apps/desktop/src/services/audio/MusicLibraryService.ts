@@ -1197,7 +1197,7 @@ export class MusicLibraryService {
 
     const operator = filter.operator;
     const normalizedValue = typeof filter.value === 'string' ? filter.value.trim() : '';
-    const isNumericField = field === 'durationSeconds' || field === 'playCount';
+    const isNumericField = getMusicLibraryBaseFieldCapability(filter.field)?.kind === 'number';
 
     if (operator === 'is_empty' || operator === 'is_not_empty') {
       return { field, operator };

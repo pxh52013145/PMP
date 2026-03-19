@@ -161,6 +161,22 @@ describe('musicLibraryReadGateway', () => {
     expect(context.ensureDb).not.toHaveBeenCalled();
   });
 
+  it('returns an empty desktop result when native track page reads are unavailable', async () => {
+    const context = createContext({
+      isDesktopRuntime: () => true,
+      tryGetAllTracksFromNativeDb: vi.fn().mockResolvedValue(nativeUnavailable()),
+      ensureDb: vi.fn().mockResolvedValue(
+        createFakeDb([{ id: 'web-track-1', title: 'Fallback Track', visible: true }])
+      ),
+    });
+
+    const gateway = createMusicLibraryReadGateway(context);
+    const result = await gateway.getAllTracks(120, 0);
+
+    expect(result).toEqual([]);
+    expect(context.ensureDb).not.toHaveBeenCalled();
+  });
+
   it('does not fallback to IndexedDB in desktop runtime when native read is unavailable', async () => {
     const context = createContext({
       isDesktopRuntime: () => true,
@@ -219,6 +235,24 @@ describe('musicLibraryReadGateway', () => {
       totalSize: 0,
       totalDuration: 0,
     });
+    expect(context.ensureDb).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty desktop album summary list when native album reads are unavailable', async () => {
+    const context = createContext({
+      isDesktopRuntime: () => true,
+      tryGetAllAlbumsFromNativeDb: vi.fn().mockResolvedValue(nativeUnavailable()),
+      ensureDb: vi.fn().mockResolvedValue(
+        createFakeDb([
+          { id: 'album-web-1', title: 'Fallback Track', album: 'Album A', artist: 'Artist A', visible: true },
+        ])
+      ),
+    });
+
+    const gateway = createMusicLibraryReadGateway(context);
+    const result = await gateway.getAllAlbums({ includeStoredCover: true });
+
+    expect(result).toEqual([]);
     expect(context.ensureDb).not.toHaveBeenCalled();
   });
 

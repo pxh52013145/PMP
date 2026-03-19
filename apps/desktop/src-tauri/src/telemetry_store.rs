@@ -68,7 +68,11 @@ impl TelemetryStore {
         let file = match OpenOptions::new().read(true).open(&self.current_file_path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(format!("Failed to open telemetry file for reading: {error}")),
+            Err(error) => {
+                return Err(format!(
+                    "Failed to open telemetry file for reading: {error}"
+                ))
+            }
         };
 
         let reader = BufReader::new(file);

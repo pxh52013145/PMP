@@ -58,7 +58,10 @@ mod tests {
     fn compare_levels_orders_values() {
         assert!(compare_levels(TelemetryLevel::Warn, TelemetryLevel::Info) > 0);
         assert!(compare_levels(TelemetryLevel::Debug, TelemetryLevel::Error) < 0);
-        assert_eq!(compare_levels(TelemetryLevel::Info, TelemetryLevel::Info), 0);
+        assert_eq!(
+            compare_levels(TelemetryLevel::Info, TelemetryLevel::Info),
+            0
+        );
     }
 
     #[test]

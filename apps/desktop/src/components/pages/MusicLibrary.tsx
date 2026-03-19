@@ -2039,6 +2039,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     !canUseNativeBaseQuery;
 
+  const shouldUseLegacyModuleCache =
+
+    librarySourceMode === 'local' &&
+
+    !isTauriRuntime();
+
   const [collapsedTrackGroupKeys, setCollapsedTrackGroupKeys] = useState<Set<string>>(() => new Set());
 
   const [baseFilterField, setBaseFilterField] = useState<MusicLibraryBaseField>('artist');
@@ -2243,6 +2249,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     libraryLoadTokenRef.current += 1;
     stableLoadTokenRef.current += 1;
     searchTokenRef.current += 1;
+    if (isTauriRuntime()) {
+      clearModuleCache();
+    }
     releaseLocalLibraryViewState();
     releaseStableLibraryViewState();
     releaseMusicLibraryRuntimeResources({
@@ -2325,7 +2334,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
         const merged = [...prev, ...nextChunk];
 
-        if (moduleCache) {
+        if (shouldUseLegacyModuleCache && moduleCache) {
 
           moduleCache = buildModuleCacheSnapshot({
 
@@ -2386,7 +2395,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     }
 
-  }, [beginAudioProtection]);
+  }, [beginAudioProtection, searchQuery, shouldUseLegacyModuleCache, telemetry]);
 
 
 
@@ -3108,6 +3117,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     if (
 
+      shouldUseLegacyModuleCache &&
+
       moduleCache &&
 
       now - moduleCache.timestamp < CACHE_DURATION &&
@@ -3162,8 +3173,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 // [legacy garbled comment omitted]
 
-    telemetry.info('music-library.data-load.indexeddb.start', {
+    if (!shouldUseLegacyModuleCache) {
+      clearModuleCache();
+    }
+
+    telemetry.info('music-library.data-load.primary-read.start', {
       fields: {
+        source: shouldUseLegacyModuleCache ? 'web-indexeddb' : 'desktop-native',
         searchQueryLength: searchQuery.trim().length,
       },
     });
@@ -3204,17 +3220,19 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       // ???T$m!?)1;_?o?V?S???dwO?|??p????o@iuun? ?[F??N?P??}?[?z?P?D?)滕?
 
-      moduleCache = buildModuleCacheSnapshot({
+      if (shouldUseLegacyModuleCache) {
+        moduleCache = buildModuleCacheSnapshot({
 
-        tracks: initialTracks,
+          tracks: initialTracks,
 
-        trackNextOffset: trackNextOffsetRef.current,
+          trackNextOffset: trackNextOffsetRef.current,
 
-        hasMoreTracks: hasMore,
+          hasMoreTracks: hasMore,
 
-        normalizeForIncrementalLoad: true,
+          normalizeForIncrementalLoad: true,
 
-      });
+        });
+      }
 
 
 
@@ -3259,7 +3277,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     }
 
-  }, [beginAudioProtection, searchQuery, telemetry]);
+  }, [beginAudioProtection, searchQuery, shouldUseLegacyModuleCache, telemetry]);
 
   const reloadCurrentLocalTrackSource = useCallback(async () => {
 
@@ -4095,15 +4113,17 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       setHasMoreTracks(false);
 
-      moduleCache = buildModuleCacheSnapshot({
+      if (shouldUseLegacyModuleCache) {
+        moduleCache = buildModuleCacheSnapshot({
 
-        tracks: results,
+          tracks: results,
 
-        trackNextOffset: trackNextOffsetRef.current,
+          trackNextOffset: trackNextOffsetRef.current,
 
-        hasMoreTracks: false,
+          hasMoreTracks: false,
 
-      });
+        });
+      }
 
     } else {
 
@@ -4124,6 +4144,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     maybeLoadTrackChunkFromScroll,
 
     resetLibraryDataFromStorage,
+
+    shouldUseLegacyModuleCache,
 
     shouldUseNativeBaseQuery,
 

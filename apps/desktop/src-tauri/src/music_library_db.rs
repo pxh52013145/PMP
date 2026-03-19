@@ -2,7 +2,7 @@ use once_cell::sync::{Lazy, OnceCell};
 use rusqlite::{
     params, params_from_iter,
     types::{Value, ValueRef},
-    Connection,
+    Connection, Transaction,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -481,6 +481,24 @@ pub struct LibraryPlaylistItemRecord {
     pub snapshot_album: Option<String>,
     pub snapshot_duration_seconds: Option<f64>,
     pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryPlaylistTrackPageQueryInput {
+    pub playlist_id: String,
+    pub search_query: Option<String>,
+    pub sort_field: Option<String>,
+    pub sort_direction: Option<String>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryPlaylistTrackPageResult {
+    pub items: Vec<LibraryPlaylistItemRecord>,
+    pub total: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -4471,8 +4489,7 @@ pub fn list_playlist_items(
             return Ok(Vec::new());
         }
 
-        let normalized_limit = limit
-            .map(|value| value.max(1).min(512) as i64);
+        let normalized_limit = limit.map(|value| value.max(1).min(512) as i64);
 
         let mut stmt = conn
             .prepare(
@@ -4498,21 +4515,10 @@ pub fn list_playlist_items(
             .map_err(|error| format!("Failed to prepare list playlist items statement: {error}"))?;
 
         let rows = stmt
-            .query_map(params![normalized_playlist_id, normalized_limit], |row| {
-                Ok(LibraryPlaylistItemRecord {
-                    id: row.get(0)?,
-                    playlist_id: row.get(1)?,
-                    position: row.get(2)?,
-                    local_track_id: row.get(3)?,
-                    entry_id: row.get(4)?,
-                    track_payload_json: row.get(5)?,
-                    snapshot_title: row.get(6)?,
-                    snapshot_artist: row.get(7)?,
-                    snapshot_album: row.get(8)?,
-                    snapshot_duration_seconds: row.get(9)?,
-                    created_at_ms: row.get(10)?,
-                })
-            })
+            .query_map(
+                params![normalized_playlist_id, normalized_limit],
+                parse_playlist_item_row,
+            )
             .map_err(|error| format!("Failed to query playlist items: {error}"))?;
 
         let mut result = Vec::new();
@@ -4521,6 +4527,580 @@ pub fn list_playlist_items(
                 .push(row.map_err(|error| format!("Failed to parse playlist item row: {error}"))?);
         }
         Ok(result)
+    })
+}
+
+fn parse_playlist_item_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LibraryPlaylistItemRecord> {
+    Ok(LibraryPlaylistItemRecord {
+        id: row.get(0)?,
+        playlist_id: row.get(1)?,
+        position: row.get(2)?,
+        local_track_id: row.get(3)?,
+        entry_id: row.get(4)?,
+        track_payload_json: row.get(5)?,
+        snapshot_title: row.get(6)?,
+        snapshot_artist: row.get(7)?,
+        snapshot_album: row.get(8)?,
+        snapshot_duration_seconds: row.get(9)?,
+        created_at_ms: row.get(10)?,
+    })
+}
+
+#[derive(Debug, Default, Clone)]
+struct PlaylistItemCompareKeys {
+    identity: String,
+    normalized_path: String,
+}
+
+fn normalize_compare_text(value: Option<&str>) -> String {
+    value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .filter(|item| !item.is_empty())
+        .unwrap_or_default()
+}
+
+fn normalize_track_path_for_compare(value: Option<&str>) -> String {
+    let Some(raw_path) = value else {
+        return String::new();
+    };
+
+    let mut normalized = raw_path.trim().to_string();
+    if normalized.is_empty() {
+        return String::new();
+    }
+
+    let lower = normalized.to_ascii_lowercase();
+    if lower.starts_with("file://localhost") {
+        normalized = normalized[16..].to_string();
+    } else if lower.starts_with("file://") {
+        normalized = normalized[7..].to_string();
+    }
+
+    if normalized.starts_with("\\\\?\\") {
+        normalized = normalized[4..].to_string();
+    } else if normalized.starts_with("//?/") {
+        normalized = normalized[4..].to_string();
+    }
+
+    let normalized_bytes = normalized.as_bytes();
+    if normalized_bytes.len() >= 3
+        && normalized_bytes[0] == b'/'
+        && normalized_bytes[2] == b':'
+        && normalized_bytes[1].is_ascii_alphabetic()
+    {
+        normalized = normalized[1..].to_string();
+    }
+
+    normalized = normalized.replace('\\', "/");
+    while normalized.contains("//") {
+        normalized = normalized.replace("//", "/");
+    }
+    while normalized.ends_with('/') {
+        normalized.pop();
+    }
+
+    normalized.trim().to_ascii_lowercase()
+}
+
+fn read_track_payload_string_field<'a>(payload: &'a JsonValue, field: &str) -> Option<&'a str> {
+    payload
+        .get(field)
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn build_playlist_item_compare_keys(
+    track_payload_json: Option<&str>,
+    snapshot_title: Option<&str>,
+    snapshot_artist: Option<&str>,
+) -> PlaylistItemCompareKeys {
+    let payload = track_payload_json.and_then(|raw| serde_json::from_str::<JsonValue>(raw).ok());
+    let payload_ref = payload.as_ref();
+    let id = normalize_compare_text(
+        payload_ref.and_then(|value| read_track_payload_string_field(value, "id")),
+    );
+    let original_path = normalize_compare_text(
+        payload_ref.and_then(|value| read_track_payload_string_field(value, "originalPath")),
+    );
+    let file_path = normalize_compare_text(
+        payload_ref.and_then(|value| read_track_payload_string_field(value, "filePath")),
+    );
+    let path = normalize_compare_text(
+        payload_ref.and_then(|value| read_track_payload_string_field(value, "path")),
+    );
+    let title = normalize_compare_text(
+        payload_ref
+            .and_then(|value| read_track_payload_string_field(value, "title"))
+            .or(snapshot_title),
+    );
+    let artist = normalize_compare_text(
+        payload_ref
+            .and_then(|value| read_track_payload_string_field(value, "artist"))
+            .or(snapshot_artist),
+    );
+
+    let identity = if !id.is_empty() {
+        format!("id:{id}")
+    } else if !original_path.is_empty() {
+        format!("origin:{original_path}")
+    } else if !file_path.is_empty() {
+        format!("file:{file_path}")
+    } else if !path.is_empty() {
+        format!("path:{path}")
+    } else if !title.is_empty() {
+        format!("meta:{title}|{artist}")
+    } else {
+        String::new()
+    };
+
+    let normalized_path = normalize_track_path_for_compare(
+        payload_ref
+            .and_then(|value| read_track_payload_string_field(value, "filePath"))
+            .or_else(|| {
+                payload_ref.and_then(|value| read_track_payload_string_field(value, "path"))
+            })
+            .or_else(|| {
+                payload_ref.and_then(|value| read_track_payload_string_field(value, "originalPath"))
+            }),
+    );
+
+    PlaylistItemCompareKeys {
+        identity,
+        normalized_path,
+    }
+}
+
+fn resequence_playlist_items(tx: &Transaction<'_>, playlist_id: &str) -> Result<(), String> {
+    let mut stmt = tx
+        .prepare(
+            r#"
+            SELECT id
+            FROM playlist_items
+            WHERE playlist_id = ?1
+            ORDER BY position ASC, created_at_ms ASC, id ASC
+            "#,
+        )
+        .map_err(|error| format!("Failed to prepare playlist item resequence query: {error}"))?;
+
+    let rows = stmt
+        .query_map(params![playlist_id], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("Failed to query playlist item ids for resequence: {error}"))?;
+
+    let mut ordered_ids = Vec::new();
+    for row in rows {
+        ordered_ids.push(row.map_err(|error| {
+            format!("Failed to parse playlist item id for resequence: {error}")
+        })?);
+    }
+    drop(stmt);
+
+    for (index, item_id) in ordered_ids.into_iter().enumerate() {
+        tx.execute(
+            "UPDATE playlist_items SET position = ?2 WHERE id = ?1",
+            params![item_id, index as i64],
+        )
+        .map_err(|error| format!("Failed to resequence playlist item position: {error}"))?;
+    }
+
+    Ok(())
+}
+
+fn touch_playlist_updated_at(
+    tx: &Transaction<'_>,
+    playlist_id: &str,
+    updated_at_ms: i64,
+) -> Result<(), String> {
+    tx.execute(
+        r#"
+        UPDATE playlists
+        SET updated_at_ms = ?2
+        WHERE id = ?1
+        "#,
+        params![playlist_id, updated_at_ms.max(0)],
+    )
+    .map_err(|error| format!("Failed to update playlist timestamp: {error}"))?;
+    Ok(())
+}
+
+pub fn prepend_playlist_item(
+    app: &AppHandle,
+    playlist_id: &str,
+    item: LibraryPlaylistItemUpsertInput,
+) -> Result<LibraryPlaylistRecord, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_playlist_id = playlist_id.trim();
+        if normalized_playlist_id.is_empty() {
+            return Err("Playlist id is required".to_string());
+        }
+
+        let local_track_id = normalize_text(item.local_track_id.as_deref());
+        let entry_id = normalize_text(item.entry_id.as_deref());
+        let track_payload_json = normalize_text(item.track_payload_json.as_deref());
+        if local_track_id.is_none() && entry_id.is_none() && track_payload_json.is_none() {
+            return playlist_record_by_id(conn, normalized_playlist_id);
+        }
+
+        let incoming_keys = build_playlist_item_compare_keys(
+            track_payload_json.as_deref(),
+            item.snapshot_title.as_deref(),
+            item.snapshot_artist.as_deref(),
+        );
+
+        let mut dedup_stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  id,
+                  track_payload_json,
+                  snapshot_title,
+                  snapshot_artist
+                FROM playlist_items
+                WHERE playlist_id = ?1
+                ORDER BY position ASC, created_at_ms ASC, id ASC
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare playlist dedup query: {error}"))?;
+
+        let dedup_rows = dedup_stmt
+            .query_map(params![normalized_playlist_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })
+            .map_err(|error| format!("Failed to query playlist dedup rows: {error}"))?;
+
+        let mut duplicate_ids = Vec::new();
+        for row in dedup_rows {
+            let (item_id, payload_json, snapshot_title, snapshot_artist) =
+                row.map_err(|error| format!("Failed to parse playlist dedup row: {error}"))?;
+            let candidate_keys = build_playlist_item_compare_keys(
+                payload_json.as_deref(),
+                snapshot_title.as_deref(),
+                snapshot_artist.as_deref(),
+            );
+            let same_identity = !incoming_keys.identity.is_empty()
+                && incoming_keys.identity == candidate_keys.identity;
+            let same_path = !incoming_keys.normalized_path.is_empty()
+                && incoming_keys.normalized_path == candidate_keys.normalized_path;
+            if same_identity || same_path {
+                duplicate_ids.push(item_id);
+            }
+        }
+        drop(dedup_stmt);
+
+        let tx = conn.transaction().map_err(|error| {
+            format!("Failed to start prepend playlist item transaction: {error}")
+        })?;
+
+        for duplicate_id in duplicate_ids {
+            tx.execute(
+                "DELETE FROM playlist_items WHERE id = ?1",
+                params![duplicate_id],
+            )
+            .map_err(|error| format!("Failed to remove duplicate playlist item: {error}"))?;
+        }
+
+        resequence_playlist_items(&tx, normalized_playlist_id)?;
+
+        tx.execute(
+            "UPDATE playlist_items SET position = position + 1 WHERE playlist_id = ?1",
+            params![normalized_playlist_id],
+        )
+        .map_err(|error| format!("Failed to shift playlist item positions: {error}"))?;
+
+        let now = now_ms();
+        let item_id = normalize_text(item.id.as_deref())
+            .unwrap_or_else(|| format!("pli::{normalized_playlist_id}::0::{now}"));
+        let created_at_ms = item.created_at_ms.unwrap_or(now).max(0);
+        let snapshot_duration_seconds = item
+            .snapshot_duration_seconds
+            .filter(|value| value.is_finite() && *value >= 0.0);
+
+        tx.execute(
+            r#"
+            INSERT INTO playlist_items(
+              id,
+              playlist_id,
+              position,
+              local_track_id,
+              entry_id,
+              track_payload_json,
+              snapshot_title,
+              snapshot_artist,
+              snapshot_album,
+              snapshot_duration_seconds,
+              created_at_ms
+            )
+            VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "#,
+            params![
+                item_id,
+                normalized_playlist_id,
+                local_track_id,
+                entry_id,
+                track_payload_json,
+                normalize_text(item.snapshot_title.as_deref()),
+                normalize_text(item.snapshot_artist.as_deref()),
+                normalize_text(item.snapshot_album.as_deref()),
+                snapshot_duration_seconds,
+                created_at_ms,
+            ],
+        )
+        .map_err(|error| format!("Failed to insert prepended playlist item: {error}"))?;
+
+        touch_playlist_updated_at(&tx, normalized_playlist_id, now)?;
+        tx.commit().map_err(|error| {
+            format!("Failed to commit prepend playlist item transaction: {error}")
+        })?;
+
+        playlist_record_by_id(conn, normalized_playlist_id)
+    })
+}
+
+pub fn remove_playlist_item_at(
+    app: &AppHandle,
+    playlist_id: &str,
+    position: i64,
+) -> Result<LibraryPlaylistRecord, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_playlist_id = playlist_id.trim();
+        if normalized_playlist_id.is_empty() {
+            return Err("Playlist id is required".to_string());
+        }
+        if position < 0 {
+            return playlist_record_by_id(conn, normalized_playlist_id);
+        }
+
+        let tx = conn.transaction().map_err(|error| {
+            format!("Failed to start remove playlist item transaction: {error}")
+        })?;
+
+        tx.execute(
+            "DELETE FROM playlist_items WHERE playlist_id = ?1 AND position = ?2",
+            params![normalized_playlist_id, position],
+        )
+        .map_err(|error| format!("Failed to delete playlist item by position: {error}"))?;
+
+        resequence_playlist_items(&tx, normalized_playlist_id)?;
+        touch_playlist_updated_at(&tx, normalized_playlist_id, now_ms())?;
+        tx.commit().map_err(|error| {
+            format!("Failed to commit remove playlist item transaction: {error}")
+        })?;
+
+        playlist_record_by_id(conn, normalized_playlist_id)
+    })
+}
+
+pub fn clear_playlist_items(
+    app: &AppHandle,
+    playlist_id: &str,
+) -> Result<LibraryPlaylistRecord, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_playlist_id = playlist_id.trim();
+        if normalized_playlist_id.is_empty() {
+            return Err("Playlist id is required".to_string());
+        }
+
+        let tx = conn.transaction().map_err(|error| {
+            format!("Failed to start clear playlist items transaction: {error}")
+        })?;
+
+        tx.execute(
+            "DELETE FROM playlist_items WHERE playlist_id = ?1",
+            params![normalized_playlist_id],
+        )
+        .map_err(|error| format!("Failed to clear playlist items: {error}"))?;
+
+        touch_playlist_updated_at(&tx, normalized_playlist_id, now_ms())?;
+        tx.commit().map_err(|error| {
+            format!("Failed to commit clear playlist items transaction: {error}")
+        })?;
+
+        playlist_record_by_id(conn, normalized_playlist_id)
+    })
+}
+
+fn normalize_playlist_track_page_limit(query: Option<&LibraryPlaylistTrackPageQueryInput>) -> i64 {
+    query
+        .and_then(|value| value.limit)
+        .map(|value| value.max(1).min(2000) as i64)
+        .unwrap_or(240)
+}
+
+fn normalize_playlist_track_page_offset(query: Option<&LibraryPlaylistTrackPageQueryInput>) -> i64 {
+    query
+        .and_then(|value| value.offset)
+        .map(|value| value.max(0) as i64)
+        .unwrap_or(0)
+}
+
+fn build_playlist_track_page_order_clause(
+    query: Option<&LibraryPlaylistTrackPageQueryInput>,
+) -> &'static str {
+    let sort_direction = query
+        .and_then(|value| normalize_text(value.sort_direction.as_deref()))
+        .map(|value| value.to_lowercase())
+        .unwrap_or_else(|| "asc".to_string());
+    let descending = sort_direction == "desc";
+
+    match query
+        .and_then(|value| normalize_text(value.sort_field.as_deref()))
+        .map(|value| value.to_lowercase())
+        .as_deref()
+    {
+        Some("title") if descending => {
+            "LOWER(COALESCE(snapshot_title, '')) DESC, position ASC, created_at_ms ASC, id ASC"
+        }
+        Some("title") => {
+            "LOWER(COALESCE(snapshot_title, '')) ASC, position ASC, created_at_ms ASC, id ASC"
+        }
+        Some("artist") if descending => {
+            "LOWER(COALESCE(snapshot_artist, '')) DESC, position ASC, created_at_ms ASC, id ASC"
+        }
+        Some("artist") => {
+            "LOWER(COALESCE(snapshot_artist, '')) ASC, position ASC, created_at_ms ASC, id ASC"
+        }
+        Some("album") if descending => {
+            "LOWER(COALESCE(snapshot_album, '')) DESC, position ASC, created_at_ms ASC, id ASC"
+        }
+        Some("album") => {
+            "LOWER(COALESCE(snapshot_album, '')) ASC, position ASC, created_at_ms ASC, id ASC"
+        }
+        Some("duration") if descending => {
+            "COALESCE(snapshot_duration_seconds, 0) DESC, position ASC, created_at_ms ASC, id ASC"
+        }
+        Some("duration") => {
+            "COALESCE(snapshot_duration_seconds, 0) ASC, position ASC, created_at_ms ASC, id ASC"
+        }
+        _ => "position ASC, created_at_ms ASC, id ASC",
+    }
+}
+
+pub fn query_playlist_tracks_page(
+    app: &AppHandle,
+    query: Option<LibraryPlaylistTrackPageQueryInput>,
+) -> Result<LibraryPlaylistTrackPageResult, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let query_ref = query.as_ref();
+        let playlist_id = query_ref
+            .and_then(|value| normalize_text(Some(value.playlist_id.as_str())))
+            .unwrap_or_default();
+        if playlist_id.is_empty() {
+            return Ok(LibraryPlaylistTrackPageResult {
+                items: Vec::new(),
+                total: 0,
+            });
+        }
+
+        let limit = normalize_playlist_track_page_limit(query_ref);
+        let offset = normalize_playlist_track_page_offset(query_ref);
+        let order_clause = build_playlist_track_page_order_clause(query_ref);
+        let search_pattern = query_ref
+            .and_then(|value| normalize_text(value.search_query.as_deref()))
+            .map(|value| format!("%{}%", value.to_lowercase()));
+
+        let count_sql_with_search = r#"
+            SELECT COUNT(1)
+            FROM playlist_items
+            WHERE playlist_id = ?1
+              AND (
+                LOWER(COALESCE(snapshot_title, '')) LIKE ?2
+                OR LOWER(COALESCE(snapshot_artist, '')) LIKE ?2
+                OR LOWER(COALESCE(snapshot_album, '')) LIKE ?2
+              )
+        "#;
+        let count_sql_without_search = r#"
+            SELECT COUNT(1)
+            FROM playlist_items
+            WHERE playlist_id = ?1
+        "#;
+
+        let select_prefix = r#"
+            SELECT
+              id,
+              playlist_id,
+              position,
+              local_track_id,
+              entry_id,
+              track_payload_json,
+              snapshot_title,
+              snapshot_artist,
+              snapshot_album,
+              snapshot_duration_seconds,
+              created_at_ms
+            FROM playlist_items
+            WHERE playlist_id = ?1
+        "#;
+
+        let total = if let Some(search) = search_pattern.as_ref() {
+            conn.query_row(count_sql_with_search, params![playlist_id, search], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map(|value| value.max(0) as u64)
+            .map_err(|error| format!("Failed to count playlist tracks page rows: {error}"))?
+        } else {
+            conn.query_row(count_sql_without_search, params![playlist_id], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map(|value| value.max(0) as u64)
+            .map_err(|error| format!("Failed to count playlist tracks page rows: {error}"))?
+        };
+
+        let sql = if search_pattern.is_some() {
+            format!(
+                r#"
+                {select_prefix}
+                  AND (
+                    LOWER(COALESCE(snapshot_title, '')) LIKE ?2
+                    OR LOWER(COALESCE(snapshot_artist, '')) LIKE ?2
+                    OR LOWER(COALESCE(snapshot_album, '')) LIKE ?2
+                  )
+                ORDER BY {order_clause}
+                LIMIT ?3
+                OFFSET ?4
+                "#
+            )
+        } else {
+            format!(
+                r#"
+                {select_prefix}
+                ORDER BY {order_clause}
+                LIMIT ?2
+                OFFSET ?3
+                "#
+            )
+        };
+
+        let mut stmt = conn.prepare(sql.as_str()).map_err(|error| {
+            format!("Failed to prepare playlist tracks page statement: {error}")
+        })?;
+
+        let rows = if let Some(search) = search_pattern.as_ref() {
+            stmt.query_map(
+                params![playlist_id, search, limit, offset],
+                parse_playlist_item_row,
+            )
+        } else {
+            stmt.query_map(params![playlist_id, limit, offset], parse_playlist_item_row)
+        }
+        .map_err(|error| format!("Failed to query playlist tracks page rows: {error}"))?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(
+                row.map_err(|error| format!("Failed to parse playlist tracks page row: {error}"))?,
+            );
+        }
+
+        Ok(LibraryPlaylistTrackPageResult { items, total })
     })
 }
 

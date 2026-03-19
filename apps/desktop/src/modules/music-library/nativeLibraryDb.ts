@@ -755,6 +755,29 @@ export interface NativeLibraryPlaylistItemRecord {
   createdAtMs: number;
 }
 
+export type NativeLibraryPlaylistTrackSortField =
+  | 'default'
+  | 'title'
+  | 'artist'
+  | 'album'
+  | 'duration';
+
+export type NativeLibraryPlaylistTrackSortDirection = 'asc' | 'desc';
+
+export interface NativeLibraryPlaylistTrackPageQuery {
+  playlistId: string;
+  searchQuery?: string;
+  sortField?: NativeLibraryPlaylistTrackSortField;
+  sortDirection?: NativeLibraryPlaylistTrackSortDirection;
+  limit?: number;
+  offset?: number;
+}
+
+export interface NativeLibraryPlaylistTrackPageResult {
+  items: NativeLibraryPlaylistItemRecord[];
+  total: number;
+}
+
 export interface NativeLibraryFallbackTaskUpsertInput {
   id?: string;
   ownerUid: string;
@@ -2055,6 +2078,26 @@ function ensurePlaylistItemRecord(value: unknown): NativeLibraryPlaylistItemReco
     snapshotAlbum: asOptionalString(value.snapshotAlbum),
     snapshotDurationSeconds: asNumber(value.snapshotDurationSeconds),
     createdAtMs,
+  };
+}
+
+function ensurePlaylistTrackPageResult(value: unknown): NativeLibraryPlaylistTrackPageResult | null {
+  if (!isRecord(value)) return null;
+
+  const total = asNumber(value.total);
+  const rawItems = Array.isArray(value.items) ? value.items : null;
+  if (total === undefined || !rawItems) return null;
+
+  const items: NativeLibraryPlaylistItemRecord[] = [];
+  for (const item of rawItems) {
+    const parsed = ensurePlaylistItemRecord(item);
+    if (!parsed) continue;
+    items.push(parsed);
+  }
+
+  return {
+    total: Math.max(0, Math.floor(total)),
+    items,
   };
 }
 
@@ -3545,6 +3588,154 @@ export async function listNativeLibraryPlaylistItems(
     result.push(parsed);
   }
   return result;
+}
+
+export async function prependNativeLibraryPlaylistItem(
+  playlistId: string,
+  item: NativeLibraryPlaylistItemUpsertInput
+): Promise<NativeLibraryPlaylistRecord | null> {
+  if (!isTauriRuntime()) return null;
+  const normalizedPlaylistId = playlistId.trim();
+  if (!normalizedPlaylistId) return null;
+
+  const payload = {
+    id: asOptionalString(item.id),
+    position:
+      typeof item.position === 'number' && Number.isFinite(item.position)
+        ? Math.max(0, Math.floor(item.position))
+        : undefined,
+    localTrackId: asOptionalString(item.localTrackId),
+    entryId: asOptionalString(item.entryId),
+    trackPayloadJson: asOptionalString(item.trackPayloadJson),
+    snapshotTitle: asOptionalString(item.snapshotTitle),
+    snapshotArtist: asOptionalString(item.snapshotArtist),
+    snapshotAlbum: asOptionalString(item.snapshotAlbum),
+    snapshotDurationSeconds:
+      typeof item.snapshotDurationSeconds === 'number' && Number.isFinite(item.snapshotDurationSeconds)
+        ? Math.max(0, item.snapshotDurationSeconds)
+        : undefined,
+    createdAtMs:
+      typeof item.createdAtMs === 'number' && Number.isFinite(item.createdAtMs)
+        ? Math.max(0, Math.floor(item.createdAtMs))
+        : undefined,
+  };
+
+  const raw = await invokeWithTelemetry<unknown>(
+    'music_library_db_prepend_playlist_item',
+    {
+      playlistId: normalizedPlaylistId,
+      item: payload,
+    },
+    {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.db.prepend-playlist-item',
+      includeResultSize: true,
+    }
+  ).catch(() => null);
+
+  return ensurePlaylistRecord(raw);
+}
+
+export async function removeNativeLibraryPlaylistItemAt(
+  playlistId: string,
+  position: number
+): Promise<NativeLibraryPlaylistRecord | null> {
+  if (!isTauriRuntime()) return null;
+  const normalizedPlaylistId = playlistId.trim();
+  if (!normalizedPlaylistId) return null;
+  if (!Number.isFinite(position)) return null;
+
+  const raw = await invokeWithTelemetry<unknown>(
+    'music_library_db_remove_playlist_item_at',
+    {
+      playlistId: normalizedPlaylistId,
+      position: Math.max(0, Math.floor(position)),
+    },
+    {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.db.remove-playlist-item',
+      includeResultSize: true,
+    }
+  ).catch(() => null);
+
+  return ensurePlaylistRecord(raw);
+}
+
+export async function clearNativeLibraryPlaylistItems(
+  playlistId: string
+): Promise<NativeLibraryPlaylistRecord | null> {
+  if (!isTauriRuntime()) return null;
+  const normalizedPlaylistId = playlistId.trim();
+  if (!normalizedPlaylistId) return null;
+
+  const raw = await invokeWithTelemetry<unknown>(
+    'music_library_db_clear_playlist_items',
+    {
+      playlistId: normalizedPlaylistId,
+    },
+    {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.db.clear-playlist-items',
+      includeResultSize: true,
+    }
+  ).catch(() => null);
+
+  return ensurePlaylistRecord(raw);
+}
+
+export async function queryNativeLibraryPlaylistTracksPage(
+  query: NativeLibraryPlaylistTrackPageQuery
+): Promise<NativeLibraryPlaylistTrackPageResult> {
+  if (!isTauriRuntime()) return { items: [], total: 0 };
+
+  const playlistId = asTrimmedString(query.playlistId);
+  if (!playlistId) return { items: [], total: 0 };
+
+  const limit =
+    typeof query.limit === 'number' && Number.isFinite(query.limit)
+      ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
+      : undefined;
+  const offset =
+    typeof query.offset === 'number' && Number.isFinite(query.offset)
+      ? Math.max(0, Math.floor(query.offset))
+      : undefined;
+  const searchQuery = asOptionalString(query.searchQuery);
+  const sortField: NativeLibraryPlaylistTrackSortField =
+    query.sortField === 'title' ||
+    query.sortField === 'artist' ||
+    query.sortField === 'album' ||
+    query.sortField === 'duration'
+      ? query.sortField
+      : 'default';
+  const sortDirection: NativeLibraryPlaylistTrackSortDirection =
+    query.sortDirection === 'desc' ? 'desc' : 'asc';
+
+  const raw = await invokeWithTelemetry<unknown>(
+    'music_library_db_query_playlist_tracks_page',
+    {
+      query: {
+        playlistId,
+        searchQuery,
+        sortField,
+        sortDirection,
+        limit,
+        offset,
+      },
+    },
+    {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.db.query-playlist-tracks.page',
+      includeResultSize: true,
+    }
+  ).catch(() => null);
+
+  const parsed = ensurePlaylistTrackPageResult(raw);
+  if (!parsed) return { items: [], total: 0 };
+  return parsed;
 }
 
 export async function upsertNativeLibraryFallbackTask(

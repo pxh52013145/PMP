@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  clearNativeLibraryPlaylistItems,
   cleanupNativeLibrarySourceTracks,
   clearNativeLibraryTracks,
   deleteNativeLibraryUserEntry,
@@ -21,8 +22,11 @@ import {
   listNativeLibrarySources,
   markNativeLibraryUserEntryPlayed,
   markNativeLibraryTrackPlayed,
+  prependNativeLibraryPlaylistItem,
   queryNativeLibraryTracks,
+  queryNativeLibraryPlaylistTracksPage,
   queryNativeLibraryTracksPage,
+  removeNativeLibraryPlaylistItemAt,
   resolveNativeLibraryLyrics,
   updateNativeLibraryCloudHashJobStatus,
   updateNativeLibraryFallbackTaskStatus,
@@ -199,6 +203,155 @@ describe('nativeLibraryDb', () => {
       id: 'track-page-1',
       sourceId: 'source-9',
       filePath: 'D:/Music/paged.flac',
+    });
+  });
+
+  it('queries paged playlist tracks with normalized search and sort payload', async () => {
+    tauriMocks.invoke.mockResolvedValue({
+      total: 42,
+      items: [
+        {
+          id: 'playlist-item-1',
+          playlistId: 'playlist-1',
+          position: 7,
+          localTrackId: 'track-7',
+          trackPayloadJson: '{"id":"track-7","title":"Paged Track"}',
+          snapshotTitle: 'Paged Track',
+          snapshotArtist: 'Artist 7',
+          snapshotAlbum: 'Album 7',
+          snapshotDurationSeconds: 187,
+          createdAtMs: 1700000000000,
+        },
+      ],
+    });
+
+    const result = await queryNativeLibraryPlaylistTracksPage({
+      playlistId: '  playlist-1  ',
+      searchQuery: '  paged  ',
+      sortField: 'artist',
+      sortDirection: 'desc',
+      limit: 99999,
+      offset: -10,
+    });
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith(
+      'music_library_db_query_playlist_tracks_page',
+      {
+        query: {
+          playlistId: 'playlist-1',
+          searchQuery: 'paged',
+          sortField: 'artist',
+          sortDirection: 'desc',
+          limit: 2000,
+          offset: 0,
+        },
+      }
+    );
+    expect(result).toEqual({
+      total: 42,
+      items: [
+        expect.objectContaining({
+          id: 'playlist-item-1',
+          playlistId: 'playlist-1',
+          position: 7,
+          localTrackId: 'track-7',
+        }),
+      ],
+    });
+  });
+
+  it('prepends playlist item with normalized payload and parses updated playlist summary', async () => {
+    tauriMocks.invoke.mockResolvedValue({
+      id: 'playlist-1',
+      ownerUid: 'local:default',
+      name: 'Playlist 1',
+      kind: 'manual',
+      isReadonly: false,
+      createdAtMs: 1700000000000,
+      updatedAtMs: 1700000000123,
+      trackCount: 4,
+      totalDuration: 640,
+    });
+
+    const result = await prependNativeLibraryPlaylistItem('  playlist-1  ', {
+      trackPayloadJson: ' {"id":"track-1"} ',
+      snapshotTitle: '  Track 1  ',
+      snapshotArtist: '  Artist 1  ',
+      snapshotAlbum: '  Album 1  ',
+      snapshotDurationSeconds: 180.4,
+      createdAtMs: 1700000000123.9,
+    });
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_prepend_playlist_item', {
+      playlistId: 'playlist-1',
+      item: {
+        id: undefined,
+        position: undefined,
+        localTrackId: undefined,
+        entryId: undefined,
+        trackPayloadJson: '{"id":"track-1"}',
+        snapshotTitle: 'Track 1',
+        snapshotArtist: 'Artist 1',
+        snapshotAlbum: 'Album 1',
+        snapshotDurationSeconds: 180.4,
+        createdAtMs: 1700000000123,
+      },
+    });
+    expect(result).toMatchObject({
+      id: 'playlist-1',
+      trackCount: 4,
+      totalDuration: 640,
+    });
+  });
+
+  it('removes playlist item by position and parses updated playlist summary', async () => {
+    tauriMocks.invoke.mockResolvedValue({
+      id: 'playlist-1',
+      ownerUid: 'local:default',
+      name: 'Playlist 1',
+      kind: 'manual',
+      isReadonly: false,
+      createdAtMs: 1700000000000,
+      updatedAtMs: 1700000000222,
+      trackCount: 3,
+      totalDuration: 460,
+    });
+
+    const result = await removeNativeLibraryPlaylistItemAt(' playlist-1 ', 7.8);
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_remove_playlist_item_at', {
+      playlistId: 'playlist-1',
+      position: 7,
+    });
+    expect(result).toMatchObject({
+      id: 'playlist-1',
+      trackCount: 3,
+      totalDuration: 460,
+    });
+  });
+
+  it('clears playlist items and parses updated playlist summary', async () => {
+    tauriMocks.invoke.mockResolvedValue({
+      id: 'playlist-1',
+      ownerUid: 'local:default',
+      name: 'Playlist 1',
+      kind: 'manual',
+      isReadonly: false,
+      createdAtMs: 1700000000000,
+      updatedAtMs: 1700000000333,
+      trackCount: 0,
+      totalDuration: 0,
+    });
+
+    const result = await clearNativeLibraryPlaylistItems(' playlist-1 ');
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_clear_playlist_items', {
+      playlistId: 'playlist-1',
+    });
+    expect(result).toMatchObject({
+      id: 'playlist-1',
+      trackCount: 0,
+      totalDuration: 0,
     });
   });
 

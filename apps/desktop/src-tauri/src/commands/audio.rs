@@ -372,6 +372,59 @@ pub async fn native_audio_sync_queue(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_append_queue(
+    app: tauri::AppHandle,
+    queue: Vec<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::append_queue(&app, queue))
+        .await
+        .map_err(|e| format!("Native audio append queue task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn native_audio_clear_queue(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::clear_queue(&app))
+        .await
+        .map_err(|e| format!("Native audio clear queue task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_remove_queue_item(
+    app: tauri::AppHandle,
+    index: i32,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::remove_queue_item(&app, index))
+        .await
+        .map_err(|e| format!("Native audio remove queue item task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_move_queue_item(
+    app: tauri::AppHandle,
+    from_index: i32,
+    to_index: i32,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::move_queue_item(&app, from_index, to_index)
+    })
+    .await
+    .map_err(|e| format!("Native audio move queue item task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_replace_queue_item_path(
+    app: tauri::AppHandle,
+    index: i32,
+    path: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::replace_queue_item_path(&app, index, path)
+    })
+    .await
+    .map_err(|e| format!("Native audio replace queue item path task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn native_audio_sync_queue_index(
     app: tauri::AppHandle,
     current_index: i32,
@@ -381,4 +434,40 @@ pub async fn native_audio_sync_queue_index(
     })
     .await
     .map_err(|e| format!("Native audio sync queue index task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_load_and_play_queue_index(
+    app: tauri::AppHandle,
+    index: i32,
+    replay_gain_db: Option<f32>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::load_and_play_queue_index(&app, index, replay_gain_db)
+    })
+    .await
+    .map_err(|e| format!("Native audio load+play queue index task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_load_queue_index(
+    app: tauri::AppHandle,
+    index: i32,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::load_queue_index(&app, index))
+        .await
+        .map_err(|e| format!("Native audio load queue index task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_crossfade_to_queue_index(
+    app: tauri::AppHandle,
+    index: i32,
+    duration_ms: u64,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::crossfade_to_queue_index(&app, index, duration_ms)
+    })
+    .await
+    .map_err(|e| format!("Native audio crossfade queue index task failed: {e}"))?
 }

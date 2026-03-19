@@ -143,6 +143,265 @@ describe('NativeAudioService', () => {
     service.destroy();
   });
 
+  it('appends queue entries through native incremental queue command for batch adds', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const service = new NativeAudioService();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockClear();
+
+    service.addMultipleToQueue([
+      {
+        id: 'queue-append-1',
+        title: 'Queue Append 1',
+        filePath: 'C:\\Music\\queue-append-1.flac',
+        path: 'C:\\Music\\queue-append-1.flac',
+      },
+      {
+        id: 'queue-append-2',
+        title: 'Queue Append 2',
+        filePath: 'C:\\Music\\queue-append-2.flac',
+        path: 'C:\\Music\\queue-append-2.flac',
+      },
+    ]);
+    await flushMicrotasks(6);
+
+    expect(invokeMock).toHaveBeenCalledWith('native_audio_append_queue', {
+      queue: ['C:\\Music\\queue-append-1.flac', 'C:\\Music\\queue-append-2.flac'],
+    });
+    expect(
+      invokeMock.mock.calls.some(([cmd]) => cmd === 'native_audio_sync_queue')
+    ).toBe(false);
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('clears queue through native clear queue command instead of full queue sync', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const service = new NativeAudioService();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+
+    service.addMultipleToQueue([
+      {
+        id: 'queue-clear-1',
+        title: 'Queue Clear 1',
+        filePath: 'C:\\Music\\queue-clear-1.flac',
+        path: 'C:\\Music\\queue-clear-1.flac',
+      },
+    ]);
+    await flushMicrotasks(6);
+
+    invokeMock.mockClear();
+    service.clearQueue();
+    await flushMicrotasks(6);
+
+    expect(invokeMock).toHaveBeenCalledWith('native_audio_clear_queue', undefined);
+    expect(invokeMock).toHaveBeenCalledWith('native_audio_stop', undefined);
+    expect(
+      invokeMock.mock.calls.some(([cmd]) => cmd === 'native_audio_sync_queue')
+    ).toBe(false);
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('removes queue entries through native remove queue command instead of full queue sync', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const service = new NativeAudioService();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+
+    service.addMultipleToQueue([
+      {
+        id: 'queue-remove-1',
+        title: 'Queue Remove 1',
+        filePath: 'C:\\Music\\queue-remove-1.flac',
+        path: 'C:\\Music\\queue-remove-1.flac',
+      },
+      {
+        id: 'queue-remove-2',
+        title: 'Queue Remove 2',
+        filePath: 'C:\\Music\\queue-remove-2.flac',
+        path: 'C:\\Music\\queue-remove-2.flac',
+      },
+    ]);
+    await flushMicrotasks(6);
+
+    invokeMock.mockClear();
+    service.removeFromQueue(0);
+    await flushMicrotasks(6);
+
+    expect(invokeMock).toHaveBeenCalledWith('native_audio_remove_queue_item', {
+      index: 0,
+    });
+    expect(
+      invokeMock.mock.calls.some(([cmd]) => cmd === 'native_audio_sync_queue')
+    ).toBe(false);
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('reorders queue entries through native move queue command instead of full queue sync', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const service = new NativeAudioService();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+
+    service.addMultipleToQueue([
+      {
+        id: 'queue-move-1',
+        title: 'Queue Move 1',
+        filePath: 'C:\\Music\\queue-move-1.flac',
+        path: 'C:\\Music\\queue-move-1.flac',
+      },
+      {
+        id: 'queue-move-2',
+        title: 'Queue Move 2',
+        filePath: 'C:\\Music\\queue-move-2.flac',
+        path: 'C:\\Music\\queue-move-2.flac',
+      },
+      {
+        id: 'queue-move-3',
+        title: 'Queue Move 3',
+        filePath: 'C:\\Music\\queue-move-3.flac',
+        path: 'C:\\Music\\queue-move-3.flac',
+      },
+    ]);
+    await flushMicrotasks(6);
+
+    invokeMock.mockClear();
+    service.reorderQueue(0, 2);
+    await flushMicrotasks(6);
+
+    expect(invokeMock).toHaveBeenCalledWith('native_audio_move_queue_item', {
+      fromIndex: 0,
+      toIndex: 2,
+    });
+    expect(
+      invokeMock.mock.calls.some(([cmd]) => cmd === 'native_audio_sync_queue')
+    ).toBe(false);
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('loads local queue tracks by native queue index without path load command', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const service = new NativeAudioService();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+
+    service.addMultipleToQueue([
+      {
+        id: 'queue-load-1',
+        title: 'Queue Load 1',
+        filePath: 'C:\\Music\\queue-load-1.flac',
+        path: 'C:\\Music\\queue-load-1.flac',
+      },
+      {
+        id: 'queue-load-2',
+        title: 'Queue Load 2',
+        filePath: 'C:\\Music\\queue-load-2.flac',
+        path: 'C:\\Music\\queue-load-2.flac',
+      },
+    ]);
+    await flushMicrotasks(6);
+
+    invokeMock.mockClear();
+    await service.loadTrack({
+      id: 'queue-load-2',
+      title: 'Queue Load 2',
+      filePath: 'C:\\Music\\queue-load-2.flac',
+      path: 'C:\\Music\\queue-load-2.flac',
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith('native_audio_load_queue_index', {
+      index: 1,
+    });
+    expect(
+      invokeMock.mock.calls.some(([cmd]) => cmd === 'native_audio_load')
+    ).toBe(false);
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('plays local queue tracks by native queue index without path reload command', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const service = new NativeAudioService();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+
+    service.addMultipleToQueue([
+      {
+        id: 'queue-play-1',
+        title: 'Queue Play 1',
+        filePath: 'C:\\Music\\queue-play-1.flac',
+        path: 'C:\\Music\\queue-play-1.flac',
+      },
+      {
+        id: 'queue-play-2',
+        title: 'Queue Play 2',
+        filePath: 'C:\\Music\\queue-play-2.flac',
+        path: 'C:\\Music\\queue-play-2.flac',
+      },
+    ]);
+    await flushMicrotasks(6);
+
+    invokeMock.mockClear();
+    await service.playTrackAtIndex(1);
+
+    expect(invokeMock).toHaveBeenCalledWith('native_audio_load_and_play_queue_index', {
+      index: 1,
+      replayGainDb: 0,
+    });
+    expect(
+      invokeMock.mock.calls.some(([cmd]) => cmd === 'native_audio_load_and_play')
+    ).toBe(false);
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('patches native queue item path before playing a resolved queue track by index', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const service = new NativeAudioService();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+
+    service.addMultipleToQueue([
+      {
+        id: 'queue-patch-1',
+        title: 'Queue Patch 1',
+        filePath: 'C:\\Music\\queue-patch-original.flac',
+        path: 'C:\\Music\\queue-patch-original.flac',
+      },
+    ]);
+    await flushMicrotasks(6);
+
+    const resolvedTrack: Track = {
+      id: 'queue-patch-1',
+      title: 'Queue Patch 1',
+      filePath: 'D:\\Cache\\queue-patch-resolved.flac',
+      path: 'D:\\Cache\\queue-patch-resolved.flac',
+      originalPath: 'C:\\Music\\queue-patch-original.flac',
+    };
+    vi.spyOn(service as never, 'resolveTrackForNativePlayback' as never).mockResolvedValue(
+      resolvedTrack as never
+    );
+
+    invokeMock.mockClear();
+    await service.playTrackAtIndex(0);
+
+    expect(invokeMock).toHaveBeenCalledWith('native_audio_replace_queue_item_path', {
+      index: 0,
+      path: 'D:\\Cache\\queue-patch-resolved.flac',
+    });
+    expect(invokeMock).toHaveBeenCalledWith('native_audio_load_and_play_queue_index', {
+      index: 0,
+      replayGainDb: 0,
+    });
+
+    service.destroy();
+    restoreRuntime();
+  });
+
   it('stores manual playlist entries in lightweight projected form', () => {
     const service = new NativeAudioService();
     const playlist = service.createPlaylist('Compact Playlist');
@@ -485,6 +744,662 @@ describe('NativeAudioService', () => {
     expect(coverSpy).toHaveBeenCalled();
 
     coverSpy.mockRestore();
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('queries summary-only playlist tracks through paged native reads without hydrating playlist state', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation(async (cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'music_library_db_list_playlists') {
+        const query = (payload as { query?: { kind?: string } } | undefined)?.query;
+        if (query?.kind === 'smart') {
+          return [];
+        }
+        return [
+          {
+            id: 'playlist-page-1',
+            ownerUid: 'local:default',
+            name: 'Page Playlist',
+            description: null,
+            coverUrl: null,
+            kind: 'manual',
+            sourceConnectorId: null,
+            sourcePlaylistId: null,
+            smartRuleJson: null,
+            isReadonly: false,
+            createdAtMs: 1700000000000,
+            updatedAtMs: 1700000000000,
+            lastOpenedAtMs: null,
+            trackCount: 2,
+            totalDuration: 300,
+          },
+        ];
+      }
+      if (cmd === 'music_library_db_upsert_playlist') {
+        return {
+          id: 'smart-recently-played',
+          ownerUid: 'local:default',
+          name: 'Recently Played',
+          description: null,
+          kind: 'smart',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: JSON.stringify({ type: 'recently_played', limit: 1000 }),
+          isReadonly: true,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000000,
+          lastOpenedAtMs: null,
+          trackCount: 0,
+          totalDuration: 0,
+        };
+      }
+      if (cmd === 'music_library_db_query_playlist_tracks_page') {
+        expect(payload).toMatchObject({
+          query: {
+            playlistId: 'playlist-page-1',
+            searchQuery: 'paged',
+            sortField: 'artist',
+            sortDirection: 'desc',
+            limit: 50,
+            offset: 0,
+          },
+        });
+        return {
+          total: 2,
+          items: [
+            {
+              id: 'playlist-page-item-2',
+              playlistId: 'playlist-page-1',
+              position: 1,
+              localTrackId: 'track-page-2',
+              trackPayloadJson: JSON.stringify({
+                id: 'track-page-2',
+                title: 'Paged Track 2',
+                artist: 'Artist 2',
+                album: 'Album 2',
+                filePath: 'C:\\\\Music\\\\paged-track-2.flac',
+                path: 'C:\\\\Music\\\\paged-track-2.flac',
+                duration: 180,
+              }),
+              snapshotTitle: 'Paged Track 2',
+              snapshotArtist: 'Artist 2',
+              snapshotAlbum: 'Album 2',
+              snapshotDurationSeconds: 180,
+              createdAtMs: 1700000000001,
+            },
+            {
+              id: 'playlist-page-item-1',
+              playlistId: 'playlist-page-1',
+              position: 0,
+              localTrackId: 'track-page-1',
+              trackPayloadJson: JSON.stringify({
+                id: 'track-page-1',
+                title: 'Paged Track 1',
+                artist: 'Artist 1',
+                album: 'Album 1',
+                filePath: 'C:\\\\Music\\\\paged-track-1.flac',
+                path: 'C:\\\\Music\\\\paged-track-1.flac',
+                duration: 120,
+              }),
+              snapshotTitle: 'Paged Track 1',
+              snapshotArtist: 'Artist 1',
+              snapshotAlbum: 'Album 1',
+              snapshotDurationSeconds: 120,
+              createdAtMs: 1700000000000,
+            },
+          ],
+        };
+      }
+      return [];
+    });
+
+    const service = new NativeAudioService();
+    await flushMicrotasks(6);
+    await vi.waitFor(() => {
+      expect(service.getPlaylist('playlist-page-1')).not.toBeNull();
+    });
+
+    const page = await service.queryPlaylistTracksPage?.('playlist-page-1', {
+      searchQuery: 'paged',
+      sortField: 'artist',
+      sortDirection: 'desc',
+      limit: 50,
+      offset: 0,
+    });
+
+    expect(page).toEqual({
+      total: 2,
+      items: [
+        expect.objectContaining({
+          playlistIndex: 1,
+          track: expect.objectContaining({ id: 'track-page-2', title: 'Paged Track 2' }),
+        }),
+        expect.objectContaining({
+          playlistIndex: 0,
+          track: expect.objectContaining({ id: 'track-page-1', title: 'Paged Track 1' }),
+        }),
+      ],
+    });
+    expect(service.getPlaylist('playlist-page-1')?.tracksHydrated).toBe(false);
+    expect(service.getPlaylist('playlist-page-1')?.tracks).toHaveLength(0);
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('adds tracks to summary-only playlists through native prepend mutation without hydrating tracks', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation(async (cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'music_library_db_list_playlists') {
+        const query = (payload as { query?: { kind?: string } } | undefined)?.query;
+        if (query?.kind === 'smart') {
+          return [];
+        }
+        return [
+          {
+            id: 'playlist-mutate-1',
+            ownerUid: 'local:default',
+            name: 'Mutate Playlist',
+            description: null,
+            coverUrl: null,
+            kind: 'manual',
+            sourceConnectorId: null,
+            sourcePlaylistId: null,
+            smartRuleJson: null,
+            isReadonly: false,
+            createdAtMs: 1700000000000,
+            updatedAtMs: 1700000000000,
+            lastOpenedAtMs: null,
+            trackCount: 2,
+            totalDuration: 300,
+          },
+        ];
+      }
+      if (cmd === 'music_library_db_upsert_playlist') {
+        return {
+          id: 'smart-recently-played',
+          ownerUid: 'local:default',
+          name: 'Recently Played',
+          description: null,
+          kind: 'smart',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: JSON.stringify({ type: 'recently_played', limit: 1000 }),
+          isReadonly: true,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000000,
+          lastOpenedAtMs: null,
+          trackCount: 0,
+          totalDuration: 0,
+        };
+      }
+      if (cmd === 'music_library_db_prepend_playlist_item') {
+        expect(payload).toMatchObject({
+          playlistId: 'playlist-mutate-1',
+          item: expect.objectContaining({
+            snapshotTitle: 'Fresh Track',
+            snapshotArtist: 'Artist Fresh',
+            snapshotAlbum: 'Album Fresh',
+            snapshotDurationSeconds: 210,
+          }),
+        });
+        return {
+          id: 'playlist-mutate-1',
+          ownerUid: 'local:default',
+          name: 'Mutate Playlist',
+          description: null,
+          coverUrl: null,
+          kind: 'manual',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: null,
+          isReadonly: false,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000001111,
+          lastOpenedAtMs: null,
+          trackCount: 3,
+          totalDuration: 510,
+        };
+      }
+      return undefined;
+    });
+
+    const service = new NativeAudioService();
+    await flushMicrotasks(6);
+    await vi.waitFor(() => {
+      expect(service.getPlaylist('playlist-mutate-1')).not.toBeNull();
+    });
+
+    service.addTrackToPlaylist('playlist-mutate-1', {
+      id: 'track-fresh',
+      title: 'Fresh Track',
+      artist: 'Artist Fresh',
+      album: 'Album Fresh',
+      duration: 210,
+      filePath: 'C:\\Music\\fresh-track.flac',
+      path: 'C:\\Music\\fresh-track.flac',
+      lyrics: 'heavy',
+      fileContent: new ArrayBuffer(1024 * 1024),
+    });
+
+    await vi.waitFor(() => {
+      const playlist = service.getPlaylist('playlist-mutate-1');
+      expect(playlist?.trackCount).toBe(3);
+      expect(playlist?.tracksHydrated).toBe(false);
+      expect(playlist?.tracks).toHaveLength(0);
+    });
+
+    const invokedCommands = invokeMock.mock.calls.map((call) => call[0]);
+    expect(invokedCommands).toContain('music_library_db_prepend_playlist_item');
+    expect(invokedCommands).not.toContain('music_library_db_list_playlist_items');
+    expect(invokedCommands).not.toContain('music_library_db_replace_playlist_items');
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('removes tracks from summary-only playlists through native mutation without hydrating tracks', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation(async (cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'music_library_db_list_playlists') {
+        const query = (payload as { query?: { kind?: string } } | undefined)?.query;
+        if (query?.kind === 'smart') {
+          return [];
+        }
+        return [
+          {
+            id: 'playlist-mutate-remove',
+            ownerUid: 'local:default',
+            name: 'Remove Playlist',
+            description: null,
+            coverUrl: null,
+            kind: 'manual',
+            sourceConnectorId: null,
+            sourcePlaylistId: null,
+            smartRuleJson: null,
+            isReadonly: false,
+            createdAtMs: 1700000000000,
+            updatedAtMs: 1700000000000,
+            lastOpenedAtMs: null,
+            trackCount: 3,
+            totalDuration: 510,
+          },
+        ];
+      }
+      if (cmd === 'music_library_db_upsert_playlist') {
+        return {
+          id: 'smart-recently-played',
+          ownerUid: 'local:default',
+          name: 'Recently Played',
+          description: null,
+          kind: 'smart',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: JSON.stringify({ type: 'recently_played', limit: 1000 }),
+          isReadonly: true,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000000,
+          lastOpenedAtMs: null,
+          trackCount: 0,
+          totalDuration: 0,
+        };
+      }
+      if (cmd === 'music_library_db_remove_playlist_item_at') {
+        expect(payload).toMatchObject({
+          playlistId: 'playlist-mutate-remove',
+          position: 1,
+        });
+        return {
+          id: 'playlist-mutate-remove',
+          ownerUid: 'local:default',
+          name: 'Remove Playlist',
+          description: null,
+          coverUrl: null,
+          kind: 'manual',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: null,
+          isReadonly: false,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000002222,
+          lastOpenedAtMs: null,
+          trackCount: 2,
+          totalDuration: 330,
+        };
+      }
+      return undefined;
+    });
+
+    const service = new NativeAudioService();
+    await flushMicrotasks(6);
+    await vi.waitFor(() => {
+      expect(service.getPlaylist('playlist-mutate-remove')).not.toBeNull();
+    });
+
+    service.removeTrackFromPlaylist('playlist-mutate-remove', 1);
+
+    await vi.waitFor(() => {
+      const playlist = service.getPlaylist('playlist-mutate-remove');
+      expect(playlist?.trackCount).toBe(2);
+      expect(playlist?.tracksHydrated).toBe(false);
+      expect(playlist?.tracks).toHaveLength(0);
+    });
+
+    const invokedCommands = invokeMock.mock.calls.map((call) => call[0]);
+    expect(invokedCommands).toContain('music_library_db_remove_playlist_item_at');
+    expect(invokedCommands).not.toContain('music_library_db_list_playlist_items');
+    expect(invokedCommands).not.toContain('music_library_db_replace_playlist_items');
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('clears summary-only playlists through native mutation without hydrating tracks', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation(async (cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'music_library_db_list_playlists') {
+        const query = (payload as { query?: { kind?: string } } | undefined)?.query;
+        if (query?.kind === 'smart') {
+          return [];
+        }
+        return [
+          {
+            id: 'playlist-mutate-clear',
+            ownerUid: 'local:default',
+            name: 'Clear Playlist',
+            description: null,
+            coverUrl: null,
+            kind: 'manual',
+            sourceConnectorId: null,
+            sourcePlaylistId: null,
+            smartRuleJson: null,
+            isReadonly: false,
+            createdAtMs: 1700000000000,
+            updatedAtMs: 1700000000000,
+            lastOpenedAtMs: null,
+            trackCount: 3,
+            totalDuration: 510,
+          },
+        ];
+      }
+      if (cmd === 'music_library_db_upsert_playlist') {
+        return {
+          id: 'smart-recently-played',
+          ownerUid: 'local:default',
+          name: 'Recently Played',
+          description: null,
+          kind: 'smart',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: JSON.stringify({ type: 'recently_played', limit: 1000 }),
+          isReadonly: true,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000000,
+          lastOpenedAtMs: null,
+          trackCount: 0,
+          totalDuration: 0,
+        };
+      }
+      if (cmd === 'music_library_db_clear_playlist_items') {
+        expect(payload).toMatchObject({
+          playlistId: 'playlist-mutate-clear',
+        });
+        return {
+          id: 'playlist-mutate-clear',
+          ownerUid: 'local:default',
+          name: 'Clear Playlist',
+          description: null,
+          coverUrl: null,
+          kind: 'manual',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: null,
+          isReadonly: false,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000003333,
+          lastOpenedAtMs: null,
+          trackCount: 0,
+          totalDuration: 0,
+        };
+      }
+      return undefined;
+    });
+
+    const service = new NativeAudioService();
+    await flushMicrotasks(6);
+    await vi.waitFor(() => {
+      expect(service.getPlaylist('playlist-mutate-clear')).not.toBeNull();
+    });
+
+    service.clearPlaylist('playlist-mutate-clear');
+
+    await vi.waitFor(() => {
+      const playlist = service.getPlaylist('playlist-mutate-clear');
+      expect(playlist?.trackCount).toBe(0);
+      expect(playlist?.totalDuration).toBe(0);
+      expect(playlist?.tracksHydrated).toBe(false);
+      expect(playlist?.tracks).toHaveLength(0);
+    });
+
+    const invokedCommands = invokeMock.mock.calls.map((call) => call[0]);
+    expect(invokedCommands).toContain('music_library_db_clear_playlist_items');
+    expect(invokedCommands).not.toContain('music_library_db_list_playlist_items');
+    expect(invokedCommands).not.toContain('music_library_db_replace_playlist_items');
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('adds tracks to hydrated playlists through native prepend mutation without snapshot replace', async () => {
+    const service = new NativeAudioService();
+    const playlist = service.createPlaylist('Hydrated Add');
+    service.addTrackToPlaylist(playlist.id, {
+      id: 'hydrated-existing-1',
+      title: 'Existing Track',
+      artist: 'Artist Existing',
+      album: 'Album Existing',
+      duration: 180,
+      filePath: 'C:\\Music\\hydrated-existing-1.flac',
+      path: 'C:\\Music\\hydrated-existing-1.flac',
+    });
+
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'music_library_db_prepend_playlist_item') {
+        expect(payload).toMatchObject({
+          playlistId: playlist.id,
+          item: expect.objectContaining({
+            snapshotTitle: 'Hydrated Fresh',
+            snapshotArtist: 'Artist Fresh',
+            snapshotAlbum: 'Album Fresh',
+            snapshotDurationSeconds: 240,
+          }),
+        });
+        return {
+          id: playlist.id,
+          ownerUid: 'local:default',
+          name: 'Hydrated Add',
+          description: null,
+          coverUrl: null,
+          kind: 'manual',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: null,
+          isReadonly: false,
+          createdAtMs: playlist.createdAt,
+          updatedAtMs: 1700000011111,
+          lastOpenedAtMs: null,
+          trackCount: 2,
+          totalDuration: 420,
+        };
+      }
+      return undefined;
+    });
+
+    service.addTrackToPlaylist(playlist.id, {
+      id: 'hydrated-fresh-1',
+      title: 'Hydrated Fresh',
+      artist: 'Artist Fresh',
+      album: 'Album Fresh',
+      duration: 240,
+      filePath: 'C:\\Music\\hydrated-fresh-1.flac',
+      path: 'C:\\Music\\hydrated-fresh-1.flac',
+      lyrics: 'heavy',
+      fileContent: new ArrayBuffer(1024 * 1024),
+    });
+
+    await vi.waitFor(() => {
+      const updated = service.getPlaylist(playlist.id);
+      expect(updated?.tracksHydrated).toBe(true);
+      expect(updated?.tracks).toHaveLength(2);
+      expect(updated?.tracks[0]?.id).toBe('hydrated-fresh-1');
+      expect(updated?.trackCount).toBe(2);
+      expect(updated?.totalDuration).toBe(420);
+    });
+
+    const invokedCommands = invokeMock.mock.calls.map((call) => call[0]);
+    expect(invokedCommands).toContain('music_library_db_prepend_playlist_item');
+    expect(invokedCommands).not.toContain('music_library_db_replace_playlist_items');
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('removes tracks from hydrated playlists through native remove mutation without snapshot replace', async () => {
+    const service = new NativeAudioService();
+    const playlist = service.createPlaylist('Hydrated Remove');
+    service.addTrackToPlaylist(playlist.id, {
+      id: 'hydrated-remove-1',
+      title: 'Remove One',
+      duration: 180,
+      filePath: 'C:\\Music\\hydrated-remove-1.flac',
+      path: 'C:\\Music\\hydrated-remove-1.flac',
+    });
+    service.addTrackToPlaylist(playlist.id, {
+      id: 'hydrated-remove-2',
+      title: 'Remove Two',
+      duration: 120,
+      filePath: 'C:\\Music\\hydrated-remove-2.flac',
+      path: 'C:\\Music\\hydrated-remove-2.flac',
+    });
+
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'music_library_db_remove_playlist_item_at') {
+        expect(payload).toMatchObject({
+          playlistId: playlist.id,
+          position: 1,
+        });
+        return {
+          id: playlist.id,
+          ownerUid: 'local:default',
+          name: 'Hydrated Remove',
+          description: null,
+          coverUrl: null,
+          kind: 'manual',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: null,
+          isReadonly: false,
+          createdAtMs: playlist.createdAt,
+          updatedAtMs: 1700000022222,
+          lastOpenedAtMs: null,
+          trackCount: 1,
+          totalDuration: 180,
+        };
+      }
+      return undefined;
+    });
+
+    service.removeTrackFromPlaylist(playlist.id, 1);
+
+    await vi.waitFor(() => {
+      const updated = service.getPlaylist(playlist.id);
+      expect(updated?.tracksHydrated).toBe(true);
+      expect(updated?.tracks).toHaveLength(1);
+      expect(updated?.tracks[0]?.id).toBe('hydrated-remove-2');
+      expect(updated?.trackCount).toBe(1);
+      expect(updated?.totalDuration).toBe(180);
+    });
+
+    const invokedCommands = invokeMock.mock.calls.map((call) => call[0]);
+    expect(invokedCommands).toContain('music_library_db_remove_playlist_item_at');
+    expect(invokedCommands).not.toContain('music_library_db_replace_playlist_items');
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('clears hydrated playlists through native clear mutation without snapshot replace', async () => {
+    const service = new NativeAudioService();
+    const playlist = service.createPlaylist('Hydrated Clear');
+    service.addTrackToPlaylist(playlist.id, {
+      id: 'hydrated-clear-1',
+      title: 'Clear One',
+      duration: 180,
+      filePath: 'C:\\Music\\hydrated-clear-1.flac',
+      path: 'C:\\Music\\hydrated-clear-1.flac',
+    });
+    service.addTrackToPlaylist(playlist.id, {
+      id: 'hydrated-clear-2',
+      title: 'Clear Two',
+      duration: 120,
+      filePath: 'C:\\Music\\hydrated-clear-2.flac',
+      path: 'C:\\Music\\hydrated-clear-2.flac',
+    });
+
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'music_library_db_clear_playlist_items') {
+        expect(payload).toMatchObject({
+          playlistId: playlist.id,
+        });
+        return {
+          id: playlist.id,
+          ownerUid: 'local:default',
+          name: 'Hydrated Clear',
+          description: null,
+          coverUrl: null,
+          kind: 'manual',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: null,
+          isReadonly: false,
+          createdAtMs: playlist.createdAt,
+          updatedAtMs: 1700000033333,
+          lastOpenedAtMs: null,
+          trackCount: 0,
+          totalDuration: 0,
+        };
+      }
+      return undefined;
+    });
+
+    service.clearPlaylist(playlist.id);
+
+    await vi.waitFor(() => {
+      const updated = service.getPlaylist(playlist.id);
+      expect(updated?.tracksHydrated).toBe(true);
+      expect(updated?.tracks).toHaveLength(0);
+      expect(updated?.trackCount).toBe(0);
+      expect(updated?.totalDuration).toBe(0);
+    });
+
+    const invokedCommands = invokeMock.mock.calls.map((call) => call[0]);
+    expect(invokedCommands).toContain('music_library_db_clear_playlist_items');
+    expect(invokedCommands).not.toContain('music_library_db_replace_playlist_items');
+
     service.destroy();
     restoreRuntime();
   });

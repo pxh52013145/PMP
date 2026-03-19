@@ -38,6 +38,11 @@ export class NativeAudioQueueSyncController<T> {
     this.lastSyncedQueueIndex = -1;
   }
 
+  markSynced(queue: T[], currentIndex: number): void {
+    this.lastSyncedQueueRef = queue;
+    this.lastSyncedQueueIndex = currentIndex;
+  }
+
   scheduleFlush(callbacks: QueueSyncCallbacks<T>): void {
     if (callbacks.isDisposed()) {
       this.pendingRequest = null;
@@ -102,4 +107,3 @@ export class NativeAudioQueueSyncController<T> {
     }
   }
 }
-

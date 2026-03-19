@@ -551,6 +551,56 @@ pub async fn music_library_db_list_playlist_items(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_prepend_playlist_item(
+    app: tauri::AppHandle,
+    playlist_id: String,
+    item: music_library_db::LibraryPlaylistItemUpsertInput,
+) -> Result<music_library_db::LibraryPlaylistRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::prepend_playlist_item(&app, &playlist_id, item)
+    })
+    .await
+    .map_err(|e| format!("Music library prepend playlist item task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_remove_playlist_item_at(
+    app: tauri::AppHandle,
+    playlist_id: String,
+    position: i64,
+) -> Result<music_library_db::LibraryPlaylistRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::remove_playlist_item_at(&app, &playlist_id, position)
+    })
+    .await
+    .map_err(|e| format!("Music library remove playlist item task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_clear_playlist_items(
+    app: tauri::AppHandle,
+    playlist_id: String,
+) -> Result<music_library_db::LibraryPlaylistRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::clear_playlist_items(&app, &playlist_id)
+    })
+    .await
+    .map_err(|e| format!("Music library clear playlist items task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_query_playlist_tracks_page(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibraryPlaylistTrackPageQueryInput>,
+) -> Result<music_library_db::LibraryPlaylistTrackPageResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::query_playlist_tracks_page(&app, query)
+    })
+    .await
+    .map_err(|e| format!("Music library query playlist tracks page task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_db_upsert_fallback_task(
     app: tauri::AppHandle,
     task: music_library_db::LibraryFallbackTaskUpsertInput,

@@ -2464,6 +2464,132 @@ impl NativeAudioEngine {
         }
     }
 
+    pub(crate) fn append_queue_state(&mut self, entries: Vec<PathBuf>) {
+        if entries.is_empty() {
+            return;
+        }
+
+        self.queue_initialized = true;
+        self.queue.extend(entries);
+    }
+
+    pub(crate) fn clear_queue_state(&mut self) {
+        self.queue_initialized = true;
+        self.queue.clear();
+        self.current_index = -1;
+        self.release_runtime_state_for_empty_queue();
+    }
+
+    pub(crate) fn remove_queue_entry_at(&mut self, index: i32) -> Result<(), String> {
+        if index < 0 {
+            return Err("Queue index is negative".to_string());
+        }
+
+        self.queue_initialized = true;
+        let normalized_index = index as usize;
+        if normalized_index >= self.queue.len() {
+            return Err(format!(
+                "Queue index out of range: {} >= {}",
+                normalized_index,
+                self.queue.len()
+            ));
+        }
+
+        self.queue.remove(normalized_index);
+
+        if self.queue.is_empty() {
+            self.current_index = -1;
+            self.release_runtime_state_for_empty_queue();
+            return Ok(());
+        }
+
+        if self.current_index == index {
+            self.current_index = index.min((self.queue.len() as i32).saturating_sub(1));
+        } else if self.current_index > index {
+            self.current_index -= 1;
+        }
+
+        if self.current_index >= self.queue.len() as i32 {
+            self.current_index = (self.queue.len() as i32).saturating_sub(1);
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn move_queue_entry(
+        &mut self,
+        from_index: i32,
+        to_index: i32,
+    ) -> Result<(), String> {
+        if from_index < 0 || to_index < 0 {
+            return Err("Queue index is negative".to_string());
+        }
+
+        self.queue_initialized = true;
+        let normalized_from = from_index as usize;
+        let normalized_to = to_index as usize;
+        let queue_len = self.queue.len();
+        if normalized_from >= queue_len {
+            return Err(format!(
+                "Queue source index out of range: {} >= {}",
+                normalized_from, queue_len
+            ));
+        }
+        if normalized_to >= queue_len {
+            return Err(format!(
+                "Queue target index out of range: {} >= {}",
+                normalized_to, queue_len
+            ));
+        }
+        if normalized_from == normalized_to {
+            return Ok(());
+        }
+
+        let entry = self.queue.remove(normalized_from);
+        self.queue.insert(normalized_to, entry);
+
+        if self.current_index == from_index {
+            self.current_index = to_index;
+        } else if from_index < self.current_index && to_index >= self.current_index {
+            self.current_index -= 1;
+        } else if from_index > self.current_index && to_index <= self.current_index {
+            self.current_index += 1;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn replace_queue_entry_path(
+        &mut self,
+        index: i32,
+        path: PathBuf,
+    ) -> Result<(), String> {
+        if index < 0 {
+            return Err("Queue index is negative".to_string());
+        }
+
+        self.queue_initialized = true;
+        let normalized_index = index as usize;
+        if normalized_index >= self.queue.len() {
+            return Err(format!(
+                "Queue index out of range: {} >= {}",
+                normalized_index,
+                self.queue.len()
+            ));
+        }
+
+        self.queue[normalized_index] = path;
+        Ok(())
+    }
+
+    pub(crate) fn queued_track_path_at(&self, index: i32) -> Option<PathBuf> {
+        if index < 0 {
+            return None;
+        }
+
+        self.queue.get(index as usize).cloned()
+    }
+
     pub(crate) fn sync_queue_index_state(&mut self, current_index: i32) {
         if !self.queue_initialized {
             return;
