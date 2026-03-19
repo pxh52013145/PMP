@@ -17,6 +17,8 @@ import { readJson, writeJson } from '../../modules/storage';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { MEMORY_GOVERNANCE_AUDIT_MAX_ENTRIES } from '../../contracts/memoryGovernance';
 import { getProcessPerfTotalsSnapshot } from '../../modules/debug';
+import { getTelemetryLogger } from '../telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../telemetry/tauriInvokeTelemetry';
 import { scheduleProcessWorkingSetTrim } from '../../utils/processWorkingSetTrim';
 
 export type MemoryGovernanceAuditEntry = {
@@ -94,6 +96,7 @@ function buildPlannedActions(
 
 export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
   private lastResult: MemoryGovernanceRunResult | null = null;
+  private readonly telemetry = getTelemetryLogger('memory-governance', 'MemoryGovernanceService');
 
   constructor(
     private readonly navigation: NavigationService,
@@ -109,6 +112,14 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
     const plan = decideMemoryGovernancePlan(snapshot);
     const plannedActions = buildPlannedActions(plan.actions, reason, snapshot.isTauri);
 
+    this.telemetry.info('memory-governance.run.start', {
+      fields: {
+        reason,
+        tier: plan.tier,
+        plannedActions,
+      },
+    });
+
     const executed: MemoryGovernanceAction[] = [];
 
     for (const action of plannedActions) {
@@ -117,7 +128,10 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
           MusicLibraryService.getInstance().clearCoverRuntimeCaches();
           executed.push(action);
         } catch (error) {
-          console.warn('[memory-governance] failed to clear cover caches', error);
+          this.telemetry.warn('memory-governance.cover-cache.clear.failed', {
+            message: error instanceof Error ? error.message : String(error),
+            fields: { action, reason },
+          });
         }
         continue;
       }
@@ -132,7 +146,10 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
           }
           executed.push(action);
         } catch (error) {
-          console.warn('[memory-governance] failed to tighten cover cache policy', error);
+          this.telemetry.warn('memory-governance.cover-cache.policy.failed', {
+            message: error instanceof Error ? error.message : String(error),
+            fields: { action, policy, reason },
+          });
         }
         continue;
       }
@@ -211,6 +228,13 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
     });
 
     this.events.emit('memory-governance/ran', result);
+    this.telemetry.info('memory-governance.run.completed', {
+      fields: {
+        reason,
+        tier: plan.tier,
+        executed,
+      },
+    });
     return result;
   }
 
@@ -272,7 +296,9 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
         treeCpuPercent: totals.totals.cpuPercent,
       };
     } catch (error) {
-      console.warn('[memory-governance] failed to collect webview2 snapshot', error);
+      this.telemetry.warn('memory-governance.webview2-snapshot.failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
       return undefined;
     }
   }
@@ -283,7 +309,9 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       const next = [...existing, entry].slice(-MEMORY_GOVERNANCE_AUDIT_MAX_ENTRIES);
       writeJson(STORAGE_KEYS.MEMORY_GOVERNANCE_AUDIT_V1, next, { mode: 'idle', debounceMs: 300 });
     } catch (error) {
-      console.warn('[memory-governance] failed to append audit entry', error);
+      this.telemetry.warn('memory-governance.audit.append.failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -295,11 +323,21 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
     if (!isTauri) return false;
 
     try {
-      const { invoke } = await import('@tauri-apps/api/tauri');
-      await invoke(command);
+      await invokeWithTelemetry(command, undefined, {
+        moduleId: 'memory-governance',
+        component: 'MemoryGovernanceService',
+        event: 'memory-governance.command.invoke',
+        successLevel: 'info',
+      });
       return true;
     } catch (error) {
-      console.warn(warningPrefix, error);
+      this.telemetry.warn('memory-governance.command.invoke.failed', {
+        message: error instanceof Error ? error.message : String(error),
+        fields: {
+          command,
+          warningPrefix,
+        },
+      });
       return false;
     }
   }

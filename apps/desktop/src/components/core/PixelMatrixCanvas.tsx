@@ -5,10 +5,13 @@ import { STORAGE_KEYS, TAURI_EVENTS, setupTauriListener } from '../../utils/wind
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { useQuality } from '../../contexts/QualityContext';
 import { readString } from '../../modules/storage';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 
 interface PixelMatrixCanvasProps {
   onPixelPositionsUpdate?: (positions: Map<string, { x: number; y: number }>) => void;
 }
+
+const telemetry = getTelemetryLogger('visualizer', 'PixelMatrixCanvas');
 
 export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatrixCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -30,6 +33,13 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
     if (!containerRef.current) return;
 
     const quality = qualityRef.current;
+    telemetry.info('visualizer.pixel-matrix.renderer.init', {
+      fields: {
+        renderScale: quality.renderScale,
+        fpsForeground: quality.fpsForeground,
+        fpsBackground: quality.fpsBackground,
+      },
+    });
     const renderer = new PixelMatrixRenderer(window.innerWidth, window.innerHeight, {
       renderScale: quality.renderScale,
       fpsCapFull: quality.fpsForeground,
@@ -108,6 +118,7 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
       window.removeEventListener('resize', handleResize);
       if (resizeRaf !== null) window.cancelAnimationFrame(resizeRaf);
       cleanupPromise.then((cleanup) => cleanup());
+      telemetry.info('visualizer.pixel-matrix.renderer.destroy');
       rendererRef.current?.destroy();
     };
   }, []);
@@ -118,6 +129,11 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
 
   useEffect(() => {
     rendererRef.current?.setRenderMode(renderMode);
+    telemetry.info('visualizer.pixel-matrix.render-mode.changed', {
+      fields: {
+        renderMode,
+      },
+    });
   }, [renderMode]);
 
   useEffect(() => {
@@ -125,6 +141,13 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
       renderScale: effective.renderScale,
       fpsCapFull: effective.fpsForeground,
       fpsCapThrottle: effective.fpsBackground,
+    });
+    telemetry.debug('visualizer.pixel-matrix.quality.updated', {
+      fields: {
+        renderScale: effective.renderScale,
+        fpsForeground: effective.fpsForeground,
+        fpsBackground: effective.fpsBackground,
+      },
     });
   }, [effective.fpsBackground, effective.fpsForeground, effective.renderScale]);
 

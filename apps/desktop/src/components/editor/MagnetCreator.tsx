@@ -29,7 +29,14 @@ import {
 } from './magnetCreatorModel';
 import { DEFAULT_MAGNET_TRANSITION } from '../../modules/magnets/chromePresets';
 import { useLocale, useT } from '../../i18n';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import './MagnetCreator.css';
+
+const telemetry = getTelemetryLogger('editor', 'MagnetCreator');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 interface MagnetCreatorProps {
   mode: 'create' | 'edit';
@@ -482,7 +489,9 @@ export function MagnetCreator({
         setImportError('');
       }
     } catch (error) {
-      console.error('File import error:', error);
+      telemetry.error('editor.magnet.import-file.failed', {
+        message: getErrorMessage(error),
+      });
       setImportError(
         error instanceof Error ? error.message : 'editor.magnet-creator.import.readFileFailed'
       );
@@ -529,7 +538,11 @@ export function MagnetCreator({
       })
       .catch(() => {
         alert(t('editor.magnet-creator.export.copyFailed'));
-        console.log(jsonStr);
+        telemetry.warn('editor.magnet.export.clipboard-copy.failed', {
+          fields: {
+            fallbackBytes: jsonStr.length,
+          },
+        });
       });
   };
 
@@ -552,7 +565,7 @@ export function MagnetCreator({
       {/* 闁归攱鐗曟慨鈺呭冀閸ヮ剦鏆敓?*/}
       <div className="editor-window-header" data-tauri-drag-region>
         <span className="window-title" data-tauri-drag-region>
-          闁抽偊鍠掗敓?
+          {t('windows.editor.creator.title')}
         </span>
       </div>
 

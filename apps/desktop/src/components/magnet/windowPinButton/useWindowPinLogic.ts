@@ -1,6 +1,13 @@
 import { appWindow } from '@tauri-apps/api/window';
 import { useT } from '../../../i18n';
+import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import { WindowPinLogic } from './WindowPinTypes';
+
+const telemetry = getTelemetryLogger('windowing', 'useWindowPinLogic');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function useWindowPinLogic(
   isPinned: boolean,
@@ -19,7 +26,12 @@ export function useWindowPinLogic(
       await appWindow.setAlwaysOnTop(nextPinned);
     } catch (error) {
       setIsPinned(isPinned);
-      console.error('Failed to toggle window pin state:', error);
+      telemetry.error('window_pin.toggle.failed', {
+        message: readErrorMessage(error),
+        fields: {
+          nextPinned,
+        },
+      });
     }
   };
 

@@ -1,9 +1,11 @@
 import { Magnet } from '../../types/pixel';
 import { createControlChromePreset } from '../../modules/magnets/chromePresets';
 import { createCenteredSingleControlLayoutPreset } from '../../modules/magnets/layoutPresets';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 
 const DESKTOP_LYRICS_CHROME = createControlChromePreset();
 const DESKTOP_LYRICS_LAYOUT = createCenteredSingleControlLayoutPreset();
+const telemetry = getTelemetryLogger('magnets', 'desktopLyricsMagnet');
 
 export const DESKTOP_LYRICS_MAGNET: Magnet = {
   id: 'btn-desktop-lyrics',
@@ -23,7 +25,7 @@ export const DESKTOP_LYRICS_MAGNET: Magnet = {
     draggable: true,
     clickable: true,
     onClick: () => {
-      console.log('toggle desktop lyrics');
+      telemetry.debug('desktop_lyrics.toggle.clicked');
     },
   },
 };

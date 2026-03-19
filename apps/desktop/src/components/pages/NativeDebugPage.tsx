@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import './NativeDebugPage.css';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { usePerformanceControlSettings } from '../../contexts/usePerformanceControlSettings';
 import { useLocale, useT } from '../../i18n';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
 import { AudioRobustnessSnapshot, type AudioState, Playlist, Track } from '../../services/audio';
 import type { AudioTuningProfileId } from '../../services/audio/types';
 import {
@@ -24,6 +25,24 @@ import {
   STORAGE_KEYS,
   TAURI_EVENTS,
 } from '../../utils/windowCommunication';
+
+const telemetry = getTelemetryLogger('debug', 'NativeDebugPage');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function invokeNativeDebug<T>(
+  command: string,
+  args: Record<string, unknown> | undefined,
+  event: string
+): Promise<T> {
+  return invokeWithTelemetry<T>(command, args, {
+    moduleId: 'debug',
+    component: 'NativeDebugPage',
+    event,
+  });
+}
 
 function getFileName(filePath: string, fallback: string): string {
   const normalized = filePath.replace(/\\/g, '/');
@@ -994,11 +1013,18 @@ export const NativeDebugPage: React.FC = () => {
 
   const fetchEnginePolicy = useCallback(async () => {
     try {
-      const payload = await invoke<unknown>('native_audio_get_engine_policy');
+      const payload = await invokeNativeDebug<unknown>(
+        'native_audio_get_engine_policy',
+        undefined,
+        'debug.audio.engine-policy.read'
+      );
       const record = asRecord(payload);
       if (!record) return;
       applySrcPolicyState(record as NativeAudioEnginePolicyPayload);
     } catch (error) {
+      telemetry.warn('debug.audio.engine-policy.read.failed', {
+        message: getErrorMessage(error),
+      });
       const message = error instanceof Error ? error.message : String(error);
       appendLog(t('pages.native-debug.log.enginePolicyFetchFailed', { message }));
     }
@@ -1015,11 +1041,15 @@ export const NativeDebugPage: React.FC = () => {
     const shouldUseTarget = srcMode === 'target-rate';
 
     try {
-      const payload = await invoke<unknown>('native_audio_set_engine_policy', {
-        srcMode,
-        srcBackend,
-        srcTargetSampleRate: shouldUseTarget ? targetRate : null,
-      });
+      const payload = await invokeNativeDebug<unknown>(
+        'native_audio_set_engine_policy',
+        {
+          srcMode,
+          srcBackend,
+          srcTargetSampleRate: shouldUseTarget ? targetRate : null,
+        },
+        'debug.audio.engine-policy.set'
+      );
       const record = asRecord(payload);
       if (record) {
         applySrcPolicyState(record as NativeAudioEnginePolicyPayload);
@@ -1069,11 +1099,15 @@ export const NativeDebugPage: React.FC = () => {
       }
 
       try {
-        const payload = await invoke<unknown>('native_audio_set_engine_policy', {
-          srcMode: nextMode,
-          srcBackend: nextBackend,
-          srcTargetSampleRate: nextMode === 'target-rate' ? nextTarget : null,
-        });
+        const payload = await invokeNativeDebug<unknown>(
+          'native_audio_set_engine_policy',
+          {
+            srcMode: nextMode,
+            srcBackend: nextBackend,
+            srcTargetSampleRate: nextMode === 'target-rate' ? nextTarget : null,
+          },
+          'debug.audio.engine-policy.set'
+        );
         const record = asRecord(payload);
         if (record) {
           applySrcPolicyState(record as NativeAudioEnginePolicyPayload);
@@ -1123,7 +1157,11 @@ export const NativeDebugPage: React.FC = () => {
 
   const handleRefreshAudioComponents = useCallback(async () => {
     try {
-      const payload = await invoke<unknown>('native_audio_get_audio_components_state');
+      const payload = await invokeNativeDebug<unknown>(
+        'native_audio_get_audio_components_state',
+        undefined,
+        'debug.audio.components-state.read'
+      );
       const parsed = parseNativeAudioComponentsState(payload);
       setComponentsState(parsed);
       setSelectedBackend(parsed.outputBackendId ?? '');
@@ -1136,7 +1174,11 @@ export const NativeDebugPage: React.FC = () => {
     await fetchEnginePolicy();
 
     try {
-      const backends = await invoke<string[]>('native_audio_list_output_backends');
+      const backends = await invokeNativeDebug<string[]>(
+        'native_audio_list_output_backends',
+        undefined,
+        'debug.audio.output-backends.list'
+      );
       setOutputBackends(backends);
       appendLog(t('pages.native-debug.log.outputBackendsFetched', { count: backends.length }));
     } catch (error) {
@@ -1145,7 +1187,11 @@ export const NativeDebugPage: React.FC = () => {
     }
 
     try {
-      const inputs = await invoke<string[]>('native_audio_list_audio_inputs');
+      const inputs = await invokeNativeDebug<string[]>(
+        'native_audio_list_audio_inputs',
+        undefined,
+        'debug.audio.audio-inputs.list'
+      );
       setAudioInputs(inputs);
       appendLog(t('pages.native-debug.log.audioInputsFetched', { count: inputs.length }));
     } catch (error) {
@@ -1163,9 +1209,11 @@ export const NativeDebugPage: React.FC = () => {
     const backendId = selectedBackend.length > 0 ? selectedBackend : null;
 
     try {
-      const payload = await invoke<unknown>('native_audio_select_output_backend', {
-        backendId,
-      });
+      const payload = await invokeNativeDebug<unknown>(
+        'native_audio_select_output_backend',
+        { backendId },
+        'debug.audio.output-backend.select'
+      );
       const parsed = parseNativeAudioComponentsState(payload);
       setComponentsState(parsed);
       setSelectedBackend(parsed.outputBackendId ?? '');
@@ -1206,9 +1254,11 @@ export const NativeDebugPage: React.FC = () => {
         TAURI_EVENTS.NATIVE_AUDIO_INPUT_ID_UPDATED
       );
 
-      const payload = await invoke<unknown>('native_audio_select_audio_input', {
-        inputId,
-      });
+      const payload = await invokeNativeDebug<unknown>(
+        'native_audio_select_audio_input',
+        { inputId },
+        'debug.audio.audio-input.select'
+      );
       const parsed = parseNativeAudioComponentsState(payload);
       setComponentsState(parsed);
       setSelectedInput(parsed.preferredInputId ?? '');
@@ -1226,10 +1276,14 @@ export const NativeDebugPage: React.FC = () => {
 
   const handleRefreshOutputRoute = useCallback(async () => {
     try {
-      await invoke('native_audio_select_device', {
-        deviceId: null,
-        deviceName: null,
-      });
+      await invokeNativeDebug(
+        'native_audio_select_device',
+        {
+          deviceId: null,
+          deviceName: null,
+        },
+        'debug.audio.output-device.refresh'
+      );
       await broadcastSignal(TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED);
       await handleRefreshAudioComponents();
       appendLog(
@@ -1270,7 +1324,7 @@ export const NativeDebugPage: React.FC = () => {
           nextGainDb,
           TAURI_EVENTS.NATIVE_AUDIO_GAIN_DB_UPDATED
         );
-        await invoke('native_audio_set_dsp_chain', { chain });
+        await invokeNativeDebug('native_audio_set_dsp_chain', { chain }, 'debug.audio.dsp-chain.set');
         appendLog(logLine);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -1375,9 +1429,9 @@ export const NativeDebugPage: React.FC = () => {
       const hasBase = typeof base === 'number' && isFinite(base);
       const effective = replayGainSettings.enabled && hasBase ? base + replayGainSettings.preampDb : 0;
 
-      await invoke('native_audio_set_replay_gain', {
+      await invokeNativeDebug('native_audio_set_replay_gain', {
         db: effective,
-      });
+      }, 'debug.audio.replay-gain.set');
 
       appendLog(
         t('pages.native-debug.log.replayGainUpdated', {
@@ -1400,9 +1454,9 @@ export const NativeDebugPage: React.FC = () => {
         TAURI_EVENTS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS_UPDATED
       );
 
-      await invoke('native_audio_set_dynamic_gain_enabled', {
+      await invokeNativeDebug('native_audio_set_dynamic_gain_enabled', {
         enabled: runtimeControlSettings.dynamicGainEnabled,
-      });
+      }, 'debug.audio.dynamic-gain.set');
 
       const track = audioService.getState().currentTrack;
       const base =
@@ -1412,9 +1466,9 @@ export const NativeDebugPage: React.FC = () => {
       const hasBase = typeof base === 'number' && isFinite(base);
       const effective = replayGainSettings.enabled && hasBase ? base + replayGainSettings.preampDb : 0;
 
-      await invoke('native_audio_set_replay_gain', {
+      await invokeNativeDebug('native_audio_set_replay_gain', {
         db: effective,
-      });
+      }, 'debug.audio.replay-gain.set');
 
       appendLog(t('settings.audioAdvanced.runtimeControl.applySuccess'));
     } catch (error) {

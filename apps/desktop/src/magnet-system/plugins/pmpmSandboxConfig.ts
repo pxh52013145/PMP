@@ -1,4 +1,5 @@
 import { readJson, writeJson } from '../../modules/storage';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 
 export type PmpmSandboxListener = () => void;
@@ -6,6 +7,11 @@ export type PmpmSandboxListener = () => void;
 const sandboxListeners = new Set<PmpmSandboxListener>();
 let sandboxRevision = 0;
 let syncDisposer: (() => void) | null = null;
+const telemetry = getTelemetryLogger('pmpm', 'pmpmSandboxConfig');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function notifySandboxListeners(): void {
   sandboxRevision += 1;
@@ -13,7 +19,9 @@ function notifySandboxListeners(): void {
     try {
       listener();
     } catch (error) {
-      console.warn('[pmpm-sandbox] listener failed', error);
+      telemetry.warn('sandbox.listener.failed', {
+        message: readErrorMessage(error),
+      });
     }
   }
 }

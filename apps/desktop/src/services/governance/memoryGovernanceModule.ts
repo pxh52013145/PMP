@@ -21,6 +21,7 @@ import {
   MEMORY_GOVERNANCE_SERVICE_TOKEN,
   type MemoryGovernanceService,
 } from './MemoryGovernanceService';
+import { getTelemetryLogger } from '../telemetry/TelemetryService';
 import { AUDIO_ENGINE_SERVICE_TOKEN } from '../audio';
 
 function readEnabledSetting(): boolean {
@@ -48,6 +49,7 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
   return {
     id: 'memory-governance',
     activate: ({ services, events }) => {
+      const telemetry = getTelemetryLogger('memory-governance', 'memoryGovernanceModule');
       const navigation = services.get(NAVIGATION_SERVICE_TOKEN);
       const lifecycle = services.get(APP_LIFECYCLE_SERVICE_TOKEN) as AppLifecycleService;
       const audioEngine = services.getOptional(AUDIO_ENGINE_SERVICE_TOKEN);
@@ -109,6 +111,12 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
 
       const syncEnabled = (next: boolean, reason: MemoryGovernanceReason) => {
         enabled = next;
+        telemetry.info('memory-governance.auto.enabled-changed', {
+          fields: {
+            enabled,
+            reason,
+          },
+        });
         if (enabled) {
           start();
           startPlaybackWatch();

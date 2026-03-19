@@ -29,6 +29,7 @@ import {
   useMagnetChromeOverrideMode,
 } from '../../modules/magnets';
 import { readJson, readString, removeKey, writeJson } from '../../modules/storage';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { useWindowClose } from '../../contexts/WindowCloseContext';
 
@@ -66,6 +67,7 @@ export function MatrixWorkbench({
   showEditorPanel,
   showWindowBorder,
 }: MatrixWorkbenchProps) {
+  const telemetry = useMemo(() => getTelemetryLogger('background', 'MatrixWorkbench'), []);
   const disablePixelCanvasForPerf = import.meta.env.VITE_PERF_DISABLE_MATRIX_CANVAS === '1';
   const disableMagnetLayerForPerf = import.meta.env.VITE_PERF_DISABLE_MAGNET_LAYER === '1';
   const disableBackgroundLayerForPerf = import.meta.env.VITE_PERF_DISABLE_BACKGROUND_LAYER === '1';
@@ -408,10 +410,17 @@ export function MatrixWorkbench({
         const { gcOrphanBackgroundMedia } = await import('../../modules/background/mediaCleanup');
         const result = await gcOrphanBackgroundMedia();
         if (result.removed > 0) {
-          console.log(`[background] GC removed ${result.removed}/${result.scanned} orphan files`);
+          telemetry.info('background.gc.completed', {
+            fields: {
+              removedCount: result.removed,
+              scannedCount: result.scanned,
+            },
+          });
         }
       } catch (error) {
-        console.warn('[background] GC failed:', error);
+        telemetry.warn('background.gc.failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
       }
     };
 
@@ -426,7 +435,7 @@ export function MatrixWorkbench({
     }
     const timer = setTimeout(() => run(), 800);
     return () => clearTimeout(timer);
-  }, []);
+  }, [telemetry]);
 
   // 监听背景设置变化（使用统一的通信机制）
   useEffect(() => {

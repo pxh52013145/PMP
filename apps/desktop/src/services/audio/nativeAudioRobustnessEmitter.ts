@@ -1,5 +1,12 @@
 import type { AudioRobustnessSnapshot } from './types';
 import type { RobustnessListener } from './nativeAudioServiceTypes';
+import { getTelemetryLogger } from '../telemetry/TelemetryService';
+
+const telemetry = getTelemetryLogger('audio', 'nativeAudioRobustnessEmitter');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 type NativeAudioRobustnessEmitterSource = {
   getCallbacks(): Set<RobustnessListener>;
@@ -38,7 +45,9 @@ export function emitNativeAudioRobustnessSnapshot(
       try {
         callback(snapshot);
       } catch (error) {
-        console.warn('[NativeAudio] Robustness listener callback failed:', error);
+        telemetry.warn('native_audio.robustness_listener.callback_failed', {
+          message: readErrorMessage(error),
+        });
       }
     });
   } finally {
@@ -55,4 +64,3 @@ export function emitNativeAudioRobustnessSnapshot(
     }
   }
 }
-

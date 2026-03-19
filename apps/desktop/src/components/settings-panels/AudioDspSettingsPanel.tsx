@@ -1,10 +1,17 @@
-import { invoke } from '@tauri-apps/api/tauri';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAudioEngine } from '../../contexts/AudioEngineContext';
 import { useT } from '../../i18n';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
 import { broadcastDataUpdate, readData, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { PmpButton, PmpChoiceButton } from '../primitives';
+
+const telemetry = getTelemetryLogger('settings', 'AudioDspSettingsPanel');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 type NativeDspEqBandKind = 'peaking' | 'low-shelf' | 'high-shelf';
 
@@ -177,8 +184,15 @@ export function AudioDspSettingsPanel() {
           next.gainDb,
           TAURI_EVENTS.NATIVE_AUDIO_GAIN_DB_UPDATED
         );
-        await invoke('native_audio_set_dsp_chain', { chain });
+        await invokeWithTelemetry('native_audio_set_dsp_chain', { chain }, {
+          moduleId: 'settings',
+          component: 'AudioDspSettingsPanel',
+          event: 'settings.audio-dsp.chain.set',
+        });
       } catch (err) {
+        telemetry.error('settings.audio-dsp.chain.set.failed', {
+          message: getErrorMessage(err),
+        });
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);

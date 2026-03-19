@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::AppHandle;
 
+use crate::telemetry_contract::TelemetryPolicy;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum VstSidechainModeOverride {
@@ -55,6 +57,8 @@ pub struct DebugConfig {
     pub open_debug_center_on_next_start: bool,
     #[serde(default)]
     pub vst_bridge: DebugVstBridgeConfig,
+    #[serde(default)]
+    pub telemetry: TelemetryPolicy,
 }
 
 fn default_version() -> u32 {
@@ -68,6 +72,7 @@ impl Default for DebugConfig {
             enabled: false,
             open_debug_center_on_next_start: false,
             vst_bridge: DebugVstBridgeConfig::default(),
+            telemetry: TelemetryPolicy::default(),
         }
     }
 }
@@ -201,4 +206,26 @@ pub fn env_snapshot() -> BTreeMap<String, Option<String>> {
         );
     }
     map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DebugConfig;
+
+    #[test]
+    fn debug_config_serde_backfills_telemetry_defaults() {
+        let parsed: DebugConfig = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "enabled": true,
+            "vstBridge": {
+                "stderr": true
+            }
+        }))
+        .expect("debug config should deserialize");
+
+        assert!(parsed.telemetry.enabled);
+        assert_eq!(parsed.telemetry.batch_flush_ms, 250);
+        assert_eq!(parsed.telemetry.batch_max_items, 64);
+        assert_eq!(parsed.telemetry.persist_min_level, crate::telemetry_contract::TelemetryLevel::Warn);
+    }
 }

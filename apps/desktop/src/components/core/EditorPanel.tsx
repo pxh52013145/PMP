@@ -3,6 +3,13 @@ import { useEditor } from '../../contexts/EditorContext';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { writeJson, type StorageWriteMode } from '../../modules/storage';
 import { useMagnetConfig } from '../../modules/magnets';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+
+const telemetry = getTelemetryLogger('editor', 'EditorPanel');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function EditorPanel() {
   const { editorState } = useEditor();
@@ -37,7 +44,12 @@ export function EditorPanel() {
           await openEditorWindow({ type: 'control', ...position });
         } catch (error) {
           didOpenControlWindowRef.current = false;
-          console.error('Failed to open control window:', error);
+          telemetry.error('editor.control_window.open.failed', {
+            message: readErrorMessage(error),
+            fields: {
+              isEditing: editorState.isEditing,
+            },
+          });
         }
       })();
       return;
@@ -49,7 +61,12 @@ export function EditorPanel() {
         const { closeEditorWindow } = await import('../../utils/editorWindows');
         await closeEditorWindow('control');
       } catch (error) {
-        console.error('Failed to close editor windows:', error);
+        telemetry.error('editor.control_window.close.failed', {
+          message: readErrorMessage(error),
+          fields: {
+            isEditing: editorState.isEditing,
+          },
+        });
       }
     };
     void close();

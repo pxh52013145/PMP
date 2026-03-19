@@ -1,10 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import { broadcastDataUpdate, readData, setupDualListener, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { useT } from '../../i18n';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import {
+  invokeWithTelemetry,
+  type TauriInvokeTelemetryOptions,
+} from '../../services/telemetry/tauriInvokeTelemetry';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { ConfirmDialog } from './ConfirmDialog';
 import { buildMagnetVariantRenderers } from './shared/magnetVariantCatalog';
@@ -37,6 +41,25 @@ type VstSessionStatus = {
 type WarmupState = 'none' | 'disabled' | 'notLoaded' | 'loading' | 'loaded' | 'error';
 
 const EVENT_VST_SESSION_STATUSES = 'vst-session-statuses';
+const telemetry = getTelemetryLogger('vst', 'DspVstMagnet');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function invokeDspVst<T>(
+  command: string,
+  args: Record<string, unknown> | undefined,
+  event: string,
+  options: Partial<TauriInvokeTelemetryOptions> = {}
+): Promise<T> {
+  return invokeWithTelemetry<T>(command, args, {
+    moduleId: 'vst',
+    component: 'DspVstMagnet',
+    event,
+    ...options,
+  });
+}
 
 const PROGRESS_DOT_KEYS = ['d1', 'd2', 'd3', 'd4', 'd5'] as const;
 
@@ -290,7 +313,11 @@ const DspVstDefaultRenderer: React.FC<DspVstRendererProps> = ({ variantConfig })
 
   const refreshVstStatuses = useCallback(async () => {
     if (!isTauri) return;
-    const list = await invoke<unknown>('native_audio_vst_list_session_statuses').catch(() => []);
+    const list = await invokeDspVst<unknown>(
+      'native_audio_vst_list_session_statuses',
+      undefined,
+      'vst.session-status.list'
+    ).catch(() => []);
     setVstStatuses(ensureVstSessionStatusMap(list));
   }, [isTauri]);
 
@@ -321,7 +348,7 @@ const DspVstDefaultRenderer: React.FC<DspVstRendererProps> = ({ variantConfig })
 
       setVstToggleBusy(true);
       try {
-        await invoke('native_audio_vst_set_enabled', { enabled: nextEnabled });
+        await invokeDspVst('native_audio_vst_set_enabled', { enabled: nextEnabled }, 'vst.enabled.set');
         await broadcastDataUpdate(
           STORAGE_KEYS.NATIVE_AUDIO_VST_ENABLED,
           nextEnabled,
@@ -331,7 +358,12 @@ const DspVstDefaultRenderer: React.FC<DspVstRendererProps> = ({ variantConfig })
         void refreshVstStatuses();
         return true;
       } catch (err) {
-        console.warn('[DspVstMagnet] Toggle VST failed:', err);
+        telemetry.warn('vst.enabled.set.failed', {
+          message: getErrorMessage(err),
+          fields: {
+            enabled: nextEnabled,
+          },
+        });
         setWarmupReportMessage(t('magnet.dsp-vst.operation.failed', { error: String(err) }));
         return false;
       } finally {
@@ -356,7 +388,7 @@ const DspVstDefaultRenderer: React.FC<DspVstRendererProps> = ({ variantConfig })
       }
 
       setWarmupBusy(true);
-      const report = await invoke<unknown>('native_audio_vst_warmup');
+      const report = await invokeDspVst<unknown>('native_audio_vst_warmup', undefined, 'vst.warmup.run');
       const parsed = ensureWarmupReports(report);
       const lines: string[] = [];
       if (parsed.length === 0) {
@@ -372,7 +404,9 @@ const DspVstDefaultRenderer: React.FC<DspVstRendererProps> = ({ variantConfig })
       }
       setWarmupReportMessage(lines.join('\n'));
     } catch (err) {
-      console.warn('[DspVstMagnet] Warmup failed:', err);
+      telemetry.warn('vst.warmup.run.failed', {
+        message: getErrorMessage(err),
+      });
       setWarmupReportMessage(t('magnet.dsp-vst.warmup.report.failed', { error: String(err) }));
     } finally {
       setWarmupBusy(false);

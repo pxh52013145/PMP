@@ -1,6 +1,10 @@
 import type { Track } from '../audio';
 import type { AlbumSummary, LibraryStats } from './MusicLibraryService';
 
+export type NativeReadResult<T> =
+  | { status: 'ok'; value: T }
+  | { status: 'unavailable' };
+
 export interface MusicLibraryReadGateway {
   getAllTracks(limit?: number, offset?: number): Promise<Track[]>;
   searchTracks(query: string, limit?: number): Promise<Track[]>;
@@ -11,17 +15,56 @@ export interface MusicLibraryReadGateway {
 
 export interface MusicLibraryReadGatewayContext {
   isDesktopRuntime(): boolean;
-  tryGetAllTracksFromNativeDb(limit?: number, offset?: number): Promise<Track[] | null>;
-  trySearchTracksFromNativeDb(query: string, limit?: number): Promise<Track[] | null>;
-  tryGetTracksByAlbumFromNativeDb(album: string): Promise<Track[] | null>;
-  tryGetAllAlbumsFromNativeDb(includeStoredCover: boolean): Promise<AlbumSummary[] | null>;
-  tryGetLibraryStatsFromNativeDb(): Promise<LibraryStats | null>;
+  shouldAllowDesktopWebFallback?(): boolean;
+  tryGetAllTracksFromNativeDb(limit?: number, offset?: number): Promise<NativeReadResult<Track[]>>;
+  trySearchTracksFromNativeDb(query: string, limit?: number): Promise<NativeReadResult<Track[]>>;
+  tryGetTracksByAlbumFromNativeDb(album: string): Promise<NativeReadResult<Track[]>>;
+  tryGetAllAlbumsFromNativeDb(
+    includeStoredCover: boolean
+  ): Promise<NativeReadResult<AlbumSummary[]>>;
+  tryGetLibraryStatsFromNativeDb(): Promise<NativeReadResult<LibraryStats>>;
   ensureDb(): Promise<IDBDatabase>;
   buildPathVisibilityContext(): Promise<unknown>;
   isStoredTrackVisible(storedTrack: unknown, visibilityContext: unknown): boolean;
   restoreTrackForListProjection(storedTrack: unknown): Track;
   restoreTrackForPlayback(storedTrack: unknown): Track;
   sanitizeStoredCoverUrlForPath(rawCoverUrl: unknown, trackPath: unknown): string | undefined;
+}
+
+function isNativeReadAvailable<T>(
+  result: NativeReadResult<T>
+): result is Extract<NativeReadResult<T>, { status: 'ok' }> {
+  return result.status === 'ok';
+}
+
+function shouldAllowDesktopWebFallback(context: MusicLibraryReadGatewayContext): boolean {
+  return context.shouldAllowDesktopWebFallback?.() === true;
+}
+
+function createEmptyLibraryStats(): LibraryStats {
+  return {
+    totalTracks: 0,
+    totalArtists: 0,
+    totalAlbums: 0,
+    totalSize: 0,
+    totalDuration: 0,
+  };
+}
+
+async function resolveDesktopRead<T>(
+  context: MusicLibraryReadGatewayContext,
+  nativeRead: Promise<NativeReadResult<T>>,
+  webFallback: () => Promise<T>,
+  unavailableValue: () => T
+): Promise<T> {
+  const nativeValue = await nativeRead;
+  if (isNativeReadAvailable(nativeValue)) {
+    return nativeValue.value;
+  }
+  if (shouldAllowDesktopWebFallback(context)) {
+    return webFallback();
+  }
+  return unavailableValue();
 }
 
 function createWebMusicLibraryReadGateway(
@@ -304,11 +347,12 @@ function createDesktopMusicLibraryReadGateway(
 ): MusicLibraryReadGateway {
   return {
     async getAllTracks(limit?: number, offset?: number): Promise<Track[]> {
-      const nativeTracks = await context.tryGetAllTracksFromNativeDb(limit, offset);
-      if (nativeTracks) {
-        return nativeTracks;
-      }
-      return webGateway.getAllTracks(limit, offset);
+      return resolveDesktopRead(
+        context,
+        context.tryGetAllTracksFromNativeDb(limit, offset),
+        () => webGateway.getAllTracks(limit, offset),
+        () => []
+      );
     },
 
     async searchTracks(query: string, limit?: number): Promise<Track[]> {
@@ -317,36 +361,40 @@ function createDesktopMusicLibraryReadGateway(
         return typeof limit === 'number' ? this.getAllTracks(limit) : this.getAllTracks();
       }
 
-      const nativeTracks = await context.trySearchTracksFromNativeDb(normalizedQuery, limit);
-      if (nativeTracks) {
-        return nativeTracks;
-      }
-      return webGateway.searchTracks(normalizedQuery, limit);
+      return resolveDesktopRead(
+        context,
+        context.trySearchTracksFromNativeDb(normalizedQuery, limit),
+        () => webGateway.searchTracks(normalizedQuery, limit),
+        () => []
+      );
     },
 
     async getTracksByAlbum(album: string): Promise<Track[]> {
-      const nativeTracks = await context.tryGetTracksByAlbumFromNativeDb(album);
-      if (nativeTracks) {
-        return nativeTracks;
-      }
-      return webGateway.getTracksByAlbum(album);
+      return resolveDesktopRead(
+        context,
+        context.tryGetTracksByAlbumFromNativeDb(album),
+        () => webGateway.getTracksByAlbum(album),
+        () => []
+      );
     },
 
     async getAllAlbums(options?: { includeStoredCover?: boolean }): Promise<AlbumSummary[]> {
       const includeStoredCover = options?.includeStoredCover ?? true;
-      const nativeAlbums = await context.tryGetAllAlbumsFromNativeDb(includeStoredCover);
-      if (nativeAlbums) {
-        return nativeAlbums;
-      }
-      return webGateway.getAllAlbums(options);
+      return resolveDesktopRead(
+        context,
+        context.tryGetAllAlbumsFromNativeDb(includeStoredCover),
+        () => webGateway.getAllAlbums(options),
+        () => []
+      );
     },
 
     async getLibraryStats(): Promise<LibraryStats> {
-      const nativeStats = await context.tryGetLibraryStatsFromNativeDb();
-      if (nativeStats) {
-        return nativeStats;
-      }
-      return webGateway.getLibraryStats();
+      return resolveDesktopRead(
+        context,
+        context.tryGetLibraryStatsFromNativeDb(),
+        () => webGateway.getLibraryStats(),
+        () => createEmptyLibraryStats()
+      );
     },
   };
 }

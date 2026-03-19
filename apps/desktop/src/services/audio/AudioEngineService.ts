@@ -1,6 +1,7 @@
 import type { ScopedEventBus } from '../../kernel';
 import { createServiceToken } from '../../kernel';
 import type { AppEvents } from '../../contracts/events';
+import { getTelemetryLogger } from '../telemetry/TelemetryService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { NativeAudioService } from './NativeAudioService';
 import { NoopAudioService } from './NoopAudioService';
@@ -49,7 +50,18 @@ function isRobustnessListenerAvailable(service: IAudioService): service is IAudi
   return typeof service.onRobustnessSnapshot === 'function';
 }
 
+function readTelemetryErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
 export class DefaultAudioEngineService implements AudioEngineService {
+  private readonly telemetry = getTelemetryLogger('audio', 'AudioEngineService');
   private readonly mode: AudioEngineMode;
   private engineType: AudioEngineType;
   private isNativeAvailable: boolean;
@@ -198,7 +210,12 @@ export class DefaultAudioEngineService implements AudioEngineService {
             code === 'NATIVE_AUDIO_PAUSE_FAILED' ||
             code === 'NATIVE_AUDIO_SEEK_FAILED');
         if (isNoTrackLoaded) {
-          console.warn('[AudioEngine] Native audio transient (no track loaded):', error);
+          this.telemetry.warn('audio.engine.native-transient', {
+            message: readTelemetryErrorMessage(error),
+            fields: {
+              code: code ?? null,
+            },
+          });
           return;
         }
 
@@ -210,7 +227,12 @@ export class DefaultAudioEngineService implements AudioEngineService {
           messageText.includes('requires an absolute file path');
 
         if (isTrackPathIssue) {
-          console.warn('[AudioEngine] Native audio track error (no fallback):', error);
+          this.telemetry.warn('audio.engine.track-path.failed', {
+            message: readTelemetryErrorMessage(error),
+            fields: {
+              code: code ?? null,
+            },
+          });
           void import('@tauri-apps/api/dialog')
             .then(({ message }) =>
               message(
@@ -219,12 +241,19 @@ export class DefaultAudioEngineService implements AudioEngineService {
               )
             )
             .catch((dialogError) => {
-              console.warn('[AudioEngine] Failed to show native audio track warning dialog:', dialogError);
+              this.telemetry.warn('audio.engine.dialog.track-warning.failed', {
+                message: readTelemetryErrorMessage(dialogError),
+              });
             });
           return;
         }
 
-        console.warn('[AudioEngine] Native audio error:', error);
+        this.telemetry.warn('audio.engine.native-error', {
+          message: readTelemetryErrorMessage(error),
+          fields: {
+            code: code ?? null,
+          },
+        });
         void import('@tauri-apps/api/dialog')
           .then(({ message }) =>
             message(`Native audio error: ${messageText}`, {
@@ -233,7 +262,9 @@ export class DefaultAudioEngineService implements AudioEngineService {
             })
           )
           .catch((dialogError) => {
-            console.warn('[AudioEngine] Failed to show native audio warning dialog:', dialogError);
+            this.telemetry.warn('audio.engine.dialog.warning.failed', {
+              message: readTelemetryErrorMessage(dialogError),
+            });
           });
       });
     }
@@ -274,13 +305,17 @@ export class DefaultAudioEngineService implements AudioEngineService {
 
           if (action === 'previous') {
             void service.playPrevious().catch((err) => {
-              console.error('[Taskbar] playPrevious failed:', err);
+              this.telemetry.error('audio.taskbar.previous.failed', {
+                message: readTelemetryErrorMessage(err),
+              });
             });
             return;
           }
           if (action === 'next') {
             void service.playNext().catch((err) => {
-              console.error('[Taskbar] playNext failed:', err);
+              this.telemetry.error('audio.taskbar.next.failed', {
+                message: readTelemetryErrorMessage(err),
+              });
             });
             return;
           }
@@ -288,7 +323,9 @@ export class DefaultAudioEngineService implements AudioEngineService {
             try {
               service.stop();
             } catch (err) {
-              console.error('[Taskbar] stop failed:', err);
+              this.telemetry.error('audio.taskbar.stop.failed', {
+                message: readTelemetryErrorMessage(err),
+              });
             }
             return;
           }
@@ -307,11 +344,15 @@ export class DefaultAudioEngineService implements AudioEngineService {
                   typeof thenable.catch === 'function'
                 ) {
                   void (thenable.catch as (cb: (err: unknown) => void) => unknown)((err: unknown) => {
-                    console.error('[Taskbar] pause failed:', err);
+                    this.telemetry.error('audio.taskbar.pause.failed', {
+                      message: readTelemetryErrorMessage(err),
+                    });
                   });
                 }
               } catch (err) {
-                console.error('[Taskbar] pause failed:', err);
+                this.telemetry.error('audio.taskbar.pause.failed', {
+                  message: readTelemetryErrorMessage(err),
+                });
               }
               return;
             }
@@ -319,13 +360,20 @@ export class DefaultAudioEngineService implements AudioEngineService {
             if (!state.currentTrack && state.queue.length > 0) {
               const index = state.currentIndex >= 0 ? state.currentIndex : 0;
               void service.playTrackAtIndex(index).catch((err) => {
-                console.error('[Taskbar] playTrackAtIndex failed:', err);
+                this.telemetry.error('audio.taskbar.play-track-index.failed', {
+                  message: readTelemetryErrorMessage(err),
+                  fields: {
+                    index,
+                  },
+                });
               });
               return;
             }
 
             void service.play().catch((err) => {
-              console.error('[Taskbar] play failed:', err);
+              this.telemetry.error('audio.taskbar.play.failed', {
+                message: readTelemetryErrorMessage(err),
+              });
             });
           }
         })
@@ -338,7 +386,9 @@ export class DefaultAudioEngineService implements AudioEngineService {
         unlisten = fn;
       })
       .catch((err) => {
-        console.warn('[Taskbar] Failed to register taskbar media controls listener:', err);
+        this.telemetry.warn('audio.taskbar.listener.failed', {
+          message: readTelemetryErrorMessage(err),
+        });
       });
 
     this.unlistenTaskbarControls = () => {

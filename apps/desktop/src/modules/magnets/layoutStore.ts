@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { DEFAULT_ACTIVE_MAGNET_IDS } from '../../constants/magnets';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readJson } from '../storage';
@@ -10,6 +11,11 @@ import {
 } from './spaces';
 import type { MagnetSpaceLayout } from './layout';
 import { ensureMagnetSpaceLayout } from './layoutStorage';
+const telemetry = getTelemetryLogger('magnets', 'layoutStore');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export type MagnetSpacePresetV1 = {
   id: string;
@@ -100,7 +106,9 @@ export async function magnetLayoutStoreGetState(): Promise<MagnetLayoutStoreStat
   try {
     return (await invoke('magnet_layout_store_get_state')) as MagnetLayoutStoreState;
   } catch (error) {
-    console.warn('[magnets] Failed to get magnet layout store state', error);
+    telemetry.warn('layout_store.get_state.failed', {
+      message: readErrorMessage(error),
+    });
     return null;
   }
 }
@@ -114,7 +122,9 @@ export async function magnetLayoutStoreBootstrapFromLegacy(
     const request = buildLegacyMagnetLayoutStoreBootstrapRequest(defaultActiveMagnetIds);
     return (await invoke('magnet_layout_store_bootstrap', { request })) as MagnetLayoutStoreBootstrapResponse;
   } catch (error) {
-    console.warn('[magnets] Failed to bootstrap magnet layout store', error);
+    telemetry.warn('layout_store.bootstrap.failed', {
+      message: readErrorMessage(error),
+    });
     return null;
   }
 }
@@ -127,7 +137,14 @@ export async function magnetLayoutStoreApplyPatch(
   try {
     return (await invoke('magnet_layout_store_apply_patch', { request })) as MagnetLayoutStoreApplyPatchResponse;
   } catch (error) {
-    console.warn('[magnets] Failed to apply magnet layout store patch', error);
+    telemetry.warn('layout_store.apply_patch.failed', {
+      message: readErrorMessage(error),
+      fields: {
+        expectedRevision: request.expectedRevision,
+        patchCount: request.patches.length,
+        reason: request.reason ?? null,
+      },
+    });
     return null;
   }
 }

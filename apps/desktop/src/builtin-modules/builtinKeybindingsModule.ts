@@ -1,6 +1,13 @@
 import type { AppEvents } from '../contracts/events';
 import type { KeybindingContribution } from '../contracts/contributions';
 import type { KernelModule } from '../kernel';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
+
+const telemetry = getTelemetryLogger('keybindings', 'builtinKeybindingsModule');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function isMacPlatform(): boolean {
   if (typeof navigator === 'undefined') return false;
@@ -105,7 +112,9 @@ export function createBuiltinKeybindingsModule(): KernelModule<AppEvents> {
           try {
             unregister();
           } catch (error) {
-            console.warn('[builtin-keybindings] unregister failed', error);
+            telemetry.warn('keybinding.unregister.failed', {
+              message: readErrorMessage(error),
+            });
           }
         }
         unregisters.clear();

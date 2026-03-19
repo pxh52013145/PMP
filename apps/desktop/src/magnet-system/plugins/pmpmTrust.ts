@@ -1,4 +1,5 @@
 import { readJson, writeJson } from '../../modules/storage';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 
 export type PmpmTrustedKeysListener = () => void;
@@ -6,6 +7,11 @@ export type PmpmTrustedKeysListener = () => void;
 const trustedKeysListeners = new Set<PmpmTrustedKeysListener>();
 let trustedKeysRevision = 0;
 let syncDisposer: (() => void) | null = null;
+const telemetry = getTelemetryLogger('pmpm', 'pmpmTrust');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function notifyTrustedKeysListeners(): void {
   trustedKeysRevision += 1;
@@ -13,7 +19,9 @@ function notifyTrustedKeysListeners(): void {
     try {
       listener();
     } catch (error) {
-      console.warn('[pmpm-trust] listener failed', error);
+      telemetry.warn('trusted_keys.listener.failed', {
+        message: readErrorMessage(error),
+      });
     }
   }
 }

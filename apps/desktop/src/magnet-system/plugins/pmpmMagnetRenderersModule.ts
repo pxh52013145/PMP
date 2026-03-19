@@ -1,8 +1,15 @@
 import type { KernelModule } from '../../kernel';
 import type { AppEvents } from '../../contracts/events';
 import { registerMagnetRenderer, unregisterMagnetRenderer } from '../registry';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { clearMagnetVariants, registerMagnetVariant } from '../variantRegistry';
 import { getPluginRendererDefinition, loadInstalledPmpmPlugins, subscribePmpmPlugins } from './pmpm';
+
+const telemetry = getTelemetryLogger('pmpm', 'pmpmMagnetRenderersModule');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function createPmpmMagnetRenderersModule(): KernelModule<AppEvents> {
   return {
@@ -59,7 +66,9 @@ export function createPmpmMagnetRenderersModule(): KernelModule<AppEvents> {
         try {
           unsubscribe();
         } catch (error) {
-          console.warn('[pmpm-magnet-renderers] unsubscribe failed', error);
+          telemetry.warn('plugin_magnet_renderers.unsubscribe.failed', {
+            message: readErrorMessage(error),
+          });
         }
 
         for (const id of Array.from(registered)) {

@@ -68,6 +68,7 @@ scripts/
 !scripts/
 scripts/*
 !scripts/audio-score-gate.mjs
+!scripts/perf-memory-phase0-suite.ps1
 snapshots/
 
 # Local scratch

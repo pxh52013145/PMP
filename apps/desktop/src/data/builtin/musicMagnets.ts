@@ -6,9 +6,11 @@
 import { Magnet } from '../../types/pixel';
 import { createControlChromePreset } from '../../modules/magnets/chromePresets';
 import { createCenteredSingleControlLayoutPreset } from '../../modules/magnets/layoutPresets';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 
 const MUSIC_BUTTON_CHROME = createControlChromePreset();
 const MUSIC_BUTTON_LAYOUT = createCenteredSingleControlLayoutPreset();
+const telemetry = getTelemetryLogger('magnets', 'musicMagnets');
 
 /**
  * 播放列表按钮 Magnet
@@ -32,7 +34,7 @@ export const PLAY_QUEUE_MAGNET: Magnet = {
     draggable: true,
     clickable: true,
     onClick: () => {
-      console.log('打开播放列表');
+      telemetry.debug('music_magnet.play_queue.clicked');
     },
   },
 };
@@ -59,7 +61,7 @@ export const PLAYLISTS_MAGNET: Magnet = {
     draggable: true,
     clickable: true,
     onClick: () => {
-      console.log('打开歌单管理');
+      telemetry.debug('music_magnet.playlists.clicked');
     },
   },
 };
@@ -86,7 +88,7 @@ export const MUSIC_LIBRARY_MAGNET: Magnet = {
     draggable: true,
     clickable: true,
     onClick: () => {
-      console.log('打开音乐库');
+      telemetry.debug('music_magnet.library.clicked');
     },
   },
 };

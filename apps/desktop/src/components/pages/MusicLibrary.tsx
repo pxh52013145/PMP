@@ -36,6 +36,12 @@ import {
 } from '../../themes/surfaceMotion';
 
 import { useAudioService } from '../../contexts/AudioEngineContext';
+import {
+  getProcessPerfTotalsSnapshot,
+  type ProcessPerfTotalsSnapshot,
+} from '../../modules/debug';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import { captureTelemetryScenarioSnapshot } from '../../services/telemetry/scenarioSnapshots';
 
 import { readJson } from '../../modules/storage';
 
@@ -480,6 +486,8 @@ const MUSIC_LIBRARY_MAIN_HORIZONTAL_PADDING_PX = 40;
 
 const MUSIC_LIBRARY_MEMORY_LOG_DEBOUNCE_MS = 900;
 
+const MUSIC_LIBRARY_PROCESS_PERF_REFRESH_MS = 1_500;
+
 const EMPTY_LIBRARY_STATS: LibraryStats = {
   totalTracks: 0,
   totalArtists: 0,
@@ -500,10 +508,12 @@ type MusicLibraryRuntimeDiagnosticSnapshot = {
   baseView: MusicLibraryBaseView;
   searchQuery: string;
   shouldUseNativeBaseQuery: boolean;
+  shouldUseQueryPageBaseCache: boolean;
   coverPolicy: CoverRuntimeCachePolicy;
   counts: {
     tracks: number;
     nativeBaseTracks: number;
+    queryPageTracks: number;
     filteredTracks: number;
     renderedTracks: number;
     groupedRows: number;
@@ -511,6 +521,21 @@ type MusicLibraryRuntimeDiagnosticSnapshot = {
   estimatedBytes: {
     tracks: number | null;
     nativeBaseTracks: number | null;
+    queryPageTracks: number | null;
+  };
+  attribution: {
+    trackArrayBytes: number;
+    trackedRuntimeBytes: number;
+    webview2PrivateResidualBytes: number | null;
+    webview2PrivateMinusTrackArraysBytes: number | null;
+  };
+  process: {
+    timestampMs: number | null;
+    webview2PrivateBytes: number | null;
+    webview2WorkingSetBytes: number | null;
+    treePrivateBytes: number | null;
+    treeWorkingSetBytes: number | null;
+    webview2CpuPercent: number | null;
   };
   coverCache: ReturnType<typeof musicLibraryService.getCoverRuntimeCacheStats>;
   jsHeap: {
@@ -540,6 +565,7 @@ function clearSharedVisibilityObservers(): void {
 declare global {
   interface Window {
     __PMP_MUSIC_LIBRARY_GET_SNAPSHOT__?: () => MusicLibraryRuntimeDiagnosticSnapshot;
+    __PMP_LAST_MUSIC_LIBRARY_SNAPSHOT__?: MusicLibraryRuntimeDiagnosticSnapshot;
   }
 }
 
@@ -623,6 +649,41 @@ function buildModuleCacheSnapshot(input: {
 
 }
 
+const EMPTY_MUSIC_LIBRARY_BASE_QUERY: MusicLibraryBaseQuery = {
+  filterOperator: 'and',
+  filterGroups: [],
+  groupByRules: [],
+  sortRules: [],
+};
+
+function hasActiveMusicLibraryBaseQuery(query: MusicLibraryBaseQuery): boolean {
+  return (
+    query.filterGroups.some((group) => group.filters.length > 0) ||
+    query.groupByRules.length > 0 ||
+    query.sortRules.length > 0
+  );
+}
+
+function mergeMusicLibraryQueryPageCache(
+  currentTracks: Track[],
+  sourceTracks: Track[],
+  query: MusicLibraryBaseQuery
+): Track[] {
+  if (sourceTracks.length === 0) {
+    return currentTracks;
+  }
+
+  const deduped = new Map<string, Track>();
+  for (const track of currentTracks) {
+    deduped.set(track.id, track);
+  }
+  for (const track of sourceTracks) {
+    deduped.set(track.id, track);
+  }
+
+  return applyMusicLibraryBaseQuery(Array.from(deduped.values()), query);
+}
+
 
 
 function isModuleCacheTrackMetadataCompatible(snapshot: ModuleCacheSnapshot): boolean {
@@ -686,6 +747,16 @@ function estimateMusicLibraryTrackArrayBytes(
 
   }
 
+}
+
+function readTelemetryErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
 }
 
 
@@ -1118,6 +1189,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 }) => {
 
   const audioService = useAudioService();
+  const telemetry = useMemo(() => getTelemetryLogger('music-library', 'MusicLibraryPage'), []);
 
   const t = useT();
 
@@ -1274,6 +1346,23 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const musicLibraryDiagnosticsTimerRef = useRef<number | null>(null);
 
   const musicLibraryDiagnosticsSignatureRef = useRef('');
+
+  useEffect(() => {
+    telemetry.info(isOpen ? 'music-library.page.enter' : 'music-library.page.leave', {
+      fields: {
+        embedded,
+      },
+    });
+    captureTelemetryScenarioSnapshot({
+      moduleId: 'music-library',
+      component: 'MusicLibraryPage',
+      event: isOpen ? 'music-library.page.enter.snapshot' : 'music-library.page.leave.snapshot',
+      fields: {
+        embedded,
+      },
+      minIntervalMs: 400,
+    });
+  }, [embedded, isOpen, telemetry]);
 
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -1919,27 +2008,36 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   }, [baseQueryState, librarySourceMode]);
 
+  const hasActiveBaseQuery = useMemo(
+    () => hasActiveMusicLibraryBaseQuery(baseQueryState),
+    [baseQueryState]
+  );
+
   const shouldUseNativeBaseQuery =
 
     canUseNativeBaseQuery &&
 
-    (baseQueryState.filterGroups.some((group) => group.filters.length > 0) ||
+    hasActiveBaseQuery;
 
-      baseQueryState.groupByRules.length > 0 ||
-
-      baseQueryState.sortRules.length > 0);
-
-  const shouldUseFallbackBaseQuery =
+  const shouldUseQueryPageBaseCache =
 
     librarySourceMode === 'local' &&
 
-    !canUseNativeBaseQuery &&
+    isTauriRuntime() &&
 
-    (baseQueryState.filterGroups.some((group) => group.filters.length > 0) ||
+    hasActiveBaseQuery &&
 
-      baseQueryState.groupByRules.length > 0 ||
+    !canUseNativeBaseQuery;
 
-      baseQueryState.sortRules.length > 0);
+  const shouldUseWebFallbackBaseQuery =
+
+    librarySourceMode === 'local' &&
+
+    !isTauriRuntime() &&
+
+    hasActiveBaseQuery &&
+
+    !canUseNativeBaseQuery;
 
   const [collapsedTrackGroupKeys, setCollapsedTrackGroupKeys] = useState<Set<string>>(() => new Set());
 
@@ -1975,6 +2073,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   const [isNativeBaseTracksLoading, setIsNativeBaseTracksLoading] = useState(false);
 
+  const [musicLibraryProcessPerf, setMusicLibraryProcessPerf] = useState<ProcessPerfTotalsSnapshot | null>(
+    null
+  );
+
   const nativeBaseTrackNextOffsetRef = useRef(0);
 
   const nativeBaseTrackLoadingRef = useRef(false);
@@ -1984,6 +2086,26 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const nativeBaseTracksRef = useRef<Track[] | null>(null);
 
   const hasMoreNativeBaseTracksRef = useRef(false);
+
+  const [queryPageTracks, setQueryPageTracks] = useState<Track[] | null>(null);
+
+  const [queryPageTracksTotal, setQueryPageTracksTotal] = useState<number | null>(null);
+
+  const [hasMoreQueryPageTracks, setHasMoreQueryPageTracks] = useState(false);
+
+  const [isQueryPageTracksLoading, setIsQueryPageTracksLoading] = useState(false);
+
+  const queryPageTrackNextOffsetRef = useRef(0);
+
+  const queryPageTrackLoadingRef = useRef(false);
+
+  const queryPageTrackSourceExhaustedRef = useRef(false);
+
+  const queryPageQueryKeyRef = useRef('');
+
+  const queryPageTracksRef = useRef<Track[] | null>(null);
+
+  const hasMoreQueryPageTracksRef = useRef(false);
 
 
 
@@ -2006,6 +2128,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     nativeBaseQueryKeyRef.current = '';
     nativeBaseTracksRef.current = null;
     hasMoreNativeBaseTracksRef.current = false;
+    queryPageTrackNextOffsetRef.current = 0;
+    queryPageTrackLoadingRef.current = false;
+    queryPageTrackSourceExhaustedRef.current = false;
+    queryPageQueryKeyRef.current = '';
+    queryPageTracksRef.current = null;
+    hasMoreQueryPageTracksRef.current = false;
     initialViewportAutoloadKeyRef.current = null;
 
     setTracks([]);
@@ -2013,6 +2141,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     setNativeBaseTracksTotal(null);
     setHasMoreNativeBaseTracks(false);
     setIsNativeBaseTracksLoading(false);
+    setQueryPageTracks(null);
+    setQueryPageTracksTotal(null);
+    setHasMoreQueryPageTracks(false);
+    setIsQueryPageTracksLoading(false);
     setHasMoreTracks(false);
     setIsTrackChunkLoading(false);
     setRenderedTrackLimit(TRACK_RENDER_CHUNK_SIZE);
@@ -2029,6 +2161,43 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     setContextMenu(null);
     setCleanupConfirmTarget(null);
     setMainViewport(EMPTY_MAIN_VIEWPORT);
+  }, []);
+
+  const resetLoadedTrackPages = useCallback((options?: { clearModuleCache?: boolean }) => {
+    if (options?.clearModuleCache) {
+      clearModuleCache();
+    }
+    trackChunkLoadingRef.current = false;
+    trackNextOffsetRef.current = 0;
+    hasMoreTracksRef.current = false;
+    setTracks([]);
+    setHasMoreTracks(false);
+    setIsTrackChunkLoading(false);
+  }, []);
+
+  const resetNativeBaseTrackPages = useCallback(() => {
+    nativeBaseTrackNextOffsetRef.current = 0;
+    nativeBaseTrackLoadingRef.current = false;
+    nativeBaseQueryKeyRef.current = '';
+    nativeBaseTracksRef.current = null;
+    hasMoreNativeBaseTracksRef.current = false;
+    setNativeBaseTracks(null);
+    setNativeBaseTracksTotal(null);
+    setHasMoreNativeBaseTracks(false);
+    setIsNativeBaseTracksLoading(false);
+  }, []);
+
+  const resetQueryPageTrackPages = useCallback(() => {
+    queryPageTrackNextOffsetRef.current = 0;
+    queryPageTrackLoadingRef.current = false;
+    queryPageTrackSourceExhaustedRef.current = false;
+    queryPageQueryKeyRef.current = '';
+    queryPageTracksRef.current = null;
+    hasMoreQueryPageTracksRef.current = false;
+    setQueryPageTracks(null);
+    setQueryPageTracksTotal(null);
+    setHasMoreQueryPageTracks(false);
+    setIsQueryPageTracksLoading(false);
   }, []);
 
   const releaseStableLibraryViewState = useCallback(() => {
@@ -2109,8 +2278,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     musicLibraryService.applyCoverRuntimeCachePolicy(policy);
 
   }, []);
-
-
 
   const scheduleTrackChunkLoad = useCallback(async (): Promise<boolean> => {
 
@@ -2194,7 +2361,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     } catch (error) {
 
-      console.warn('[MusicLibrary] Failed to load next track chunk:', error);
+      telemetry.warn('music-library.chunk-load.failed', {
+        message: readTelemetryErrorMessage(error),
+        fields: {
+          mode: 'legacy',
+          offset,
+          searchQueryLength: searchQuery.trim().length,
+        },
+      });
 
       hasMoreTracksRef.current = false;
 
@@ -2232,6 +2406,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   );
 
+  const activeBaseQueryRequestKey =
+
+    shouldUseNativeBaseQuery || shouldUseQueryPageBaseCache ? nativeBaseQueryKey : '';
+
 
 
 
@@ -2253,6 +2431,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   }, [nativeBaseTracks]);
 
+  useEffect(() => {
+
+    queryPageTracksRef.current = queryPageTracks;
+
+  }, [queryPageTracks]);
+
 
 
   useEffect(() => {
@@ -2260,6 +2444,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     hasMoreNativeBaseTracksRef.current = hasMoreNativeBaseTracks;
 
   }, [hasMoreNativeBaseTracks]);
+
+  useEffect(() => {
+
+    hasMoreQueryPageTracksRef.current = hasMoreQueryPageTracks;
+
+  }, [hasMoreQueryPageTracks]);
 
 
 
@@ -2407,6 +2597,173 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   );
 
+  const loadQueryPageTrackChunk = useCallback(
+
+    async (options?: { reset?: boolean }): Promise<boolean> => {
+
+      if (!isOpen || !shouldUseQueryPageBaseCache) return false;
+
+      if (queryPageTrackLoadingRef.current) return false;
+
+      const reset = options?.reset === true;
+
+      const requestKey = nativeBaseQueryKey;
+
+      let sourceOffset = reset ? 0 : queryPageTrackNextOffsetRef.current;
+
+      let sourceExhausted = reset ? false : queryPageTrackSourceExhaustedRef.current;
+
+      const currentQueryPageTracks = queryPageTracksRef.current;
+
+      if (!reset && sourceExhausted && currentQueryPageTracks !== null) {
+
+        return false;
+
+      }
+
+      queryPageTrackLoadingRef.current = true;
+
+      queryPageQueryKeyRef.current = requestKey;
+
+      setIsQueryPageTracksLoading(true);
+
+      try {
+
+        const previousTracks = reset || currentQueryPageTracks == null ? [] : currentQueryPageTracks;
+
+        const previousCount = previousTracks.length;
+
+        const targetCount = previousCount + NATIVE_BASE_PAGE_SIZE;
+
+        let nextTracks = previousTracks;
+
+        while (!sourceExhausted && nextTracks.length < targetCount) {
+
+          const sourcePage = await musicLibraryService.queryLocalTracksPageByBase({
+
+            searchQuery,
+
+            baseQuery: EMPTY_MUSIC_LIBRARY_BASE_QUERY,
+
+            limit: NATIVE_BASE_PAGE_SIZE,
+
+            offset: sourceOffset,
+
+            includeMissing: false,
+
+            visibleOnly: true,
+
+          });
+
+          if (queryPageQueryKeyRef.current !== requestKey) {
+
+            return false;
+
+          }
+
+          const sourceRows = sourcePage?.tracks ?? [];
+
+          const sourceTotal =
+
+            typeof sourcePage?.total === 'number' && Number.isFinite(sourcePage.total)
+
+              ? Math.max(0, Math.floor(sourcePage.total))
+
+              : null;
+
+          if (sourceRows.length > 0) {
+
+            nextTracks = mergeMusicLibraryQueryPageCache(nextTracks, sourceRows, baseQueryState);
+
+          }
+
+          sourceOffset += sourceRows.length;
+
+          if (sourceTotal !== null) {
+
+            sourceExhausted = sourceOffset >= sourceTotal;
+
+          } else if (sourceRows.length < NATIVE_BASE_PAGE_SIZE) {
+
+            sourceExhausted = true;
+
+          }
+
+          if (sourceRows.length === 0) {
+
+            sourceExhausted = true;
+
+          }
+
+        }
+
+        queryPageTrackNextOffsetRef.current = sourceOffset;
+
+        queryPageTrackSourceExhaustedRef.current = sourceExhausted;
+
+        queryPageTracksRef.current = nextTracks;
+
+        hasMoreQueryPageTracksRef.current = !sourceExhausted;
+
+        setQueryPageTracksTotal(sourceExhausted ? nextTracks.length : null);
+
+        setHasMoreQueryPageTracks(!sourceExhausted);
+
+        setQueryPageTracks(nextTracks);
+
+        return nextTracks.length > previousCount;
+
+      } catch (error) {
+
+        telemetry.warn('music-library.chunk-load.failed', {
+          message: readTelemetryErrorMessage(error),
+          fields: {
+            mode: 'query-page',
+            sourceOffset,
+            searchQueryLength: searchQuery.trim().length,
+          },
+        });
+
+        queryPageTrackSourceExhaustedRef.current = true;
+
+        hasMoreQueryPageTracksRef.current = false;
+
+        setHasMoreQueryPageTracks(false);
+
+        return false;
+
+      } finally {
+
+        if (queryPageQueryKeyRef.current === requestKey) {
+
+          queryPageTrackLoadingRef.current = false;
+
+          setIsQueryPageTracksLoading(false);
+
+        }
+
+      }
+
+    },
+
+    [
+
+      baseQueryState,
+
+      isOpen,
+
+      nativeBaseQueryKey,
+
+      searchQuery,
+
+      shouldUseQueryPageBaseCache,
+
+      telemetry,
+
+    ]
+
+  );
+
 
 
   const maybeLoadTrackChunkFromScroll = useCallback(() => {
@@ -2441,6 +2798,18 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     }
 
+    if (shouldUseQueryPageBaseCache) {
+
+      if (hasMoreQueryPageTracksRef.current || queryPageTracksRef.current === null) {
+
+        void loadQueryPageTrackChunk();
+
+      }
+
+      return;
+
+    }
+
 
 
     if (!hasMoreTracksRef.current) return;
@@ -2453,9 +2822,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     loadNativeBaseTrackChunk,
 
+    loadQueryPageTrackChunk,
+
     scheduleTrackChunkLoad,
     baseView,
     shouldUseNativeBaseQuery,
+
+    shouldUseQueryPageBaseCache,
 
   ]);
 
@@ -2609,7 +2982,23 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     };
 
-  }, [getMainScrollRoot, isOpen, syncMainViewport, tracks.length, viewMode]);
+  }, [
+
+    getMainScrollRoot,
+
+    isOpen,
+
+    nativeBaseTracks?.length,
+
+    queryPageTracks?.length,
+
+    syncMainViewport,
+
+    tracks.length,
+
+    viewMode,
+
+  ]);
 
 
 
@@ -2703,7 +3092,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     const token = ++libraryLoadTokenRef.current;
 
-    console.log('Loading library data...');
+    telemetry.info('music-library.data-load.start', {
+      fields: {
+        searchQueryLength: searchQuery.trim().length,
+      },
+    });
 
     const releaseProtection = beginAudioProtection('music-library-load', 25_000);
 
@@ -2723,7 +3116,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     ) {
 
-      console.log('Using module cache for instant display');
+      telemetry.info('music-library.data-load.cache-hit', {
+        fields: {
+          trackCount: moduleCache.tracks.length,
+          hasMoreTracks: moduleCache.hasMoreTracks,
+          searchQueryLength: searchQuery.trim().length,
+        },
+      });
 
       setTracks(moduleCache.tracks);
 
@@ -2743,6 +3142,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
         setLibraryStats(stats);
 
+        telemetry.info('music-library.stats.loaded', {
+          fields: {
+            totalTracks: stats.totalTracks,
+            totalAlbums: stats.totalAlbums,
+            totalArtists: stats.totalArtists,
+          },
+        });
+
       });
 
       return; // ??????p[f!?'1nep;j?N???P?[?~? ??cz?o?e?|?o-aBq9p?0?h?? ??JT?h?o?`??
@@ -2755,7 +3162,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 // [legacy garbled comment omitted]
 
-    console.log('Loading from IndexedDB...');
+    telemetry.info('music-library.data-load.indexeddb.start', {
+      fields: {
+        searchQueryLength: searchQuery.trim().length,
+      },
+    });
 
 
 
@@ -2781,10 +3192,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-      console.log('Library data loaded:', {
-
-        tracks: initialTracks.length,
-
+      telemetry.info('music-library.data-load.completed', {
+        fields: {
+          trackCount: initialTracks.length,
+          hasMore,
+          searchQueryLength: searchQuery.trim().length,
+        },
       });
 
 
@@ -2819,13 +3232,24 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
         setLibraryStats(stats);
 
-        console.log('Library stats loaded:', stats);
+        telemetry.info('music-library.stats.loaded', {
+          fields: {
+            totalTracks: stats.totalTracks,
+            totalAlbums: stats.totalAlbums,
+            totalArtists: stats.totalArtists,
+          },
+        });
 
       });
 
     } catch (error) {
 
-      console.error('Failed to load library data:', error);
+      telemetry.error('music-library.data-load.failed', {
+        message: readTelemetryErrorMessage(error),
+        fields: {
+          searchQueryLength: searchQuery.trim().length,
+        },
+      });
 
       setHasMoreTracks(false);
 
@@ -2835,7 +3259,95 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     }
 
-  }, [beginAudioProtection]);
+  }, [beginAudioProtection, searchQuery, telemetry]);
+
+  const reloadCurrentLocalTrackSource = useCallback(async () => {
+
+    if (shouldUseNativeBaseQuery) {
+
+      libraryLoadTokenRef.current += 1;
+
+      searchTokenRef.current += 1;
+
+      resetLoadedTrackPages({ clearModuleCache: true });
+
+      nativeBaseTrackNextOffsetRef.current = 0;
+
+      nativeBaseTrackLoadingRef.current = false;
+
+      nativeBaseQueryKeyRef.current = nativeBaseQueryKey;
+
+      nativeBaseTracksRef.current = [];
+
+      hasMoreNativeBaseTracksRef.current = false;
+
+      setNativeBaseTracks([]);
+
+      setNativeBaseTracksTotal(null);
+
+      setHasMoreNativeBaseTracks(false);
+
+      setRenderedTrackLimit(TRACK_RENDER_CHUNK_SIZE);
+
+      await loadNativeBaseTrackChunk({ reset: true });
+
+      return;
+
+    }
+
+    if (shouldUseQueryPageBaseCache) {
+
+      libraryLoadTokenRef.current += 1;
+
+      searchTokenRef.current += 1;
+
+      resetLoadedTrackPages({ clearModuleCache: true });
+
+      queryPageTrackNextOffsetRef.current = 0;
+
+      queryPageTrackLoadingRef.current = false;
+
+      queryPageTrackSourceExhaustedRef.current = false;
+
+      queryPageQueryKeyRef.current = nativeBaseQueryKey;
+
+      queryPageTracksRef.current = [];
+
+      hasMoreQueryPageTracksRef.current = false;
+
+      setQueryPageTracks([]);
+
+      setQueryPageTracksTotal(null);
+
+      setHasMoreQueryPageTracks(false);
+
+      setRenderedTrackLimit(TRACK_RENDER_CHUNK_SIZE);
+
+      await loadQueryPageTrackChunk({ reset: true });
+
+      return;
+
+    }
+
+    await loadLibraryData();
+
+  }, [
+
+    loadLibraryData,
+
+    loadNativeBaseTrackChunk,
+
+    loadQueryPageTrackChunk,
+
+    nativeBaseQueryKey,
+
+    resetLoadedTrackPages,
+
+    shouldUseNativeBaseQuery,
+
+    shouldUseQueryPageBaseCache,
+
+  ]);
 
 
 
@@ -2911,7 +3423,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       if (token !== stableLoadTokenRef.current) return;
 
-      console.warn('Failed to load stable library entries:', error);
+      telemetry.warn('music-library.stable.entries.load.failed', {
+        message: readTelemetryErrorMessage(error),
+      });
 
       setStableEntries([]);
 
@@ -2927,7 +3441,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     },
 
-    [stableInCloudOnly, stableIncludeMissing, stableOwnerFilter]
+    [stableInCloudOnly, stableIncludeMissing, stableOwnerFilter, telemetry]
 
   );
 
@@ -2981,7 +3495,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     } catch (error) {
 
-      console.warn('Failed to load library path health:', error);
+      telemetry.warn('music-library.paths.health.load.failed', {
+        message: readTelemetryErrorMessage(error),
+      });
 
       setLibraryPathHealthMap({});
 
@@ -2993,7 +3509,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     }
 
-  }, []);
+  }, [telemetry]);
 
 
 
@@ -3015,13 +3531,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     } catch (error) {
 
-      console.error('Failed to load library paths:', error);
+      telemetry.error('music-library.paths.load.failed', {
+        message: readTelemetryErrorMessage(error),
+      });
 
       return [];
 
     }
 
-  }, [loadLibraryPathHealth, showPathsManager]);
+  }, [loadLibraryPathHealth, showPathsManager, telemetry]);
 
 
 
@@ -3029,9 +3547,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     clearModuleCache();
 
-    await loadLibraryData();
+    await reloadCurrentLocalTrackSource();
 
-  }, [loadLibraryData]);
+  }, [reloadCurrentLocalTrackSource]);
 
 
 
@@ -3178,7 +3696,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     }
 
-    if (shouldUseNativeBaseQuery) {
+    if (shouldUseNativeBaseQuery || shouldUseQueryPageBaseCache) {
 
       return;
 
@@ -3199,6 +3717,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     searchQuery,
 
     shouldUseNativeBaseQuery,
+
+    shouldUseQueryPageBaseCache,
 
     updateCoverRuntimePolicy,
 
@@ -3251,6 +3771,54 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   useEffect(() => {
 
     if (!isOpen) {
+
+      setMusicLibraryProcessPerf(null);
+
+      return;
+
+    }
+
+    if (!isTauriRuntime()) return;
+
+    let cancelled = false;
+
+    const sync = () => {
+
+      void getProcessPerfTotalsSnapshot()
+        .then((snapshot) => {
+
+          if (cancelled) return;
+
+          setMusicLibraryProcessPerf(snapshot);
+
+        })
+        .catch(() => {
+
+          if (cancelled) return;
+
+          setMusicLibraryProcessPerf(null);
+
+        });
+
+    };
+
+    sync();
+
+    const timer = window.setInterval(sync, MUSIC_LIBRARY_PROCESS_PERF_REFRESH_MS);
+
+    return () => {
+
+      cancelled = true;
+
+      window.clearInterval(timer);
+
+    };
+
+  }, [isOpen]);
+
+  useEffect(() => {
+
+    if (!isOpen) {
       teardownHiddenMusicLibraryView();
     }
   }, [isOpen, teardownHiddenMusicLibraryView]);
@@ -3279,8 +3847,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     const unsubscribe = musicLibraryService.onScanProgress((progress) => {
 
-      console.log('Scan progress:', progress);
-
       setScanProgress(progress);
 
 
@@ -3288,8 +3854,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       // ?????K?mT??t"1SP?Hrpn??&1?\?[?0?`??nT????JT?gT??\:]Z 2?h??@iJrZX?g?t3 ?g????X???R??Y??ns??JT^h?Y?Y?
 
       if (!progress.isScanning && progress.current > 0) {
-
-        console.log('Scan completed, refreshing library...');
+        telemetry.info('music-library.scan.refresh-requested', {
+          fields: {
+            current: progress.current,
+            total: progress.total,
+          },
+        });
 
         clearModuleCache(); // ???uZ?p8c??:j?%4dG??x???`?x???
 
@@ -3301,7 +3871,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
           Promise.all([
 
-            loadLibraryData(),
+            reloadCurrentLocalTrackSource(),
 
             loadLibraryPaths(), // ??JT~????L??py???W???? ???rf?h?nb"k??Ty?o?0?Z'??
 
@@ -3315,7 +3885,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     return unsubscribe;
 
-  }, [librarySourceMode, loadLibraryData, loadLibraryPaths]);
+  }, [librarySourceMode, loadLibraryPaths, reloadCurrentLocalTrackSource, telemetry]);
 
 
 
@@ -3355,7 +3925,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     updateCoverRuntimePolicy(
 
-      (shouldUseNativeBaseQuery ? hasMoreNativeBaseTracks : hasMoreTracks) ? 'watch' : 'critical'
+      (
+        shouldUseNativeBaseQuery
+          ? hasMoreNativeBaseTracks
+          : shouldUseQueryPageBaseCache
+            ? hasMoreQueryPageTracks
+            : hasMoreTracks
+      )
+        ? 'watch'
+        : 'critical'
 
     );
 
@@ -3364,6 +3942,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     baseView,
 
     hasMoreNativeBaseTracks,
+
+    hasMoreQueryPageTracks,
 
     hasMoreTracks,
 
@@ -3374,6 +3954,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     searchQuery,
 
     shouldUseNativeBaseQuery,
+
+    shouldUseQueryPageBaseCache,
 
     updateCoverRuntimePolicy,
 
@@ -3396,12 +3978,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     const releaseProtection = beginAudioProtection('music-library-scan', 90_000);
 
     try {
-
-      console.log('Starting folder scan...');
+      telemetry.info('music-library.scan.start', {
+        fields: {
+          sourceMode: librarySourceMode,
+        },
+      });
 
       await musicLibraryService.scanFolder();
-
-      console.log('Folder scan completed, refreshing library data...');
 
       // ?????K?mT??t"1SP?Hrpn??&1?\?[?0?`??)2O??P?ZJ?Ci?i?/?SPZ?jH??a?Nqy???W???? ??p????o@iuun? ?[D?]uP?F?4U??W?op?9]O??UXP?
 
@@ -3409,19 +3992,28 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       await Promise.all([
 
-        loadLibraryData(),
+        reloadCurrentLocalTrackSource(),
 
         loadLibraryPaths(), // ??JT!^??M?;_?o?R	]$i(h(l?~?p?g???d?k???
 
       ]);
 
-      console.log('Library data and paths refreshed');
+      telemetry.info('music-library.scan.completed', {
+        fields: {
+          sourceMode: librarySourceMode,
+        },
+      });
 
       setErrorMessage(null);
 
     } catch (error) {
 
-      console.error('Failed to scan folder:', error);
+      telemetry.error('music-library.scan.failed', {
+        message: readTelemetryErrorMessage(error),
+        fields: {
+          sourceMode: librarySourceMode,
+        },
+      });
 
       setErrorMessage(
 
@@ -3451,7 +4043,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     } catch (error) {
 
-      console.error('Failed to cancel scan:', error);
+      telemetry.error('music-library.scan.cancel.failed', {
+        message: readTelemetryErrorMessage(error),
+      });
 
     }
 
@@ -3463,7 +4057,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     clearModuleCache();
 
-    await loadLibraryData();
+    await reloadCurrentLocalTrackSource();
 
     setShowClearConfirm(false);
 
@@ -3478,6 +4072,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     const token = ++searchTokenRef.current;
 
     setRenderedTrackLimit(TRACK_RENDER_CHUNK_SIZE);
+
+    if (shouldUseNativeBaseQuery || shouldUseQueryPageBaseCache) {
+
+      return;
+
+    }
 
 
 
@@ -3524,6 +4124,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     maybeLoadTrackChunkFromScroll,
 
     resetLibraryDataFromStorage,
+
+    shouldUseNativeBaseQuery,
+
+    shouldUseQueryPageBaseCache,
 
   ]);
 
@@ -3652,8 +4256,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       })
 
       .catch((error) => {
-
-        console.warn('[MusicLibrary] failed to load native schema envelope:', error);
+        telemetry.warn('music-library.schema.load.failed', {
+          message: readTelemetryErrorMessage(error),
+        });
 
         if (cancelled) return;
 
@@ -4539,11 +5144,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
         searchQuery: searchQuery.trim(),
 
-        nativeBaseQueryKey: shouldUseNativeBaseQuery ? nativeBaseQueryKey : '',
+        baseQueryRequestKey: activeBaseQueryRequestKey,
 
       }),
 
-    [librarySourceMode, nativeBaseQueryKey, searchQuery, shouldUseNativeBaseQuery]
+    [activeBaseQueryRequestKey, librarySourceMode, searchQuery]
 
   );
 
@@ -4567,7 +5172,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       ? (nativeBaseTracks?.length ?? 0)
 
-      : tracks.length;
+      : shouldUseQueryPageBaseCache
+
+        ? (queryPageTracks?.length ?? 0)
+
+        : tracks.length;
 
     if (visibleTrackSourceLength <= 0) return;
 
@@ -4595,9 +5204,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     nativeBaseTracks?.length,
 
+    queryPageTracks?.length,
+
     searchQuery,
 
     shouldUseNativeBaseQuery,
+
+    shouldUseQueryPageBaseCache,
 
     tracks.length,
 
@@ -5154,31 +5767,19 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     if (!isOpen || !shouldUseNativeBaseQuery) {
 
-      nativeBaseTrackNextOffsetRef.current = 0;
-
-      nativeBaseTrackLoadingRef.current = false;
-
-      nativeBaseQueryKeyRef.current = '';
-
-      nativeBaseTracksRef.current = null;
-
-      hasMoreNativeBaseTracksRef.current = false;
-
-      setNativeBaseTracks(null);
-
-      setNativeBaseTracksTotal(null);
-
-      setHasMoreNativeBaseTracks(false);
-
-      setIsNativeBaseTracksLoading(false);
+      resetNativeBaseTrackPages();
 
       return;
 
     }
 
+    libraryLoadTokenRef.current += 1;
 
+    searchTokenRef.current += 1;
 
     nativeBaseTrackNextOffsetRef.current = 0;
+
+    resetLoadedTrackPages({ clearModuleCache: true });
 
     nativeBaseTrackLoadingRef.current = false;
 
@@ -5198,7 +5799,75 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     void loadNativeBaseTrackChunk({ reset: true });
 
-  }, [isOpen, loadNativeBaseTrackChunk, nativeBaseQueryKey, shouldUseNativeBaseQuery]);
+  }, [
+
+    isOpen,
+
+    loadNativeBaseTrackChunk,
+
+    nativeBaseQueryKey,
+
+    resetLoadedTrackPages,
+
+    resetNativeBaseTrackPages,
+
+    shouldUseNativeBaseQuery,
+
+  ]);
+
+  useEffect(() => {
+
+    if (!isOpen || !shouldUseQueryPageBaseCache) {
+
+      resetQueryPageTrackPages();
+
+      return;
+
+    }
+
+    libraryLoadTokenRef.current += 1;
+
+    searchTokenRef.current += 1;
+
+    resetLoadedTrackPages({ clearModuleCache: true });
+
+    queryPageTrackNextOffsetRef.current = 0;
+
+    queryPageTrackLoadingRef.current = false;
+
+    queryPageTrackSourceExhaustedRef.current = false;
+
+    queryPageQueryKeyRef.current = nativeBaseQueryKey;
+
+    queryPageTracksRef.current = [];
+
+    hasMoreQueryPageTracksRef.current = false;
+
+    setQueryPageTracks([]);
+
+    setQueryPageTracksTotal(null);
+
+    setHasMoreQueryPageTracks(false);
+
+    setRenderedTrackLimit(TRACK_RENDER_CHUNK_SIZE);
+
+    void loadQueryPageTrackChunk({ reset: true });
+
+  }, [
+
+    isOpen,
+
+    loadQueryPageTrackChunk,
+
+    nativeBaseQueryKey,
+
+    resetLoadedTrackPages,
+
+    resetQueryPageTrackPages,
+
+    shouldUseQueryPageBaseCache,
+
+  ]);
 
 
 
@@ -5212,11 +5881,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     }
 
+    if (queryPageTracks) {
 
+      return queryPageTracks;
 
-    return applyMusicLibraryBaseQuery(tracks, baseQueryState);
+    }
 
-  }, [nativeBaseTracks, tracks, baseQueryState]);
+    return shouldUseWebFallbackBaseQuery ? applyMusicLibraryBaseQuery(tracks, baseQueryState) : tracks;
+
+  }, [nativeBaseTracks, queryPageTracks, shouldUseWebFallbackBaseQuery, tracks, baseQueryState]);
 
 
 
@@ -5286,11 +5959,23 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   const isUsingNativeBaseTracks = nativeBaseTracks != null;
 
-  const hasMoreVisibleTrackSource = isUsingNativeBaseTracks ? hasMoreNativeBaseTracks : hasMoreTracks;
+  const isUsingQueryPageTracks = queryPageTracks != null;
+
+  const hasMoreVisibleTrackSource = isUsingNativeBaseTracks
+
+    ? hasMoreNativeBaseTracks
+
+    : isUsingQueryPageTracks
+
+      ? hasMoreQueryPageTracks
+
+      : hasMoreTracks;
 
   const isPartialBaseQueryResult =
 
-    (shouldUseFallbackBaseQuery && hasMoreTracks) ||
+    (shouldUseWebFallbackBaseQuery && hasMoreTracks) ||
+
+    (shouldUseQueryPageBaseCache && hasMoreQueryPageTracks) ||
 
     (shouldUseNativeBaseQuery && hasMoreNativeBaseTracks);
 
@@ -5317,6 +6002,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     shouldUseNativeBaseQuery && nativeBaseTracksTotal !== null
 
       ? nativeBaseTracksTotal
+
+      : shouldUseQueryPageBaseCache && queryPageTracksTotal !== null
+
+        ? queryPageTracksTotal
 
       : filteredTracks.length;
 
@@ -5491,25 +6180,45 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   );
 
 
+  const isVisibleTrackSourceLoading = isUsingNativeBaseTracks
+
+    ? isNativeBaseTracksLoading
+
+    : isUsingQueryPageTracks
+
+      ? isQueryPageTracksLoading
+
+      : isTrackChunkLoading;
+
   const showTrackLoadHint = isUsingNativeBaseTracks
 
-    ? isNativeBaseTracksLoading ||
+    ? isVisibleTrackSourceLoading ||
 
       hasMoreNativeBaseTracks ||
 
       (baseView === 'card' && renderedTracks.length < filteredTracksTotal)
 
-    : isTrackChunkLoading ||
+    : isUsingQueryPageTracks
 
-      hasMoreTracks ||
+      ? isVisibleTrackSourceLoading ||
 
-      (baseView === 'card' && renderedTracks.length < filteredTracksTotal);
+        hasMoreQueryPageTracks ||
+
+        (baseView === 'card' && renderedTracks.length < filteredTracksTotal)
+
+      : isVisibleTrackSourceLoading ||
+
+        hasMoreTracks ||
+
+        (baseView === 'card' && renderedTracks.length < filteredTracksTotal);
 
 
 
   const getMusicLibraryRuntimeDiagnosticSnapshot = useCallback(
 
     (): MusicLibraryRuntimeDiagnosticSnapshot => {
+
+      const coverCache = musicLibraryService.getCoverRuntimeCacheStats();
 
       const performanceMemory = (
 
@@ -5529,6 +6238,22 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       ).memory;
 
+      const tracksBytes = estimateMusicLibraryTrackArrayBytes(tracks) ?? 0;
+
+      const nativeBaseTracksBytes = estimateMusicLibraryTrackArrayBytes(nativeBaseTracks) ?? 0;
+
+      const queryPageTracksBytes = estimateMusicLibraryTrackArrayBytes(queryPageTracks) ?? 0;
+
+      const trackArrayBytes = tracksBytes + nativeBaseTracksBytes + queryPageTracksBytes;
+
+      const trackedRuntimeBytes =
+
+        trackArrayBytes + coverCache.coverBlobUrlTotalBytes + coverCache.coverDecodedEstimateTotalBytes;
+
+      const webview2PrivateBytes =
+
+        musicLibraryProcessPerf?.totals.webview2PrivateBytes ?? null;
+
 
 
       return {
@@ -5543,6 +6268,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
         shouldUseNativeBaseQuery,
 
+        shouldUseQueryPageBaseCache,
+
         coverPolicy: musicLibraryService.getCurrentCoverRuntimeCachePolicy(),
 
         counts: {
@@ -5550,6 +6277,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           tracks: tracks.length,
 
           nativeBaseTracks: nativeBaseTracks?.length ?? 0,
+
+          queryPageTracks: queryPageTracks?.length ?? 0,
 
           filteredTracks: filteredTracks.length,
 
@@ -5561,13 +6290,47 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
         estimatedBytes: {
 
-          tracks: estimateMusicLibraryTrackArrayBytes(tracks),
+          tracks: tracksBytes,
 
-          nativeBaseTracks: estimateMusicLibraryTrackArrayBytes(nativeBaseTracks),
+          nativeBaseTracks: nativeBaseTracksBytes,
+
+          queryPageTracks: queryPageTracksBytes,
 
         },
 
-        coverCache: musicLibraryService.getCoverRuntimeCacheStats(),
+        attribution: {
+
+          trackArrayBytes,
+
+          trackedRuntimeBytes,
+
+          webview2PrivateResidualBytes:
+
+            webview2PrivateBytes !== null ? Math.max(0, webview2PrivateBytes - trackedRuntimeBytes) : null,
+
+          webview2PrivateMinusTrackArraysBytes:
+
+            webview2PrivateBytes !== null ? Math.max(0, webview2PrivateBytes - trackArrayBytes) : null,
+
+        },
+
+        process: {
+
+          timestampMs: musicLibraryProcessPerf?.timestampMs ?? null,
+
+          webview2PrivateBytes,
+
+          webview2WorkingSetBytes: musicLibraryProcessPerf?.totals.webview2WorkingSetBytes ?? null,
+
+          treePrivateBytes: musicLibraryProcessPerf?.totals.privateBytes ?? null,
+
+          treeWorkingSetBytes: musicLibraryProcessPerf?.totals.workingSetBytes ?? null,
+
+          webview2CpuPercent: musicLibraryProcessPerf?.totals.webview2CpuPercent ?? null,
+
+        },
+
+        coverCache,
 
         jsHeap:
 
@@ -5607,11 +6370,17 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       nativeBaseTracks,
 
+      musicLibraryProcessPerf,
+
+      queryPageTracks,
+
       renderedTracks.length,
 
       searchQuery,
 
       shouldUseNativeBaseQuery,
+
+      shouldUseQueryPageBaseCache,
 
       tracks,
 
@@ -5627,13 +6396,27 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-    window.__PMP_MUSIC_LIBRARY_GET_SNAPSHOT__ = getMusicLibraryRuntimeDiagnosticSnapshot;
+    const getRuntimeSnapshot = (): MusicLibraryRuntimeDiagnosticSnapshot => {
+
+      const snapshot = getMusicLibraryRuntimeDiagnosticSnapshot();
+
+      window.__PMP_LAST_MUSIC_LIBRARY_SNAPSHOT__ = snapshot;
+
+      return snapshot;
+
+    };
+
+
+
+    window.__PMP_MUSIC_LIBRARY_GET_SNAPSHOT__ = getRuntimeSnapshot;
+
+    window.__PMP_LAST_MUSIC_LIBRARY_SNAPSHOT__ = getRuntimeSnapshot();
 
 
 
     return () => {
 
-      if (window.__PMP_MUSIC_LIBRARY_GET_SNAPSHOT__ === getMusicLibraryRuntimeDiagnosticSnapshot) {
+      if (window.__PMP_MUSIC_LIBRARY_GET_SNAPSHOT__ === getRuntimeSnapshot) {
 
         delete window.__PMP_MUSIC_LIBRARY_GET_SNAPSHOT__;
 
@@ -5689,9 +6472,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
         searchQuery: snapshot.searchQuery,
 
+        shouldUseQueryPageBaseCache: snapshot.shouldUseQueryPageBaseCache,
+
         tracks: snapshot.counts.tracks,
 
         nativeBaseTracks: snapshot.counts.nativeBaseTracks,
+
+        queryPageTracks: snapshot.counts.queryPageTracks,
 
         filteredTracks: snapshot.counts.filteredTracks,
 
@@ -5704,6 +6491,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         coverBlobUrlTotalBytes: snapshot.coverCache.coverBlobUrlTotalBytes,
 
         coverDecodedEstimateTotalBytes: snapshot.coverCache.coverDecodedEstimateTotalBytes,
+
+        trackedRuntimeBytes: snapshot.attribution.trackedRuntimeBytes,
+
+        webview2PrivateBytes: snapshot.process.webview2PrivateBytes,
+
+        webview2PrivateResidualBytes: snapshot.attribution.webview2PrivateResidualBytes,
 
         usedJSHeapSize: snapshot.jsHeap?.usedJSHeapSize ?? null,
 
@@ -5721,7 +6514,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       musicLibraryDiagnosticsSignatureRef.current = signature;
 
-      console.info('[MusicLibrary][snapshot]', snapshot);
+      telemetry.debug('music-library.diagnostics.snapshot', {
+        fields: snapshot as unknown as Record<string, unknown>,
+      });
 
     }, MUSIC_LIBRARY_MEMORY_LOG_DEBOUNCE_MS);
 
@@ -5739,7 +6534,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     };
 
-  }, [getMusicLibraryRuntimeDiagnosticSnapshot, isOpen]);
+  }, [getMusicLibraryRuntimeDiagnosticSnapshot, isOpen, telemetry]);
 
 
 
@@ -5801,7 +6596,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
         } else if (hasMoreVisibleTrackSource) {
 
-          void (shouldUseNativeBaseQuery ? loadNativeBaseTrackChunk() : scheduleTrackChunkLoad());
+          void (
+            shouldUseNativeBaseQuery
+              ? loadNativeBaseTrackChunk()
+              : shouldUseQueryPageBaseCache
+                ? loadQueryPageTrackChunk()
+                : scheduleTrackChunkLoad()
+          );
 
           return;
 
@@ -5841,7 +6642,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
         if (hasMoreVisibleTrackSource) {
 
-          void (shouldUseNativeBaseQuery ? loadNativeBaseTrackChunk() : scheduleTrackChunkLoad());
+          void (
+            shouldUseNativeBaseQuery
+              ? loadNativeBaseTrackChunk()
+              : shouldUseQueryPageBaseCache
+                ? loadQueryPageTrackChunk()
+                : scheduleTrackChunkLoad()
+          );
 
           return;
 
@@ -5955,11 +6762,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     loadNativeBaseTrackChunk,
 
+    loadQueryPageTrackChunk,
+
     renderedTrackLimit,
 
     scheduleTrackChunkLoad,
 
     shouldUseNativeBaseQuery,
+
+    shouldUseQueryPageBaseCache,
 
     tracks.length,
 
@@ -5980,8 +6791,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const handleTrackDoubleClick = useCallback((track: Track, index: number) => {
 
     if (!onPlayNow) {
-
-      console.log('Play track:', track.title, '(embedded mode - no playback)');
+      telemetry.debug('music-library.play-track.skipped', {
+        fields: {
+          mode: 'list',
+          reason: 'embedded-no-playback',
+          trackId: track.id,
+          trackTitle: track.title ?? null,
+        },
+      });
 
       return;
 
@@ -5995,11 +6812,19 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     const startIndex = originalIndex >= 0 ? originalIndex : index;
 
-    console.log(`[MusicLibrary] Playing from track ${startIndex + 1}/${filteredTracks.length}`);
+    telemetry.info('music-library.play-track', {
+      fields: {
+        mode: 'list',
+        startIndex,
+        filteredTrackCount: filteredTracks.length,
+        trackId: track.id,
+        trackTitle: track.title ?? null,
+      },
+    });
 
     onPlayNow(filteredTracks, startIndex);
 
-  }, [filteredTracks, markPendingPlayTrack, onPlayNow]);
+  }, [filteredTracks, markPendingPlayTrack, onPlayNow, telemetry]);
 
 
 
@@ -6010,8 +6835,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     e?.stopPropagation();
 
     if (!onPlayNow) {
-
-      console.log('Play single track:', track.title, '(embedded mode - no playback)');
+      telemetry.debug('music-library.play-track.skipped', {
+        fields: {
+          mode: 'single',
+          reason: 'embedded-no-playback',
+          trackId: track.id,
+          trackTitle: track.title ?? null,
+        },
+      });
 
       return;
 
@@ -6019,11 +6850,17 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     markPendingPlayTrack(track);
 
-    console.log('[MusicLibrary] Playing single track:', track.title);
+    telemetry.info('music-library.play-track', {
+      fields: {
+        mode: 'single',
+        trackId: track.id,
+        trackTitle: track.title ?? null,
+      },
+    });
 
     onPlayNow([track]);
 
-  }, [markPendingPlayTrack, onPlayNow]);
+  }, [markPendingPlayTrack, onPlayNow, telemetry]);
 
 
 
@@ -6034,18 +6871,28 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     e?.stopPropagation();
 
     if (!onAddToQueue) {
-
-      console.log('Add track:', track.title, '(embedded mode - no queue)');
+      telemetry.debug('music-library.add-track.skipped', {
+        fields: {
+          reason: 'embedded-no-queue',
+          trackId: track.id,
+          trackTitle: track.title ?? null,
+        },
+      });
 
       return;
 
     }
 
-    console.log('闁?Adding single track:', track.title);
+    telemetry.info('music-library.add-track', {
+      fields: {
+        trackId: track.id,
+        trackTitle: track.title ?? null,
+      },
+    });
 
     onAddToQueue([track]);
 
-  }, [onAddToQueue]);
+  }, [onAddToQueue, telemetry]);
 
 
 
@@ -6227,7 +7074,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       } catch (error) {
 
-        console.warn('Failed to load stable queue data:', error);
+        telemetry.warn('music-library.stable.queue.load.failed', {
+          message: readTelemetryErrorMessage(error),
+        });
 
         setErrorMessage(t('pages.music-library.stable.queue.loadFailed'));
 
@@ -7066,7 +7915,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
         if (deleted > 0) {
 
-          await Promise.all([loadLibraryPaths(), loadLibraryData()]);
+          await Promise.all([loadLibraryPaths(), reloadCurrentLocalTrackSource()]);
 
         } else {
 
@@ -7090,7 +7939,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     },
 
-    [beginAudioProtection, loadLibraryData, loadLibraryPathHealth, loadLibraryPaths]
+    [beginAudioProtection, loadLibraryPathHealth, loadLibraryPaths, reloadCurrentLocalTrackSource]
 
   );
 
@@ -7126,7 +7975,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       if (deletedTotal > 0) {
 
-        await Promise.all([loadLibraryPaths(), loadLibraryData()]);
+        await Promise.all([loadLibraryPaths(), reloadCurrentLocalTrackSource()]);
 
       } else {
 
@@ -7150,11 +7999,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     libraryPaths,
 
-    loadLibraryData,
-
     loadLibraryPathHealth,
 
     loadLibraryPaths,
+
+    reloadCurrentLocalTrackSource,
 
     totalMissingTracks,
 
@@ -9350,7 +10199,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                     <div className="music-library-track-load-hint" role="status" aria-live="polite">
 
-                      {isTrackChunkLoading
+                      {isVisibleTrackSourceLoading
 
                         ? t('pages.music-library.loading.tracksChunk')
 
@@ -9365,16 +10214,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                             })
 
                           : t('pages.music-library.loading.scrollToLoadMore')}
-
-                    </div>
-
-                  )}
-
-                  {isNativeBaseTracksLoading && (
-
-                    <div className="music-library-track-load-hint" role="status" aria-live="polite">
-
-                      {t('pages.music-library.loading.tracksChunk')}
 
                     </div>
 
@@ -10176,7 +11015,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                               await musicLibraryService.setLibraryPathVisibility(path.id, !path.isVisible);
 
-                              await Promise.all([loadLibraryPaths(), loadLibraryData()]);
+                              await Promise.all([loadLibraryPaths(), reloadCurrentLocalTrackSource()]);
 
                             } finally {
 
@@ -10312,11 +11151,16 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                               await loadLibraryPaths();
 
-                              await loadLibraryData();
+                              await reloadCurrentLocalTrackSource();
 
                             } catch (error) {
-
-                              console.error('Failed to rescan path:', error);
+                              telemetry.error('music-library.paths.rescan.failed', {
+                                message: readTelemetryErrorMessage(error),
+                                fields: {
+                                  sourceId: path.id,
+                                  path: path.path,
+                                },
+                              });
 
                             } finally {
 
@@ -10348,7 +11192,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                               await musicLibraryService.removeLibraryPath(path.id);
 
-                              await Promise.all([loadLibraryPaths(), loadLibraryData()]);
+                              await Promise.all([loadLibraryPaths(), reloadCurrentLocalTrackSource()]);
 
                             } finally {
 

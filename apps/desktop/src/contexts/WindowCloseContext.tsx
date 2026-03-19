@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { appWindow } from '@tauri-apps/api/window';
-import { invoke } from '@tauri-apps/api/tauri';
 import { flushStorageWrites, usePersistentSetting } from '../modules/storage';
 import { useT } from '../i18n';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../services/telemetry/tauriInvokeTelemetry';
 import { isTauriRuntime } from '../utils/tauriRuntime';
 import { broadcastSignal, setupTauriListener, STORAGE_KEYS, TAURI_EVENTS } from '../utils/windowCommunication';
 import { ExitDialog } from '../components/core/ExitDialog';
@@ -24,6 +25,7 @@ function normalizeBehavior(value: unknown, fallback: MainWindowCloseBehavior): M
 export function WindowCloseProvider({ children }: { children: ReactNode }) {
   const t = useT();
   const isTauri = isTauriRuntime();
+  const telemetry = useMemo(() => getTelemetryLogger('windowing', 'WindowCloseContext'), []);
 
   const [magnetBehaviorRaw] = usePersistentSetting<string>(STORAGE_KEYS.MAIN_WINDOW_CLOSE_BEHAVIOR_MAGNET, 'ask', {
     format: 'string',
@@ -53,13 +55,20 @@ export function WindowCloseProvider({ children }: { children: ReactNode }) {
       // best-effort
     }
     await broadcastSignal(TAURI_EVENTS.MAIN_WINDOW_HIDDEN);
-  }, [isTauri]);
+    telemetry.info('window.main.hide.completed');
+  }, [isTauri, telemetry]);
 
   const requestExit = useCallback(async () => {
     if (!isTauri) return;
     flushStorageWrites();
-    await invoke('app_request_exit');
-  }, [isTauri]);
+    telemetry.info('window.main.exit.requested');
+    await invokeWithTelemetry('app_request_exit', undefined, {
+      moduleId: 'windowing',
+      component: 'windowClose',
+      event: 'window.main.request-exit',
+      successLevel: 'info',
+    });
+  }, [isTauri, telemetry]);
 
   const applyBehavior = useCallback(
     async (behavior: MainWindowCloseBehavior) => {
@@ -80,6 +89,11 @@ export function WindowCloseProvider({ children }: { children: ReactNode }) {
 
       const behavior = source === 'magnet' ? magnetBehavior : systemBehavior;
       if (behavior === 'ask') {
+        telemetry.info('window.main.close.prompt-opened', {
+          fields: {
+            source,
+          },
+        });
         setPromptSource(source);
         return;
       }
@@ -88,7 +102,7 @@ export function WindowCloseProvider({ children }: { children: ReactNode }) {
       setBusy(true);
       void applyBehavior(behavior).finally(() => setBusy(false));
     },
-    [applyBehavior, busy, isTauri, magnetBehavior, systemBehavior]
+    [applyBehavior, busy, isTauri, magnetBehavior, systemBehavior, telemetry]
   );
 
   useEffect(() => {

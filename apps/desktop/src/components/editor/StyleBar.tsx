@@ -1,9 +1,16 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useT } from '../../i18n';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { TAURI_EVENTS, setupTauriListenerWithPayload } from '../../utils/windowCommunication';
 import { setMagnetChromeOverrideMode, useMagnetChromeOverrideMode, type MagnetChromeOverrideMode } from '../../modules/magnets';
 import './StyleBar.css';
+
+const telemetry = getTelemetryLogger('editor', 'StyleBar');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export const StyleBar = memo(function StyleBar() {
   const t = useT();
@@ -91,7 +98,12 @@ export const StyleBar = memo(function StyleBar() {
         const position = await calculateWindowPosition(type);
         await openEditorWindow({ type, ...position });
       } catch (error) {
-        console.error('[StyleBar] Failed to open style popup window:', type, error);
+        telemetry.error('editor.style-popup.toggle.failed', {
+          message: getErrorMessage(error),
+          fields: {
+            popupType: type,
+          },
+        });
       }
     },
     [openPopups]

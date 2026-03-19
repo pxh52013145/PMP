@@ -1,4 +1,5 @@
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 
 export type DurableTextNamespace = 'pmpm-entry' | 'pmps-fragment' | 'migration-backup' | 'profile-pack-backup';
 
@@ -7,6 +8,7 @@ const IDB_STORE_NAME = 'durableText';
 const IDB_VERSION = 1;
 
 let idbPromise: Promise<IDBDatabase> | null = null;
+const telemetry = getTelemetryLogger('storage', 'durableTextStore');
 
 function openIdb(): Promise<IDBDatabase> {
   if (idbPromise) return idbPromise;
@@ -129,7 +131,10 @@ export async function writeDurableText(
     await idbSet(buildKey(namespace, id), value);
     return true;
   } catch (error) {
-    console.warn(`[storage] Failed to write durable text ${namespace}/${id}`, error);
+    telemetry.warn('storage.durable.write.failed', {
+      message: error instanceof Error ? error.message : String(error),
+      fields: { namespace, id },
+    });
     return false;
   }
 }
@@ -143,7 +148,10 @@ export async function readDurableText(namespace: DurableTextNamespace, id: strin
     }
     return await idbGet(buildKey(namespace, id));
   } catch (error) {
-    console.warn(`[storage] Failed to read durable text ${namespace}/${id}`, error);
+    telemetry.warn('storage.durable.read.failed', {
+      message: error instanceof Error ? error.message : String(error),
+      fields: { namespace, id },
+    });
     return null;
   }
 }
@@ -158,6 +166,9 @@ export async function removeDurableText(namespace: DurableTextNamespace, id: str
     }
     await idbDelete(buildKey(namespace, id));
   } catch (error) {
-    console.warn(`[storage] Failed to remove durable text ${namespace}/${id}`, error);
+    telemetry.warn('storage.durable.remove.failed', {
+      message: error instanceof Error ? error.message : String(error),
+      fields: { namespace, id },
+    });
   }
 }

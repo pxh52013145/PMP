@@ -31,9 +31,15 @@ import { InputDialog } from './InputDialog';
 import { buildMagnetVariantRenderers } from './shared/magnetVariantCatalog';
 import { useResolvedMagnetSkinRenderer } from './shared/useResolvedMagnetSkinRenderer';
 import { MATRIX_CHANGE_VARIANT_PRESETS, parseMatrixChangeSkinProps } from './matrixChangeSkin';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import './MatrixChangeMagnet.css';
 
 const MAX_HISTORY_PER_SPACE = 20;
+const telemetry = getTelemetryLogger('magnets', 'MatrixChangeMagnet');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function getSpaceBadge(spaceId: string): string {
   const match = spaceId.match(/^space(\d+)$/);
@@ -259,7 +265,12 @@ function MatrixChangeMagnetDefaultRenderer({ variantConfig }: MatrixChangeRender
         const attemptReason = attempt === 0 ? reason : `${reason}:retry${attempt === 1 ? '' : attempt}`;
         const response = await magnetLayoutStoreApplyPatch({ expectedRevision, patches, reason: attemptReason });
         if (!response) {
-          console.warn('[magnets] Failed to apply layout store patch (no response)', { reason: attemptReason });
+          telemetry.warn('layout_store.apply_patch.no_response', {
+            fields: {
+              reason: attemptReason,
+              patchCount: patches.length,
+            },
+          });
           return;
         }
 
@@ -268,13 +279,26 @@ function MatrixChangeMagnetDefaultRenderer({ variantConfig }: MatrixChangeRender
 
         if (response.ok) return;
         if (response.error?.code !== 'revisionConflict') {
-          console.warn('[magnets] Failed to apply layout store patch', { reason: attemptReason, error: response.error });
+          telemetry.warn('layout_store.apply_patch.failed', {
+            message: response.error?.message ?? 'Failed to apply layout store patch.',
+            fields: {
+              reason: attemptReason,
+              patchCount: patches.length,
+              errorCode: response.error?.code ?? null,
+            },
+          });
           return;
         }
 
         const retryRevision = response.state.revision;
         if (retryRevision <= 0 || retryRevision === expectedRevision) {
-          console.warn('[magnets] Failed to apply layout store patch (revision conflict)', { reason: attemptReason });
+          telemetry.warn('layout_store.apply_patch.revision_conflict_stalled', {
+            fields: {
+              reason: attemptReason,
+              expectedRevision,
+              retryRevision,
+            },
+          });
           return;
         }
         expectedRevision = retryRevision;
@@ -833,7 +857,13 @@ function MatrixChangeMagnetDefaultRenderer({ variantConfig }: MatrixChangeRender
           try {
             copySpaceStorage(dialog.sourceSpaceId, dialog.newId);
           } catch (error) {
-            console.warn('[magnets] Failed to clone space storage', error);
+            telemetry.warn('space.clone_storage.failed', {
+              message: readErrorMessage(error),
+              fields: {
+                sourceSpaceId: dialog.sourceSpaceId,
+                targetSpaceId: dialog.newId,
+              },
+            });
           }
           const nextState = sanitizeMagnetSpacesState({
             ...spacesState,

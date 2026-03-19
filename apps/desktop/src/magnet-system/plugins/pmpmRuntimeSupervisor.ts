@@ -1,4 +1,5 @@
 import { readJson } from '../../modules/storage';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { broadcastDataUpdate, setupStorageListener, STORAGE_KEYS } from '../../utils/windowCommunication';
 import { recordPmpmAuditEvent } from './pmpmGovernance';
 import { clearPmpmPluginRuntimeCache } from './pmpmRuntime';
@@ -14,6 +15,11 @@ export type PmpmRuntimeRestartListener = () => void;
 const listeners = new Set<PmpmRuntimeRestartListener>();
 let revision = 0;
 let syncDisposer: (() => void) | null = null;
+const telemetry = getTelemetryLogger('pmpm', 'pmpmRuntimeSupervisor');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function notifyListeners(): void {
   revision += 1;
@@ -21,7 +27,9 @@ function notifyListeners(): void {
     try {
       listener();
     } catch (error) {
-      console.warn('[pmpm-runtime] listener failed', error);
+      telemetry.warn('runtime_restart.listener.failed', {
+        message: readErrorMessage(error),
+      });
     }
   }
 }

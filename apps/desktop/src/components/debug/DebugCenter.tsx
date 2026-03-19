@@ -7,6 +7,8 @@ import {
   useRef,
   useState,
 } from 'react';
+import type { TelemetryQueryInput, TelemetryRecord } from '../../contracts/telemetry';
+import { useKernel } from '../../contexts/KernelContext';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import { readJson, usePersistentSetting, writeJson } from '../../modules/storage';
@@ -16,6 +18,8 @@ import {
   getDefaultDebugConfig,
   getProcessPerfTotalsSnapshot,
   getRecentGitCommits,
+  queryTelemetryCurrentSession,
+  readCurrentTelemetrySession,
   restartApp,
   setDebugConfig,
   type DebugConfig,
@@ -42,6 +46,16 @@ import {
   type NativeLibrarySyncTickResult,
 } from '../../modules/music-library';
 import {
+  TELEMETRY_SERVICE_TOKEN,
+} from '../../services/telemetry/TelemetryService';
+import type { TelemetryService, TelemetrySnapshot } from '../../services/telemetry/telemetryTypes';
+import {
+  buildTelemetryAiContextReport,
+  getDefaultTelemetryAiQuery,
+} from '../../services/telemetry/aiContextReport';
+import { buildTelemetryScenarioReport } from '../../services/telemetry/scenarioReport';
+import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
+import {
   STORAGE_KEYS,
   TAURI_EVENTS,
   setupTauriListenerWithPayload,
@@ -59,6 +73,43 @@ type EditorWindowsDebugState = {
 };
 
 type CoverCacheStats = ReturnType<MusicLibraryService['getCoverRuntimeCacheStats']>;
+
+type MusicLibraryRuntimeMemorySnapshot = {
+  timestampMs: number;
+  sourceMode: string;
+  baseView: string;
+  searchQuery: string;
+  shouldUseNativeBaseQuery: boolean;
+  shouldUseQueryPageBaseCache: boolean;
+  coverPolicy: string;
+  counts: {
+    tracks: number;
+    nativeBaseTracks: number;
+    queryPageTracks: number;
+    filteredTracks: number;
+    renderedTracks: number;
+    groupedRows: number;
+  };
+  estimatedBytes: {
+    tracks: number | null;
+    nativeBaseTracks: number | null;
+    queryPageTracks: number | null;
+  };
+  attribution: {
+    trackArrayBytes: number;
+    trackedRuntimeBytes: number;
+    webview2PrivateResidualBytes: number | null;
+    webview2PrivateMinusTrackArraysBytes: number | null;
+  };
+  process: {
+    timestampMs: number | null;
+    webview2PrivateBytes: number | null;
+    webview2WorkingSetBytes: number | null;
+    treePrivateBytes: number | null;
+    treeWorkingSetBytes: number | null;
+    webview2CpuPercent: number | null;
+  };
+};
 
 type MusicLibrarySyncStatusEventPayload = {
   source?: string;
@@ -139,6 +190,47 @@ function formatBytesToMb(value: number | undefined | null): string {
   const mb = value / 1024 / 1024;
   const normalized = Object.is(mb, -0) ? 0 : mb;
   return normalized.toFixed(1);
+}
+
+function formatTelemetryTimestamp(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '-';
+  return new Date(value).toLocaleTimeString();
+}
+
+function formatTelemetryRecordLine(record: TelemetryRecord): string {
+  const parts = [
+    `[${formatTelemetryTimestamp(record.ts)}]`,
+    record.level.toUpperCase(),
+    record.moduleId,
+    record.event,
+  ];
+  const message = typeof record.message === 'string' && record.message.trim().length > 0
+    ? record.message.trim()
+    : '';
+  if (message) {
+    parts.push(message);
+  }
+  return parts.join(' | ');
+}
+
+function getLatestMusicLibraryRuntimeSnapshot(): MusicLibraryRuntimeMemorySnapshot | null {
+  if (typeof window === 'undefined') return null;
+  const snapshotWindow = window as Window & {
+    __PMP_MUSIC_LIBRARY_GET_SNAPSHOT__?: () => MusicLibraryRuntimeMemorySnapshot;
+    __PMP_LAST_MUSIC_LIBRARY_SNAPSHOT__?: MusicLibraryRuntimeMemorySnapshot;
+  };
+
+  try {
+    const liveSnapshot = snapshotWindow.__PMP_MUSIC_LIBRARY_GET_SNAPSHOT__?.();
+    if (liveSnapshot) {
+      snapshotWindow.__PMP_LAST_MUSIC_LIBRARY_SNAPSHOT__ = liveSnapshot;
+      return liveSnapshot;
+    }
+  } catch {
+    // Ignore getter failures and fall back to the last captured snapshot.
+  }
+
+  return snapshotWindow.__PMP_LAST_MUSIC_LIBRARY_SNAPSHOT__ ?? null;
 }
 
 function sanitizeFileSegment(value: string, fallback: string): string {
@@ -435,13 +527,20 @@ function buildMemoryBaselineCsv(payload: MemoryBaselineExportPayload): string {
 }
 
 export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings' }) {
+  const kernel = useKernel();
   const t = useT();
   const { navigateTo, history } = useNavigation();
   const isTauri = useMemo(() => isTauriRuntime(), []);
+  const telemetryService = useMemo(
+    () => kernel.services.get(TELEMETRY_SERVICE_TOKEN) as TelemetryService,
+    [kernel]
+  );
   const [config, setConfigState] = useState<DebugConfig>(() => getDefaultDebugConfig());
   const [envSnapshot, setEnvSnapshot] = useState<DebugEnvSnapshot>({});
   const [editorWindowsState, setEditorWindowsState] = useState<EditorWindowsDebugState | null>(null);
   const [coverCacheStats, setCoverCacheStats] = useState<CoverCacheStats | null>(null);
+  const [musicLibrarySnapshot, setMusicLibrarySnapshot] =
+    useState<MusicLibraryRuntimeMemorySnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -482,6 +581,16 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     { format: 'string' }
   );
   const windowCommDebugEnabled = windowCommDebug === '1';
+  const [telemetrySnapshot, setTelemetrySnapshot] = useState<TelemetrySnapshot>(() =>
+    telemetryService.getSnapshot()
+  );
+
+  useEffect(() => {
+    setTelemetrySnapshot(telemetryService.getSnapshot());
+    return telemetryService.subscribe((snapshot: TelemetrySnapshot) => {
+      setTelemetrySnapshot(snapshot);
+    });
+  }, [telemetryService]);
 
   const navigationHistoryStats = useMemo(() => {
     let bytes = 0;
@@ -500,6 +609,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const refreshMemory = useCallback(async () => {
     const coverStats = MusicLibraryService.getInstance().getCoverRuntimeCacheStats();
     setCoverCacheStats(coverStats);
+    setMusicLibrarySnapshot(getLatestMusicLibraryRuntimeSnapshot());
 
     if (!isTauri) {
       setEditorWindowsState(null);
@@ -507,13 +617,51 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     }
 
     try {
-      const { invoke } = await import('@tauri-apps/api/tauri');
-      const state = await invoke<EditorWindowsDebugState>('debug_get_editor_windows_state');
+      const state = await invokeWithTelemetry<EditorWindowsDebugState>(
+        'debug_get_editor_windows_state',
+        undefined,
+        {
+          moduleId: 'debug',
+          component: 'DebugCenter',
+          event: 'debug.editor-windows.state',
+        }
+      );
       setEditorWindowsState(state);
     } catch {
       setEditorWindowsState(null);
     }
   }, [isTauri]);
+
+  const refreshTelemetryRuntime = useCallback(async () => {
+    setError(null);
+    try {
+      const snapshot = await telemetryService.refreshRuntime();
+      setTelemetrySnapshot(snapshot);
+      setStatusMessage('Telemetry runtime refreshed.');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    }
+  }, [telemetryService]);
+
+  const flushTelemetryRuntime = useCallback(async () => {
+    setError(null);
+    try {
+      await telemetryService.flushNow();
+      setStatusMessage('Telemetry queue flushed.');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    }
+  }, [telemetryService]);
+
+  const clearTelemetryRuntimeSession = useCallback(async () => {
+    setError(null);
+    try {
+      await telemetryService.clearSession();
+      setStatusMessage('Telemetry session cleared.');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    }
+  }, [telemetryService]);
 
   const refreshSyncOrchestrator = useCallback(async () => {
     if (!isTauri) {
@@ -1198,6 +1346,135 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       URL.revokeObjectURL(url);
     }, 0);
   }, []);
+
+  const saveDebugArtifact = useCallback(async (
+    fileName: string,
+    content: string,
+    mimeType: string
+  ) => {
+    if (!isTauri) {
+      downloadTextFile(fileName, content, mimeType);
+      return { kind: 'download' as const, path: fileName };
+    }
+
+    const fs = await import('@tauri-apps/api/fs');
+    const relativePath = `logs/${fileName}`;
+    await fs.createDir('logs', { dir: fs.BaseDirectory.AppData, recursive: true });
+    await fs.writeFile({ path: relativePath, contents: content }, { dir: fs.BaseDirectory.AppData });
+    return { kind: 'saved' as const, path: relativePath };
+  }, [downloadTextFile, isTauri]);
+
+  const handleExportTelemetrySessionJson = useCallback(async () => {
+    setError(null);
+    try {
+      const session = await readCurrentTelemetrySession();
+      if (!session || session.records.length === 0) {
+        setStatusMessage(null);
+        setError('Telemetry session is empty.');
+        return;
+      }
+
+      const safeTs = new Date().toISOString().replace(/[:.]/g, '-');
+      const safeSessionId = sanitizeFileSegment(session.status.currentSessionId, 'session');
+      const content = JSON.stringify(session, null, 2);
+      const fileName = `telemetry-session-${safeTs}-${safeSessionId}.json`;
+      const result = await saveDebugArtifact(fileName, content, 'application/json;charset=utf-8');
+
+      setStatusMessage(
+        result.kind === 'saved'
+          ? `Telemetry session exported to ${result.path}`
+          : 'Telemetry session exported.'
+      );
+    } catch (err) {
+      setStatusMessage(null);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [saveDebugArtifact]);
+
+  const handleExportTelemetryScenarioReport = useCallback(async () => {
+    setError(null);
+    try {
+      const session = await readCurrentTelemetrySession();
+      if (!session || session.records.length === 0) {
+        setStatusMessage(null);
+        setError('Telemetry session is empty.');
+        return;
+      }
+
+      const perfTotals = isTauri ? await getProcessPerfTotalsSnapshot() : null;
+      const report = buildTelemetryScenarioReport({ session, perfTotals });
+      const safeTs = new Date().toISOString().replace(/[:.]/g, '-');
+      const safeSessionId = sanitizeFileSegment(session.status.currentSessionId, 'session');
+      const fileName = `telemetry-scenario-${safeTs}-${safeSessionId}.md`;
+      const result = await saveDebugArtifact(fileName, report, 'text/markdown;charset=utf-8');
+
+      setStatusMessage(
+        result.kind === 'saved'
+          ? `Telemetry scenario report exported to ${result.path}`
+          : 'Telemetry scenario report exported.'
+      );
+    } catch (err) {
+      setStatusMessage(null);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [isTauri, saveDebugArtifact]);
+
+  const loadTelemetryAiContextArtifact = useCallback(async (): Promise<{
+    query: TelemetryQueryInput;
+    report: string;
+    sessionId: string;
+  }> => {
+    const query = getDefaultTelemetryAiQuery();
+    const result = await queryTelemetryCurrentSession(query);
+    if (!result || result.matchedRecordCount === 0) {
+      throw new Error('Telemetry AI context is empty.');
+    }
+
+    const perfTotals = isTauri ? await getProcessPerfTotalsSnapshot() : null;
+    const report = buildTelemetryAiContextReport({
+      query,
+      result,
+      perfTotals,
+    });
+
+    return {
+      query,
+      report,
+      sessionId: result.status.currentSessionId,
+    };
+  }, [isTauri]);
+
+  const handleCopyTelemetryAiContext = useCallback(async () => {
+    setError(null);
+    try {
+      const artifact = await loadTelemetryAiContextArtifact();
+      await navigator.clipboard.writeText(artifact.report);
+      setStatusMessage(`Telemetry AI context copied from session ${artifact.sessionId}.`);
+    } catch (err) {
+      setStatusMessage(null);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [loadTelemetryAiContextArtifact]);
+
+  const handleExportTelemetryAiContext = useCallback(async () => {
+    setError(null);
+    try {
+      const artifact = await loadTelemetryAiContextArtifact();
+      const safeTs = new Date().toISOString().replace(/[:.]/g, '-');
+      const safeSessionId = sanitizeFileSegment(artifact.sessionId, 'session');
+      const fileName = `telemetry-ai-context-${safeTs}-${safeSessionId}.md`;
+      const result = await saveDebugArtifact(fileName, artifact.report, 'text/markdown;charset=utf-8');
+
+      setStatusMessage(
+        result.kind === 'saved'
+          ? `Telemetry AI context exported to ${result.path}`
+          : 'Telemetry AI context exported.'
+      );
+    } catch (err) {
+      setStatusMessage(null);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [loadTelemetryAiContextArtifact, saveDebugArtifact]);
 
   const handleExportBaselinesJson = useCallback(() => {
     if (memoryBaselines.length === 0) {
@@ -2181,6 +2458,126 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
         <SettingsCard>
           <div className="settings-card-header">
             <div>
+              <p className="settings-card-label">Telemetry / 遥测运行时</p>
+              <p className="settings-card-desc">
+                统一查看 console bridge、invoke wrapper、本地 flush 队列和最近 tail。
+              </p>
+            </div>
+            <span className="settings-card-badge">
+              {telemetrySnapshot.transportAvailable ? 'transport:on' : 'transport:off'}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+            <SettingsActionButton type="button" onClick={() => void refreshTelemetryRuntime()}>
+              刷新 Telemetry
+            </SettingsActionButton>
+            <SettingsActionButton type="button" onClick={() => void flushTelemetryRuntime()}>
+              Flush
+            </SettingsActionButton>
+            <SettingsActionButton type="button" onClick={() => void clearTelemetryRuntimeSession()}>
+              清空 Session
+            </SettingsActionButton>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <p className="settings-card-desc">
+              session={telemetrySnapshot.status.currentSessionId} | bootstrap={telemetrySnapshot.bootstrapState} |
+              enabled={telemetrySnapshot.policy.enabled ? 'on' : 'off'} | uiTail=
+              {telemetrySnapshot.policy.uiTailEnabled ? 'on' : 'off'}
+            </p>
+            <p className="settings-card-desc">
+              localBuffered={telemetrySnapshot.bufferedRecords} | localDropped(queue)=
+              {telemetrySnapshot.queueDroppedRecords} | localDropped(tail)=
+              {telemetrySnapshot.tailDroppedRecords}
+            </p>
+            <p className="settings-card-desc">
+              backendFlushed={telemetrySnapshot.status.flushedRecords} | backendDropped=
+              {telemetrySnapshot.status.droppedRecords} | file=
+              {formatBytesToMb(telemetrySnapshot.status.currentFileBytes)} MB
+            </p>
+            <p className="settings-card-note">
+              frontendMin={telemetrySnapshot.status.frontendMinLevel} | backendMin=
+              {telemetrySnapshot.status.backendMinLevel} | persistMin=
+              {telemetrySnapshot.status.persistMinLevel} | flushEvery=
+              {telemetrySnapshot.policy.batchFlushMs}ms / {telemetrySnapshot.policy.batchMaxItems} items
+            </p>
+            {telemetrySnapshot.status.currentFilePath ? (
+              <p className="settings-card-note">filePath={telemetrySnapshot.status.currentFilePath}</p>
+            ) : null}
+            {telemetrySnapshot.status.lastError ? (
+              <p className="settings-card-note" style={{ color: 'rgba(255,120,120,0.9)' }}>
+                lastError={telemetrySnapshot.status.lastError}
+              </p>
+            ) : null}
+          </div>
+
+          <div style={{ marginTop: 14 }}>
+            <p className="settings-card-label">Recent Tail</p>
+            {telemetrySnapshot.tail.length === 0 ? (
+              <p className="settings-card-note">暂无最近记录。</p>
+            ) : (
+              <pre
+                style={{
+                  marginTop: 10,
+                  padding: 12,
+                  borderRadius: 10,
+                  background: 'rgba(0,0,0,0.25)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  overflowX: 'auto',
+                  maxHeight: 220,
+                  fontSize: 12,
+                  color: 'rgba(255,255,255,0.88)',
+                  whiteSpace: 'pre-wrap',
+                }}
+              >
+                {telemetrySnapshot.tail
+                  .slice(-12)
+                  .reverse()
+                  .map((record) => formatTelemetryRecordLine(record))
+                  .join('\n')}
+              </pre>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
+            <SettingsActionButton
+              type="button"
+              onClick={() => {
+                void handleExportTelemetrySessionJson();
+              }}
+            >
+              Export Session JSON
+            </SettingsActionButton>
+            <SettingsActionButton
+              type="button"
+              onClick={() => {
+                void handleExportTelemetryScenarioReport();
+              }}
+            >
+              Export Scenario Report
+            </SettingsActionButton>
+            <SettingsActionButton
+              type="button"
+              onClick={() => {
+                void handleCopyTelemetryAiContext();
+              }}
+            >
+              Copy AI Context
+            </SettingsActionButton>
+            <SettingsActionButton
+              type="button"
+              onClick={() => {
+                void handleExportTelemetryAiContext();
+              }}
+            >
+              Export AI Context
+            </SettingsActionButton>
+          </div>
+        </SettingsCard>
+
+        <SettingsCard>
+          <div className="settings-card-header">
+            <div>
               <p className="settings-card-label">{t('debug.center.memory.title')}</p>
               <p className="settings-card-desc">{t('debug.center.memory.desc')}</p>
             </div>
@@ -2316,6 +2713,84 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
             </div>
 
             <div>
+              <p className="settings-card-label">{t('debug.center.memory.musicLibrary.label')}</p>
+              <p className="settings-card-desc">{t('debug.center.memory.musicLibrary.desc')}</p>
+              {musicLibrarySnapshot ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <p className="settings-card-note">
+                    {t('debug.center.memory.musicLibrary.captured', {
+                      at: new Date(musicLibrarySnapshot.timestampMs).toLocaleString(),
+                    })}
+                  </p>
+                  <p className="settings-card-desc">
+                    {t('debug.center.memory.musicLibrary.mode', {
+                      sourceMode: musicLibrarySnapshot.sourceMode,
+                      baseView: musicLibrarySnapshot.baseView,
+                      searchQuery: musicLibrarySnapshot.searchQuery || '-',
+                      nativeBase: t(
+                        `common.state.${musicLibrarySnapshot.shouldUseNativeBaseQuery ? 'on' : 'off'}`
+                      ),
+                      queryPageCache: t(
+                        `common.state.${musicLibrarySnapshot.shouldUseQueryPageBaseCache ? 'on' : 'off'}`
+                      ),
+                      coverPolicy: musicLibrarySnapshot.coverPolicy,
+                    })}
+                  </p>
+                  <p className="settings-card-desc">
+                    {t('debug.center.memory.musicLibrary.counts', {
+                      tracks: musicLibrarySnapshot.counts.tracks,
+                      nativeBaseTracks: musicLibrarySnapshot.counts.nativeBaseTracks,
+                      queryPageTracks: musicLibrarySnapshot.counts.queryPageTracks,
+                      filteredTracks: musicLibrarySnapshot.counts.filteredTracks,
+                      renderedTracks: musicLibrarySnapshot.counts.renderedTracks,
+                      groupedRows: musicLibrarySnapshot.counts.groupedRows,
+                    })}
+                  </p>
+                  <p className="settings-card-desc">
+                    {t('debug.center.memory.musicLibrary.arrays', {
+                      trackArrayMb: formatBytesToMb(musicLibrarySnapshot.attribution.trackArrayBytes),
+                      tracksMb: formatBytesToMb(musicLibrarySnapshot.estimatedBytes.tracks),
+                      nativeBaseMb: formatBytesToMb(musicLibrarySnapshot.estimatedBytes.nativeBaseTracks),
+                      queryPageMb: formatBytesToMb(musicLibrarySnapshot.estimatedBytes.queryPageTracks),
+                    })}
+                  </p>
+                  <p className="settings-card-desc">
+                    {t('debug.center.memory.musicLibrary.attribution', {
+                      trackedRuntimeMb: formatBytesToMb(
+                        musicLibrarySnapshot.attribution.trackedRuntimeBytes
+                      ),
+                      residualMb: formatBytesToMb(
+                        musicLibrarySnapshot.attribution.webview2PrivateResidualBytes
+                      ),
+                      privateMinusTrackArraysMb: formatBytesToMb(
+                        musicLibrarySnapshot.attribution.webview2PrivateMinusTrackArraysBytes
+                      ),
+                    })}
+                  </p>
+                  <p className="settings-card-note">
+                    {t('debug.center.memory.musicLibrary.process', {
+                      webview2PrivateMb: formatBytesToMb(
+                        musicLibrarySnapshot.process.webview2PrivateBytes
+                      ),
+                      webview2WsMb: formatBytesToMb(
+                        musicLibrarySnapshot.process.webview2WorkingSetBytes
+                      ),
+                      treePrivateMb: formatBytesToMb(musicLibrarySnapshot.process.treePrivateBytes),
+                      treeWsMb: formatBytesToMb(musicLibrarySnapshot.process.treeWorkingSetBytes),
+                      webview2Cpu:
+                        typeof musicLibrarySnapshot.process.webview2CpuPercent === 'number' &&
+                        Number.isFinite(musicLibrarySnapshot.process.webview2CpuPercent)
+                          ? musicLibrarySnapshot.process.webview2CpuPercent.toFixed(1)
+                          : '-',
+                    })}
+                  </p>
+                </div>
+              ) : (
+                <p className="settings-card-note">{t('debug.center.memory.musicLibrary.empty')}</p>
+              )}
+            </div>
+
+            <div>
               <p className="settings-card-label">{t('debug.center.memory.navigation.label')}</p>
               <p className="settings-card-desc">{t('debug.center.memory.navigation.desc')}</p>
               <p className="settings-card-note">
@@ -2438,8 +2913,12 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
         onConfirm={() => {
           setConfirmDestroyEditorWindows(false);
           if (!isTauri) return;
-          void import('@tauri-apps/api/tauri')
-            .then(({ invoke }) => invoke('close_all_editor_windows'))
+          void invokeWithTelemetry('close_all_editor_windows', undefined, {
+            moduleId: 'debug',
+            component: 'DebugCenter',
+            event: 'debug.editor-windows.close-all',
+            successLevel: 'info',
+          })
             .then(() => refreshMemory())
             .catch((err) => setError(err instanceof Error ? err.message : String(err)));
         }}

@@ -1,7 +1,14 @@
-import { invoke } from '@tauri-apps/api/tauri';
 import { readJson } from '../modules/storage';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../services/telemetry/tauriInvokeTelemetry';
 import { broadcastSignal, STORAGE_KEYS, TAURI_EVENTS } from './windowCommunication';
 import { isTauriRuntime } from './tauriRuntime';
+
+const telemetry = getTelemetryLogger('windowing', 'editorWindowEffects');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function readEditorLowPerformanceMode(): boolean {
   return readJson<boolean>(STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE, false);
@@ -10,9 +17,16 @@ export function readEditorLowPerformanceMode(): boolean {
 export async function setEditorBlurEnabled(enabled: boolean): Promise<void> {
   if (!isTauriRuntime()) return;
   try {
-    await invoke('set_editor_blur_enabled', { enabled });
+    await invokeWithTelemetry('set_editor_blur_enabled', { enabled }, {
+      moduleId: 'windowing',
+      component: 'editorWindowEffects',
+      event: 'window.editor.blur.set',
+    });
   } catch (error) {
-    console.error('Failed to set editor blur state:', error);
+    telemetry.error('window.editor.blur.set.failed', {
+      message: getErrorMessage(error),
+      fields: { enabled },
+    });
   }
 }
 

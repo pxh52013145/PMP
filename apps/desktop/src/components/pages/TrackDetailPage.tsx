@@ -8,6 +8,7 @@ import {
   type NativeLyricDocument,
   type NativeLyricResolveQuery,
 } from '../../modules/music-library';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { useT } from '../../i18n';
 import './TrackDetailPage.css';
 
@@ -25,9 +26,14 @@ interface RenderLyricLine {
 
 type TrackDetailAudioState = Pick<AudioState, 'currentTrack' | 'currentTime' | 'queue'>;
 
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ trackId }) => {
   const t = useT();
   const audioService = useAudioService();
+  const telemetry = useMemo(() => getTelemetryLogger('music-library', 'TrackDetailPage'), []);
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [playbackTimeSec, setPlaybackTimeSec] = useState(0);
   const [activePanel, setActivePanel] = useState<'lyrics' | 'metadata'>('lyrics');
@@ -50,7 +56,12 @@ export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ trackId }) => 
         setCurrentTrack(track);
       })
       .catch((error) => {
-        console.warn('[TrackDetail] Failed to resolve trackId:', error);
+        telemetry.warn('track_detail.resolve_track.failed', {
+          message: readErrorMessage(error),
+          fields: {
+            trackId,
+          },
+        });
       });
 
     return () => {
@@ -226,7 +237,23 @@ export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ trackId }) => 
         }
       } catch (error) {
         if (cancelled) return;
-        console.warn('[TrackDetail] Failed to resolve lyrics:', error);
+        telemetry.warn('track_detail.resolve_lyrics.failed', {
+          message: readErrorMessage(error),
+          fields: {
+            trackId: currentTrack.id,
+            filePath:
+              typeof currentTrack.filePath === 'string' && currentTrack.filePath.trim().length > 0
+                ? currentTrack.filePath.trim()
+                : typeof currentTrack.path === 'string' && currentTrack.path.trim().length > 0
+                  ? currentTrack.path.trim()
+                  : null,
+            quickFingerprint:
+              typeof currentTrack.quickFingerprint === 'string' &&
+              currentTrack.quickFingerprint.trim().length > 0
+                ? currentTrack.quickFingerprint.trim()
+                : null,
+          },
+        });
         setLyricsError(true);
         setResolvedLyrics(null);
       } finally {

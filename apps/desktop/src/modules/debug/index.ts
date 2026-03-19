@@ -30,3 +30,12 @@ export {
   type SystemMemorySnapshot,
 } from './processPerf';
 
+export {
+  clearTelemetrySession,
+  getTelemetryStatus,
+  ingestTelemetryBatch,
+  queryTelemetryCurrentSession,
+  readCurrentTelemetrySession,
+  type TelemetryReadSessionResult,
+} from './telemetry';
+

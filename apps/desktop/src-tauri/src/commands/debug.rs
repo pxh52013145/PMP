@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::Arc;
 
-use crate::{debug_config, modules, perf_monitor, windows};
+use crate::{debug_config, modules, perf_monitor, telemetry, telemetry_contract, windows};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,8 +82,11 @@ pub fn debug_get_config(app: tauri::AppHandle) -> Result<debug_config::DebugConf
 pub fn debug_set_config(
     app: tauri::AppHandle,
     config: debug_config::DebugConfig,
+    telemetry_core: tauri::State<'_, Arc<telemetry::TelemetryCore>>,
 ) -> Result<(), String> {
-    debug_config::set_config(&app, config)
+    debug_config::set_config(&app, config.clone())?;
+    telemetry_core.update_policy(config.telemetry);
+    Ok(())
 }
 
 #[tauri::command]
@@ -156,6 +159,43 @@ pub fn debug_get_registered_commands() -> Vec<String> {
         .into_iter()
         .map(str::to_string)
         .collect()
+}
+
+#[tauri::command]
+pub fn debug_telemetry_get_status(
+    telemetry_core: tauri::State<'_, Arc<telemetry::TelemetryCore>>,
+) -> telemetry_contract::TelemetryStatus {
+    telemetry_core.status()
+}
+
+#[tauri::command]
+pub fn debug_telemetry_ingest_batch(
+    telemetry_core: tauri::State<'_, Arc<telemetry::TelemetryCore>>,
+    records: Vec<telemetry_contract::TelemetryRecord>,
+) -> telemetry_contract::TelemetryIngestBatchResult {
+    telemetry_core.ingest_batch(records)
+}
+
+#[tauri::command]
+pub fn debug_telemetry_clear_session(
+    telemetry_core: tauri::State<'_, Arc<telemetry::TelemetryCore>>,
+) -> telemetry_contract::TelemetryClearSessionResult {
+    telemetry_core.clear_session()
+}
+
+#[tauri::command]
+pub fn debug_telemetry_read_current_session(
+    telemetry_core: tauri::State<'_, Arc<telemetry::TelemetryCore>>,
+) -> telemetry_contract::TelemetryReadSessionResult {
+    telemetry_core.read_current_session()
+}
+
+#[tauri::command]
+pub fn debug_telemetry_query(
+    telemetry_core: tauri::State<'_, Arc<telemetry::TelemetryCore>>,
+    query: telemetry_contract::TelemetryQueryInput,
+) -> telemetry_contract::TelemetryQueryResult {
+    telemetry_core.query_current_session(query)
 }
 
 #[tauri::command]

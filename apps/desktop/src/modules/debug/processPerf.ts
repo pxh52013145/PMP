@@ -1,5 +1,5 @@
-import { invoke } from '@tauri-apps/api/tauri';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
 
 export type ProcessPerfKind = 'app' | 'webview2' | 'child';
 export type ProcessWorkingSetTrimTarget = 'app' | 'webview2' | 'tree';
@@ -232,14 +232,22 @@ export function ensureProcessWorkingSetTrimResult(value: unknown): ProcessWorkin
 
 export async function getProcessPerfSnapshot(): Promise<ProcessPerfSnapshot | null> {
   if (!isTauriRuntime()) return null;
-  const raw = await invoke<unknown>('debug_get_process_perf_snapshot').catch(() => null);
+  const raw = await invokeWithTelemetry<unknown>('debug_get_process_perf_snapshot', undefined, {
+    moduleId: 'debug',
+    component: 'processPerf',
+    event: 'debug.process-perf.snapshot',
+  }).catch(() => null);
   if (!raw) return null;
   return ensureProcessPerfSnapshot(raw);
 }
 
 export async function getProcessPerfTotalsSnapshot(): Promise<ProcessPerfTotalsSnapshot | null> {
   if (!isTauriRuntime()) return null;
-  const raw = await invoke<unknown>('debug_get_process_perf_totals').catch(() => null);
+  const raw = await invokeWithTelemetry<unknown>('debug_get_process_perf_totals', undefined, {
+    moduleId: 'debug',
+    component: 'processPerf',
+    event: 'debug.process-perf.totals',
+  }).catch(() => null);
   if (!raw) return null;
   return ensureProcessPerfTotalsSnapshot(raw);
 }
@@ -248,7 +256,12 @@ export async function trimProcessWorkingSet(
   target: ProcessWorkingSetTrimTarget = 'tree'
 ): Promise<ProcessWorkingSetTrimResult | null> {
   if (!isTauriRuntime()) return null;
-  const raw = await invoke<unknown>('debug_trim_process_working_set', { target }).catch(() => null);
+  const raw = await invokeWithTelemetry<unknown>('debug_trim_process_working_set', { target }, {
+    moduleId: 'debug',
+    component: 'processPerf',
+    event: 'debug.process-perf.trim-working-set',
+    successLevel: 'info',
+  }).catch(() => null);
   if (!raw) return null;
   return ensureProcessWorkingSetTrimResult(raw);
 }

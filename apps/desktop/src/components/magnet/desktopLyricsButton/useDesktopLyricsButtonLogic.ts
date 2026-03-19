@@ -1,7 +1,8 @@
-import { invoke } from '@tauri-apps/api/tauri';
 import { useCallback } from 'react';
 import type { MouseEvent } from 'react';
 import { useT } from '../../../i18n';
+import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../../../services/telemetry/tauriInvokeTelemetry';
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
 import {
   type DesktopLyricsOverlaySettings,
@@ -12,6 +13,12 @@ import {
   normalizeDesktopLyricsRegionHeight,
   normalizeDesktopLyricsRegionWidth,
 } from './DesktopLyricsButtonModel';
+
+const telemetry = getTelemetryLogger('windowing', 'desktopLyricsButtonLogic');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export interface DesktopLyricsButtonLogic {
   toggleDesktopLyrics: (
@@ -35,43 +42,67 @@ export function useDesktopLyricsButtonLogic(): DesktopLyricsButtonLogic {
 
   const applyClickThrough = useCallback(async (enabled: boolean) => {
     if (!isTauriRuntime()) return;
-    await invoke('desktop_lyrics_set_click_through', { enabled });
+    await invokeWithTelemetry('desktop_lyrics_set_click_through', { enabled }, {
+      moduleId: 'windowing',
+      component: 'desktopLyricsButtonLogic',
+      event: 'desktop-lyrics.button.click-through.set',
+    });
   }, []);
 
   const applyFontSize = useCallback(async (fontSize: number) => {
     if (!isTauriRuntime()) return;
-    await invoke('desktop_lyrics_set_font_size', {
+    await invokeWithTelemetry('desktop_lyrics_set_font_size', {
       fontSize: normalizeDesktopLyricsFontSize(fontSize),
+    }, {
+      moduleId: 'windowing',
+      component: 'desktopLyricsButtonLogic',
+      event: 'desktop-lyrics.button.font-size.set',
     });
   }, []);
 
   const applyOpacityPercent = useCallback(async (opacityPercent: number) => {
     if (!isTauriRuntime()) return;
-    await invoke('desktop_lyrics_set_opacity_percent', {
+    await invokeWithTelemetry('desktop_lyrics_set_opacity_percent', {
       opacityPercent: normalizeDesktopLyricsOpacityPercent(opacityPercent),
+    }, {
+      moduleId: 'windowing',
+      component: 'desktopLyricsButtonLogic',
+      event: 'desktop-lyrics.button.opacity.set',
     });
   }, []);
 
   const applyPositionOffset = useCallback(async (offsetX: number, offsetY: number) => {
     if (!isTauriRuntime()) return;
-    await invoke('desktop_lyrics_set_position_offset', {
+    await invokeWithTelemetry('desktop_lyrics_set_position_offset', {
       offsetX: normalizeDesktopLyricsPositionOffset(offsetX),
       offsetY: normalizeDesktopLyricsPositionOffset(offsetY),
+    }, {
+      moduleId: 'windowing',
+      component: 'desktopLyricsButtonLogic',
+      event: 'desktop-lyrics.button.position-offset.set',
     });
   }, []);
 
   const applyRegionSize = useCallback(async (width: number, height: number) => {
     if (!isTauriRuntime()) return;
-    await invoke('desktop_lyrics_set_region_size', {
+    await invokeWithTelemetry('desktop_lyrics_set_region_size', {
       width: normalizeDesktopLyricsRegionWidth(width),
       height: normalizeDesktopLyricsRegionHeight(height),
+    }, {
+      moduleId: 'windowing',
+      component: 'desktopLyricsButtonLogic',
+      event: 'desktop-lyrics.button.region-size.set',
     });
   }, []);
 
   const applyLyricOffsetMs = useCallback(async (offsetMs: number) => {
     if (!isTauriRuntime()) return;
-    await invoke('desktop_lyrics_set_lyric_offset_ms', {
+    await invokeWithTelemetry('desktop_lyrics_set_lyric_offset_ms', {
       offsetMs: normalizeDesktopLyricsLyricOffsetMs(offsetMs),
+    }, {
+      moduleId: 'windowing',
+      component: 'desktopLyricsButtonLogic',
+      event: 'desktop-lyrics.button.lyric-offset.set',
     });
   }, []);
 
@@ -85,7 +116,11 @@ export function useDesktopLyricsButtonLogic(): DesktopLyricsButtonLogic {
       await applyPositionOffset(settings.positionOffsetX, settings.positionOffsetY);
       await applyRegionSize(settings.regionWidth, settings.regionHeight);
       await applyLyricOffsetMs(settings.lyricOffsetMs);
-      await invoke('desktop_lyrics_set_visible', { visible: settings.enabled });
+      await invokeWithTelemetry('desktop_lyrics_set_visible', { visible: settings.enabled }, {
+        moduleId: 'windowing',
+        component: 'desktopLyricsButtonLogic',
+        event: 'desktop-lyrics.button.visible.set',
+      });
     },
     [
       applyClickThrough,
@@ -118,7 +153,11 @@ export function useDesktopLyricsButtonLogic(): DesktopLyricsButtonLogic {
           return;
         }
 
-        const nextEnabled = await invoke<boolean>('desktop_lyrics_toggle_visible');
+        const nextEnabled = await invokeWithTelemetry<boolean>('desktop_lyrics_toggle_visible', undefined, {
+          moduleId: 'windowing',
+          component: 'desktopLyricsButtonLogic',
+          event: 'desktop-lyrics.button.visible.toggle',
+        });
         const nextClickThrough = nextEnabled ? false : settings.clickThrough;
 
         setEnabled(nextEnabled);
@@ -137,7 +176,13 @@ export function useDesktopLyricsButtonLogic(): DesktopLyricsButtonLogic {
       } catch (error) {
         setEnabled(settings.enabled);
         setClickThrough(settings.clickThrough);
-        console.error('[desktop-lyrics-button] failed to toggle desktop lyrics:', error);
+        telemetry.error('desktop-lyrics.button.visible.toggle.failed', {
+          message: getErrorMessage(error),
+          fields: {
+            enabled: settings.enabled,
+            clickThrough: settings.clickThrough,
+          },
+        });
       }
     },
     [

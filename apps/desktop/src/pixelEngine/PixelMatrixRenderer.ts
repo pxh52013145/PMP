@@ -2,8 +2,11 @@ import * as PIXI from 'pixi.js';
 import { BACKGROUND_RENDER_THROTTLE_FPS, type RenderMode } from '../contracts/performance';
 import { MATRIX_CONFIG, PIXEL_COLORS } from '../constants/config';
 import { readString } from '../modules/storage';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { STORAGE_KEYS } from '../utils/windowCommunication';
 import { computePixelGridLayout, hitTestPixelGridFromPoint, PixelGridLayout } from '../utils/pixelGrid';
+
+const telemetry = getTelemetryLogger('visualizer', 'PixelMatrixRenderer');
 
 type PixelShape = 'circle' | 'square' | 'rounded-square' | 'diamond' | 'hexagon';
 
@@ -182,7 +185,12 @@ export class PixelMatrixRenderer {
     const hit = hitTestPixelGridFromPoint(event.global.x, event.global.y, this.layout);
     if (!hit) return;
 
-    console.log(`Pixel clicked: (${hit.gridX}, ${hit.gridY})`);
+    telemetry.debug('pixel_matrix.pixel.clicked', {
+      fields: {
+        gridX: hit.gridX,
+        gridY: hit.gridY,
+      },
+    });
   }
 
   private normalizePixelShape(shape: string): PixelShape {
@@ -432,7 +440,15 @@ export class PixelMatrixRenderer {
 
     // 边界检查
     if (gridX < 0 || gridX >= COLUMNS || gridY < 0 || gridY >= ROWS) {
-      console.warn(`Pixel position out of bounds: (${gridX}, ${gridY})`);
+      telemetry.warn('pixel_matrix.pixel_position.out_of_bounds', {
+        message: `Pixel position out of bounds: (${gridX}, ${gridY})`,
+        fields: {
+          gridX,
+          gridY,
+          maxColumns: COLUMNS,
+          maxRows: ROWS,
+        },
+      });
       return null;
     }
 

@@ -1,3 +1,5 @@
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+
 export type StorageWriteMode = 'sync' | 'idle' | 'debounce';
 
 export interface StorageWriteOptions {
@@ -27,6 +29,7 @@ function emitStorageChange(key: string, value: string | null): void {
 const pendingWrites = new Map<string, string>();
 let flushTimeout: number | null = null;
 let idleHandle: number | null = null;
+const telemetry = getTelemetryLogger('storage', 'localStorage');
 
 function flushPendingWrites(): void {
   flushTimeout = null;
@@ -39,7 +42,10 @@ function flushPendingWrites(): void {
     try {
       localStorage.setItem(key, value);
     } catch (error) {
-      console.warn(`[storage] Failed to flush key "${key}"`, error);
+      telemetry.warn('storage.local.flush.failed', {
+        message: error instanceof Error ? error.message : String(error),
+        fields: { key },
+      });
     }
   }
   pendingWrites.clear();
@@ -60,7 +66,10 @@ export function readString(key: string): string | null {
   try {
     return localStorage.getItem(key);
   } catch (error) {
-    console.warn(`[storage] Failed to read key "${key}"`, error);
+    telemetry.warn('storage.local.read.failed', {
+      message: error instanceof Error ? error.message : String(error),
+      fields: { key },
+    });
     return null;
   }
 }
@@ -71,7 +80,10 @@ export function readJson<T>(key: string, fallback: T): T {
   try {
     return JSON.parse(raw) as T;
   } catch (error) {
-    console.warn(`[storage] Failed to parse JSON for key "${key}"`, error);
+    telemetry.warn('storage.local.json-parse.failed', {
+      message: error instanceof Error ? error.message : String(error),
+      fields: { key },
+    });
     return fallback;
   }
 }
@@ -91,7 +103,10 @@ export function writeString(key: string, value: string, options: StorageWriteOpt
     scheduleFlush(mode, debounceMs);
     emitStorageChange(key, value);
   } catch (error) {
-    console.warn(`[storage] Failed to write key "${key}"`, error);
+    telemetry.warn('storage.local.write.failed', {
+      message: error instanceof Error ? error.message : String(error),
+      fields: { key, mode },
+    });
   }
 }
 
@@ -101,7 +116,10 @@ export function tryWriteString(key: string, value: string): boolean {
     emitStorageChange(key, value);
     return true;
   } catch (error) {
-    console.warn(`[storage] Failed to write key "${key}"`, error);
+    telemetry.warn('storage.local.write.failed', {
+      message: error instanceof Error ? error.message : String(error),
+      fields: { key, mode: 'sync' },
+    });
     return false;
   }
 }
@@ -110,7 +128,10 @@ export function writeJson<T>(key: string, value: T, options: StorageWriteOptions
   try {
     writeString(key, JSON.stringify(value), options);
   } catch (error) {
-    console.warn(`[storage] Failed to serialize JSON for key "${key}"`, error);
+    telemetry.warn('storage.local.json-serialize.failed', {
+      message: error instanceof Error ? error.message : String(error),
+      fields: { key },
+    });
   }
 }
 
@@ -118,7 +139,10 @@ export function tryWriteJson<T>(key: string, value: T): boolean {
   try {
     return tryWriteString(key, JSON.stringify(value));
   } catch (error) {
-    console.warn(`[storage] Failed to serialize JSON for key "${key}"`, error);
+    telemetry.warn('storage.local.json-serialize.failed', {
+      message: error instanceof Error ? error.message : String(error),
+      fields: { key },
+    });
     return false;
   }
 }
@@ -128,7 +152,10 @@ export function removeKey(key: string): void {
     localStorage.removeItem(key);
     emitStorageChange(key, null);
   } catch (error) {
-    console.warn(`[storage] Failed to remove key "${key}"`, error);
+    telemetry.warn('storage.local.remove.failed', {
+      message: error instanceof Error ? error.message : String(error),
+      fields: { key },
+    });
   }
 }
 

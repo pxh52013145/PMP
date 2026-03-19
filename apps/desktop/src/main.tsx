@@ -2,12 +2,17 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { KernelProvider } from './contexts/KernelContext';
 import { I18nSync, readPersistedLocale, setLocale } from './i18n';
+import { installConsoleBridge } from './services/telemetry/consoleBridge';
+import { getTelemetryLogger } from './services/telemetry/TelemetryService';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import { readString } from './modules/storage';
 import { STORAGE_KEYS } from './utils/windowCommunication';
 import { bootstrapPerformanceRuntimeProfileStorage } from './modules/startup/performanceRuntimeBootstrap';
 import './index.css';
 import './themes/surfaceMotion.css';
+
+installConsoleBridge();
+const startupTelemetry = getTelemetryLogger('startup', 'main');
 
 function applyRuntimePlatformDataset(): void {
   if (typeof document === 'undefined' || typeof navigator === 'undefined') return;
@@ -63,7 +68,9 @@ function scheduleIdle(
       void Promise.resolve()
         .then(() => task())
         .catch((error) => {
-          console.warn('[startup] idle task failed:', error);
+          startupTelemetry.warn('startup.idle-task.failed', {
+            message: error instanceof Error ? error.message : String(error),
+          });
         });
     };
 
@@ -84,6 +91,7 @@ function scheduleIdle(
 
 function StartupReadyGate({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
+    startupTelemetry.info('startup.root.rendered');
     const overlay = document.getElementById('pmp-startup-overlay');
     if (!overlay) return;
 
@@ -138,7 +146,13 @@ async function resolveRootAppByHash(hash: string): Promise<RootAppResolveResult>
 }
 
 async function bootstrap(): Promise<void> {
+  startupTelemetry.info('startup.bootstrap.begin');
   const rootApp = await resolveRootAppByHash(window.location.hash);
+  startupTelemetry.info('startup.root.resolved', {
+    fields: {
+      kind: rootApp.kind,
+    },
+  });
   const RootApp = rootApp.component;
   const rootContent = (
     <StartupReadyGate>
@@ -166,7 +180,9 @@ async function bootstrap(): Promise<void> {
           const { restoreBackgroundSnapshots } = await import('./modules/background/backgroundSnapshot');
           await restoreBackgroundSnapshots({ restoreHistory: false });
         } catch (error) {
-          console.warn('[background] restore snapshots failed:', error);
+          startupTelemetry.warn('startup.background.restore-settings.failed', {
+            message: error instanceof Error ? error.message : String(error),
+          });
         }
       },
       { timeoutMs: 2_000 }
@@ -179,7 +195,9 @@ async function bootstrap(): Promise<void> {
           const { restoreBackgroundSnapshots } = await import('./modules/background/backgroundSnapshot');
           await restoreBackgroundSnapshots({ restoreSettings: false, restoreHistory: true });
         } catch (error) {
-          console.warn('[background] restore history snapshot failed:', error);
+          startupTelemetry.warn('startup.background.restore-history.failed', {
+            message: error instanceof Error ? error.message : String(error),
+          });
         }
       },
       { timeoutMs: 4_000, delayMs: 2_500 }
@@ -195,7 +213,9 @@ async function bootstrap(): Promise<void> {
             );
             await migrateBackgroundStorageToManagedMedia();
           } catch (error) {
-            console.warn('[background] migration failed:', error);
+            startupTelemetry.warn('startup.background.migration.failed', {
+              message: error instanceof Error ? error.message : String(error),
+            });
           }
         },
         { timeoutMs: 8_000, delayMs: 4_000 }

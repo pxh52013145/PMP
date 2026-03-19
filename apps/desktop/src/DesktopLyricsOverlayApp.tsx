@@ -1,8 +1,9 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/tauri';
 import { appWindow } from '@tauri-apps/api/window';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useT } from './i18n';
+import { getTelemetryLogger } from './services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from './services/telemetry/tauriInvokeTelemetry';
 import './DesktopLyricsOverlayApp.css';
 
 const OVERLAY_SYNC_EVENT = 'desktop-lyrics-overlay-sync';
@@ -33,6 +34,12 @@ const DEFAULT_OVERLAY_STATE: DesktopLyricsOverlaySyncPayload = {
   opacityPercent: 92,
   text: null,
 };
+
+const telemetry = getTelemetryLogger('windowing', 'DesktopLyricsOverlayApp');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function normalizeState(
   payload: Partial<DesktopLyricsOverlaySyncPayload> | null | undefined,
@@ -93,12 +100,22 @@ export function DesktopLyricsOverlayApp() {
       });
 
       try {
-        const snapshot = await invoke<DesktopLyricsOverlaySyncPayload>('desktop_lyrics_overlay_get_snapshot');
+        const snapshot = await invokeWithTelemetry<DesktopLyricsOverlaySyncPayload>(
+          'desktop_lyrics_overlay_get_snapshot',
+          undefined,
+          {
+            moduleId: 'windowing',
+            component: 'DesktopLyricsOverlayApp',
+            event: 'desktop-lyrics.overlay.snapshot.read',
+          }
+        );
         if (!disposed) {
           setState((previous) => normalizeState(snapshot, previous));
         }
       } catch (error) {
-        console.warn('[desktop-lyrics-overlay] failed to request snapshot:', error);
+        telemetry.warn('desktop-lyrics.overlay.snapshot.read.failed', {
+          message: getErrorMessage(error),
+        });
       }
     };
 
@@ -125,10 +142,17 @@ export function DesktopLyricsOverlayApp() {
     const next = !state.clickThrough;
     setState((previous) => ({ ...previous, clickThrough: next }));
     try {
-      await invoke('desktop_lyrics_set_click_through', { enabled: next });
+      await invokeWithTelemetry('desktop_lyrics_set_click_through', { enabled: next }, {
+        moduleId: 'windowing',
+        component: 'DesktopLyricsOverlayApp',
+        event: 'desktop-lyrics.overlay.click-through.set',
+      });
     } catch (error) {
       setState((previous) => ({ ...previous, clickThrough: state.clickThrough }));
-      console.error('[desktop-lyrics-overlay] failed to toggle click-through:', error);
+      telemetry.error('desktop-lyrics.overlay.click-through.set.failed', {
+        message: getErrorMessage(error),
+        fields: { enabled: next },
+      });
     }
   }, [state.clickThrough]);
 
@@ -136,9 +160,16 @@ export function DesktopLyricsOverlayApp() {
     const next = Math.round(Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, state.fontSize + delta)));
     setState((previous) => ({ ...previous, fontSize: next }));
     try {
-      await invoke('desktop_lyrics_set_font_size', { fontSize: next });
+      await invokeWithTelemetry('desktop_lyrics_set_font_size', { fontSize: next }, {
+        moduleId: 'windowing',
+        component: 'DesktopLyricsOverlayApp',
+        event: 'desktop-lyrics.overlay.font-size.set',
+      });
     } catch (error) {
-      console.error('[desktop-lyrics-overlay] failed to adjust font size:', error);
+      telemetry.error('desktop-lyrics.overlay.font-size.set.failed', {
+        message: getErrorMessage(error),
+        fields: { fontSize: next },
+      });
     }
   }, [state.fontSize]);
 
@@ -149,9 +180,16 @@ export function DesktopLyricsOverlayApp() {
       );
       setState((previous) => ({ ...previous, opacityPercent: next }));
       try {
-        await invoke('desktop_lyrics_set_opacity_percent', { opacityPercent: next });
+        await invokeWithTelemetry('desktop_lyrics_set_opacity_percent', { opacityPercent: next }, {
+          moduleId: 'windowing',
+          component: 'DesktopLyricsOverlayApp',
+          event: 'desktop-lyrics.overlay.opacity.set',
+        });
       } catch (error) {
-        console.error('[desktop-lyrics-overlay] failed to adjust opacity:', error);
+        telemetry.error('desktop-lyrics.overlay.opacity.set.failed', {
+          message: getErrorMessage(error),
+          fields: { opacityPercent: next },
+        });
       }
     },
     [state.opacityPercent]
@@ -159,9 +197,16 @@ export function DesktopLyricsOverlayApp() {
 
   const closeOverlay = useCallback(async () => {
     try {
-      await invoke('desktop_lyrics_set_visible', { visible: false });
+      await invokeWithTelemetry('desktop_lyrics_set_visible', { visible: false }, {
+        moduleId: 'windowing',
+        component: 'DesktopLyricsOverlayApp',
+        event: 'desktop-lyrics.overlay.visible.set',
+      });
     } catch (error) {
-      console.error('[desktop-lyrics-overlay] failed to close overlay:', error);
+      telemetry.error('desktop-lyrics.overlay.visible.set.failed', {
+        message: getErrorMessage(error),
+        fields: { visible: false },
+      });
     }
   }, []);
 

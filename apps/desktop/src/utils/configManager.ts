@@ -2,6 +2,7 @@ import { Magnet, PixelAnchor } from '../types/pixel';
 import { BUILTIN_MAGNET_IDS, DEFAULT_ACTIVE_MAGNET_IDS } from '../constants/magnets';
 import { resolveMagnetPositions, detectConflicts } from './magnetPositionResolver';
 import { readString, removeKey, writeString } from '../modules/storage';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 
 /**
  * 配置文件格式
@@ -42,6 +43,11 @@ const CONFIG_KEY = 'pixel-matrix-player-config';
 const PROCESS_PERF_MONITOR_MAGNET_ID = 'process-perf-monitor';
 const LEGACY_PROCESS_PERF_MONITOR_TOP_INSET = 8;
 const PROCESS_PERF_MONITOR_TOP_OUTSET = 9;
+const telemetry = getTelemetryLogger('magnets', 'configManager');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 type SavedLayoutStateConfig = Pick<
   MagnetStateConfig,
@@ -288,7 +294,12 @@ export function saveConfig(
 
     writeString(storageKey, JSON.stringify(config));
   } catch (error) {
-    console.error('保存配置失败:', error);
+    telemetry.error('config.save.failed', {
+      message: readErrorMessage(error),
+      fields: {
+        storageKey,
+      },
+    });
   }
 }
 
@@ -337,9 +348,15 @@ export function loadConfig(storageKey: string = CONFIG_KEY): MagnetConfig | null
     let config: MagnetConfig = JSON.parse(configStr);
     let shouldPersist = false;
 
-    // ???????
     if (config.version !== CONFIG_VERSION) {
-      console.warn(`???????: ${config.version} !== ${CONFIG_VERSION}`);
+      telemetry.warn('config.load.version_mismatch', {
+        message: 'Persisted config version mismatch. Updating to current version.',
+        fields: {
+          storageKey,
+          fromVersion: config.version,
+          targetVersion: CONFIG_VERSION,
+        },
+      });
       config.version = CONFIG_VERSION;
       shouldPersist = true;
     }
@@ -356,7 +373,12 @@ export function loadConfig(storageKey: string = CONFIG_KEY): MagnetConfig | null
 
     return config;
   } catch (error) {
-    console.error('加载配置失败:', error);
+    telemetry.error('config.load.failed', {
+      message: readErrorMessage(error),
+      fields: {
+        storageKey,
+      },
+    });
     return null;
   }
 }
@@ -409,9 +431,14 @@ export function importConfig(jsonStr: string): MagnetConfig | null {
       throw new Error('配置格式不正确');
     }
 
-    // 检查版本兼容性
     if (config.version !== CONFIG_VERSION) {
-      console.warn(`配置版本不匹配: ${config.version} !== ${CONFIG_VERSION}`);
+      telemetry.warn('config.import.version_mismatch', {
+        message: 'Imported config version mismatch. Updating to current version.',
+        fields: {
+          fromVersion: config.version,
+          targetVersion: CONFIG_VERSION,
+        },
+      });
       config.version = CONFIG_VERSION;
     }
 
@@ -422,7 +449,9 @@ export function importConfig(jsonStr: string): MagnetConfig | null {
 
     return config;
   } catch (error) {
-    console.error('导入配置失败:', error);
+    telemetry.error('config.import.failed', {
+      message: readErrorMessage(error),
+    });
     return null;
   }
 }
@@ -434,7 +463,12 @@ export function clearConfig(): void {
   try {
     removeKey(CONFIG_KEY);
   } catch (error) {
-    console.error('清除配置失败:', error);
+    telemetry.error('config.clear.failed', {
+      message: readErrorMessage(error),
+      fields: {
+        storageKey: CONFIG_KEY,
+      },
+    });
   }
 }
 
@@ -450,7 +484,12 @@ function deduplicateMagnets(magnets: Magnet[]): Magnet[] {
       seen.add(magnet.id);
       result.push(magnet);
     } else {
-      console.warn(`警告：发现重复的 Magnet ID: ${magnet.id}，已跳过`);
+      telemetry.warn('config.magnet.duplicate_id', {
+        message: 'Duplicate magnet id detected. Skipping duplicate entry.',
+        fields: {
+          magnetId: magnet.id,
+        },
+      });
     }
   }
 
@@ -462,12 +501,23 @@ function deduplicateMagnets(magnets: Magnet[]): Magnet[] {
  */
 function validateMagnet(magnet: Magnet): boolean {
   if (!magnet.id || typeof magnet.id !== 'string') {
-    console.error('无效的 Magnet：缺少 id', magnet);
+    telemetry.error('config.magnet.invalid_missing_id', {
+      message: 'Invalid magnet: missing id.',
+      fields: {
+        hasAnchors: Array.isArray(magnet.anchors),
+      },
+    });
     return false;
   }
 
   if (!magnet.anchors || !Array.isArray(magnet.anchors) || magnet.anchors.length === 0) {
-    console.error(`无效的 Magnet ${magnet.id}：缺少有效的 anchors`, magnet);
+    telemetry.error('config.magnet.invalid_anchors', {
+      message: 'Invalid magnet: missing anchors.',
+      fields: {
+        magnetId: magnet.id,
+        anchorCount: Array.isArray(magnet.anchors) ? magnet.anchors.length : 0,
+      },
+    });
     return false;
   }
 
@@ -484,7 +534,12 @@ function sanitizeConfig(config: MagnetConfig): MagnetConfig {
   if (sanitized.customMagnets) {
     sanitized.customMagnets = sanitized.customMagnets.filter((m) => {
       if (BUILTIN_MAGNET_IDS.has(m.id)) {
-        console.warn(`清理：从 customMagnets 中移除内置 magnet: ${m.id}`);
+        telemetry.warn('config.sanitize.remove_builtin_custom', {
+          message: 'Removing builtin magnet from customMagnets.',
+          fields: {
+            magnetId: m.id,
+          },
+        });
         return false;
       }
       return validateMagnet(m);
@@ -519,7 +574,12 @@ export function applyConfig(
   // 1. 首先处理内置 Magnet
   defaultMagnetLibrary.forEach((defaultMagnet) => {
     if (addedIds.has(defaultMagnet.id)) {
-      console.warn(`跳过重复的内置 magnet: ${defaultMagnet.id}`);
+      telemetry.warn('config.apply.skip_duplicate_builtin', {
+        message: 'Skipping duplicate builtin magnet.',
+        fields: {
+          magnetId: defaultMagnet.id,
+        },
+      });
       return;
     }
 
@@ -559,7 +619,13 @@ export function applyConfig(
     cleanConfig.customMagnets.forEach((customMagnet) => {
       // 跳过已添加的和内置的
       if (addedIds.has(customMagnet.id) || BUILTIN_MAGNET_IDS.has(customMagnet.id)) {
-        console.warn(`跳过重复或内置的自定义 magnet: ${customMagnet.id}`);
+        telemetry.warn('config.apply.skip_duplicate_or_builtin_custom', {
+          message: 'Skipping duplicate or builtin custom magnet.',
+          fields: {
+            magnetId: customMagnet.id,
+            isBuiltin: BUILTIN_MAGNET_IDS.has(customMagnet.id),
+          },
+        });
         return;
       }
 
@@ -604,11 +670,21 @@ export function applyConfig(
     return { magnetLibrary, activeMagnetIds };
   }
 
-  console.warn(`⚠️ 检测到 ${conflicts.length} 个激活 Magnet 位置冲突，正在自动解决...`);
+  telemetry.warn('config.apply.conflicts_detected', {
+    message: 'Detected active magnet layout conflicts. Auto resolving.',
+    fields: {
+      conflictCount: conflicts.length,
+    },
+  });
   conflicts.forEach((conflict) => {
-    console.warn(
-      `   - "${conflict.magnet1}" 与 "${conflict.magnet2}" 在 ${conflict.conflictPixels.length} 个像素位置冲突`
-    );
+    telemetry.warn('config.apply.conflict_detail', {
+      message: 'Active magnet layout conflict detail.',
+      fields: {
+        magnetId1: conflict.magnet1,
+        magnetId2: conflict.magnet2,
+        overlapPixelCount: conflict.conflictPixels.length,
+      },
+    });
   });
 
   const resolvedActive = resolveMagnetPositions(activeMagnets);

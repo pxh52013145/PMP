@@ -1,5 +1,10 @@
-import { invoke } from '@tauri-apps/api/tauri';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import {
+  DEFAULT_TELEMETRY_POLICY,
+  ensureTelemetryPolicy,
+  type TelemetryPolicy,
+} from '../../contracts/telemetry';
+import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
 
 export type VstSidechainModeOverride = 'disabled' | 'silence' | 'self';
 
@@ -17,6 +22,7 @@ export type DebugConfig = {
   enabled: boolean;
   openDebugCenterOnNextStart: boolean;
   vstBridge: DebugVstBridgeConfig;
+  telemetry: TelemetryPolicy;
 };
 
 export type DebugEnvSnapshot = Record<string, string | null>;
@@ -40,6 +46,7 @@ const DEFAULT_CONFIG: DebugConfig = {
     editorSafeMode: null,
     sidechainMode: null,
   },
+  telemetry: DEFAULT_TELEMETRY_POLICY,
 };
 
 function cloneDefault(): DebugConfig {
@@ -103,6 +110,7 @@ export function ensureDebugConfig(value: unknown): DebugConfig {
       editorSafeMode: readOptionalBoolean(vstBridgeRecord, 'editorSafeMode'),
       sidechainMode: readSidechainMode(vstBridgeRecord, 'sidechainMode'),
     },
+    telemetry: ensureTelemetryPolicy(record?.telemetry),
   };
 }
 
@@ -112,18 +120,30 @@ export function getDefaultDebugConfig(): DebugConfig {
 
 export async function getDebugConfig(): Promise<DebugConfig> {
   if (!isTauriRuntime()) return getDefaultDebugConfig();
-  const raw = await invoke<unknown>('debug_get_config').catch(() => null);
+  const raw = await invokeWithTelemetry<unknown>('debug_get_config', undefined, {
+    moduleId: 'debug',
+    component: 'debugConfig',
+    event: 'debug.config.get',
+  }).catch(() => null);
   return ensureDebugConfig(raw);
 }
 
 export async function setDebugConfig(config: DebugConfig): Promise<void> {
   if (!isTauriRuntime()) return;
-  await invoke('debug_set_config', { config });
+  await invokeWithTelemetry('debug_set_config', { config }, {
+    moduleId: 'debug',
+    component: 'debugConfig',
+    event: 'debug.config.set',
+  });
 }
 
 export async function getDebugEnvSnapshot(): Promise<DebugEnvSnapshot> {
   if (!isTauriRuntime()) return {};
-  const raw = await invoke<unknown>('debug_get_env_snapshot').catch(() => null);
+  const raw = await invokeWithTelemetry<unknown>('debug_get_env_snapshot', undefined, {
+    moduleId: 'debug',
+    component: 'debugConfig',
+    event: 'debug.env.snapshot',
+  }).catch(() => null);
   if (!isRecord(raw)) return {};
 
   const snapshot: DebugEnvSnapshot = {};
@@ -161,7 +181,12 @@ export async function restartApp(): Promise<void> {
     softReloadCurrentWindow();
     return;
   }
-  await invoke('app_restart');
+  await invokeWithTelemetry('app_restart', undefined, {
+    moduleId: 'debug',
+    component: 'debugConfig',
+    event: 'debug.app.restart',
+    successLevel: 'info',
+  });
 }
 
 function ensureRecentGitCommit(value: unknown): RecentGitCommit | null {
@@ -179,9 +204,11 @@ function ensureRecentGitCommit(value: unknown): RecentGitCommit | null {
 export async function getRecentGitCommits(limit: number = 3): Promise<RecentGitCommit[]> {
   if (!isTauriRuntime()) return [];
   const normalized = Number.isFinite(limit) ? Math.min(20, Math.max(1, Math.floor(limit))) : 3;
-  const raw = await invoke<unknown>('debug_get_recent_git_commits', { limit: normalized }).catch(
-    () => null
-  );
+  const raw = await invokeWithTelemetry<unknown>('debug_get_recent_git_commits', { limit: normalized }, {
+    moduleId: 'debug',
+    component: 'debugConfig',
+    event: 'debug.git.recent',
+  }).catch(() => null);
   if (!Array.isArray(raw)) return [];
 
   const commits: RecentGitCommit[] = [];

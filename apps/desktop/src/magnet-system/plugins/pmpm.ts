@@ -3,6 +3,7 @@ import { unzip, strFromU8 } from 'fflate';
 import type { Unzipped } from 'fflate';
 import type { Magnet } from '../../types/pixel';
 import type { MagnetRendererDefinition } from '../registry';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { PluginMagnetHost } from './PluginMagnetHost';
 import { BUILTIN_MAGNET_IDS } from '../../constants/magnets';
 import {
@@ -24,6 +25,12 @@ import {
 } from './pmpmSignature';
 
 export { recordPmpmPermissionDenied } from './pmpmGovernance';
+
+const telemetry = getTelemetryLogger('pmpm', 'pmpm');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 async function unzipAsync(bytes: Uint8Array): Promise<Unzipped> {
   return await new Promise((resolve, reject) => {
@@ -152,7 +159,9 @@ function notifyPluginStoreChanged(): void {
     try {
       listener();
     } catch (error) {
-      console.warn('[pmpm] plugin store listener failed', error);
+      telemetry.warn('plugin_store.listener.failed', {
+        message: readErrorMessage(error),
+      });
     }
   }
 }

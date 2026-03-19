@@ -4,6 +4,7 @@ import {
   computeMediaCropLayout,
   type GeometrySize,
 } from '../../modules/background/cropGeometry';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { BackgroundConfig } from '../../types/background';
 import './Background.css';
 
@@ -25,8 +26,13 @@ function readElementSize(element: HTMLElement | null): GeometrySize {
   };
 }
 
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export default function Background({ config }: BackgroundProps) {
   const { renderMode } = useWindowActivity();
+  const telemetry = useMemo(() => getTelemetryLogger('background', 'Background'), []);
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -88,13 +94,25 @@ export default function Background({ config }: BackgroundProps) {
       const playPromise = video.play();
       if (playPromise && typeof (playPromise as Promise<void>).catch === 'function') {
         (playPromise as Promise<void>).catch((error) => {
-          console.warn('Video autoplay failed:', error);
+          telemetry.warn('background.video_autoplay.failed', {
+            message: readErrorMessage(error),
+            fields: {
+              url: config.video?.url ?? null,
+              renderMode,
+            },
+          });
         });
       }
     } catch (error) {
-      console.warn('Video autoplay failed:', error);
+      telemetry.warn('background.video_autoplay.failed', {
+        message: readErrorMessage(error),
+        fields: {
+          url: config.video?.url ?? null,
+          renderMode,
+        },
+      });
     }
-  }, [config.type, config.video?.url, config.video?.loop, config.video?.muted, renderMode]);
+  }, [config.type, config.video?.url, config.video?.loop, config.video?.muted, renderMode, telemetry]);
 
   const imageCropLayout = useMemo(() => {
     if (!imageConfig?.url || !imageCrop || !imageCropInMediaSpace || !imageNaturalSize) return null;

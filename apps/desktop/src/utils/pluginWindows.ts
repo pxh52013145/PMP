@@ -1,6 +1,7 @@
-import { invoke } from '@tauri-apps/api/tauri';
 import { isTauriRuntime } from './tauriRuntime';
 import { getMainWindowBounds } from './editorWindows';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../services/telemetry/tauriInvokeTelemetry';
 
 export type PluginWindowId = string;
 
@@ -12,6 +13,12 @@ export interface PluginWindowConfig {
   y: number;
   width: number;
   height: number;
+}
+
+const telemetry = getTelemetryLogger('windowing', 'pluginWindows');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isSafeId(value: string): boolean {
@@ -68,24 +75,56 @@ export async function openPluginWindow(
       ? { x: config.x, y: config.y, width, height }
       : await calculatePluginWindowPosition({ width, height });
 
-  await invoke('open_plugin_window', {
-    pluginId: config.pluginId,
-    windowId: config.windowId,
-    x: position.x,
-    y: position.y,
-    width: position.width,
-    height: position.height,
-    title: config.title ?? null,
-  });
+  try {
+    await invokeWithTelemetry('open_plugin_window', {
+      pluginId: config.pluginId,
+      windowId: config.windowId,
+      x: position.x,
+      y: position.y,
+      width: position.width,
+      height: position.height,
+      title: config.title ?? null,
+    }, {
+      moduleId: 'windowing',
+      component: 'pluginWindows',
+      event: 'window.plugin.open',
+      successLevel: 'info',
+    });
+  } catch (error) {
+    telemetry.error('window.plugin.open.failed', {
+      message: getErrorMessage(error),
+      fields: {
+        pluginId: config.pluginId,
+        windowId: config.windowId,
+      },
+    });
+    throw error;
+  }
 }
 
 export async function closePluginWindow(pluginId: string, windowId: string): Promise<void> {
   if (!isTauriRuntime()) return;
   if (!isSafeId(pluginId) || !isSafeId(windowId)) return;
 
-  await invoke('close_plugin_window', {
-    pluginId,
-    windowId,
-  });
+  try {
+    await invokeWithTelemetry('close_plugin_window', {
+      pluginId,
+      windowId,
+    }, {
+      moduleId: 'windowing',
+      component: 'pluginWindows',
+      event: 'window.plugin.close',
+      successLevel: 'info',
+    });
+  } catch (error) {
+    telemetry.error('window.plugin.close.failed', {
+      message: getErrorMessage(error),
+      fields: {
+        pluginId,
+        windowId,
+      },
+    });
+    throw error;
+  }
 }
 

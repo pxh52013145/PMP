@@ -1,10 +1,16 @@
 import { emit } from '@tauri-apps/api/event';
 import { readJson, removeKey } from '../../modules/storage';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { TAURI_EVENTS, broadcastDataUpdate } from '../../utils/windowCommunication';
 
 export type PmpmPluginConfig = Record<string, unknown>;
 
 const CONFIG_PREFIX = 'pixel-matrix-pmpm-plugin-config:';
+const telemetry = getTelemetryLogger('pmpm', 'pluginConfig');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 const listenersByPluginId = new Map<string, Set<(config: PmpmPluginConfig) => void>>();
 const syncDisposersByPluginId = new Map<string, () => void>();
@@ -17,7 +23,12 @@ function notify(pluginId: string, config: PmpmPluginConfig): void {
     try {
       listener(config);
     } catch (error) {
-      console.warn(`[pmpm][config] Listener failed for "${pluginId}"`, error);
+      telemetry.warn('plugin_config.listener.failed', {
+        message: readErrorMessage(error),
+        fields: {
+          pluginId,
+        },
+      });
     }
   }
 }

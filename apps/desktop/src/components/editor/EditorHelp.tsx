@@ -10,7 +10,7 @@ export const EditorHelp = memo(function EditorHelp() {
       {/* 拖动标题栏 */}
       <div className="editor-window-header" data-tauri-drag-region>
         <span className="window-title" data-tauri-drag-region>
-          ⋮⋮
+          {t('windows.editor.help.title')}
         </span>
       </div>
       {/* 内容区域 */}

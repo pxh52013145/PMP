@@ -13,6 +13,7 @@ import {
   toMagnetVariantDefinitions,
   type MagnetVariantPreset,
 } from '../components/magnet/shared/magnetVariantCatalog';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { DSP_VST_VARIANT_PRESETS } from '../components/magnet/dspVstSkin';
 import { MATRIX_CHANGE_VARIANT_PRESETS } from '../components/magnet/matrixChangeSkin';
 import { PROCESS_PERF_MONITOR_VARIANT_PRESETS } from '../components/magnet/processPerfMonitorSkin';
@@ -96,6 +97,11 @@ const DspVstMagnetLazy = React.lazy(async () => ({
 const ProcessPerfMonitorMagnetLazy = React.lazy(async () => ({
   default: (await import('../components/magnet/ProcessPerfMonitorMagnet')).ProcessPerfMonitorMagnet,
 }));
+const telemetry = getTelemetryLogger('magnets', 'builtinMagnetRenderersModule');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function renderWithLazyBoundary(node: React.ReactNode): React.ReactNode {
   return <React.Suspense fallback={null}>{node}</React.Suspense>;
@@ -341,7 +347,9 @@ export function createBuiltinMagnetRenderersModule(): KernelModule<AppEvents> {
         try {
           unsubscribeLocale();
         } catch (error) {
-          console.warn('[builtin-magnet-renderers] locale subscription cleanup failed', error);
+          telemetry.warn('magnet_renderers.locale_subscription.cleanup_failed', {
+            message: readErrorMessage(error),
+          });
         }
 
         for (const definition of getBuiltinDefinitions()) {

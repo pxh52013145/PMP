@@ -3,6 +3,7 @@ import { Track } from '../../services/audio';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
 import { musicLibraryService } from '../../services/audio/MusicLibraryService';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { useT } from '../../i18n';
 import './AlbumDetailPage.css';
 
@@ -16,6 +17,10 @@ const ALBUM_SCROLL_RENDER_TRIGGER_PX = 240;
 const ALBUM_TRACK_TEXT_INTERN_POOL_MAX = 2048;
 
 const albumTrackTextInternPool = new Map<string, string>();
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function trimAlbumTrackText(value: unknown, maxChars: number = 200): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -84,6 +89,7 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
 }) => {
   const t = useT();
   const audioService = useAudioService();
+  const telemetry = useMemo(() => getTelemetryLogger('music-library', 'AlbumDetailPage'), []);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [albumCover, setAlbumCover] = useState<string | undefined>();
   const [renderedTrackLimit, setRenderedTrackLimit] = useState(ALBUM_TRACK_RENDER_CHUNK_SIZE);
@@ -143,7 +149,13 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
       });
     })().catch((error) => {
       if (!cancelled) {
-        console.warn('[AlbumDetailPage] Failed to load album tracks:', error);
+        telemetry.warn('album.tracks.load.failed', {
+          message: readErrorMessage(error),
+          fields: {
+            albumName,
+            artist: artist?.trim() || null,
+          },
+        });
       }
     });
 
@@ -198,51 +210,117 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
     }
   }, [tracks.length]);
 
-  // 双击播放：添加整个专辑，从选中的歌曲开始播放
   const handlePlayTrack = async (track: Track, index: number) => {
-    console.log('🎵 Playing track:', track.title, 'from album');
-    audioService.clearQueue();
-    audioService.addMultipleToQueue(tracks);
-    await audioService.playTrackAtIndex(index);
-    console.log('✅ Album added to queue, playing from track', index + 1);
-  };
-
-  // 播放全部：从第一首开始播放
-  const handlePlayAll = async () => {
-    if (tracks.length > 0) {
-      console.log('🎵 Playing all tracks:', tracks.length);
+    try {
       audioService.clearQueue();
       audioService.addMultipleToQueue(tracks);
-      await audioService.playTrackAtIndex(0);
-      console.log('✅ All tracks loaded and playing');
+      await audioService.playTrackAtIndex(index);
+      telemetry.info('album.queue.play_from_track', {
+        fields: {
+          albumName,
+          artist: artist?.trim() || null,
+          trackId: track.id,
+          trackTitle: track.title,
+          trackIndex: index,
+          trackCount: tracks.length,
+          queueSize: audioService.getQueue().length,
+        },
+      });
+    } catch (error) {
+      telemetry.error('album.queue.play_from_track.failed', {
+        message: readErrorMessage(error),
+        fields: {
+          albumName,
+          artist: artist?.trim() || null,
+          trackId: track.id,
+          trackIndex: index,
+          trackCount: tracks.length,
+        },
+      });
     }
   };
 
-  // 添加整个专辑到队列
+  const handlePlayAll = async () => {
+    if (tracks.length > 0) {
+      try {
+        audioService.clearQueue();
+        audioService.addMultipleToQueue(tracks);
+        await audioService.playTrackAtIndex(0);
+        telemetry.info('album.queue.play_all', {
+          fields: {
+            albumName,
+            artist: artist?.trim() || null,
+            trackCount: tracks.length,
+            queueSize: audioService.getQueue().length,
+          },
+        });
+      } catch (error) {
+        telemetry.error('album.queue.play_all.failed', {
+          message: readErrorMessage(error),
+          fields: {
+            albumName,
+            artist: artist?.trim() || null,
+            trackCount: tracks.length,
+          },
+        });
+      }
+    }
+  };
+
   const handleAddAllToQueue = () => {
     if (tracks.length > 0) {
-      console.log('➕ Adding all tracks to queue:', tracks.length);
       audioService.addMultipleToQueue(tracks);
-      console.log('✅ Tracks added to queue:', audioService.getQueue().length);
+      telemetry.info('album.queue.add_all', {
+        fields: {
+          albumName,
+          artist: artist?.trim() || null,
+          trackCount: tracks.length,
+          queueSize: audioService.getQueue().length,
+        },
+      });
     }
   };
 
-  // 只添加单首歌曲到队列（不播放）
   const handleAddTrackToQueue = (track: Track, e: React.MouseEvent) => {
     e.stopPropagation();
-    console.log('➕ Adding single track to queue:', track.title);
     audioService.addToQueue(track);
-    console.log('✅ Track added to queue');
+    telemetry.info('album.queue.add_track', {
+      fields: {
+        albumName,
+        artist: artist?.trim() || null,
+        trackId: track.id,
+        trackTitle: track.title,
+        queueSize: audioService.getQueue().length,
+      },
+    });
   };
 
-  // 点击播放按钮：只播放这一首歌
   const handlePlaySingleTrack = async (track: Track, e: React.MouseEvent) => {
     e.stopPropagation();
-    console.log('🎵 Playing single track:', track.title);
-    audioService.clearQueue();
-    audioService.addToQueue(track);
-    await audioService.playTrackAtIndex(0);
-    console.log('✅ Single track loaded and playing');
+    try {
+      audioService.clearQueue();
+      audioService.addToQueue(track);
+      await audioService.playTrackAtIndex(0);
+      telemetry.info('album.queue.play_single', {
+        fields: {
+          albumName,
+          artist: artist?.trim() || null,
+          trackId: track.id,
+          trackTitle: track.title,
+          queueSize: audioService.getQueue().length,
+        },
+      });
+    } catch (error) {
+      telemetry.error('album.queue.play_single.failed', {
+        message: readErrorMessage(error),
+        fields: {
+          albumName,
+          artist: artist?.trim() || null,
+          trackId: track.id,
+          trackTitle: track.title,
+        },
+      });
+    }
   };
 
   // 处理歌曲右键菜单

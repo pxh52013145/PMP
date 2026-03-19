@@ -13,6 +13,8 @@ import { createKeybindingsModule } from '../services/keybindings';
 import { createMemoryGovernanceModule } from '../services/governance';
 import { createQualityModule } from '../services/quality';
 import { createPerformanceControlModule } from '../services/performance-control';
+import { createTelemetryModule } from '../services/telemetry';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { STORAGE_KEYS } from '../utils/windowCommunication';
 import { PMP_STORAGE_CHANGE_EVENT } from '../modules/storage/localStorage';
 
@@ -80,6 +82,7 @@ async function loadBuiltinContributionsModule(): Promise<KernelModule<AppEvents>
 }
 
 function createRuntime(): KernelRuntime {
+  const telemetry = getTelemetryLogger('kernel', 'KernelContext');
   const kernel = createKernel<AppEvents>();
   const loader = new ModuleLoader<AppEvents>(kernel.services, kernel.events, kernel.contributions);
 
@@ -109,6 +112,11 @@ function createRuntime(): KernelRuntime {
       if (runtimeDisposed || pluginModulesActivated) return;
       loader.activate(modules);
       pluginModulesActivated = true;
+      telemetry.info('kernel.plugin-modules.activated', {
+        fields: {
+          moduleCount: modules.length,
+        },
+      });
     })().finally(() => {
       pluginActivationPromise = null;
     });
@@ -128,6 +136,7 @@ function createRuntime(): KernelRuntime {
       if (runtimeDisposed || builtinContributionsActivated) return;
       loader.activate([module]);
       builtinContributionsActivated = true;
+      telemetry.info('kernel.builtin-contributions.activated');
     })().finally(() => {
       builtinContributionsActivationPromise = null;
     });
@@ -143,6 +152,7 @@ function createRuntime(): KernelRuntime {
 
   const modules = [
     createLifecycleModule(),
+    createTelemetryModule(),
     createQualityModule(),
     createPerformanceControlModule(),
     createNavigationModule(),
@@ -164,6 +174,14 @@ function createRuntime(): KernelRuntime {
   }
 
   loader.activate(modules);
+  telemetry.info('kernel.runtime.created');
+  telemetry.info('kernel.modules.activated', {
+    fields: {
+      moduleCount: modules.length,
+      auxWindow: isAuxWindow,
+      canUsePluginModules,
+    },
+  });
 
   if (!isAuxWindow) {
     window.requestAnimationFrame(() => {

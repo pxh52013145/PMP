@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useT } from '../../i18n';
 import { useConfirmDialog } from '../core/ConfirmDialog';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { listRegisteredMagnetRenderers, type MagnetRendererDefinition } from '../../magnet-system/registry';
 import { listMagnetVariants } from '../../magnet-system/variantRegistry';
 import { getInstalledPmpmPlugin, installPmpmPluginFromZipBytes } from '../../magnet-system/plugins/pmpm';
@@ -33,6 +34,12 @@ import {
   type ParsedThemePack,
   type ThemePackManifestV1,
 } from '../../themes/packs/pmpk';
+
+const telemetry = getTelemetryLogger('editor', 'ThemeEditor');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 import {
   createProfilePackZipBytes,
   parseProfilePackFromZipBytes,
@@ -829,7 +836,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       const position = await calculateWindowPosition('debug');
       await openEditorWindow({ type: 'debug', ...position });
     } catch (error) {
-      console.error('[ThemeEditor] Failed to toggle debug window', error);
+      telemetry.error('editor.debug-window.toggle.failed', {
+        message: getErrorMessage(error),
+      });
     }
   }, [debugOpen]);
 
@@ -2234,7 +2243,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     <div className="editor-theme">
       <div className="editor-window-header" data-tauri-drag-region>
         <span className="window-title" data-tauri-drag-region>
-          ⋮⋮
+          {t('windows.editor.theme.title')}
         </span>
       </div>
 

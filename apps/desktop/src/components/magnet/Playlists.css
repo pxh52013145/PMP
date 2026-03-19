@@ -200,6 +200,7 @@
   height: 100%;
   object-fit: cover;
   display: block;
+  image-rendering: auto;
 }
 
 .playlists-item-cover-fallback {
@@ -867,6 +868,7 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+  image-rendering: auto;
 }
 
 .playlists-hero-cover-fallback {

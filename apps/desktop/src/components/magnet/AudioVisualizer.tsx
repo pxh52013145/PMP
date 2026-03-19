@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { useQuality } from '../../contexts/QualityContext';
 import { BACKGROUND_RENDER_THROTTLE_FPS } from '../../contracts/performance';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import type {
   AudioVisualizerBackdropMode,
   AudioVisualizerDensity,
@@ -105,6 +106,8 @@ const BACKDROP_ALPHA: Record<AudioVisualizerBackdropMode, number> = {
   strong: 0.24,
 };
 
+const telemetry = getTelemetryLogger('visualizer', 'AudioVisualizer');
+
 /**
  * Audio spectrum visualizer.
  *
@@ -131,6 +134,22 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   const tickRef = useRef<((now: number) => void) | null>(null);
   const { renderMode } = useWindowActivity();
   const { effective: quality } = useQuality();
+
+  useEffect(() => {
+    telemetry.info('visualizer.audio.mount');
+    return () => {
+      telemetry.info('visualizer.audio.unmount');
+    };
+  }, []);
+
+  useEffect(() => {
+    telemetry.info('visualizer.audio.render-mode.changed', {
+      fields: {
+        renderMode,
+        isPlaying,
+      },
+    });
+  }, [isPlaying, renderMode]);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;

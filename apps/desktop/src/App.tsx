@@ -30,6 +30,7 @@ import {
 } from './modules/startup/durableMigrationGuards';
 import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
 import { MatrixWorkbench } from './workbenches/matrix/MatrixWorkbench';
+import { getTelemetryLogger } from './services/telemetry/TelemetryService';
 import './App.css';
 
 let coverDecodeReporter: ((src: string, width: number, height: number) => void) | null = null;
@@ -63,6 +64,7 @@ function reportCoverDecoded(src: string, width: number, height: number): void {
 
 function AppContent() {
   const kernel = useKernel();
+  const telemetry = useMemo(() => getTelemetryLogger('startup', 'AppContent'), []);
   const keybindings = kernel.services.get(KEYBINDINGS_SERVICE_TOKEN);
   const { navigateTo } = useNavigation();
   const { editorState } = useEditor();
@@ -115,7 +117,9 @@ function AppContent() {
 
         navigateTo('debug', { tab: 'debug-center' });
         void setDebugConfig({ ...config, openDebugCenterOnNextStart: false }).catch((error) => {
-          console.warn('[DebugCenter] Failed to clear openDebugCenterOnNextStart flag', error);
+          telemetry.warn('startup.debug-center.flag-clear.failed', {
+            message: error instanceof Error ? error.message : String(error),
+          });
         });
       })
       .catch(() => {
@@ -125,7 +129,7 @@ function AppContent() {
     return () => {
       cancelled = true;
     };
-  }, [isTauri, navigateTo]);
+  }, [isTauri, navigateTo, telemetry]);
 
   useEffect(() => {
     if (!shouldRunDurableStorageMigrations()) {
@@ -155,7 +159,9 @@ function AppContent() {
           (pmpm && (pmpm.migrated || pmpm.failed)) ||
           (pmps && (pmps.migrated || pmps.failed))
         ) {
-          console.info('[storage] migration result', { pmpm, pmps });
+          telemetry.info('storage.migration.result', {
+            fields: { pmpm, pmps },
+          });
         }
       } catch {
         // best-effort: migration should not block app boot
@@ -174,7 +180,7 @@ function AppContent() {
 
     const timer = window.setTimeout(() => void run(), 800);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [telemetry]);
 
   useEffect(() => {
     const onVisibilityChange = () => setIsDocumentVisible(!document.hidden);
@@ -227,7 +233,9 @@ function AppContent() {
           });
           return;
         } catch (error) {
-          console.warn('[MainWindow] Failed to subscribe to focus events:', error);
+          telemetry.warn('window.main.focus-listener.attach.failed', {
+            message: error instanceof Error ? error.message : String(error),
+          });
         }
       }
 
@@ -350,7 +358,7 @@ function AppContent() {
     return () => {
       cleanupPromise.then((cleanup) => cleanup());
     };
-  }, [isTauri]);
+  }, [isTauri, telemetry]);
 
   useEffect(() => {
     if (!isTauri || !editorState.isEditing || isMainWindowFocused) {

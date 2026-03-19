@@ -1,5 +1,6 @@
 import type { Magnet } from '../../types/pixel';
 import { readJson, writeJson } from '../../modules/storage';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 
 export interface MagnetHistoryItem {
   id: string;
@@ -10,6 +11,11 @@ export interface MagnetHistoryItem {
 
 const HISTORY_STORAGE_KEY = 'magnet-creator-history';
 const MAX_HISTORY_ITEMS = 20;
+const telemetry = getTelemetryLogger('editor', 'magnetCreatorHistory');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function loadMagnetHistory(magnetId: string): MagnetHistoryItem[] {
   try {
@@ -23,7 +29,12 @@ export function saveMagnetHistory(magnetId: string, history: MagnetHistoryItem[]
   try {
     writeJson(`${HISTORY_STORAGE_KEY}-${magnetId}`, history);
   } catch (error) {
-    console.error('Failed to save magnet history:', error);
+    telemetry.error('editor.magnet.history.save.failed', {
+      message: getErrorMessage(error),
+      fields: {
+        magnetId,
+      },
+    });
   }
 }
 

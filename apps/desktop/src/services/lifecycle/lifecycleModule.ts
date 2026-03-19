@@ -3,6 +3,7 @@ import type { AppEvents } from '../../contracts/events';
 import { flushStorageWrites } from '../../modules/storage';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { TAURI_EVENTS } from '../../utils/windowCommunication';
+import { getTelemetryLogger } from '../telemetry/TelemetryService';
 import {
   APP_LIFECYCLE_SERVICE_TOKEN,
   DefaultAppLifecycleService,
@@ -13,6 +14,7 @@ export function createLifecycleModule(): KernelModule<AppEvents> {
   return {
     id: 'lifecycle',
     activate: ({ services }) => {
+      const telemetry = getTelemetryLogger('lifecycle', 'lifecycleModule');
       const service = new DefaultAppLifecycleService();
       const unregister = services.register(APP_LIFECYCLE_SERVICE_TOKEN, service);
 
@@ -57,8 +59,10 @@ export function createLifecycleModule(): KernelModule<AppEvents> {
             unlistenPluginHidden = pluginHidden;
             unlistenVstManagerHidden = vstManagerHidden;
           })
-          .catch(() => {
-            // best-effort
+          .catch((error) => {
+            telemetry.warn('lifecycle.tauri-hidden-listener.attach.failed', {
+              message: error instanceof Error ? error.message : String(error),
+            });
           });
       }
 

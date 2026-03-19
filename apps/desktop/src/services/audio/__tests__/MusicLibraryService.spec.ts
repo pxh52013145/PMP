@@ -12,6 +12,7 @@ vi.mock('@tauri-apps/api/dialog', () => ({
 vi.mock('@tauri-apps/api/fs', () => ({
   readDir: vi.fn(),
   exists: vi.fn(),
+  readBinaryFile: vi.fn(async () => new Uint8Array([1, 2, 3, 4])),
 }));
 
 import { invoke } from '@tauri-apps/api/tauri';
@@ -30,6 +31,17 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
     localStorage.clear();
     clearCloudPlaybackFallbackQueue();
     replaceMusicLibraryBaseFieldCapabilities([], { source: 'extension' });
+
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => 'blob:mock-cover-url'),
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(),
+    });
 
     delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
     (MusicLibraryService as unknown as { instance?: unknown }).instance = undefined;
@@ -68,8 +80,7 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
       'music_library_get_cover',
       expect.objectContaining({ path: 'C:\\\\Music\\\\song.mp3' })
     );
-    expect(url).toContain('cover-abc-thumb-256px.jpg');
-    expect(url?.startsWith('http://asset.localhost/')).toBe(true);
+    expect(url?.startsWith('blob:')).toBe(true);
   });
 
   it('keeps embedded base64 coverUrl for non-absolute paths in Tauri', async () => {
@@ -121,8 +132,7 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
       'music_library_get_cover',
       expect.objectContaining({ path: 'C:\\Music\\sized.mp3', maxEdgePx: 96 })
     );
-    expect(url).toContain('cover-small-thumb-96px.jpg');
-    expect(url?.startsWith('http://asset.localhost/')).toBe(true);
+    expect(url?.startsWith('blob:')).toBe(true);
   });
 
   it('applies the configured thumbnail quality cap to larger size hints', async () => {
@@ -156,8 +166,7 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
       'music_library_get_cover',
       expect.objectContaining({ path: 'C:\\Music\\sized-medium.mp3', maxEdgePx: 128 })
     );
-    expect(url).toContain('cover-medium-thumb-128px.jpg');
-    expect(url?.startsWith('http://asset.localhost/')).toBe(true);
+    expect(url?.startsWith('blob:')).toBe(true);
   });
 
   it('clears runtime cover caches when thumbnail quality setting changes', async () => {
@@ -372,8 +381,7 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
       'music_library_get_cover',
       expect.objectContaining({ path: 'C:\\Music\\dev.mp3' })
     );
-    expect(url).toContain('cover-dev-thumb-256px.jpg');
-    expect(url?.startsWith('http://asset.localhost/')).toBe(true);
+    expect(url?.startsWith('blob:')).toBe(true);
   });
 
   it('allows bypassing hidden runtime cache policy for active track cover resolution', async () => {
@@ -410,11 +418,32 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
     expect(blocked).toBeUndefined();
 
     const url = await service.getCoverUrlForTrack(track, { bypassRuntimePolicy: true });
-    expect(url).toContain('cover-hidden-thumb-256px.jpg');
-    expect(url?.startsWith('http://asset.localhost/')).toBe(true);
+    expect(url?.startsWith('blob:')).toBe(true);
     expect(invoke).toHaveBeenCalledWith(
       'music_library_get_cover',
       expect.objectContaining({ path: 'C:\\Music\\hidden.mp3' })
+    );
+  });
+
+  it('does not fall back to stale asset.localhost cover urls for absolute desktop tracks', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockResolvedValue(null);
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const url = await service.getCoverUrlForTrack({
+      id: 't-stale-asset',
+      title: 'Stale Asset Cover',
+      filePath: 'C:\\Music\\stale-cover.mp3',
+      coverUrl:
+        'https://asset.localhost/C%3A%5CUsers%5C31625%5CAppData%5CRoaming%5Ccom.pixelmatrix.player%5Cmusic-covers%5Ccover-stale-thumb-96px.jpg',
+    });
+
+    expect(url).toBeUndefined();
+    expect(invokeMock).toHaveBeenCalledWith(
+      'music_library_get_cover',
+      expect.objectContaining({ path: 'C:\\Music\\stale-cover.mp3' })
     );
   });
 });

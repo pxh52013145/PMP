@@ -1,11 +1,18 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/tauri';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAudioEngine } from '../../contexts/AudioEngineContext';
 import { useT } from '../../i18n';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
 import { broadcastDataUpdate, readData, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { PmpButton, PmpChoiceButton, PmpSegmented } from '../primitives';
+
+const telemetry = getTelemetryLogger('settings', 'AudioBufferSettingsPanel');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object') return null;
@@ -115,7 +122,11 @@ export function AudioBufferSettingsPanel() {
   const refreshComponentsState = useCallback(async () => {
     if (!canUseBackend) return;
     try {
-      const payload = await invoke<unknown>('native_audio_get_audio_components_state');
+      const payload = await invokeWithTelemetry<unknown>('native_audio_get_audio_components_state', undefined, {
+        moduleId: 'settings',
+        component: 'AudioBufferSettingsPanel',
+        event: 'settings.audio-buffer.state.read',
+      });
       setComponentsState(parseNativeAudioComponentsState(payload));
     } catch {
       // ignore
@@ -172,12 +183,19 @@ export function AudioBufferSettingsPanel() {
         );
 
         if (!canUseBackend) return;
-        void invoke('native_audio_set_streaming_buffer_settings', {
+        void invokeWithTelemetry('native_audio_set_streaming_buffer_settings', {
           startOrSeekSeconds: latest.startOrSeekSeconds,
           crossfadeSeconds: latest.crossfadeSeconds,
           decodeMode: latest.decodeMode,
           interactiveProfile: latest.interactiveProfile,
+        }, {
+          moduleId: 'settings',
+          component: 'AudioBufferSettingsPanel',
+          event: 'settings.audio-buffer.streaming.set',
         }).catch((err) => {
+          telemetry.warn('settings.audio-buffer.streaming.set.failed', {
+            message: getErrorMessage(err),
+          });
           setError(err instanceof Error ? err.message : String(err));
         });
       }, 250);

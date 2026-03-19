@@ -1,9 +1,16 @@
 import { useNavigation } from '../../../contexts/NavigationContext';
 import { useT } from '../../../i18n';
+import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 
 export interface DebugButtonLogic {
   toggleDebugWindow: (isOpen: boolean, setIsOpen: (value: boolean) => void) => Promise<void>;
   getButtonTitle: (isOpen: boolean) => string;
+}
+
+const telemetry = getTelemetryLogger('navigation', 'useDebugButtonLogic');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function useDebugButtonLogic(): DebugButtonLogic {
@@ -21,7 +28,12 @@ export function useDebugButtonLogic(): DebugButtonLogic {
       navigation.navigateTo('settings');
       setIsOpen(true);
     } catch (error) {
-      console.error('Failed to toggle settings:', error);
+      telemetry.error('debug_button.toggle_settings.failed', {
+        message: readErrorMessage(error),
+        fields: {
+          wasOpen: isOpen,
+        },
+      });
       setIsOpen(false);
     }
   };

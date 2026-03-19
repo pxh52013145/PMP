@@ -5,6 +5,9 @@ import { Webgl2ShaderRuntime, type DetectedUniform, type ShaderRuntimeError } fr
 import { useWindowActivity } from '../contexts/WindowActivityContext';
 import { BACKGROUND_RENDER_THROTTLE_FPS } from '../contracts/performance';
 import { useQuality } from '../contexts/QualityContext';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
+
+const telemetry = getTelemetryLogger('visualizer', 'PmpsShaderLayer');
 
 export type PmpsShaderLayerProps = {
   shaderId: string;
@@ -60,7 +63,13 @@ export function PmpsShaderLayer({
     setHasError(false);
 
     const runtimeErrorHandler = (error: ShaderRuntimeError) => {
-      console.error('[pmps]', error);
+      telemetry.error('pmps.runtime.failed', {
+        message: error.message,
+        fields: {
+          shaderId: error.shaderId,
+          stage: error.stage,
+        },
+      });
       onError?.(error);
       if (error.stage === 'context') {
         return;

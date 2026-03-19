@@ -529,7 +529,14 @@ export interface IAudioService {
   /**
    * 将播放列表添加到队列
    */
-  addPlaylistToQueue(playlistId: string): void;
+  addPlaylistToQueue(playlistId: string): Promise<void>;
+
+  playPlaylistTrackAtIndex?(playlistId: string, trackIndex: number): Promise<void>;
+
+  addPlaylistTrackIndexesToQueue?(
+    playlistId: string,
+    trackIndexes: number[]
+  ): Promise<void>;
 
   /**
    * 按需加载播放列表曲目
@@ -538,7 +545,10 @@ export interface IAudioService {
 
   resolvePlaylistCoverPreview?(
     playlistId: string,
-    options?: { coverSizeHint?: 'small' | 'medium' | 'large' }
+    options?: {
+      coverSizeHint?: 'small' | 'medium' | 'large';
+      preferCompactPreview?: boolean;
+    }
   ): Promise<string | undefined>;
 
   /**

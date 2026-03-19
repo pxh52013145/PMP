@@ -17,6 +17,11 @@ pub const DEBUG_COMMAND_NAMES: &[&str] = &[
     "debug_trim_process_working_set",
     "debug_get_backend_modules",
     "debug_get_registered_commands",
+    "debug_telemetry_get_status",
+    "debug_telemetry_ingest_batch",
+    "debug_telemetry_clear_session",
+    "debug_telemetry_read_current_session",
+    "debug_telemetry_query",
 ];
 
 pub const MEDIA_COMMAND_NAMES: &[&str] = &["background_import_media", "ornament_import_media"];
@@ -292,6 +297,11 @@ macro_rules! pmp_generate_handler {
             crate::commands::debug::debug_trim_process_working_set,
             crate::commands::debug::debug_get_backend_modules,
             crate::commands::debug::debug_get_registered_commands,
+            crate::commands::debug::debug_telemetry_get_status,
+            crate::commands::debug::debug_telemetry_ingest_batch,
+            crate::commands::debug::debug_telemetry_clear_session,
+            crate::commands::debug::debug_telemetry_read_current_session,
+            crate::commands::debug::debug_telemetry_query,
             crate::commands::media::background_import_media,
             crate::commands::media::ornament_import_media,
             crate::commands::windows::open_editor_window,

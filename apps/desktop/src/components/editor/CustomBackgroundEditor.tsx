@@ -8,6 +8,8 @@ import {
   type GeometrySize,
 } from '../../modules/background/cropGeometry';
 import { readJson } from '../../modules/storage';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { useT } from '../../i18n';
 import './CustomBackgroundEditor.css';
@@ -21,6 +23,11 @@ type CustomType = 'image' | 'video' | 'html';
 const DEFAULT_CROP_RECT: BackgroundCropRect = { x: 0, y: 0, width: 100, height: 100, space: 'media' };
 const DEFAULT_IMAGE_IMPORT_SOFT_LIMIT_MB = 100;
 const DEFAULT_VIDEO_IMPORT_SOFT_LIMIT_MB = 300;
+const telemetry = getTelemetryLogger('editor', 'CustomBackgroundEditor');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 type BackgroundImportInvokeResult =
   | string
@@ -239,7 +246,9 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
         const { appWindow } = await import('@tauri-apps/api/window');
         await appWindow.setFocus();
       } catch (error) {
-        console.error('Failed to focus window:', error);
+        telemetry.warn('editor.custom-background.focus.failed', {
+          message: getErrorMessage(error),
+        });
       }
     };
     focusWindow();
@@ -487,11 +496,19 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
             typeof gifMaxFpsRaw === 'number' && Number.isFinite(gifMaxFpsRaw)
               ? Math.max(0, Math.min(60, Math.round(gifMaxFpsRaw)))
               : 30;
-          const importResult = await tauri.invoke<BackgroundImportInvokeResult>('background_import_media', {
-            sourcePath: selected,
-            kind: type,
-            gifMaxFps: type === 'image' ? gifMaxFps : undefined,
-          });
+          const importResult = await invokeWithTelemetry<BackgroundImportInvokeResult>(
+            'background_import_media',
+            {
+              sourcePath: selected,
+              kind: type,
+              gifMaxFps: type === 'image' ? gifMaxFps : undefined,
+            },
+            {
+              moduleId: 'editor',
+              component: 'CustomBackgroundEditor',
+              event: 'editor.background.media.import',
+            }
+          );
           const destPath =
             typeof importResult === 'string' ? importResult : importResult?.destPath || '';
           const sourceBytes =
@@ -550,7 +567,12 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
             clearAppliedSelection();
           }
         } catch (readError) {
-          console.error('[CustomBackgroundEditor] File import failed:', readError);
+          telemetry.error('editor.background.media.import.failed', {
+            message: getErrorMessage(readError),
+            fields: {
+              kind: type,
+            },
+          });
           setImportWarningMessage(null);
           const details = readError instanceof Error ? readError.message : String(readError);
           setErrorMessage(
@@ -561,8 +583,9 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
         }
       }
     } catch (error) {
-      console.error('文件选择错误详情:', error);
-      console.error('Error stack:', error instanceof Error ? error.stack : 'No stack');
+      telemetry.error('editor.background.media.select.failed', {
+        message: getErrorMessage(error),
+      });
       setImportWarningMessage(null);
       const details = error instanceof Error ? error.message : String(error);
       setErrorMessage(
@@ -578,7 +601,9 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       const { appWindow } = await import('@tauri-apps/api/window');
       await appWindow.close();
     } catch (error) {
-      console.error('Failed to close window:', error);
+      telemetry.error('editor.custom-background.window.close.failed', {
+        message: getErrorMessage(error),
+      });
     }
   }, []);
 
@@ -792,7 +817,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       {/* 拖动标题栏 */}
       <div className="editor-window-header" data-tauri-drag-region>
         <span className="window-title" data-tauri-drag-region>
-          ⋮⋮
+          {t('windows.editor.custom-background.title')}
         </span>
       </div>
 

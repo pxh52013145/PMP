@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useKernel } from '../../contexts/KernelContext';
 import type { SettingsPanelContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { useSkinSurfaceModel } from '../../themes/skinSurface';
 import {
   buildThemePresenceAnimationStyle,
@@ -65,6 +66,7 @@ type SettingsSection = {
 export const SettingsPage: React.FC = () => {
   const kernel = useKernel();
   const t = useT();
+  const telemetry = useMemo(() => getTelemetryLogger('settings', 'SettingsPage'), []);
   const pageSurface = useSkinSurfaceModel('page.settings');
   const pageEnterMotion = useMemo(
     () => pickThemeMotionChannel(pageSurface.root.motion, ['enter']),
@@ -188,6 +190,33 @@ export const SettingsPage: React.FC = () => {
     className: ['page-settings', 'page-settings--deltaforce'].join(' '),
     style: pageMotionStyle,
   });
+
+  useEffect(() => {
+    telemetry.info('settings.page.enter');
+    return () => {
+      telemetry.info('settings.page.leave');
+    };
+  }, [telemetry]);
+
+  useEffect(() => {
+    if (!activeSectionId) return;
+    telemetry.info('settings.section.changed', {
+      fields: {
+        sectionId: activeSectionId,
+        panelCount: visiblePanels.length,
+      },
+    });
+  }, [activeSectionId, telemetry, visiblePanels.length]);
+
+  useEffect(() => {
+    if (!activePanelId) return;
+    telemetry.info('settings.panel.changed', {
+      fields: {
+        sectionId: activeSectionId,
+        panelId: activePanelId,
+      },
+    });
+  }, [activePanelId, activeSectionId, telemetry]);
 
   return (
     <div

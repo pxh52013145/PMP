@@ -1,6 +1,7 @@
 import { useMemo, memo, useState, useEffect } from 'react';
 import { useEditor } from '../../contexts/EditorContext';
 import { MATRIX_CONFIG } from '../../constants/config';
+import { useT } from '../../i18n';
 import { STORAGE_KEYS, TAURI_EVENTS, setupTauriListener } from '../../utils/windowCommunication';
 import { readJson } from '../../modules/storage';
 import './EditorStatistics.css';
@@ -14,6 +15,7 @@ interface SerializableEditorState {
 
 export const EditorStatistics = memo(function EditorStatistics() {
   const { occupancyMap } = useEditor();
+  const t = useT();
   const defaultEditorState: SerializableEditorState = {
     selectedPixels: [],
     mode: 'view',
@@ -139,7 +141,7 @@ export const EditorStatistics = memo(function EditorStatistics() {
       {/* 拖动标题栏 */}
       <div className="editor-window-header" data-tauri-drag-region>
         <span className="window-title" data-tauri-drag-region>
-          ⋮⋮
+          {t('windows.editor.statistics.title')}
         </span>
       </div>
       {/* 内容区域 */}

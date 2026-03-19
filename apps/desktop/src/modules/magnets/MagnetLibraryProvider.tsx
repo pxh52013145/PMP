@@ -51,8 +51,15 @@ import {
 } from './layoutStore';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readJson, usePersistentSetting } from '../storage';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { createDefaultMagnetSpacesState, sanitizeMagnetSpacesState } from './spaces';
 import { parsePerformanceRuntimeProfile } from '../../contracts/performanceControl';
+
+const telemetry = getTelemetryLogger('magnets', 'MagnetLibraryProvider');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export interface MagnetLibraryProviderProps {
   children: ReactNode;
@@ -561,7 +568,13 @@ export function MagnetLibraryProvider({
         saveMagnetSpaceLayout(layout, loadedLayoutKey);
       }
     } catch (error) {
-      console.warn(`[magnets] Failed to persist config before switching key "${loadedKey}"`, error);
+      telemetry.warn('magnets.persist_before_key_switch.failed', {
+        message: readErrorMessage(error),
+        fields: {
+          loadedKey,
+          nextKey: magnetConfigStorageKey,
+        },
+      });
     }
 
     reloadFromStorage();

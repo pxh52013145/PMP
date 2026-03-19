@@ -338,7 +338,7 @@ export class NoopAudioService implements IAudioService {
     await this.playTrackAtIndex(0);
   }
 
-  addPlaylistToQueue(playlistId: string): void {
+  async addPlaylistToQueue(playlistId: string): Promise<void> {
     const playlist = this.playlists.find((p) => p.id === playlistId);
     if (!playlist || playlist.tracks.length === 0) return;
     this.addMultipleToQueue(playlist.tracks);

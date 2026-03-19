@@ -3,6 +3,7 @@ import type { NavigationPageType, NavigationParamsFor } from '../../../contracts
 import { parseNavigationParams } from '../../../contracts/navigationParams';
 import type { PlayMode, Track } from '../../../services/audio';
 import { musicLibraryService } from '../../../services/audio/MusicLibraryService';
+import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import { getDynamicColorsForImageUrl } from '../../../utils/dynamicColors';
 import { closePluginWindow, openPluginWindow } from '../../../utils/pluginWindows';
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
@@ -47,6 +48,11 @@ const PAGES_REQUIRING_PARAMS = new Set<NavigationPageType>([
 const PLAY_MODES = new Set<string>(['sequence', 'loop', 'single-loop', 'shuffle']);
 const HOST_CAPABILITY_INVOKE_TIMEOUT_MS = 6000;
 const HOST_CAPABILITY_PAYLOAD_MAX_BYTES = 256 * 1024;
+const telemetry = getTelemetryLogger('pmpm-host-api', 'createPluginMountApi');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function asJsonSerializedSize(value: unknown): number {
   let serialized: string | undefined;
@@ -111,8 +117,30 @@ export function createPluginMountApi({
   const allowPluginConfig = hasPermission(permissions, PLUGIN_PERMISSIONS.configLocal);
   const allowWindows = hasPermission(permissions, PLUGIN_PERMISSIONS.window);
 
+  const warnApiIssue = (
+    event: string,
+    message: string,
+    fields: Record<string, unknown> | null = null
+  ) => {
+    telemetry.warn(event, {
+      message,
+      fields: {
+        pluginId,
+        hostLabel,
+        ...(fields ?? {}),
+      },
+    });
+  };
+
   const warnDenied = (capability: string, action: string) => {
-    console.warn(`[${hostLabel}] Permission denied (${capability}): ${pluginId} -> ${action}`);
+    warnApiIssue(
+      'plugin.permission.denied',
+      `[${hostLabel}] Permission denied (${capability}): ${pluginId} -> ${action}`,
+      {
+        capability,
+        action,
+      }
+    );
     try {
       recordPmpmPermissionDenied({ pluginId, hostLabel, capability, action });
     } catch {
@@ -248,7 +276,11 @@ export function createPluginMountApi({
         return;
       }
       if (typeof windowId !== 'string' || !/^[a-z0-9-]{1,48}$/.test(windowId)) {
-        console.warn(`[${hostLabel}] Invalid windowId "${String(windowId)}" (plugin=${pluginId})`);
+        warnApiIssue(
+          'window.invalid_id',
+          `[${hostLabel}] Invalid windowId "${String(windowId)}" (plugin=${pluginId})`,
+          { windowId: String(windowId) }
+        );
         return;
       }
 
@@ -268,7 +300,11 @@ export function createPluginMountApi({
         return;
       }
       if (typeof windowId !== 'string' || !/^[a-z0-9-]{1,48}$/.test(windowId)) {
-        console.warn(`[${hostLabel}] Invalid windowId "${String(windowId)}" (plugin=${pluginId})`);
+        warnApiIssue(
+          'window.invalid_id',
+          `[${hostLabel}] Invalid windowId "${String(windowId)}" (plugin=${pluginId})`,
+          { windowId: String(windowId) }
+        );
         return;
       }
       await closePluginWindow(pluginId, windowId);
@@ -290,7 +326,11 @@ export function createPluginMountApi({
         ? snap
         : null;
     } catch (error) {
-      console.warn(`[${hostLabel}] navigation.getSnapshot() failed (plugin=${pluginId})`, error);
+      warnApiIssue(
+        'navigation.snapshot_failed',
+        `[${hostLabel}] navigation.getSnapshot() failed (plugin=${pluginId})`,
+        { errorMessage: readErrorMessage(error) }
+      );
       return null;
     }
   };
@@ -412,7 +452,10 @@ export function createPluginMountApi({
           return () => {};
         }
         if (typeof cb !== 'function') {
-          console.warn(`[${hostLabel}] Invalid onStateChange callback (plugin=${pluginId})`);
+          warnApiIssue(
+            'audio.on_state_change.invalid_callback',
+            `[${hostLabel}] Invalid onStateChange callback (plugin=${pluginId})`
+          );
           return () => {};
         }
         return audioService.onStateChange((state) => cb(state));
@@ -423,7 +466,10 @@ export function createPluginMountApi({
           return () => {};
         }
         if (typeof cb !== 'function') {
-          console.warn(`[${hostLabel}] Invalid onTimeUpdate callback (plugin=${pluginId})`);
+          warnApiIssue(
+            'audio.on_time_update.invalid_callback',
+            `[${hostLabel}] Invalid onTimeUpdate callback (plugin=${pluginId})`
+          );
           return () => {};
         }
         return audioService.onTimeUpdate(cb);
@@ -434,7 +480,10 @@ export function createPluginMountApi({
           return () => {};
         }
         if (typeof cb !== 'function') {
-          console.warn(`[${hostLabel}] Invalid onEnded callback (plugin=${pluginId})`);
+          warnApiIssue(
+            'audio.on_ended.invalid_callback',
+            `[${hostLabel}] Invalid onEnded callback (plugin=${pluginId})`
+          );
           return () => {};
         }
         return audioService.onEnded(cb);
@@ -445,7 +494,10 @@ export function createPluginMountApi({
           return () => {};
         }
         if (typeof cb !== 'function') {
-          console.warn(`[${hostLabel}] Invalid onLoadProgress callback (plugin=${pluginId})`);
+          warnApiIssue(
+            'audio.on_load_progress.invalid_callback',
+            `[${hostLabel}] Invalid onLoadProgress callback (plugin=${pluginId})`
+          );
           return () => {};
         }
         if (typeof audioService.onLoadProgress !== 'function') return () => {};
@@ -463,7 +515,10 @@ export function createPluginMountApi({
           return () => {};
         }
         if (typeof cb !== 'function') {
-          console.warn(`[${hostLabel}] Invalid onError callback (plugin=${pluginId})`);
+          warnApiIssue(
+            'audio.on_error.invalid_callback',
+            `[${hostLabel}] Invalid onError callback (plugin=${pluginId})`
+          );
           return () => {};
         }
         if (typeof audioService.onError !== 'function') return () => {};
@@ -503,7 +558,11 @@ export function createPluginMountApi({
           return;
         }
         if (typeof time !== 'number' || !Number.isFinite(time) || time < 0) {
-          console.warn(`[${hostLabel}] Invalid seek(${String(time)}) (plugin=${pluginId})`);
+          warnApiIssue(
+            'audio.seek.invalid_argument',
+            `[${hostLabel}] Invalid seek(${String(time)}) (plugin=${pluginId})`,
+            { time: String(time) }
+          );
           return;
         }
         audioService.seek(time);
@@ -514,7 +573,11 @@ export function createPluginMountApi({
           return;
         }
         if (typeof volume !== 'number' || !Number.isFinite(volume)) {
-          console.warn(`[${hostLabel}] Invalid setVolume(${String(volume)}) (plugin=${pluginId})`);
+          warnApiIssue(
+            'audio.set_volume.invalid_argument',
+            `[${hostLabel}] Invalid setVolume(${String(volume)}) (plugin=${pluginId})`,
+            { volume: String(volume) }
+          );
           return;
         }
         audioService.setVolume(volume);
@@ -551,7 +614,11 @@ export function createPluginMountApi({
         }
         const int = typeof index === 'number' && Number.isFinite(index) ? Math.floor(index) : -1;
         if (int < 0) {
-          console.warn(`[${hostLabel}] Invalid playTrackAtIndex(${String(index)}) (plugin=${pluginId})`);
+          warnApiIssue(
+            'audio.play_track_at_index.invalid_argument',
+            `[${hostLabel}] Invalid playTrackAtIndex(${String(index)}) (plugin=${pluginId})`,
+            { index: String(index) }
+          );
           return;
         }
         const fn = audioService.playTrackAtIndex;
@@ -579,7 +646,11 @@ export function createPluginMountApi({
         }
         const normalized = typeof mode === 'string' ? mode.trim() : '';
         if (!PLAY_MODES.has(normalized)) {
-          console.warn(`[${hostLabel}] Invalid play mode "${String(mode)}" (plugin=${pluginId})`);
+          warnApiIssue(
+            'audio.play_mode.invalid_argument',
+            `[${hostLabel}] Invalid play mode "${String(mode)}" (plugin=${pluginId})`,
+            { mode: String(mode) }
+          );
           return;
         }
         const fn = audioService.setPlayMode;
@@ -614,7 +685,10 @@ export function createPluginMountApi({
         }
 
         if (typeof cb !== 'function') {
-          console.warn(`[${hostLabel}] Invalid onSpectrum callback (plugin=${pluginId})`);
+          warnApiIssue(
+            'visualizer.on_spectrum.invalid_callback',
+            `[${hostLabel}] Invalid onSpectrum callback (plugin=${pluginId})`
+          );
           return () => {};
         }
 
@@ -627,9 +701,10 @@ export function createPluginMountApi({
           try {
             cb(audioService.getFrequencyData?.() ?? null);
           } catch (error) {
-            console.warn(
+            warnApiIssue(
+              'visualizer.on_spectrum.callback_failed',
               `[${hostLabel}] visualizer.onSpectrum callback failed (plugin=${pluginId})`,
-              error
+              { errorMessage: readErrorMessage(error) }
             );
           }
         }, intervalMs);
@@ -645,7 +720,10 @@ export function createPluginMountApi({
         }
 
         if (typeof cb !== 'function') {
-          console.warn(`[${hostLabel}] Invalid onSpectrumFrame callback (plugin=${pluginId})`);
+          warnApiIssue(
+            'visualizer.on_spectrum_frame.invalid_callback',
+            `[${hostLabel}] Invalid onSpectrumFrame callback (plugin=${pluginId})`
+          );
           return () => {};
         }
 
@@ -659,9 +737,10 @@ export function createPluginMountApi({
           try {
             cb(audioService.getSpectrumFrame?.(tap) ?? null);
           } catch (error) {
-            console.warn(
+            warnApiIssue(
+              'visualizer.on_spectrum_frame.callback_failed',
               `[${hostLabel}] visualizer.onSpectrumFrame callback failed (plugin=${pluginId})`,
-              error
+              { tap, errorMessage: readErrorMessage(error) }
             );
           }
         }, intervalMs);
@@ -679,7 +758,11 @@ export function createPluginMountApi({
         }
         if (params === undefined) {
           if (PAGES_REQUIRING_PARAMS.has(page)) {
-            console.warn(`[${hostLabel}] navigateTo(${page}) requires params; ignoring request.`);
+            warnApiIssue(
+              'navigation.navigate_to.missing_params',
+              `[${hostLabel}] navigateTo(${page}) requires params; ignoring request.`,
+              { page }
+            );
             return;
           }
           navigation.navigateTo(page as PageWithoutParams);
@@ -687,14 +770,22 @@ export function createPluginMountApi({
         }
 
         if (!PAGES_REQUIRING_PARAMS.has(page)) {
-          console.warn(`[${hostLabel}] navigateTo(${page}) ignores params; navigating without params.`);
+          warnApiIssue(
+            'navigation.navigate_to.ignores_params',
+            `[${hostLabel}] navigateTo(${page}) ignores params; navigating without params.`,
+            { page }
+          );
           navigation.navigateTo(page as PageWithoutParams);
           return;
         }
 
         const validated = parseNavigationParams(page, params);
         if (!validated) {
-          console.warn(`[${hostLabel}] navigateTo(${page}) params invalid; ignoring request.`);
+          warnApiIssue(
+            'navigation.navigate_to.invalid_params',
+            `[${hostLabel}] navigateTo(${page}) params invalid; ignoring request.`,
+            { page }
+          );
           return;
         }
 
@@ -714,7 +805,10 @@ export function createPluginMountApi({
           return () => {};
         }
         if (typeof cb !== 'function') {
-          console.warn(`[${hostLabel}] Invalid navigation.onChange callback (plugin=${pluginId})`);
+          warnApiIssue(
+            'navigation.on_change.invalid_callback',
+            `[${hostLabel}] Invalid navigation.onChange callback (plugin=${pluginId})`
+          );
           return () => {};
         }
 
@@ -725,7 +819,11 @@ export function createPluginMountApi({
           try {
             cb(snapshot);
           } catch (error) {
-            console.warn(`[${hostLabel}] navigation.onChange callback failed (plugin=${pluginId})`, error);
+            warnApiIssue(
+              'navigation.on_change.callback_failed',
+              `[${hostLabel}] navigation.onChange callback failed (plugin=${pluginId})`,
+              { errorMessage: readErrorMessage(error) }
+            );
           }
         });
       },
@@ -769,7 +867,10 @@ export function createPluginMountApi({
           return () => {};
         }
         if (typeof cb !== 'function') {
-          console.warn(`[${hostLabel}] Invalid config.onChange callback (plugin=${pluginId})`);
+          warnApiIssue(
+            'config.on_change.invalid_callback',
+            `[${hostLabel}] Invalid config.onChange callback (plugin=${pluginId})`
+          );
           return () => {};
         }
         return subscribePmpmPluginConfig(pluginId, cb);

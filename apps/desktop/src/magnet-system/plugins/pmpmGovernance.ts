@@ -1,5 +1,12 @@
 import { readJson, writeJson } from '../../modules/storage';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
+
+const telemetry = getTelemetryLogger('pmpm', 'pmpmGovernance');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export type PmpmPermissionDeniedAuditEvent = {
   type: 'permission-denied';
@@ -153,7 +160,9 @@ function notifyAuditListeners(): void {
     try {
       listener();
     } catch (error) {
-      console.warn('[pmpm-audit] listener failed', error);
+      telemetry.warn('audit.listener.failed', {
+        message: readErrorMessage(error),
+      });
     }
   }
 }
@@ -213,9 +222,15 @@ export function recordPmpmPermissionDenied(options: {
   capability: string;
   action: string;
 }): void {
-  console.warn(
-    `[pmpm][permission] denied plugin=${options.pluginId} host=${options.hostLabel} capability=${options.capability} action=${options.action}`
-  );
+  telemetry.warn('permission.denied', {
+    message: `[pmpm][permission] denied plugin=${options.pluginId} host=${options.hostLabel} capability=${options.capability} action=${options.action}`,
+    fields: {
+      pluginId: options.pluginId,
+      hostLabel: options.hostLabel,
+      capability: options.capability,
+      action: options.action,
+    },
+  });
   try {
     recordPmpmAuditEvent({
       type: 'permission-denied',

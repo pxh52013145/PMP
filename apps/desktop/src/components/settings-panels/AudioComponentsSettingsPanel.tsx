@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
 import { useAudioEngine } from '../../contexts/AudioEngineContext';
 import { useT } from '../../i18n';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
 import {
   broadcastDataUpdate,
   broadcastSignal,
@@ -10,6 +11,24 @@ import {
 } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { PmpButton, PmpChoiceButton } from '../primitives';
+
+const telemetry = getTelemetryLogger('settings', 'AudioComponentsSettingsPanel');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function invokeAudioComponents<T>(
+  command: string,
+  args: Record<string, unknown> | undefined,
+  event: string
+): Promise<T> {
+  return invokeWithTelemetry<T>(command, args, {
+    moduleId: 'settings',
+    component: 'AudioComponentsSettingsPanel',
+    event,
+  });
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object') return null;
@@ -180,26 +199,47 @@ export function AudioComponentsSettingsPanel() {
     setError(null);
 
     try {
-      const payload = await invoke<unknown>('native_audio_get_audio_components_state');
+      const payload = await invokeAudioComponents<unknown>(
+        'native_audio_get_audio_components_state',
+        undefined,
+        'settings.audio-components.state.read'
+      );
       const parsed = parseNativeAudioComponentsState(payload);
       setComponentsState(parsed);
       setSelectedBackend(parsed.outputBackendId ?? '');
       setSelectedInput(parsed.preferredInputId ?? '');
     } catch (err) {
+      telemetry.warn('settings.audio-components.state.read.failed', {
+        message: getErrorMessage(err),
+      });
       setError(err instanceof Error ? err.message : String(err));
     }
 
     try {
-      const backends = await invoke<string[]>('native_audio_list_output_backends');
+      const backends = await invokeAudioComponents<string[]>(
+        'native_audio_list_output_backends',
+        undefined,
+        'settings.audio-components.output-backends.list'
+      );
       setOutputBackends(backends);
     } catch (err) {
+      telemetry.warn('settings.audio-components.output-backends.list.failed', {
+        message: getErrorMessage(err),
+      });
       setError(err instanceof Error ? err.message : String(err));
     }
 
     try {
-      const inputs = await invoke<string[]>('native_audio_list_audio_inputs');
+      const inputs = await invokeAudioComponents<string[]>(
+        'native_audio_list_audio_inputs',
+        undefined,
+        'settings.audio-components.audio-inputs.list'
+      );
       setAudioInputs(inputs);
     } catch (err) {
+      telemetry.warn('settings.audio-components.audio-inputs.list.failed', {
+        message: getErrorMessage(err),
+      });
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       busyRef.current = false;
@@ -232,7 +272,11 @@ export function AudioComponentsSettingsPanel() {
     setError(null);
 
     try {
-      const payload = await invoke<unknown>('native_audio_select_output_backend', { backendId });
+      const payload = await invokeAudioComponents<unknown>(
+        'native_audio_select_output_backend',
+        { backendId },
+        'settings.audio-components.output-backend.select'
+      );
       const parsed = parseNativeAudioComponentsState(payload);
       const prevBackend = componentsState.outputBackendId;
       setComponentsState(parsed);
@@ -266,7 +310,11 @@ export function AudioComponentsSettingsPanel() {
     setError(null);
 
     try {
-      await invoke('native_audio_select_device', { deviceId: null, deviceName: null });
+      await invokeAudioComponents(
+        'native_audio_select_device',
+        { deviceId: null, deviceName: null },
+        'settings.audio-components.output-device.refresh'
+      );
       await broadcastSignal(TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED);
       await refreshComponents();
     } catch (err) {
@@ -288,7 +336,11 @@ export function AudioComponentsSettingsPanel() {
     setError(null);
 
     try {
-      await invoke('native_audio_open_asio_control_panel', { deviceName });
+      await invokeAudioComponents(
+        'native_audio_open_asio_control_panel',
+        { deviceName },
+        'settings.audio-components.asio-control-panel.open'
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -308,7 +360,11 @@ export function AudioComponentsSettingsPanel() {
     setError(null);
 
     try {
-      const payload = await invoke<unknown>('native_audio_select_audio_input', { inputId });
+      const payload = await invokeAudioComponents<unknown>(
+        'native_audio_select_audio_input',
+        { inputId },
+        'settings.audio-components.audio-input.select'
+      );
       const parsed = parseNativeAudioComponentsState(payload);
       setComponentsState(parsed);
       setSelectedInput(parsed.preferredInputId ?? '');

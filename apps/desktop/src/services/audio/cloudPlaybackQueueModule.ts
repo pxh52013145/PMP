@@ -5,7 +5,14 @@ import {
   DefaultCloudPlaybackQueueService,
 } from './CloudPlaybackQueueService';
 import { upsertNativeLibraryFallbackTask } from '../../modules/music-library';
+import { getTelemetryLogger } from '../telemetry/TelemetryService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+
+const telemetry = getTelemetryLogger('audio', 'cloudPlaybackQueueModule');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function createCloudPlaybackQueueModule(): KernelModule<AppEvents> {
   return {
@@ -37,7 +44,14 @@ export function createCloudPlaybackQueueModule(): KernelModule<AppEvents> {
           reason: payload.request.reason,
           requestedAtMs: payload.request.requestedAtMs,
         }).catch((error) => {
-          console.warn('[cloud-playback-queue] failed to persist fallback task', error);
+          telemetry.warn('cloud_playback_queue.persist_fallback_task.failed', {
+            message: readErrorMessage(error),
+            fields: {
+              ownerUid: payload.request.ownerUid,
+              entryId: payload.request.entryId,
+              trackId: payload.request.trackId ?? null,
+            },
+          });
         });
       });
 

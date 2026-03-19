@@ -89,6 +89,24 @@ export function serializeTrackForPlaylist(track: Track): string | undefined {
   }
 }
 
+function createPlaylistSummarySnapshot(playlist: Playlist | null | undefined): Playlist | null {
+  if (!playlist) return null;
+
+  return {
+    ...playlist,
+    tracks: [],
+    trackCount:
+      typeof playlist.trackCount === 'number' && Number.isFinite(playlist.trackCount)
+        ? Math.max(0, Math.floor(playlist.trackCount))
+        : playlist.tracks.length,
+    totalDuration:
+      typeof playlist.totalDuration === 'number' && Number.isFinite(playlist.totalDuration)
+        ? Math.max(0, playlist.totalDuration)
+        : playlist.tracks.reduce((sum, item) => sum + (item.duration ?? 0), 0),
+    tracksHydrated: false,
+  };
+}
+
 export function toPlaylistItemUpserts(playlist: Playlist): NativeLibraryPlaylistItemUpsertInput[] {
   const items: NativeLibraryPlaylistItemUpsertInput[] = [];
   for (const track of playlist.tracks) {
@@ -144,7 +162,6 @@ export function applyRecentSmartPlaylistSnapshotToState(options: {
 }): { playlists: Playlist[]; currentPlaylist: Playlist | null } {
   const totalDuration = options.tracks.reduce((sum, item) => sum + (item.duration ?? 0), 0);
   let hasRecentPlaylist = false;
-  const shouldMaterializeTracks = options.currentPlaylist?.id === options.recentPlaylistId;
 
   const nextPlaylists = options.playlists.map((playlist) => {
     if (playlist.id !== options.recentPlaylistId) {
@@ -152,7 +169,7 @@ export function applyRecentSmartPlaylistSnapshotToState(options: {
     }
 
     hasRecentPlaylist = true;
-    const materializeTracks = shouldMaterializeTracks || playlist.tracksHydrated !== false;
+    const materializeTracks = playlist.tracksHydrated !== false;
     return {
       ...playlist,
       name: playlist.name || options.recentPlaylistName,
@@ -176,7 +193,7 @@ export function applyRecentSmartPlaylistSnapshotToState(options: {
     nextPlaylists.push({
       id: options.recentPlaylistId,
       name: options.recentPlaylistName,
-      tracks: shouldMaterializeTracks ? options.tracks : [],
+      tracks: [],
       kind: 'smart',
       readonly: true,
       smartRuleJson: JSON.stringify({
@@ -187,13 +204,15 @@ export function applyRecentSmartPlaylistSnapshotToState(options: {
       updatedAt: options.updatedAtMs,
       trackCount: options.tracks.length,
       totalDuration,
-      tracksHydrated: shouldMaterializeTracks,
+      tracksHydrated: false,
     });
   }
 
   const currentPlaylist =
     options.currentPlaylist?.id === options.recentPlaylistId
-      ? (nextPlaylists.find((item) => item.id === options.recentPlaylistId) ?? null)
+      ? createPlaylistSummarySnapshot(
+          nextPlaylists.find((item) => item.id === options.recentPlaylistId) ?? null
+        )
       : options.currentPlaylist;
 
   return {

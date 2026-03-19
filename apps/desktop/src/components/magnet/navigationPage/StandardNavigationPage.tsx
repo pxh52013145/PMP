@@ -9,6 +9,7 @@ import {
 } from '../../../contracts/musicLibrarySource';
 import { useKernel } from '../../../contexts/KernelContext';
 import { useT } from '../../../i18n';
+import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import { NavigationPageVariantProps } from './NavigationPageTypes';
 import { parseNavigationPageSkinProps } from './navigationPageSkin';
 import './NavigationPage.css';
@@ -20,6 +21,7 @@ export const StandardNavigationPage: React.FC<NavigationPageVariantProps> = ({
   const { currentPage } = data;
   const kernel = useKernel();
   const t = useT();
+  const telemetry = useMemo(() => getTelemetryLogger('navigation', 'StandardNavigationPage'), []);
   const skinProps = useMemo(() => parseNavigationPageSkinProps(variantConfig), [variantConfig]);
   const [registryRevision, setRegistryRevision] = useState(0);
   const [showSourcePopup, setShowSourcePopup] = useState(false);
@@ -52,6 +54,16 @@ export const StandardNavigationPage: React.FC<NavigationPageVariantProps> = ({
       setShowSourcePopup(false);
     }
   }, [skinProps.sourceSwitcherMode]);
+
+  useEffect(() => {
+    if (!isMusicLibraryPage || skinProps.sourceSwitcherMode !== 'popup') return;
+    telemetry.info(showSourcePopup ? 'navigation.library-source.popup.opened' : 'navigation.library-source.popup.closed', {
+      fields: {
+        page: currentPage.type,
+        sourceMode: librarySourceMode,
+      },
+    });
+  }, [currentPage.type, isMusicLibraryPage, librarySourceMode, showSourcePopup, skinProps.sourceSwitcherMode, telemetry]);
 
   useEffect(() => {
     const onStatsChange = (event: Event) => {
@@ -99,12 +111,18 @@ export const StandardNavigationPage: React.FC<NavigationPageVariantProps> = ({
   const handleSelectLibrarySource = useCallback((mode: MusicLibrarySourceMode) => {
     setLibrarySourceMode(mode);
     setShowSourcePopup(false);
+    telemetry.info('navigation.library-source.selected', {
+      fields: {
+        page: currentPage.type,
+        mode,
+      },
+    });
     window.dispatchEvent(
       new CustomEvent(MUSIC_LIBRARY_SOURCE_CHANGE_EVENT, {
         detail: { mode },
       })
     );
-  }, []);
+  }, [currentPage.type, telemetry]);
 
   return (
     <div className="navigation-page">

@@ -1,5 +1,6 @@
 import { createServiceToken } from '../../kernel';
 import { readJson, writeJson } from '../../modules/storage';
+import { getTelemetryLogger } from '../telemetry/TelemetryService';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import type {
   CloudPlaybackFallbackDispatchResult,
@@ -7,6 +8,11 @@ import type {
 } from './cloudPlaybackFallbackAdapter';
 
 export const CLOUD_PLAYBACK_QUEUE_AUDIT_MAX_ENTRIES = 120;
+const telemetry = getTelemetryLogger('audio', 'CloudPlaybackQueueService');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export type CloudPlaybackQueueAuditEntry = {
   atMs: number;
@@ -147,8 +153,12 @@ export class DefaultCloudPlaybackQueueService implements CloudPlaybackQueueServi
         debounceMs: 300,
       });
     } catch (error) {
-      console.warn('[cloud-playback-queue] failed to persist audit entries', error);
+      telemetry.warn('cloud_playback_queue.persist_audit.failed', {
+        message: readErrorMessage(error),
+        fields: {
+          entryCount: this.recent.length,
+        },
+      });
     }
   }
 }
-

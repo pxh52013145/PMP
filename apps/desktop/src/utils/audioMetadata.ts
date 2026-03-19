@@ -5,6 +5,13 @@
 
 import { parseBlob, IAudioMetadata } from 'music-metadata';
 import { Track } from '../services/audio';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
+
+const telemetry = getTelemetryLogger('audio', 'audioMetadata');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * 解析音频文件的元数据
@@ -61,7 +68,14 @@ export async function parseAudioMetadata(file: File): Promise<Partial<Track>> {
 
     return track;
   } catch (error) {
-    console.warn('Failed to parse audio metadata:', error);
+    telemetry.warn('audio_metadata.parse_metadata.failed', {
+      message: readErrorMessage(error),
+      fields: {
+        fileName: file.name,
+        fileSize: file.size,
+        mimeType: file.type || null,
+      },
+    });
     // 解析失败时返回空对象，使用默认值
     return {};
   }
@@ -142,7 +156,14 @@ export async function parseAudioFile(file: File): Promise<Track> {
       addedAt: new Date(), // 添加时间
     };
   } catch (error) {
-    console.error('Failed to parse audio file:', error);
+    telemetry.error('audio_metadata.parse_file.failed', {
+      message: readErrorMessage(error),
+      fields: {
+        fileName: file.name,
+        fileSize: file.size,
+        mimeType: file.type || null,
+      },
+    });
     // 如果解析失败，返回基本信息
     const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
     return {

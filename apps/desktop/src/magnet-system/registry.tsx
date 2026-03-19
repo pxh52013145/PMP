@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Magnet } from '../types/pixel';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 
 export type MagnetRendererSource = 'builtin' | 'plugin' | 'runtime';
 
@@ -17,6 +18,7 @@ export interface MagnetRendererDefinition {
 type RendererMap = Map<string, MagnetRendererDefinition>;
 
 const rendererRegistry: RendererMap = new Map();
+const telemetry = getTelemetryLogger('magnets', 'registry');
 
 function normalizePreview(preview?: ReactNode | (() => ReactNode)): ReactNode | undefined {
   if (typeof preview === 'function') {
@@ -40,7 +42,12 @@ export function registerMagnetRenderer(
 
   const exists = rendererRegistry.has(id);
   if (exists && options.overwrite === false) {
-    console.warn(`[MagnetRegistry] Renderer "${id}" already exists, skip registering`);
+    telemetry.warn('magnet_renderer.register.skipped_duplicate', {
+      message: `Renderer "${id}" already exists, skipping registration.`,
+      fields: {
+        rendererId: id,
+      },
+    });
     return;
   }
 

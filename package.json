@@ -22,6 +22,8 @@
     "audio:score:gate:v95": "node scripts/audio-score-gate.mjs --profile v95",
     "audio:score:gate:smoke": "node scripts/audio-score-gate.mjs --with-smoke",
     "audio:score:gate:smoke:strict": "node scripts/audio-score-gate.mjs --require-smoke",
+    "perf:memory:phase0": "powershell -ExecutionPolicy Bypass -File scripts/perf-memory-phase0-suite.ps1 -AutoStartDev",
+    "perf:memory:phase0:quick": "powershell -ExecutionPolicy Bypass -File scripts/perf-memory-phase0-suite.ps1 -AutoStartDev -Quick",
     "perf:snapshot:4rounds": "powershell -ExecutionPolicy Bypass -File scripts/perf-snapshot-4rounds.ps1 -AutoStartDev",
     "perf:snapshot:4rounds:quick": "powershell -ExecutionPolicy Bypass -File scripts/perf-snapshot-4rounds.ps1 -AutoStartDev -Quick",
     "build": "pnpm --filter @pixel-matrix/desktop build",

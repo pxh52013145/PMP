@@ -3,6 +3,7 @@ import type { KernelModule } from '../../kernel';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { AUDIO_ENGINE_SERVICE_TOKEN, type AudioState, type Track } from '../audio';
 import { KEYBINDINGS_SERVICE_TOKEN } from '../keybindings';
+import { getTelemetryLogger } from '../telemetry/TelemetryService';
 
 type MediaSessionActionHandler = Parameters<MediaSession['setActionHandler']>[1];
 
@@ -214,6 +215,7 @@ export function createMediaSessionModule(options: { enabled?: boolean } = {}): K
   return {
     id: 'media-session',
     activate: ({ services, events }) => {
+      const telemetry = getTelemetryLogger('media-session', 'mediaSessionModule');
       const enabled = options.enabled !== false;
       if (!enabled) return () => {};
       if (!isMainWindowHash()) return () => {};
@@ -307,14 +309,20 @@ export function createMediaSessionModule(options: { enabled?: boolean } = {}): K
       };
 
       safeSetActionHandler('play', () => {
-        void ensurePlay().catch((err) => console.warn('[media-session] play failed', err));
+        void ensurePlay().catch((err) =>
+          telemetry.warn('media-session.action.play.failed', {
+            message: err instanceof Error ? err.message : String(err),
+          })
+        );
       });
 
       safeSetActionHandler('pause', () => {
         try {
           ensurePause();
         } catch (err) {
-          console.warn('[media-session] pause failed', err);
+          telemetry.warn('media-session.action.pause.failed', {
+            message: err instanceof Error ? err.message : String(err),
+          });
         }
       });
 
@@ -322,16 +330,26 @@ export function createMediaSessionModule(options: { enabled?: boolean } = {}): K
         try {
           audioService.stop();
         } catch (err) {
-          console.warn('[media-session] stop failed', err);
+          telemetry.warn('media-session.action.stop.failed', {
+            message: err instanceof Error ? err.message : String(err),
+          });
         }
       });
 
       safeSetActionHandler('previoustrack', () => {
-        void audioService.playPrevious().catch((err) => console.warn('[media-session] previous failed', err));
+        void audioService.playPrevious().catch((err) =>
+          telemetry.warn('media-session.action.previous.failed', {
+            message: err instanceof Error ? err.message : String(err),
+          })
+        );
       });
 
       safeSetActionHandler('nexttrack', () => {
-        void audioService.playNext().catch((err) => console.warn('[media-session] next failed', err));
+        void audioService.playNext().catch((err) =>
+          telemetry.warn('media-session.action.next.failed', {
+            message: err instanceof Error ? err.message : String(err),
+          })
+        );
       });
 
       safeSetActionHandler('seekbackward', (details) => {
@@ -339,7 +357,9 @@ export function createMediaSessionModule(options: { enabled?: boolean } = {}): K
         try {
           audioService.rewind(offset);
         } catch (err) {
-          console.warn('[media-session] seekbackward failed', err);
+          telemetry.warn('media-session.action.seekbackward.failed', {
+            message: err instanceof Error ? err.message : String(err),
+          });
         }
       });
 
@@ -348,7 +368,9 @@ export function createMediaSessionModule(options: { enabled?: boolean } = {}): K
         try {
           audioService.fastForward(offset);
         } catch (err) {
-          console.warn('[media-session] seekforward failed', err);
+          telemetry.warn('media-session.action.seekforward.failed', {
+            message: err instanceof Error ? err.message : String(err),
+          });
         }
       });
 
@@ -357,7 +379,9 @@ export function createMediaSessionModule(options: { enabled?: boolean } = {}): K
         try {
           audioService.seek(details.seekTime);
         } catch (err) {
-          console.warn('[media-session] seekto failed', err);
+          telemetry.warn('media-session.action.seekto.failed', {
+            message: err instanceof Error ? err.message : String(err),
+          });
         }
       });
 

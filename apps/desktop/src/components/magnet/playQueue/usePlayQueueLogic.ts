@@ -7,7 +7,14 @@ import { useState } from 'react';
 import { Track } from '../../../services/audio';
 import { parseAudioFile } from '../../../utils/audioMetadata';
 import { useAudioService } from '../../../contexts/AudioEngineContext';
+import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import { open } from '@tauri-apps/api/dialog';
+
+const telemetry = getTelemetryLogger('audio', 'usePlayQueueLogic');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function stableIdFromPath(path: string): string {
   const normalized = path.replace(/\\/g, '/').toLowerCase();
@@ -79,7 +86,13 @@ export function usePlayQueueLogic(): PlayQueueLogic {
 
   const playTrack = (index: number) => {
     void audioService.playTrackAtIndex(index).catch((error) => {
-      console.error('[PlayQueue] Failed to play track:', error);
+      telemetry.error('play_queue.play_track.failed', {
+        message: readErrorMessage(error),
+        fields: {
+          index,
+          queueSize: audioService.getQueue().length,
+        },
+      });
     });
   };
 
@@ -91,11 +104,11 @@ export function usePlayQueueLogic(): PlayQueueLogic {
     audioService.clearQueue();
   };
 
-	  const addFiles = async () => {
-	    try {
-	      const isTauriRuntime =
-	        typeof window !== 'undefined' &&
-	        typeof (window as unknown as { __TAURI__?: unknown }).__TAURI__ !== 'undefined';
+  const addFiles = async () => {
+    try {
+      const isTauriRuntime =
+        typeof window !== 'undefined' &&
+        typeof (window as unknown as { __TAURI__?: unknown }).__TAURI__ !== 'undefined';
 
       if (isTauriRuntime) {
         const selected = await open({
@@ -128,25 +141,33 @@ export function usePlayQueueLogic(): PlayQueueLogic {
 
         if (tracks.length > 0) {
           audioService.addMultipleToQueue(tracks);
+          telemetry.info('play_queue.add_files.completed', {
+            fields: {
+              source: 'tauri-dialog',
+              selectedCount: paths.length,
+              addedCount: tracks.length,
+              queueSize: audioService.getQueue().length,
+            },
+          });
         }
         return;
       }
 
-	      const showOpenFilePicker = (window as unknown as {
-	        showOpenFilePicker?: (options: {
-	          multiple?: boolean;
-	          types?: Array<{
-	            description?: string;
-	            accept?: Record<string, string[]>;
-	          }>;
-	        }) => Promise<Array<{ getFile: () => Promise<File> }>>;
-	      }).showOpenFilePicker;
-	      if (!showOpenFilePicker) return;
+      const showOpenFilePicker = (window as unknown as {
+        showOpenFilePicker?: (options: {
+          multiple?: boolean;
+          types?: Array<{
+            description?: string;
+            accept?: Record<string, string[]>;
+          }>;
+        }) => Promise<Array<{ getFile: () => Promise<File> }>>;
+      }).showOpenFilePicker;
+      if (!showOpenFilePicker) return;
 
-	      const fileHandles = await showOpenFilePicker({
-	        multiple: true,
-	        types: [
-	          {
+      const fileHandles = await showOpenFilePicker({
+        multiple: true,
+        types: [
+          {
             description: 'Audio Files',
             accept: {
               'audio/*': ['.mp3', '.flac', '.wav', '.dsf', '.m4a', '.mp4', '.ogg', '.weba', '.aac'],
@@ -162,15 +183,34 @@ export function usePlayQueueLogic(): PlayQueueLogic {
           const track = await parseAudioFile(file);
           tracks.push(track);
         } catch (error) {
-          console.error(`Failed to parse ${file.name}:`, error);
+          telemetry.warn('play_queue.add_files.parse_failed', {
+            message: readErrorMessage(error),
+            fields: {
+              fileName: file.name,
+              fileSize: file.size,
+            },
+          });
         }
       }
 
       if (tracks.length > 0) {
         audioService.addMultipleToQueue(tracks);
+        telemetry.info('play_queue.add_files.completed', {
+          fields: {
+            source: 'web-picker',
+            selectedCount: fileHandles.length,
+            addedCount: tracks.length,
+            queueSize: audioService.getQueue().length,
+          },
+        });
       }
     } catch (error) {
-      console.error('Failed to add files:', error);
+      telemetry.error('play_queue.add_files.failed', {
+        message: readErrorMessage(error),
+        fields: {
+          queueSize: audioService.getQueue().length,
+        },
+      });
     }
   };
 

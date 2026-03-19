@@ -3,8 +3,15 @@ import type { AppEvents } from '../contracts/events';
 import type { CommandContribution, WindowContribution } from '../contracts/contributions';
 import { NAVIGATION_SERVICE_TOKEN } from '../services/navigation';
 import { AUDIO_ENGINE_SERVICE_TOKEN } from '../services/audio';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { openVstManagerWindow } from '../utils/vstManagerWindows';
 import { subscribeLocale, t } from '../i18n/core';
+
+const telemetry = getTelemetryLogger('commands', 'builtinCommandsModule');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
   return {
@@ -56,7 +63,7 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
           run: async () => {
             const win = contributions.get<WindowContribution>('window', 'keyboard-shortcuts');
             if (!win) {
-              console.warn('[commands] keyboard-shortcuts window not registered');
+              telemetry.warn('command.keyboard_shortcuts_window.not_registered');
               return;
             }
             await win.open();
@@ -235,14 +242,18 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
         try {
           unsubscribeLocale();
         } catch (error) {
-          console.warn('[builtin-commands] locale subscription cleanup failed', error);
+          telemetry.warn('command.locale_subscription.cleanup_failed', {
+            message: readErrorMessage(error),
+          });
         }
 
         for (const unregister of unregisters.values()) {
           try {
             unregister();
           } catch (error) {
-            console.warn('[builtin-commands] unregister failed', error);
+            telemetry.warn('command.unregister.failed', {
+              message: readErrorMessage(error),
+            });
           }
         }
         unregisters.clear();

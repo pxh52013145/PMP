@@ -109,7 +109,9 @@ export const buildAddToPlaylistMenuItem = ({
   const children: ContextMenuItem[] =
     targets.length > 0
       ? targets.map((playlist) => ({
-          label: membershipSet.has(playlist.id) ? `${playlist.name} ✓` : playlist.name,
+          label: membershipSet.has(playlist.id)
+            ? `${playlist.name} (${t('common.state.alreadyAdded')})`
+            : playlist.name,
           icon: playlist.kind === 'platform' ? 'C' : 'M',
           disabled: membershipSet.has(playlist.id),
           onClick: membershipSet.has(playlist.id)

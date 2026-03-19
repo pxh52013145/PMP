@@ -9,6 +9,13 @@ import { calculateWindowPosition, openEditorWindow, type EditorWindowType } from
 import { closeVstManagerWindow, openVstManagerWindow } from '../utils/vstManagerWindows';
 import { subscribeLocale, t } from '../i18n/core';
 import { NAVIGATION_SERVICE_TOKEN } from '../services/navigation';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
+
+const telemetry = getTelemetryLogger('navigation', 'builtinContributionsModule');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 const HomePageLazy = React.lazy(async () => ({ default: (await import('../components/pages/HomePage')).HomePage }));
 const SettingsPageLazy = React.lazy(async () => ({ default: (await import('../components/pages/SettingsPage')).SettingsPage }));
@@ -481,14 +488,18 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
         try {
           unsubscribeLocale();
         } catch (error) {
-          console.warn('[builtin-contributions] locale subscription cleanup failed', error);
+          telemetry.warn('contributions.locale_subscription.cleanup_failed', {
+            message: readErrorMessage(error),
+          });
         }
 
         for (const unregister of unregisters.values()) {
           try {
             unregister();
           } catch (error) {
-            console.warn('[builtin-contributions] unregister failed', error);
+            telemetry.warn('contributions.unregister.failed', {
+              message: readErrorMessage(error),
+            });
           }
         }
         unregisters.clear();

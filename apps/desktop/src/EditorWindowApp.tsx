@@ -63,6 +63,7 @@ import {
 } from './contracts/editorQualitySkin';
 import { QUALITY_SERVICE_TOKEN, type QualityService } from './services/quality';
 import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
+import { getTelemetryLogger } from './services/telemetry/TelemetryService';
 import './index.css';
 import './components/editor/EditorStatistics.css';
 import './components/editor/EditorMagnetLibrary.css';
@@ -71,6 +72,13 @@ import './components/editor/MagnetCreator.css';
 import './components/editor/BackgroundManager.css';
 import './components/editor/CustomBackgroundEditor.css';
 import './components/editor/ThemeEditor.css';
+
+const editorControlTelemetry = getTelemetryLogger('editor', 'EditorControlPanel');
+const editorWindowTelemetry = getTelemetryLogger('editor', 'EditorWindowApp');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 interface EditorControlPanelProps {
   onExitEditMode: () => void;
@@ -114,7 +122,13 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         await window.setAlwaysOnTop(value);
       } catch (error) {
         // Best-effort for auxiliary windows; the current control window state is authoritative.
-        console.warn(`[Editor] Failed to sync always-on-top for ${window.label}:`, error);
+        editorControlTelemetry.warn('editor.window.always-on-top.sync.failed', {
+          message: getErrorMessage(error),
+          fields: {
+            targetWindow: window.label,
+            value,
+          },
+        });
       }
     }
   }, []);
@@ -138,7 +152,13 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         }
       } catch (error) {
         setOpen(isOpen);
-        console.error(`Failed to toggle ${type} window:`, error);
+        editorControlTelemetry.error('editor.window.toggle.failed', {
+          message: getErrorMessage(error),
+          fields: {
+            windowType: type,
+            nextOpen,
+          },
+        });
       } finally {
         toggleInFlightRef.current[type] = false;
       }
@@ -321,7 +341,12 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         try {
           await applyEditorWindowsAlwaysOnTop(preferredPinned);
         } catch (error) {
-          console.warn('[Editor] Failed to apply persisted always-on-top preference:', error);
+          editorControlTelemetry.warn('editor.window.always-on-top.persisted-apply.failed', {
+            message: getErrorMessage(error),
+            fields: {
+              value: preferredPinned,
+            },
+          });
         }
         return;
       }
@@ -406,7 +431,12 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
       writeWindowPinState(newState);
     } catch (error) {
       setIsAlwaysOnTop(previousState);
-      console.error('Failed to toggle always on top:', error);
+      editorControlTelemetry.error('editor.window.always-on-top.toggle.failed', {
+        message: getErrorMessage(error),
+        fields: {
+          value: newState,
+        },
+      });
     }
   };
 
@@ -654,7 +684,9 @@ export function EditorWindowApp() {
           });
           return;
         } catch (error) {
-          console.warn('[EditorWindow] Failed to subscribe to focus events:', error);
+          editorWindowTelemetry.warn('editor.window.focus.subscribe.failed', {
+            message: getErrorMessage(error),
+          });
         }
       }
 
@@ -794,7 +826,9 @@ export function EditorWindowApp() {
         setEditingMagnet(undefined);
       }
     } catch (error) {
-      console.error('Failed to load creator data:', error);
+      editorWindowTelemetry.error('editor.creator-data.load.failed', {
+        message: getErrorMessage(error),
+      });
       setCreatorMode('create');
       setEditingMagnet(undefined);
     }
@@ -975,7 +1009,12 @@ export function EditorWindowApp() {
         const maximizedData = readJson<boolean | null>(STORAGE_KEYS.IS_MAXIMIZED, null);
         if (maximizedData !== null) setIsMaximized(maximizedData);
         } catch (error) {
-          console.error('Failed to load config from main window:', error);
+          editorWindowTelemetry.error('editor.config.load-from-main.failed', {
+            message: getErrorMessage(error),
+            fields: {
+              windowType,
+            },
+          });
         }
     };
 
@@ -1033,7 +1072,9 @@ export function EditorWindowApp() {
       const { closeEditorWindow } = await import('./utils/editorWindows');
       await closeEditorWindow('control');
     } catch (error) {
-      console.error('Failed to exit edit mode:', error);
+      editorWindowTelemetry.error('editor.exit-edit-mode.failed', {
+        message: getErrorMessage(error),
+      });
     }
   };
 
@@ -1052,7 +1093,11 @@ export function EditorWindowApp() {
 
   const handleMagnetDeactivate = async (magnetId: string) => {
     if (REQUIRED_MAGNET_IDS.has(magnetId)) {
-      console.log('EditorWindow: ignore deactivation of required magnet:', magnetId);
+      editorWindowTelemetry.debug('editor.magnet.deactivate.skipped-required', {
+        fields: {
+          magnetId,
+        },
+      });
       return;
     }
     const newActive = new Set(activeMagnetIds);
@@ -1075,7 +1120,13 @@ export function EditorWindowApp() {
           { maxRetries: 2 }
         );
         if (!response?.ok) {
-          console.warn('[editor-window] Failed to deactivate magnet via layout store', response?.error ?? response);
+          editorWindowTelemetry.warn('editor.magnet.deactivate.persist.failed', {
+            message: String(response?.error ?? response),
+            fields: {
+              magnetId,
+              spaceId: activeSpaceId,
+            },
+          });
         }
       }
     } else {
@@ -1099,7 +1150,12 @@ export function EditorWindowApp() {
     if (!isTauri) {
       await broadcastSignal(TAURI_EVENTS.MAGNET_DEACTIVATED);
     }
-    console.log('EditorWindow: Magnet deactivated:', magnetId);
+    editorWindowTelemetry.info('editor.magnet.deactivated', {
+      fields: {
+        magnetId,
+        activeCount: newActive.size,
+      },
+    });
   };
 
   const handleMagnetDeleteFromLibrary = async (magnetId: string) => {
@@ -1125,7 +1181,13 @@ export function EditorWindowApp() {
           { maxRetries: 2 }
         );
         if (!response?.ok) {
-          console.warn('[editor-window] Failed to persist magnet delete via layout store', response?.error ?? response);
+          editorWindowTelemetry.warn('editor.magnet.delete.persist.failed', {
+            message: String(response?.error ?? response),
+            fields: {
+              magnetId,
+              spaceId: activeSpaceId,
+            },
+          });
         }
       }
     } else {
@@ -1145,7 +1207,12 @@ export function EditorWindowApp() {
     if (!isTauri) {
       await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
     }
-    console.log('EditorWindow: Magnet deleted:', magnetId);
+    editorWindowTelemetry.info('editor.magnet.deleted', {
+      fields: {
+        magnetId,
+        librarySize: newLibrary.length,
+      },
+    });
   };
 
   const handleMagnetAddToLibrary = async (magnet: Magnet) => {
@@ -1171,7 +1238,13 @@ export function EditorWindowApp() {
           { maxRetries: 2 }
         );
         if (!response?.ok) {
-          console.warn('[editor-window] Failed to persist magnet add via layout store', response?.error ?? response);
+          editorWindowTelemetry.warn('editor.magnet.add.persist.failed', {
+            message: String(response?.error ?? response),
+            fields: {
+              magnetId: magnet.id,
+              spaceId: activeSpaceId,
+            },
+          });
         }
       }
     } else {
@@ -1191,7 +1264,12 @@ export function EditorWindowApp() {
     if (!isTauri) {
       await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
     }
-    console.log('EditorWindow: Magnet added:', magnet.id);
+    editorWindowTelemetry.info('editor.magnet.added', {
+      fields: {
+        magnetId: magnet.id,
+        librarySize: newLibrary.length,
+      },
+    });
   };
 
   const handleMagnetUpdate = async (magnet: Magnet) => {
@@ -1217,7 +1295,13 @@ export function EditorWindowApp() {
           { maxRetries: 2 }
         );
         if (!response?.ok) {
-          console.warn('[editor-window] Failed to persist magnet update via layout store', response?.error ?? response);
+          editorWindowTelemetry.warn('editor.magnet.update.persist.failed', {
+            message: String(response?.error ?? response),
+            fields: {
+              magnetId: magnet.id,
+              spaceId: activeSpaceId,
+            },
+          });
         }
       }
     } else {
@@ -1237,7 +1321,12 @@ export function EditorWindowApp() {
     if (!isTauri) {
       await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
     }
-    console.log('EditorWindow: Magnet updated:', magnet.id);
+    editorWindowTelemetry.info('editor.magnet.updated', {
+      fields: {
+        magnetId: magnet.id,
+        librarySize: newLibrary.length,
+      },
+    });
   };
 
   const handleApplyRendererBindings = useCallback(
@@ -1300,15 +1389,17 @@ export function EditorWindowApp() {
   };
 
   const handleCustomBackgroundSave = async (config: BackgroundConfig) => {
-    console.log('handleCustomBackgroundSave called with:', config);
-    console.log('isMaximized:', isMaximized);
+    editorWindowTelemetry.debug('editor.background.custom.save.requested', {
+      fields: {
+        isMaximized,
+      },
+    });
 
     // 保存自定义背景到当前模式
     const newSettings = {
       ...backgroundSettings,
       [isMaximized ? 'maximized' : 'windowed']: config,
     };
-    console.log('newSettings:', newSettings);
 
     setBackgroundSettings(newSettings);
 
@@ -1318,7 +1409,11 @@ export function EditorWindowApp() {
       newSettings,
       TAURI_EVENTS.BACKGROUND_UPDATED
     );
-    console.log('Background settings broadcasted');
+    editorWindowTelemetry.info('editor.background.custom.save.completed', {
+      fields: {
+        targetMode: isMaximized ? 'maximized' : 'windowed',
+      },
+    });
 
     // Auto-add to background history (so custom backgrounds are discoverable without extra clicks).
     try {
@@ -1330,13 +1425,15 @@ export function EditorWindowApp() {
       };
       writeJson(STORAGE_KEYS.BACKGROUND_HISTORY, [newItem, ...history].slice(0, 20));
     } catch (error) {
-      console.warn('Failed to auto-add background history item:', error);
+      editorWindowTelemetry.warn('editor.background.history.auto-add.failed', {
+        message: getErrorMessage(error),
+      });
     }
 
     // 关闭自定义背景编辑窗口
     import('./utils/editorWindows').then(({ closeEditorWindow }) => {
       closeEditorWindow('custom-background');
-      console.log('Custom background window closed');
+      editorWindowTelemetry.debug('editor.background.custom.window.close.requested');
     });
   };
 
@@ -1439,7 +1536,9 @@ export function EditorWindowApp() {
                     const { closeEditorWindow } = await import('./utils/editorWindows');
                     await closeEditorWindow('creator');
                   } catch (error) {
-                    console.error('Failed to close creator window:', error);
+                    editorWindowTelemetry.error('editor.creator.window.close.failed', {
+                      message: getErrorMessage(error),
+                    });
                   }
                 }}
               />

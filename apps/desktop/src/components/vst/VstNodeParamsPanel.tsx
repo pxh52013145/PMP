@@ -1,6 +1,10 @@
 import React from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
 import { useT } from '../../i18n';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import {
+  invokeWithTelemetry,
+  type TauriInvokeTelemetryOptions,
+} from '../../services/telemetry/tauriInvokeTelemetry';
 import './VstNodeParamsPanel.css';
 
 type VstParamValue = {
@@ -41,6 +45,26 @@ type Props = {
   pluginId: string;
   params?: VstParamValue[] | null;
 };
+
+const telemetry = getTelemetryLogger('vst', 'VstNodeParamsPanel');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function invokeVstPanel<T>(
+  command: string,
+  args: Record<string, unknown> | undefined,
+  event: string,
+  options: Partial<TauriInvokeTelemetryOptions> = {}
+): Promise<T> {
+  return invokeWithTelemetry<T>(command, args, {
+    moduleId: 'vst',
+    component: 'VstNodeParamsPanel',
+    event,
+    ...options,
+  });
+}
 
 function clamp(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min;
@@ -227,9 +251,17 @@ export function VstNodeParamsPanel({ nodeId, pluginId, params }: Props) {
     setError(null);
     try {
       const [lockedRaw, presetsRaw, paramsRaw] = await Promise.all([
-        invoke<unknown>('native_audio_vst_get_locked_params', { nodeId }),
-        invoke<unknown>('native_audio_vst_list_presets', { pluginId: normalizedPluginId }),
-        invoke<unknown>('native_audio_vst_library_get_plugin_params', { pluginId: normalizedPluginId }),
+        invokeVstPanel<unknown>('native_audio_vst_get_locked_params', { nodeId }, 'vst.params.locked.read'),
+        invokeVstPanel<unknown>(
+          'native_audio_vst_list_presets',
+          { pluginId: normalizedPluginId },
+          'vst.preset.list'
+        ),
+        invokeVstPanel<unknown>(
+          'native_audio_vst_library_get_plugin_params',
+          { pluginId: normalizedPluginId },
+          'vst.plugin.params.read'
+        ),
       ]);
 
       const lockedList = ensureStringArray(lockedRaw);
@@ -242,12 +274,21 @@ export function VstNodeParamsPanel({ nodeId, pluginId, params }: Props) {
         return;
       }
 
-      const describeResp = await invoke<unknown>('native_audio_vst_describe_plugin', {
-        pluginId: normalizedPluginId,
-      });
+      const describeResp = await invokeVstPanel<unknown>(
+        'native_audio_vst_describe_plugin',
+        { pluginId: normalizedPluginId },
+        'vst.plugin.describe'
+      );
       const descriptor = ensurePluginDescriptor(describeResp);
       setDescriptors(descriptor?.parameters ?? []);
     } catch (err) {
+      telemetry.error('vst.params.refresh.failed', {
+        message: getErrorMessage(err),
+        fields: {
+          nodeId,
+          pluginId: normalizedPluginId,
+        },
+      });
       setError(err instanceof Error ? err.message : String(err));
       setDescriptors([]);
     } finally {
@@ -302,7 +343,11 @@ export function VstNodeParamsPanel({ nodeId, pluginId, params }: Props) {
     async (key: string, locked: boolean) => {
       setError(null);
       try {
-        await invoke('native_audio_vst_set_param_locked', { nodeId, key, locked });
+        await invokeVstPanel(
+          'native_audio_vst_set_param_locked',
+          { nodeId, key, locked },
+          'vst.param.lock.set'
+        );
         setLockedKeys((prev) => {
           const next = new Set(prev);
           if (locked) next.add(key);
@@ -310,6 +355,14 @@ export function VstNodeParamsPanel({ nodeId, pluginId, params }: Props) {
           return next;
         });
       } catch (err) {
+        telemetry.error('vst.param.lock.set.failed', {
+          message: getErrorMessage(err),
+          fields: {
+            nodeId,
+            key,
+            locked,
+          },
+        });
         setError(err instanceof Error ? err.message : String(err));
       }
     },
@@ -323,7 +376,20 @@ export function VstNodeParamsPanel({ nodeId, pluginId, params }: Props) {
 
       const timeoutId = window.setTimeout(() => {
         timersRef.current.delete(key);
-        void invoke('native_audio_vst_set_param_value', { nodeId, key, value }).catch(() => {});
+        void invokeVstPanel(
+          'native_audio_vst_set_param_value',
+          { nodeId, key, value },
+          'vst.param.value.set',
+          { successLevel: 'trace' }
+        ).catch((error) => {
+          telemetry.warn('vst.param.value.set.failed', {
+            message: getErrorMessage(error),
+            fields: {
+              nodeId,
+              key,
+            },
+          });
+        });
       }, 90);
       timersRef.current.set(key, timeoutId);
     },
@@ -345,7 +411,11 @@ export function VstNodeParamsPanel({ nodeId, pluginId, params }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const resp = await invoke<unknown>('native_audio_vst_save_preset', { nodeId, name });
+      const resp = await invokeVstPanel<unknown>(
+        'native_audio_vst_save_preset',
+        { nodeId, name },
+        'vst.preset.save'
+      );
       const saved = ensurePresetSummary(resp);
       setPresetName('');
       if (saved) {
@@ -354,6 +424,13 @@ export function VstNodeParamsPanel({ nodeId, pluginId, params }: Props) {
         await refreshAuxState();
       }
     } catch (err) {
+      telemetry.error('vst.preset.save.failed', {
+        message: getErrorMessage(err),
+        fields: {
+          nodeId,
+          pluginId: normalizedPluginId,
+        },
+      });
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
@@ -366,9 +443,20 @@ export function VstNodeParamsPanel({ nodeId, pluginId, params }: Props) {
       setLoading(true);
       setError(null);
       try {
-        await invoke('native_audio_vst_delete_preset', { pluginId: normalizedPluginId, presetId });
+        await invokeVstPanel(
+          'native_audio_vst_delete_preset',
+          { pluginId: normalizedPluginId, presetId },
+          'vst.preset.delete'
+        );
         setPresets((prev) => prev.filter((p) => p.id !== presetId));
       } catch (err) {
+        telemetry.error('vst.preset.delete.failed', {
+          message: getErrorMessage(err),
+          fields: {
+            pluginId: normalizedPluginId,
+            presetId,
+          },
+        });
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setLoading(false);
@@ -382,9 +470,17 @@ export function VstNodeParamsPanel({ nodeId, pluginId, params }: Props) {
       setLoading(true);
       setError(null);
       try {
-        await invoke('native_audio_vst_apply_preset', { nodeId, presetId });
+        await invokeVstPanel(
+          'native_audio_vst_apply_preset',
+          { nodeId, presetId },
+          'vst.preset.apply'
+        );
         try {
-          const graphResp = await invoke<unknown>('native_audio_get_dsp_graph');
+          const graphResp = await invokeVstPanel<unknown>(
+            'native_audio_get_dsp_graph',
+            undefined,
+            'vst.graph.read'
+          );
           const graph = asRecord(graphResp);
           const nodes = Array.isArray(graph?.nodes) ? graph?.nodes : [];
           const match = nodes.find((node) => readStringField(node, 'id') === nodeId);
@@ -395,6 +491,13 @@ export function VstNodeParamsPanel({ nodeId, pluginId, params }: Props) {
         }
         await refreshAuxState();
       } catch (err) {
+        telemetry.error('vst.preset.apply.failed', {
+          message: getErrorMessage(err),
+          fields: {
+            nodeId,
+            presetId,
+          },
+        });
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setLoading(false);

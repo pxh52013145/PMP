@@ -7,9 +7,16 @@ import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
 import { QualityProvider } from './contexts/QualityContext';
+import { getTelemetryLogger } from './services/telemetry/TelemetryService';
 import { TAURI_EVENTS, setupTauriListener } from './utils/windowCommunication';
 import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
 import './VstManagerWindowApp.css';
+
+const telemetry = getTelemetryLogger('windowing', 'VstManagerWindowApp');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function isVstManagerRoute(): boolean {
   const hash = window.location.hash;
@@ -79,7 +86,9 @@ export function VstManagerWindowApp() {
           });
           return;
         } catch (error) {
-          console.warn('[VstManagerWindow] Failed to subscribe to focus events:', error);
+          telemetry.warn('vst_manager_window.focus_subscription.failed', {
+            message: readErrorMessage(error),
+          });
         }
       }
 

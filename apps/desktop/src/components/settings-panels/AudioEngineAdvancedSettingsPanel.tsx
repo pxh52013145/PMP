@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/tauri';
 import {
   type ComponentPropsWithoutRef,
   type CSSProperties,
@@ -10,10 +9,30 @@ import {
 } from 'react';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { useT } from '../../i18n';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
 import { broadcastDataUpdate, readData, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { resolveAudioTuningProfilePayload } from '../../services/audio/audioTuningProfiles';
 import { PmpButton, PmpChoiceButton, PmpSegmented } from '../primitives';
+
+const telemetry = getTelemetryLogger('settings', 'AudioEngineAdvancedSettingsPanel');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function invokeAudioAdvanced<T>(
+  command: string,
+  args: Record<string, unknown> | undefined,
+  event: string
+): Promise<T> {
+  return invokeWithTelemetry<T>(command, args, {
+    moduleId: 'settings',
+    component: 'AudioEngineAdvancedSettingsPanel',
+    event,
+  });
+}
 
 type ReplayGainMode = 'track' | 'album';
 type NativeAudioSrcMode = 'source-native' | 'match-output' | 'target-rate';
@@ -690,10 +709,18 @@ export function AudioEngineAdvancedSettingsPanel() {
     setBusy(true);
     setError(null);
     try {
-      const componentsPayload = await invoke<unknown>('native_audio_get_audio_components_state');
+      const componentsPayload = await invokeAudioAdvanced<unknown>(
+        'native_audio_get_audio_components_state',
+        undefined,
+        'settings.audio-advanced.components-state.read'
+      );
       setOutputBackendId(parseOutputBackendId(componentsPayload));
 
-      const policyPayload = await invoke<unknown>('native_audio_get_engine_policy');
+      const policyPayload = await invokeAudioAdvanced<unknown>(
+        'native_audio_get_engine_policy',
+        undefined,
+        'settings.audio-advanced.engine-policy.read'
+      );
       const parsedPolicy = parseEnginePolicy(policyPayload);
       setEnginePolicy(parsedPolicy);
       setAppliedEnginePolicy(parsedPolicy);
@@ -793,11 +820,14 @@ export function AudioEngineAdvancedSettingsPanel() {
       const base = replayGain.mode === 'album' ? track?.replayGainAlbumGainDb : track?.replayGainTrackGainDb;
       const hasBase = typeof base === 'number' && Number.isFinite(base);
       const effectiveDb = replayGain.enabled && hasBase ? base + replayGain.preampDb : 0;
-      await invoke('native_audio_set_replay_gain', {
+      await invokeAudioAdvanced('native_audio_set_replay_gain', {
         db: clampNumber(effectiveDb, -30, 30),
-      });
+      }, 'settings.audio-advanced.replay-gain.set');
       setAppliedReplayGain(replayGain);
     } catch (err) {
+      telemetry.error('settings.audio-advanced.replay-gain.set.failed', {
+        message: getErrorMessage(err),
+      });
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
@@ -816,19 +846,22 @@ export function AudioEngineAdvancedSettingsPanel() {
         TAURI_EVENTS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS_UPDATED
       );
 
-      await invoke('native_audio_set_dynamic_gain_enabled', {
+      await invokeAudioAdvanced('native_audio_set_dynamic_gain_enabled', {
         enabled: runtimeControl.dynamicGainEnabled,
-      });
+      }, 'settings.audio-advanced.dynamic-gain.set');
 
       const track = audioService.getState().currentTrack;
       const base = replayGain.mode === 'album' ? track?.replayGainAlbumGainDb : track?.replayGainTrackGainDb;
       const hasBase = typeof base === 'number' && Number.isFinite(base);
       const effectiveDb = replayGain.enabled && hasBase ? base + replayGain.preampDb : 0;
-      await invoke('native_audio_set_replay_gain', {
+      await invokeAudioAdvanced('native_audio_set_replay_gain', {
         db: clampNumber(effectiveDb, -30, 30),
-      });
+      }, 'settings.audio-advanced.replay-gain.set');
       setAppliedRuntimeControl(runtimeControl);
     } catch (err) {
+      telemetry.error('settings.audio-advanced.runtime-control.apply.failed', {
+        message: getErrorMessage(err),
+      });
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);

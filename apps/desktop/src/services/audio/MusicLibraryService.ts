@@ -111,11 +111,16 @@ import {
   type MusicSourceFacadeItem,
   type MusicSourceTrackCandidate,
 } from './musicSourceFacade';
-import { createMusicLibraryReadGateway } from './musicLibraryReadGateway';
+import { createMusicLibraryReadGateway, type NativeReadResult } from './musicLibraryReadGateway';
+import { getTelemetryLogger } from '../telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../telemetry/tauriInvokeTelemetry';
 
 // 音乐库数据库版本
 const DB_VERSION = 5;
 const DB_NAME = 'MusicLibrary';
+
+const nativeReadOk = <T,>(value: T): NativeReadResult<T> => ({ status: 'ok', value });
+const nativeReadUnavailable = <T,>(): NativeReadResult<T> => ({ status: 'unavailable' });
 
 const NATIVE_LIST_PROJECTION_FIELD_IDS = new Set<MusicLibraryBaseField>([
   'title',
@@ -328,6 +333,7 @@ export type CoverSizeHint = 'small' | 'medium' | 'large';
 export class MusicLibraryService {
   private static instance: MusicLibraryService;
   private static startupRefreshScheduled: boolean = false;
+  private readonly telemetry = getTelemetryLogger('music-library', 'MusicLibraryService');
   private db: IDBDatabase | null = null;
   private scanProgressListeners: Set<(progress: ScanProgress) => void> = new Set();
   private isScanning: boolean = false;
@@ -369,6 +375,7 @@ export class MusicLibraryService {
   private nativeSchemaEnvelopeCacheExpiresAtMs = 0;
   private nativeSchemaEnvelopeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private nativeSchemaChangeUnlistenPromise: Promise<UnlistenFn | null> | null = null;
+  private lastUnsupportedBaseQuerySignature: string | null = null;
 
   // 缓存 - 减少数据库查询
   private cachedStats: LibraryStats | null = null;
@@ -376,6 +383,7 @@ export class MusicLibraryService {
   private CACHE_TTL = 5000; // 5秒缓存
   private readonly readGateway = createMusicLibraryReadGateway({
     isDesktopRuntime: () => isTauriRuntime(),
+    shouldAllowDesktopWebFallback: () => false,
     tryGetAllTracksFromNativeDb: (limit?: number, offset?: number) =>
       this.tryGetAllTracksFromNativeDb(limit, offset),
     trySearchTracksFromNativeDb: (query: string, limit?: number) =>
@@ -401,7 +409,9 @@ export class MusicLibraryService {
 
   private constructor() {
     void this.initDB().catch((error) => {
-      console.warn('[MusicLibraryService] initDB failed:', error);
+      this.telemetry.warn('music-library.db.init.failed', {
+        message: this.readTelemetryErrorMessage(error),
+      });
     });
     this.coverMaxEdgePx = this.readCoverMaxEdgePxSetting();
     this.setupCoverSettingsListener();
@@ -409,6 +419,77 @@ export class MusicLibraryService {
     this.setupNativeSchemaEnvelopeListener();
     this.scheduleNativeSourceBootstrap();
     this.scheduleStartupRefresh();
+  }
+
+  private readTelemetryErrorMessage(error: unknown): string {
+    if (error instanceof Error) return error.message;
+    if (typeof error === 'string') return error;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+
+  private logTelemetryWarn(
+    event: string,
+    error: unknown,
+    fields?: Record<string, unknown>
+  ): void {
+    this.telemetry.warn(event, {
+      message: this.readTelemetryErrorMessage(error),
+      fields,
+    });
+  }
+
+  private logTelemetryError(
+    event: string,
+    error: unknown,
+    fields?: Record<string, unknown>
+  ): void {
+    this.telemetry.error(event, {
+      message: this.readTelemetryErrorMessage(error),
+      fields,
+    });
+  }
+
+  private buildLocalBaseQueryTelemetryFields(
+    query: LocalBaseTracksQuery,
+    extra?: Record<string, unknown>
+  ): Record<string, unknown> {
+    const filterGroups = Array.isArray(query.baseQuery.filterGroups) ? query.baseQuery.filterGroups : [];
+    return {
+      searchQueryLength: typeof query.searchQuery === 'string' ? query.searchQuery.trim().length : 0,
+      filterGroupCount: filterGroups.length,
+      filterCount: filterGroups.reduce((total, group) => total + (group.filters?.length ?? 0), 0),
+      groupByCount: Array.isArray(query.baseQuery.groupByRules) ? query.baseQuery.groupByRules.length : 0,
+      sortCount: Array.isArray(query.baseQuery.sortRules) ? query.baseQuery.sortRules.length : 0,
+      limit: typeof query.limit === 'number' && Number.isFinite(query.limit) ? Math.floor(query.limit) : null,
+      offset:
+        typeof query.offset === 'number' && Number.isFinite(query.offset) ? Math.floor(query.offset) : 0,
+      includeMissing: query.includeMissing === true,
+      visibleOnly: query.visibleOnly !== false,
+      ...extra,
+    };
+  }
+
+  private logUnsupportedLocalBaseQuery(
+    reason: string,
+    query: LocalBaseTracksQuery,
+    extra?: Record<string, unknown>
+  ): void {
+    const fields = this.buildLocalBaseQueryTelemetryFields(query, {
+      reason,
+      ...extra,
+    });
+    const signature = JSON.stringify(fields);
+    if (this.lastUnsupportedBaseQuerySignature === signature) {
+      return;
+    }
+    this.lastUnsupportedBaseQuerySignature = signature;
+    this.telemetry.info('music-library.base-query.unsupported', {
+      fields,
+    });
   }
 
   private readCoverMaxEdgePxSetting(): number {
@@ -463,7 +544,9 @@ export class MusicLibraryService {
       }
     ).catch((error) => {
       this.nativeSchemaChangeUnlistenPromise = null;
-      console.warn('[MusicLibraryService] failed to subscribe native schema change events:', error);
+      this.telemetry.warn('music-library.schema.listener.failed', {
+        message: this.readTelemetryErrorMessage(error),
+      });
       return null;
     });
   }
@@ -489,10 +572,12 @@ export class MusicLibraryService {
     this.nativeSchemaEnvelopeRefreshTimer = setTimeout(() => {
       this.nativeSchemaEnvelopeRefreshTimer = null;
       void this.refreshNativeSchemaEnvelope().catch((error) => {
-        console.warn(
-          `[MusicLibraryService] failed to refresh native schema envelope after ${reason}:`,
-          error
-        );
+        this.telemetry.warn('music-library.schema.refresh.failed', {
+          message: this.readTelemetryErrorMessage(error),
+          fields: {
+            reason,
+          },
+        });
       });
     }, 120);
   }
@@ -722,7 +807,12 @@ export class MusicLibraryService {
           pathInfo.lastScanned instanceof Date ? pathInfo.lastScanned.getTime() : undefined,
       });
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to sync native source:', sourceId, error);
+      this.telemetry.warn('music-library.source.sync.failed', {
+        message: this.readTelemetryErrorMessage(error),
+        fields: {
+          sourceId,
+        },
+      });
     }
   }
 
@@ -733,7 +823,12 @@ export class MusicLibraryService {
     try {
       await removeNativeLibrarySource(sourceId);
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to remove native source:', sourceId, error);
+      this.telemetry.warn('music-library.source.remove.failed', {
+        message: this.readTelemetryErrorMessage(error),
+        fields: {
+          sourceId,
+        },
+      });
     }
   }
 
@@ -802,7 +897,14 @@ export class MusicLibraryService {
       try {
         await syncNativeLibraryTracks(normalizedSourceId, chunk, missing);
       } catch (error) {
-        console.warn('[MusicLibraryService] failed to sync native tracks:', normalizedSourceId, error);
+        this.telemetry.warn('music-library.source.tracks.sync.failed', {
+          message: this.readTelemetryErrorMessage(error),
+          fields: {
+            sourceId: normalizedSourceId,
+            chunkSize: chunk.length,
+            missingCount: missing.length,
+          },
+        });
         return;
       }
     }
@@ -811,7 +913,13 @@ export class MusicLibraryService {
       try {
         await syncNativeLibraryTracks(normalizedSourceId, [], normalizedMissingIds);
       } catch (error) {
-        console.warn('[MusicLibraryService] failed to sync native missing tracks:', normalizedSourceId, error);
+        this.telemetry.warn('music-library.source.tracks.missing-sync.failed', {
+          message: this.readTelemetryErrorMessage(error),
+          fields: {
+            sourceId: normalizedSourceId,
+            missingCount: normalizedMissingIds.length,
+          },
+        });
       }
     }
   }
@@ -1031,10 +1139,9 @@ export class MusicLibraryService {
       })
       .catch((error) => {
         if (cachedEnvelope) {
-          console.warn(
-            '[MusicLibraryService] failed to refresh native schema envelope, using stale cache:',
-            error
-          );
+          this.telemetry.warn('music-library.schema.refresh.stale-cache', {
+            message: this.readTelemetryErrorMessage(error),
+          });
           this.nativeSchemaEnvelopeCacheExpiresAtMs =
             Date.now() + this.NATIVE_SCHEMA_ENVELOPE_STALE_RETRY_MS;
           return cachedEnvelope;
@@ -1052,7 +1159,9 @@ export class MusicLibraryService {
     try {
       await this.loadAndRegisterNativeSchemaEnvelope();
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to load native schema envelope:', error);
+      this.telemetry.warn('music-library.schema.load.failed', {
+        message: this.readTelemetryErrorMessage(error),
+      });
     }
   }
 
@@ -1188,16 +1297,27 @@ export class MusicLibraryService {
     const nativeFilterGroups: NativeLibraryTrackFilterGroupInput[] = [];
     for (const group of normalizedBaseQuery.filterGroups) {
       if (!canUseNativeBaseFilterGroup(group)) {
+        this.logUnsupportedLocalBaseQuery('filter-group', query, {
+          operator: group.operator,
+        });
         return null;
       }
 
       const mappedFilters: NativeLibraryTrackFilterInput[] = [];
       for (const filter of group.filters) {
         if (!canUseNativeBaseFilter(filter)) {
+          this.logUnsupportedLocalBaseQuery('filter', query, {
+            field: filter.field,
+            operator: filter.operator,
+          });
           return null;
         }
         const mapped = this.toNativeTrackFilterFromBase(filter);
         if (!mapped) {
+          this.logUnsupportedLocalBaseQuery('filter-map', query, {
+            field: filter.field,
+            operator: filter.operator,
+          });
           return null;
         }
         mappedFilters.push(mapped);
@@ -1220,6 +1340,9 @@ export class MusicLibraryService {
       (rule) => !canUseNativeBaseOrderRule(rule)
     );
     if (invalidRule) {
+      this.logUnsupportedLocalBaseQuery('order-rule', query, {
+        field: invalidRule.field,
+      });
       return null;
     }
 
@@ -1261,19 +1384,26 @@ export class MusicLibraryService {
         limit: normalizedLimit,
         offset: normalizedOffset,
       });
+      this.lastUnsupportedBaseQuerySignature = null;
 
       return {
         tracks: result.items.map((item) => this.mapNativeTrackRecordToListTrack(item)),
         total: Math.max(0, Math.floor(result.total)),
       };
     } catch (error) {
-      console.warn('[MusicLibraryService] native base-track query failed:', error);
+      this.telemetry.warn('music-library.base-query.native-page.failed', {
+        message: this.readTelemetryErrorMessage(error),
+        fields: this.buildLocalBaseQueryTelemetryFields(query),
+      });
       return null;
     }
   }
 
-  private async tryGetAllTracksFromNativeDb(limit?: number, offset?: number): Promise<Track[] | null> {
-    if (!isTauriRuntime()) return null;
+  private async tryGetAllTracksFromNativeDb(
+    limit?: number,
+    offset?: number
+  ): Promise<NativeReadResult<Track[]>> {
+    if (!isTauriRuntime()) return nativeReadUnavailable();
 
     const normalizedLimit =
       typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined;
@@ -1289,22 +1419,27 @@ export class MusicLibraryService {
         visibleOnly: true,
       });
 
-      if (nativeTracks.length === 0) {
-        return null;
-      }
-
-      return nativeTracks.map((item) => this.mapNativeTrackRecordToListTrack(item));
+      return nativeReadOk(nativeTracks.map((item) => this.mapNativeTrackRecordToListTrack(item)));
     } catch (error) {
-      console.warn('[MusicLibraryService] native track query failed, fallback to IndexedDB:', error);
-      return null;
+      this.telemetry.warn('music-library.native-read.tracks.failed', {
+        message: this.readTelemetryErrorMessage(error),
+        fields: {
+          limit: normalizedLimit ?? null,
+          offset: normalizedOffset ?? 0,
+        },
+      });
+      return nativeReadUnavailable();
     }
   }
 
-  private async trySearchTracksFromNativeDb(query: string, limit?: number): Promise<Track[] | null> {
-    if (!isTauriRuntime()) return null;
+  private async trySearchTracksFromNativeDb(
+    query: string,
+    limit?: number
+  ): Promise<NativeReadResult<Track[]>> {
+    if (!isTauriRuntime()) return nativeReadUnavailable();
 
     const normalizedQuery = query.trim();
-    if (!normalizedQuery) return null;
+    if (!normalizedQuery) return nativeReadOk([]);
 
     const normalizedLimit =
       typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined;
@@ -1319,14 +1454,16 @@ export class MusicLibraryService {
         searchQuery: normalizedQuery,
       });
 
-      if (nativeTracks.length === 0) {
-        return null;
-      }
-
-      return nativeTracks.map((item) => this.mapNativeTrackRecordToListTrack(item));
+      return nativeReadOk(nativeTracks.map((item) => this.mapNativeTrackRecordToListTrack(item)));
     } catch (error) {
-      console.warn('[MusicLibraryService] native search query failed, fallback to IndexedDB:', error);
-      return null;
+      this.telemetry.warn('music-library.native-read.search.failed', {
+        message: this.readTelemetryErrorMessage(error),
+        fields: {
+          queryLength: normalizedQuery.length,
+          limit: normalizedLimit ?? null,
+        },
+      });
+      return nativeReadUnavailable();
     }
   }
 
@@ -1350,7 +1487,12 @@ export class MusicLibraryService {
 
       return this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(nativeTracks[0]));
     } catch (error) {
-      console.warn('[MusicLibraryService] native track-by-id query failed, fallback to IndexedDB:', error);
+      this.telemetry.warn('music-library.native-read.track-by-id.failed', {
+        message: this.readTelemetryErrorMessage(error),
+        fields: {
+          trackId: normalizedTrackId,
+        },
+      });
       return null;
     }
   }
@@ -1375,18 +1517,20 @@ export class MusicLibraryService {
         this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(item))
       );
     } catch (error) {
-      console.warn(
-        '[MusicLibraryService] native artist track query failed, fallback to IndexedDB:',
-        error
-      );
+      this.telemetry.warn('music-library.native-read.artist.failed', {
+        message: this.readTelemetryErrorMessage(error),
+        fields: {
+          artistLength: normalizedArtist.length,
+        },
+      });
       return null;
     }
   }
 
-  private async tryGetTracksByAlbumFromNativeDb(album: string): Promise<Track[] | null> {
-    if (!isTauriRuntime()) return null;
+  private async tryGetTracksByAlbumFromNativeDb(album: string): Promise<NativeReadResult<Track[]>> {
+    if (!isTauriRuntime()) return nativeReadUnavailable();
     const normalizedAlbum = album.trim();
-    if (!normalizedAlbum) return [];
+    if (!normalizedAlbum) return nativeReadOk([]);
 
     try {
       const nativeTracks = await queryNativeLibraryTracks({
@@ -1395,29 +1539,29 @@ export class MusicLibraryService {
         album: normalizedAlbum,
       });
 
-      if (nativeTracks.length === 0) {
-        return null;
-      }
-
-      return nativeTracks.map((item) =>
-        this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(item))
+      return nativeReadOk(
+        nativeTracks.map((item) =>
+          this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(item))
+        )
       );
     } catch (error) {
-      console.warn(
-        '[MusicLibraryService] native album track query failed, fallback to IndexedDB:',
-        error
-      );
-      return null;
+      this.telemetry.warn('music-library.native-read.album.failed', {
+        message: this.readTelemetryErrorMessage(error),
+        fields: {
+          albumLength: normalizedAlbum.length,
+        },
+      });
+      return nativeReadUnavailable();
     }
   }
 
   private async loadNativeFacetCollection(
     descriptor: MusicLibraryCollectionFacetDescriptor,
     options?: { includeStoredCover?: boolean }
-  ): Promise<string[] | AlbumSummary[] | null> {
-    if (!isTauriRuntime()) return null;
+  ): Promise<NativeReadResult<string[] | AlbumSummary[]>> {
+    if (!isTauriRuntime()) return nativeReadUnavailable();
     if (descriptor.kind === 'album-summaries' && options?.includeStoredCover) {
-      return null;
+      return nativeReadUnavailable();
     }
 
     try {
@@ -1427,36 +1571,47 @@ export class MusicLibraryService {
         includeMissing: false,
         visibleOnly: true,
       });
-      if (!result) return null;
+      if (!result) return nativeReadUnavailable();
 
       if (result.kind === 'album-summaries') {
         const albums = (result.albums ?? [])
           .map((item) => this.toAlbumSummaryFromNativeRecord(item))
           .sort((a, b) => a.album.localeCompare(b.album));
-        return albums.length > 0 ? albums : null;
+        return nativeReadOk(albums);
       }
 
       const values = result.textValues ?? [];
-      return values.length > 0 ? values : null;
+      return nativeReadOk(values);
     } catch (error) {
-      console.warn('[MusicLibraryService] native facet list failed, fallback to IndexedDB:', {
-        descriptor,
-        error,
+      this.telemetry.warn('music-library.native-read.facets.failed', {
+        message: this.readTelemetryErrorMessage(error),
+        fields: {
+          field: descriptor.field,
+          kind: descriptor.kind,
+        },
       });
-      return null;
+      return nativeReadUnavailable();
     }
   }
 
-  private async tryGetAllArtistsFromNativeDb(): Promise<string[] | null> {
+  private async tryGetAllArtistsFromNativeDb(): Promise<NativeReadResult<string[]>> {
     const descriptor = await this.resolveNativeFacetCollectionDescriptor('artists');
-    if (!descriptor) return null;
-    return (await this.loadNativeFacetCollection(descriptor)) as string[] | null;
+    if (!descriptor) return nativeReadUnavailable();
+    const result = await this.loadNativeFacetCollection(descriptor);
+    if (result.status !== 'ok') {
+      return result;
+    }
+    return nativeReadOk(result.value as string[]);
   }
 
-  private async tryGetAllGenresFromNativeDb(): Promise<string[] | null> {
+  private async tryGetAllGenresFromNativeDb(): Promise<NativeReadResult<string[]>> {
     const descriptor = await this.resolveNativeFacetCollectionDescriptor('genres');
-    if (!descriptor) return null;
-    return (await this.loadNativeFacetCollection(descriptor)) as string[] | null;
+    if (!descriptor) return nativeReadUnavailable();
+    const result = await this.loadNativeFacetCollection(descriptor);
+    if (result.status !== 'ok') {
+      return result;
+    }
+    return nativeReadOk(result.value as string[]);
   }
 
   async getBaseFieldFacetValues(
@@ -1477,10 +1632,13 @@ export class MusicLibraryService {
       });
       return result?.kind === 'text-values' ? result.textValues ?? [] : [];
     } catch (error) {
-      console.warn('[MusicLibraryService] base field facet values query failed:', {
-        field,
-        descriptor,
-        error,
+      this.telemetry.warn('music-library.base-query.facets.failed', {
+        message: this.readTelemetryErrorMessage(error),
+        fields: {
+          field,
+          kind: descriptor.kind,
+          limit: options?.limit ?? null,
+        },
       });
       return [];
     }
@@ -1497,12 +1655,18 @@ export class MusicLibraryService {
 
   private async tryGetAllAlbumsFromNativeDb(
     includeStoredCover: boolean
-  ): Promise<AlbumSummary[] | null> {
+  ): Promise<NativeReadResult<AlbumSummary[]>> {
     const descriptor = await this.resolveNativeFacetCollectionDescriptor('albums');
-    if (!descriptor) return null;
-    return (await this.loadNativeFacetCollection(descriptor, {
+    if (!descriptor) return nativeReadUnavailable();
+
+    const result = await this.loadNativeFacetCollection(descriptor, {
       includeStoredCover,
-    })) as AlbumSummary[] | null;
+    });
+    if (result.status !== 'ok') {
+      return result;
+    }
+
+    return nativeReadOk(result.value as AlbumSummary[]);
   }
 
   private toLibraryStatsFromNativeRecord(record: NativeLibraryStatsRecord): LibraryStats {
@@ -1515,23 +1679,22 @@ export class MusicLibraryService {
     };
   }
 
-  private async tryGetLibraryStatsFromNativeDb(): Promise<LibraryStats | null> {
-    if (!isTauriRuntime()) return null;
+  private async tryGetLibraryStatsFromNativeDb(): Promise<NativeReadResult<LibraryStats>> {
+    if (!isTauriRuntime()) return nativeReadUnavailable();
     try {
       const stats = await getNativeLibraryStats({
         includeMissing: false,
         visibleOnly: true,
       });
-      if (!stats) return null;
+      if (!stats) return nativeReadUnavailable();
 
       const normalized = this.toLibraryStatsFromNativeRecord(stats);
-      if (normalized.totalTracks === 0) {
-        return null;
-      }
-      return normalized;
+      return nativeReadOk(normalized);
     } catch (error) {
-      console.warn('[MusicLibraryService] native library stats failed, fallback to IndexedDB:', error);
-      return null;
+      this.telemetry.warn('music-library.native-read.stats.failed', {
+        message: this.readTelemetryErrorMessage(error),
+      });
+      return nativeReadUnavailable();
     }
   }
 
@@ -1542,7 +1705,9 @@ export class MusicLibraryService {
 
     window.setTimeout(() => {
       void this.syncNativeSourcesFromIndexedDb().catch((error) => {
-        console.warn('[MusicLibraryService] native source bootstrap failed:', error);
+        this.telemetry.warn('music-library.source.bootstrap.failed', {
+          message: this.readTelemetryErrorMessage(error),
+        });
       });
     }, 0);
   }
@@ -1646,8 +1811,14 @@ export class MusicLibraryService {
     }
 
     if (updatedPath) {
+      const updatedPathId = updatedPath.id;
       await this.upsertLibraryPathInIndexedDb(updatedPath).catch((error) => {
-        console.warn('[MusicLibraryService] failed to upsert scan snapshot into IndexedDB:', error);
+        this.telemetry.warn('music-library.path.scan-snapshot.persist.failed', {
+          message: this.readTelemetryErrorMessage(error),
+          fields: {
+            pathId: updatedPathId,
+          },
+        });
       });
       await this.tryUpsertNativeLibrarySource(updatedPath);
     }
@@ -1705,7 +1876,9 @@ export class MusicLibraryService {
         .map((source) => this.mergeNativeLibraryPath(source, storedById, storedByNormalizedPath))
         .sort((left, right) => left.addedAt.getTime() - right.addedAt.getTime());
     } catch (error) {
-      console.warn('[MusicLibraryService] native source list failed, fallback to IndexedDB:', error);
+      this.telemetry.warn('music-library.source.list.failed', {
+        message: this.readTelemetryErrorMessage(error),
+      });
       return null;
     }
   }
@@ -1788,6 +1961,79 @@ export class MusicLibraryService {
     return undefined;
   }
 
+  private isAssetLocalhostHttpUrl(raw: string | null | undefined): boolean {
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    if (!value) return false;
+
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return false;
+      }
+      return parsed.hostname.toLowerCase() === 'asset.localhost';
+    } catch {
+      return false;
+    }
+  }
+
+  private isManagedCoverCachePath(path: string | null | undefined): boolean {
+    const normalized = typeof path === 'string' ? path.trim().toLowerCase() : '';
+    if (!normalized) return false;
+    return normalized.includes('music-covers');
+  }
+
+  private isSessionOnlyCoverUrl(raw: string | null | undefined): boolean {
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    if (!value) return false;
+
+    const lower = value.toLowerCase();
+    return (
+      lower.startsWith('data:') ||
+      lower.startsWith('blob:') ||
+      lower.startsWith('asset:') ||
+      lower.startsWith('tauri:') ||
+      lower.startsWith('pmp://cover/') ||
+      lower.startsWith('pmp://localhost/cover/') ||
+      this.isAssetLocalhostHttpUrl(value) ||
+      lower.includes('music-covers')
+    );
+  }
+
+  private shouldUseBlobCoverUrlForRuntime(coverPath: string): boolean {
+    if (!this.isManagedCoverCachePath(coverPath)) return false;
+    if (typeof window === 'undefined') return false;
+    const protocol = String(window.location?.protocol || '').toLowerCase();
+    return protocol === 'http:' || protocol === 'https:';
+  }
+
+  private async buildBlobCoverUrlForRuntime(
+    coverPath: string,
+    mediaType?: string | null
+  ): Promise<string | undefined> {
+    try {
+      const fsApi = await import('@tauri-apps/api/fs');
+      if (typeof fsApi.readBinaryFile !== 'function') {
+        return undefined;
+      }
+
+      const bytes = await fsApi.readBinaryFile(coverPath);
+      if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+        return undefined;
+      }
+
+      const copied = Uint8Array.from(bytes);
+
+      const blob = new Blob([copied.buffer], {
+        type: typeof mediaType === 'string' && mediaType.trim().length > 0
+          ? mediaType.trim()
+          : 'image/jpeg',
+      });
+      return URL.createObjectURL(blob);
+    } catch {
+      return undefined;
+    }
+  }
+
   private sanitizeStoredCoverUrlForPath(raw: unknown, trackPath: unknown): string | undefined {
     const coverUrl = this.sanitizeCoverUrl(raw);
     if (!coverUrl) return undefined;
@@ -1799,7 +2045,7 @@ export class MusicLibraryService {
       isTauriRuntime() &&
       typeof trackPath === 'string' &&
       this.isLikelyAbsolutePath(trackPath) &&
-      (coverUrl.startsWith('data:') || coverUrl.startsWith('blob:'))
+      this.isSessionOnlyCoverUrl(coverUrl)
     ) {
       return undefined;
     }
@@ -1844,11 +2090,17 @@ export class MusicLibraryService {
   private async buildResolvedCoverUrlForRuntime(
     coverPath: string,
     coverKey: string,
-    coverSizeHint?: CoverSizeHint
+    coverSizeHint?: CoverSizeHint,
+    mediaType?: string | null
   ): Promise<string | undefined> {
     if (this.shouldUsePmpCoverProtocol()) {
       const pmpUrl = this.buildPmpCoverUrlForHint(coverKey, coverSizeHint);
       if (pmpUrl) return pmpUrl;
+    }
+
+    if (this.shouldUseBlobCoverUrlForRuntime(coverPath)) {
+      const blobUrl = await this.buildBlobCoverUrlForRuntime(coverPath, mediaType);
+      if (blobUrl) return blobUrl;
     }
 
     try {
@@ -2008,7 +2260,9 @@ export class MusicLibraryService {
 
     window.setTimeout(() => {
       void this.refreshLibraryOnStartup().catch((error) => {
-        console.error('[MusicLibrary] Startup refresh failed:', error);
+        this.telemetry.error('music-library.startup-refresh.failed', {
+          message: this.readTelemetryErrorMessage(error),
+        });
       });
     }, 2500);
   }
@@ -2069,12 +2323,9 @@ export class MusicLibraryService {
     coverKey: string
   ): Promise<void> {
     const coverUrlString = String(coverUrl || '');
-    const isSessionOnlyUrl =
-      coverUrlString.startsWith('blob:') ||
-      coverUrlString.startsWith('asset:') ||
-      coverUrlString.startsWith('tauri:');
+    const isSessionOnlyUrl = this.isSessionOnlyCoverUrl(coverUrlString);
 
-    // Blob/asset/tauri URLs are session-only; never persist them into IndexedDB.
+    // Session-local cover URLs must not be persisted into IndexedDB.
     if (isSessionOnlyUrl) {
       const db = await this.ensureDB();
       await new Promise<void>((resolve, reject) => {
@@ -2091,12 +2342,7 @@ export class MusicLibraryService {
           const existing = request.result;
           if (existing) {
             const prevCoverUrl = String(existing.coverUrl || '');
-            const lower = prevCoverUrl.toLowerCase();
-            const shouldDropLegacyCoverUrl =
-              lower.startsWith('data:') ||
-              lower.startsWith('blob:') ||
-              lower.startsWith('asset:') ||
-              lower.startsWith('tauri:');
+            const shouldDropLegacyCoverUrl = this.isSessionOnlyCoverUrl(prevCoverUrl);
 
             const next = { ...existing, coverKey } as Record<string, unknown>;
             if (shouldDropLegacyCoverUrl && 'coverUrl' in next) {
@@ -2296,12 +2542,18 @@ export class MusicLibraryService {
       transaction.onerror = () => reject(transaction.error);
     });
 
-    const { invoke } = await import('@tauri-apps/api/tauri');
     for (const key of keysToDelete) {
       try {
-        await invoke('music_library_remove_cover', { key });
+        await invokeWithTelemetry('music_library_remove_cover', { key }, {
+          moduleId: 'music-library',
+          component: 'MusicLibraryService',
+          event: 'music-library.cover.remove',
+        });
       } catch (error) {
-        console.warn('[MusicLibrary] Failed to delete cached cover file:', error);
+        this.telemetry.warn('music-library.cover.remove.failed', {
+          message: this.readTelemetryErrorMessage(error),
+          fields: { key },
+        });
       }
     }
   }
@@ -2401,7 +2653,12 @@ export class MusicLibraryService {
 
     const cached = this.coverUrlCache.get(effectiveCacheKey);
     if (cached) {
-      if (this.isPmpCoverUrl(cached) && !allowPmpCoverUrl) {
+      const canReuseSessionOnlyCachedUrl =
+        cached.startsWith('blob:') || (this.isPmpCoverUrl(cached) && allowPmpCoverUrl);
+      if (
+        (this.isPmpCoverUrl(cached) && !allowPmpCoverUrl) ||
+        (this.isSessionOnlyCoverUrl(cached) && !canReuseSessionOnlyCachedUrl)
+      ) {
         this.coverUrlCache.delete(effectiveCacheKey);
       } else {
         if (track.coverKey) {
@@ -2427,9 +2684,7 @@ export class MusicLibraryService {
     markCoverLookupMiss();
 
     const promise = (async () => {
-      const { invoke } = await import('@tauri-apps/api/tauri');
-
-      const result = await invoke<
+      const result = await invokeWithTelemetry<
         | {
             key: string;
             path: string;
@@ -2441,6 +2696,10 @@ export class MusicLibraryService {
         path: audioPath,
         maxBytes: this.COVER_MAX_IMAGE_BYTES,
         maxEdgePx: requestedEdgePx > 0 ? requestedEdgePx : undefined,
+      }, {
+        moduleId: 'music-library',
+        component: 'MusicLibraryService',
+        event: 'music-library.cover.resolve',
       });
 
       if (!result) return undefined;
@@ -2451,7 +2710,8 @@ export class MusicLibraryService {
       const resolvedUrl = await this.buildResolvedCoverUrlForRuntime(
         coverPath,
         String(result.key || ''),
-        coverSizeHint
+        coverSizeHint,
+        typeof result.mediaType === 'string' ? result.mediaType : null
       );
       if (!resolvedUrl) return undefined;
       if (coverRuntimeEpoch !== this.coverRuntimeEpoch) return undefined;
@@ -2481,7 +2741,15 @@ export class MusicLibraryService {
       return url;
     })()
       .catch((error) => {
-        console.warn('[MusicLibrary] Failed to get cover:', error);
+        this.telemetry.warn('music-library.cover.resolve.failed', {
+          message: this.readTelemetryErrorMessage(error),
+          fields: {
+            audioPath,
+            requestedEdgePx,
+            allowAlbumFallback,
+            bypassRuntimePolicy,
+          },
+        });
         return undefined;
       })
       .finally(() => {
@@ -2494,6 +2762,7 @@ export class MusicLibraryService {
 
     const fallbackExistingUrl =
       normalizedExistingUrl && (!this.isPmpCoverUrl(normalizedExistingUrl) || allowPmpCoverUrl)
+      && !this.isSessionOnlyCoverUrl(normalizedExistingUrl)
         ? normalizedExistingUrl
         : undefined;
 
@@ -2545,7 +2814,14 @@ export class MusicLibraryService {
       return undefined;
     })()
       .catch((error) => {
-        console.warn('[MusicLibrary] Failed to resolve album cover fallback:', error);
+        this.telemetry.warn('music-library.cover.album-fallback.failed', {
+          message: this.readTelemetryErrorMessage(error),
+          fields: {
+            album: track.album ?? null,
+            artist: track.artist ?? null,
+            requestedEdgePx,
+          },
+        });
         return undefined;
       })
       .finally(() => {
@@ -2920,7 +3196,12 @@ export class MusicLibraryService {
     const existingPaths = await this.getLibraryPaths();
     const exists = existingPaths.some((p) => p.path === folderHandle.name);
     if (exists) {
-      console.log(`Path already exists: ${folderHandle.name}`);
+      this.telemetry.info('music-library.path.add.skipped-existing', {
+        fields: {
+          path: folderHandle.name,
+          source: 'file-system-handle',
+        },
+      });
       return existingPaths.find((p) => p.path === folderHandle.name)!;
     }
 
@@ -2947,11 +3228,21 @@ export class MusicLibraryService {
 
     await new Promise<void>((resolve, reject) => {
       transaction.oncomplete = () => {
-        console.log(`Successfully added library path: ${folderHandle.name}`);
+        this.telemetry.info('music-library.path.add.completed', {
+          fields: {
+            pathId,
+            path: folderHandle.name,
+            source: 'file-system-handle',
+          },
+        });
         resolve();
       };
       transaction.onerror = () => {
-        console.error('Failed to add library path:', transaction.error);
+        this.logTelemetryError('music-library.path.add.failed', transaction.error, {
+          pathId,
+          path: folderHandle.name,
+          source: 'file-system-handle',
+        });
         reject(transaction.error);
       };
     });
@@ -2997,7 +3288,9 @@ export class MusicLibraryService {
       const rows = await listNativeLibrarySourceHealth({ sourceId: normalizedPathId });
       return rows.map((item) => this.mapNativeSourceHealthRecord(item));
     } catch (error) {
-      console.warn('[MusicLibraryService] native source health query failed:', error);
+      this.logTelemetryWarn('music-library.source-health.read.failed', error, {
+        sourceId: normalizedPathId ?? null,
+      });
       return null;
     }
   }
@@ -3019,7 +3312,10 @@ export class MusicLibraryService {
       }
       return deleted;
     } catch (error) {
-      console.warn('[MusicLibraryService] native source cleanup failed:', normalizedPathId, error);
+      this.logTelemetryWarn('music-library.source.cleanup.failed', error, {
+        sourceId: normalizedPathId,
+        missingOnly: options?.missingOnly !== false,
+      });
       return 0;
     }
   }
@@ -3115,7 +3411,11 @@ export class MusicLibraryService {
     this.clearCache();
     if (updatedPath) {
       await this.upsertLibraryPathInIndexedDb(updatedPath).catch((error) => {
-        console.warn('[MusicLibraryService] failed to upsert path visibility in IndexedDB:', error);
+        this.logTelemetryWarn('music-library.path.visibility.persist.failed', error, {
+          pathId,
+          isVisible,
+          path: updatedPath?.path ?? null,
+        });
       });
       await this.tryUpsertNativeLibrarySource(updatedPath);
     }
@@ -3165,7 +3465,11 @@ export class MusicLibraryService {
 
     if (updatedPath) {
       await this.upsertLibraryPathInIndexedDb(updatedPath).catch((error) => {
-        console.warn('[MusicLibraryService] failed to upsert path scanning in IndexedDB:', error);
+        this.logTelemetryWarn('music-library.path.scanning.persist.failed', error, {
+          pathId,
+          isScanned,
+          path: updatedPath?.path ?? null,
+        });
       });
       await this.tryUpsertNativeLibrarySource(updatedPath);
     }
@@ -3178,13 +3482,19 @@ export class MusicLibraryService {
     if (!normalizedPath) return false;
 
     try {
-      const { invoke } = await import('@tauri-apps/api/tauri');
-      await invoke('music_library_open_in_file_manager', {
+      await invokeWithTelemetry('music_library_open_in_file_manager', {
         path: normalizedPath,
+      }, {
+        moduleId: 'music-library',
+        component: 'MusicLibraryService',
+        event: 'music-library.path.open-in-file-manager',
       });
       return true;
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to open in file manager:', normalizedPath, error);
+      this.telemetry.warn('music-library.path.open-in-file-manager.failed', {
+        message: this.readTelemetryErrorMessage(error),
+        fields: { path: normalizedPath },
+      });
       return false;
     }
   }
@@ -3192,11 +3502,21 @@ export class MusicLibraryService {
   // 扫描所有库路径
   async scanAllLibraryPaths(): Promise<void> {
     const paths = (await this.getLibraryPaths()).filter((path) => path.isScanned);
-    console.log(`Found ${paths.length} library paths to scan`);
+    this.telemetry.info('music-library.scan.all.start', {
+      fields: {
+        pathCount: paths.length,
+      },
+    });
     const tauriRuntime = isTauriRuntime();
 
     for (const pathInfo of paths) {
-      console.log(`Scanning library path: ${pathInfo.path}`);
+      this.telemetry.info('music-library.scan.path.start', {
+        fields: {
+          pathId: pathInfo.id,
+          path: pathInfo.path,
+          tauriRuntime,
+        },
+      });
       try {
         if (tauriRuntime) {
           await this.scanFolder(pathInfo.path, pathInfo.id);
@@ -3208,7 +3528,12 @@ export class MusicLibraryService {
           showDirectoryPicker?: (options: { mode: 'read' | 'readwrite'; id?: string }) => Promise<FileSystemDirectoryHandle>;
         }).showDirectoryPicker;
         if (showDirectoryPicker) {
-          console.log(`请授权访问文件夹: ${pathInfo.path}`);
+          this.telemetry.info('music-library.scan.path.permission.prompt', {
+            fields: {
+              pathId: pathInfo.id,
+              path: pathInfo.path,
+            },
+          });
           // 注意：每次都需要用户重新授权
           const folderHandle = await showDirectoryPicker({
             mode: 'read',
@@ -3222,9 +3547,17 @@ export class MusicLibraryService {
             ? (error as { name: string }).name
             : undefined;
         if (name === 'AbortError') {
-          console.log(`User cancelled scanning for path: ${pathInfo.path}`);
+          this.telemetry.info('music-library.scan.path.cancelled', {
+            fields: {
+              pathId: pathInfo.id,
+              path: pathInfo.path,
+            },
+          });
         } else {
-          console.error(`Failed to scan path ${pathInfo.path}:`, error);
+          this.logTelemetryError('music-library.scan.path.failed', error, {
+            pathId: pathInfo.id,
+            path: pathInfo.path,
+          });
         }
       }
     }
@@ -3254,7 +3587,11 @@ export class MusicLibraryService {
           folderHandle = await showDirectoryPicker({ mode: 'read' });
           useFileSystemAPI = true;
           shouldAddPath = true;
-          console.log('Using File System Access API (fast)');
+          this.telemetry.info('music-library.scan.folder-selection.mode', {
+            fields: {
+              mode: 'file-system-access-api',
+            },
+          });
         } else {
           // 降级到 Tauri dialog
           const selected = await open({
@@ -3264,13 +3601,21 @@ export class MusicLibraryService {
           });
 
           if (!selected || Array.isArray(selected)) {
-            console.log('User cancelled folder selection');
+            this.telemetry.info('music-library.scan.folder-selection.cancelled', {
+              fields: {
+                mode: 'tauri-dialog',
+              },
+            });
             return;
           }
 
           folderPath = selected;
           shouldAddPath = true;
-          console.log('Using Tauri dialog (fallback)');
+          this.telemetry.info('music-library.scan.folder-selection.mode', {
+            fields: {
+              mode: 'tauri-dialog',
+            },
+          });
         }
       } catch (error: unknown) {
         const name =
@@ -3278,10 +3623,16 @@ export class MusicLibraryService {
             ? (error as { name: string }).name
             : undefined;
         if (name === 'AbortError') {
-          console.log('User cancelled folder selection');
+          this.telemetry.info('music-library.scan.folder-selection.cancelled', {
+            fields: {
+              mode: tauriRuntime ? 'tauri-dialog' : 'file-system-access-api',
+            },
+          });
           return;
         }
-        console.error('Error during folder selection:', error);
+        this.logTelemetryError('music-library.scan.folder-selection.failed', error, {
+          mode: tauriRuntime ? 'tauri-dialog' : 'file-system-access-api',
+        });
         throw error;
       }
     } else if (typeof folderPathOrHandle === 'string') {
@@ -3298,7 +3649,13 @@ export class MusicLibraryService {
       return;
     }
 
-    console.log('Starting to scan folder...');
+    this.telemetry.info('music-library.scan.frontend.start', {
+      fields: {
+        source: useFileSystemAPI ? 'file-system-access-api' : 'path',
+        folderPath: folderPath ?? null,
+        pathId: pathId ?? null,
+      },
+    });
 
     // 收集所有音频文件
     const audioFiles: Array<{
@@ -3319,9 +3676,20 @@ export class MusicLibraryService {
         throw new Error('No folder source available');
       }
 
-      console.log(`Successfully collected ${audioFiles.length} audio files`);
+      this.telemetry.info('music-library.scan.frontend.collected', {
+        fields: {
+          fileCount: audioFiles.length,
+          source: useFileSystemAPI ? 'file-system-access-api' : 'path',
+          folderPath: folderPath ?? null,
+          pathId: pathId ?? null,
+        },
+      });
     } catch (error) {
-      console.error('Error collecting audio files:', error);
+      this.logTelemetryError('music-library.scan.frontend.collect.failed', error, {
+        source: useFileSystemAPI ? 'file-system-access-api' : 'path',
+        folderPath: folderPath ?? null,
+        pathId: pathId ?? null,
+      });
       this.notifyScanProgress({
         total: 0,
         current: 0,
@@ -3340,7 +3708,13 @@ export class MusicLibraryService {
     });
 
     if (total === 0) {
-      console.log('No audio files found in selected folder');
+      this.telemetry.info('music-library.scan.frontend.empty', {
+        fields: {
+          source: useFileSystemAPI ? 'file-system-access-api' : 'path',
+          folderPath: folderPath ?? null,
+          pathId: pathId ?? null,
+        },
+      });
       this.notifyScanProgress({
         total: 0,
         current: 0,
@@ -3349,7 +3723,14 @@ export class MusicLibraryService {
       return;
     }
 
-    console.log(`Found ${total} audio files, starting scan...`);
+    this.telemetry.info('music-library.scan.frontend.processing', {
+      fields: {
+        total,
+        source: useFileSystemAPI ? 'file-system-access-api' : 'path',
+        folderPath: folderPath ?? null,
+        pathId: pathId ?? null,
+      },
+    });
 
     await this.ensureDB();
     const startTime = Date.now();
@@ -3416,7 +3797,11 @@ export class MusicLibraryService {
               addedAt: track.addedAt ? track.addedAt.getTime() : Date.now(),
             };
           } catch (error) {
-            console.error(`Failed to process file ${audioFile.name}:`, error);
+            this.logTelemetryWarn('music-library.scan.frontend.track-process.failed', error, {
+              fileName: audioFile.name,
+              filePath: audioFile.path,
+              batchIndex: absoluteIndex,
+            });
             return null;
           }
         })
@@ -3431,7 +3816,15 @@ export class MusicLibraryService {
       current = i + batch.length;
     }
 
-    console.log(`Scan completed: ${current} files processed`);
+    this.telemetry.info('music-library.scan.frontend.completed', {
+      fields: {
+        processedCount: current,
+        total,
+        source: useFileSystemAPI ? 'file-system-access-api' : 'path',
+        folderPath: folderPath ?? null,
+        pathId: pathId ?? null,
+      },
+    });
 
     // 清除缓存以便重新计算统计信息
     this.clearCache();
@@ -3443,16 +3836,32 @@ export class MusicLibraryService {
           // File System Access API 场景
           const newPath = await this.addLibraryPath(folderHandle);
           pathId = newPath.id;
-          console.log(`Added library path: ${folderHandle.name}, ID: ${pathId}`);
+          this.telemetry.info('music-library.scan.path-linked', {
+            fields: {
+              pathId,
+              path: folderHandle.name,
+              source: 'file-system-handle',
+            },
+          });
         } else if (folderPath) {
           // Tauri dialog 场景
           const folderName = folderPath.split(/[/\\]/).pop() || folderPath;
           const newPath = await this.addLibraryPathByString(folderPath, folderName);
           pathId = newPath.id;
-          console.log(`Added library path: ${folderPath}, ID: ${pathId}`);
+          this.telemetry.info('music-library.scan.path-linked', {
+            fields: {
+              pathId,
+              path: folderPath,
+              source: 'path',
+            },
+          });
         }
       } catch (error) {
-        console.error('Failed to add library path:', error);
+        this.logTelemetryError('music-library.scan.path-link.failed', error, {
+          source: folderHandle ? 'file-system-handle' : 'path',
+          folderPath: folderPath ?? null,
+          pathId: pathId ?? null,
+        });
       }
     }
 
@@ -3461,7 +3870,10 @@ export class MusicLibraryService {
       try {
         await this.updateLibraryPathScanSnapshot(pathId, current);
       } catch (error) {
-        console.error('Failed to update library path:', error);
+        this.logTelemetryError('music-library.scan.path-snapshot-update.failed', error, {
+          pathId,
+          processedCount: current,
+        });
       }
     }
 
@@ -3475,10 +3887,16 @@ export class MusicLibraryService {
   async cancelCurrentScan(): Promise<void> {
     if (!isTauriRuntime()) return;
     try {
-      const { invoke } = await import('@tauri-apps/api/tauri');
-      await invoke('music_library_cancel_scan');
+      this.telemetry.info('music-library.scan.cancel.requested');
+      await invokeWithTelemetry('music_library_cancel_scan', undefined, {
+        moduleId: 'music-library',
+        component: 'MusicLibraryService',
+        event: 'music-library.scan.cancel',
+      });
     } catch (error) {
-      console.error('[MusicLibrary] Failed to cancel scan:', error);
+      this.telemetry.error('music-library.scan.cancel.failed', {
+        message: this.readTelemetryErrorMessage(error),
+      });
     } finally {
       this.notifyScanProgress({ total: 0, current: 0, isScanning: false });
     }
@@ -3507,7 +3925,6 @@ export class MusicLibraryService {
       });
     }
 
-    const { invoke } = await import('@tauri-apps/api/tauri');
     const { listen } = await import('@tauri-apps/api/event');
 
     // Ensure the folder is registered so tracks can be associated to a stable libraryPathId.
@@ -3517,7 +3934,9 @@ export class MusicLibraryService {
         const newPath = await this.addLibraryPathByString(folderPath, folderName);
         pathId = newPath.id;
       } catch (error) {
-        console.error('Failed to add library path before scanning:', error);
+        this.logTelemetryError('music-library.scan.path-ensure.failed', error, {
+          folderPath,
+        });
       }
     }
 
@@ -3548,7 +3967,7 @@ export class MusicLibraryService {
 
     try {
       // ML.2 Stage A: fast enumerate only (mtime/size) without metadata probing.
-      const quick = await invoke<
+      const quick = await invokeWithTelemetry<
         Array<{
           path: string;
           fileName?: string;
@@ -3562,6 +3981,10 @@ export class MusicLibraryService {
       >('music_library_scan', {
         paths: [folderPath],
         options: { includeMetadata: false },
+      }, {
+        moduleId: 'music-library',
+        component: 'MusicLibraryService',
+        event: 'music-library.scan.backend.quick',
       });
 
       await this.ensureDB();
@@ -3700,7 +4123,7 @@ export class MusicLibraryService {
 
       // ML.2 Stage B: only probe metadata for added/modified/unscanned items.
       if (needMetadataPaths.length > 0) {
-        const scannedMeta = await invoke<
+        const scannedMeta = await invokeWithTelemetry<
           Array<{
             path: string;
             fileName?: string;
@@ -3724,6 +4147,10 @@ export class MusicLibraryService {
         >('music_library_scan', {
           paths: needMetadataPaths,
           options: { includeMetadata: true },
+        }, {
+          moduleId: 'music-library',
+          component: 'MusicLibraryService',
+          event: 'music-library.scan.backend.metadata',
         });
 
         const metaByPath = new Map<string, (typeof scannedMeta)[number]>();
@@ -3794,7 +4221,10 @@ export class MusicLibraryService {
         try {
           await this.updateLibraryPathScanSnapshot(pathId, quick.length);
         } catch (error) {
-          console.error('Failed to update library path metadata:', error);
+          this.logTelemetryError('music-library.scan.path-metadata-update.failed', error, {
+            pathId,
+            trackCount: quick.length,
+          });
         }
       }
     } catch (error: unknown) {
@@ -3897,10 +4327,10 @@ export class MusicLibraryService {
           return this.normalizePathForCompare(trackPath).startsWith(folderPrefix);
         });
     } catch (error) {
-      console.warn(
-        '[MusicLibraryService] native backend-scan source query failed, fallback to IndexedDB:',
-        error
-      );
+      this.logTelemetryWarn('music-library.scan.backend.existing-query.failed', error, {
+        folderPath,
+        sourceId: normalizedPathId,
+      });
       return null;
     }
   }
@@ -3973,7 +4403,10 @@ export class MusicLibraryService {
           });
         }
       } catch (error) {
-        console.error('Failed to store track:', error);
+        this.logTelemetryWarn('music-library.track.store.failed', error, {
+          trackId: trackToStore?.id ?? null,
+          path: trackToStore?.path ?? trackToStore?.filePath ?? null,
+        });
       }
     }
 
@@ -4024,7 +4457,10 @@ export class MusicLibraryService {
         }
       }
     } catch (error) {
-      console.error(`Error scanning directory:`, error);
+      this.logTelemetryError('music-library.scan.directory.failed', error, {
+        dirPath: currentPath,
+        source: 'file-system-access-api',
+      });
       throw error;
     }
   }
@@ -4042,7 +4478,13 @@ export class MusicLibraryService {
   ): Promise<void> {
     const supportedFormats = ['.mp3', '.flac', '.wav', '.dsf', '.m4a', '.mp4', '.ogg', '.weba', '.aac'];
 
-    console.log(`Scanning directory: ${dirPath}`);
+    this.telemetry.debug('music-library.scan.directory.start', {
+      fields: {
+        dirPath,
+        relativePath,
+        source: 'tauri-fs',
+      },
+    });
 
     try {
       const entries = await readDir(dirPath, { recursive: false });
@@ -4065,7 +4507,11 @@ export class MusicLibraryService {
         }
       }
     } catch (error) {
-      console.error(`Error scanning directory ${dirPath}:`, error);
+      this.logTelemetryError('music-library.scan.directory.failed', error, {
+        dirPath,
+        relativePath,
+        source: 'tauri-fs',
+      });
       throw error;
     }
   }
@@ -4079,7 +4525,12 @@ export class MusicLibraryService {
     const existingPaths = await this.getLibraryPaths();
     const exists = existingPaths.some((p) => p.path === path);
     if (exists) {
-      console.log(`Path already exists: ${path}`);
+      this.telemetry.info('music-library.path.add.skipped-existing', {
+        fields: {
+          path,
+          source: 'path',
+        },
+      });
       return existingPaths.find((p) => p.path === path)!;
     }
 
@@ -4104,11 +4555,21 @@ export class MusicLibraryService {
 
     await new Promise<void>((resolve, reject) => {
       transaction.oncomplete = () => {
-        console.log(`Successfully added library path: ${path}`);
+        this.telemetry.info('music-library.path.add.completed', {
+          fields: {
+            pathId,
+            path,
+            source: 'path',
+          },
+        });
         resolve();
       };
       transaction.onerror = () => {
-        console.error('Failed to add library path:', transaction.error);
+        this.logTelemetryError('music-library.path.add.failed', transaction.error, {
+          pathId,
+          path,
+          source: 'path',
+        });
         reject(transaction.error);
       };
     });
@@ -4268,7 +4729,9 @@ export class MusicLibraryService {
           lower.startsWith('data:') ||
           lower.startsWith('blob:') ||
           lower.startsWith('asset:') ||
-          lower.startsWith('tauri:')
+          lower.startsWith('tauri:') ||
+          this.isAssetLocalhostHttpUrl(rawCoverUrl) ||
+          lower.includes('music-covers')
         ) {
           this.scheduleLegacyCoverUrlDrop(storedTrack.id);
         }
@@ -4337,25 +4800,40 @@ export class MusicLibraryService {
 
       return false;
     } catch (error) {
-      console.error('[MusicLibrary] Failed to request permission:', error);
+      this.logTelemetryError('music-library.path.permission.request.failed', error);
       return false;
     }
   }
   // 检查文件是否存在
   async checkTrackAvailability(track: Track): Promise<boolean> {
     if (!track.filePath) {
-      console.warn(`[MusicLibrary] Track ${track.title} has no filePath`);
+      this.telemetry.warn('music-library.track.availability.missing-path', {
+        fields: {
+          trackId: track.id,
+          trackTitle: track.title ?? null,
+        },
+      });
       return false;
     }
 
     try {
       const fileExists = await exists(track.filePath);
       if (!fileExists) {
-        console.warn(`[MusicLibrary] File not found for track ${track.title}: ${track.filePath}`);
+        this.telemetry.warn('music-library.track.availability.not-found', {
+          fields: {
+            trackId: track.id,
+            trackTitle: track.title ?? null,
+            filePath: track.filePath,
+          },
+        });
       }
       return fileExists;
     } catch (error) {
-      console.error(`[MusicLibrary] Error checking file existence for ${track.title}:`, error);
+      this.logTelemetryError('music-library.track.availability.check.failed', error, {
+        trackId: track.id,
+        trackTitle: track.title ?? null,
+        filePath: track.filePath,
+      });
       return false;
     }
   }
@@ -4419,7 +4897,10 @@ export class MusicLibraryService {
       try {
         nativeUpdated = await markNativeLibraryTrackPlayed(normalizedTrackId, { playedAtMs });
       } catch (error) {
-        console.warn('[MusicLibraryService] failed to mark native track playback:', normalizedTrackId, error);
+        this.logTelemetryWarn('music-library.track.played.native.failed', error, {
+          trackId: normalizedTrackId,
+          playedAtMs,
+        });
       }
     }
 
@@ -4428,11 +4909,10 @@ export class MusicLibraryService {
       return nativeUpdated || indexedUpdated;
     } catch (error) {
       if (!nativeUpdated) {
-        console.warn(
-          '[MusicLibraryService] failed to mark indexeddb track playback:',
-          normalizedTrackId,
-          error
-        );
+        this.logTelemetryWarn('music-library.track.played.indexeddb.failed', error, {
+          trackId: normalizedTrackId,
+          playedAtMs,
+        });
       }
       return nativeUpdated;
     }
@@ -4476,7 +4956,10 @@ export class MusicLibraryService {
             : undefined,
       });
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to upsert cloud library entry:', error);
+      this.logTelemetryWarn('music-library.cloud.entry.upsert.failed', error, {
+        entryId,
+        ownerUid,
+      });
       return null;
     }
   }
@@ -4485,17 +4968,20 @@ export class MusicLibraryService {
     query?: CloudLibraryEntryQuery
   ): Promise<NativeLibraryUserEntryRecord[]> {
     if (!isTauriRuntime()) return [];
+    const ownerUid = typeof query?.ownerUid === 'string' ? query.ownerUid.trim() : undefined;
+    const limit =
+      typeof query?.limit === 'number' && Number.isFinite(query.limit)
+        ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
+        : undefined;
+    const offset =
+      typeof query?.offset === 'number' && Number.isFinite(query.offset)
+        ? Math.max(0, Math.floor(query.offset))
+        : undefined;
     try {
       const payload: NativeLibraryUserEntryQuery = {
-        ownerUid: typeof query?.ownerUid === 'string' ? query.ownerUid.trim() : undefined,
-        limit:
-          typeof query?.limit === 'number' && Number.isFinite(query.limit)
-            ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
-            : undefined,
-        offset:
-          typeof query?.offset === 'number' && Number.isFinite(query.offset)
-            ? Math.max(0, Math.floor(query.offset))
-            : undefined,
+        ownerUid,
+        limit,
+        offset,
         inCloudOnly: query?.inCloudOnly === true,
         includeMissing: query?.includeMissing !== false,
         searchQuery:
@@ -4505,7 +4991,11 @@ export class MusicLibraryService {
       };
       return await listNativeLibraryUserEntries(payload);
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to list cloud library entries:', error);
+      this.logTelemetryWarn('music-library.cloud.entry.list.failed', error, {
+        ownerUid: ownerUid ?? null,
+        limit: limit ?? null,
+        offset: offset ?? 0,
+      });
       return [];
     }
   }
@@ -4518,7 +5008,9 @@ export class MusicLibraryService {
     try {
       return await deleteNativeLibraryUserEntry(normalizedEntryId);
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to delete cloud library entry:', error);
+      this.logTelemetryWarn('music-library.cloud.entry.delete.failed', error, {
+        entryId: normalizedEntryId,
+      });
       return false;
     }
   }
@@ -4539,7 +5031,10 @@ export class MusicLibraryService {
     try {
       return await markNativeLibraryUserEntryPlayed(normalizedEntryId, { playedAtMs });
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to mark cloud entry played:', error);
+      this.logTelemetryWarn('music-library.cloud.entry.played.failed', error, {
+        entryId: normalizedEntryId,
+        playedAtMs,
+      });
       return false;
     }
   }
@@ -4568,7 +5063,10 @@ export class MusicLibraryService {
             : Date.now(),
       });
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to queue cloud fallback task:', error);
+      this.logTelemetryWarn('music-library.cloud.fallback-task.upsert.failed', error, {
+        entryId,
+        ownerUid,
+      });
       return null;
     }
   }
@@ -4577,22 +5075,31 @@ export class MusicLibraryService {
     query?: CloudFallbackTaskQuery
   ): Promise<NativeLibraryFallbackTaskRecord[]> {
     if (!isTauriRuntime()) return [];
+    const ownerUid = typeof query?.ownerUid === 'string' ? query.ownerUid.trim() : undefined;
+    const taskStatus = typeof query?.status === 'string' ? query.status.trim() : undefined;
+    const limit =
+      typeof query?.limit === 'number' && Number.isFinite(query.limit)
+        ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
+        : undefined;
+    const offset =
+      typeof query?.offset === 'number' && Number.isFinite(query.offset)
+        ? Math.max(0, Math.floor(query.offset))
+        : undefined;
     try {
       const payload: NativeLibraryFallbackTaskQuery = {
-        ownerUid: typeof query?.ownerUid === 'string' ? query.ownerUid.trim() : undefined,
-        status: typeof query?.status === 'string' ? query.status.trim() : undefined,
-        limit:
-          typeof query?.limit === 'number' && Number.isFinite(query.limit)
-            ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
-            : undefined,
-        offset:
-          typeof query?.offset === 'number' && Number.isFinite(query.offset)
-            ? Math.max(0, Math.floor(query.offset))
-            : undefined,
+        ownerUid,
+        status: taskStatus,
+        limit,
+        offset,
       };
       return await listNativeLibraryFallbackTasks(payload);
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to list cloud fallback tasks:', error);
+      this.logTelemetryWarn('music-library.cloud.fallback-task.list.failed', error, {
+        ownerUid: ownerUid ?? null,
+        status: taskStatus ?? null,
+        limit: limit ?? null,
+        offset: offset ?? 0,
+      });
       return [];
     }
   }
@@ -4611,7 +5118,10 @@ export class MusicLibraryService {
         lastError: typeof options?.lastError === 'string' ? options.lastError.trim() : undefined,
       });
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to update cloud fallback task status:', error);
+      this.logTelemetryWarn('music-library.cloud.fallback-task.status-update.failed', error, {
+        taskId: normalizedTaskId,
+        status,
+      });
       return false;
     }
   }
@@ -4642,29 +5152,41 @@ export class MusicLibraryService {
             : undefined,
       });
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to upsert cloud hash job:', error);
+      this.logTelemetryWarn('music-library.cloud.hash-job.upsert.failed', error, {
+        entryId,
+        ownerUid,
+      });
       return null;
     }
   }
 
   async listCloudHashJobs(query?: CloudHashJobQuery): Promise<NativeLibraryCloudHashJobRecord[]> {
     if (!isTauriRuntime()) return [];
+    const ownerUid = typeof query?.ownerUid === 'string' ? query.ownerUid.trim() : undefined;
+    const jobStatus = typeof query?.status === 'string' ? query.status.trim() : undefined;
+    const limit =
+      typeof query?.limit === 'number' && Number.isFinite(query.limit)
+        ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
+        : undefined;
+    const offset =
+      typeof query?.offset === 'number' && Number.isFinite(query.offset)
+        ? Math.max(0, Math.floor(query.offset))
+        : undefined;
     try {
       const payload: NativeLibraryCloudHashJobQuery = {
-        ownerUid: typeof query?.ownerUid === 'string' ? query.ownerUid.trim() : undefined,
-        status: typeof query?.status === 'string' ? query.status.trim() : undefined,
-        limit:
-          typeof query?.limit === 'number' && Number.isFinite(query.limit)
-            ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
-            : undefined,
-        offset:
-          typeof query?.offset === 'number' && Number.isFinite(query.offset)
-            ? Math.max(0, Math.floor(query.offset))
-            : undefined,
+        ownerUid,
+        status: jobStatus,
+        limit,
+        offset,
       };
       return await listNativeLibraryCloudHashJobs(payload);
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to list cloud hash jobs:', error);
+      this.logTelemetryWarn('music-library.cloud.hash-job.list.failed', error, {
+        ownerUid: ownerUid ?? null,
+        status: jobStatus ?? null,
+        limit: limit ?? null,
+        offset: offset ?? 0,
+      });
       return [];
     }
   }
@@ -4685,7 +5207,10 @@ export class MusicLibraryService {
         lastError: typeof options?.lastError === 'string' ? options.lastError.trim() : undefined,
       });
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to update cloud hash job status:', error);
+      this.logTelemetryWarn('music-library.cloud.hash-job.status-update.failed', error, {
+        jobId: normalizedJobId,
+        status,
+      });
       return false;
     }
   }
@@ -4695,7 +5220,7 @@ export class MusicLibraryService {
     try {
       return await getNativeLibrarySyncStatus();
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to get sync orchestrator status:', error);
+      this.logTelemetryWarn('music-library.sync.status.read.failed', error);
       return null;
     }
   }
@@ -4708,7 +5233,9 @@ export class MusicLibraryService {
     try {
       return await runNativeLibrarySyncTick(normalizedReason);
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to run sync orchestrator tick:', error);
+      this.logTelemetryWarn('music-library.sync.tick.failed', error, {
+        reason: normalizedReason ?? null,
+      });
       return null;
     }
   }
@@ -4718,7 +5245,7 @@ export class MusicLibraryService {
     try {
       return await getNativeLibrarySyncSchedulerStatus();
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to get sync scheduler status:', error);
+      this.logTelemetryWarn('music-library.sync.scheduler-status.read.failed', error);
       return null;
     }
   }
@@ -4734,7 +5261,9 @@ export class MusicLibraryService {
     try {
       return await startNativeLibrarySyncScheduler({ intervalMs: normalizedIntervalMs });
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to start sync scheduler:', error);
+      this.logTelemetryWarn('music-library.sync.scheduler.start.failed', error, {
+        intervalMs: normalizedIntervalMs ?? null,
+      });
       return null;
     }
   }
@@ -4744,7 +5273,7 @@ export class MusicLibraryService {
     try {
       return await stopNativeLibrarySyncScheduler();
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to stop sync scheduler:', error);
+      this.logTelemetryWarn('music-library.sync.scheduler.stop.failed', error);
       return null;
     }
   }
@@ -4760,7 +5289,9 @@ export class MusicLibraryService {
     try {
       return await getNativeLibrarySyncFailureOverview({ limit: normalizedLimit });
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to get sync failure overview:', error);
+      this.logTelemetryWarn('music-library.sync.failure-overview.read.failed', error, {
+        limit: normalizedLimit ?? null,
+      });
       return null;
     }
   }
@@ -4788,7 +5319,10 @@ export class MusicLibraryService {
         reason: normalizedReason,
       });
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to retry sync failed sources:', error);
+      this.logTelemetryWarn('music-library.sync.failed-sources.retry.failed', error, {
+        sourceCount: normalizedSourceIds?.length ?? 0,
+        reason: normalizedReason ?? null,
+      });
       return null;
     }
   }
@@ -4810,7 +5344,9 @@ export class MusicLibraryService {
         sourceIds: normalizedSourceIds,
       });
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to clear sync failed sources:', error);
+      this.logTelemetryWarn('music-library.sync.failed-sources.clear.failed', error, {
+        sourceCount: normalizedSourceIds?.length ?? 0,
+      });
       return null;
     }
   }
@@ -4820,7 +5356,7 @@ export class MusicLibraryService {
     try {
       return await listMusicSourceFacadeItems();
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to list unified music sources:', error);
+      this.logTelemetryWarn('music-library.unified-sources.list.failed', error);
       return [];
     }
   }
@@ -4834,7 +5370,11 @@ export class MusicLibraryService {
     try {
       return await searchMusicSourceTracks(options);
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to search unified tracks:', error);
+      this.logTelemetryWarn('music-library.unified-tracks.search.failed', error, {
+        queryLength: options.query.trim().length,
+        limit: options.limit ?? null,
+        sourceCount: options.sourceIds?.length ?? 0,
+      });
       return [];
     }
   }
@@ -4844,7 +5384,7 @@ export class MusicLibraryService {
     try {
       return await getNativeBilibiliAuthStatus();
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to get Bilibili auth status:', error);
+      this.logTelemetryWarn('music-library.bilibili.auth-status.read.failed', error);
       return null;
     }
   }
@@ -4854,7 +5394,7 @@ export class MusicLibraryService {
     try {
       return await generateNativeBilibiliQrCodeSession();
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to generate Bilibili QR session:', error);
+      this.logTelemetryWarn('music-library.bilibili.qr-session.generate.failed', error);
       return null;
     }
   }
@@ -4866,7 +5406,9 @@ export class MusicLibraryService {
     try {
       return await pollNativeBilibiliQrCodeSession(normalizedSessionId);
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to poll Bilibili QR session:', error);
+      this.logTelemetryWarn('music-library.bilibili.qr-session.poll.failed', error, {
+        sessionId: normalizedSessionId,
+      });
       return null;
     }
   }
@@ -4876,7 +5418,7 @@ export class MusicLibraryService {
     try {
       return await logoutNativeBilibili();
     } catch (error) {
-      console.warn('[MusicLibraryService] failed to logout Bilibili:', error);
+      this.logTelemetryWarn('music-library.bilibili.logout.failed', error);
       return null;
     }
   }
@@ -4950,7 +5492,14 @@ export class MusicLibraryService {
           }
         }
       } catch (error) {
-        console.warn('[MusicLibraryService] local playback resolve from native db failed:', error);
+        this.telemetry.warn('music-library.playback.resolve.native.failed', {
+          message: this.readTelemetryErrorMessage(error),
+          fields: {
+            trackId: normalizedTrackId,
+            quickFingerprint: normalizedQuickFingerprint,
+            filePath: normalizedFilePath,
+          },
+        });
       }
     }
 
@@ -5042,7 +5591,15 @@ export class MusicLibraryService {
     try {
       fallbackDispatch = await getCloudPlaybackFallbackAdapter().dispatch(networkFallback);
     } catch (error) {
-      console.warn('[MusicLibraryService] cloud fallback dispatch bridge failed:', error);
+      this.telemetry.warn('music-library.cloud-fallback.dispatch.failed', {
+        message: this.readTelemetryErrorMessage(error),
+        fields: {
+          entryId,
+          ownerUid,
+          trackId: networkFallback.trackId ?? null,
+          quickFingerprint: networkFallback.quickFingerprint ?? null,
+        },
+      });
     }
 
     return {
@@ -5115,8 +5672,8 @@ export class MusicLibraryService {
   // 获取所有艺术家
   async getAllArtists(): Promise<string[]> {
     const nativeArtists = await this.tryGetAllArtistsFromNativeDb();
-    if (nativeArtists) {
-      return nativeArtists;
+    if (nativeArtists.status === 'ok') {
+      return nativeArtists.value;
     }
 
     const db = await this.ensureDB();
@@ -5157,8 +5714,8 @@ export class MusicLibraryService {
   // 获取所有流派
   async getAllGenres(): Promise<string[]> {
     const nativeGenres = await this.tryGetAllGenresFromNativeDb();
-    if (nativeGenres) {
-      return nativeGenres;
+    if (nativeGenres.status === 'ok') {
+      return nativeGenres.value;
     }
 
     const db = await this.ensureDB();
@@ -5216,7 +5773,7 @@ export class MusicLibraryService {
       try {
         await clearNativeLibraryTracks();
       } catch (error) {
-        console.warn('[MusicLibraryService] failed to clear native tracks, fallback to IndexedDB:', error);
+        this.logTelemetryWarn('music-library.tracks.clear.native.failed', error);
       }
     }
 
@@ -5238,11 +5795,9 @@ export class MusicLibraryService {
       try {
         await deleteNativeLibraryTracks([normalizedId]);
       } catch (error) {
-        console.warn(
-          '[MusicLibraryService] failed to delete native track, fallback to IndexedDB:',
-          normalizedId,
-          error
-        );
+        this.logTelemetryWarn('music-library.track.delete.native.failed', error, {
+          trackId: normalizedId,
+        });
       }
     }
 
@@ -5266,10 +5821,9 @@ export class MusicLibraryService {
       try {
         await deleteNativeLibraryTracks(normalizedIds);
       } catch (error) {
-        console.warn(
-          '[MusicLibraryService] failed to delete native tracks, fallback to IndexedDB:',
-          error
-        );
+        this.logTelemetryWarn('music-library.track.delete-many.native.failed', error, {
+          trackCount: normalizedIds.length,
+        });
       }
     }
 

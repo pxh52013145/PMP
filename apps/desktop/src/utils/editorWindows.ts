@@ -1,6 +1,10 @@
 ﻿import { invoke } from '@tauri-apps/api/tauri';
 import { isTauriRuntime } from './tauriRuntime';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../services/telemetry/tauriInvokeTelemetry';
 import { readWindowPinState } from './windowPinState';
+
+void invoke;
 
 export type EditorWindowType =
   | 'control'
@@ -31,6 +35,7 @@ const windowPositionCache = new Map<
   { x: number; y: number; width: number; height: number; timestamp: number }
 >();
 const CACHE_DURATION = 5000; // 5 秒缓存
+const telemetry = getTelemetryLogger('windowing', 'editorWindows');
 
 /**
  * 打开编辑器窗口
@@ -41,16 +46,39 @@ export async function openEditorWindow(config: EditorWindowConfig): Promise<void
   }
   try {
     const alwaysOnTop = readWindowPinState();
-    await invoke('open_editor_window', {
+    telemetry.info('window.editor.open.requested', {
+      fields: {
+        windowType: config.type,
+        width: config.width,
+        height: config.height,
+        alwaysOnTop,
+      },
+    });
+    await invokeWithTelemetry('open_editor_window', {
       windowType: config.type,
       x: config.x,
       y: config.y,
       width: config.width,
       height: config.height,
       alwaysOnTop,
+    }, {
+      moduleId: 'windowing',
+      component: 'editorWindows',
+      event: 'window.editor.open',
+      successLevel: 'info',
+    });
+    telemetry.info('window.editor.open.completed', {
+      fields: {
+        windowType: config.type,
+      },
     });
   } catch (error) {
-    console.error(`Failed to open editor window (${config.type}):`, error);
+    telemetry.error('window.editor.open.failed', {
+      message: error instanceof Error ? error.message : String(error),
+      fields: {
+        windowType: config.type,
+      },
+    });
     throw error;
   }
 }
@@ -82,6 +110,11 @@ export async function closeEditorWindow(type: EditorWindowType): Promise<void> {
   try {
     // 先关闭所有子窗口
     if (!isTauriRuntime()) return;
+    telemetry.info('window.editor.close.requested', {
+      fields: {
+        windowType: type,
+      },
+    });
 
     const childWindows = WINDOW_HIERARCHY[type] || [];
     for (const childType of childWindows) {
@@ -89,13 +122,28 @@ export async function closeEditorWindow(type: EditorWindowType): Promise<void> {
     }
 
     // 再关闭自己
-    await invoke('close_editor_window', {
+    await invokeWithTelemetry('close_editor_window', {
       windowType: type,
+    }, {
+      moduleId: 'windowing',
+      component: 'editorWindows',
+      event: 'window.editor.close',
+      successLevel: 'info',
     });
     // 清除该窗口的位置缓存，下次打开时重新计算
     windowPositionCache.delete(type);
+    telemetry.info('window.editor.close.completed', {
+      fields: {
+        windowType: type,
+      },
+    });
   } catch (error) {
-    console.error(`Failed to close editor window (${type}):`, error);
+    telemetry.error('window.editor.close.failed', {
+      message: error instanceof Error ? error.message : String(error),
+      fields: {
+        windowType: type,
+      },
+    });
     throw error;
   }
 }
@@ -106,11 +154,20 @@ export async function closeEditorWindow(type: EditorWindowType): Promise<void> {
 export async function closeAllEditorWindows(): Promise<void> {
   try {
     if (!isTauriRuntime()) return;
-    await invoke('close_all_editor_windows');
+    telemetry.info('window.editor.close-all.requested');
+    await invokeWithTelemetry('close_all_editor_windows', undefined, {
+      moduleId: 'windowing',
+      component: 'editorWindows',
+      event: 'window.editor.close-all',
+      successLevel: 'info',
+    });
     // 清除所有窗口的位置缓存
     windowPositionCache.clear();
+    telemetry.info('window.editor.close-all.completed');
   } catch (error) {
-    console.error('Failed to close all editor windows:', error);
+    telemetry.error('window.editor.close-all.failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
     throw error;
   }
 }
@@ -162,7 +219,9 @@ export async function getMainWindowBounds(): Promise<{
       scaleFactor,
     };
   } catch (error) {
-    console.error('Failed to get main window bounds:', error);
+    telemetry.warn('window.main.bounds.resolve.failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
     // Best-effort fallback for web/dev mode.
     return {
       x: 100,
@@ -228,7 +287,13 @@ async function getVisibleEditorWindowRects(
     );
 
     return rects.filter(Boolean) as WindowRect[];
-  } catch {
+  } catch (error) {
+    telemetry.warn('window.editor.visible-rects.read.failed', {
+      message: error instanceof Error ? error.message : String(error),
+      fields: {
+        excludeType,
+      },
+    });
     return [];
   }
 }

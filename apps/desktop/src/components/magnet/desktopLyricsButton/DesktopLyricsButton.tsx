@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type ContextMenuItem, ContextMenu } from '../ContextMenu';
 import { useT } from '../../../i18n';
+import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import {
   type DesktopLyricsOverlaySettings,
   normalizeDesktopLyricsFontSize,
@@ -49,6 +50,12 @@ const LYRIC_OFFSET_NUDGE_STEP = 100;
 const DESKTOP_LYRICS_RENDERERS = {
   ...buildMagnetVariantRenderers(StandardDesktopLyricsButton, DESKTOP_LYRICS_VARIANT_PRESETS),
 };
+
+const telemetry = getTelemetryLogger('windowing', 'DesktopLyricsButton');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export const DesktopLyricsButton: React.FC = () => {
   const t = useT();
@@ -118,7 +125,9 @@ export const DesktopLyricsButton: React.FC = () => {
   const { applyOverlaySettings } = logic;
   useEffect(() => {
     void applyOverlaySettings(initialSettingsRef.current).catch((error) => {
-      console.warn('[desktop-lyrics-button] failed to sync initial desktop lyrics settings:', error);
+      telemetry.warn('desktop-lyrics.button.initial-sync.failed', {
+        message: getErrorMessage(error),
+      });
     });
   }, [applyOverlaySettings]);
 
@@ -201,7 +210,13 @@ export const DesktopLyricsButton: React.FC = () => {
       } catch (error) {
         setPositionOffsetX(previousX);
         setPositionOffsetY(previousY);
-        console.error('[desktop-lyrics-button] failed to set position offset:', error);
+        telemetry.error('desktop-lyrics.button.position-offset.set.failed', {
+          message: getErrorMessage(error),
+          fields: {
+            offsetX: normalizedX,
+            offsetY: normalizedY,
+          },
+        });
       }
     },
     [logic, positionOffsetX, positionOffsetY, setPositionOffsetX, setPositionOffsetY]
@@ -217,7 +232,12 @@ export const DesktopLyricsButton: React.FC = () => {
         await logic.applyLyricOffsetMs(normalized);
       } catch (error) {
         setLyricOffsetMs(previous);
-        console.error('[desktop-lyrics-button] failed to set lyric offset:', error);
+        telemetry.error('desktop-lyrics.button.lyric-offset.set.failed', {
+          message: getErrorMessage(error),
+          fields: {
+            offsetMs: normalized,
+          },
+        });
       }
     },
     [logic, lyricOffsetMs, setLyricOffsetMs]

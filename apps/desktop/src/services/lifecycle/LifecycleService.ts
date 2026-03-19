@@ -1,4 +1,5 @@
 import { createServiceToken } from '../../kernel';
+import { getTelemetryLogger } from '../telemetry/TelemetryService';
 
 export type LifecycleFlushReason =
   | 'beforeunload'
@@ -20,6 +21,7 @@ export const APP_LIFECYCLE_SERVICE_TOKEN = createServiceToken<AppLifecycleServic
 
 export class DefaultAppLifecycleService implements AppLifecycleService {
   private readonly handlers = new Set<FlushHandler>();
+  private readonly telemetry = getTelemetryLogger('lifecycle', 'LifecycleService');
 
   registerFlushHandler(handler: FlushHandler): () => void {
     this.handlers.add(handler);
@@ -29,11 +31,22 @@ export class DefaultAppLifecycleService implements AppLifecycleService {
   }
 
   flush(reason: LifecycleFlushReason): void {
+    this.telemetry.info('lifecycle.flush', {
+      fields: {
+        reason,
+        handlerCount: this.handlers.size,
+      },
+    });
     for (const handler of Array.from(this.handlers)) {
       try {
         handler(reason);
       } catch (error) {
-        console.warn('[lifecycle] flush handler failed', error);
+        this.telemetry.warn('lifecycle.flush-handler.failed', {
+          message: error instanceof Error ? error.message : String(error),
+          fields: {
+            reason,
+          },
+        });
       }
     }
   }

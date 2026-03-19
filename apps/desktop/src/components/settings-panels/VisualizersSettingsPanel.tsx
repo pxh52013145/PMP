@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useKernel } from '../../contexts/KernelContext';
 import type { VisualizerContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { PmpButton, PmpCard } from '../primitives';
 
 function normalizeText(value: string | undefined): string {
@@ -18,6 +19,7 @@ function sortVisualizers(a: VisualizerContribution, b: VisualizerContribution): 
 export function VisualizersSettingsPanel() {
   const kernel = useKernel();
   const t = useT();
+  const telemetry = useMemo(() => getTelemetryLogger('settings', 'VisualizersSettingsPanel'), []);
   const [revision, setRevision] = useState(0);
   const [query, setQuery] = useState('');
 
@@ -35,6 +37,15 @@ export function VisualizersSettingsPanel() {
       return normalizeText(haystack).includes(q);
     });
   }, [kernel.contributions, query, revision]);
+
+  useEffect(() => {
+    telemetry.debug('settings.visualizers.search.changed', {
+      fields: {
+        queryLength: query.trim().length,
+        resultCount: visualizers.length,
+      },
+    });
+  }, [query, telemetry, visualizers.length]);
 
   return (
     <PmpCard className="settings-card" surfaceId="primitive.card.settings">
@@ -72,7 +83,20 @@ export function VisualizersSettingsPanel() {
                 )}
               </div>
 
-              <PmpButton className="settings-action-btn" variant="default" onClick={() => void item.open()} title={item.id}>
+              <PmpButton
+                className="settings-action-btn"
+                variant="default"
+                onClick={() => {
+                  telemetry.info('settings.visualizers.open.requested', {
+                    fields: {
+                      visualizerId: item.id,
+                      title: item.title,
+                    },
+                  });
+                  void item.open();
+                }}
+                title={item.id}
+              >
                 {t('common.action.open')}
               </PmpButton>
             </div>

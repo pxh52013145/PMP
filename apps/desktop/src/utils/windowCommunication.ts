@@ -5,12 +5,18 @@
 
 import { emit, listen, UnlistenFn } from '@tauri-apps/api/event';
 import { readString, writeJson } from '../modules/storage';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { isTauriRuntime } from './tauriRuntime';
 
 const DEBUG_STORAGE_KEY = 'pixel-matrix-debug-window-comm';
 const LOCAL_COMM_EVENT = 'pixel-matrix-window-comm';
 const BROADCAST_CHANNEL_NAME = 'pixel-matrix-window-comm';
 let debugEnabledCache: boolean | null = null;
+const telemetry = getTelemetryLogger('windowing', 'windowCommunication');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function isDebugEnabled(): boolean {
   if (debugEnabledCache !== null) return debugEnabledCache;
@@ -22,7 +28,11 @@ function isDebugEnabled(): boolean {
 
 function debugLog(...args: unknown[]): void {
   if (!isDebugEnabled()) return;
-  console.log(...args);
+  telemetry.debug('window-communication.debug', {
+    fields: {
+      args,
+    },
+  });
 }
 
 type WindowCommStats = {
@@ -373,14 +383,25 @@ export async function broadcastDataUpdate<T>(
     if (tauriEvent && isTauriRuntime()) {
       recordEmit(tauriEvent);
       void emit(tauriEvent, { timestamp, key: storageKey }).catch((error) => {
-        console.error(`Failed to broadcast tauri event (${tauriEvent}):`, error);
+        telemetry.error('window-communication.broadcast-data.tauri-emit.failed', {
+          message: getErrorMessage(error),
+          fields: {
+            storageKey,
+            tauriEvent,
+          },
+        });
       });
       debugLog(`Broadcasted: ${storageKey} via ${tauriEvent}`);
     } else {
       debugLog(`Saved to localStorage: ${storageKey}`);
     }
   } catch (error) {
-    console.error(`Failed to broadcast data update (${storageKey}):`, error);
+    telemetry.error('window-communication.broadcast-data.failed', {
+      message: getErrorMessage(error),
+      fields: {
+        storageKey,
+      },
+    });
     // Do not throw: most callers are UI callbacks and may not await/handle rejections.
   }
 }
@@ -397,11 +418,21 @@ export async function broadcastSignal(tauriEvent: string): Promise<void> {
   try {
     recordEmit(tauriEvent);
     void emit(tauriEvent, { timestamp }).catch((error) => {
-      console.error(`Failed to broadcast signal (${tauriEvent}):`, error);
+      telemetry.error('window-communication.broadcast-signal.tauri-emit.failed', {
+        message: getErrorMessage(error),
+        fields: {
+          tauriEvent,
+        },
+      });
     });
     debugLog(`Signal broadcasted: ${tauriEvent}`);
   } catch (error) {
-    console.error(`Failed to broadcast signal (${tauriEvent}):`, error);
+    telemetry.error('window-communication.broadcast-signal.failed', {
+      message: getErrorMessage(error),
+      fields: {
+        tauriEvent,
+      },
+    });
     // Do not throw: signals are best-effort and typically not critical to render paths.
   }
 }
@@ -414,7 +445,12 @@ export function readData<T>(storageKey: string): T | null {
     const data = readString(storageKey);
     return data ? JSON.parse(data) : null;
   } catch (error) {
-    console.error(`Failed to read data (${storageKey}):`, error);
+    telemetry.error('window-communication.read.failed', {
+      message: getErrorMessage(error),
+      fields: {
+        storageKey,
+      },
+    });
     return null;
   }
 }
@@ -465,7 +501,13 @@ export async function setupTauriListener(
     });
     return unlisten;
   } catch (error) {
-    console.error(`Failed to setup Tauri listener (${eventName}):`, error);
+    telemetry.error('window-communication.listener.setup.failed', {
+      message: getErrorMessage(error),
+      fields: {
+        eventName,
+        payload: false,
+      },
+    });
     return () => {};
   }
 }
@@ -489,7 +531,13 @@ export async function setupTauriListenerWithPayload<T>(
     });
     return unlisten;
   } catch (error) {
-    console.error(`Failed to setup Tauri listener (${eventName}):`, error);
+    telemetry.error('window-communication.listener.setup.failed', {
+      message: getErrorMessage(error),
+      fields: {
+        eventName,
+        payload: true,
+      },
+    });
     return () => {};
   }
 }
@@ -512,7 +560,9 @@ export async function setupDualListener(
       try {
         callback();
       } catch (error) {
-        console.error('windowCommunication callback failed:', error);
+        telemetry.error('window-communication.callback.failed', {
+          message: getErrorMessage(error),
+        });
       }
     });
   };
@@ -568,7 +618,12 @@ export async function setupDualListener(
       const unlisten = await setupTauriListener(eventName, run);
       tauriUnlisteners.push(unlisten);
     } catch (error) {
-      console.error(`Failed to setup listener for ${eventName}:`, error);
+      telemetry.error('window-communication.listener.group-setup.failed', {
+        message: getErrorMessage(error),
+        fields: {
+          eventName,
+        },
+      });
     }
   }
 

@@ -4,6 +4,7 @@ import {
   createCenteredSingleControlLayoutPreset,
   createPanelLayoutPreset,
 } from '../../modules/magnets/layoutPresets';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 
 const PLAYER_CONTROL_CHROME = createControlChromePreset();
 const PRIMARY_PLAYER_CONTROL_CHROME = createControlChromePreset({
@@ -49,6 +50,7 @@ const TRACK_INFO_CHROME = createPanelChromePreset({
 const PLAYER_CONTROL_LAYOUT = createCenteredSingleControlLayoutPreset();
 const PROGRESS_BAR_LAYOUT = createPanelLayoutPreset();
 const TRACK_INFO_LAYOUT = createPanelLayoutPreset();
+const telemetry = getTelemetryLogger('magnets', 'musicPlayerMagnets');
 
 /**
  * 音乐播放器控制按钮 Magnet 配置
@@ -77,7 +79,7 @@ export const PREVIOUS_BUTTON: Magnet = {
     draggable: false,
     clickable: true,
     onClick: () => {
-      console.log('Previous track');
+      telemetry.debug('music_player.previous.clicked');
       // TODO: 集成音乐播放器API
     },
   },
@@ -103,7 +105,7 @@ export const PLAY_PAUSE_BUTTON: Magnet = {
     draggable: false,
     clickable: true,
     onClick: () => {
-      console.log('Toggle play/pause');
+      telemetry.debug('music_player.play_pause.clicked');
       // TODO: 集成音乐播放器API
       // TODO: 切换按钮显示内容（▶ ⇄ ⏸）
     },
@@ -130,7 +132,7 @@ export const NEXT_BUTTON: Magnet = {
     draggable: false,
     clickable: true,
     onClick: () => {
-      console.log('Next track');
+      telemetry.debug('music_player.next.clicked');
       // TODO: 集成音乐播放器API
     },
   },
@@ -156,7 +158,7 @@ export const PLAYBACK_MODE_BUTTON: Magnet = {
     draggable: false,
     clickable: true,
     onClick: () => {
-      console.log('Toggle playback mode');
+      telemetry.debug('music_player.playback_mode.clicked');
       // TODO: 切换播放模式（顺序 → 单曲循环 → 随机播放）
     },
   },
@@ -182,7 +184,7 @@ export const VOLUME_BUTTON: Magnet = {
     draggable: false,
     clickable: true,
     onClick: () => {
-      console.log('Toggle volume/mute');
+      telemetry.debug('music_player.volume.clicked');
       // TODO: 显示音量滑块或切换静音
     },
   },
@@ -210,7 +212,7 @@ export const PROGRESS_BAR: Magnet = {
     draggable: false,
     clickable: true,
     onClick: () => {
-      console.log('Seek to position');
+      telemetry.debug('music_player.progress.clicked');
       // TODO: 根据点击位置跳转播放进度
     },
   },
@@ -238,7 +240,7 @@ export const TRACK_INFO: Magnet = {
     draggable: false,
     clickable: true,
     onClick: () => {
-      console.log('Show track details');
+      telemetry.debug('music_player.track_info.clicked');
       // TODO: 显示歌曲详情弹窗
     },
   },

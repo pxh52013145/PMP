@@ -23,6 +23,7 @@ import type {
 } from './types';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { parseWhenClause } from './WhenClause';
+import { getTelemetryLogger } from '../telemetry/TelemetryService';
 
 export interface KeybindingsService {
   getSnapshot(): KeybindingsSnapshot;
@@ -89,6 +90,7 @@ function sortDefaults(rules: KeybindingRule[]): KeybindingRule[] {
 }
 
 export class DefaultKeybindingsService implements KeybindingsService {
+  private readonly telemetry = getTelemetryLogger('keybindings', 'KeybindingsService');
   private context: KeybindingContext = {};
 
   private defaults: KeybindingRule[] = [];
@@ -218,7 +220,10 @@ export class DefaultKeybindingsService implements KeybindingsService {
     }
 
     void this.commands.dispatch(command, result.binding.rule.args).catch((error) => {
-      console.warn(`[keybindings] command failed: ${command}`, error);
+      this.telemetry.warn('keybindings.command.dispatch.failed', {
+        message: error instanceof Error ? error.message : String(error),
+        fields: { command },
+      });
     });
     return true;
   }
@@ -330,7 +335,10 @@ export class DefaultKeybindingsService implements KeybindingsService {
     const command = result.binding.rule.command;
     if (!command || command.startsWith('-') || command.trim().length === 0) return;
     void this.commands.dispatch(command, result.binding.rule.args).catch((error) => {
-      console.warn(`[keybindings] command failed: ${command}`, error);
+      this.telemetry.warn('keybindings.command.dispatch.failed', {
+        message: error instanceof Error ? error.message : String(error),
+        fields: { command },
+      });
     });
   }
 
@@ -392,7 +400,9 @@ export class DefaultKeybindingsService implements KeybindingsService {
         const key = btn === 'back' ? 'mouse4' : btn === 'forward' ? 'mouse5' : null;
         if (!key) return;
         try {
-          console.debug('[keybindings] mouse-side-button', { button: btn, key });
+          this.telemetry.debug('keybindings.mouse-side-button', {
+            fields: { button: btn, key },
+          });
         } catch {
           // ignore
         }
@@ -400,7 +410,9 @@ export class DefaultKeybindingsService implements KeybindingsService {
       });
       this.unlistenTauriMouseSideButton = unlisten;
     } catch (error) {
-      console.warn('[keybindings] failed to listen mouse-side-button', error);
+      this.telemetry.warn('keybindings.mouse-side-button.listen.failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 }

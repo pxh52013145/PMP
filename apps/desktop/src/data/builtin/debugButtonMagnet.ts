@@ -1,9 +1,11 @@
 import { Magnet } from '../../types/pixel';
 import { createControlChromePreset } from '../../modules/magnets/chromePresets';
 import { createCenteredSingleControlLayoutPreset } from '../../modules/magnets/layoutPresets';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 
 const DEBUG_BUTTON_CHROME = createControlChromePreset();
 const DEBUG_BUTTON_LAYOUT = createCenteredSingleControlLayoutPreset();
+const telemetry = getTelemetryLogger('magnets', 'debugButtonMagnet');
 
 /**
  * 设置按钮 Magnet（历史 id：btn-debug）
@@ -37,7 +39,7 @@ export const DEBUG_BUTTON_MAGNET: Magnet = {
     draggable: true,
     clickable: true,
     onClick: () => {
-      console.log('打开设置');
+      telemetry.debug('navigation.debug_button.clicked');
     },
   },
 };

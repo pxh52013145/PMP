@@ -2,8 +2,14 @@ export type Contribution = {
   kind: string;
   id: string;
 };
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 
 export type ContributionListener = () => void;
+const telemetry = getTelemetryLogger('kernel', 'ContributionRegistry');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export type RegisterContributionOptions = {
   replace?: boolean;
@@ -94,7 +100,9 @@ export class ContributionRegistry implements ContributionRegistryApi {
       try {
         listener();
       } catch (error) {
-        console.warn('[ContributionRegistry] listener failed', error);
+        telemetry.warn('contribution_registry.listener.failed', {
+          message: readErrorMessage(error),
+        });
       }
     }
   }

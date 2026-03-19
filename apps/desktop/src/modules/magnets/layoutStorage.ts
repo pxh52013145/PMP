@@ -8,12 +8,18 @@ import {
   type MagnetSpaceLayout,
 } from './layout';
 import { getSystemAnchorsForActiveMagnets } from './systemLayouts';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 
 const SPACE2_DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   ...REQUIRED_MAGNET_IDS,
   'platform-magnet',
   'btn-platform-login',
 ]);
+const telemetry = getTelemetryLogger('magnets', 'layoutStorage');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function loadMagnetSpaceLayout(storageKey: string): MagnetSpaceLayout | null {
   const raw = readJson<unknown | null>(storageKey, null);
@@ -65,11 +71,21 @@ export function scheduleSaveMagnetSpaceLayout(
       saveMagnetSpaceLayout(args.layout, args.storageKey ?? resolveMagnetLayoutStorageKey('space1'));
       if (afterSave) {
         Promise.resolve(afterSave()).catch((error) => {
-          console.warn('[magnets] afterSave (layout) callback failed', error);
+          telemetry.warn('layout.after_save.failed', {
+            message: readErrorMessage(error),
+            fields: {
+              mode: 'scheduled',
+            },
+          });
         });
       }
     } catch (error) {
-      console.warn('[magnets] Failed to save layout (scheduled)', error);
+      telemetry.warn('layout.save_scheduled.failed', {
+        message: readErrorMessage(error),
+        fields: {
+          storageKey: args.storageKey ?? resolveMagnetLayoutStorageKey('space1'),
+        },
+      });
     }
   }, debounceMs);
 }
@@ -100,11 +116,21 @@ export function flushScheduledMagnetSpaceLayoutSave(): void {
     saveMagnetSpaceLayout(args.layout, args.storageKey ?? resolveMagnetLayoutStorageKey('space1'));
     if (afterSave) {
       Promise.resolve(afterSave()).catch((error) => {
-        console.warn('[magnets] afterSave (layout) callback failed', error);
+        telemetry.warn('layout.after_save.failed', {
+          message: readErrorMessage(error),
+          fields: {
+            mode: 'flush',
+          },
+        });
       });
     }
   } catch (error) {
-    console.warn('[magnets] Failed to save layout (flush)', error);
+    telemetry.warn('layout.save_flush.failed', {
+      message: readErrorMessage(error),
+      fields: {
+        storageKey: args.storageKey ?? resolveMagnetLayoutStorageKey('space1'),
+      },
+    });
   }
 }
 

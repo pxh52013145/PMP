@@ -3,7 +3,14 @@ import { BackgroundConfig, BackgroundSettings, PRESET_BACKGROUNDS } from '../../
 import { setupStorageListener, STORAGE_KEYS } from '../../utils/windowCommunication';
 import { readJson, readString, tryWriteJson, writeString } from '../../modules/storage';
 import { useT } from '../../i18n';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import './BackgroundManager.css';
+
+const telemetry = getTelemetryLogger('editor', 'BackgroundManager');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function isTauriLocalhostHttpUrl(url: string): boolean {
   try {
@@ -410,11 +417,15 @@ export const BackgroundManager = memo(function BackgroundManager({
         '../../utils/editorWindows'
       );
       const position = await calculateWindowPosition('custom-background');
-      console.log('Opening custom background window at:', position);
+      telemetry.debug('editor.background.custom-window.open.requested', {
+        fields: position,
+      });
       await openEditorWindow({ type: 'custom-background', ...position });
-      console.log('Custom background window opened successfully');
+      telemetry.info('editor.background.custom-window.open.completed');
     } catch (error) {
-      console.error('Failed to open custom background window:', error);
+      telemetry.error('editor.background.custom-window.open.failed', {
+        message: getErrorMessage(error),
+      });
       alert(t('editor.background-manager.error.openCustomEditorFailed', { message: String(error) }));
     }
   }, [t]);
@@ -569,7 +580,9 @@ export const BackgroundManager = memo(function BackgroundManager({
           const migratedUrl = await writeManagedMediaFromDataUrl(config.image.url, 'image');
           return { ...config, image: { ...config.image, url: migratedUrl } };
         } catch (error) {
-          console.warn('[BackgroundManager] Failed to migrate image data URL:', error);
+          telemetry.warn('editor.background.legacy-image.migrate.failed', {
+            message: getErrorMessage(error),
+          });
           return { type: 'image', image: { url: '', fit: 'cover', position: 'center center', repeat: 'no-repeat' } };
         }
       }
@@ -579,7 +592,9 @@ export const BackgroundManager = memo(function BackgroundManager({
           const migratedUrl = await writeManagedMediaFromDataUrl(config.video.url, 'video');
           return { ...config, video: { ...config.video, url: migratedUrl } };
         } catch (error) {
-          console.warn('[BackgroundManager] Failed to migrate video data URL:', error);
+          telemetry.warn('editor.background.legacy-video.migrate.failed', {
+            message: getErrorMessage(error),
+          });
           return { type: 'color', color: '#000000', opacity: 1 };
         }
       }
@@ -645,7 +660,9 @@ export const BackgroundManager = memo(function BackgroundManager({
           : t('editor.background-manager.maintenance.migrateDone')
       );
     } catch (error) {
-      console.error('[BackgroundManager] Legacy migration failed:', error);
+      telemetry.error('editor.background.legacy.migration.failed', {
+        message: getErrorMessage(error),
+      });
       setMaintenanceMessage(t('editor.background-manager.maintenance.migrateFailed'));
     } finally {
       migrationRunningRef.current = false;
@@ -696,7 +713,12 @@ export const BackgroundManager = memo(function BackgroundManager({
           await fs.removeFile(rel, { dir: fs.BaseDirectory.AppData });
           removed += 1;
         } catch (error) {
-          console.warn('[BackgroundManager] Failed to remove orphan file:', rel, error);
+          telemetry.warn('editor.background.media-gc.remove-orphan.failed', {
+            message: getErrorMessage(error),
+            fields: {
+              rel,
+            },
+          });
         }
       }
 
@@ -704,7 +726,9 @@ export const BackgroundManager = memo(function BackgroundManager({
         t('editor.background-manager.maintenance.gcDone', { scanned, removed })
       );
     } catch (error) {
-      console.error('[BackgroundManager] Media GC failed:', error);
+      telemetry.error('editor.background.media-gc.failed', {
+        message: getErrorMessage(error),
+      });
       setMaintenanceMessage(t('editor.background-manager.maintenance.gcFailed'));
     } finally {
       setMaintenanceBusy(false);
@@ -859,7 +883,7 @@ export const BackgroundManager = memo(function BackgroundManager({
       {/* 拖动标题栏 */}
       <div className="editor-window-header" data-tauri-drag-region>
         <span className="window-title" data-tauri-drag-region>
-          ⋮⋮
+          {t('editor.background-manager.title')}
         </span>
       </div>
 

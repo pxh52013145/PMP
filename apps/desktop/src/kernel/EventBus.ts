@@ -1,9 +1,15 @@
 export type EventMap = Record<string, unknown>;
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 
 export type EventMeta = {
   timestamp: number;
   source?: string;
 };
+const telemetry = getTelemetryLogger('kernel', 'EventBus');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export type EventListener<Payload> = (payload: Payload, meta: EventMeta) => void;
 
@@ -44,7 +50,13 @@ export class EventBus<Events extends EventMap> {
       try {
         (listener as EventListener<Events[K]>)(payload, metaWithDefaults);
       } catch (error) {
-        console.warn(`[EventBus] Listener for "${String(event)}" failed`, error);
+        telemetry.warn('event_bus.listener.failed', {
+          message: readErrorMessage(error),
+          fields: {
+            event: String(event),
+            source: metaWithDefaults.source ?? null,
+          },
+        });
       }
     }
   }

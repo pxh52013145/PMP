@@ -5,6 +5,13 @@ import type {
   NativeAudioSpectrumPayload,
   NativeAudioStatePayload,
 } from './nativeAudioServiceTypes';
+import { getTelemetryLogger } from '../telemetry/TelemetryService';
+
+const telemetry = getTelemetryLogger('audio', 'nativeAudioNativeListeners');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 type NativeAudioListenerCleanup = (() => void) | null;
 
@@ -738,7 +745,9 @@ export async function setupNativeListenersImpl(
         this.emitError(error);
       });
     } catch (error) {
-      console.warn('[NativeAudio] Failed to register state listener:', error);
+      telemetry.warn('native_audio.register_state_listener.failed', {
+        message: readErrorMessage(error),
+      });
     }
   
 }

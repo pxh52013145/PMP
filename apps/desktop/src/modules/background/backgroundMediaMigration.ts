@@ -1,7 +1,14 @@
 import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import type { BackgroundConfig, BackgroundSettings } from '../../types/background';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { persistBackgroundSnapshots } from './backgroundSnapshot';
 import { readString, writeString } from '../storage';
+
+const telemetry = getTelemetryLogger('background', 'backgroundMediaMigration');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 type BackgroundHistoryItem = {
   id: string;
@@ -66,7 +73,13 @@ async function importFileToManagedBackgroundMedia(
     if (!destPath) return null;
     return tauri.convertFileSrc(destPath);
   } catch (error) {
-    console.warn('[background] Failed to import external background media:', error);
+    telemetry.warn('background.import_media.failed', {
+      message: readErrorMessage(error),
+      fields: {
+        sourcePath,
+        kind,
+      },
+    });
     return null;
   }
 }
@@ -164,7 +177,9 @@ export async function migrateBackgroundStorageToManagedMedia(): Promise<{
     // Keep compatible with legacy flag checks in UI.
     writeString(STORAGE_KEYS.BACKGROUND_MEDIA_MIGRATION_V1, '1');
   } catch (error) {
-    console.warn('[background] migration failed:', error);
+    telemetry.warn('background.migration.failed', {
+      message: readErrorMessage(error),
+    });
     writeString(STORAGE_KEYS.BACKGROUND_MEDIA_MIGRATION_V1, 'failed');
   }
 

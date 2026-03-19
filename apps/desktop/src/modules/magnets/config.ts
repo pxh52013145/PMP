@@ -6,6 +6,7 @@ import {
   type MagnetConfig,
   type MagnetStateConfig,
 } from '../../utils/configManager';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 
 export type { MagnetConfig, MagnetStateConfig };
@@ -29,6 +30,11 @@ let scheduledSaveArgs:
     }
   | null = null;
 let scheduledAfterSave: null | (() => void | Promise<void>) = null;
+const telemetry = getTelemetryLogger('magnets', 'config');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * Magnets persistence/config public API.
@@ -100,11 +106,21 @@ export function scheduleSaveMagnetConfig(
       );
       if (afterSave) {
         Promise.resolve(afterSave()).catch((error) => {
-          console.warn('[magnets] afterSave callback failed', error);
+          telemetry.warn('config.after_save.failed', {
+            message: readErrorMessage(error),
+            fields: {
+              mode: 'scheduled',
+            },
+          });
         });
       }
     } catch (error) {
-      console.warn('[magnets] Failed to save config (scheduled)', error);
+      telemetry.warn('config.save_scheduled.failed', {
+        message: readErrorMessage(error),
+        fields: {
+          storageKey: args.storageKey ?? null,
+        },
+      });
     }
   }, debounceMs);
 }
@@ -142,11 +158,21 @@ export function flushScheduledMagnetConfigSave(): void {
     );
     if (afterSave) {
       Promise.resolve(afterSave()).catch((error) => {
-        console.warn('[magnets] afterSave callback failed', error);
+        telemetry.warn('config.after_save.failed', {
+          message: readErrorMessage(error),
+          fields: {
+            mode: 'flush',
+          },
+        });
       });
     }
   } catch (error) {
-    console.warn('[magnets] Failed to save config (flush)', error);
+    telemetry.warn('config.save_flush.failed', {
+      message: readErrorMessage(error),
+      fields: {
+        storageKey: args.storageKey ?? null,
+      },
+    });
   }
 }
 

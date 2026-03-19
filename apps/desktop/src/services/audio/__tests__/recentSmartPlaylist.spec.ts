@@ -138,6 +138,7 @@ describe('recentSmartPlaylist', () => {
     expect(result.playlists[0]?.trackCount).toBe(1);
     expect(result.playlists[0]?.totalDuration).toBe(120);
     expect(result.currentPlaylist?.id).toBe('smart-recently-played');
-    expect(result.currentPlaylist?.tracks).toHaveLength(1);
+    expect(result.currentPlaylist?.tracks).toHaveLength(0);
+    expect(result.currentPlaylist?.tracksHydrated).toBe(false);
   });
 });

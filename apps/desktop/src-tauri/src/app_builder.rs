@@ -1,4 +1,5 @@
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu};
@@ -79,6 +80,14 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
     if let Err(error) = crate::debug_config::apply_from_disk(&app.handle()) {
         eprintln!("[debug] Failed to apply debug config: {error}");
     }
+
+    let telemetry_policy = crate::debug_config::get_config(&app.handle())
+        .map(|config| config.telemetry)
+        .unwrap_or_default();
+    app.manage(Arc::new(crate::telemetry::TelemetryCore::new(
+        &app.handle(),
+        telemetry_policy,
+    )));
 
     let magnet_layout_store = crate::magnet_layout_store::MagnetLayoutStore::new(&app.handle())
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;

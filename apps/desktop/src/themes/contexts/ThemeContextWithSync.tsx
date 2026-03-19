@@ -9,6 +9,7 @@ import {
 
 import { DEFAULT_BACKGROUND_SETTINGS } from '../../constants/defaultBackground';
 import { readJson } from '../../modules/storage';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { broadcastDataUpdate, setupDualListener, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import {
   assignThemeBinding,
@@ -54,6 +55,11 @@ const DEFAULT_THEME: Theme = {
     },
   },
 };
+const telemetry = getTelemetryLogger('theme', 'ThemeContextWithSync');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 interface ThemeContextValue {
   theme: Theme;
@@ -81,7 +87,12 @@ async function saveAndBroadcastTheme(theme: Theme): Promise<void> {
   try {
     await broadcastDataUpdate(STORAGE_KEYS.THEME_CONFIG, normalizedTheme, TAURI_EVENTS.THEME_UPDATED);
   } catch (error) {
-    console.error('[ThemeContextWithSync] Failed to save theme:', error);
+    telemetry.error('theme.save.failed', {
+      message: readErrorMessage(error),
+      fields: {
+        themeId: normalizedTheme.id,
+      },
+    });
   }
 }
 

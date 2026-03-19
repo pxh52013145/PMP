@@ -1,6 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createMusicLibraryReadGateway, type MusicLibraryReadGatewayContext } from '../musicLibraryReadGateway';
+import {
+  createMusicLibraryReadGateway,
+  type MusicLibraryReadGatewayContext,
+  type NativeReadResult,
+} from '../musicLibraryReadGateway';
+
+function nativeOk<T>(value: T): NativeReadResult<T> {
+  return { status: 'ok', value };
+}
+
+function nativeUnavailable<T>(): NativeReadResult<T> {
+  return { status: 'unavailable' };
+}
 
 function createAsyncRequest(result: unknown) {
   const request: {
@@ -90,11 +102,12 @@ function createContext(
 ): MusicLibraryReadGatewayContext {
   const context: MusicLibraryReadGatewayContext = {
     isDesktopRuntime: () => false,
-    tryGetAllTracksFromNativeDb: vi.fn().mockResolvedValue(null),
-    trySearchTracksFromNativeDb: vi.fn().mockResolvedValue(null),
-    tryGetTracksByAlbumFromNativeDb: vi.fn().mockResolvedValue(null),
-    tryGetAllAlbumsFromNativeDb: vi.fn().mockResolvedValue(null),
-    tryGetLibraryStatsFromNativeDb: vi.fn().mockResolvedValue(null),
+    shouldAllowDesktopWebFallback: () => false,
+    tryGetAllTracksFromNativeDb: vi.fn().mockResolvedValue(nativeUnavailable()),
+    trySearchTracksFromNativeDb: vi.fn().mockResolvedValue(nativeUnavailable()),
+    tryGetTracksByAlbumFromNativeDb: vi.fn().mockResolvedValue(nativeUnavailable()),
+    tryGetAllAlbumsFromNativeDb: vi.fn().mockResolvedValue(nativeUnavailable()),
+    tryGetLibraryStatsFromNativeDb: vi.fn().mockResolvedValue(nativeUnavailable()),
     ensureDb: vi.fn().mockResolvedValue(createFakeDb([])),
     buildPathVisibilityContext: vi.fn().mockResolvedValue({}),
     isStoredTrackVisible: vi.fn().mockImplementation((track: Record<string, unknown>) => track.visible !== false),
@@ -121,7 +134,7 @@ describe('musicLibraryReadGateway', () => {
     const nativeTracks = [{ id: 'native-track-1', title: 'Native Track' }];
     const context = createContext({
       isDesktopRuntime: () => desktopRuntime,
-      tryGetAllTracksFromNativeDb: vi.fn().mockResolvedValue(nativeTracks),
+      tryGetAllTracksFromNativeDb: vi.fn().mockResolvedValue(nativeOk(nativeTracks)),
       ensureDb: vi.fn().mockResolvedValue(createFakeDb([{ id: 'web-track-1', title: 'Web Track' }])),
     });
 
@@ -133,6 +146,80 @@ describe('musicLibraryReadGateway', () => {
     expect(context.tryGetAllTracksFromNativeDb).toHaveBeenCalledWith(50, 10);
     expect(context.ensureDb).not.toHaveBeenCalled();
     expect(result).toEqual(nativeTracks);
+  });
+
+  it('treats desktop native empty results as authoritative and does not fallback to IndexedDB', async () => {
+    const context = createContext({
+      isDesktopRuntime: () => true,
+      trySearchTracksFromNativeDb: vi.fn().mockResolvedValue(nativeOk([])),
+    });
+
+    const gateway = createMusicLibraryReadGateway(context);
+    const result = await gateway.searchTracks('needle', 20);
+
+    expect(result).toEqual([]);
+    expect(context.ensureDb).not.toHaveBeenCalled();
+  });
+
+  it('does not fallback to IndexedDB in desktop runtime when native read is unavailable', async () => {
+    const context = createContext({
+      isDesktopRuntime: () => true,
+      tryGetTracksByAlbumFromNativeDb: vi.fn().mockResolvedValue(nativeUnavailable()),
+      ensureDb: vi.fn().mockResolvedValue(
+        createFakeDb([{ id: 'album-web-1', title: 'Fallback Track', album: 'Target Album', visible: true }])
+      ),
+    });
+
+    const gateway = createMusicLibraryReadGateway(context);
+    const result = await gateway.getTracksByAlbum('Target Album');
+
+    expect(result).toEqual([]);
+    expect(context.ensureDb).not.toHaveBeenCalled();
+  });
+
+  it('allows explicit desktop IndexedDB fallback when the escape hatch is enabled', async () => {
+    const context = createContext({
+      isDesktopRuntime: () => true,
+      shouldAllowDesktopWebFallback: () => true,
+      tryGetTracksByAlbumFromNativeDb: vi.fn().mockResolvedValue(nativeUnavailable()),
+      ensureDb: vi.fn().mockResolvedValue(
+        createFakeDb([{ id: 'album-web-1', title: 'Fallback Track', album: 'Target Album', visible: true }])
+      ),
+    });
+
+    const gateway = createMusicLibraryReadGateway(context);
+    const result = await gateway.getTracksByAlbum('Target Album');
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ id: 'album-web-1', projection: 'playback' });
+    expect(context.ensureDb).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats zero desktop native stats as authoritative and does not fallback to IndexedDB', async () => {
+    const context = createContext({
+      isDesktopRuntime: () => true,
+      tryGetLibraryStatsFromNativeDb: vi.fn().mockResolvedValue(
+        nativeOk({
+          totalTracks: 0,
+          totalArtists: 0,
+          totalAlbums: 0,
+          totalSize: 0,
+          totalDuration: 0,
+        })
+      ),
+    });
+
+    const gateway = createMusicLibraryReadGateway(context);
+    const stats = await gateway.getLibraryStats();
+
+    expect(stats).toEqual({
+      totalTracks: 0,
+      totalArtists: 0,
+      totalAlbums: 0,
+      totalSize: 0,
+      totalDuration: 0,
+    });
+    expect(context.ensureDb).not.toHaveBeenCalled();
   });
 
   it('uses IndexedDB search in web runtime and respects visibility plus limit', async () => {

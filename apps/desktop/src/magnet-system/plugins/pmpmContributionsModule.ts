@@ -26,6 +26,13 @@ import { clearPmpmPluginRuntimeCache, ensurePmpmPluginRuntime } from './pmpmRunt
 import { requestPmpmPluginRuntimeRestart } from './pmpmRuntimeSupervisor';
 import { runPmpmSandboxedCommand } from './pmpmSandboxCommandRunner';
 import { getPmpmSandboxRuntimeEnabled } from './pmpmSandboxConfig';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+
+const telemetry = getTelemetryLogger('pmpm', 'pmpmContributionsModule');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function buildPluginCommandId(pluginId: string, commandId: string): string {
   return `pmpm:${pluginId}:${commandId}`;
@@ -60,6 +67,30 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
     id: 'pmpm-contributions',
     activate: ({ contributions, services }) => {
       const unregisters = new Map<string, () => void>();
+      const warnCleanupFailure = (
+        event: string,
+        error: unknown,
+        fields: Record<string, unknown>
+      ) => {
+        telemetry.warn(event, {
+          message: readErrorMessage(error),
+          fields,
+        });
+      };
+      const tryUnregister = (
+        contributionId: string,
+        contributionKind: string,
+        unregister: () => void
+      ) => {
+        try {
+          unregister();
+        } catch (error) {
+          warnCleanupFailure('plugin.contribution.unregister.failed', error, {
+            contributionId,
+            contributionKind,
+          });
+        }
+      };
 
       const governance: GovernanceService = {
         restartPmpmPluginRuntime: (pluginId, options = {}) => {
@@ -87,11 +118,7 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
 
             const existingUnregister = unregisters.get(pageKey);
             if (existingUnregister) {
-              try {
-                existingUnregister();
-              } catch (error) {
-                console.warn('[pmpm-contributions] unregister failed', error);
-              }
+              tryUnregister(pageKey, 'page', existingUnregister);
               unregisters.delete(pageKey);
             }
 
@@ -127,11 +154,7 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
 
             const existingUnregister = unregisters.get(windowKey);
             if (existingUnregister) {
-              try {
-                existingUnregister();
-              } catch (error) {
-                console.warn('[pmpm-contributions] unregister failed', error);
-              }
+              tryUnregister(windowKey, 'window', existingUnregister);
               unregisters.delete(windowKey);
             }
 
@@ -191,11 +214,7 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
 
             const existingUnregister = unregisters.get(commandKey);
             if (existingUnregister) {
-              try {
-                existingUnregister();
-              } catch (error) {
-                console.warn('[pmpm-contributions] unregister failed', error);
-              }
+              tryUnregister(commandKey, 'command', existingUnregister);
               unregisters.delete(commandKey);
             }
 
@@ -265,11 +284,7 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
 
             const existingUnregister = unregisters.get(panelKey);
             if (existingUnregister) {
-              try {
-                existingUnregister();
-              } catch (error) {
-                console.warn('[pmpm-contributions] unregister failed', error);
-              }
+              tryUnregister(panelKey, 'settings-panel', existingUnregister);
               unregisters.delete(panelKey);
             }
 
@@ -307,11 +322,7 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
 
             const existingUnregister = unregisters.get(visualizerKey);
             if (existingUnregister) {
-              try {
-                existingUnregister();
-              } catch (error) {
-                console.warn('[pmpm-contributions] unregister failed', error);
-              }
+              tryUnregister(visualizerKey, 'visualizer', existingUnregister);
               unregisters.delete(visualizerKey);
             }
 
@@ -348,7 +359,10 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
           try {
             unregister();
           } catch (error) {
-            console.warn('[pmpm-contributions] unregister failed', error);
+            warnCleanupFailure('plugin.contribution.unregister.failed', error, {
+              contributionId: commandKey,
+              contributionKind: 'unknown',
+            });
           } finally {
             unregisters.delete(commandKey);
           }
@@ -362,21 +376,17 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
         try {
           unsubscribe();
         } catch (error) {
-          console.warn('[pmpm-contributions] unsubscribe failed', error);
+          warnCleanupFailure('plugin.subscription.unsubscribe.failed', error, {});
         }
 
         try {
           unregisterGovernance();
         } catch (error) {
-          console.warn('[pmpm-contributions] unregister governance failed', error);
+          warnCleanupFailure('plugin.governance.unregister.failed', error, {});
         }
 
-        for (const unregister of Array.from(unregisters.values())) {
-          try {
-            unregister();
-          } catch (error) {
-            console.warn('[pmpm-contributions] unregister failed', error);
-          }
+        for (const [contributionId, unregister] of Array.from(unregisters.entries())) {
+          tryUnregister(contributionId, 'unknown', unregister);
         }
         unregisters.clear();
       };

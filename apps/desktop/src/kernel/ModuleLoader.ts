@@ -6,8 +6,14 @@ import type { ServiceToken } from './tokens';
 import type { RegisterOptions } from './ServiceRegistry';
 import type { Contribution, RegisterContributionOptions } from './ContributionRegistry';
 import type { EventListener, ScopedEventBus } from './EventBus';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 
 type Disposable = () => void;
+const telemetry = getTelemetryLogger('kernel', 'ModuleLoader');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 class DisposableBag {
   private readonly disposers = new Set<Disposable>();
@@ -29,7 +35,9 @@ class DisposableBag {
       try {
         disposer();
       } catch (error) {
-        console.warn('[ModuleLoader] scoped disposer failed', error);
+        telemetry.warn('module_loader.scoped_disposer.failed', {
+          message: readErrorMessage(error),
+        });
       }
     }
     this.disposers.clear();
@@ -111,14 +119,24 @@ export class ModuleLoader<Events extends EventMap> {
       try {
         entry.module.deactivate?.();
       } catch (error) {
-        console.warn(`[ModuleLoader] deactivate() failed: ${entry.module.id}`, error);
+        telemetry.warn('module_loader.deactivate.failed', {
+          message: readErrorMessage(error),
+          fields: {
+            moduleId: entry.module.id,
+          },
+        });
       }
 
       if (typeof entry.cleanupFromActivate === 'function') {
         try {
           entry.cleanupFromActivate();
         } catch (error) {
-          console.warn(`[ModuleLoader] activate cleanup failed: ${entry.module.id}`, error);
+          telemetry.warn('module_loader.activate_cleanup.failed', {
+            message: readErrorMessage(error),
+            fields: {
+              moduleId: entry.module.id,
+            },
+          });
         }
       }
 

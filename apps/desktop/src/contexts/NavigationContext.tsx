@@ -9,6 +9,7 @@ import {
 } from 'react';
 import type { NavigationPageData, NavigationPageType } from '../contracts/navigation';
 import { NAVIGATION_SERVICE_TOKEN, type NavigationSnapshot } from '../services/navigation';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { useKernel } from './KernelContext';
 import { readData, setupDualListener, STORAGE_KEYS, TAURI_EVENTS } from '../utils/windowCommunication';
 
@@ -31,6 +32,7 @@ interface NavigationProviderProps {
 export function NavigationProvider({ children }: NavigationProviderProps) {
   const kernel = useKernel();
   const navigationService = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
+  const telemetry = getTelemetryLogger('navigation', 'NavigationContext');
 
   const [snapshot, setSnapshot] = useState<NavigationSnapshot>(() => navigationService.getSnapshot());
   const lastExternalRequestId = useRef<string | null>(null);
@@ -63,6 +65,14 @@ export function NavigationProvider({ children }: NavigationProviderProps) {
       if (!page) return;
       const params = isRecord(payload) ? payload.params : undefined;
 
+      telemetry.info('navigation.external-request.received', {
+        fields: {
+          requestId,
+          page,
+          hasParams: isRecord(params),
+        },
+      });
+
       navigationService.navigateTo(page as NavigationPageType, isRecord(params) ? params : undefined);
     };
 
@@ -73,7 +83,7 @@ export function NavigationProvider({ children }: NavigationProviderProps) {
       }
     );
     return () => cleanup?.();
-  }, [navigationService]);
+  }, [navigationService, telemetry]);
 
   const navigateTo = useCallback(
     (page: NavigationPageType, params?: Record<string, unknown>) => {

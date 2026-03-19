@@ -4,6 +4,9 @@
  */
 
 import { Magnet } from '../../types/pixel';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+
+const telemetry = getTelemetryLogger('magnets', 'exampleCustomMagnet');
 
 /**
  * 示例1：带点击功能的帮助按钮
@@ -51,7 +54,7 @@ export const HELP_BUTTON_MAGNET: Magnet = {
       window.open('https://github.com/your-repo/help', '_blank');
     },
     onHover: () => {
-      console.log('Help button hovered');
+      telemetry.debug('custom.help_button.hovered');
     },
   },
 };
@@ -100,7 +103,7 @@ export const VOLUME_TOGGLE_MAGNET: Magnet = {
         const currentContent = element.textContent;
         element.textContent = currentContent === '🔊' ? '🔇' : '🔊';
       }
-      console.log('Volume toggled');
+      telemetry.debug('custom.volume_toggle.clicked');
     },
   },
 };
@@ -154,7 +157,7 @@ export const CUSTOM_BUTTON_FROM_CREATOR: Magnet = {
     onClick: () => {
       alert('Custom button clicked!');
       // 可以调用任何JavaScript代码
-      console.log('Button action executed');
+      telemetry.debug('custom.creator_button.clicked');
     },
   },
 };

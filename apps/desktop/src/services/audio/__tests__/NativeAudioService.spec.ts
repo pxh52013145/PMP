@@ -489,6 +489,214 @@ describe('NativeAudioService', () => {
     restoreRuntime();
   });
 
+  it('prefers compact playlist preview covers over explicit originals when requested', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation(async (cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'music_library_db_list_playlists') {
+        const query = (payload as { query?: { kind?: string } } | undefined)?.query;
+        if (query?.kind === 'smart') {
+          return [];
+        }
+        return [
+          {
+            id: 'playlist-preview-compact',
+            ownerUid: 'local:default',
+            name: 'Compact Preview Playlist',
+            description: null,
+            coverUrl: 'https://example.com/original-cover.jpg',
+            kind: 'manual',
+            sourceConnectorId: null,
+            sourcePlaylistId: null,
+            smartRuleJson: null,
+            isReadonly: false,
+            createdAtMs: 1700000000000,
+            updatedAtMs: 1700000000000,
+            lastOpenedAtMs: null,
+            trackCount: 1,
+            totalDuration: 180,
+          },
+        ];
+      }
+      if (cmd === 'music_library_db_upsert_playlist') {
+        return {
+          id: 'smart-recently-played',
+          ownerUid: 'local:default',
+          name: 'Recently Played',
+          description: null,
+          kind: 'smart',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: JSON.stringify({ type: 'recently_played', limit: 1000 }),
+          isReadonly: true,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000000,
+          lastOpenedAtMs: null,
+          trackCount: 0,
+          totalDuration: 0,
+        };
+      }
+      if (cmd === 'music_library_db_list_playlist_items') {
+        expect(payload).toMatchObject({
+          playlistId: 'playlist-preview-compact',
+          limit: 5,
+        });
+        return [
+          {
+            id: 'compact-preview-item-1',
+            playlistId: 'playlist-preview-compact',
+            position: 0,
+            trackPayloadJson: JSON.stringify({
+              id: 'compact-preview-track-1',
+              title: 'Compact Preview Track 1',
+              filePath: 'C:\\\\Music\\\\compact-preview-track-1.flac',
+              path: 'C:\\\\Music\\\\compact-preview-track-1.flac',
+              duration: 180,
+            }),
+            snapshotTitle: 'Compact Preview Track 1',
+            snapshotDurationSeconds: 180,
+            createdAtMs: 1700000000000,
+          },
+        ];
+      }
+      return [];
+    });
+
+    const coverSpy = vi
+      .spyOn(musicLibraryService, 'getCoverUrlForTrack')
+      .mockResolvedValue('pmp://cover/compact-preview-thumb-96px?size=small');
+
+    const service = new NativeAudioService();
+    await flushMicrotasks(6);
+    await vi.waitFor(() => {
+      expect(service.getPlaylist('playlist-preview-compact')).not.toBeNull();
+    });
+
+    const compactPreviewUrl = await service.resolvePlaylistCoverPreview?.(
+      'playlist-preview-compact',
+      {
+        coverSizeHint: 'small',
+        preferCompactPreview: true,
+      }
+    );
+    const defaultPreviewUrl = await service.resolvePlaylistCoverPreview?.('playlist-preview-compact', {
+      coverSizeHint: 'small',
+    });
+
+    expect(compactPreviewUrl).toBe('pmp://cover/compact-preview-thumb-96px?size=small');
+    expect(defaultPreviewUrl).toBe('https://example.com/original-cover.jpg');
+    expect(service.getPlaylist('playlist-preview-compact')?.tracksHydrated).toBe(false);
+    expect(service.getPlaylist('playlist-preview-compact')?.tracks).toHaveLength(0);
+    expect(coverSpy).toHaveBeenCalledTimes(1);
+
+    coverSpy.mockRestore();
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('regenerates compact previews for asset.localhost playlist covers', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation(async (cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'music_library_db_list_playlists') {
+        const query = (payload as { query?: { kind?: string } } | undefined)?.query;
+        if (query?.kind === 'smart') {
+          return [];
+        }
+        return [
+          {
+            id: 'playlist-preview-asset-local',
+            ownerUid: 'local:default',
+            name: 'Asset Localhost Preview Playlist',
+            description: null,
+            coverUrl:
+              'https://asset.localhost/C%3A%5CUsers%5C31625%5CAppData%5CRoaming%5Ccom.pixelmatrix.player%5Cmusic-covers%5Ccover-stale-thumb-96px.jpg',
+            kind: 'manual',
+            sourceConnectorId: null,
+            sourcePlaylistId: null,
+            smartRuleJson: null,
+            isReadonly: false,
+            createdAtMs: 1700000000000,
+            updatedAtMs: 1700000000000,
+            lastOpenedAtMs: null,
+            trackCount: 1,
+            totalDuration: 180,
+          },
+        ];
+      }
+      if (cmd === 'music_library_db_upsert_playlist') {
+        return {
+          id: 'smart-recently-played',
+          ownerUid: 'local:default',
+          name: 'Recently Played',
+          description: null,
+          kind: 'smart',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: JSON.stringify({ type: 'recently_played', limit: 1000 }),
+          isReadonly: true,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000000,
+          lastOpenedAtMs: null,
+          trackCount: 0,
+          totalDuration: 0,
+        };
+      }
+      if (cmd === 'music_library_db_list_playlist_items') {
+        expect(payload).toMatchObject({
+          playlistId: 'playlist-preview-asset-local',
+          limit: 5,
+        });
+        return [
+          {
+            id: 'asset-local-preview-item-1',
+            playlistId: 'playlist-preview-asset-local',
+            position: 0,
+            trackPayloadJson: JSON.stringify({
+              id: 'asset-local-preview-track-1',
+              title: 'Asset Local Preview Track 1',
+              filePath: 'C:\\\\Music\\\\asset-local-preview-track-1.flac',
+              path: 'C:\\\\Music\\\\asset-local-preview-track-1.flac',
+              duration: 180,
+            }),
+            snapshotTitle: 'Asset Local Preview Track 1',
+            snapshotDurationSeconds: 180,
+            createdAtMs: 1700000000000,
+          },
+        ];
+      }
+      return [];
+    });
+
+    const coverSpy = vi
+      .spyOn(musicLibraryService, 'getCoverUrlForTrack')
+      .mockResolvedValue('pmp://cover/asset-local-regenerated-thumb-96px?size=small');
+
+    const service = new NativeAudioService();
+    await flushMicrotasks(6);
+    await vi.waitFor(() => {
+      expect(service.getPlaylist('playlist-preview-asset-local')).not.toBeNull();
+    });
+
+    const regeneratedPreviewUrl = await service.resolvePlaylistCoverPreview?.(
+      'playlist-preview-asset-local',
+      {
+        coverSizeHint: 'small',
+      }
+    );
+
+    expect(regeneratedPreviewUrl).toBe(
+      'pmp://cover/asset-local-regenerated-thumb-96px?size=small'
+    );
+    expect(service.getPlaylist('playlist-preview-asset-local')?.tracksHydrated).toBe(false);
+    expect(service.getPlaylist('playlist-preview-asset-local')?.tracks).toHaveLength(0);
+    expect(coverSpy).toHaveBeenCalledTimes(1);
+
+    coverSpy.mockRestore();
+    service.destroy();
+    restoreRuntime();
+  });
+
   it('plays summary-only playlists without materializing tracks back into playlist state', async () => {
     const restoreRuntime = enableMockTauriRuntime();
     const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
@@ -589,6 +797,38 @@ describe('NativeAudioService', () => {
 
     service.destroy();
     restoreRuntime();
+  });
+
+  it('keeps currentPlaylist summary-only when playing an already hydrated playlist', async () => {
+    const service = new NativeAudioService();
+    const playlist = service.createPlaylist('Hydrated Playback');
+
+    service.addTrackToPlaylist(playlist.id, {
+      id: 'hydrated-play-1',
+      title: 'Hydrated Play 1',
+      filePath: 'C:\\Music\\hydrated-play-1.mp3',
+      path: 'C:\\Music\\hydrated-play-1.mp3',
+      duration: 120,
+    });
+    service.addTrackToPlaylist(playlist.id, {
+      id: 'hydrated-play-2',
+      title: 'Hydrated Play 2',
+      filePath: 'C:\\Music\\hydrated-play-2.mp3',
+      path: 'C:\\Music\\hydrated-play-2.mp3',
+      duration: 180,
+    });
+
+    expect(service.getPlaylist(playlist.id)?.tracks).toHaveLength(2);
+
+    await service.playPlaylist(playlist.id);
+
+    expect(service.getState().queue).toHaveLength(2);
+    expect(service.getState().currentPlaylist?.id).toBe(playlist.id);
+    expect(service.getState().currentPlaylist?.tracks).toHaveLength(0);
+    expect(service.getState().currentPlaylist?.tracksHydrated).toBe(false);
+    expect(service.getPlaylist(playlist.id)?.tracks).toHaveLength(2);
+
+    service.destroy();
   });
 
   it('emits a coded error when track has no absolute file path', async () => {

@@ -1,6 +1,10 @@
 import React from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
 import { useAudioEngine } from '../../contexts/AudioEngineContext';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import {
+  invokeWithTelemetry,
+  type TauriInvokeTelemetryOptions,
+} from '../../services/telemetry/tauriInvokeTelemetry';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readData, STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate, setupDualListener } from '../../utils/windowCommunication';
 import { openVstManagerWindow } from '../../utils/vstManagerWindows';
@@ -48,6 +52,26 @@ type VstSessionStatus = {
 };
 
 const EVENT_VST_SESSION_STATUSES = 'vst-session-statuses';
+
+const telemetry = getTelemetryLogger('vst', 'DspRackPage');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function invokeDspRack<T>(
+  command: string,
+  args: Record<string, unknown> | undefined,
+  event: string,
+  options: Partial<TauriInvokeTelemetryOptions> = {}
+): Promise<T> {
+  return invokeWithTelemetry<T>(command, args, {
+    moduleId: 'vst',
+    component: 'DspRackPage',
+    event,
+    ...options,
+  });
+}
 
 function clamp(value: number, min: number, max: number) {
   if (!isFinite(value)) return min;
@@ -188,11 +212,19 @@ export const DspRackPage: React.FC = () => {
     setBusy(true);
     setError(null);
     try {
-      const graphResp = await invoke<DspGraphConfig>('native_audio_get_dsp_graph');
+      const graphResp = await invokeDspRack<DspGraphConfig>(
+        'native_audio_get_dsp_graph',
+        undefined,
+        'vst.graph.read'
+      );
       const nextGraph = graphResp && typeof graphResp === 'object' ? graphResp : { nodes: [] };
       setGraph(nextGraph);
       try {
-        const statuses = await invoke<VstSessionStatus[]>('native_audio_vst_list_session_statuses');
+        const statuses = await invokeDspRack<VstSessionStatus[]>(
+          'native_audio_vst_list_session_statuses',
+          undefined,
+          'vst.session-status.list'
+        );
         const map: Record<string, VstSessionStatus> = {};
         for (const status of statuses) {
           map[status.nodeId] = status;
@@ -318,10 +350,16 @@ export const DspRackPage: React.FC = () => {
         await broadcastDataUpdate(
           STORAGE_KEYS.NATIVE_AUDIO_GAIN_DB,
           gainDb,
-          TAURI_EVENTS.NATIVE_AUDIO_GAIN_DB_UPDATED
-        );
-        await invoke('native_audio_set_dsp_graph', { graph: next });
+        TAURI_EVENTS.NATIVE_AUDIO_GAIN_DB_UPDATED
+      );
+        await invokeDspRack('native_audio_set_dsp_graph', { graph: next }, 'vst.graph.apply');
       } catch (err) {
+        telemetry.error('vst.graph.apply.failed', {
+          message: getErrorMessage(err),
+          fields: {
+            nodeCount: next.nodes.length,
+          },
+        });
         setError(err instanceof Error ? err.message : String(err));
       }
     },
@@ -434,9 +472,11 @@ export const DspRackPage: React.FC = () => {
           <button
             type="button"
             onClick={() =>
-              void invoke<number>('native_audio_vst_bring_editors_to_front').catch((err) =>
-                setError(err instanceof Error ? err.message : String(err))
-              )
+              void invokeDspRack<number>(
+                'native_audio_vst_bring_editors_to_front',
+                undefined,
+                'vst.editor.bring-to-front'
+              ).catch((err) => setError(err instanceof Error ? err.message : String(err)))
             }
             disabled={busy}
           >
@@ -541,10 +581,14 @@ export const DspRackPage: React.FC = () => {
                       type="button"
                       title={node.enabled ? '打开插件原生界面' : '请先勾选“启用”该节点，再打开 Native UI'}
                       onClick={() =>
-                        void invoke('native_audio_vst_open_native_editor', {
-                          nodeId: node.id,
-                          title: `VST3 (${readStringField(node, 'pluginId') ?? 'vst'})`,
-                        }).catch((err) => setError(err instanceof Error ? err.message : String(err)))
+                        void invokeDspRack(
+                          'native_audio_vst_open_native_editor',
+                          {
+                            nodeId: node.id,
+                            title: `VST3 (${readStringField(node, 'pluginId') ?? 'vst'})`,
+                          },
+                          'vst.editor.open'
+                        ).catch((err) => setError(err instanceof Error ? err.message : String(err)))
                       }
                       disabled={busy || !node.enabled || !(readStringField(node, 'pluginId') ?? '').trim()}
                     >
@@ -556,9 +600,11 @@ export const DspRackPage: React.FC = () => {
                     <button
                       type="button"
                       onClick={() =>
-                        void invoke('native_audio_vst_close_native_editor', { nodeId: node.id }).catch((err) =>
-                          setError(err instanceof Error ? err.message : String(err))
-                        )
+                        void invokeDspRack(
+                          'native_audio_vst_close_native_editor',
+                          { nodeId: node.id },
+                          'vst.editor.close'
+                        ).catch((err) => setError(err instanceof Error ? err.message : String(err)))
                       }
                       disabled={busy || !(vstStatuses[node.id]?.nativeEditorOpen ?? false)}
                     >

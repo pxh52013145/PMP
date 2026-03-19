@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
 
 export interface NativeLibrarySourceUpsertInput {
   id: string;
@@ -2797,7 +2798,12 @@ export async function removeNativeLibrarySource(sourceId: string): Promise<void>
   if (!isTauriRuntime()) return;
   const normalized = sourceId.trim();
   if (!normalized) return;
-  await invoke('music_library_db_remove_source', { sourceId: normalized });
+  await invokeWithTelemetry('music_library_db_remove_source', { sourceId: normalized }, {
+    moduleId: 'music-library',
+    component: 'nativeLibraryDb',
+    event: 'music-library.db.remove-source',
+    successLevel: 'info',
+  });
 }
 
 export async function syncNativeLibraryTracks(
@@ -3081,9 +3087,16 @@ export async function queryNativeLibraryTracks(
 
   const payload = buildNativeLibraryTrackQueryPayload(query);
 
-  const raw = await invoke<unknown>('music_library_db_query_tracks', { query: payload }).catch(
-    () => null
-  );
+  const raw = await invokeWithTelemetry<unknown>(
+    'music_library_db_query_tracks',
+    { query: payload },
+    {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.db.query-tracks',
+      includeResultSize: true,
+    }
+  ).catch(() => null);
   if (!Array.isArray(raw)) return [];
 
   const tracks: NativeLibraryTrackRecord[] = [];
@@ -3101,9 +3114,18 @@ export async function queryNativeLibraryTracksPage(
   if (!isTauriRuntime()) return { items: [], total: 0 };
 
   const payload = buildNativeLibraryTrackQueryPayload(query);
-  const raw = await invoke<unknown>('music_library_db_query_tracks_page', {
-    query: payload,
-  }).catch(() => null);
+  const raw = await invokeWithTelemetry<unknown>(
+    'music_library_db_query_tracks_page',
+    {
+      query: payload,
+    },
+    {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.db.query-tracks.page',
+      includeResultSize: true,
+    }
+  ).catch(() => null);
 
   const parsed = ensureTrackPageResult(raw);
   if (!parsed) return { items: [], total: 0 };
@@ -3393,9 +3415,18 @@ export async function listNativeLibraryPlaylists(
         : undefined,
   };
 
-  const raw = await invoke<unknown>('music_library_db_list_playlists', {
-    query: payload,
-  }).catch(() => null);
+  const raw = await invokeWithTelemetry<unknown>(
+    'music_library_db_list_playlists',
+    {
+      query: payload,
+    },
+    {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.db.list-playlists',
+      includeResultSize: true,
+    }
+  ).catch(() => null);
   if (!Array.isArray(raw)) return [];
 
   const playlists: NativeLibraryPlaylistRecord[] = [];
@@ -3492,10 +3523,19 @@ export async function listNativeLibraryPlaylistItems(
       ? Math.max(1, Math.min(512, Math.floor(options.limit)))
       : undefined;
 
-  const raw = await invoke<unknown>('music_library_db_list_playlist_items', {
-    playlistId: normalizedPlaylistId,
-    limit,
-  }).catch(() => null);
+  const raw = await invokeWithTelemetry<unknown>(
+    'music_library_db_list_playlist_items',
+    {
+      playlistId: normalizedPlaylistId,
+      limit,
+    },
+    {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.db.list-playlist-items',
+      includeResultSize: true,
+    }
+  ).catch(() => null);
   if (!Array.isArray(raw)) return [];
 
   const result: NativeLibraryPlaylistItemRecord[] = [];

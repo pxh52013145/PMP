@@ -1,7 +1,11 @@
 import React from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
 import { readJson, writeJson } from '../../modules/storage';
 import { useLocale, useT } from '../../i18n';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import {
+  invokeWithTelemetry,
+  type TauriInvokeTelemetryOptions,
+} from '../../services/telemetry/tauriInvokeTelemetry';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import {
   readData,
@@ -11,6 +15,26 @@ import {
   setupDualListener,
 } from '../../utils/windowCommunication';
 import './VstManagerWindow.css';
+
+const telemetry = getTelemetryLogger('vst', 'VstManagerWindow');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function invokeVst<T>(
+  command: string,
+  args: Record<string, unknown> | undefined,
+  event: string,
+  options: Partial<TauriInvokeTelemetryOptions> = {}
+): Promise<T> {
+  return invokeWithTelemetry<T>(command, args, {
+    moduleId: 'vst',
+    component: 'VstManagerWindow',
+    event,
+    ...options,
+  });
+}
 
 type VstScanMode = 'fast' | 'full' | 'params';
 
@@ -716,9 +740,19 @@ export function VstManagerWindow() {
       setCompatBusy(true);
       setCompatError(null);
       try {
-        const resp = await invoke<unknown>('native_audio_vst_get_compatibility', { pluginId });
+        const resp = await invokeVst<unknown>(
+          'native_audio_vst_get_compatibility',
+          { pluginId },
+          'vst.compatibility.read'
+        );
         setCompatInfo(ensureCompatQueryResult(resp));
       } catch (err) {
+        telemetry.warn('vst.compatibility.read.failed', {
+          message: getErrorMessage(err),
+          fields: {
+            pluginId,
+          },
+        });
         setCompatInfo(null);
         setCompatError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -767,9 +801,20 @@ export function VstManagerWindow() {
       setCompatBusy(true);
       setCompatError(null);
       try {
-        await invoke('native_audio_vst_set_compat_rule', { scope: compatScope, key, rule: next });
+        await invokeVst(
+          'native_audio_vst_set_compat_rule',
+          { scope: compatScope, key, rule: next },
+          'vst.compatibility.rule.set'
+        );
         await loadCompatibility(pluginId);
       } catch (err) {
+        telemetry.error('vst.compatibility.rule.set.failed', {
+          message: getErrorMessage(err),
+          fields: {
+            scope: compatScope,
+            key,
+          },
+        });
         setCompatError(err instanceof Error ? err.message : String(err));
       } finally {
         setCompatBusy(false);
@@ -798,9 +843,20 @@ export function VstManagerWindow() {
     setCompatBusy(true);
     setCompatError(null);
     try {
-      await invoke('native_audio_vst_clear_compat_rule', { scope: compatScope, key });
+      await invokeVst(
+        'native_audio_vst_clear_compat_rule',
+        { scope: compatScope, key },
+        'vst.compatibility.rule.clear'
+      );
       await loadCompatibility(pluginId);
     } catch (err) {
+      telemetry.error('vst.compatibility.rule.clear.failed', {
+        message: getErrorMessage(err),
+        fields: {
+          scope: compatScope,
+          key,
+        },
+      });
       setCompatError(err instanceof Error ? err.message : String(err));
     } finally {
       setCompatBusy(false);
@@ -895,7 +951,11 @@ export function VstManagerWindow() {
     }
 
     try {
-      const graphResp = await invoke<unknown>('native_audio_get_dsp_graph').catch(() => null);
+      const graphResp = await invokeVst<unknown>(
+        'native_audio_get_dsp_graph',
+        undefined,
+        'vst.graph.read'
+      ).catch(() => null);
       setRackUsage(buildRackUsage(graphResp));
     } catch {
       setRackUsage({});
@@ -907,10 +967,16 @@ export function VstManagerWindow() {
     setError(null);
     try {
       const [libraryResp, scanResp, scanRunsResp, settingsResp] = await Promise.all([
-        invoke<unknown>('native_audio_vst_library_list_plugins').catch(() => []),
-        invoke<unknown>('native_audio_vst_scan_state').catch(() => null),
-        invoke<unknown>('native_audio_vst_library_list_scan_runs', { limit: 20 }).catch(() => []),
-        invoke<unknown>('native_audio_vst_get_settings').catch(() => null),
+        invokeVst<unknown>('native_audio_vst_library_list_plugins', undefined, 'vst.library.plugins.list').catch(
+          () => []
+        ),
+        invokeVst<unknown>('native_audio_vst_scan_state', undefined, 'vst.scan.state.read').catch(() => null),
+        invokeVst<unknown>(
+          'native_audio_vst_library_list_scan_runs',
+          { limit: 20 },
+          'vst.scan-runs.list'
+        ).catch(() => []),
+        invokeVst<unknown>('native_audio_vst_get_settings', undefined, 'vst.settings.read').catch(() => null),
       ]);
       const libraryPlugins = ensureLibraryPlugins(libraryResp);
       const nextScanState = ensureVstScanState(scanResp);
@@ -932,6 +998,9 @@ export function VstManagerWindow() {
         setSelectedPluginId(libraryPlugins[0].id);
       }
     } catch (err) {
+      telemetry.error('vst.window.refresh.failed', {
+        message: getErrorMessage(err),
+      });
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [isTauri, selectedPluginId]);
@@ -943,10 +1012,17 @@ export function VstManagerWindow() {
       setError(null);
       setVstSettings(next);
       try {
-        await invoke('native_audio_vst_set_settings', { settings: next });
+        await invokeVst('native_audio_vst_set_settings', { settings: next }, 'vst.settings.set');
       } catch (err) {
+        telemetry.error('vst.settings.set.failed', {
+          message: getErrorMessage(err),
+        });
         setError(err instanceof Error ? err.message : String(err));
-        const refreshed = await invoke<unknown>('native_audio_vst_get_settings').catch(() => null);
+        const refreshed = await invokeVst<unknown>(
+          'native_audio_vst_get_settings',
+          undefined,
+          'vst.settings.read'
+        ).catch(() => null);
         setVstSettings(ensureVstSettings(refreshed));
       } finally {
         setVstSettingsBusy(false);
@@ -964,10 +1040,14 @@ export function VstManagerWindow() {
         return;
       }
       try {
-        const resp = await invoke<unknown>('native_audio_vst_library_list_scan_events', {
-          runId: normalized,
-          limit: 80,
-        }).catch(() => []);
+        const resp = await invokeVst<unknown>(
+          'native_audio_vst_library_list_scan_events',
+          {
+            runId: normalized,
+            limit: 80,
+          },
+          'vst.scan-events.list'
+        ).catch(() => []);
         const events = ensureScanEvents(resp).sort((a, b) => a.atMs - b.atMs);
         setScanEvents(events);
       } catch {
@@ -986,9 +1066,11 @@ export function VstManagerWindow() {
         return;
       }
       try {
-        const resp = await invoke<unknown>('native_audio_vst_library_get_scan_run_summary', {
-          runId: normalized,
-        }).catch(() => null);
+        const resp = await invokeVst<unknown>(
+          'native_audio_vst_library_get_scan_run_summary',
+          { runId: normalized },
+          'vst.scan-summary.read'
+        ).catch(() => null);
         setScanSummary(ensureScanRunSummary(resp));
       } catch {
         setScanSummary(null);
@@ -1033,15 +1115,22 @@ export function VstManagerWindow() {
     if (scanRunning) return;
     setError(null);
     try {
-      await invoke<string>('native_audio_vst_scan_start', {
-        request: {
-          mode: verifyOnScan ? 'full' : 'fast',
-          pluginIds: [],
-          scanPaths: enabledScanPaths,
-          includeDefaultPaths,
+      await invokeVst<string>(
+        'native_audio_vst_scan_start',
+        {
+          request: {
+            mode: verifyOnScan ? 'full' : 'fast',
+            pluginIds: [],
+            scanPaths: enabledScanPaths,
+            includeDefaultPaths,
+          },
         },
-      });
+        'vst.scan.start'
+      );
     } catch (err) {
+      telemetry.error('vst.scan.start.failed', {
+        message: getErrorMessage(err),
+      });
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [enabledScanPaths, includeDefaultPaths, isTauri, scanRunning, verifyOnScan]);
@@ -1049,7 +1138,7 @@ export function VstManagerWindow() {
   const cancelScan = React.useCallback(async () => {
     if (!isTauri) return;
     try {
-      await invoke('native_audio_vst_scan_cancel');
+      await invokeVst('native_audio_vst_scan_cancel', undefined, 'vst.scan.cancel');
     } catch {
       // best-effort
     }
@@ -1061,15 +1150,25 @@ export function VstManagerWindow() {
     if (!selectedPluginId) return;
     setError(null);
     try {
-      await invoke<string>('native_audio_vst_scan_start', {
-        request: {
-          mode: 'params',
-          pluginIds: [selectedPluginId],
-          scanPaths: enabledScanPaths,
-          includeDefaultPaths,
+      await invokeVst<string>(
+        'native_audio_vst_scan_start',
+        {
+          request: {
+            mode: 'params',
+            pluginIds: [selectedPluginId],
+            scanPaths: enabledScanPaths,
+            includeDefaultPaths,
+          },
+        },
+        'vst.scan-params.start'
+      );
+    } catch (err) {
+      telemetry.error('vst.scan-params.start.failed', {
+        message: getErrorMessage(err),
+        fields: {
+          pluginId: selectedPluginId,
         },
       });
-    } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [enabledScanPaths, includeDefaultPaths, isTauri, scanRunning, selectedPluginId]);
@@ -1082,9 +1181,19 @@ export function VstManagerWindow() {
     if (!pluginId) return;
     setError(null);
     try {
-      await invoke('native_audio_vst_library_reset_plugin_scan_status', { pluginId });
+      await invokeVst(
+        'native_audio_vst_library_reset_plugin_scan_status',
+        { pluginId },
+        'vst.plugin.scan-status.reset'
+      );
       await refresh();
     } catch (err) {
+      telemetry.error('vst.plugin.scan-status.reset.failed', {
+        message: getErrorMessage(err),
+        fields: {
+          pluginId,
+        },
+      });
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [isTauri, refresh, scanRunning, selectedPluginId]);
@@ -1097,12 +1206,22 @@ export function VstManagerWindow() {
     if (!pluginId) return;
     setError(null);
     try {
-      await invoke('native_audio_vst_library_invalidate_plugin_params_cache', { pluginId });
+      await invokeVst(
+        'native_audio_vst_library_invalidate_plugin_params_cache',
+        { pluginId },
+        'vst.plugin.params-cache.invalidate'
+      );
       setSelectedParams([]);
       setParamsForPluginId(null);
       setParamsForScannedAtMs(null);
       await refresh();
     } catch (err) {
+      telemetry.error('vst.plugin.params-cache.invalidate.failed', {
+        message: getErrorMessage(err),
+        fields: {
+          pluginId,
+        },
+      });
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [isTauri, refresh, scanRunning, selectedPluginId]);
@@ -1117,9 +1236,11 @@ export function VstManagerWindow() {
 
       setParamsLoading(true);
       try {
-        const resp = await invoke<unknown>('native_audio_vst_library_get_plugin_params', {
-          pluginId: normalized,
-        }).catch(() => []);
+        const resp = await invokeVst<unknown>(
+          'native_audio_vst_library_get_plugin_params',
+          { pluginId: normalized },
+          'vst.plugin.params.read'
+        ).catch(() => []);
         const list = ensureLibraryParams(resp);
         if (paramsRequestIdRef.current !== requestId) return;
         setSelectedParams(list);
@@ -1130,6 +1251,12 @@ export function VstManagerWindow() {
         setSelectedParams([]);
         setParamsForPluginId(normalized);
         setParamsForScannedAtMs(scannedAtMs);
+        telemetry.error('vst.plugin.params.read.failed', {
+          message: getErrorMessage(err),
+          fields: {
+            pluginId: normalized,
+          },
+        });
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         if (paramsRequestIdRef.current === requestId) {
@@ -1183,7 +1310,7 @@ export function VstManagerWindow() {
         computeTotalGainDb(next.nodes),
         TAURI_EVENTS.NATIVE_AUDIO_GAIN_DB_UPDATED
       );
-      await invoke('native_audio_set_dsp_graph', { graph: next });
+      await invokeVst('native_audio_set_dsp_graph', { graph: next }, 'vst.graph.apply');
       setRackUsage(buildRackUsage(next));
     },
     [setRackUsage]
@@ -1201,11 +1328,16 @@ export function VstManagerWindow() {
         const graphResp =
           storedGraph !== null
             ? storedGraph
-            : await invoke<unknown>('native_audio_get_dsp_graph').catch(() => ({ nodes: [] }));
+            : await invokeVst<unknown>('native_audio_get_dsp_graph', undefined, 'vst.graph.read').catch(
+                () => ({ nodes: [] })
+              );
         const graph = ensureDspGraphConfig(graphResp);
         const next = updater(graph);
         await applyDspGraph(next);
       } catch (err) {
+        telemetry.error('vst.graph.mutate.failed', {
+          message: getErrorMessage(err),
+        });
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setApplyBusy(false);
@@ -1289,7 +1421,11 @@ export function VstManagerWindow() {
     setApplyBusy(true);
     setError(null);
     try {
-      const graphResp = await invoke<unknown>('native_audio_get_dsp_graph').catch(() => ({
+      const graphResp = await invokeVst<unknown>(
+        'native_audio_get_dsp_graph',
+        undefined,
+        'vst.graph.read'
+      ).catch(() => ({
         nodes: [],
       }));
       const graph = ensureDspGraphConfig(graphResp);
@@ -1305,6 +1441,12 @@ export function VstManagerWindow() {
       const next: DspGraphConfig = { nodes: [...graph.nodes, node] };
       await applyDspGraph(next);
     } catch (err) {
+      telemetry.error('vst.graph.add-node.failed', {
+        message: getErrorMessage(err),
+        fields: {
+          pluginId,
+        },
+      });
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setApplyBusy(false);

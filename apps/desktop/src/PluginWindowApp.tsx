@@ -8,9 +8,16 @@ import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
 import { QualityProvider } from './contexts/QualityContext';
+import { getTelemetryLogger } from './services/telemetry/TelemetryService';
 import { TAURI_EVENTS, setupTauriListenerWithPayload } from './utils/windowCommunication';
 import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
 import './PluginWindowApp.css';
+
+const telemetry = getTelemetryLogger('windowing', 'PluginWindowApp');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function parsePluginWindowHash(): { pluginId: string; windowId: string } | null {
   const hash = window.location.hash;
@@ -83,7 +90,9 @@ export function PluginWindowApp() {
           });
           return;
         } catch (error) {
-          console.warn('[PluginWindow] Failed to subscribe to focus events:', error);
+          telemetry.warn('plugin_window.focus_subscription.failed', {
+            message: readErrorMessage(error),
+          });
         }
       }
 

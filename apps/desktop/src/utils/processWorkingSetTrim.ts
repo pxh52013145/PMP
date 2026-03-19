@@ -2,6 +2,7 @@ import {
   trimProcessWorkingSet,
   type ProcessWorkingSetTrimTarget,
 } from '../modules/debug';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { isTauriRuntime } from './tauriRuntime';
 
 type ProcessWorkingSetTrimScheduleOptions = {
@@ -14,6 +15,11 @@ const scheduledTrimTimers = new Map<
   ProcessWorkingSetTrimTarget,
   ReturnType<typeof setTimeout>[]
 >();
+const telemetry = getTelemetryLogger('memory-governance', 'processWorkingSetTrim');
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function normalizeDelays(delaysMs?: readonly number[]): number[] {
   const source = Array.isArray(delaysMs) && delaysMs.length > 0 ? delaysMs : DEFAULT_DELAYS_MS;
@@ -58,8 +64,13 @@ export function scheduleProcessWorkingSetTrim(
       }
 
       void trimProcessWorkingSet(target).catch((error) => {
-        const reason = options?.reason ? ` (${options.reason})` : '';
-        console.warn(`[memory-trim] failed to trim ${target}${reason}:`, error);
+        telemetry.warn('process_working_set_trim.failed', {
+          message: readErrorMessage(error),
+          fields: {
+            target,
+            reason: options?.reason ?? null,
+          },
+        });
       });
     }, delayMs)
   );

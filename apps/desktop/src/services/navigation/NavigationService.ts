@@ -3,6 +3,7 @@ import { createServiceToken } from '../../kernel';
 import type { AppEvents } from '../../contracts/events';
 import type { NavigationPageData, NavigationPageType } from '../../contracts/navigation';
 import { parseNavigationParams } from '../../contracts/navigationParams';
+import { getTelemetryLogger } from '../telemetry/TelemetryService';
 
 export type NavigationSnapshot = {
   currentPage: NavigationPageData;
@@ -23,6 +24,7 @@ export class InMemoryNavigationService implements NavigationService {
 
   private history: NavigationPageData[] = [{ type: 'home' }];
   private currentIndex = 0;
+  private readonly telemetry = getTelemetryLogger('navigation', 'NavigationService');
 
   constructor(private readonly events: ScopedEventBus<AppEvents>) {}
 
@@ -57,6 +59,14 @@ export class InMemoryNavigationService implements NavigationService {
       const nextHistory = [...this.history];
       nextHistory[this.currentIndex] = nextPage;
       this.history = nextHistory;
+      this.telemetry.info('navigation.replace-current', {
+        fields: {
+          fromPage: currentPage.type,
+          toPage: nextPage.type,
+          historyLength: nextHistory.length,
+          currentIndex: this.currentIndex,
+        },
+      });
       this.emitChanged();
       return;
     }
@@ -71,12 +81,30 @@ export class InMemoryNavigationService implements NavigationService {
 
     this.history = nextHistory;
     this.currentIndex = nextHistory.length - 1;
+    this.telemetry.info('navigation.navigate', {
+      fields: {
+        fromPage: currentPage.type,
+        toPage: nextPage.type,
+        historyLength: nextHistory.length,
+        currentIndex: this.currentIndex,
+      },
+    });
     this.emitChanged();
   }
 
   goBack(): void {
     if (this.currentIndex <= 0) return;
+    const previousPage = this.history[this.currentIndex] ?? { type: 'home' };
     this.currentIndex -= 1;
+    const nextPage = this.history[this.currentIndex] ?? { type: 'home' };
+    this.telemetry.info('navigation.back', {
+      fields: {
+        fromPage: previousPage.type,
+        toPage: nextPage.type,
+        historyLength: this.history.length,
+        currentIndex: this.currentIndex,
+      },
+    });
     this.emitChanged();
   }
 

@@ -35,7 +35,14 @@ import {
 } from '../../utils/magnetPlacement';
 import { useConfirmDialog } from '../core/ConfirmDialog';
 import { useT } from '../../i18n';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import './EditorMagnetLibrary.css';
+
+const telemetry = getTelemetryLogger('editor', 'EditorMagnetLibrary');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 interface EditorMagnetLibraryProps {
   magnetLibrary: Magnet[];
@@ -436,7 +443,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
           ...position,
         });
       } catch (error) {
-        console.error('Failed to open editor window:', error);
+        telemetry.error('editor.creator-window.open.failed', {
+          message: getErrorMessage(error),
+        });
         // 出错时清除标记
         await broadcastDataUpdate(
           STORAGE_KEYS.CREATOR_WINDOW_OPEN,
@@ -668,7 +677,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
       {/* 拖动标题栏 */}
       <div className="editor-window-header" data-tauri-drag-region>
         <span className="window-title" data-tauri-drag-region>
-          ⋮⋮
+          {t('windows.editor.library.title')}
         </span>
       </div>
       {/* 内容区域 */}
@@ -1108,7 +1117,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                   ...position,
                 });
               } catch (error) {
-                console.error('Failed to open creator window:', error);
+                telemetry.error('editor.creator-window.open.failed', {
+                  message: getErrorMessage(error),
+                });
                 // 出错时清除标记
                 await broadcastDataUpdate(
                   STORAGE_KEYS.CREATOR_WINDOW_OPEN,

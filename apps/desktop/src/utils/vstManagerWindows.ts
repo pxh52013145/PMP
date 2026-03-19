@@ -1,6 +1,9 @@
-import { invoke } from '@tauri-apps/api/tauri';
 import { calculatePluginWindowPosition } from './pluginWindows';
+import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../services/telemetry/tauriInvokeTelemetry';
 import { isTauriRuntime } from './tauriRuntime';
+
+const telemetry = getTelemetryLogger('windowing', 'vstManagerWindow');
 
 export async function openVstManagerWindow(options?: {
   title?: string;
@@ -24,17 +27,35 @@ export async function openVstManagerWindow(options?: {
       ? { x: options.x, y: options.y, width, height }
       : await calculatePluginWindowPosition({ width, height });
 
-  await invoke('open_vst_manager_window', {
+  telemetry.info('window.vst-manager.open.requested', {
+    fields: {
+      width: position.width,
+      height: position.height,
+      hasExplicitTitle: typeof options?.title === 'string' && options.title.trim().length > 0,
+    },
+  });
+  await invokeWithTelemetry('open_vst_manager_window', {
     x: position.x,
     y: position.y,
     width: position.width,
     height: position.height,
     title: options?.title ?? null,
+  }, {
+    moduleId: 'windowing',
+    component: 'vstManagerWindow',
+    event: 'window.vst-manager.open',
+    successLevel: 'info',
   });
 }
 
 export async function closeVstManagerWindow(): Promise<void> {
   if (!isTauriRuntime()) return;
-  await invoke('close_vst_manager_window');
+  telemetry.info('window.vst-manager.close.requested');
+  await invokeWithTelemetry('close_vst_manager_window', undefined, {
+    moduleId: 'windowing',
+    component: 'vstManagerWindow',
+    event: 'window.vst-manager.close',
+    successLevel: 'info',
+  });
 }
 

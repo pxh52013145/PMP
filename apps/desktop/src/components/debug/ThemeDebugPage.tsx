@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useT } from '../../i18n';
 import { listRegisteredMagnetRenderers, type MagnetRendererDefinition } from '../../magnet-system/registry';
 import { listMagnetVariants } from '../../magnet-system/variantRegistry';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
 import type { ThemeBindingId } from '../../themes/types/theme';
 import { useThemeBindingEditor } from '../../themes/useThemeBindingEditor';
@@ -35,6 +36,8 @@ type ThemeDebugMagnetOption = {
   groupId: string;
   groupLabel: string;
 };
+
+const telemetry = getTelemetryLogger('debug', 'ThemeDebugPage');
 
 const DEBUG_MAGNET_LABEL_KEYS: Record<string, string> = {
   'track-info': 'editor.theme-debug.component.option.track-info',
@@ -147,6 +150,10 @@ function formatRendererGroup(
   return translated === key ? value : translated;
 }
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export const ThemeDebugPage: React.FC = () => {
   const t = useT();
   const { theme, applyTheme } = useTheme();
@@ -252,7 +259,13 @@ export const ThemeDebugPage: React.FC = () => {
       applyTheme(parsed);
     } catch (error) {
       alert(t('editor.theme-debug.alert.invalidThemeJson'));
-      console.error('[ThemeDebug] Failed to parse theme json', error);
+      telemetry.error('theme_debug.theme_json.parse_failed', {
+        message: getErrorMessage(error),
+        fields: {
+          configMode,
+          selectedMagnet,
+        },
+      });
     }
   };
 
@@ -267,7 +280,15 @@ export const ThemeDebugPage: React.FC = () => {
       alert(t('editor.theme-debug.alert.themeFileLoaded', { name: file.name }));
     } catch (error) {
       alert(t('editor.theme-debug.alert.themeFileLoadFailed'));
-      console.error('[ThemeDebug] Failed to load theme file', error);
+      telemetry.error('theme_debug.theme_file.load_failed', {
+        message: getErrorMessage(error),
+        fields: {
+          configMode,
+          selectedMagnet,
+          fileName: file.name,
+          fileSize: file.size,
+        },
+      });
     }
   };
 
@@ -308,9 +329,15 @@ export const ThemeDebugPage: React.FC = () => {
         await applyTheme(JSON.parse(text));
       }
     } catch (error) {
-      console.error('[ThemeDebug] Failed to import theme', error);
+      telemetry.error('theme_debug.import.failed', {
+        message: getErrorMessage(error),
+        fields: {
+          configMode,
+          selectedMagnet,
+        },
+      });
     }
-  }, [applyTheme, t]);
+  }, [applyTheme, configMode, selectedMagnet, t]);
 
   const handleExportTheme = useCallback(() => {
     const configStr = JSON.stringify(theme, null, 2);
@@ -334,7 +361,7 @@ export const ThemeDebugPage: React.FC = () => {
     <div className="editor-debug">
       <div className="editor-window-header" data-tauri-drag-region>
         <span className="window-title" data-tauri-drag-region>
-          鈰嫯
+          {t('editor.theme-debug.title')}
         </span>
       </div>
 
