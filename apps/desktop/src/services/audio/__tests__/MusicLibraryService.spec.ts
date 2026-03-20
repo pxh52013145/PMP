@@ -77,7 +77,7 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
     });
 
     expect(invoke).toHaveBeenCalledWith(
-      'music_library_get_cover',
+      'music_library_cover_lease',
       expect.objectContaining({ path: 'C:\\\\Music\\\\song.mp3' })
     );
     expect(url?.startsWith('blob:')).toBe(true);
@@ -100,7 +100,7 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
     });
 
     expect(url).toBe(embedded);
-    expect(invoke).not.toHaveBeenCalledWith('music_library_get_cover', expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith('music_library_cover_lease', expect.anything());
   });
 
   it('builds pmp cover url with size hint and requests matching thumbnail edge', async () => {
@@ -129,7 +129,7 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
     );
 
     expect(invoke).toHaveBeenCalledWith(
-      'music_library_get_cover',
+      'music_library_cover_lease',
       expect.objectContaining({ path: 'C:\\Music\\sized.mp3', maxEdgePx: 96 })
     );
     expect(url?.startsWith('blob:')).toBe(true);
@@ -163,7 +163,7 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
     );
 
     expect(invoke).toHaveBeenCalledWith(
-      'music_library_get_cover',
+      'music_library_cover_lease',
       expect.objectContaining({ path: 'C:\\Music\\sized-medium.mp3', maxEdgePx: 128 })
     );
     expect(url?.startsWith('blob:')).toBe(true);
@@ -210,6 +210,24 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
 
     expect(service.getCoverRuntimeCacheStats().coverUrlCacheEntries).toBe(0);
     expect(service.getCoverRuntimeCacheStats().coverBlobUrlCacheEntries).toBe(0);
+  });
+
+  it('releases pmp cover leases back to Rust when runtime urls are dropped', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockResolvedValue(undefined);
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    service.releaseCoverUrls([
+      'pmp://cover/cover-lease-thumb-96px?size=small',
+      'pmp://cover/cover-lease-thumb-96px?size=small',
+    ]);
+    await Promise.resolve();
+
+    expect(invokeMock).toHaveBeenCalledWith('music_library_cover_release', {
+      keys: ['cover-lease-thumb-96px'],
+    });
   });
 
   it('uses full projection when native grouping depends on a custom field', async () => {
@@ -498,7 +516,7 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
     });
 
     expect(invoke).toHaveBeenCalledWith(
-      'music_library_get_cover',
+      'music_library_cover_lease',
       expect.objectContaining({ path: 'C:\\Music\\dev.mp3' })
     );
     expect(url?.startsWith('blob:')).toBe(true);
@@ -540,7 +558,7 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
     const url = await service.getCoverUrlForTrack(track, { bypassRuntimePolicy: true });
     expect(url?.startsWith('blob:')).toBe(true);
     expect(invoke).toHaveBeenCalledWith(
-      'music_library_get_cover',
+      'music_library_cover_lease',
       expect.objectContaining({ path: 'C:\\Music\\hidden.mp3' })
     );
   });
@@ -562,7 +580,7 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
 
     expect(url).toBeUndefined();
     expect(invokeMock).toHaveBeenCalledWith(
-      'music_library_get_cover',
+      'music_library_cover_lease',
       expect.objectContaining({ path: 'C:\\Music\\stale-cover.mp3' })
     );
   });
@@ -723,6 +741,422 @@ describe('MusicLibraryService local resolver and playback stats', () => {
       quickFingerprint: 'qf2:abcdef1234567890',
       reason: 'local-miss',
     });
+  });
+});
+
+describe('MusicLibraryService desktop authoritative reads', () => {
+  const createMockTrackMirrorDb = (trackCount: number) => {
+    const transactionSpy = vi.fn((storeNames: string[], mode: IDBTransactionMode) => {
+      const transaction = {
+        oncomplete: null as ((event: Event) => void) | null,
+        onerror: null as ((event: Event) => void) | null,
+        onabort: null as ((event: Event) => void) | null,
+        objectStore: vi.fn(() => ({
+          count: () => {
+            const request = {} as IDBRequest<number>;
+            queueMicrotask(() => {
+              Object.defineProperty(request, 'result', {
+                configurable: true,
+                value: trackCount,
+              });
+              request.onsuccess?.({ target: request } as unknown as Event);
+            });
+            return request;
+          },
+          clear: () => {
+            const request = {} as IDBRequest<undefined>;
+            queueMicrotask(() => {
+              request.onsuccess?.({ target: request } as unknown as Event);
+              transaction.oncomplete?.(new Event('complete'));
+            });
+            return request;
+          },
+        })),
+      };
+
+      expect(storeNames).toEqual(['tracks']);
+      expect(mode === 'readonly' || mode === 'readwrite').toBe(true);
+      return transaction as unknown as IDBTransaction;
+    });
+
+    const db = {
+      objectStoreNames: {
+        contains: (name: string) => name === 'tracks',
+      },
+      transaction: transactionSpy,
+    } as unknown as IDBDatabase;
+
+    return { db, transactionSpy };
+  };
+
+  const createMockCoverCacheDb = (coverCacheRecordCount: number) => {
+    const transactionSpy = vi.fn((storeNames: string[], mode: IDBTransactionMode) => {
+      const transaction = {
+        oncomplete: null as ((event: Event) => void) | null,
+        onerror: null as ((event: Event) => void) | null,
+        onabort: null as ((event: Event) => void) | null,
+        objectStore: vi.fn(() => ({
+          count: () => {
+            const request = {} as IDBRequest<number>;
+            queueMicrotask(() => {
+              Object.defineProperty(request, 'result', {
+                configurable: true,
+                value: coverCacheRecordCount,
+              });
+              request.onsuccess?.({ target: request } as unknown as Event);
+            });
+            return request;
+          },
+          clear: () => {
+            const request = {} as IDBRequest<undefined>;
+            queueMicrotask(() => {
+              request.onsuccess?.({ target: request } as unknown as Event);
+              transaction.oncomplete?.(new Event('complete'));
+            });
+            return request;
+          },
+        })),
+      };
+
+      expect(storeNames).toEqual(['coverCache']);
+      expect(mode === 'readonly' || mode === 'readwrite').toBe(true);
+      return transaction as unknown as IDBTransaction;
+    });
+
+    const db = {
+      objectStoreNames: {
+        contains: (name: string) => name === 'coverCache',
+      },
+      transaction: transactionSpy,
+    } as unknown as IDBDatabase;
+
+    return { db, transactionSpy };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    clearCloudPlaybackFallbackQueue();
+
+    delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    (MusicLibraryService as unknown as { instance?: unknown }).instance = undefined;
+    (MusicLibraryService as unknown as { startupRefreshScheduled?: boolean }).startupRefreshScheduled = false;
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+  });
+
+  it('does not fallback to IndexedDB for getTrackById when desktop native read is unavailable', async () => {
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const nativeReadSpy = vi
+      .spyOn(service as unknown as { tryGetTrackByIdFromNativeDb: (trackId: string) => Promise<unknown> }, 'tryGetTrackByIdFromNativeDb')
+      .mockResolvedValue({ status: 'unavailable' });
+    const ensureDbSpy = vi
+      .spyOn(service as unknown as { ensureDB: () => Promise<IDBDatabase> }, 'ensureDB')
+      .mockRejectedValue(new Error('IndexedDB fallback should stay disabled in desktop runtime'));
+
+    const track = await service.getTrackById('track-desktop-miss');
+
+    expect(track).toBeNull();
+    expect(nativeReadSpy).toHaveBeenCalledWith('track-desktop-miss');
+    expect(ensureDbSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not fallback to IndexedDB for getTracksByArtist when desktop native read is unavailable', async () => {
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const nativeReadSpy = vi
+      .spyOn(service as unknown as { tryGetTracksByArtistFromNativeDb: (artist: string) => Promise<unknown> }, 'tryGetTracksByArtistFromNativeDb')
+      .mockResolvedValue({ status: 'unavailable' });
+    const ensureDbSpy = vi
+      .spyOn(service as unknown as { ensureDB: () => Promise<IDBDatabase> }, 'ensureDB')
+      .mockRejectedValue(new Error('IndexedDB fallback should stay disabled in desktop runtime'));
+
+    const tracks = await service.getTracksByArtist('Desktop Artist');
+
+    expect(tracks).toEqual([]);
+    expect(nativeReadSpy).toHaveBeenCalledWith('Desktop Artist');
+    expect(ensureDbSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not fallback to IndexedDB for getAllArtists when desktop native read is unavailable', async () => {
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const nativeReadSpy = vi
+      .spyOn(service as unknown as { tryGetAllArtistsFromNativeDb: () => Promise<unknown> }, 'tryGetAllArtistsFromNativeDb')
+      .mockResolvedValue({ status: 'unavailable' });
+    const ensureDbSpy = vi
+      .spyOn(service as unknown as { ensureDB: () => Promise<IDBDatabase> }, 'ensureDB')
+      .mockRejectedValue(new Error('IndexedDB fallback should stay disabled in desktop runtime'));
+
+    const artists = await service.getAllArtists();
+
+    expect(artists).toEqual([]);
+    expect(nativeReadSpy).toHaveBeenCalledTimes(1);
+    expect(ensureDbSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not fallback to IndexedDB for getAllGenres when desktop native read is unavailable', async () => {
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const nativeReadSpy = vi
+      .spyOn(service as unknown as { tryGetAllGenresFromNativeDb: () => Promise<unknown> }, 'tryGetAllGenresFromNativeDb')
+      .mockResolvedValue({ status: 'unavailable' });
+    const ensureDbSpy = vi
+      .spyOn(service as unknown as { ensureDB: () => Promise<IDBDatabase> }, 'ensureDB')
+      .mockRejectedValue(new Error('IndexedDB fallback should stay disabled in desktop runtime'));
+
+    const genres = await service.getAllGenres();
+
+    expect(genres).toEqual([]);
+    expect(nativeReadSpy).toHaveBeenCalledTimes(1);
+    expect(ensureDbSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not mirror play-count updates into IndexedDB in desktop runtime', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'music_library_db_mark_track_played') {
+        return Promise.resolve(true);
+      }
+      return Promise.resolve(null);
+    });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const ensureDbSpy = vi
+      .spyOn(service as unknown as { ensureDB: () => Promise<IDBDatabase> }, 'ensureDB')
+      .mockRejectedValue(new Error('Desktop play-count updates should stay on native owner'));
+
+    const updated = await service.markTrackPlayed('track-desktop-write', {
+      playedAtMs: 1700000123.8,
+    });
+
+    expect(updated).toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith('music_library_db_mark_track_played', {
+      trackId: 'track-desktop-write',
+      playedAtMs: 1700000123,
+    });
+    expect(ensureDbSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not clear IndexedDB track mirror in desktop runtime', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'music_library_db_clear_tracks') {
+        return Promise.resolve(12);
+      }
+      return Promise.resolve(null);
+    });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const ensureDbSpy = vi
+      .spyOn(service as unknown as { ensureDB: () => Promise<IDBDatabase> }, 'ensureDB')
+      .mockRejectedValue(new Error('Desktop clear should not touch IndexedDB track mirror'));
+
+    await service.clearLibrary();
+
+    expect(invokeMock).toHaveBeenCalledWith('music_library_db_clear_tracks');
+    expect(ensureDbSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not delete single desktop tracks from IndexedDB mirror', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string, payload?: { trackIds?: string[] }) => {
+      if (cmd === 'music_library_db_delete_tracks') {
+        return Promise.resolve(payload?.trackIds?.length ?? 0);
+      }
+      return Promise.resolve(null);
+    });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const ensureDbSpy = vi
+      .spyOn(service as unknown as { ensureDB: () => Promise<IDBDatabase> }, 'ensureDB')
+      .mockRejectedValue(new Error('Desktop delete should not touch IndexedDB track mirror'));
+
+    await service.deleteTrack(' track-desktop-delete ');
+
+    expect(invokeMock).toHaveBeenCalledWith('music_library_db_delete_tracks', {
+      trackIds: ['track-desktop-delete'],
+    });
+    expect(ensureDbSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not delete multiple desktop tracks from IndexedDB mirror', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string, payload?: { trackIds?: string[] }) => {
+      if (cmd === 'music_library_db_delete_tracks') {
+        return Promise.resolve(payload?.trackIds?.length ?? 0);
+      }
+      return Promise.resolve(null);
+    });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const ensureDbSpy = vi
+      .spyOn(service as unknown as { ensureDB: () => Promise<IDBDatabase> }, 'ensureDB')
+      .mockRejectedValue(
+        new Error('Desktop bulk delete should not touch IndexedDB track mirror')
+      );
+
+    await service.deleteMultipleTracks([' track-1 ', '', 'track-2']);
+
+    expect(invokeMock).toHaveBeenCalledWith('music_library_db_delete_tracks', {
+      trackIds: ['track-1', 'track-2'],
+    });
+    expect(ensureDbSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not fallback to IndexedDB mirror for backend scan diffs in desktop runtime', async () => {
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const nativeStoredSpy = vi
+      .spyOn(
+        service as unknown as {
+          tryGetStoredTracksForBackendScanFromNativeDb: (
+            folderPath: string,
+            pathId?: string
+          ) => Promise<unknown>;
+        },
+        'tryGetStoredTracksForBackendScanFromNativeDb'
+      )
+      .mockResolvedValue(null);
+    const ensureDbSpy = vi
+      .spyOn(service as unknown as { ensureDB: () => Promise<IDBDatabase> }, 'ensureDB')
+      .mockRejectedValue(
+        new Error('Desktop scan diff should not fallback to IndexedDB track mirror')
+      );
+
+    const tracks = await (
+      service as unknown as {
+        getStoredTracksForBackendScan: (
+          folderPath: string,
+          pathId?: string
+        ) => Promise<unknown>;
+      }
+    ).getStoredTracksForBackendScan('C:\\Music', 'source-1');
+
+    expect(tracks).toEqual([]);
+    expect(nativeStoredSpy).toHaveBeenCalledWith('C:\\Music', 'source-1');
+    expect(ensureDbSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not persist desktop cover metadata into IndexedDB track mirror', async () => {
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const ensureDbSpy = vi
+      .spyOn(service as unknown as { ensureDB: () => Promise<IDBDatabase> }, 'ensureDB')
+      .mockRejectedValue(
+        new Error('Desktop cover resolution should not persist track mirror metadata')
+      );
+
+    await (
+      service as unknown as {
+        maybeUpdateTrackCoverInDB: (
+          audioPath: string,
+          coverUrl: string,
+          coverKey: string
+        ) => Promise<void>;
+      }
+    ).maybeUpdateTrackCoverInDB(
+      'C:\\Music\\cover-target.flac',
+      'pmp://cover/cover-target-thumb-96px?size=small',
+      'cover-target-thumb-96px'
+    );
+
+    expect(ensureDbSpy).not.toHaveBeenCalled();
+  });
+
+  it('vacuums legacy desktop track mirror records when IndexedDB still contains old tracks', async () => {
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const { db, transactionSpy } = createMockTrackMirrorDb(37);
+
+    await (
+      service as unknown as {
+        maybeVacuumDesktopLegacyTrackMirror: (db: IDBDatabase) => Promise<void>;
+      }
+    ).maybeVacuumDesktopLegacyTrackMirror(db);
+
+    expect(transactionSpy).toHaveBeenCalledTimes(2);
+    expect(transactionSpy.mock.calls[0]).toEqual([['tracks'], 'readonly']);
+    expect(transactionSpy.mock.calls[1]).toEqual([['tracks'], 'readwrite']);
+  });
+
+  it('runs desktop legacy track mirror vacuum only once per service instance', async () => {
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const { db, transactionSpy } = createMockTrackMirrorDb(12);
+
+    await (
+      service as unknown as {
+        maybeVacuumDesktopLegacyTrackMirror: (db: IDBDatabase) => Promise<void>;
+      }
+    ).maybeVacuumDesktopLegacyTrackMirror(db);
+    await (
+      service as unknown as {
+        maybeVacuumDesktopLegacyTrackMirror: (db: IDBDatabase) => Promise<void>;
+      }
+    ).maybeVacuumDesktopLegacyTrackMirror(db);
+
+    expect(transactionSpy).toHaveBeenCalledTimes(2);
+    expect(transactionSpy.mock.calls[0]).toEqual([['tracks'], 'readonly']);
+    expect(transactionSpy.mock.calls[1]).toEqual([['tracks'], 'readwrite']);
+  });
+
+  it('vacuums deprecated desktop coverCache records when IndexedDB still contains cached covers', async () => {
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const { db, transactionSpy } = createMockCoverCacheDb(9);
+
+    await (
+      service as unknown as {
+        maybeVacuumDesktopLegacyCoverCache: (db: IDBDatabase) => Promise<void>;
+      }
+    ).maybeVacuumDesktopLegacyCoverCache(db);
+
+    expect(transactionSpy).toHaveBeenCalledTimes(2);
+    expect(transactionSpy.mock.calls[0]).toEqual([['coverCache'], 'readonly']);
+    expect(transactionSpy.mock.calls[1]).toEqual([['coverCache'], 'readwrite']);
+  });
+
+  it('runs desktop coverCache vacuum only once per service instance', async () => {
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const { db, transactionSpy } = createMockCoverCacheDb(5);
+
+    await (
+      service as unknown as {
+        maybeVacuumDesktopLegacyCoverCache: (db: IDBDatabase) => Promise<void>;
+      }
+    ).maybeVacuumDesktopLegacyCoverCache(db);
+    await (
+      service as unknown as {
+        maybeVacuumDesktopLegacyCoverCache: (db: IDBDatabase) => Promise<void>;
+      }
+    ).maybeVacuumDesktopLegacyCoverCache(db);
+
+    expect(transactionSpy).toHaveBeenCalledTimes(2);
+    expect(transactionSpy.mock.calls[0]).toEqual([['coverCache'], 'readonly']);
+    expect(transactionSpy.mock.calls[1]).toEqual([['coverCache'], 'readwrite']);
   });
 });
 

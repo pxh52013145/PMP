@@ -2453,17 +2453,6 @@ impl NativeAudioEngine {
         self.set_state(PlaybackState::Stopped);
     }
 
-    pub(crate) fn sync_queue_state(&mut self, queue: Vec<PathBuf>, current_index: i32) {
-        self.queue_initialized = true;
-        self.queue = queue;
-        let max_index = (self.queue.len() as i32).saturating_sub(1);
-        self.current_index = current_index.clamp(-1, max_index);
-
-        if self.queue.is_empty() || self.current_index < 0 {
-            self.release_runtime_state_for_empty_queue();
-        }
-    }
-
     pub(crate) fn append_queue_state(&mut self, entries: Vec<PathBuf>) {
         if entries.is_empty() {
             return;
@@ -2835,7 +2824,6 @@ impl NativeAudioEngine {
                 (start_sample as f64) / (sample_rate as f64 * channels as f64).max(1.0);
 
             // In-memory seek must never recreate the sink/output stream; it should be a fast
-            // pointer jump (VCP-style). Switch the mixer source in-place with a ~1ms crossfade
             // to avoid clicks without introducing a perceptible gap.
             let seek_fade_frames = 64u64;
             mixer.crossfade_to(
@@ -4001,7 +3989,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_queue_state_empty_blocks_until_slow_sink_is_dropped() {
+    fn clear_queue_state_empty_blocks_until_slow_sink_is_dropped() {
         let backend_impl = Arc::new(TransportModeBackend::new("rodio-cpal"));
         let backend: Arc<dyn AudioOutputBackend> = backend_impl.clone();
         let mut engine = NativeAudioEngine::new_with_backend(backend);
@@ -4023,7 +4011,7 @@ mod tests {
         engine.desired_playback_state = PlaybackState::Paused;
 
         let started = Instant::now();
-        engine.sync_queue_state(Vec::new(), -1);
+        engine.clear_queue_state();
         let elapsed = started.elapsed();
 
         assert!(
@@ -4033,13 +4021,13 @@ mod tests {
         assert_eq!(stop_calls.load(Ordering::Acquire), 1);
         assert!(
             dropped.load(Ordering::Acquire),
-            "slow sink should already be dropped before sync_queue_state returns"
+            "slow sink should already be dropped before clear_queue_state returns"
         );
         assert_eq!(backend_impl.close_stream_calls.load(Ordering::Relaxed), 1);
     }
 
     #[test]
-    fn sync_queue_state_empty_aggressively_cools_runtime_state() {
+    fn clear_queue_state_empty_aggressively_cools_runtime_state() {
         let backend_impl = Arc::new(TransportModeBackend::new("rodio-cpal"));
         let backend: Arc<dyn AudioOutputBackend> = backend_impl.clone();
         let mut engine = NativeAudioEngine::new_with_backend(backend);
@@ -4066,7 +4054,7 @@ mod tests {
         engine.playback_state = PlaybackState::Paused;
         engine.desired_playback_state = PlaybackState::Paused;
 
-        engine.sync_queue_state(Vec::new(), -1);
+        engine.clear_queue_state();
 
         assert!(engine.queue.is_empty());
         assert!(engine.current_track.is_none());

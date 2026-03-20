@@ -57,7 +57,6 @@ import {
   VolumeCommandCoalescer,
 } from './audioCommandCoalescers';
 import { DynamicSrcPolicyExecutor } from './dynamicSrcPolicyExecutor';
-import { NativeAudioQueueSyncController } from './nativeAudioQueueSyncController';
 import {
   getDynamicSrcAdaptiveScale,
   resolveDynamicSrcAdaptiveProfile,
@@ -172,6 +171,41 @@ function readTelemetryErrorMessage(error: unknown): string {
   } catch {
     return String(error);
   }
+}
+
+const PLAYLIST_QUEUE_PAGE_SIZE = 120;
+
+function buildContiguousPlaylistIndexRanges(
+  indexes: readonly number[]
+): Array<{ offset: number; limit: number }> {
+  if (indexes.length === 0) {
+    return [];
+  }
+
+  const ranges: Array<{ offset: number; limit: number }> = [];
+  let start = indexes[0] ?? 0;
+  let previous = start;
+
+  for (let index = 1; index < indexes.length; index += 1) {
+    const current = indexes[index] ?? previous;
+    if (current === previous + 1) {
+      previous = current;
+      continue;
+    }
+
+    ranges.push({
+      offset: start,
+      limit: previous - start + 1,
+    });
+    start = current;
+    previous = current;
+  }
+
+  ranges.push({
+    offset: start,
+    limit: previous - start + 1,
+  });
+  return ranges;
 }
 
 function buildTrackTelemetryFields(track: Track | null | undefined): Record<string, unknown> {
@@ -921,7 +955,7 @@ export class NativeAudioService implements IAudioService {
       const limit = this.resolveRecentSmartPlaylistLimit(playlist.smartRuleJson);
       let tracks = this.parseTracksFromPlaylistItems(
         playlistId,
-        await listNativeLibraryPlaylistItems(playlistId)
+        await listNativeLibraryPlaylistItems(playlistId, { limit })
       ).slice(0, limit);
 
       if (
@@ -1001,6 +1035,141 @@ export class NativeAudioService implements IAudioService {
       });
       return playlist;
     }
+  }
+
+  private async loadPlaylistTracksForQueuePlayback(
+    playlistId: string
+  ): Promise<{ playlist: Playlist; tracks: Track[] } | null> {
+    const normalizedPlaylistId = String(playlistId || '').trim();
+    if (!normalizedPlaylistId) return null;
+
+    const playlist = this.getPlaylist(normalizedPlaylistId);
+    if (!playlist) return null;
+    if (playlist.tracksHydrated !== false) {
+      return {
+        playlist,
+        tracks: playlist.tracks,
+      };
+    }
+
+    if (!isTauriRuntime()) {
+      const resolvedPlaylist = await this.resolvePlaylistForQueuePlayback(normalizedPlaylistId);
+      if (!resolvedPlaylist) return null;
+      return {
+        playlist: resolvedPlaylist,
+        tracks: resolvedPlaylist.tracks,
+      };
+    }
+
+    const tracks: Track[] = [];
+    let offset = 0;
+    let total =
+      typeof playlist.trackCount === 'number' && Number.isFinite(playlist.trackCount)
+        ? Math.max(0, Math.floor(playlist.trackCount))
+        : 0;
+
+    while (offset === 0 || offset < total) {
+      const page = await this.queryPlaylistTracksPage(normalizedPlaylistId, {
+        sortField: 'default',
+        sortDirection: 'asc',
+        limit: PLAYLIST_QUEUE_PAGE_SIZE,
+        offset,
+      });
+      const items = page?.items ?? [];
+      if (typeof page?.total === 'number' && Number.isFinite(page.total)) {
+        total = Math.max(0, Math.floor(page.total));
+      }
+      if (items.length === 0) {
+        break;
+      }
+      tracks.push(...items.map((item) => item.track));
+      offset += items.length;
+      if (items.length < PLAYLIST_QUEUE_PAGE_SIZE) {
+        break;
+      }
+    }
+
+    return {
+      playlist,
+      tracks,
+    };
+  }
+
+  private async loadPlaylistTrackSelectionForQueue(
+    playlistId: string,
+    trackIndexes: readonly number[]
+  ): Promise<{ playlist: Playlist; normalizedIndexes: number[]; tracks: Track[] } | null> {
+    const normalizedPlaylistId = String(playlistId || '').trim();
+    if (!normalizedPlaylistId) return null;
+
+    const playlist = this.getPlaylist(normalizedPlaylistId);
+    if (!playlist) return null;
+
+    const normalizedIndexes = this.normalizePlaylistTrackIndexes(playlist, trackIndexes);
+    if (normalizedIndexes.length === 0) {
+      return {
+        playlist,
+        normalizedIndexes,
+        tracks: [],
+      };
+    }
+
+    if (playlist.tracksHydrated !== false) {
+      return {
+        playlist,
+        normalizedIndexes,
+        tracks: normalizedIndexes
+          .map((index) => playlist.tracks[index])
+          .filter((track): track is Track => Boolean(track)),
+      };
+    }
+
+    if (!isTauriRuntime()) {
+      const resolvedPlaylist = await this.resolvePlaylistForQueuePlayback(normalizedPlaylistId);
+      if (!resolvedPlaylist) return null;
+      return {
+        playlist: resolvedPlaylist,
+        normalizedIndexes,
+        tracks: normalizedIndexes
+          .map((index) => resolvedPlaylist.tracks[index])
+          .filter((track): track is Track => Boolean(track)),
+      };
+    }
+
+    const selectedTrackMap = new Map<number, Track>();
+    for (const range of buildContiguousPlaylistIndexRanges(normalizedIndexes)) {
+      let rangeOffset = range.offset;
+      let remaining = range.limit;
+      while (remaining > 0) {
+        const pageLimit = Math.min(PLAYLIST_QUEUE_PAGE_SIZE, remaining);
+        const page = await this.queryPlaylistTracksPage(normalizedPlaylistId, {
+          sortField: 'default',
+          sortDirection: 'asc',
+          limit: pageLimit,
+          offset: rangeOffset,
+        });
+        const items = page?.items ?? [];
+        if (items.length === 0) {
+          break;
+        }
+        for (const item of items) {
+          selectedTrackMap.set(item.playlistIndex, item.track);
+        }
+        rangeOffset += items.length;
+        remaining -= items.length;
+        if (items.length < pageLimit) {
+          break;
+        }
+      }
+    }
+
+    return {
+      playlist,
+      normalizedIndexes,
+      tracks: normalizedIndexes
+        .map((index) => selectedTrackMap.get(index))
+        .filter((track): track is Track => Boolean(track)),
+    };
   }
 
   private buildPersistablePlaylistFromTracks(
@@ -1132,7 +1301,10 @@ export class NativeAudioService implements IAudioService {
     playlist: Playlist,
     trackIndexes: readonly number[]
   ): number[] {
-    const total = playlist.tracks.length;
+    const total =
+      typeof playlist.trackCount === 'number' && Number.isFinite(playlist.trackCount)
+        ? Math.max(playlist.tracks.length, Math.floor(playlist.trackCount))
+        : playlist.tracks.length;
     if (total === 0 || trackIndexes.length === 0) {
       return [];
     }
@@ -1351,36 +1523,6 @@ export class NativeAudioService implements IAudioService {
           },
         });
       });
-  }
-
-  private persistPlaylistSnapshotToLibraryDbBestEffort(playlist: Playlist): void {
-    if (!isTauriRuntime()) return;
-
-    const playlistId = String(playlist.id || '').trim();
-    if (!playlistId) return;
-
-    const kind =
-      playlist.kind === NativeAudioService.PLAYLIST_KIND_SMART
-        ? NativeAudioService.PLAYLIST_KIND_SMART
-        : playlist.kind === NativeAudioService.PLAYLIST_KIND_PLATFORM
-          ? NativeAudioService.PLAYLIST_KIND_PLATFORM
-          : NativeAudioService.PLAYLIST_KIND_MANUAL;
-    if (kind === NativeAudioService.PLAYLIST_KIND_SMART) {
-      return;
-    }
-
-    this.upsertPlaylistMetadataToLibraryDbBestEffort(playlist);
-
-    void replaceNativeLibraryPlaylistItems(playlistId, toPlaylistItemUpserts(playlist)).catch(
-      (error) => {
-        this.telemetry.warn('audio.playlist.snapshot-persist.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            playlistId,
-          },
-        });
-      }
-    );
   }
 
   private deletePlaylistFromLibraryDbBestEffort(playlistId: string): void {
@@ -3818,10 +3960,14 @@ export class NativeAudioService implements IAudioService {
     return queue.map((track) => this.getTrackPath(track)).filter(Boolean) as string[];
   }
 
-  private buildStrictQueuePaths(queue: Track[]): string[] | null {
+  private buildNativeQueueEntryPaths(queue: Track[]): string[] | null {
     const queuePaths: string[] = [];
     for (const track of queue) {
-      const trackPath = this.getTrackPath(track);
+      const trackPath =
+        this.getTrackPath(track) ??
+        (typeof track.id === 'string' && track.id.trim().length > 0
+          ? `queue://track-id/${encodeURIComponent(track.id.trim())}`
+          : null);
       if (!trackPath) {
         return null;
       }
@@ -3833,12 +3979,14 @@ export class NativeAudioService implements IAudioService {
   private syncAppendedQueueToNative(nextQueue: Track[], appendedTracks: Track[]): void {
     if (this.disposed) return;
     if (!isTauriRuntime()) return;
+    if (this.nativeQueueMirrorDirty) return;
 
     const currentIndex = this.state.currentIndex;
-    const nextQueuePaths = this.buildStrictQueuePaths(nextQueue);
-    const appendedPaths = this.buildStrictQueuePaths(appendedTracks);
-    if (!nextQueuePaths || !appendedPaths) {
-      this.syncQueueToNative(nextQueue, currentIndex);
+    const appendedPaths = this.buildNativeQueueEntryPaths(appendedTracks);
+    if (!appendedPaths) {
+      this.markNativeQueueMirrorDirty('append-missing-identity', {
+        addedCount: appendedTracks.length,
+      });
       return;
     }
 
@@ -3866,18 +4014,25 @@ export class NativeAudioService implements IAudioService {
             addedCount: appendedTracks.length,
           },
         });
-        this.syncQueueToNative(nextQueue, currentIndex);
+        this.markNativeQueueMirrorDirty('append-command-failed', {
+          addedCount: appendedTracks.length,
+        });
       });
   }
 
   private canUseAtomicNativeQueueMutation(queue: Track[]): boolean {
-    return isTauriRuntime() && this.buildStrictQueuePaths(queue) !== null;
+    return (
+      isTauriRuntime() &&
+      !this.nativeQueueMirrorDirty &&
+      this.buildNativeQueueEntryPaths(queue) !== null
+    );
   }
 
   private markNativeQueueMutationSynced(queue: Track[], currentIndex: number): void {
-    this.queueSyncController.markSynced(queue, currentIndex);
+    this.nativeQueueMirrorQueueRef = queue;
+    this.nativeQueueMirrorIndex = currentIndex;
     if (this.state.queue === queue && this.state.currentIndex !== currentIndex) {
-      this.syncQueueToNative(queue, this.state.currentIndex, { indexOnly: true });
+      this.scheduleNativeQueueIndexSync(this.state.currentIndex);
     }
   }
 
@@ -3889,7 +4044,9 @@ export class NativeAudioService implements IAudioService {
   ): void {
     if (this.disposed) return;
     if (!this.canUseAtomicNativeQueueMutation(previousQueue)) {
-      this.syncQueueToNative(nextQueue, currentIndex);
+      this.markNativeQueueMirrorDirty('remove-preconditions-missing', {
+        removedIndex,
+      });
       return;
     }
 
@@ -3915,7 +4072,9 @@ export class NativeAudioService implements IAudioService {
             removedIndex,
           },
         });
-        this.syncQueueToNative(nextQueue, currentIndex);
+        this.markNativeQueueMirrorDirty('remove-command-failed', {
+          removedIndex,
+        });
       });
   }
 
@@ -3928,7 +4087,10 @@ export class NativeAudioService implements IAudioService {
   ): void {
     if (this.disposed) return;
     if (!this.canUseAtomicNativeQueueMutation(previousQueue)) {
-      this.syncQueueToNative(nextQueue, currentIndex);
+      this.markNativeQueueMirrorDirty('move-preconditions-missing', {
+        fromIndex,
+        toIndex,
+      });
       return;
     }
 
@@ -3956,13 +4118,16 @@ export class NativeAudioService implements IAudioService {
             toIndex,
           },
         });
-        this.syncQueueToNative(nextQueue, currentIndex);
+        this.markNativeQueueMirrorDirty('move-command-failed', {
+          fromIndex,
+          toIndex,
+        });
       });
   }
 
   private async replaceQueueItemPathInNative(index: number, path: string): Promise<boolean> {
     if (!isTauriRuntime()) return false;
-    if (!this.buildStrictQueuePaths(this.state.queue)) {
+    if (this.nativeQueueMirrorDirty || !this.buildNativeQueueEntryPaths(this.state.queue)) {
       return false;
     }
 
@@ -3982,6 +4147,9 @@ export class NativeAudioService implements IAudioService {
           index,
         },
       });
+      this.markNativeQueueMirrorDirty('replace-item-path-command-failed', {
+        index,
+      });
       return false;
     }
   }
@@ -3989,90 +4157,102 @@ export class NativeAudioService implements IAudioService {
   private canUseQueueIndexTransport(queue: Track[], index: number): boolean {
     if (!isTauriRuntime()) return false;
     if (index < 0 || index >= queue.length) return false;
-    return this.buildStrictQueuePaths(queue) !== null;
+    if (this.nativeQueueMirrorDirty) return false;
+    return this.buildNativeQueueEntryPaths(queue) !== null;
   }
 
   private disposed = false;
-  private readonly queueSyncController = new NativeAudioQueueSyncController<Track>();
+  private nativeQueueMirrorQueueRef: Track[] | null = null;
+  private nativeQueueMirrorIndex = -1;
+  private pendingNativeQueueIndex: number | null = null;
+  private nativeQueueIndexSyncScheduled = false;
+  private nativeQueueMirrorDirty = false;
 
-  private scheduleQueueSyncFlush(): void {
-    this.queueSyncController.scheduleFlush({
-      isDisposed: () => this.disposed,
-      syncIndex: async (currentIndex) => {
-        const fields = this.buildQueueTelemetryFields(this.state.queue, currentIndex, {
-          mode: 'index-only',
-        });
-        try {
-          await invokeWithTelemetry('native_audio_sync_queue_index', { currentIndex }, {
-            moduleId: 'audio',
-            component: 'NativeAudioService',
-            event: 'audio.queue.sync.index',
-          });
-          this.telemetry.info('audio.queue.sync.flush', { fields });
-        } catch (error) {
-          this.telemetry.warn('audio.queue.sync.failed', {
-            message: readTelemetryErrorMessage(error),
-            fields,
-          });
-          throw error;
-        }
-      },
-      syncQueue: async (queue, currentIndex) => {
-        const queuePaths = this.buildQueuePaths(queue);
-        const fields = this.buildQueueTelemetryFields(queue, currentIndex, {
-          mode: 'full',
-          queuePathCount: queuePaths.length,
-          queuePathApproxBytes: approxJsonBytes(queuePaths),
-        });
-        try {
-          await invokeWithTelemetry(
-            'native_audio_sync_queue',
-            {
-              queue: queuePaths,
-              currentIndex,
-            },
-            {
-              moduleId: 'audio',
-              component: 'NativeAudioService',
-              event: 'audio.queue.sync.full',
-            }
-          );
-          this.telemetry.info('audio.queue.sync.flush', { fields });
-        } catch (error) {
-          this.telemetry.warn('audio.queue.sync.failed', {
-            message: readTelemetryErrorMessage(error),
-            fields,
-          });
-          throw error;
-        }
-      },
-      onIndexSyncError: (error) => {
-        this.telemetry.warn('audio.queue.sync.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            phase: 'index',
-          },
-        });
-      },
-      onQueueSyncError: (error) => {
-        this.telemetry.warn('audio.queue.sync.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            phase: 'queue',
-          },
-        });
+  private resetNativeQueueMirrorState(): void {
+    this.nativeQueueMirrorQueueRef = null;
+    this.nativeQueueMirrorIndex = -1;
+    this.pendingNativeQueueIndex = null;
+    this.nativeQueueIndexSyncScheduled = false;
+    this.nativeQueueMirrorDirty = false;
+  }
+
+  private markNativeQueueMirrorDirty(
+    reason: string,
+    fields?: Record<string, unknown>
+  ): void {
+    if (this.nativeQueueMirrorDirty) return;
+    this.nativeQueueMirrorDirty = true;
+    this.nativeQueueMirrorQueueRef = null;
+    this.nativeQueueMirrorIndex = -1;
+    this.pendingNativeQueueIndex = null;
+    this.nativeQueueIndexSyncScheduled = false;
+    this.telemetry.warn('audio.queue.native-mirror.dirty', {
+      fields: {
+        reason,
+        ...fields,
       },
     });
   }
 
-  private syncQueueToNative(
-    queue: Track[] = this.state.queue,
-    currentIndex = this.state.currentIndex,
-    options?: { indexOnly?: boolean }
-  ): void {
-    if (this.disposed) return;
-    this.queueSyncController.enqueue(queue, currentIndex, options);
-    this.scheduleQueueSyncFlush();
+  private scheduleNativeQueueIndexSync(currentIndex: number): void {
+    if (this.disposed || !isTauriRuntime() || this.nativeQueueMirrorDirty) return;
+    if (
+      this.nativeQueueMirrorQueueRef === this.state.queue &&
+      this.nativeQueueMirrorIndex === currentIndex
+    ) {
+      return;
+    }
+
+    this.pendingNativeQueueIndex = currentIndex;
+    if (this.nativeQueueIndexSyncScheduled) return;
+    this.nativeQueueIndexSyncScheduled = true;
+
+    const flush = () => {
+      this.nativeQueueIndexSyncScheduled = false;
+      const nextIndex = this.pendingNativeQueueIndex;
+      this.pendingNativeQueueIndex = null;
+      if (nextIndex == null) return;
+      void this.syncQueueIndexToNative(nextIndex);
+    };
+
+    if (typeof queueMicrotask === 'function') {
+      queueMicrotask(flush);
+      return;
+    }
+
+    void Promise.resolve().then(flush);
+  }
+
+  private async syncQueueIndexToNative(currentIndex: number): Promise<void> {
+    if (this.disposed || !isTauriRuntime() || this.nativeQueueMirrorDirty) return;
+    if (
+      this.nativeQueueMirrorQueueRef === this.state.queue &&
+      this.nativeQueueMirrorIndex === currentIndex
+    ) {
+      return;
+    }
+
+    const fields = this.buildQueueTelemetryFields(this.state.queue, currentIndex, {
+      mode: 'index-only',
+    });
+    try {
+      await invokeWithTelemetry('native_audio_sync_queue_index', { currentIndex }, {
+        moduleId: 'audio',
+        component: 'NativeAudioService',
+        event: 'audio.queue.sync.index',
+      });
+      this.nativeQueueMirrorQueueRef = this.state.queue;
+      this.nativeQueueMirrorIndex = currentIndex;
+      this.telemetry.info('audio.queue.sync.flush', { fields });
+    } catch (error) {
+      this.telemetry.warn('audio.queue.sync.failed', {
+        message: readTelemetryErrorMessage(error),
+        fields,
+      });
+      this.markNativeQueueMirrorDirty('index-command-failed', {
+        currentIndex,
+      });
+    }
   }
 
   private resolveQueueFromPaths(queuePaths: string[]): Track[] {
@@ -4449,8 +4629,8 @@ export class NativeAudioService implements IAudioService {
       return false;
     }
 
-    if (!usedQueueIndexLoad) {
-      this.syncQueueToNative(queue, index, { indexOnly: queue === this.state.queue });
+    if (!usedQueueIndexLoad && queue.length > previousQueue.length && !this.nativeQueueMirrorDirty) {
+      this.markNativeQueueMutationSynced(queue, index);
     }
 
     this.updateState({
@@ -4465,6 +4645,7 @@ export class NativeAudioService implements IAudioService {
     this.clearPendingSeek();
     if (!track) return false;
 
+    const previousQueue = this.state.queue;
     const resolvedTrack = await this.resolveTrackForNativePlayback(track);
 
     const trackPath = this.resolveAbsoluteTrackPathOrEmitError(resolvedTrack);
@@ -4483,7 +4664,9 @@ export class NativeAudioService implements IAudioService {
       return false;
     }
 
-    this.syncQueueToNative(queue, index, { indexOnly: queue === this.state.queue });
+    if (queue.length > previousQueue.length && !this.nativeQueueMirrorDirty) {
+      this.markNativeQueueMutationSynced(queue, index);
+    }
 
     this.markTrackPlayedBestEffort(resolvedTrack);
     this.scheduleTrackSwitchWorkingSetTrim('native-audio-track-switch');
@@ -4543,7 +4726,8 @@ export class NativeAudioService implements IAudioService {
   private resetQueueRuntimeState(): void {
     this.desiredPlayIndex = null;
     this.playIndexQueue = Promise.resolve();
-    this.queueSyncController.reset();
+    this.pendingNativeQueueIndex = null;
+    this.nativeQueueIndexSyncScheduled = false;
 
     this.stopFallbackTicker();
     this.fallbackClockBaseTimeSec = 0;
@@ -4781,9 +4965,8 @@ export class NativeAudioService implements IAudioService {
       this.releasePlaylistTracks();
     }
     if (isTauriRuntime()) {
+      this.resetNativeQueueMirrorState();
       this.fireAndForgetCommand('native_audio_clear_queue');
-    } else {
-      this.syncQueueToNative([], -1);
     }
     this.fireAndForgetCommand('native_audio_stop');
     const fields = {
@@ -4971,14 +5154,12 @@ export class NativeAudioService implements IAudioService {
               durationMs: crossfade.durationMs,
             });
           } else {
-            this.syncQueueToNative(playbackQueue, index);
             await this.invokeCommand('native_audio_crossfade_to', {
               path: trackPath,
               durationMs: crossfade.durationMs,
             });
           }
         } else {
-          this.syncQueueToNative(playbackQueue, index, { indexOnly: playbackQueue === this.state.queue });
           await this.invokeCommand('native_audio_crossfade_to', {
             path: trackPath,
             durationMs: crossfade.durationMs,
@@ -5263,10 +5444,6 @@ export class NativeAudioService implements IAudioService {
     const playlist = this.getPlaylist(normalizedPlaylistId);
     if (!playlist) return null;
 
-    if (playlist.tracksHydrated !== false && playlist.tracks.length > 0) {
-      return this.queryPlaylistTrackPageFromTracks(playlist.tracks, options);
-    }
-
     if (!isTauriRuntime()) {
       return this.queryPlaylistTrackPageFromTracks(playlist.tracks, options);
     }
@@ -5280,37 +5457,34 @@ export class NativeAudioService implements IAudioService {
         limit: options?.limit,
         offset: options?.offset,
       });
-
-      if (page.total > 0 || page.items.length > 0) {
-        return {
-          total: page.total,
-          items: page.items
-            .map((item) => {
-              const fallbackId =
-                item.localTrackId || item.entryId || `${normalizedPlaylistId}::${item.position}`;
-              const track = this.parseTrackFromPlaylistPayload(item.trackPayloadJson, {
-                id: fallbackId,
-                title: item.snapshotTitle,
-                artist: item.snapshotArtist,
-                album: item.snapshotAlbum,
-                duration: item.snapshotDurationSeconds,
-              });
-              if (!track) return null;
-              return {
-                playlistIndex: item.position,
-                track,
-              };
-            })
-            .filter(
-              (
-                item
-              ): item is {
-                playlistIndex: number;
-                track: Track;
-              } => item != null
-            ),
-        };
-      }
+      return {
+        total: page.total,
+        items: page.items
+          .map((item) => {
+            const fallbackId =
+              item.localTrackId || item.entryId || `${normalizedPlaylistId}::${item.position}`;
+            const track = this.parseTrackFromPlaylistPayload(item.trackPayloadJson, {
+              id: fallbackId,
+              title: item.snapshotTitle,
+              artist: item.snapshotArtist,
+              album: item.snapshotAlbum,
+              duration: item.snapshotDurationSeconds,
+            });
+            if (!track) return null;
+            return {
+              playlistIndex: item.position,
+              track,
+            };
+          })
+          .filter(
+            (
+              item
+            ): item is {
+              playlistIndex: number;
+              track: Track;
+            } => item != null
+          ),
+      };
     } catch (error) {
       this.telemetry.warn('audio.playlist.query-page.failed', {
         message: readTelemetryErrorMessage(error),
@@ -5461,7 +5635,6 @@ export class NativeAudioService implements IAudioService {
       if (!normalizedPlaylistId) return;
 
       void (async () => {
-        const latestPlaylist = this.getPlaylist(normalizedPlaylistId) ?? targetPlaylist;
         const serializedTrackPayload = serializeTrackForPlaylist(stateTrack);
         if (serializedTrackPayload && isTauriRuntime()) {
           const savedPlaylist = await prependNativeLibraryPlaylistItem(normalizedPlaylistId, {
@@ -5480,12 +5653,11 @@ export class NativeAudioService implements IAudioService {
             return;
           }
         }
-
-        const existingTracks = await this.loadPlaylistTracksFromLibraryDb(latestPlaylist);
-        const nextTracks = prependTrackWithDedup(existingTracks, stateTrack);
-        const nextPlaylist = this.buildPersistablePlaylistFromTracks(latestPlaylist, nextTracks);
-        this.replacePlaylistStateWithSummary(nextPlaylist);
-        this.persistPlaylistSnapshotToLibraryDbBestEffort(nextPlaylist);
+        if (!isTauriRuntime()) {
+          const nextTracks = prependTrackWithDedup(targetPlaylist.tracks, stateTrack);
+          const nextPlaylist = this.buildPersistablePlaylistFromTracks(targetPlaylist, nextTracks);
+          this.replacePlaylistStateWithSummary(nextPlaylist);
+        }
       })().catch((error) => {
         this.telemetry.warn('audio.playlist.add-track.summary-update.failed', {
           message: readTelemetryErrorMessage(error),
@@ -5563,7 +5735,6 @@ export class NativeAudioService implements IAudioService {
       if (!normalizedPlaylistId || normalizedTrackIndex < 0) return;
 
       void (async () => {
-        const latestPlaylist = this.getPlaylist(normalizedPlaylistId) ?? targetPlaylist;
         if (isTauriRuntime()) {
           const savedPlaylist = await removeNativeLibraryPlaylistItemAt(
             normalizedPlaylistId,
@@ -5574,14 +5745,13 @@ export class NativeAudioService implements IAudioService {
             return;
           }
         }
-
-        const existingTracks = await this.loadPlaylistTracksFromLibraryDb(latestPlaylist);
-        if (normalizedTrackIndex >= existingTracks.length) return;
-        const nextTracks = [...existingTracks];
-        nextTracks.splice(normalizedTrackIndex, 1);
-        const nextPlaylist = this.buildPersistablePlaylistFromTracks(latestPlaylist, nextTracks);
-        this.replacePlaylistStateWithSummary(nextPlaylist);
-        this.persistPlaylistSnapshotToLibraryDbBestEffort(nextPlaylist);
+        if (!isTauriRuntime()) {
+          const nextTracks = [...targetPlaylist.tracks];
+          if (normalizedTrackIndex >= nextTracks.length) return;
+          nextTracks.splice(normalizedTrackIndex, 1);
+          const nextPlaylist = this.buildPersistablePlaylistFromTracks(targetPlaylist, nextTracks);
+          this.replacePlaylistStateWithSummary(nextPlaylist);
+        }
       })().catch((error) => {
         this.telemetry.warn('audio.playlist.remove-track.summary-update.failed', {
           message: readTelemetryErrorMessage(error),
@@ -5653,10 +5823,10 @@ export class NativeAudioService implements IAudioService {
             return;
           }
         }
-
-        const nextPlaylist = this.buildPersistablePlaylistFromTracks(targetPlaylist, []);
-        this.replacePlaylistStateWithSummary(nextPlaylist);
-        this.persistPlaylistSnapshotToLibraryDbBestEffort(nextPlaylist);
+        if (!isTauriRuntime()) {
+          const nextPlaylist = this.buildPersistablePlaylistFromTracks(targetPlaylist, []);
+          this.replacePlaylistStateWithSummary(nextPlaylist);
+        }
       })().catch((error) => {
         this.telemetry.warn('audio.playlist.clear.summary-update.failed', {
           message: readTelemetryErrorMessage(error),
@@ -5702,18 +5872,18 @@ export class NativeAudioService implements IAudioService {
   }
 
   async playPlaylist(playlistId: string): Promise<void> {
-    const playlist =
-      (await this.resolvePlaylistForQueuePlayback(playlistId)) ?? this.getPlaylist(playlistId);
-    if (!playlist || playlist.tracks.length === 0) return;
+    const resolved = await this.loadPlaylistTracksForQueuePlayback(playlistId);
+    if (!resolved || resolved.tracks.length === 0) return;
+    const { playlist, tracks } = resolved;
     this.telemetry.info('audio.playlist.play', {
       fields: {
         playlistId: playlist.id,
-        trackCount: playlist.tracks.length,
+        trackCount: tracks.length,
         kind: playlist.kind ?? null,
       },
     });
     this.clearQueue({ releasePlaylists: false });
-    this.addMultipleToQueue(playlist.tracks);
+    this.addMultipleToQueue(tracks);
     await this.playTrackAtIndex(0);
     this.updateState({
       currentPlaylist: this.createPlaylistSummaryReference(this.getPlaylist(playlistId) ?? playlist),
@@ -5722,21 +5892,21 @@ export class NativeAudioService implements IAudioService {
   }
 
   async playPlaylistTrackAtIndex(playlistId: string, trackIndex: number): Promise<void> {
-    const playlist =
-      (await this.resolvePlaylistForQueuePlayback(playlistId)) ?? this.getPlaylist(playlistId);
-    if (!playlist || playlist.tracks.length === 0) return;
+    const resolved = await this.loadPlaylistTracksForQueuePlayback(playlistId);
+    if (!resolved || resolved.tracks.length === 0) return;
+    const { playlist, tracks } = resolved;
 
     const normalizedTrackIndex =
-      Number.isInteger(trackIndex) && trackIndex >= 0 && trackIndex < playlist.tracks.length
+      Number.isInteger(trackIndex) && trackIndex >= 0 && trackIndex < tracks.length
         ? trackIndex
         : -1;
     if (normalizedTrackIndex < 0) return;
 
-    const track = playlist.tracks[normalizedTrackIndex] ?? null;
+    const track = tracks[normalizedTrackIndex] ?? null;
     this.telemetry.info('audio.playlist.track.play', {
       fields: {
         playlistId: playlist.id,
-        playlistTrackCount: playlist.tracks.length,
+        playlistTrackCount: tracks.length,
         trackIndex: normalizedTrackIndex,
         trackId: track?.id ?? null,
         trackTitle: track?.title ?? null,
@@ -5745,7 +5915,7 @@ export class NativeAudioService implements IAudioService {
     });
 
     this.clearQueue({ releasePlaylists: false });
-    this.addMultipleToQueue(playlist.tracks);
+    this.addMultipleToQueue(tracks);
     await this.playTrackAtIndex(normalizedTrackIndex);
     this.updateState({
       currentPlaylist: this.createPlaylistSummaryReference(this.getPlaylist(playlistId) ?? playlist),
@@ -5754,18 +5924,18 @@ export class NativeAudioService implements IAudioService {
   }
 
   async addPlaylistToQueue(playlistId: string): Promise<void> {
-    const playlist =
-      (await this.resolvePlaylistForQueuePlayback(playlistId)) ?? this.getPlaylist(playlistId);
-    if (!playlist) return;
+    const resolved = await this.loadPlaylistTracksForQueuePlayback(playlistId);
+    if (!resolved) return;
+    const { playlist, tracks } = resolved;
     const fields = {
       playlistId: playlist.id,
-      trackCount: playlist.tracks.length,
+      trackCount: tracks.length,
       kind: playlist.kind ?? null,
     };
     this.telemetry.info('audio.queue.add.playlist', {
       fields,
     });
-    this.addMultipleToQueue(playlist.tracks);
+    this.addMultipleToQueue(tracks);
     captureTelemetryScenarioSnapshot({
       moduleId: 'audio',
       component: 'NativeAudioService',
@@ -5782,21 +5952,18 @@ export class NativeAudioService implements IAudioService {
     playlistId: string,
     trackIndexes: number[]
   ): Promise<void> {
-    const playlist =
-      (await this.resolvePlaylistForQueuePlayback(playlistId)) ?? this.getPlaylist(playlistId);
-    if (!playlist) return;
-
-    const normalizedIndexes = this.normalizePlaylistTrackIndexes(playlist, trackIndexes);
+    const resolved = await this.loadPlaylistTrackSelectionForQueue(playlistId, trackIndexes);
+    if (!resolved) return;
+    const { playlist, normalizedIndexes, tracks } = resolved;
     if (normalizedIndexes.length === 0) return;
-
-    const tracks = normalizedIndexes
-      .map((index) => playlist.tracks[index])
-      .filter((track): track is Track => Boolean(track));
     if (tracks.length === 0) return;
 
     const fields = {
       playlistId: playlist.id,
-      playlistTrackCount: playlist.tracks.length,
+      playlistTrackCount:
+        typeof playlist.trackCount === 'number' && Number.isFinite(playlist.trackCount)
+          ? Math.max(0, Math.floor(playlist.trackCount))
+          : playlist.tracks.length,
       selectedTrackCount: tracks.length,
       firstTrackIndex: normalizedIndexes[0] ?? null,
       lastTrackIndex: normalizedIndexes[normalizedIndexes.length - 1] ?? null,
@@ -5904,7 +6071,7 @@ export class NativeAudioService implements IAudioService {
   destroy(): void {
     this.disposed = true;
     cancelScheduledProcessWorkingSetTrim('tree');
-    this.queueSyncController.reset();
+    this.resetNativeQueueMirrorState();
     this.playlistHydrationPromises.clear();
     this.diagnosticTimelineIgnoreBeforeMs = 0;
 

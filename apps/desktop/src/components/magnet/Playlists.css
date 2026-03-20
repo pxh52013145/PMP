@@ -429,8 +429,17 @@
 
 .playlists-tracks {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 16px 24px;
+}
+
+.playlists-tracks-list-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .playlists-tracks-manage {
@@ -483,21 +492,25 @@
   padding: 5px 10px;
 }
 
-.playlists-tracks::-webkit-scrollbar {
+.playlists-tracks-list-viewport::-webkit-scrollbar {
   width: 6px;
 }
 
-.playlists-tracks::-webkit-scrollbar-track {
+.playlists-tracks-list-viewport::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.playlists-tracks::-webkit-scrollbar-thumb {
+.playlists-tracks-list-viewport::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);
   border-radius: 3px;
 }
 
-.playlists-tracks::-webkit-scrollbar-thumb:hover {
+.playlists-tracks-list-viewport::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.25);
+}
+
+.playlists-track-spacer {
+  width: 100%;
 }
 
 .playlists-tracks-empty {

@@ -14,24 +14,46 @@ pub async fn music_library_scan(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_get_cover(
+pub async fn music_library_cover_lease(
     app: tauri::AppHandle,
     path: String,
     max_bytes: Option<u64>,
     max_edge_px: Option<u32>,
-) -> Result<Option<music_library::CachedCover>, String> {
+) -> Result<Option<music_library::CoverLease>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        music_library::get_or_create_cover(&app, path, max_bytes, max_edge_px)
+        music_library::lease_cover(&app, path, max_bytes, max_edge_px)
     })
     .await
-    .map_err(|e| format!("Cover task failed: {e}"))?
+    .map_err(|e| format!("Cover lease task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_remove_cover(app: tauri::AppHandle, key: String) -> Result<u64, String> {
-    tauri::async_runtime::spawn_blocking(move || music_library::remove_cached_cover(&app, key))
+pub async fn music_library_cover_touch(
+    app: tauri::AppHandle,
+    keys: Vec<String>,
+) -> Result<music_library::CoverLeaseBatchResult, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library::touch_cover_leases(&app, keys))
         .await
-        .map_err(|e| format!("Remove cover task failed: {e}"))?
+        .map_err(|e| format!("Cover touch task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_cover_release(
+    app: tauri::AppHandle,
+    keys: Vec<String>,
+) -> Result<music_library::CoverLeaseBatchResult, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library::release_cover_leases(&app, keys))
+        .await
+        .map_err(|e| format!("Cover release task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_cover_get_lease_stats(
+    app: tauri::AppHandle,
+) -> Result<music_library::CoverLeaseStats, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library::get_cover_lease_stats(&app))
+        .await
+        .map_err(|e| format!("Cover lease stats task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]

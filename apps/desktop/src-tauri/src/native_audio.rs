@@ -1398,20 +1398,6 @@ pub fn stop(app_handle: &AppHandle) -> Result<(), String> {
     emit_transport_execution(app_handle, execution)
 }
 
-pub fn sync_queue(
-    app_handle: &AppHandle,
-    queue: Vec<String>,
-    current_index: i32,
-) -> Result<(), String> {
-    emitter::ensure_started(app_handle);
-    let paths = queue.into_iter().map(PathBuf::from).collect::<Vec<_>>();
-    let mut engine = ENGINE
-        .lock()
-        .map_err(|_| "Audio engine is locked".to_string())?;
-    engine.sync_queue_state(paths, current_index);
-    Ok(())
-}
-
 pub fn append_queue(app_handle: &AppHandle, queue: Vec<String>) -> Result<(), String> {
     emitter::ensure_started(app_handle);
     if queue.is_empty() {

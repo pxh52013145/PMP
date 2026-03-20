@@ -53,13 +53,20 @@ type SelectedPlaylistHeroCoverState = {
   url: string;
 };
 
+type PlaylistTrackWindowItem = {
+  playlistIndex: number;
+  track: Track;
+};
+
 const makeTrackKey = (track: Track, index: number): string => `${track.id}::${index}`;
 
 const BILIBILI_BVID_PATTERN = /BV[0-9A-Za-z]{10}/i;
 const PLAYLIST_LIST_VIRTUAL_ROW_HEIGHT = 72;
 const PLAYLIST_LIST_VIRTUAL_OVERSCAN_ROWS = 8;
 const PLAYLIST_COVER_RESOLVE_BATCH_SIZE = 8;
-const PLAYLIST_TRACK_PAGE_MAX_ITEMS = 2000;
+const PLAYLIST_TRACK_PAGE_SIZE = 120;
+const PLAYLIST_TRACK_WINDOW_OVERSCAN_ROWS = 10;
+const PLAYLIST_TRACK_ROW_HEIGHT = 76;
 const EMPTY_PLAYLISTS: Playlist[] = [];
 const EMPTY_TRACKS: Track[] = [];
 const EMPTY_NUMBERS: number[] = [];
@@ -263,6 +270,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const [selectedPlaylistTrackPage, setSelectedPlaylistTrackPage] = useState<
     Array<{ playlistIndex: number; track: Track }>
   >([]);
+  const [selectedPlaylistTrackPageOffset, setSelectedPlaylistTrackPageOffset] = useState(0);
   const [selectedPlaylistTrackPageTotal, setSelectedPlaylistTrackPageTotal] = useState(0);
   const [resolvedPlaylistCoverMap, setResolvedPlaylistCoverMap] = useState<Record<string, string>>({});
   const [selectedPlaylistHeroCover, setSelectedPlaylistHeroCover] =
@@ -301,10 +309,13 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const playlistsResidencyTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>[]>>(new Map());
   const playlistTrackSearchControlRef = useRef<HTMLDivElement | null>(null);
   const playlistTrackSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const playlistTrackListRef = useRef<HTMLDivElement | null>(null);
   const sortMenuRef = useRef<HTMLDivElement | null>(null);
   const sortMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [playlistListScrollTop, setPlaylistListScrollTop] = useState(0);
   const [playlistListViewportHeight, setPlaylistListViewportHeight] = useState(0);
+  const [playlistTrackListScrollTop, setPlaylistTrackListScrollTop] = useState(0);
+  const [playlistTrackListViewportHeight, setPlaylistTrackListViewportHeight] = useState(0);
 
   const [trackContextMenu, setTrackContextMenu] = useState<PopupMenuState | null>(null);
   const [playlistActionsMenu, setPlaylistActionsMenu] = useState<PopupMenuState | null>(null);
@@ -371,6 +382,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     if (!isOpen || !selectedPlaylist?.id) {
       setIsSelectedPlaylistLoading(false);
       setSelectedPlaylistTrackPage([]);
+      setSelectedPlaylistTrackPageOffset(0);
       setSelectedPlaylistTrackPageTotal(0);
       return () => {
         cancelled = true;
@@ -378,10 +390,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     }
 
     const supportsTrackPageQuery = typeof audioService.queryPlaylistTracksPage === 'function';
-    const shouldUseTrackPageQuery =
-      supportsTrackPageQuery &&
-      selectedPlaylist.tracksHydrated === false &&
-      (selectedPlaylist.trackCount ?? 0) > 0;
+    const shouldUseTrackPageQuery = supportsTrackPageQuery;
 
     if (shouldUseTrackPageQuery) {
       const queryPlaylistTracksPage = audioService.queryPlaylistTracksPage;
@@ -394,12 +403,34 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
         };
       }
 
+      const viewportHeight = playlistTrackListViewportHeight > 0 ? playlistTrackListViewportHeight : 720;
+      const visibleCount = Math.max(1, Math.ceil(viewportHeight / PLAYLIST_TRACK_ROW_HEIGHT));
+      const targetStart = Math.max(
+        0,
+        Math.floor(playlistTrackListScrollTop / PLAYLIST_TRACK_ROW_HEIGHT) -
+          PLAYLIST_TRACK_WINDOW_OVERSCAN_ROWS
+      );
+      const targetEnd =
+        targetStart + visibleCount + PLAYLIST_TRACK_WINDOW_OVERSCAN_ROWS * 2;
+      const currentWindowStart = selectedPlaylistTrackPageOffset;
+      const currentWindowEnd = currentWindowStart + selectedPlaylistTrackPage.length;
+      const canReuseWindow =
+        selectedPlaylistTrackPage.length > 0 &&
+        targetStart >= currentWindowStart &&
+        targetEnd <= currentWindowEnd &&
+        selectedPlaylistTrackPageTotal >= currentWindowEnd;
+
+      if (canReuseWindow) {
+        setIsSelectedPlaylistLoading(false);
+        return () => {
+          cancelled = true;
+        };
+      }
+
+      const pageOffset = targetStart;
       const pageLimit = Math.max(
-        1,
-        Math.min(
-          PLAYLIST_TRACK_PAGE_MAX_ITEMS,
-          Math.max(1, Math.floor(selectedPlaylist.trackCount ?? PLAYLIST_TRACK_PAGE_MAX_ITEMS))
-        )
+        PLAYLIST_TRACK_PAGE_SIZE,
+        visibleCount + PLAYLIST_TRACK_WINDOW_OVERSCAN_ROWS * 2
       );
 
       setIsSelectedPlaylistLoading(true);
@@ -410,6 +441,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
           searchQueryLength: playlistTrackSearchQuery.trim().length,
           sortField: playlistTrackSortField,
           sortDirection: playlistTrackSortDirection,
+          offset: pageOffset,
           limit: pageLimit,
           kind: selectedPlaylist.kind ?? null,
         },
@@ -421,17 +453,19 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
           sortField: playlistTrackSortField,
           sortDirection: playlistTrackSortDirection,
           limit: pageLimit,
-          offset: 0,
+          offset: pageOffset,
         })
         .then((page) => {
           if (cancelled) return;
           setSelectedPlaylistTrackPage(page?.items ?? []);
+          setSelectedPlaylistTrackPageOffset(pageOffset);
           setSelectedPlaylistTrackPageTotal(page?.total ?? 0);
           telemetry.info('playlists.tracks.page-query.completed', {
             fields: {
               playlistId: selectedPlaylist.id,
               itemCount: page?.items.length ?? 0,
               total: page?.total ?? 0,
+              offset: pageOffset,
               searchQueryLength: playlistTrackSearchQuery.trim().length,
               sortField: playlistTrackSortField,
               sortDirection: playlistTrackSortDirection,
@@ -449,10 +483,12 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
               searchQueryLength: playlistTrackSearchQuery.trim().length,
               sortField: playlistTrackSortField,
               sortDirection: playlistTrackSortDirection,
+              offset: pageOffset,
               kind: selectedPlaylist.kind ?? null,
             },
           });
           setSelectedPlaylistTrackPage([]);
+          setSelectedPlaylistTrackPageOffset(0);
           setSelectedPlaylistTrackPageTotal(0);
         })
         .finally(() => {
@@ -467,10 +503,13 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     }
 
     setSelectedPlaylistTrackPage([]);
+    setSelectedPlaylistTrackPageOffset(0);
     setSelectedPlaylistTrackPageTotal(0);
 
     const requiresHydration =
-      selectedPlaylist.tracksHydrated === false && (selectedPlaylist.trackCount ?? 0) > 0;
+      !supportsTrackPageQuery &&
+      selectedPlaylist.tracksHydrated === false &&
+      (selectedPlaylist.trackCount ?? 0) > 0;
     if (!requiresHydration) {
       setIsSelectedPlaylistLoading(false);
       return () => {
@@ -527,12 +566,18 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     audioService,
     isOpen,
     selectedPlaylist?.id,
+    selectedPlaylist?.kind,
     selectedPlaylist?.trackCount,
     selectedPlaylist?.updatedAt,
     selectedPlaylist?.tracksHydrated,
+    playlistTrackListScrollTop,
+    playlistTrackListViewportHeight,
     playlistTrackSearchQuery,
     playlistTrackSortDirection,
     playlistTrackSortField,
+    selectedPlaylistTrackPage.length,
+    selectedPlaylistTrackPageOffset,
+    selectedPlaylistTrackPageTotal,
     telemetry,
   ]);
 
@@ -606,6 +651,45 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       playlistListRef.current.scrollTop = 0;
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const listElement = playlistTrackListRef.current;
+    if (!listElement) return;
+
+    const syncViewport = () => {
+      setPlaylistTrackListViewportHeight(listElement.clientHeight);
+      setPlaylistTrackListScrollTop(listElement.scrollTop);
+    };
+
+    syncViewport();
+
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      syncViewport();
+    });
+    observer.observe(listElement);
+    return () => {
+      observer.disconnect();
+    };
+  }, [isOpen, selectedPlaylist?.id]);
+
+  useEffect(() => {
+    setSelectedTrackIndexes([]);
+    setPlaylistTrackListScrollTop(0);
+    setSelectedPlaylistTrackPageOffset(0);
+    if (playlistTrackListRef.current) {
+      playlistTrackListRef.current.scrollTop = 0;
+    }
+  }, [
+    isOpen,
+    playlistTrackSearchQuery,
+    playlistTrackSortDirection,
+    playlistTrackSortField,
+    selectedPlaylist?.id,
+    selectedPlaylist?.updatedAt,
+  ]);
 
   const playlistVirtualWindow = useMemo(() => {
     const total = playlists.length;
@@ -1488,11 +1572,14 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
         setPlaylistToClear(null);
         setIsSelectedPlaylistLoading(false);
         setSelectedPlaylistTrackPage([]);
+        setSelectedPlaylistTrackPageOffset(0);
         setSelectedPlaylistTrackPageTotal(0);
         setSelectedPlaylistHeroCover(EMPTY_SELECTED_PLAYLIST_HERO_COVER);
         setResolvedPlaylistCoverMap({});
         setPlaylistListScrollTop(0);
         setPlaylistListViewportHeight(0);
+        setPlaylistTrackListScrollTop(0);
+        setPlaylistTrackListViewportHeight(0);
       }
 
       if (urlsToRelease.size > 0) {
@@ -1524,7 +1611,6 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
 
   const shouldUseSelectedPlaylistTrackPage =
     !!selectedPlaylist &&
-    selectedPlaylist.tracksHydrated === false &&
     typeof audioService.queryPlaylistTracksPage === 'function';
 
   const selectedPlaylistTrackEntries = shouldUseSelectedPlaylistTrackPage
@@ -1543,7 +1629,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const filteredPlaylistTrackIndexes = useMemo(
     () =>
       shouldUseSelectedPlaylistTrackPage
-        ? selectedPlaylistTrackEntries.map((entry) => entry.playlistIndex)
+        ? EMPTY_NUMBERS
         : resolvePlaylistTrackIndexes({
             tracks: selectedPlaylistTracks,
             searchQuery: playlistTrackSearchQuery,
@@ -1555,10 +1641,66 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       playlistTrackSearchQuery,
       playlistTrackSortDirection,
       playlistTrackSortField,
-      selectedPlaylistTrackEntries,
       selectedPlaylistTracks,
     ]
   );
+  const filteredPlaylistTrackCount = shouldUseSelectedPlaylistTrackPage
+    ? selectedPlaylistTrackPageTotal
+    : filteredPlaylistTrackIndexes.length;
+
+  const playlistTrackRenderWindow = useMemo(() => {
+    const viewportHeight = playlistTrackListViewportHeight > 0 ? playlistTrackListViewportHeight : 720;
+    const visibleCount = Math.max(1, Math.ceil(viewportHeight / PLAYLIST_TRACK_ROW_HEIGHT));
+    const overscan = PLAYLIST_TRACK_WINDOW_OVERSCAN_ROWS;
+
+    if (shouldUseSelectedPlaylistTrackPage) {
+      const items: PlaylistTrackWindowItem[] = selectedPlaylistTrackPage.map((entry) => ({
+        playlistIndex: entry.playlistIndex,
+        track: entry.track,
+      }));
+      const windowEnd = selectedPlaylistTrackPageOffset + selectedPlaylistTrackPage.length;
+      return {
+        items,
+        topSpacerPx: selectedPlaylistTrackPageOffset * PLAYLIST_TRACK_ROW_HEIGHT,
+        bottomSpacerPx: Math.max(0, selectedPlaylistTrackPageTotal - windowEnd) * PLAYLIST_TRACK_ROW_HEIGHT,
+      };
+    }
+
+    const start = Math.max(
+      0,
+      Math.floor(playlistTrackListScrollTop / PLAYLIST_TRACK_ROW_HEIGHT) - overscan
+    );
+    const end = Math.min(
+      filteredPlaylistTrackIndexes.length,
+      start + visibleCount + overscan * 2
+    );
+    const items: PlaylistTrackWindowItem[] = filteredPlaylistTrackIndexes
+      .slice(start, end)
+      .map((playlistIndex) => {
+        const track = selectedPlaylistTrackEntryMap.get(playlistIndex);
+        if (!track) return null;
+        return {
+          playlistIndex,
+          track,
+        };
+      })
+      .filter((item): item is PlaylistTrackWindowItem => item != null);
+
+    return {
+      items,
+      topSpacerPx: start * PLAYLIST_TRACK_ROW_HEIGHT,
+      bottomSpacerPx: Math.max(0, filteredPlaylistTrackIndexes.length - end) * PLAYLIST_TRACK_ROW_HEIGHT,
+    };
+  }, [
+    filteredPlaylistTrackIndexes,
+    playlistTrackListScrollTop,
+    playlistTrackListViewportHeight,
+    selectedPlaylistTrackEntryMap,
+    selectedPlaylistTrackPage,
+    selectedPlaylistTrackPageOffset,
+    selectedPlaylistTrackPageTotal,
+    shouldUseSelectedPlaylistTrackPage,
+  ]);
 
   const selectedTrackIndexSet = useMemo(
     () => new Set(selectedTrackIndexes),
@@ -1566,23 +1708,29 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   );
 
   const selectedPlaylistTrackIndexes = useMemo(() => {
-    if (selectedPlaylistTracks.length === 0 || selectedTrackIndexes.length === 0) {
+    if (selectedTrackIndexes.length === 0) {
+      return EMPTY_NUMBERS;
+    }
+
+    const maxPlaylistIndexExclusive = shouldUseSelectedPlaylistTrackPage
+      ? Math.max(selectedPlaylistTrackPageTotal, selectedPlaylist?.trackCount ?? 0)
+      : selectedPlaylistTracks.length;
+    if (maxPlaylistIndexExclusive <= 0) {
       return EMPTY_NUMBERS;
     }
 
     const next = Array.from(
       new Set(
         selectedTrackIndexes.filter((index) =>
-          shouldUseSelectedPlaylistTrackPage
-            ? selectedPlaylistTrackEntryMap.has(index)
-            : Number.isInteger(index) && index >= 0 && index < selectedPlaylistTracks.length
+          Number.isInteger(index) && index >= 0 && index < maxPlaylistIndexExclusive
         )
       )
     ).sort((left, right) => left - right);
 
     return next.length > 0 ? next : EMPTY_NUMBERS;
   }, [
-    selectedPlaylistTrackEntryMap,
+    selectedPlaylist?.trackCount,
+    selectedPlaylistTrackPageTotal,
     selectedPlaylistTracks,
     selectedTrackIndexes,
     shouldUseSelectedPlaylistTrackPage,
@@ -1617,17 +1765,19 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const selectedCoverDecodedBytes = useMemo(() => {
     const normalizedUrl = toNonEmptyString(selectedPlaylistCoverUrl);
     if (!normalizedUrl) return 0;
+    void playlistCoverDecodedStats.totalBytes;
     return playlistCoverDecodedBytesRef.current.get(normalizedUrl) ?? 0;
-  }, [selectedPlaylistCoverUrl, playlistCoverDecodedStats.entryCount, playlistCoverDecodedStats.totalBytes]);
+  }, [playlistCoverDecodedStats.totalBytes, selectedPlaylistCoverUrl]);
   const playlistsOverlayPageApproxJsonBytes = useMemo(
     () =>
       measureJsonBytes({
         selectedPlaylistId,
         selectedTrackIndexes,
         selectedPlaylistTrackPage,
+        selectedPlaylistTrackPageOffset,
         selectedPlaylistTrackPageTotal,
         resolvedPlaylistCoverMap,
-        filteredPlaylistTrackIndexes,
+        filteredPlaylistTrackCount,
         playlistBatchMode,
         showPlaylistTrackSearch,
         playlistTrackSearchQuery,
@@ -1635,7 +1785,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
         playlistTrackSortDirection,
       }),
     [
-      filteredPlaylistTrackIndexes,
+      filteredPlaylistTrackCount,
       playlistBatchMode,
       playlistTrackSearchQuery,
       playlistTrackSortDirection,
@@ -1643,6 +1793,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       resolvedPlaylistCoverMap,
       selectedPlaylistId,
       selectedPlaylistTrackPage,
+      selectedPlaylistTrackPageOffset,
       selectedPlaylistTrackPageTotal,
       selectedTrackIndexes,
       showPlaylistTrackSearch,
@@ -1653,12 +1804,14 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     playlistsResidencyMetricsRef.current = {
       overlayOpen: isOpen,
       selectedPlaylistId,
-      selectedPlaylistTrackCount: selectedPlaylistTracks.length,
+      selectedPlaylistTrackCount: shouldUseSelectedPlaylistTrackPage
+        ? selectedPlaylistTrackPageTotal
+        : selectedPlaylistTracks.length,
       totalPlaylistCount: playlists.length,
       hydratedPlaylistCount,
       loadedPlaylistTrackCount,
       visibleSidebarPlaylistCount: virtualizedSidebarPlaylists.length,
-      filteredTrackCount: filteredPlaylistTrackIndexes.length,
+      filteredTrackCount: filteredPlaylistTrackCount,
       selectedTrackCount,
       resolvedCoverCount: resolvedCoverValues.length,
       resolvedCoverBlobCount,
@@ -1673,7 +1826,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   }, [
     activePlaylistBlobCoverUrlCount,
     playlists.length,
-    filteredPlaylistTrackIndexes.length,
+    filteredPlaylistTrackCount,
     hydratedPlaylistCount,
     isOpen,
     loadedPlaylistTrackCount,
@@ -1683,13 +1836,15 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     resolvedCoverBlobCount,
     resolvedCoverUrlChars,
     resolvedCoverValues.length,
-    selectedCoverDecodedBytes,
-    selectedPlaylistCoverUrl,
-    selectedPlaylistId,
-    selectedPlaylistTracks.length,
-    selectedTrackCount,
-    virtualizedSidebarPlaylists.length,
-  ]);
+      selectedCoverDecodedBytes,
+      selectedPlaylistCoverUrl,
+      selectedPlaylistId,
+      selectedPlaylistTrackPageTotal,
+      selectedPlaylistTracks.length,
+      selectedTrackCount,
+      shouldUseSelectedPlaylistTrackPage,
+      virtualizedSidebarPlaylists.length,
+    ]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -1741,6 +1896,54 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   };
 
   const handleSelectAllFilteredTracks = () => {
+    if (
+      shouldUseSelectedPlaylistTrackPage &&
+      selectedPlaylist?.id &&
+      typeof audioService.queryPlaylistTracksPage === 'function'
+    ) {
+      const queryPlaylistTracksPage = audioService.queryPlaylistTracksPage;
+      void (async () => {
+        const indexes: number[] = [];
+        let offset = 0;
+        let total = selectedPlaylistTrackPageTotal;
+        while (total <= 0 || offset < total) {
+          const page = await queryPlaylistTracksPage.call(audioService, selectedPlaylist.id, {
+            searchQuery: playlistTrackSearchQuery,
+            sortField: playlistTrackSortField,
+            sortDirection: playlistTrackSortDirection,
+            limit: PLAYLIST_TRACK_PAGE_SIZE,
+            offset,
+          });
+          const items = page?.items ?? [];
+          if (typeof page?.total === 'number' && Number.isFinite(page.total)) {
+            total = Math.max(0, Math.floor(page.total));
+          }
+          if (items.length === 0) {
+            break;
+          }
+          for (const item of items) {
+            indexes.push(item.playlistIndex);
+          }
+          offset += items.length;
+          if (items.length < PLAYLIST_TRACK_PAGE_SIZE) {
+            break;
+          }
+        }
+        setSelectedTrackIndexes(Array.from(new Set(indexes)).sort((left, right) => left - right));
+      })().catch((error) => {
+        telemetry.warn('playlists.track.batch-select-all.failed', {
+          message: readTelemetryErrorMessage(error),
+          fields: {
+            playlistId: selectedPlaylist.id,
+            searchQueryLength: playlistTrackSearchQuery.trim().length,
+            sortField: playlistTrackSortField,
+            sortDirection: playlistTrackSortDirection,
+          },
+        });
+      });
+      return;
+    }
+
     setSelectedTrackIndexes((previous) => {
       const next = new Set(previous);
       for (const index of filteredPlaylistTrackIndexes) {
@@ -2065,7 +2268,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                           <button
                             className="playlists-tracks-batch-icon-btn"
                             onClick={handleSelectAllFilteredTracks}
-                            disabled={filteredPlaylistTrackIndexes.length === 0}
+                            disabled={filteredPlaylistTrackCount === 0}
                             title={t('pages.playlists.manage.batch.selectAll')}
                             aria-label={t('pages.playlists.manage.batch.selectAll')}
                           >
@@ -2304,42 +2507,54 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                           {t('common.state.loading')}
                         </div>
                       </div>
-                    ) : filteredPlaylistTrackIndexes.length === 0 ? (
+                    ) : filteredPlaylistTrackCount === 0 ? (
                       <div className="playlists-tracks-empty playlists-tracks-empty-query">
                         <div className="playlists-tracks-empty-text">
                           {t('pages.playlists.tracks.empty.searchResult')}
                         </div>
                       </div>
                     ) : (
-                      <>
-                        {filteredPlaylistTrackIndexes.map((index) => {
-                          const track = selectedPlaylistTrackEntryMap.get(index);
-                          if (!track) return null;
-                          const trackKey = makeTrackKey(track, index);
-                          const isSelected = selectedTrackIndexSet.has(index);
+                      <div
+                        ref={playlistTrackListRef}
+                        className="playlists-tracks-list-viewport"
+                        onScroll={(event) => {
+                          setPlaylistTrackListScrollTop(event.currentTarget.scrollTop);
+                        }}
+                      >
+                        {playlistTrackRenderWindow.topSpacerPx > 0 ? (
+                          <div
+                            className="playlists-track-spacer"
+                            style={{ height: `${playlistTrackRenderWindow.topSpacerPx}px` }}
+                            aria-hidden="true"
+                          />
+                        ) : null}
+                        {playlistTrackRenderWindow.items.map((item) => {
+                          const { playlistIndex, track } = item;
+                          const trackKey = makeTrackKey(track, playlistIndex);
+                          const isSelected = selectedTrackIndexSet.has(playlistIndex);
 
                           return (
                             <div
                               key={trackKey}
                               className={`playlists-track ${playlistBatchMode ? 'playlists-track-batch-selectable' : ''} ${isSelected ? 'playlists-track-selected' : ''}`}
                               onContextMenu={(event) =>
-                                handleTrackContextMenu(selectedPlaylist, track, index, event)
+                                handleTrackContextMenu(selectedPlaylist, track, playlistIndex, event)
                               }
                               onDoubleClick={() => {
                                 if (playlistBatchMode) {
                                   return;
                                 }
-                                handlePlayTrackFromPlaylist(selectedPlaylist, index);
+                                handlePlayTrackFromPlaylist(selectedPlaylist, playlistIndex);
                               }}
                               onClick={() => {
                                 if (!playlistBatchMode) {
                                   return;
                                 }
-                                handleToggleTrackSelection(index, !isSelected);
+                                handleToggleTrackSelection(playlistIndex, !isSelected);
                               }}
                             >
                               <div className="playlists-track-number">
-                                {String(index + 1).padStart(2, '0')}
+                                {String(playlistIndex + 1).padStart(2, '0')}
                               </div>
                               <div className="playlists-track-title">{track.title}</div>
                               <div className="playlists-track-artist">{track.artist || '-'}</div>
@@ -2352,7 +2567,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                                   className="playlists-track-action-btn playlists-track-play"
                                   onClick={(event) => {
                                     event.stopPropagation();
-                                    handlePlayTrackFromPlaylist(selectedPlaylist, index);
+                                    handlePlayTrackFromPlaylist(selectedPlaylist, playlistIndex);
                                   }}
                                   title={t('common.action.play')}
                                 >
@@ -2362,7 +2577,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                                   className="playlists-track-action-btn playlists-track-remove"
                                   onClick={(event) => {
                                     event.stopPropagation();
-                                    handleRemoveTrackFromPlaylist(selectedPlaylist.id, index);
+                                    handleRemoveTrackFromPlaylist(selectedPlaylist.id, playlistIndex);
                                   }}
                                   disabled={selectedPlaylistReadonly}
                                   title={t('pages.playlists.tracks.action.removeFromPlaylist.title')}
@@ -2373,7 +2588,14 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                             </div>
                           );
                         })}
-                      </>
+                        {playlistTrackRenderWindow.bottomSpacerPx > 0 ? (
+                          <div
+                            className="playlists-track-spacer"
+                            style={{ height: `${playlistTrackRenderWindow.bottomSpacerPx}px` }}
+                            aria-hidden="true"
+                          />
+                        ) : null}
+                      </div>
                     )}
                   </>
                 )}

@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{
@@ -29,6 +32,12 @@ pub const EVENT_MUSIC_LIBRARY_SCAN_PROGRESS: &str = "music-library-scan-progress
 
 static MUSIC_LIBRARY_CANCEL_REQUESTED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
 static COVER_ASSET_SCOPE_READY: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+static COVER_LEASE_STATE: Lazy<Mutex<CoverLeaseState>> =
+    Lazy::new(|| Mutex::new(CoverLeaseState::default()));
+
+const COVER_CACHE_PRUNE_MAX_BYTES: u64 = 128 * 1024 * 1024;
+const COVER_CACHE_PRUNE_MAX_FILES: usize = 1024;
+const COVER_CACHE_PROTECTED_GRACE_MS: i64 = 15_000;
 
 pub fn request_cancel_scan() {
     MUSIC_LIBRARY_CANCEL_REQUESTED.store(true, Ordering::SeqCst);
@@ -177,6 +186,50 @@ pub struct CachedCover {
     pub media_type: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverLease {
+    pub key: String,
+    pub url: String,
+    pub path: String,
+    pub size: u64,
+    pub media_type: Option<String>,
+    pub lease_count: u32,
+    pub last_touched_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverLeaseStats {
+    pub tracked_entries: usize,
+    pub active_entries: usize,
+    pub leased_entries: usize,
+    pub tracked_bytes: u64,
+    pub active_bytes: u64,
+    pub leased_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverLeaseBatchResult {
+    pub processed: usize,
+    pub pruned_entries: usize,
+    pub pruned_bytes: u64,
+    pub stats: CoverLeaseStats,
+}
+
+#[derive(Debug, Clone)]
+struct CoverLeaseEntry {
+    cover: CachedCover,
+    lease_count: u32,
+    last_touched_at_ms: i64,
+}
+
+#[derive(Debug, Default)]
+struct CoverLeaseState {
+    entries: HashMap<String, CoverLeaseEntry>,
+}
+
 fn is_supported_audio(path: &Path, exts: &HashSet<&'static str>) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -213,6 +266,10 @@ fn system_time_to_millis(time: SystemTime) -> i64 {
     time.duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn current_time_millis() -> i64 {
+    system_time_to_millis(SystemTime::now())
 }
 
 fn parse_synchsafe_u32(bytes: &[u8]) -> Option<u32> {
@@ -1151,6 +1208,24 @@ fn media_type_from_cover_path(path: &Path) -> Option<String> {
     }
 }
 
+fn is_valid_cover_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 192
+        && !key.contains('/')
+        && !key.contains('\\')
+        && key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.')
+}
+
+fn normalize_cover_key(raw: &str) -> Option<String> {
+    let normalized = raw.trim();
+    if !is_valid_cover_key(normalized) {
+        return None;
+    }
+    Some(normalized.to_string())
+}
+
 fn parse_cover_key_from_protocol_uri(uri: &str) -> Option<String> {
     let uri_without_fragment = uri.split('#').next().unwrap_or(uri);
     let uri_without_query = uri_without_fragment
@@ -1167,20 +1242,7 @@ fn parse_cover_key_from_protocol_uri(uri: &str) -> Option<String> {
     };
 
     let key = candidate.trim_matches('/');
-    if key.is_empty() || key.len() > 192 {
-        return None;
-    }
-    if key.contains('/') || key.contains('\\') {
-        return None;
-    }
-    if !key
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.')
-    {
-        return None;
-    }
-
-    Some(key.to_string())
+    normalize_cover_key(key)
 }
 
 fn parse_cover_size_edge_from_protocol_uri(uri: &str) -> Option<u32> {
@@ -1264,6 +1326,247 @@ fn build_protocol_response(
         .body(body)
 }
 
+fn build_pmp_cover_url(key: &str) -> String {
+    format!("pmp://cover/{key}")
+}
+
+fn cached_cover_from_path(path: &Path) -> Option<CachedCover> {
+    let metadata = fs::metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+
+    let key = path.file_stem()?.to_str()?;
+    let normalized_key = normalize_cover_key(key)?;
+    Some(CachedCover {
+        key: normalized_key,
+        path: path.to_string_lossy().to_string(),
+        size: metadata.len(),
+        media_type: media_type_from_cover_path(path),
+    })
+}
+
+fn find_cached_cover_by_key(dir: &Path, key: &str) -> Option<CachedCover> {
+    let normalized_key = normalize_cover_key(key)?;
+    let path = find_cached_cover_file(dir, &normalized_key)?;
+    cached_cover_from_path(&path)
+}
+
+fn cover_lease_from_entry(entry: &CoverLeaseEntry) -> CoverLease {
+    CoverLease {
+        key: entry.cover.key.clone(),
+        url: build_pmp_cover_url(&entry.cover.key),
+        path: entry.cover.path.clone(),
+        size: entry.cover.size,
+        media_type: entry.cover.media_type.clone(),
+        lease_count: entry.lease_count,
+        last_touched_at_ms: entry.last_touched_at_ms,
+    }
+}
+
+fn upsert_cover_lease_entry(
+    state: &mut CoverLeaseState,
+    cached: CachedCover,
+    lease_increment: u32,
+    now_ms: i64,
+) -> CoverLease {
+    let entry = state
+        .entries
+        .entry(cached.key.clone())
+        .or_insert_with(|| CoverLeaseEntry {
+            cover: cached.clone(),
+            lease_count: 0,
+            last_touched_at_ms: now_ms,
+        });
+    entry.cover = cached;
+    entry.last_touched_at_ms = now_ms;
+    if lease_increment > 0 {
+        entry.lease_count = entry.lease_count.saturating_add(lease_increment);
+    }
+    cover_lease_from_entry(entry)
+}
+
+fn touch_cover_lease_key(dir: &Path, state: &mut CoverLeaseState, key: &str, now_ms: i64) -> bool {
+    let normalized_key = match normalize_cover_key(key) {
+        Some(value) => value,
+        None => return false,
+    };
+
+    let mut should_remove = false;
+    if let Some(entry) = state.entries.get_mut(&normalized_key) {
+        entry.last_touched_at_ms = now_ms;
+        should_remove = !Path::new(&entry.cover.path).exists();
+    }
+    if should_remove {
+        state.entries.remove(&normalized_key);
+        return false;
+    }
+    if state.entries.contains_key(&normalized_key) {
+        return true;
+    }
+
+    let Some(cached) = find_cached_cover_by_key(dir, &normalized_key) else {
+        return false;
+    };
+    let _ = upsert_cover_lease_entry(state, cached, 0, now_ms);
+    true
+}
+
+fn release_cover_lease_key(
+    dir: &Path,
+    state: &mut CoverLeaseState,
+    key: &str,
+    now_ms: i64,
+) -> bool {
+    let normalized_key = match normalize_cover_key(key) {
+        Some(value) => value,
+        None => return false,
+    };
+
+    let mut should_remove = false;
+    if let Some(entry) = state.entries.get_mut(&normalized_key) {
+        entry.last_touched_at_ms = now_ms;
+        entry.lease_count = entry.lease_count.saturating_sub(1);
+        should_remove = !Path::new(&entry.cover.path).exists();
+    }
+    if should_remove {
+        state.entries.remove(&normalized_key);
+        return false;
+    }
+    if state.entries.contains_key(&normalized_key) {
+        return true;
+    }
+
+    let Some(cached) = find_cached_cover_by_key(dir, &normalized_key) else {
+        return false;
+    };
+    let _ = upsert_cover_lease_entry(state, cached, 0, now_ms);
+    true
+}
+
+fn cover_lease_is_protected(entry: &CoverLeaseEntry, now_ms: i64) -> bool {
+    entry.lease_count > 0
+        || now_ms.saturating_sub(entry.last_touched_at_ms) <= COVER_CACHE_PROTECTED_GRACE_MS
+}
+
+fn sweep_cover_lease_state(state: &mut CoverLeaseState) {
+    state
+        .entries
+        .retain(|_, entry| Path::new(&entry.cover.path).exists());
+}
+
+fn compute_cover_lease_stats(state: &CoverLeaseState, now_ms: i64) -> CoverLeaseStats {
+    let mut stats = CoverLeaseStats::default();
+    stats.tracked_entries = state.entries.len();
+
+    for entry in state.entries.values() {
+        stats.tracked_bytes = stats.tracked_bytes.saturating_add(entry.cover.size);
+        if entry.lease_count > 0 {
+            stats.leased_entries = stats.leased_entries.saturating_add(1);
+            stats.leased_bytes = stats.leased_bytes.saturating_add(entry.cover.size);
+        }
+        if cover_lease_is_protected(entry, now_ms) {
+            stats.active_entries = stats.active_entries.saturating_add(1);
+            stats.active_bytes = stats.active_bytes.saturating_add(entry.cover.size);
+        }
+    }
+
+    stats
+}
+
+#[derive(Debug, Default)]
+struct CoverCachePruneOutcome {
+    deleted_entries: usize,
+    deleted_bytes: u64,
+}
+
+#[derive(Debug)]
+struct CoverCacheFileEntry {
+    key: String,
+    path: PathBuf,
+    size: u64,
+    modified_ms: i64,
+}
+
+fn scan_cover_cache_files(dir: &Path) -> Result<Vec<CoverCacheFileEntry>, String> {
+    let mut entries: Vec<CoverCacheFileEntry> = Vec::new();
+    let read_dir =
+        fs::read_dir(dir).map_err(|error| format!("Failed to read cover cache dir: {error}"))?;
+    for entry in read_dir {
+        let entry =
+            entry.map_err(|error| format!("Failed to read cover cache dir entry: {error}"))?;
+        let path = entry.path();
+        let Some(cached) = cached_cover_from_path(&path) else {
+            continue;
+        };
+        let metadata = fs::metadata(&path).map_err(|error| {
+            format!(
+                "Failed to stat cached cover '{}': {error}",
+                path.to_string_lossy()
+            )
+        })?;
+        let modified_ms = metadata.modified().map(system_time_to_millis).unwrap_or(0);
+        entries.push(CoverCacheFileEntry {
+            key: cached.key,
+            path,
+            size: metadata.len(),
+            modified_ms,
+        });
+    }
+    Ok(entries)
+}
+
+fn prune_cover_cache_dir(
+    dir: &Path,
+    state: &mut CoverLeaseState,
+    now_ms: i64,
+) -> Result<CoverCachePruneOutcome, String> {
+    sweep_cover_lease_state(state);
+
+    let mut files = scan_cover_cache_files(dir)?;
+    let mut total_bytes: u64 = files.iter().map(|entry| entry.size).sum();
+    if total_bytes <= COVER_CACHE_PRUNE_MAX_BYTES && files.len() <= COVER_CACHE_PRUNE_MAX_FILES {
+        return Ok(CoverCachePruneOutcome::default());
+    }
+
+    let protected: HashSet<String> = state
+        .entries
+        .iter()
+        .filter_map(|(key, entry)| {
+            if cover_lease_is_protected(entry, now_ms) {
+                Some(key.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    files.sort_by_key(|entry| (entry.modified_ms, entry.key.clone()));
+
+    let mut outcome = CoverCachePruneOutcome::default();
+    let mut remaining_files = files.len();
+    for entry in files {
+        if total_bytes <= COVER_CACHE_PRUNE_MAX_BYTES
+            && remaining_files <= COVER_CACHE_PRUNE_MAX_FILES
+        {
+            break;
+        }
+        if protected.contains(&entry.key) {
+            continue;
+        }
+
+        if fs::remove_file(&entry.path).is_ok() {
+            total_bytes = total_bytes.saturating_sub(entry.size);
+            remaining_files = remaining_files.saturating_sub(1);
+            outcome.deleted_entries = outcome.deleted_entries.saturating_add(1);
+            outcome.deleted_bytes = outcome.deleted_bytes.saturating_add(entry.size);
+            state.entries.remove(&entry.key);
+        }
+    }
+
+    Ok(outcome)
+}
+
 pub fn handle_pmp_protocol_request<R: Runtime>(
     app: &AppHandle<R>,
     request: &HttpRequest,
@@ -1280,13 +1583,19 @@ pub fn handle_pmp_protocol_request<R: Runtime>(
         }
     };
 
-    let cover_path = candidate_cover_keys_for_protocol_request(&cover_key, preferred_edge_px)
+    let cached_cover = candidate_cover_keys_for_protocol_request(&cover_key, preferred_edge_px)
         .into_iter()
-        .find_map(|candidate_key| find_cached_cover_file(&dir, &candidate_key));
+        .find_map(|candidate_key| find_cached_cover_by_key(&dir, &candidate_key));
 
-    let Some(cover_path) = cover_path else {
+    let Some(cached_cover) = cached_cover else {
         return build_protocol_response(404, Some("text/plain; charset=utf-8"), Vec::new());
     };
+    let cover_path = PathBuf::from(&cached_cover.path);
+
+    let now_ms = current_time_millis();
+    if let Ok(mut state) = COVER_LEASE_STATE.lock() {
+        let _ = upsert_cover_lease_entry(&mut state, cached_cover.clone(), 0, now_ms);
+    }
 
     let metadata = match fs::metadata(&cover_path) {
         Ok(meta) if meta.is_file() => meta,
@@ -1306,7 +1615,9 @@ pub fn handle_pmp_protocol_request<R: Runtime>(
         }
     };
 
-    let mime = media_type_from_cover_path(&cover_path)
+    let mime = cached_cover
+        .media_type
+        .clone()
         .unwrap_or_else(|| "application/octet-stream".to_string());
     build_protocol_response(200, Some(mime.as_str()), bytes)
 }
@@ -1654,22 +1965,97 @@ pub fn get_or_create_cover(
     )
 }
 
-pub fn remove_cached_cover(app: &AppHandle, key: String) -> Result<u64, String> {
-    let dir = cover_cache_dir(app)?;
+pub fn lease_cover(
+    app: &AppHandle,
+    audio_path: String,
+    max_bytes: Option<u64>,
+    max_edge_px: Option<u32>,
+) -> Result<Option<CoverLease>, String> {
+    let cached = get_or_create_cover(app, audio_path, max_bytes, max_edge_px)?;
+    let Some(cached) = cached else {
+        return Ok(None);
+    };
 
-    let mut deleted: u64 = 0;
-    let patterns = ["jpg", "jpeg", "png", "webp", "bmp", "gif"];
-    for ext in patterns {
-        let candidate = dir.join(format!("{key}.{ext}"));
-        if candidate.exists() {
-            if let Ok(meta) = fs::metadata(&candidate) {
-                deleted = deleted.saturating_add(meta.len());
-            }
-            let _ = fs::remove_file(&candidate);
+    let dir = cover_cache_dir(app)?;
+    let now_ms = current_time_millis();
+    let mut state = COVER_LEASE_STATE
+        .lock()
+        .map_err(|_| "Cover lease state lock poisoned".to_string())?;
+    let lease = upsert_cover_lease_entry(&mut state, cached, 1, now_ms);
+    let _ = prune_cover_cache_dir(&dir, &mut state, now_ms)?;
+    Ok(Some(lease))
+}
+
+pub fn touch_cover_leases(
+    app: &AppHandle,
+    keys: Vec<String>,
+) -> Result<CoverLeaseBatchResult, String> {
+    let dir = cover_cache_dir(app)?;
+    let now_ms = current_time_millis();
+    let mut state = COVER_LEASE_STATE
+        .lock()
+        .map_err(|_| "Cover lease state lock poisoned".to_string())?;
+
+    let normalized_keys: HashSet<String> = keys
+        .into_iter()
+        .filter_map(|key| normalize_cover_key(&key))
+        .collect();
+
+    let mut processed = 0usize;
+    for key in normalized_keys {
+        if touch_cover_lease_key(&dir, &mut state, &key, now_ms) {
+            processed = processed.saturating_add(1);
         }
     }
 
-    Ok(deleted)
+    let prune = prune_cover_cache_dir(&dir, &mut state, now_ms)?;
+    Ok(CoverLeaseBatchResult {
+        processed,
+        pruned_entries: prune.deleted_entries,
+        pruned_bytes: prune.deleted_bytes,
+        stats: compute_cover_lease_stats(&state, now_ms),
+    })
+}
+
+pub fn release_cover_leases(
+    app: &AppHandle,
+    keys: Vec<String>,
+) -> Result<CoverLeaseBatchResult, String> {
+    let dir = cover_cache_dir(app)?;
+    let now_ms = current_time_millis();
+    let mut state = COVER_LEASE_STATE
+        .lock()
+        .map_err(|_| "Cover lease state lock poisoned".to_string())?;
+
+    let normalized_keys: HashSet<String> = keys
+        .into_iter()
+        .filter_map(|key| normalize_cover_key(&key))
+        .collect();
+
+    let mut processed = 0usize;
+    for key in normalized_keys {
+        if release_cover_lease_key(&dir, &mut state, &key, now_ms) {
+            processed = processed.saturating_add(1);
+        }
+    }
+
+    let prune = prune_cover_cache_dir(&dir, &mut state, now_ms)?;
+    Ok(CoverLeaseBatchResult {
+        processed,
+        pruned_entries: prune.deleted_entries,
+        pruned_bytes: prune.deleted_bytes,
+        stats: compute_cover_lease_stats(&state, now_ms),
+    })
+}
+
+pub fn get_cover_lease_stats(app: &AppHandle) -> Result<CoverLeaseStats, String> {
+    let dir = cover_cache_dir(app)?;
+    let now_ms = current_time_millis();
+    let mut state = COVER_LEASE_STATE
+        .lock()
+        .map_err(|_| "Cover lease state lock poisoned".to_string())?;
+    let _ = prune_cover_cache_dir(&dir, &mut state, now_ms)?;
+    Ok(compute_cover_lease_stats(&state, now_ms))
 }
 
 pub fn scan_library_paths(

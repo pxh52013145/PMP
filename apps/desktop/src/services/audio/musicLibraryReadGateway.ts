@@ -15,7 +15,6 @@ export interface MusicLibraryReadGateway {
 
 export interface MusicLibraryReadGatewayContext {
   isDesktopRuntime(): boolean;
-  shouldAllowDesktopWebFallback?(): boolean;
   tryGetAllTracksFromNativeDb(limit?: number, offset?: number): Promise<NativeReadResult<Track[]>>;
   trySearchTracksFromNativeDb(query: string, limit?: number): Promise<NativeReadResult<Track[]>>;
   tryGetTracksByAlbumFromNativeDb(album: string): Promise<NativeReadResult<Track[]>>;
@@ -37,10 +36,6 @@ function isNativeReadAvailable<T>(
   return result.status === 'ok';
 }
 
-function shouldAllowDesktopWebFallback(context: MusicLibraryReadGatewayContext): boolean {
-  return context.shouldAllowDesktopWebFallback?.() === true;
-}
-
 function createEmptyLibraryStats(): LibraryStats {
   return {
     totalTracks: 0,
@@ -52,17 +47,12 @@ function createEmptyLibraryStats(): LibraryStats {
 }
 
 async function resolveDesktopRead<T>(
-  context: MusicLibraryReadGatewayContext,
   nativeRead: Promise<NativeReadResult<T>>,
-  webFallback: () => Promise<T>,
   unavailableValue: () => T
 ): Promise<T> {
   const nativeValue = await nativeRead;
   if (isNativeReadAvailable(nativeValue)) {
     return nativeValue.value;
-  }
-  if (shouldAllowDesktopWebFallback(context)) {
-    return webFallback();
   }
   return unavailableValue();
 }
@@ -342,15 +332,12 @@ function createWebMusicLibraryReadGateway(
 }
 
 function createDesktopMusicLibraryReadGateway(
-  context: MusicLibraryReadGatewayContext,
-  webGateway: MusicLibraryReadGateway
+  context: MusicLibraryReadGatewayContext
 ): MusicLibraryReadGateway {
   return {
     async getAllTracks(limit?: number, offset?: number): Promise<Track[]> {
       return resolveDesktopRead(
-        context,
         context.tryGetAllTracksFromNativeDb(limit, offset),
-        () => webGateway.getAllTracks(limit, offset),
         () => []
       );
     },
@@ -362,18 +349,14 @@ function createDesktopMusicLibraryReadGateway(
       }
 
       return resolveDesktopRead(
-        context,
         context.trySearchTracksFromNativeDb(normalizedQuery, limit),
-        () => webGateway.searchTracks(normalizedQuery, limit),
         () => []
       );
     },
 
     async getTracksByAlbum(album: string): Promise<Track[]> {
       return resolveDesktopRead(
-        context,
         context.tryGetTracksByAlbumFromNativeDb(album),
-        () => webGateway.getTracksByAlbum(album),
         () => []
       );
     },
@@ -381,18 +364,14 @@ function createDesktopMusicLibraryReadGateway(
     async getAllAlbums(options?: { includeStoredCover?: boolean }): Promise<AlbumSummary[]> {
       const includeStoredCover = options?.includeStoredCover ?? true;
       return resolveDesktopRead(
-        context,
         context.tryGetAllAlbumsFromNativeDb(includeStoredCover),
-        () => webGateway.getAllAlbums(options),
         () => []
       );
     },
 
     async getLibraryStats(): Promise<LibraryStats> {
       return resolveDesktopRead(
-        context,
         context.tryGetLibraryStatsFromNativeDb(),
-        () => webGateway.getLibraryStats(),
         () => createEmptyLibraryStats()
       );
     },
@@ -403,7 +382,7 @@ export function createMusicLibraryReadGateway(
   context: MusicLibraryReadGatewayContext
 ): MusicLibraryReadGateway {
   const webGateway = createWebMusicLibraryReadGateway(context);
-  const desktopGateway = createDesktopMusicLibraryReadGateway(context, webGateway);
+  const desktopGateway = createDesktopMusicLibraryReadGateway(context);
 
   const resolveGateway = (): MusicLibraryReadGateway =>
     context.isDesktopRuntime() ? desktopGateway : webGateway;

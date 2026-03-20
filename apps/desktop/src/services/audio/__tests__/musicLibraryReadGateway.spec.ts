@@ -102,7 +102,6 @@ function createContext(
 ): MusicLibraryReadGatewayContext {
   const context: MusicLibraryReadGatewayContext = {
     isDesktopRuntime: () => false,
-    shouldAllowDesktopWebFallback: () => false,
     tryGetAllTracksFromNativeDb: vi.fn().mockResolvedValue(nativeUnavailable()),
     trySearchTracksFromNativeDb: vi.fn().mockResolvedValue(nativeUnavailable()),
     tryGetTracksByAlbumFromNativeDb: vi.fn().mockResolvedValue(nativeUnavailable()),
@@ -191,24 +190,6 @@ describe('musicLibraryReadGateway', () => {
 
     expect(result).toEqual([]);
     expect(context.ensureDb).not.toHaveBeenCalled();
-  });
-
-  it('allows explicit desktop IndexedDB fallback when the escape hatch is enabled', async () => {
-    const context = createContext({
-      isDesktopRuntime: () => true,
-      shouldAllowDesktopWebFallback: () => true,
-      tryGetTracksByAlbumFromNativeDb: vi.fn().mockResolvedValue(nativeUnavailable()),
-      ensureDb: vi.fn().mockResolvedValue(
-        createFakeDb([{ id: 'album-web-1', title: 'Fallback Track', album: 'Target Album', visible: true }])
-      ),
-    });
-
-    const gateway = createMusicLibraryReadGateway(context);
-    const result = await gateway.getTracksByAlbum('Target Album');
-
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({ id: 'album-web-1', projection: 'playback' });
-    expect(context.ensureDb).toHaveBeenCalledTimes(1);
   });
 
   it('treats zero desktop native stats as authoritative and does not fallback to IndexedDB', async () => {

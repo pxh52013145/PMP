@@ -23,6 +23,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   resetAudioPerformanceTelemetryForTests();
+  const runtimeWindow = window as Window & { __TAURI__?: unknown };
+  Reflect.deleteProperty(runtimeWindow, '__TAURI__');
 
   const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
   invokeMock.mockResolvedValue(undefined);
@@ -32,6 +34,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  const runtimeWindow = window as Window & { __TAURI__?: unknown };
+  Reflect.deleteProperty(runtimeWindow, '__TAURI__');
   vi.useRealTimers();
 });
 
@@ -39,6 +43,11 @@ async function flushMicrotasks(rounds: number = 3): Promise<void> {
   for (let index = 0; index < rounds; index += 1) {
     await Promise.resolve();
   }
+}
+
+function getInvokeCalls(command: string): unknown[][] {
+  const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+  return invokeMock.mock.calls.filter((call) => call?.[0] === command);
 }
 
 function enableMockTauriRuntime(): () => void {
@@ -1659,39 +1668,50 @@ describe('NativeAudioService', () => {
           totalDuration: 0,
         };
       }
-      if (cmd === 'music_library_db_list_playlist_items') {
-        return [
-          {
-            id: 'item-1',
+      if (cmd === 'music_library_db_query_playlist_tracks_page') {
+        expect(payload).toMatchObject({
+          query: {
             playlistId: 'playlist-summary-2',
-            position: 0,
-            trackPayloadJson: JSON.stringify({
-              id: 'summary-queue-track-1',
-              title: 'Summary Queue Track 1',
-              filePath: 'C:\\\\Music\\\\summary-queue-1.mp3',
-              path: 'C:\\\\Music\\\\summary-queue-1.mp3',
-              duration: 120,
-            }),
-            snapshotTitle: 'Summary Queue Track 1',
-            snapshotDurationSeconds: 120,
-            createdAtMs: 1700000000000,
+            sortField: 'default',
+            sortDirection: 'asc',
+            offset: 0,
           },
-          {
-            id: 'item-2',
-            playlistId: 'playlist-summary-2',
-            position: 1,
-            trackPayloadJson: JSON.stringify({
-              id: 'summary-queue-track-2',
-              title: 'Summary Queue Track 2',
-              filePath: 'C:\\\\Music\\\\summary-queue-2.mp3',
-              path: 'C:\\\\Music\\\\summary-queue-2.mp3',
-              duration: 180,
-            }),
-            snapshotTitle: 'Summary Queue Track 2',
-            snapshotDurationSeconds: 180,
-            createdAtMs: 1700000000000,
-          },
-        ];
+        });
+        return {
+          total: 2,
+          items: [
+            {
+              id: 'item-1',
+              playlistId: 'playlist-summary-2',
+              position: 0,
+              trackPayloadJson: JSON.stringify({
+                id: 'summary-queue-track-1',
+                title: 'Summary Queue Track 1',
+                filePath: 'C:\\\\Music\\\\summary-queue-1.mp3',
+                path: 'C:\\\\Music\\\\summary-queue-1.mp3',
+                duration: 120,
+              }),
+              snapshotTitle: 'Summary Queue Track 1',
+              snapshotDurationSeconds: 120,
+              createdAtMs: 1700000000000,
+            },
+            {
+              id: 'item-2',
+              playlistId: 'playlist-summary-2',
+              position: 1,
+              trackPayloadJson: JSON.stringify({
+                id: 'summary-queue-track-2',
+                title: 'Summary Queue Track 2',
+                filePath: 'C:\\\\Music\\\\summary-queue-2.mp3',
+                path: 'C:\\\\Music\\\\summary-queue-2.mp3',
+                duration: 180,
+              }),
+              snapshotTitle: 'Summary Queue Track 2',
+              snapshotDurationSeconds: 180,
+              createdAtMs: 1700000000000,
+            },
+          ],
+        };
       }
       return undefined;
     });
@@ -1709,6 +1729,127 @@ describe('NativeAudioService', () => {
     expect(service.getState().currentPlaylist?.tracks).toHaveLength(0);
     expect(service.getPlaylist('playlist-summary-2')?.tracksHydrated).toBe(false);
     expect(service.getPlaylist('playlist-summary-2')?.tracks).toHaveLength(0);
+    const invokedCommands = invokeMock.mock.calls.map((call) => call[0]);
+    expect(invokedCommands).toContain('music_library_db_query_playlist_tracks_page');
+    expect(invokedCommands).not.toContain('music_library_db_list_playlist_items');
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('queues selected tracks from summary-only playlists through native page queries without hydrating state', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation(async (cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'music_library_db_list_playlists') {
+        const query = (payload as { query?: { kind?: string } } | undefined)?.query;
+        if (query?.kind === 'smart') {
+          return [];
+        }
+        return [
+          {
+            id: 'playlist-selection-summary',
+            ownerUid: 'local:default',
+            name: 'Selection Summary',
+            description: null,
+            coverUrl: null,
+            kind: 'manual',
+            sourceConnectorId: null,
+            sourcePlaylistId: null,
+            smartRuleJson: null,
+            isReadonly: false,
+            createdAtMs: 1700000000000,
+            updatedAtMs: 1700000000000,
+            lastOpenedAtMs: null,
+            trackCount: 4,
+            totalDuration: 600,
+          },
+        ];
+      }
+      if (cmd === 'music_library_db_upsert_playlist') {
+        return {
+          id: 'smart-recently-played',
+          ownerUid: 'local:default',
+          name: 'Recently Played',
+          description: null,
+          kind: 'smart',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: JSON.stringify({ type: 'recently_played', limit: 1000 }),
+          isReadonly: true,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000000,
+          lastOpenedAtMs: null,
+          trackCount: 0,
+          totalDuration: 0,
+        };
+      }
+      if (cmd === 'music_library_db_query_playlist_tracks_page') {
+        expect(payload).toMatchObject({
+          query: {
+            playlistId: 'playlist-selection-summary',
+            sortField: 'default',
+            sortDirection: 'asc',
+            offset: 1,
+            limit: 2,
+          },
+        });
+        return {
+          total: 4,
+          items: [
+            {
+              id: 'item-2',
+              playlistId: 'playlist-selection-summary',
+              position: 1,
+              trackPayloadJson: JSON.stringify({
+                id: 'selection-track-2',
+                title: 'Selection Track 2',
+                filePath: 'C:\\\\Music\\\\selection-track-2.mp3',
+                path: 'C:\\\\Music\\\\selection-track-2.mp3',
+                duration: 180,
+              }),
+              snapshotTitle: 'Selection Track 2',
+              snapshotDurationSeconds: 180,
+              createdAtMs: 1700000000000,
+            },
+            {
+              id: 'item-3',
+              playlistId: 'playlist-selection-summary',
+              position: 2,
+              trackPayloadJson: JSON.stringify({
+                id: 'selection-track-3',
+                title: 'Selection Track 3',
+                filePath: 'C:\\\\Music\\\\selection-track-3.mp3',
+                path: 'C:\\\\Music\\\\selection-track-3.mp3',
+                duration: 210,
+              }),
+              snapshotTitle: 'Selection Track 3',
+              snapshotDurationSeconds: 210,
+              createdAtMs: 1700000000000,
+            },
+          ],
+        };
+      }
+      return undefined;
+    });
+
+    const service = new NativeAudioService();
+    await flushMicrotasks(6);
+    await vi.waitFor(() => {
+      expect(service.getPlaylist('playlist-selection-summary')).not.toBeNull();
+    });
+
+    await service.addPlaylistTrackIndexesToQueue('playlist-selection-summary', [1, 2]);
+
+    expect(service.getState().queue.map((track) => track.id)).toEqual([
+      'selection-track-2',
+      'selection-track-3',
+    ]);
+    expect(service.getPlaylist('playlist-selection-summary')?.tracksHydrated).toBe(false);
+    expect(service.getPlaylist('playlist-selection-summary')?.tracks).toHaveLength(0);
+    const invokedCommands = invokeMock.mock.calls.map((call) => call[0]);
+    expect(invokedCommands).toContain('music_library_db_query_playlist_tracks_page');
+    expect(invokedCommands).not.toContain('music_library_db_list_playlist_items');
 
     service.destroy();
     restoreRuntime();
@@ -2378,6 +2519,8 @@ describe('NativeAudioService', () => {
       path: 'C:\\\\Music\\\\a.mp3',
       replayGainDb: 0,
     });
+    expect(getInvokeCalls('native_audio_play')).toHaveLength(0);
+    expect(getInvokeCalls('music_library_db_mark_track_played')).toHaveLength(0);
     service.destroy();
   });
 

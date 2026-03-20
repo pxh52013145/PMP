@@ -6,8 +6,8 @@ import type {
 
 const CARD_GRID_MIN_COLUMN_WIDTH_PX = 320;
 const CARD_GRID_GAP_PX = 10;
-const CARD_BLOCK_GAP_PX = 10;
-const CARD_TRACK_ROW_HEIGHT_PX = 72;
+export const MUSIC_LIBRARY_CARD_BLOCK_GAP_PX = 10;
+export const MUSIC_LIBRARY_CARD_TRACK_ROW_HEIGHT_PX = 72;
 const CARD_GROUP_HEADER_HEIGHT_PX = 42;
 const CARD_WINDOW_OVERSCAN_PX = 180;
 const CARD_GROUP_INDENT_TOTAL_PX = 26;
@@ -89,7 +89,7 @@ export function buildMusicLibraryCardVirtualLayout(
       ...block,
       topPx: offsetTopPx,
     });
-    offsetTopPx += block.heightPx + CARD_BLOCK_GAP_PX;
+    offsetTopPx += block.heightPx + MUSIC_LIBRARY_CARD_BLOCK_GAP_PX;
   };
 
   const flushTrackRows = () => {
@@ -102,7 +102,7 @@ export function buildMusicLibraryCardVirtualLayout(
         kind: 'track-row',
         key: buildTrackRowBlockKey(chunk),
         depth: pendingTrackDepth,
-        heightPx: CARD_TRACK_ROW_HEIGHT_PX,
+        heightPx: MUSIC_LIBRARY_CARD_TRACK_ROW_HEIGHT_PX,
         rows: chunk,
       });
     }
@@ -143,7 +143,7 @@ export function buildMusicLibraryCardVirtualLayout(
 
   return {
     blocks,
-    totalHeightPx: Math.max(0, offsetTopPx - CARD_BLOCK_GAP_PX),
+    totalHeightPx: Math.max(0, offsetTopPx - MUSIC_LIBRARY_CARD_BLOCK_GAP_PX),
   };
 }
 
@@ -202,8 +202,8 @@ export function sliceMusicLibraryCardVirtualLayout(
 
   const safeScrollTopPx = Math.max(0, Number.isFinite(scrollTopPx) ? scrollTopPx : 0);
   const safeViewportHeightPx = Math.max(
-    CARD_TRACK_ROW_HEIGHT_PX,
-    Number.isFinite(viewportHeightPx) ? viewportHeightPx : CARD_TRACK_ROW_HEIGHT_PX
+    MUSIC_LIBRARY_CARD_TRACK_ROW_HEIGHT_PX,
+    Number.isFinite(viewportHeightPx) ? viewportHeightPx : MUSIC_LIBRARY_CARD_TRACK_ROW_HEIGHT_PX
   );
   const startPx = Math.max(0, safeScrollTopPx - CARD_WINDOW_OVERSCAN_PX);
   const endPx = safeScrollTopPx + safeViewportHeightPx + CARD_WINDOW_OVERSCAN_PX;

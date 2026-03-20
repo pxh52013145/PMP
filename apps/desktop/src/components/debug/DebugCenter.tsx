@@ -73,6 +73,9 @@ type EditorWindowsDebugState = {
 };
 
 type CoverCacheStats = ReturnType<MusicLibraryService['getCoverRuntimeCacheStats']>;
+type DesktopCoverLeaseStats = NonNullable<
+  Awaited<ReturnType<MusicLibraryService['getDesktopCoverLeaseStats']>>
+>;
 
 type MusicLibraryRuntimeMemorySnapshot = {
   timestampMs: number;
@@ -80,12 +83,10 @@ type MusicLibraryRuntimeMemorySnapshot = {
   baseView: string;
   searchQuery: string;
   shouldUseNativeBaseQuery: boolean;
-  shouldUseQueryPageBaseCache: boolean;
   coverPolicy: string;
   counts: {
     tracks: number;
     nativeBaseTracks: number;
-    queryPageTracks: number;
     filteredTracks: number;
     renderedTracks: number;
     groupedRows: number;
@@ -93,7 +94,6 @@ type MusicLibraryRuntimeMemorySnapshot = {
   estimatedBytes: {
     tracks: number | null;
     nativeBaseTracks: number | null;
-    queryPageTracks: number | null;
   };
   attribution: {
     trackArrayBytes: number;
@@ -539,6 +539,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [envSnapshot, setEnvSnapshot] = useState<DebugEnvSnapshot>({});
   const [editorWindowsState, setEditorWindowsState] = useState<EditorWindowsDebugState | null>(null);
   const [coverCacheStats, setCoverCacheStats] = useState<CoverCacheStats | null>(null);
+  const [desktopCoverLeaseStats, setDesktopCoverLeaseStats] = useState<DesktopCoverLeaseStats | null>(null);
   const [musicLibrarySnapshot, setMusicLibrarySnapshot] =
     useState<MusicLibraryRuntimeMemorySnapshot | null>(null);
   const [busy, setBusy] = useState(false);
@@ -607,14 +608,18 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   }, [history]);
 
   const refreshMemory = useCallback(async () => {
-    const coverStats = MusicLibraryService.getInstance().getCoverRuntimeCacheStats();
+    const service = MusicLibraryService.getInstance();
+    const coverStats = service.getCoverRuntimeCacheStats();
     setCoverCacheStats(coverStats);
     setMusicLibrarySnapshot(getLatestMusicLibraryRuntimeSnapshot());
 
     if (!isTauri) {
+      setDesktopCoverLeaseStats(null);
       setEditorWindowsState(null);
       return;
     }
+
+    setDesktopCoverLeaseStats(await service.getDesktopCoverLeaseStats());
 
     try {
       const state = await invokeWithTelemetry<EditorWindowsDebugState>(
@@ -2709,6 +2714,14 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                     count: coverCacheStats?.albumCoverUrlCacheEntries ?? 0,
                   })}
                 </p>
+                <p className="settings-card-desc">
+                  {t('debug.center.memory.coverCaches.leases.value', {
+                    leased: desktopCoverLeaseStats?.leasedEntries ?? 0,
+                    active: desktopCoverLeaseStats?.activeEntries ?? 0,
+                    tracked: desktopCoverLeaseStats?.trackedEntries ?? 0,
+                    mb: ((desktopCoverLeaseStats?.trackedBytes ?? 0) / 1024 / 1024).toFixed(1),
+                  })}
+                </p>
               </div>
             </div>
 
@@ -2730,9 +2743,6 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                       nativeBase: t(
                         `common.state.${musicLibrarySnapshot.shouldUseNativeBaseQuery ? 'on' : 'off'}`
                       ),
-                      queryPageCache: t(
-                        `common.state.${musicLibrarySnapshot.shouldUseQueryPageBaseCache ? 'on' : 'off'}`
-                      ),
                       coverPolicy: musicLibrarySnapshot.coverPolicy,
                     })}
                   </p>
@@ -2740,7 +2750,6 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                     {t('debug.center.memory.musicLibrary.counts', {
                       tracks: musicLibrarySnapshot.counts.tracks,
                       nativeBaseTracks: musicLibrarySnapshot.counts.nativeBaseTracks,
-                      queryPageTracks: musicLibrarySnapshot.counts.queryPageTracks,
                       filteredTracks: musicLibrarySnapshot.counts.filteredTracks,
                       renderedTracks: musicLibrarySnapshot.counts.renderedTracks,
                       groupedRows: musicLibrarySnapshot.counts.groupedRows,
@@ -2751,7 +2760,6 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                       trackArrayMb: formatBytesToMb(musicLibrarySnapshot.attribution.trackArrayBytes),
                       tracksMb: formatBytesToMb(musicLibrarySnapshot.estimatedBytes.tracks),
                       nativeBaseMb: formatBytesToMb(musicLibrarySnapshot.estimatedBytes.nativeBaseTracks),
-                      queryPageMb: formatBytesToMb(musicLibrarySnapshot.estimatedBytes.queryPageTracks),
                     })}
                   </p>
                   <p className="settings-card-desc">

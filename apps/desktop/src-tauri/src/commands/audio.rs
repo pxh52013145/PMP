@@ -359,19 +359,6 @@ pub async fn native_audio_open_asio_control_panel(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn native_audio_sync_queue(
-    app: tauri::AppHandle,
-    queue: Vec<String>,
-    current_index: i32,
-) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        native_audio::sync_queue(&app, queue, current_index)
-    })
-    .await
-    .map_err(|e| format!("Native audio sync queue task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
 pub async fn native_audio_append_queue(
     app: tauri::AppHandle,
     queue: Vec<String>,

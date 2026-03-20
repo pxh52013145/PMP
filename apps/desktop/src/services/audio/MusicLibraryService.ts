@@ -330,6 +330,25 @@ export interface LocalBaseTracksPageResult {
 export type CoverRuntimeCachePolicy = 'default' | 'watch' | 'high' | 'critical' | 'hidden';
 export type CoverSizeHint = 'small' | 'medium' | 'large';
 
+type DesktopCoverLeaseRecord = {
+  key: string;
+  url: string;
+  path: string;
+  size: number;
+  mediaType?: string | null;
+  leaseCount: number;
+  lastTouchedAtMs: number;
+};
+
+type DesktopCoverLeaseStats = {
+  trackedEntries: number;
+  activeEntries: number;
+  leasedEntries: number;
+  trackedBytes: number;
+  activeBytes: number;
+  leasedBytes: number;
+};
+
 export class MusicLibraryService {
   private static instance: MusicLibraryService;
   private static startupRefreshScheduled: boolean = false;
@@ -358,7 +377,6 @@ export class MusicLibraryService {
 
   private COVER_URL_CACHE_MAX_ENTRIES = this.DEFAULT_COVER_URL_CACHE_MAX_ENTRIES;
   private ALBUM_COVER_URL_CACHE_MAX_ENTRIES = this.DEFAULT_ALBUM_COVER_URL_CACHE_MAX_ENTRIES;
-  private COVER_CACHE_MAX_BYTES = this.DEFAULT_COVER_CACHE_MAX_BYTES;
   private COVER_MAX_IMAGE_BYTES = this.DEFAULT_COVER_MAX_IMAGE_BYTES;
   private COVER_BLOB_CACHE_MAX_BYTES = this.DEFAULT_COVER_BLOB_CACHE_MAX_BYTES;
   private COVER_DECODED_ESTIMATE_MAX_ENTRIES = this.DEFAULT_COVER_DECODED_ESTIMATE_MAX_ENTRIES;
@@ -376,6 +394,8 @@ export class MusicLibraryService {
   private nativeSchemaEnvelopeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private nativeSchemaChangeUnlistenPromise: Promise<UnlistenFn | null> | null = null;
   private lastUnsupportedBaseQuerySignature: string | null = null;
+  private desktopLegacyTrackMirrorVacuumPromise: Promise<void> | null = null;
+  private desktopLegacyCoverCacheVacuumPromise: Promise<void> | null = null;
 
   // 缓存 - 减少数据库查询
   private cachedStats: LibraryStats | null = null;
@@ -383,7 +403,6 @@ export class MusicLibraryService {
   private CACHE_TTL = 5000; // 5秒缓存
   private readonly readGateway = createMusicLibraryReadGateway({
     isDesktopRuntime: () => isTauriRuntime(),
-    shouldAllowDesktopWebFallback: () => false,
     tryGetAllTracksFromNativeDb: (limit?: number, offset?: number) =>
       this.tryGetAllTracksFromNativeDb(limit, offset),
     trySearchTracksFromNativeDb: (query: string, limit?: number) =>
@@ -408,11 +427,18 @@ export class MusicLibraryService {
   });
 
   private constructor() {
-    void this.initDB().catch((error) => {
-      this.telemetry.warn('music-library.db.init.failed', {
-        message: this.readTelemetryErrorMessage(error),
+    void this.initDB()
+      .then(() => {
+        if (this.db) {
+          void this.maybeVacuumDesktopLegacyTrackMirror(this.db);
+          void this.maybeVacuumDesktopLegacyCoverCache(this.db);
+        }
+      })
+      .catch((error) => {
+        this.telemetry.warn('music-library.db.init.failed', {
+          message: this.readTelemetryErrorMessage(error),
+        });
       });
-    });
     this.coverMaxEdgePx = this.readCoverMaxEdgePxSetting();
     this.setupCoverSettingsListener();
     this.setupCoverVisibilityReclaimListener();
@@ -699,7 +725,6 @@ export class MusicLibraryService {
     this.COVER_BLOB_CACHE_MAX_BYTES = next.coverBlobCacheMaxBytes;
     this.COVER_DECODED_ESTIMATE_MAX_ENTRIES = next.coverDecodedEstimateMaxEntries;
     this.COVER_DECODED_ESTIMATE_MAX_BYTES = next.coverDecodedEstimateMaxBytes;
-    this.COVER_CACHE_MAX_BYTES = next.coverCacheMaxBytes;
     this.COVER_MAX_IMAGE_BYTES = next.coverMaxImageBytes;
 
     if (policy === 'hidden' && previousPolicy !== 'hidden') {
@@ -722,6 +747,118 @@ export class MusicLibraryService {
 
   private normalizePathForCompare(path: string): string {
     return path.replace(/\\/g, '/').toLowerCase();
+  }
+
+  private shouldMaintainIndexedDbTrackMirror(): boolean {
+    return !isTauriRuntime();
+  }
+
+  private async countObjectStoreRecords(db: IDBDatabase, storeName: string): Promise<number> {
+    if (!db.objectStoreNames.contains(storeName)) return 0;
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction([storeName], 'readonly');
+      const store = transaction.objectStore(storeName);
+      const request = store.count();
+
+      request.onsuccess = () => {
+        const count = Number(request.result);
+        resolve(Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  private async vacuumDesktopLegacyTrackMirror(db: IDBDatabase): Promise<void> {
+    if (this.shouldMaintainIndexedDbTrackMirror()) return;
+    if (!db.objectStoreNames.contains('tracks')) return;
+
+    const trackRecordCount = await this.countObjectStoreRecords(db, 'tracks');
+    if (trackRecordCount <= 0) {
+      this.telemetry.info('music-library.desktop-track-mirror.vacuum.skipped', {
+        fields: {
+          trackRecordCount: 0,
+        },
+      });
+      return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(['tracks'], 'readwrite');
+      const store = transaction.objectStore('tracks');
+      store.clear();
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+
+    this.telemetry.info('music-library.desktop-track-mirror.vacuum.completed', {
+      fields: {
+        trackRecordCount,
+      },
+    });
+  }
+
+  private async maybeVacuumDesktopLegacyTrackMirror(db: IDBDatabase): Promise<void> {
+    if (this.shouldMaintainIndexedDbTrackMirror()) return;
+    if (this.desktopLegacyTrackMirrorVacuumPromise) {
+      await this.desktopLegacyTrackMirrorVacuumPromise;
+      return;
+    }
+
+    this.desktopLegacyTrackMirrorVacuumPromise = this.vacuumDesktopLegacyTrackMirror(db).catch(
+      (error) => {
+        this.logTelemetryWarn('music-library.desktop-track-mirror.vacuum.failed', error);
+      }
+    );
+
+    await this.desktopLegacyTrackMirrorVacuumPromise;
+  }
+
+  private async vacuumDesktopLegacyCoverCache(db: IDBDatabase): Promise<void> {
+    if (this.shouldMaintainIndexedDbTrackMirror()) return;
+    if (!db.objectStoreNames.contains('coverCache')) return;
+
+    const coverCacheRecordCount = await this.countObjectStoreRecords(db, 'coverCache');
+    if (coverCacheRecordCount <= 0) {
+      this.telemetry.info('music-library.desktop-cover-cache.vacuum.skipped', {
+        fields: {
+          coverCacheRecordCount: 0,
+        },
+      });
+      return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(['coverCache'], 'readwrite');
+      const store = transaction.objectStore('coverCache');
+      store.clear();
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+
+    this.telemetry.info('music-library.desktop-cover-cache.vacuum.completed', {
+      fields: {
+        coverCacheRecordCount,
+      },
+    });
+  }
+
+  private async maybeVacuumDesktopLegacyCoverCache(db: IDBDatabase): Promise<void> {
+    if (this.shouldMaintainIndexedDbTrackMirror()) return;
+    if (this.desktopLegacyCoverCacheVacuumPromise) {
+      await this.desktopLegacyCoverCacheVacuumPromise;
+      return;
+    }
+
+    this.desktopLegacyCoverCacheVacuumPromise = this.vacuumDesktopLegacyCoverCache(db).catch(
+      (error) => {
+        this.logTelemetryWarn('music-library.desktop-cover-cache.vacuum.failed', error);
+      }
+    );
+
+    await this.desktopLegacyCoverCacheVacuumPromise;
   }
 
   private sanitizeQuickFingerprint(raw: unknown): string | undefined {
@@ -1467,10 +1604,12 @@ export class MusicLibraryService {
     }
   }
 
-  private async tryGetTrackByIdFromNativeDb(trackId: string): Promise<Track | null> {
-    if (!isTauriRuntime()) return null;
+  private async tryGetTrackByIdFromNativeDb(
+    trackId: string
+  ): Promise<NativeReadResult<Track | null>> {
+    if (!isTauriRuntime()) return nativeReadUnavailable();
     const normalizedTrackId = trackId.trim();
-    if (!normalizedTrackId) return null;
+    if (!normalizedTrackId) return nativeReadOk(null);
 
     try {
       const nativeTracks = await queryNativeLibraryTracks({
@@ -1482,10 +1621,12 @@ export class MusicLibraryService {
       });
 
       if (nativeTracks.length === 0) {
-        return null;
+        return nativeReadOk(null);
       }
 
-      return this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(nativeTracks[0]));
+      return nativeReadOk(
+        this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(nativeTracks[0]))
+      );
     } catch (error) {
       this.telemetry.warn('music-library.native-read.track-by-id.failed', {
         message: this.readTelemetryErrorMessage(error),
@@ -1493,14 +1634,16 @@ export class MusicLibraryService {
           trackId: normalizedTrackId,
         },
       });
-      return null;
+      return nativeReadUnavailable();
     }
   }
 
-  private async tryGetTracksByArtistFromNativeDb(artist: string): Promise<Track[] | null> {
-    if (!isTauriRuntime()) return null;
+  private async tryGetTracksByArtistFromNativeDb(
+    artist: string
+  ): Promise<NativeReadResult<Track[]>> {
+    if (!isTauriRuntime()) return nativeReadUnavailable();
     const normalizedArtist = artist.trim();
-    if (!normalizedArtist) return [];
+    if (!normalizedArtist) return nativeReadOk([]);
 
     try {
       const nativeTracks = await queryNativeLibraryTracks({
@@ -1509,12 +1652,10 @@ export class MusicLibraryService {
         artist: normalizedArtist,
       });
 
-      if (nativeTracks.length === 0) {
-        return null;
-      }
-
-      return nativeTracks.map((item) =>
-        this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(item))
+      return nativeReadOk(
+        nativeTracks.map((item) =>
+          this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(item))
+        )
       );
     } catch (error) {
       this.telemetry.warn('music-library.native-read.artist.failed', {
@@ -1523,7 +1664,7 @@ export class MusicLibraryService {
           artistLength: normalizedArtist.length,
         },
       });
-      return null;
+      return nativeReadUnavailable();
     }
   }
 
@@ -1556,13 +1697,9 @@ export class MusicLibraryService {
   }
 
   private async loadNativeFacetCollection(
-    descriptor: MusicLibraryCollectionFacetDescriptor,
-    options?: { includeStoredCover?: boolean }
+    descriptor: MusicLibraryCollectionFacetDescriptor
   ): Promise<NativeReadResult<string[] | AlbumSummary[]>> {
     if (!isTauriRuntime()) return nativeReadUnavailable();
-    if (descriptor.kind === 'album-summaries' && options?.includeStoredCover) {
-      return nativeReadUnavailable();
-    }
 
     try {
       const result = await listNativeLibraryFacetEntries({
@@ -1654,14 +1791,12 @@ export class MusicLibraryService {
   }
 
   private async tryGetAllAlbumsFromNativeDb(
-    includeStoredCover: boolean
+    _includeStoredCover: boolean
   ): Promise<NativeReadResult<AlbumSummary[]>> {
     const descriptor = await this.resolveNativeFacetCollectionDescriptor('albums');
     if (!descriptor) return nativeReadUnavailable();
 
-    const result = await this.loadNativeFacetCollection(descriptor, {
-      includeStoredCover,
-    });
+    const result = await this.loadNativeFacetCollection(descriptor);
     if (result.status !== 'ok') {
       return result;
     }
@@ -2056,6 +2191,7 @@ export class MusicLibraryService {
   private scheduleLegacyCoverUrlDrop(trackId: string): void {
     if (!trackId) return;
     if (!isTauriRuntime()) return;
+    if (!this.shouldMaintainIndexedDbTrackMirror()) return;
     if (typeof window === 'undefined') return;
 
     this.legacyCoverUrlDropIds.add(trackId);
@@ -2170,7 +2306,86 @@ export class MusicLibraryService {
     return `${base}?size=${coverSizeHint}`;
   }
 
+  private async touchDesktopCoverLeases(keys: string[]): Promise<void> {
+    if (!isTauriRuntime()) return;
+    const normalizedKeys = Array.from(
+      new Set(
+        keys
+          .map((key) => (typeof key === 'string' ? key.trim() : ''))
+          .filter((key) => this.isValidCoverKey(key))
+      )
+    );
+    if (normalizedKeys.length === 0) return;
+
+    try {
+      await invokeWithTelemetry('music_library_cover_touch', { keys: normalizedKeys }, {
+        moduleId: 'music-library',
+        component: 'MusicLibraryService',
+        event: 'music-library.cover.touch',
+      });
+    } catch (error) {
+      this.telemetry.warn('music-library.cover.touch.failed', {
+        message: this.readTelemetryErrorMessage(error),
+        fields: {
+          keyCount: normalizedKeys.length,
+        },
+      });
+    }
+  }
+
+  private releaseDesktopCoverLeases(keys: string[]): void {
+    if (!isTauriRuntime()) return;
+    const normalizedKeys = Array.from(
+      new Set(
+        keys
+          .map((key) => (typeof key === 'string' ? key.trim() : ''))
+          .filter((key) => this.isValidCoverKey(key))
+      )
+    );
+    if (normalizedKeys.length === 0) return;
+
+    void invokeWithTelemetry('music_library_cover_release', { keys: normalizedKeys }, {
+      moduleId: 'music-library',
+      component: 'MusicLibraryService',
+      event: 'music-library.cover.release',
+    }).catch((error) => {
+      this.telemetry.warn('music-library.cover.release.failed', {
+        message: this.readTelemetryErrorMessage(error),
+        fields: {
+          keyCount: normalizedKeys.length,
+        },
+      });
+    });
+  }
+
+  async getDesktopCoverLeaseStats(): Promise<DesktopCoverLeaseStats | null> {
+    if (!isTauriRuntime()) return null;
+
+    try {
+      return await invokeWithTelemetry<DesktopCoverLeaseStats>(
+        'music_library_cover_get_lease_stats',
+        undefined,
+        {
+          moduleId: 'music-library',
+          component: 'MusicLibraryService',
+          event: 'music-library.cover.get-lease-stats',
+        }
+      );
+    } catch (error) {
+      this.telemetry.warn('music-library.cover.get-lease-stats.failed', {
+        message: this.readTelemetryErrorMessage(error),
+      });
+      return null;
+    }
+  }
+
   private async flushLegacyCoverUrlDrops(): Promise<void> {
+    if (!this.shouldMaintainIndexedDbTrackMirror()) {
+      this.legacyCoverUrlDropIds.clear();
+      this.legacyCoverUrlDropScheduled = false;
+      return;
+    }
+
     if (this.legacyCoverUrlDropInFlight) {
       if (!this.legacyCoverUrlDropScheduled && typeof window !== 'undefined') {
         this.legacyCoverUrlDropScheduled = true;
@@ -2282,46 +2497,13 @@ export class MusicLibraryService {
     }
   }
 
-  private async upsertCoverCacheEntry(entry: {
-    key: string;
-    filePath: string;
-    bytes: number;
-    lastAccessedAtMs: number;
-  }): Promise<void> {
-    const db = await this.ensureDB();
-    await new Promise<void>((resolve, reject) => {
-      const transaction = db.transaction(['coverCache'], 'readwrite');
-      const store = transaction.objectStore('coverCache');
-      store.put(entry);
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-    });
-  }
-
-  private async touchCoverCacheEntry(key: string): Promise<void> {
-    const db = await this.ensureDB();
-    await new Promise<void>((resolve, reject) => {
-      const transaction = db.transaction(['coverCache'], 'readwrite');
-      const store = transaction.objectStore('coverCache');
-      const request = store.get(key);
-      request.onsuccess = () => {
-        const existing = request.result;
-        if (existing) {
-          existing.lastAccessedAtMs = Date.now();
-          store.put(existing);
-        }
-      };
-      request.onerror = () => reject(request.error);
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-    });
-  }
-
   private async maybeUpdateTrackCoverInDB(
     audioPath: string,
     coverUrl: string,
     coverKey: string
   ): Promise<void> {
+    if (!this.shouldMaintainIndexedDbTrackMirror()) return;
+
     const coverUrlString = String(coverUrl || '');
     const isSessionOnlyUrl = this.isSessionOnlyCoverUrl(coverUrlString);
 
@@ -2500,64 +2682,6 @@ export class MusicLibraryService {
     }
   }
 
-  private async pruneCoverCacheIfNeeded(): Promise<void> {
-    const db = await this.ensureDB();
-
-    const entries: Array<{
-      key: string;
-      filePath: string;
-      bytes: number;
-      lastAccessedAtMs: number;
-    }> = await new Promise((resolve, reject) => {
-      const transaction = db.transaction(['coverCache'], 'readonly');
-      const store = transaction.objectStore('coverCache');
-      const request = store.getAll();
-      request.onsuccess = () => resolve(request.result || []);
-      request.onerror = () => reject(request.error);
-    });
-
-    let total = 0;
-    for (const e of entries) total += Number(e.bytes || 0);
-    if (total <= this.COVER_CACHE_MAX_BYTES) return;
-
-    entries.sort((a, b) => Number(a.lastAccessedAtMs || 0) - Number(b.lastAccessedAtMs || 0));
-
-    const keysToDelete: string[] = [];
-    for (const entry of entries) {
-      if (total <= this.COVER_CACHE_MAX_BYTES) break;
-      keysToDelete.push(entry.key);
-      total -= Number(entry.bytes || 0);
-    }
-
-    if (keysToDelete.length === 0) return;
-
-    await new Promise<void>((resolve, reject) => {
-      const transaction = db.transaction(['coverCache'], 'readwrite');
-      const store = transaction.objectStore('coverCache');
-      for (const key of keysToDelete) {
-        store.delete(key);
-      }
-
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-    });
-
-    for (const key of keysToDelete) {
-      try {
-        await invokeWithTelemetry('music_library_remove_cover', { key }, {
-          moduleId: 'music-library',
-          component: 'MusicLibraryService',
-          event: 'music-library.cover.remove',
-        });
-      } catch (error) {
-        this.telemetry.warn('music-library.cover.remove.failed', {
-          message: this.readTelemetryErrorMessage(error),
-          fields: { key },
-        });
-      }
-    }
-  }
-
   async getCoverUrlForTrack(
     track: Track,
     options?: {
@@ -2599,7 +2723,6 @@ export class MusicLibraryService {
       track.coverKey &&
       this.coverKeyMatchesVariant(track.coverKey, requestedEdgePx)
     ) {
-      void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
       if (cacheKey && String(existingUrl).startsWith('blob:')) {
         this.touchCoverBlobCache(cacheKey);
       }
@@ -2631,26 +2754,6 @@ export class MusicLibraryService {
     const allowPmpCoverUrl = this.shouldUsePmpCoverProtocol();
     const coverRuntimeEpoch = this.coverRuntimeEpoch;
 
-    if (this.isPmpCoverUrl(normalizedExistingUrl) && allowPmpCoverUrl) {
-      const coverKeyFromUrl = this.parseCoverKeyFromPmpUrl(normalizedExistingUrl);
-      const preferredExistingUrl = coverKeyFromUrl
-        ? this.buildPmpCoverUrlForHint(coverKeyFromUrl, coverSizeHint) || normalizedExistingUrl
-        : normalizedExistingUrl;
-
-      this.coverUrlCache.set(effectiveCacheKey, preferredExistingUrl);
-      this.touchCoverBlobCache(effectiveCacheKey);
-      if (track.coverKey) {
-        void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
-      }
-      markCoverLookupHit();
-      return preferredExistingUrl;
-    }
-
-    if (this.isPmpCoverUrl(normalizedExistingUrl) && !allowPmpCoverUrl) {
-      // Ignore stale `pmp://` URLs in runtimes where custom scheme loading is blocked.
-      this.coverUrlCache.delete(effectiveCacheKey);
-    }
-
     const cached = this.coverUrlCache.get(effectiveCacheKey);
     if (cached) {
       const canReuseSessionOnlyCachedUrl =
@@ -2661,8 +2764,9 @@ export class MusicLibraryService {
       ) {
         this.coverUrlCache.delete(effectiveCacheKey);
       } else {
-        if (track.coverKey) {
-          void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
+        const cachedLeaseKey = this.parseCoverKeyFromPmpUrl(cached);
+        if (cachedLeaseKey) {
+          void this.touchDesktopCoverLeases([cachedLeaseKey]);
         }
         this.touchCoverBlobCache(effectiveCacheKey);
         markCoverLookupHit();
@@ -2684,22 +2788,14 @@ export class MusicLibraryService {
     markCoverLookupMiss();
 
     const promise = (async () => {
-      const result = await invokeWithTelemetry<
-        | {
-            key: string;
-            path: string;
-            size: number;
-            mediaType?: string | null;
-          }
-        | null
-      >('music_library_get_cover', {
+      const result = await invokeWithTelemetry<DesktopCoverLeaseRecord | null>('music_library_cover_lease', {
         path: audioPath,
         maxBytes: this.COVER_MAX_IMAGE_BYTES,
         maxEdgePx: requestedEdgePx > 0 ? requestedEdgePx : undefined,
       }, {
         moduleId: 'music-library',
         component: 'MusicLibraryService',
-        event: 'music-library.cover.resolve',
+        event: 'music-library.cover.lease',
       });
 
       if (!result) return undefined;
@@ -2718,7 +2814,9 @@ export class MusicLibraryService {
 
       const url = resolvedUrl;
       this.coverUrlCache.set(effectiveCacheKey, url);
-      this.addCoverBlobUrlToCache(effectiveCacheKey, url, result.size);
+      if (url.startsWith('blob:')) {
+        this.addCoverBlobUrlToCache(effectiveCacheKey, url, result.size);
+      }
       this.pruneUrlCaches();
 
       const albumKey = this.albumKeyForTrack(track);
@@ -2727,21 +2825,12 @@ export class MusicLibraryService {
         this.pruneUrlCaches();
       }
 
-      const now = Date.now();
-      await this.upsertCoverCacheEntry({
-        key: result.key,
-        filePath: result.path,
-        bytes: result.size,
-        lastAccessedAtMs: now,
-      });
-
       await this.maybeUpdateTrackCoverInDB(audioPath, url, result.key);
-      await this.pruneCoverCacheIfNeeded();
 
       return url;
     })()
       .catch((error) => {
-        this.telemetry.warn('music-library.cover.resolve.failed', {
+        this.telemetry.warn('music-library.cover.lease.failed', {
           message: this.readTelemetryErrorMessage(error),
           fields: {
             audioPath,
@@ -2780,6 +2869,10 @@ export class MusicLibraryService {
 
     const cachedAlbum = this.albumCoverUrlCache.get(albumCacheKey);
     if (cachedAlbum) {
+      const albumLeaseKey = this.parseCoverKeyFromPmpUrl(cachedAlbum);
+      if (albumLeaseKey) {
+        void this.touchDesktopCoverLeases([albumLeaseKey]);
+      }
       return cachedAlbum;
     }
 
@@ -2869,6 +2962,14 @@ export class MusicLibraryService {
 
   clearCoverRuntimeCaches(): void {
     this.coverRuntimeEpoch += 1;
+    const releasableLeaseKeys = Array.from(
+      new Set(
+        [...this.coverUrlCache.values(), ...this.albumCoverUrlCache.values()]
+          .map((url) => this.parseCoverKeyFromPmpUrl(url))
+          .filter((key): key is string => Boolean(key))
+      )
+    );
+
     for (const entry of this.coverBlobUrlCache.values()) {
       try {
         URL.revokeObjectURL(entry.url);
@@ -2885,6 +2986,10 @@ export class MusicLibraryService {
     this.coverBlobUrlTotalBytes = 0;
     this.coverDecodedEstimateBytes.clear();
     this.coverDecodedEstimateTotalBytes = 0;
+
+    if (releasableLeaseKeys.length > 0) {
+      this.releaseDesktopCoverLeases(releasableLeaseKeys);
+    }
   }
 
   releaseLibraryViewRuntimeMemory(options?: {
@@ -2924,12 +3029,17 @@ export class MusicLibraryService {
 
     const uniqueUrls = new Set<string>();
     const blobUrls = new Set<string>();
+    const leaseKeys = new Set<string>();
     for (const url of urls) {
       if (typeof url !== 'string') continue;
       const trimmed = url.trim();
       if (!trimmed) continue;
       if (trimmed.startsWith('blob:')) {
         blobUrls.add(trimmed);
+      }
+      const leaseKey = this.parseCoverKeyFromPmpUrl(trimmed);
+      if (leaseKey) {
+        leaseKeys.add(leaseKey);
       }
       uniqueUrls.add(trimmed);
     }
@@ -2941,6 +3051,10 @@ export class MusicLibraryService {
 
     for (const url of uniqueUrls) {
       this.evictCoverUrlFromRuntimeCaches(url);
+    }
+
+    if (leaseKeys.size > 0) {
+      this.releaseDesktopCoverLeases(Array.from(leaseKeys));
     }
   }
 
@@ -3184,6 +3298,8 @@ export class MusicLibraryService {
     if (!this.db) {
       throw new Error('Failed to initialize database');
     }
+    await this.maybeVacuumDesktopLegacyTrackMirror(this.db);
+    await this.maybeVacuumDesktopLegacyCoverCache(this.db);
     return this.db;
   }
 
@@ -3326,12 +3442,23 @@ export class MusicLibraryService {
     if (!normalizedPathId) return;
 
     const db = await this.ensureDB();
+    const maintainTrackMirror = this.shouldMaintainIndexedDbTrackMirror();
     await new Promise<void>((resolve, reject) => {
-      const transaction = db.transaction(['libraryPaths', 'tracks'], 'readwrite');
+      const transaction = db.transaction(
+        maintainTrackMirror ? ['libraryPaths', 'tracks'] : ['libraryPaths'],
+        'readwrite'
+      );
       const pathsStore = transaction.objectStore('libraryPaths');
-      const tracksStore = transaction.objectStore('tracks');
+      const tracksStore = maintainTrackMirror ? transaction.objectStore('tracks') : null;
 
       pathsStore.delete(normalizedPathId);
+
+      if (!tracksStore) {
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+        return;
+      }
 
       if (tracksStore.indexNames.contains('libraryPathId')) {
         const libraryPathIndex = tracksStore.index('libraryPathId');
@@ -3987,7 +4114,9 @@ export class MusicLibraryService {
         event: 'music-library.scan.backend.quick',
       });
 
-      await this.ensureDB();
+      if (this.shouldMaintainIndexedDbTrackMirror()) {
+        await this.ensureDB();
+      }
 
       const existing = await this.getStoredTracksForBackendScan(folderPath, pathId);
       const existingByPath = new Map<string, StoredTrackRecord>();
@@ -4213,7 +4342,9 @@ export class MusicLibraryService {
         }
       }
 
-      await this.applyBackendScanDiff(upserts, deletions);
+      if (this.shouldMaintainIndexedDbTrackMirror()) {
+        await this.applyBackendScanDiff(upserts, deletions);
+      }
       await this.trySyncNativeLibraryTracks(pathId, upserts, deletions);
       this.clearCache();
 
@@ -4249,6 +4380,9 @@ export class MusicLibraryService {
     const nativeTracks = await this.tryGetStoredTracksForBackendScanFromNativeDb(folderPath, pathId);
     if (nativeTracks) {
       return nativeTracks;
+    }
+    if (isTauriRuntime()) {
+      return [];
     }
 
     const db = await this.ensureDB();
@@ -4340,6 +4474,7 @@ export class MusicLibraryService {
     deletions: string[]
   ): Promise<void> {
     if (upserts.length === 0 && deletions.length === 0) return;
+    if (!this.shouldMaintainIndexedDbTrackMirror()) return;
 
     const db = await this.ensureDB();
     await new Promise<void>((resolve, reject) => {
@@ -4361,6 +4496,8 @@ export class MusicLibraryService {
 
   // 批量存储轨道到数据库（优化：一个事务处理多条记录）
   private async batchStoreTracks(tracks: StoredTrackRecord[]): Promise<void> {
+    if (!this.shouldMaintainIndexedDbTrackMirror()) return;
+
     const db = await this.ensureDB();
     const transaction = db.transaction(['tracks'], 'readwrite');
     const store = transaction.objectStore('tracks');
@@ -4851,6 +4988,8 @@ export class MusicLibraryService {
   }
 
   private async markTrackPlayedInIndexedDb(trackId: string, playedAtMs: number): Promise<boolean> {
+    if (!this.shouldMaintainIndexedDbTrackMirror()) return false;
+
     const db = await this.ensureDB();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['tracks'], 'readwrite');
@@ -4902,6 +5041,10 @@ export class MusicLibraryService {
           playedAtMs,
         });
       }
+    }
+
+    if (!this.shouldMaintainIndexedDbTrackMirror()) {
+      return nativeUpdated;
     }
 
     try {
@@ -5614,8 +5757,11 @@ export class MusicLibraryService {
 
   async getTrackById(trackId: string): Promise<Track | null> {
     const nativeTrack = await this.tryGetTrackByIdFromNativeDb(trackId);
-    if (nativeTrack) {
-      return nativeTrack;
+    if (isTauriRuntime()) {
+      return nativeTrack.status === 'ok' ? nativeTrack.value : null;
+    }
+    if (nativeTrack.status === 'ok') {
+      return nativeTrack.value;
     }
 
     const db = await this.ensureDB();
@@ -5639,8 +5785,11 @@ export class MusicLibraryService {
   // 按艺术家获取轨道
   async getTracksByArtist(artist: string): Promise<Track[]> {
     const nativeTracks = await this.tryGetTracksByArtistFromNativeDb(artist);
-    if (nativeTracks) {
-      return nativeTracks;
+    if (isTauriRuntime()) {
+      return nativeTracks.status === 'ok' ? nativeTracks.value : [];
+    }
+    if (nativeTracks.status === 'ok') {
+      return nativeTracks.value;
     }
 
     const db = await this.ensureDB();
@@ -5672,6 +5821,9 @@ export class MusicLibraryService {
   // 获取所有艺术家
   async getAllArtists(): Promise<string[]> {
     const nativeArtists = await this.tryGetAllArtistsFromNativeDb();
+    if (isTauriRuntime()) {
+      return nativeArtists.status === 'ok' ? nativeArtists.value : [];
+    }
     if (nativeArtists.status === 'ok') {
       return nativeArtists.value;
     }
@@ -5714,6 +5866,9 @@ export class MusicLibraryService {
   // 获取所有流派
   async getAllGenres(): Promise<string[]> {
     const nativeGenres = await this.tryGetAllGenresFromNativeDb();
+    if (isTauriRuntime()) {
+      return nativeGenres.status === 'ok' ? nativeGenres.value : [];
+    }
     if (nativeGenres.status === 'ok') {
       return nativeGenres.value;
     }
@@ -5777,10 +5932,12 @@ export class MusicLibraryService {
       }
     }
 
-    const db = await this.ensureDB();
-    const transaction = db.transaction(['tracks'], 'readwrite');
-    const store = transaction.objectStore('tracks');
-    await store.clear();
+    if (this.shouldMaintainIndexedDbTrackMirror()) {
+      const db = await this.ensureDB();
+      const transaction = db.transaction(['tracks'], 'readwrite');
+      const store = transaction.objectStore('tracks');
+      await store.clear();
+    }
 
     // 清除缓存
     this.clearCache();
@@ -5801,10 +5958,12 @@ export class MusicLibraryService {
       }
     }
 
-    const db = await this.ensureDB();
-    const transaction = db.transaction(['tracks'], 'readwrite');
-    const store = transaction.objectStore('tracks');
-    await store.delete(normalizedId);
+    if (this.shouldMaintainIndexedDbTrackMirror()) {
+      const db = await this.ensureDB();
+      const transaction = db.transaction(['tracks'], 'readwrite');
+      const store = transaction.objectStore('tracks');
+      await store.delete(normalizedId);
+    }
 
     // 清除缓存
     this.clearCache();
@@ -5827,18 +5986,20 @@ export class MusicLibraryService {
       }
     }
 
-    const db = await this.ensureDB();
-    const transaction = db.transaction(['tracks'], 'readwrite');
-    const store = transaction.objectStore('tracks');
+    if (this.shouldMaintainIndexedDbTrackMirror()) {
+      const db = await this.ensureDB();
+      const transaction = db.transaction(['tracks'], 'readwrite');
+      const store = transaction.objectStore('tracks');
 
-    for (const id of normalizedIds) {
-      store.delete(id);
+      for (const id of normalizedIds) {
+        store.delete(id);
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
     }
-
-    await new Promise<void>((resolve, reject) => {
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-    });
 
     // 清除缓存
     this.clearCache();
