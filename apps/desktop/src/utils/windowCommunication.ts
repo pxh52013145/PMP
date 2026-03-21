@@ -135,9 +135,6 @@ export const STORAGE_KEYS = {
   MAGNET_PLACEMENT_REQUEST_V1: 'pixel-matrix-magnet-placement-request-v1', // Request placing a magnet into the main matrix (v1)
   MAGNET_LIBRARY_FOCUS_REQUEST_V1: 'pixel-matrix-magnet-library-focus-request-v1', // Request focusing a magnet in the library window (v1)
   MAGNET_CHROME_OVERRIDE_MODE_V1: 'pixel-matrix-magnet-chrome-override-mode-v1', // Global magnet chrome override mode (v1)
-  MAGNET_LIBRARY: 'pixel-matrix-magnet-library', // Magnet 库（兼容旧版）
-  ACTIVE_MAGNETS: 'pixel-matrix-active-magnets', // 激活的 Magnet ID
-  BUILTIN_MAGNETS: 'pixel-matrix-builtin-magnets', // 内置 Magnet ID
   BACKGROUND_SETTINGS: 'pixel-matrix-background-settings', // 背景设置
   BACKGROUND_HISTORY: 'pixel-matrix-background-history', // 背景历史
   IS_MAXIMIZED: 'pixel-matrix-is-maximized', // 窗口最大化状态
@@ -256,8 +253,6 @@ export const STORAGE_KEYS = {
   BACKGROUND_IMPORT_SOFT_LIMIT_IMAGE_MB: 'pixel-matrix-background-import-soft-limit-image-mb', // 0 => disable warning
   BACKGROUND_IMPORT_SOFT_LIMIT_VIDEO_MB: 'pixel-matrix-background-import-soft-limit-video-mb', // 0 => disable warning
 
-  // === Background Migration Flags ===
-  BACKGROUND_MEDIA_MIGRATION_V1: 'pixel-matrix-background-media-migration-v1',
 } as const;
 
 /**

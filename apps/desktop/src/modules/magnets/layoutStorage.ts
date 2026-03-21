@@ -1,7 +1,5 @@
-import type { PixelAnchor } from '../../types/pixel';
 import { DEFAULT_ACTIVE_MAGNET_IDS, REQUIRED_MAGNET_IDS } from '../../constants/magnets';
 import { readJson, writeJson } from '../storage';
-import { loadMagnetConfig, resolveMagnetConfigStorageKey } from './config';
 import {
   resolveMagnetLayoutStorageKey,
   sanitizeMagnetSpaceLayout,
@@ -155,65 +153,6 @@ export function createDefaultMagnetSpaceLayout(
   };
 }
 
-function deriveAnchorsByMagnetId(magnets: Record<string, unknown>): Record<string, PixelAnchor[]> {
-  const result: Record<string, PixelAnchor[]> = {};
-  for (const [magnetId, raw] of Object.entries(magnets)) {
-    if (!raw || typeof raw !== 'object') continue;
-    const anchors = (raw as { anchors?: unknown }).anchors;
-    if (!Array.isArray(anchors) || anchors.length === 0) continue;
-    result[magnetId] = anchors as PixelAnchor[];
-  }
-  return result;
-}
-
-function deriveActiveMagnetIds(
-  magnets: Record<string, unknown>,
-  spaceId: string,
-  defaultActiveMagnetIds: ReadonlySet<string>
-): string[] {
-  const active = new Set<string>();
-  for (const [magnetId, raw] of Object.entries(magnets)) {
-    if (!raw || typeof raw !== 'object') continue;
-    if ((raw as { isActive?: unknown }).isActive === true) active.add(magnetId);
-  }
-
-  // Keep "space2+" strictly empty: do not auto-enable newly added default magnets unless explicitly saved.
-  const normalized = spaceId.trim();
-  if (normalized === 'space1') {
-    for (const id of defaultActiveMagnetIds) {
-      if (!(id in magnets)) active.add(id);
-    }
-  }
-
-  for (const id of REQUIRED_MAGNET_IDS) active.add(id);
-  return [...active];
-}
-
-export function deriveMagnetSpaceLayoutFromLegacyConfig(
-  spaceId: string,
-  legacyConfig: { magnets: Record<string, unknown> },
-  options: { defaultActiveMagnetIds: ReadonlySet<string> }
-): MagnetSpaceLayout {
-  const layout = sanitizeMagnetSpaceLayout({
-    version: 1,
-    activeMagnetIds: deriveActiveMagnetIds(legacyConfig.magnets, spaceId, options.defaultActiveMagnetIds),
-    anchorsByMagnetId: deriveAnchorsByMagnetId(legacyConfig.magnets),
-  });
-
-  const active = new Set(layout.activeMagnetIds);
-  const systemAnchors = getSystemAnchorsForActiveMagnets(spaceId, active);
-  if (Object.keys(systemAnchors).length === 0) return layout;
-
-  let changed = false;
-  const nextAnchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId'] = { ...layout.anchorsByMagnetId };
-  for (const [magnetId, anchors] of Object.entries(systemAnchors)) {
-    if (Array.isArray(nextAnchorsByMagnetId[magnetId]) && nextAnchorsByMagnetId[magnetId]!.length > 0) continue;
-    nextAnchorsByMagnetId[magnetId] = anchors;
-    changed = true;
-  }
-  return changed ? { ...layout, anchorsByMagnetId: nextAnchorsByMagnetId } : layout;
-}
-
 export function ensureMagnetSpaceLayout(
   spaceId: string,
   options: { defaultActiveMagnetIds?: ReadonlySet<string> } = {}
@@ -228,24 +167,7 @@ export function ensureMagnetSpaceLayout(
   if (existing) {
     const normalized = spaceId.trim();
     const active = new Set(existing.activeMagnetIds);
-
-    // Migration: enable the built-in process perf monitor magnet in space1 by default.
-    // This is intentionally scoped to a single magnet id (does not auto-enable all new defaults).
     let changed = false;
-    if (normalized === 'space1' && !active.has('process-perf-monitor')) {
-      active.add('process-perf-monitor');
-      changed = true;
-    }
-    if (normalized === 'space2') {
-      if (!active.has('platform-magnet')) {
-        active.add('platform-magnet');
-        changed = true;
-      }
-      if (!active.has('btn-platform-login')) {
-        active.add('btn-platform-login');
-        changed = true;
-      }
-    }
 
     const systemAnchors = getSystemAnchorsForActiveMagnets(normalized, active);
     if (Object.keys(systemAnchors).length === 0) {
@@ -269,12 +191,7 @@ export function ensureMagnetSpaceLayout(
     return { layout: nextLayout, storageKey, didCreate: false };
   }
 
-  const configKey = resolveMagnetConfigStorageKey(spaceId);
-  const legacyConfig = loadMagnetConfig(configKey);
-
-  const createdLayout = legacyConfig
-    ? deriveMagnetSpaceLayoutFromLegacyConfig(spaceId, legacyConfig, { defaultActiveMagnetIds })
-    : createDefaultMagnetSpaceLayout(spaceId, defaultActiveMagnetIds);
+  const createdLayout = createDefaultMagnetSpaceLayout(spaceId, defaultActiveMagnetIds);
 
   saveMagnetSpaceLayout(createdLayout, storageKey);
   return { layout: createdLayout, storageKey, didCreate: true };

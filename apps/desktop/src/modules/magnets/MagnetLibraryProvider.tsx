@@ -8,7 +8,6 @@ import {
 import {
   STORAGE_KEYS,
   TAURI_EVENTS,
-  broadcastDataUpdate,
   broadcastSignal,
   setupConfigSync,
 } from '../../utils/windowCommunication';
@@ -33,9 +32,7 @@ import {
 import {
   cancelScheduledMagnetSpaceLayoutSave,
   createDefaultMagnetSpaceLayout,
-  deriveMagnetSpaceLayoutFromLegacyConfig,
   flushScheduledMagnetSpaceLayoutSave,
-  loadMagnetSpaceLayout,
   saveMagnetSpaceLayout,
   scheduleSaveMagnetSpaceLayout,
   ensureMagnetSpaceLayout,
@@ -44,7 +41,7 @@ import { resolveMagnetLayoutStorageKey, type MagnetSpaceLayout } from './layout'
 import { getSystemAnchorsForActiveMagnets } from './systemLayouts';
 import {
   magnetLayoutStoreApplyPatch,
-  magnetLayoutStoreBootstrapFromLegacy,
+  magnetLayoutStoreBootstrap,
   magnetLayoutStoreGetState,
   type MagnetLayoutStorePatch,
   type MagnetLayoutStoreState,
@@ -209,7 +206,7 @@ export function MagnetLibraryProvider({
     let disposed = false;
 
     const run = async () => {
-      const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy(runtimeDefaultActiveMagnetIds);
+      const bootstrapped = await magnetLayoutStoreBootstrap(runtimeDefaultActiveMagnetIds);
       const state = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
       if (disposed || !state) return;
       layoutStoreRevisionRef.current = state.revision;
@@ -229,15 +226,10 @@ export function MagnetLibraryProvider({
     layout: MagnetSpaceLayout;
   } | null>(null);
   if (!initialRef.current) {
-    const maybeLayout = loadMagnetSpaceLayout(magnetLayoutStorageKey);
     const primaryConfig = loadMagnetConfig(magnetConfigStorageKey);
-    const layout =
-      maybeLayout ??
-      (primaryConfig
-        ? deriveMagnetSpaceLayoutFromLegacyConfig(activeSpaceId, primaryConfig, {
-            defaultActiveMagnetIds: resolvedDefaultActiveMagnetIds,
-          })
-        : createDefaultMagnetSpaceLayout(activeSpaceId, resolvedDefaultActiveMagnetIds));
+    const layout = ensureMagnetSpaceLayout(activeSpaceId, {
+      defaultActiveMagnetIds: resolvedDefaultActiveMagnetIds,
+    }).layout;
 
     const activeFromLayout = new Set(layout.activeMagnetIds);
     for (const id of REQUIRED_MAGNET_IDS) activeFromLayout.add(id);
@@ -338,10 +330,9 @@ export function MagnetLibraryProvider({
 
     const applySnapshot = (args: {
       activeSpaceId: string;
-      spaceIds: string[];
       layout: MagnetSpaceLayout;
     }) => {
-      const catalogMagnets = ensureMagnetCatalogState(args.spaceIds).state.magnets;
+      const catalogMagnets = ensureMagnetCatalogState().state.magnets;
 
       const normalizedLayout = normalizeSpaceLayoutWithSystemAnchors(args.activeSpaceId, args.layout).layout;
 
@@ -386,17 +377,16 @@ export function MagnetLibraryProvider({
     };
 
     if (!isTauri) {
-      const spaceIds = magnetSpaces.spaces.map((s) => s.id);
       const layoutResult = ensureMagnetSpaceLayout(activeSpaceId, {
         defaultActiveMagnetIds: resolvedDefaultActiveMagnetIds,
       });
-      applySnapshot({ activeSpaceId, spaceIds, layout: layoutResult.layout });
+      applySnapshot({ activeSpaceId, layout: layoutResult.layout });
       loadedLayoutKeyRef.current = layoutResult.storageKey;
       return;
     }
 
     void (async () => {
-      const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy(runtimeDefaultActiveMagnetIds);
+      const bootstrapped = await magnetLayoutStoreBootstrap(runtimeDefaultActiveMagnetIds);
       const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
       if (!store) return;
 
@@ -405,8 +395,6 @@ export function MagnetLibraryProvider({
 
       const storeSpaces = store.spaces;
       const storeActiveSpaceId = storeSpaces.activeSpaceId;
-      const spaceIds = storeSpaces.spaces.map((s) => s.id);
-
       const defaultActiveSeed =
         storeActiveSpaceId === 'space1' ? runtimeDefaultActiveMagnetIds : REQUIRED_MAGNET_IDS;
       const resolvedActive = new Set(defaultActiveSeed);
@@ -419,11 +407,11 @@ export function MagnetLibraryProvider({
       if (normalized.changed) {
         void applyLayoutStorePatch(
           [{ kind: 'setSpaceLayout', spaceId: storeActiveSpaceId, layout: normalized.layout }],
-          'migrate:space-layout-system-anchors'
+          'normalize:space-layout-system-anchors'
         );
       }
 
-      applySnapshot({ activeSpaceId: storeActiveSpaceId, spaceIds, layout: normalized.layout });
+      applySnapshot({ activeSpaceId: storeActiveSpaceId, layout: normalized.layout });
     })();
   }, [
     activeSpaceId,
@@ -514,10 +502,6 @@ export function MagnetLibraryProvider({
       return next;
     });
   }, [activeMagnetIds]);
-
-  useEffect(() => {
-    void broadcastDataUpdate(STORAGE_KEYS.BUILTIN_MAGNETS, [...builtInMagnetIds]);
-  }, [builtInMagnetIds]);
 
   useEffect(() => {
     if (suppressNextAutoSaveRef.current) {

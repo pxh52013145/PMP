@@ -12,7 +12,7 @@ beforeEach(() => {
 });
 
 describe('magnet layout key', () => {
-  it('uses legacy key for space1/empty', () => {
+  it('uses the primary key for space1/empty', () => {
     expect(resolveMagnetLayoutStorageKey(undefined)).toBe(STORAGE_KEYS.MAGNET_SPACE_LAYOUT);
     expect(resolveMagnetLayoutStorageKey(null)).toBe(STORAGE_KEYS.MAGNET_SPACE_LAYOUT);
     expect(resolveMagnetLayoutStorageKey('')).toBe(STORAGE_KEYS.MAGNET_SPACE_LAYOUT);
@@ -77,52 +77,13 @@ describe('ensureMagnetSpaceLayout', () => {
     ]);
   });
 
-  it('migrates active + anchors from legacy config (space2 keeps explicit actives)', () => {
-    const legacyConfig = {
-      version: '1.1.0',
-      gridSize: { columns: 10, rows: 10 },
-      magnets: {
-        'btn-debug': {
-          anchors: [{ id: 'a', gridX: 1, gridY: 2, role: 'anchor' }],
-          isActive: true,
-        },
-      },
-      customMagnets: [],
-    };
-    localStorage.setItem(`${STORAGE_KEYS.CONFIG}:space2`, JSON.stringify(legacyConfig));
-
-    const result = ensureMagnetSpaceLayout('space2');
-    expect(result.didCreate).toBe(true);
-    expect(result.layout.activeMagnetIds).toContain('btn-debug');
-    expect(result.layout.activeMagnetIds).not.toContain('btn-play-pause');
-    expect(result.layout.anchorsByMagnetId['btn-debug']).toEqual([{ id: 'a', gridX: 1, gridY: 2, role: 'anchor' }]);
-  });
-
-  it('migrates legacy config and backfills default-active magnets for space1', () => {
-    const legacyConfig = {
-      version: '1.1.0',
-      gridSize: { columns: 10, rows: 10 },
-      magnets: {
-        'btn-debug': {
-          anchors: [{ id: 'a', gridX: 1, gridY: 2, role: 'anchor' }],
-          isActive: false,
-        },
-      },
-      customMagnets: [],
-    };
-    localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(legacyConfig));
-
-    const result = ensureMagnetSpaceLayout('space1');
-    expect(result.didCreate).toBe(true);
-    expect(result.layout.activeMagnetIds).toContain('btn-play-pause');
-    expect(result.layout.activeMagnetIds).not.toContain('btn-debug');
-  });
-
   it('reuses stored layout when present', () => {
     const key = resolveMagnetLayoutStorageKey('space2');
     localStorage.setItem(key, JSON.stringify({ version: 1, activeMagnetIds: ['btn-debug'], anchorsByMagnetId: {} }));
     const result = ensureMagnetSpaceLayout('space2');
     expect(result.didCreate).toBe(false);
     expect(result.layout.activeMagnetIds).toContain('btn-debug');
+    expect(result.layout.activeMagnetIds).not.toContain('platform-magnet');
+    expect(result.layout.activeMagnetIds).not.toContain('btn-platform-login');
   });
 });

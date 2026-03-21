@@ -1407,7 +1407,7 @@
   }
 }
 
-/* Override legacy mojibake pseudo-icons with direct text glyphs from JSX. */
+/* Override old pseudo-icons with direct text glyphs from JSX. */
 .playlists-close-btn {
   font-size: 20px;
   line-height: 1;

@@ -3,7 +3,7 @@ import { resolveMagnetConfigStorageKey } from '../config';
 import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 
 describe('magnet config key', () => {
-  it('uses legacy key for space1/empty', () => {
+  it('uses the primary key for space1/empty', () => {
     expect(resolveMagnetConfigStorageKey(undefined)).toBe(STORAGE_KEYS.CONFIG);
     expect(resolveMagnetConfigStorageKey(null)).toBe(STORAGE_KEYS.CONFIG);
     expect(resolveMagnetConfigStorageKey('')).toBe(STORAGE_KEYS.CONFIG);

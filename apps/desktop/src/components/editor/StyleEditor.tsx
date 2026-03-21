@@ -5,8 +5,8 @@ import { BackgroundEffectSection, BorderEffectSection, CoverColorSection, PixelS
 import { useStyleEditorModel } from './style/useStyleEditorModel';
 
 /**
- * Full style editor panel (legacy), kept as a reusable source-of-truth for the popup editors.
- * The current UX uses a docked style bar + dedicated popup windows.
+ * Full style editor panel kept as a reusable source-of-truth for the popup editors.
+ * The current UX uses a docked style bar plus dedicated popup windows.
  */
 export const StyleEditor = memo(function StyleEditor() {
   const t = useT();

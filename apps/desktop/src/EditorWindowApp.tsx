@@ -23,7 +23,7 @@ import { ThemeDebugPage } from './components/debug/ThemeDebugPage';
 import { Magnet } from './types/pixel';
 import { BackgroundSettings, BackgroundConfig } from './types/background';
 import { DEFAULT_BACKGROUND_SETTINGS } from './constants/defaultBackground';
-import { DEFAULT_ACTIVE_MAGNET_IDS, REQUIRED_MAGNET_IDS } from './constants/magnets';
+import { BUILTIN_MAGNET_IDS, DEFAULT_ACTIVE_MAGNET_IDS, REQUIRED_MAGNET_IDS } from './constants/magnets';
 import { saveConfig, loadConfig, applyConfig, type MagnetConfig, type MagnetStateConfig } from './utils/configManager';
 import {
   createDefaultMagnetLibrary,
@@ -31,7 +31,7 @@ import {
   createDefaultMagnetSpacesState,
   ensureMagnetCatalogState,
   magnetLayoutStoreApplyPatchWithRetry,
-  magnetLayoutStoreBootstrapFromLegacy,
+  magnetLayoutStoreBootstrap,
   magnetLayoutStoreGetState,
   removeMagnetCatalogMagnet,
   resolveMagnetConfigStorageKey,
@@ -566,11 +566,6 @@ function readActiveMagnetSpaceId(): string {
   return sanitizeMagnetSpacesState(raw).activeSpaceId;
 }
 
-function readMagnetSpaceIds(): string[] {
-  const raw = readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState());
-  return sanitizeMagnetSpacesState(raw).spaces.map((s) => s.id);
-}
-
 function buildMagnetSpaceLayoutSnapshot(
   magnetLibrary: Magnet[],
   activeMagnetIds: Set<string>
@@ -623,7 +618,6 @@ export function EditorWindowApp() {
   const isTauri = useMemo(() => isTauriRuntime(), []);
   const needsMagnetConfigSync =
     windowType === 'library' || windowType === 'statistics' || windowType === 'creator';
-  const needsBuiltInMagnetIds = windowType === 'library';
 
   useEffect(() => {
     const onVisibilityChange = () => setIsDocumentVisible(!document.hidden);
@@ -793,15 +787,11 @@ export function EditorWindowApp() {
   // 默认内置 Magnet 库
   const defaultMagnetLibrary = useMemo(() => createDefaultMagnetLibrary(), []);
 
-  const [magnetLibrary, setMagnetLibrary] = useState<Magnet[]>(() => {
-    return readJson<Magnet[]>(STORAGE_KEYS.MAGNET_LIBRARY, []);
-  });
-  const [activeMagnetIds, setActiveMagnetIds] = useState<Set<string>>(() => {
-    return new Set(readJson<string[]>(STORAGE_KEYS.ACTIVE_MAGNETS, []));
-  });
-  const [builtInMagnetIds, setBuiltInMagnetIds] = useState<Set<string>>(() => {
-    return new Set(readJson<string[]>(STORAGE_KEYS.BUILTIN_MAGNETS, []));
-  });
+  const [magnetLibrary, setMagnetLibrary] = useState<Magnet[]>(defaultMagnetLibrary);
+  const [activeMagnetIds, setActiveMagnetIds] = useState<Set<string>>(
+    () => new Set([...DEFAULT_ACTIVE_MAGNET_IDS, ...REQUIRED_MAGNET_IDS])
+  );
+  const builtInMagnetIds = useMemo(() => new Set(BUILTIN_MAGNET_IDS), []);
   const [backgroundSettings, setBackgroundSettings] = useState<BackgroundSettings>(() => {
     return readJson<BackgroundSettings>(STORAGE_KEYS.BACKGROUND_SETTINGS, DEFAULT_BACKGROUND_SETTINGS);
   });
@@ -941,24 +931,22 @@ export function EditorWindowApp() {
       try {
         if (needsMagnetConfigSync) {
           let activeSpaceId = readActiveMagnetSpaceId();
-          let spaceIds = readMagnetSpaceIds();
           let layout = ensureMagnetSpaceLayout(activeSpaceId, {
             defaultActiveMagnetIds: DEFAULT_ACTIVE_MAGNET_IDS,
           }).layout;
 
           if (isTauri) {
-            const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy();
+            const bootstrapped = await magnetLayoutStoreBootstrap();
             const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
             if (store) {
               activeSpaceId = store.spaces.activeSpaceId;
-              spaceIds = store.spaces.spaces.map((space) => space.id);
               layout =
                 store.layoutsBySpaceId[activeSpaceId] ??
                 createDefaultMagnetSpaceLayout(activeSpaceId, DEFAULT_ACTIVE_MAGNET_IDS);
             }
           }
 
-          const catalogMagnets = ensureMagnetCatalogState(spaceIds).state.magnets;
+          const catalogMagnets = ensureMagnetCatalogState().state.magnets;
           const activeFromLayout = new Set(layout.activeMagnetIds);
           for (const id of REQUIRED_MAGNET_IDS) activeFromLayout.add(id);
 
@@ -995,12 +983,6 @@ export function EditorWindowApp() {
           const ensuredActive = new Set(applied.activeMagnetIds);
           for (const id of REQUIRED_MAGNET_IDS) ensuredActive.add(id);
           setActiveMagnetIds(ensuredActive);
-        }
-
-        // 加载其他辅助数据
-        if (needsBuiltInMagnetIds) {
-          const builtInData = readJson<string[] | null>(STORAGE_KEYS.BUILTIN_MAGNETS, null);
-          if (builtInData) setBuiltInMagnetIds(new Set(builtInData));
         }
 
         const backgroundData = readJson<BackgroundSettings | null>(STORAGE_KEYS.BACKGROUND_SETTINGS, null);
@@ -1061,7 +1043,7 @@ export function EditorWindowApp() {
       if (reloadTimer !== null) window.clearTimeout(reloadTimer);
       cleanupPromise.then((cleanup) => cleanup());
     };
-  }, [defaultMagnetLibrary, isTauri, needsBuiltInMagnetIds, needsMagnetConfigSync]);
+  }, [defaultMagnetLibrary, isTauri, needsMagnetConfigSync]);
 
   // Handlers
   const handleExitEditMode = async () => {
@@ -1107,7 +1089,7 @@ export function EditorWindowApp() {
     let activeSpaceId = readActiveMagnetSpaceId();
 
     if (isTauri) {
-      const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy();
+      const bootstrapped = await magnetLayoutStoreBootstrap();
       const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
       if (store) {
         activeSpaceId = store.spaces.activeSpaceId;
@@ -1146,7 +1128,6 @@ export function EditorWindowApp() {
       resolveMagnetConfigStorageKey(activeSpaceId),
       { includeCustomMagnets: false }
     );
-    writeJson(STORAGE_KEYS.ACTIVE_MAGNETS, [...newActive]);
     if (!isTauri) {
       await broadcastSignal(TAURI_EVENTS.MAGNET_DEACTIVATED);
     }
@@ -1168,7 +1149,7 @@ export function EditorWindowApp() {
     const nextLayout = buildMagnetSpaceLayoutSnapshot(newLibrary, activeMagnetIds);
 
     if (isTauri) {
-      const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy();
+      const bootstrapped = await magnetLayoutStoreBootstrap();
       const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
       if (store) {
         activeSpaceId = store.spaces.activeSpaceId;
@@ -1203,7 +1184,6 @@ export function EditorWindowApp() {
       resolveMagnetConfigStorageKey(activeSpaceId),
       { includeCustomMagnets: false }
     );
-    writeJson(STORAGE_KEYS.MAGNET_LIBRARY, newLibrary);
     if (!isTauri) {
       await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
     }
@@ -1225,7 +1205,7 @@ export function EditorWindowApp() {
     const nextLayout = buildMagnetSpaceLayoutSnapshot(newLibrary, activeMagnetIds);
 
     if (isTauri) {
-      const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy();
+      const bootstrapped = await magnetLayoutStoreBootstrap();
       const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
       if (store) {
         activeSpaceId = store.spaces.activeSpaceId;
@@ -1260,7 +1240,6 @@ export function EditorWindowApp() {
       resolveMagnetConfigStorageKey(activeSpaceId),
       { includeCustomMagnets: false }
     );
-    writeJson(STORAGE_KEYS.MAGNET_LIBRARY, newLibrary);
     if (!isTauri) {
       await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
     }
@@ -1282,7 +1261,7 @@ export function EditorWindowApp() {
     const nextLayout = buildMagnetSpaceLayoutSnapshot(newLibrary, activeMagnetIds);
 
     if (isTauri) {
-      const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy();
+      const bootstrapped = await magnetLayoutStoreBootstrap();
       const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
       if (store) {
         activeSpaceId = store.spaces.activeSpaceId;
@@ -1317,7 +1296,6 @@ export function EditorWindowApp() {
       resolveMagnetConfigStorageKey(activeSpaceId),
       { includeCustomMagnets: false }
     );
-    writeJson(STORAGE_KEYS.MAGNET_LIBRARY, newLibrary);
     if (!isTauri) {
       await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
     }
@@ -1357,7 +1335,7 @@ export function EditorWindowApp() {
 
       let activeSpaceId = readActiveMagnetSpaceId();
       if (isTauri) {
-        const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy();
+        const bootstrapped = await magnetLayoutStoreBootstrap();
         const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
         if (store) {
           activeSpaceId = store.spaces.activeSpaceId;
@@ -1371,7 +1349,6 @@ export function EditorWindowApp() {
         resolveMagnetConfigStorageKey(activeSpaceId),
         { includeCustomMagnets: false }
       );
-      writeJson(STORAGE_KEYS.MAGNET_LIBRARY, nextLibrary);
       await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
 
       return { updated };

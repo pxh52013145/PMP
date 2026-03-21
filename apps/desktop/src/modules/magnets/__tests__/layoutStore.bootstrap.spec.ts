@@ -1,16 +1,16 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  buildLegacyMagnetLayoutStoreBootstrapRequest,
+  buildMagnetLayoutStoreBootstrapRequest,
   type MagnetLayoutStoreBootstrapRequest,
 } from '../layoutStore';
 import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 
-describe('buildLegacyMagnetLayoutStoreBootstrapRequest', () => {
+describe('buildMagnetLayoutStoreBootstrapRequest', () => {
   beforeEach(() => {
     localStorage.clear();
   });
 
-  it('uses injected default active magnets for missing legacy layouts', () => {
+  it('uses injected default active magnets for missing stored layouts', () => {
     localStorage.setItem(
       STORAGE_KEYS.MAGNET_SPACES,
       JSON.stringify({
@@ -21,7 +21,7 @@ describe('buildLegacyMagnetLayoutStoreBootstrapRequest', () => {
     );
 
     const defaults = new Set<string>(['drag-handle', 'btn-editor']);
-    const request = buildLegacyMagnetLayoutStoreBootstrapRequest(defaults) as MagnetLayoutStoreBootstrapRequest;
+    const request = buildMagnetLayoutStoreBootstrapRequest(defaults) as MagnetLayoutStoreBootstrapRequest;
 
     const layout = request.layoutsBySpaceId.space1;
     expect(layout).toBeTruthy();

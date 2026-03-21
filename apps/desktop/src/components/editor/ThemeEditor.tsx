@@ -13,7 +13,7 @@ import { readJson } from '../../modules/storage';
 import {
   createDefaultMagnetSpacesState,
   magnetLayoutStoreApplyPatch,
-  magnetLayoutStoreBootstrapFromLegacy,
+  magnetLayoutStoreBootstrap,
   magnetLayoutStoreGetState,
   resolveMagnetConfigStorageKey,
   resolveMagnetLayoutStorageKey,
@@ -827,7 +827,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
   const loadMagnetLayoutStoreState = useCallback(async (): Promise<MagnetLayoutStoreState | null> => {
     if (!isTauri) return null;
-    const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy();
+    const bootstrapped = await magnetLayoutStoreBootstrap();
     return bootstrapped?.state ?? (await magnetLayoutStoreGetState());
   }, [isTauri]);
 

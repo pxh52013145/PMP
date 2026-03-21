@@ -203,8 +203,8 @@ describe('buildAdaptiveMagnetLayout', () => {
     expect(result.joinsByMagnetId['navigation-page'].left).toBe(true);
   });
 
-  it('lets the perf panel dynamically follow the back button top baseline even if the back button keeps a legacy y dock', () => {
-    const legacyBack: Magnet = {
+  it('lets the perf panel dynamically follow the back button top baseline with a docked y alignment', () => {
+    const dockedBack: Magnet = {
       ...createLeftDockedSingleMagnet('btn-back', 6, 0),
       boundsDock: { x: 'start', y: 'end' },
     };
@@ -214,7 +214,7 @@ describe('buildAdaptiveMagnetLayout', () => {
     });
 
     const result = buildAdaptiveMagnetLayout(
-      [perf, legacyBack, createNavigationPageMagnet()],
+      [perf, dockedBack, createNavigationPageMagnet()],
       createPixelPositions(32, 32),
       { width: 1000, height: 800 }
     );

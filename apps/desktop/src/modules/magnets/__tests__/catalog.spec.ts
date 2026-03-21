@@ -40,35 +40,13 @@ describe('magnet catalog', () => {
     expect(state.magnets.map((m) => m.id)).toEqual(['custom-1', 'missing-anchors']);
   });
 
-  it('migrates customMagnets from per-space configs when missing', () => {
-    const magnet1 = createTestMagnet('custom-1');
-    const magnet2 = createTestMagnet('custom-2');
-
-    localStorage.setItem(
-      STORAGE_KEYS.CONFIG,
-      JSON.stringify({
-        version: '1.1.0',
-        gridSize: { columns: 10, rows: 10 },
-        magnets: {},
-        customMagnets: [magnet1],
-      })
-    );
-    localStorage.setItem(
-      `${STORAGE_KEYS.CONFIG}:space2`,
-      JSON.stringify({
-        version: '1.1.0',
-        gridSize: { columns: 10, rows: 10 },
-        magnets: {},
-        customMagnets: [magnet2, magnet1],
-      })
-    );
-
-    const result = ensureMagnetCatalogState(['space1', 'space2']);
+  it('creates an empty catalog when missing', () => {
+    const result = ensureMagnetCatalogState();
     expect(result.didCreate).toBe(true);
-    expect(result.state.magnets.map((m) => m.id).sort()).toEqual(['custom-1', 'custom-2']);
+    expect(result.state.magnets).toEqual([]);
 
     const persisted = readMagnetCatalogState();
-    expect(persisted.magnets.map((m) => m.id).sort()).toEqual(['custom-1', 'custom-2']);
+    expect(persisted.magnets).toEqual([]);
   });
 
   it('reuses existing catalog', () => {
@@ -76,7 +54,7 @@ describe('magnet catalog', () => {
       STORAGE_KEYS.MAGNET_CATALOG,
       JSON.stringify({ version: 1, magnets: [createTestMagnet('custom-1')] })
     );
-    const result = ensureMagnetCatalogState(['space1']);
+    const result = ensureMagnetCatalogState();
     expect(result.didCreate).toBe(false);
     expect(result.state.magnets.map((m) => m.id)).toEqual(['custom-1']);
   });

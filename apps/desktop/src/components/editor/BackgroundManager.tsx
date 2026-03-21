@@ -1,7 +1,7 @@
 import { useState, useCallback, memo, useEffect, useMemo, useRef } from 'react';
 import { BackgroundConfig, BackgroundSettings, PRESET_BACKGROUNDS } from '../../types/background';
 import { setupStorageListener, STORAGE_KEYS } from '../../utils/windowCommunication';
-import { readJson, readString, tryWriteJson, writeString } from '../../modules/storage';
+import { readJson, tryWriteJson } from '../../modules/storage';
 import { useT } from '../../i18n';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import './BackgroundManager.css';
@@ -39,8 +39,7 @@ interface HistoryItem {
 type ConfirmDialogState =
   | { type: 'delete-history'; historyId: string }
   | { type: 'clear-history' }
-  | { type: 'gc-media' }
-  | { type: 'migrate-legacy' };
+  | { type: 'gc-media' };
 
 export const BackgroundManager = memo(function BackgroundManager({
   settings,
@@ -63,7 +62,6 @@ export const BackgroundManager = memo(function BackgroundManager({
     maximized: null,
     windowed: null,
   });
-  const migrationRunningRef = useRef(false);
 
   // Keep refs hot to avoid stale closures in debounced handlers.
   settingsRef.current = settings;
@@ -110,22 +108,6 @@ export const BackgroundManager = memo(function BackgroundManager({
       lastCustomConfigRef.current[mode] = cloneConfig(currentConfig);
     }
   }, [cloneConfig, currentConfig, isCustomMode, mode]);
-
-  const hasLegacyDataUrls = useMemo(() => {
-    const hasDataUrl = (url: string | undefined): boolean => !!url && url.startsWith('data:');
-
-    if (settings.maximized.type === 'image' && hasDataUrl(settings.maximized.image?.url)) return true;
-    if (settings.maximized.type === 'video' && hasDataUrl(settings.maximized.video?.url)) return true;
-    if (settings.windowed.type === 'image' && hasDataUrl(settings.windowed.image?.url)) return true;
-    if (settings.windowed.type === 'video' && hasDataUrl(settings.windowed.video?.url)) return true;
-
-    for (const item of history) {
-      if (item.config.type === 'image' && hasDataUrl(item.config.image?.url)) return true;
-      if (item.config.type === 'video' && hasDataUrl(item.config.video?.url)) return true;
-    }
-
-    return false;
-  }, [history, settings.maximized, settings.windowed]);
 
   // 计算当前激活的预设
   const activePreset = (() => {
@@ -509,167 +491,6 @@ export const BackgroundManager = memo(function BackgroundManager({
     [tryGetManagedMediaRelPath]
   );
 
-  const decodeBase64ToBytes = useCallback((base64: string): Uint8Array => {
-    const normalized = base64.replace(/\s/g, '');
-    const chunkChars = 1_048_576; // must be divisible by 4
-    const parts: Uint8Array[] = [];
-
-    for (let offset = 0; offset < normalized.length; offset += chunkChars) {
-      const slice = normalized.slice(offset, offset + chunkChars);
-      const binary = atob(slice);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-      }
-      parts.push(bytes);
-    }
-
-    const total = parts.reduce((sum, part) => sum + part.length, 0);
-    const merged = new Uint8Array(total);
-    let writeOffset = 0;
-    for (const part of parts) {
-      merged.set(part, writeOffset);
-      writeOffset += part.length;
-    }
-    return merged;
-  }, []);
-
-  const writeManagedMediaFromDataUrl = useCallback(
-    async (dataUrl: string, fallbackKind: 'image' | 'video'): Promise<string> => {
-      const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-      if (!match) throw new Error('Invalid data URL');
-      const mimeType = match[1];
-      const base64 = match[2];
-
-      const mimeToExt: Record<string, string> = {
-        'image/png': 'png',
-        'image/jpeg': 'jpg',
-        'image/jpg': 'jpg',
-        'image/gif': 'gif',
-        'image/webp': 'webp',
-        'image/svg+xml': 'svg',
-        'image/bmp': 'bmp',
-        'video/mp4': 'mp4',
-        'video/webm': 'webm',
-        'video/ogg': 'ogg',
-        'video/quicktime': 'mov',
-      };
-      const ext = mimeToExt[mimeType] || (fallbackKind === 'image' ? 'png' : 'mp4');
-
-      const fs = await import('@tauri-apps/api/fs');
-      const pathApi = await import('@tauri-apps/api/path');
-      const tauri = await import('@tauri-apps/api/tauri');
-
-      const bytes = decodeBase64ToBytes(base64);
-      const fileName = `background-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-      const relativePath = `background-media/${fileName}`;
-      await fs.createDir('background-media', { dir: fs.BaseDirectory.AppData, recursive: true });
-      await fs.writeBinaryFile({ path: relativePath, contents: bytes }, { dir: fs.BaseDirectory.AppData });
-
-      const appDataDir = await pathApi.appDataDir();
-      const fullPath = await pathApi.join(appDataDir, 'background-media', fileName);
-      return tauri.convertFileSrc(fullPath);
-    },
-    [decodeBase64ToBytes]
-  );
-
-  const migrateConfigIfNeeded = useCallback(
-    async (config: BackgroundConfig): Promise<BackgroundConfig | null> => {
-      if (config.type === 'image' && config.image?.url?.startsWith('data:')) {
-        try {
-          const migratedUrl = await writeManagedMediaFromDataUrl(config.image.url, 'image');
-          return { ...config, image: { ...config.image, url: migratedUrl } };
-        } catch (error) {
-          telemetry.warn('editor.background.legacy-image.migrate.failed', {
-            message: getErrorMessage(error),
-          });
-          return { type: 'image', image: { url: '', fit: 'cover', position: 'center center', repeat: 'no-repeat' } };
-        }
-      }
-
-      if (config.type === 'video' && config.video?.url?.startsWith('data:')) {
-        try {
-          const migratedUrl = await writeManagedMediaFromDataUrl(config.video.url, 'video');
-          return { ...config, video: { ...config.video, url: migratedUrl } };
-        } catch (error) {
-          telemetry.warn('editor.background.legacy-video.migrate.failed', {
-            message: getErrorMessage(error),
-          });
-          return { type: 'color', color: '#000000', opacity: 1 };
-        }
-      }
-
-      return null;
-    },
-    [writeManagedMediaFromDataUrl]
-  );
-
-  const runLegacyMigration = useCallback(async () => {
-    if (maintenanceBusy || migrationRunningRef.current) return;
-    migrationRunningRef.current = true;
-    setMaintenanceBusy(true);
-    setMaintenanceMessage(t('editor.background-manager.maintenance.migratingLegacy'));
-
-    try {
-      let changedSettings = false;
-      const nextSettings: BackgroundSettings = {
-        maximized: settingsRef.current.maximized,
-        windowed: settingsRef.current.windowed,
-      };
-
-      const migratedMax = await migrateConfigIfNeeded(nextSettings.maximized);
-      if (migratedMax) {
-        nextSettings.maximized = migratedMax;
-        changedSettings = true;
-      }
-      const migratedWin = await migrateConfigIfNeeded(nextSettings.windowed);
-      if (migratedWin) {
-        nextSettings.windowed = migratedWin;
-        changedSettings = true;
-      }
-
-      if (changedSettings) {
-        onSettingsChange(nextSettings);
-      }
-
-      const nextHistory: HistoryItem[] = [];
-      let dropped = 0;
-      for (const item of history) {
-        const migrated = await migrateConfigIfNeeded(item.config);
-        if (migrated) {
-          nextHistory.push({ ...item, config: migrated });
-          continue;
-        }
-
-        const stillLegacy =
-          (item.config.type === 'image' && item.config.image?.url?.startsWith('data:')) ||
-          (item.config.type === 'video' && item.config.video?.url?.startsWith('data:'));
-        if (stillLegacy) {
-          dropped += 1;
-          continue;
-        }
-
-        nextHistory.push(item);
-      }
-
-      setHistory(nextHistory);
-      writeString(STORAGE_KEYS.BACKGROUND_MEDIA_MIGRATION_V1, '1');
-      setMaintenanceMessage(
-        dropped > 0
-          ? t('editor.background-manager.maintenance.migrateDoneWithDropped', { dropped })
-          : t('editor.background-manager.maintenance.migrateDone')
-      );
-    } catch (error) {
-      telemetry.error('editor.background.legacy.migration.failed', {
-        message: getErrorMessage(error),
-      });
-      setMaintenanceMessage(t('editor.background-manager.maintenance.migrateFailed'));
-    } finally {
-      migrationRunningRef.current = false;
-      setMaintenanceBusy(false);
-    }
-  }, [history, maintenanceBusy, migrateConfigIfNeeded, onSettingsChange, t]);
-
   const runMediaGc = useCallback(async () => {
     if (maintenanceBusy) return;
     setMaintenanceBusy(true);
@@ -734,13 +555,6 @@ export const BackgroundManager = memo(function BackgroundManager({
       setMaintenanceBusy(false);
     }
   }, [getConfigMediaRelPath, history, maintenanceBusy, t]);
-
-  useEffect(() => {
-    const migrated = readString(STORAGE_KEYS.BACKGROUND_MEDIA_MIGRATION_V1) === '1';
-    if (migrated) return;
-    if (!hasLegacyDataUrls) return;
-    void runLegacyMigration();
-  }, [hasLegacyDataUrls, runLegacyMigration]);
 
   const deleteHistoryNow = useCallback(
     (id: string) => {
@@ -847,12 +661,6 @@ export const BackgroundManager = memo(function BackgroundManager({
           message: t('editor.background-manager.confirm.gcMedia.message'),
           confirmText: t('editor.background-manager.confirm.gcMedia.confirmText'),
         };
-      case 'migrate-legacy':
-        return {
-          title: t('editor.background-manager.confirm.migrateLegacy.title'),
-          message: t('editor.background-manager.confirm.migrateLegacy.message'),
-          confirmText: t('editor.background-manager.confirm.migrateLegacy.confirmText'),
-        };
     }
   }, [confirmDialog, t]);
 
@@ -871,12 +679,8 @@ export const BackgroundManager = memo(function BackgroundManager({
     }
     if (action.type === 'gc-media') {
       void runMediaGc();
-      return;
     }
-    if (action.type === 'migrate-legacy') {
-      void runLegacyMigration();
-    }
-  }, [clearHistoryNow, confirmDialog, deleteHistoryNow, runLegacyMigration, runMediaGc]);
+  }, [clearHistoryNow, confirmDialog, deleteHistoryNow, runMediaGc]);
 
   return (
     <div className="background-manager">
@@ -1190,18 +994,6 @@ export const BackgroundManager = memo(function BackgroundManager({
             <div className="section-title">{t('editor.background-manager.section.maintenance')}</div>
             <div className="maintenance-actions">
               <button
-                className="maintenance-btn"
-                disabled={!hasLegacyDataUrls || maintenanceBusy}
-                onClick={() => setConfirmDialog({ type: 'migrate-legacy' })}
-                title={
-                  hasLegacyDataUrls
-                    ? t('editor.background-manager.maintenance.migrateLegacyTitle')
-                    : t('editor.background-manager.maintenance.noLegacyDataTitle')
-                }
-              >
-                {t('editor.background-manager.maintenance.migrateLegacy')}
-              </button>
-              <button
                 className="maintenance-btn maintenance-btn-danger"
                 disabled={maintenanceBusy}
                 onClick={() => setConfirmDialog({ type: 'gc-media' })}
@@ -1234,7 +1026,7 @@ export const BackgroundManager = memo(function BackgroundManager({
               <button
                 className="confirm-btn confirm-ok"
                 onClick={handleConfirmDialogConfirm}
-                disabled={maintenanceBusy && (confirmDialog?.type === 'gc-media' || confirmDialog?.type === 'migrate-legacy')}
+                disabled={maintenanceBusy && confirmDialog?.type === 'gc-media'}
               >
                 {confirmDialogContent.confirmText}
               </button>

@@ -37,10 +37,10 @@ export type {
   MagnetSpaceHistoryItemV1,
 } from './layoutStore';
 export {
-  buildLegacyMagnetLayoutStoreBootstrapRequest,
+  buildMagnetLayoutStoreBootstrapRequest,
   magnetLayoutStoreApplyPatch,
   magnetLayoutStoreApplyPatchWithRetry,
-  magnetLayoutStoreBootstrapFromLegacy,
+  magnetLayoutStoreBootstrap,
   magnetLayoutStoreGetState,
 } from './layoutStore';
 export type { MagnetCatalogState } from './catalog';
@@ -56,7 +56,6 @@ export {
 export {
   cancelScheduledMagnetSpaceLayoutSave,
   createDefaultMagnetSpaceLayout,
-  deriveMagnetSpaceLayoutFromLegacyConfig,
   ensureMagnetSpaceLayout,
   flushScheduledMagnetSpaceLayoutSave,
   loadMagnetSpaceLayout,

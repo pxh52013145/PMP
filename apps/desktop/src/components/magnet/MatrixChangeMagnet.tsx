@@ -9,7 +9,7 @@ import {
   createNextSpaceId,
   ensureMagnetSpaceLayout,
   magnetLayoutStoreApplyPatch,
-  magnetLayoutStoreBootstrapFromLegacy,
+  magnetLayoutStoreBootstrap,
   magnetLayoutStoreGetState,
   loadMagnetConfig,
   resolveMagnetConfigStorageKey,
@@ -155,7 +155,7 @@ function MatrixChangeMagnetDefaultRenderer({ skinProps: rawSkinProps }: MatrixCh
   const [spacesRaw] = usePersistentSetting(STORAGE_KEYS.MAGNET_SPACES, defaultSpacesState, {
     format: 'json',
   });
-  const legacySpacesState = useMemo(() => sanitizeMagnetSpacesState(spacesRaw), [spacesRaw]);
+  const storedSpacesState = useMemo(() => sanitizeMagnetSpacesState(spacesRaw), [spacesRaw]);
   const [layoutStoreState, setLayoutStoreState] = useState<MagnetLayoutStoreState | null>(null);
   const storeRevisionRef = useRef(0);
 
@@ -163,28 +163,28 @@ function MatrixChangeMagnetDefaultRenderer({ skinProps: rawSkinProps }: MatrixCh
   const [presetsRaw] = usePersistentSetting(STORAGE_KEYS.MAGNET_SPACE_PRESETS, defaultPresetsState, {
     format: 'json',
   });
-  const legacyPresetsState = useMemo(() => sanitizeMagnetSpacePresetsState(presetsRaw), [presetsRaw]);
+  const storedPresetsState = useMemo(() => sanitizeMagnetSpacePresetsState(presetsRaw), [presetsRaw]);
 
   const defaultHistoryState = useMemo(() => ({} as Record<string, MagnetSpaceHistoryItem[]>), []);
   const [historyRaw] = usePersistentSetting(STORAGE_KEYS.MAGNET_SPACE_HISTORY, defaultHistoryState, {
     format: 'json',
   });
-  const legacyHistoryState = useMemo(() => sanitizeMagnetSpaceHistoryState(historyRaw), [historyRaw]);
+  const storedHistoryState = useMemo(() => sanitizeMagnetSpaceHistoryState(historyRaw), [historyRaw]);
 
   const spacesState = useMemo(() => {
     if (isTauri && layoutStoreState) return layoutStoreState.spaces;
-    return legacySpacesState;
-  }, [isTauri, layoutStoreState, legacySpacesState]);
+    return storedSpacesState;
+  }, [isTauri, layoutStoreState, storedSpacesState]);
 
   const presetsState = useMemo(() => {
     if (isTauri && layoutStoreState) return layoutStoreState.presetsBySpaceId;
-    return legacyPresetsState;
-  }, [isTauri, layoutStoreState, legacyPresetsState]);
+    return storedPresetsState;
+  }, [isTauri, layoutStoreState, storedPresetsState]);
 
   const historyState = useMemo(() => {
     if (isTauri && layoutStoreState) return layoutStoreState.historyBySpaceId;
-    return legacyHistoryState;
-  }, [isTauri, layoutStoreState, legacyHistoryState]);
+    return storedHistoryState;
+  }, [isTauri, layoutStoreState, storedHistoryState]);
 
   const refreshLayoutStoreState = useCallback(async () => {
     if (!isTauri) return;
@@ -199,7 +199,7 @@ function MatrixChangeMagnetDefaultRenderer({ skinProps: rawSkinProps }: MatrixCh
     let disposed = false;
 
     const run = async () => {
-      const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy();
+      const bootstrapped = await magnetLayoutStoreBootstrap();
       const state = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
       if (disposed || !state) return;
       storeRevisionRef.current = state.revision;

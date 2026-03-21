@@ -5,8 +5,6 @@ import { I18nSync, readPersistedLocale, setLocale } from './i18n';
 import { installConsoleBridge } from './services/telemetry/consoleBridge';
 import { getTelemetryLogger } from './services/telemetry/TelemetryService';
 import { isTauriRuntime } from './utils/tauriRuntime';
-import { readString } from './modules/storage';
-import { STORAGE_KEYS } from './utils/windowCommunication';
 import { bootstrapPerformanceRuntimeProfileStorage } from './modules/startup/performanceRuntimeBootstrap';
 import './index.css';
 import './themes/surfaceMotion.css';
@@ -110,11 +108,6 @@ function StartupReadyGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-function shouldRunStartupBackgroundMigration(): boolean {
-  const migrationState = readString(STORAGE_KEYS.BACKGROUND_MEDIA_MIGRATION_V1);
-  return migrationState !== 'done';
-}
-
 type RootAppResolveResult = {
   component: React.ComponentType;
   kind: 'main' | 'editor' | 'plugin' | 'vst-manager' | 'desktop-lyrics-overlay';
@@ -203,24 +196,6 @@ async function bootstrap(): Promise<void> {
       { timeoutMs: 4_000, delayMs: 2_500 }
     );
 
-    if (shouldRunStartupBackgroundMigration()) {
-      // Migration may touch filesystem and copy media; delay it to avoid fighting initial UI/Pixi.
-      scheduleIdle(
-        async () => {
-          try {
-            const { migrateBackgroundStorageToManagedMedia } = await import(
-              './modules/background/backgroundMediaMigration'
-            );
-            await migrateBackgroundStorageToManagedMedia();
-          } catch (error) {
-            startupTelemetry.warn('startup.background.migration.failed', {
-              message: error instanceof Error ? error.message : String(error),
-            });
-          }
-        },
-        { timeoutMs: 8_000, delayMs: 4_000 }
-      );
-    }
   });
 }
 

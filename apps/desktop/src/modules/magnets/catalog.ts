@@ -1,12 +1,11 @@
 import type { Magnet, AnchorType, PixelAnchor, MagnetGridFootprint } from '../../types/pixel';
 import { BUILTIN_MAGNET_IDS } from '../../constants/magnets';
-import { readJson, readString } from '../storage';
+import { readJson } from '../storage';
 import {
   STORAGE_KEYS,
   TAURI_EVENTS,
   broadcastDataUpdate,
 } from '../../utils/windowCommunication';
-import { loadMagnetConfig, resolveMagnetConfigStorageKey } from './config';
 
 export type MagnetCatalogState = {
   version: 1;
@@ -130,33 +129,16 @@ export function writeMagnetCatalogState(state: MagnetCatalogState): void {
   );
 }
 
-export function ensureMagnetCatalogState(spaceIds: string[]): {
+export function ensureMagnetCatalogState(): {
   state: MagnetCatalogState;
   didCreate: boolean;
 } {
-  const existingRaw = readString(STORAGE_KEYS.MAGNET_CATALOG);
-  if (existingRaw) {
+  const existing = readJson<unknown | null>(STORAGE_KEYS.MAGNET_CATALOG, null);
+  if (existing !== null) {
     return { state: readMagnetCatalogState(), didCreate: false };
   }
 
-  const magnets: Magnet[] = [];
-  const seen = new Set<string>();
-
-  for (const spaceId of spaceIds) {
-    const configKey = resolveMagnetConfigStorageKey(spaceId);
-    const config = loadMagnetConfig(configKey);
-    for (const magnet of config?.customMagnets ?? []) {
-      if (!magnet?.id) continue;
-      const id = magnet.id.trim();
-      if (!id) continue;
-      if (BUILTIN_MAGNET_IDS.has(id)) continue;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      magnets.push({ ...magnet, id });
-    }
-  }
-
-  const state = sanitizeMagnetCatalogState({ version: 1, magnets });
+  const state = createDefaultMagnetCatalogState();
   writeMagnetCatalogState(state);
   return { state, didCreate: true };
 }
