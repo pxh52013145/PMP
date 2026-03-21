@@ -3,6 +3,7 @@ import { readJson, readString, writeJson, writeString } from '../../../modules/s
 import { useTheme } from '../../../themes/contexts/ThemeContextWithSync';
 import {
   assignMagnetBindingFragment,
+  dynamicColorConfigToCapability,
   dynamicColorCapabilityToConfig,
   materializeThemeBinding,
 } from '../../../themes/importAdapters';
@@ -86,12 +87,19 @@ export function useStyleEditorModel(): StyleEditorModel {
       for (const componentId of COVER_COLOR_COMPONENT_IDS) {
         const bindingId = `magnet.${componentId}` as ThemeBindingId;
         const currentFragment = materializeThemeBinding(nextTheme, bindingId);
+        const nextDynamicColor = dynamicColorConfigToCapability({
+          ...(dynamicColorCapabilityToConfig(currentFragment.capabilities?.dynamicColor) ?? {}),
+          ...partial,
+        });
         nextTheme = assignMagnetBindingFragment(nextTheme, componentId, {
           ...currentFragment,
-          dynamicColor: {
-            ...(currentFragment.dynamicColor ?? {}),
-            ...partial,
-          },
+          ...(nextDynamicColor
+            ? {
+                capabilities: {
+                  dynamicColor: nextDynamicColor,
+                },
+              }
+            : {}),
         });
       }
 

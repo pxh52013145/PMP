@@ -100,7 +100,15 @@ function hasMeaningfulDynamicColorCapability(value: unknown): boolean {
   );
 }
 
-function hasMeaningfulMotionCapability(value: unknown): boolean {
+function hasMeaningfulBindingCapabilities(value: unknown): boolean {
+  if (!hasOwnKeys(value)) {
+    return false;
+  }
+
+  return hasMeaningfulDynamicColorCapability(value.dynamicColor);
+}
+
+function hasMeaningfulBindingMotion(value: unknown): boolean {
   if (!hasOwnKeys(value)) {
     return false;
   }
@@ -108,17 +116,11 @@ function hasMeaningfulMotionCapability(value: unknown): boolean {
   return (
     typeof value.enabled === 'boolean' ||
     (typeof value.mode === 'string' && value.mode.trim().length > 0) ||
+    hasOwnKeys(value.presence) ||
     hasOwnKeys(value.layout) ||
-    hasOwnKeys(value.channels)
+    hasOwnKeys(value.attention) ||
+    hasOwnKeys(value.visibility)
   );
-}
-
-function hasMeaningfulBindingCapabilities(value: unknown): boolean {
-  if (!hasOwnKeys(value)) {
-    return false;
-  }
-
-  return hasMeaningfulDynamicColorCapability(value.dynamicColor) || hasMeaningfulMotionCapability(value.motion);
 }
 
 export function isThemeBindingEmpty(binding: ThemeBinding | null | undefined): boolean {
@@ -131,6 +133,7 @@ export function isThemeBindingEmpty(binding: ThemeBinding | null | undefined): b
     !(typeof binding.renderer === 'string' && binding.renderer.trim().length > 0) &&
     !(typeof binding.variant === 'string' && binding.variant.trim().length > 0) &&
     !hasOwnKeys(binding.props) &&
+    !hasMeaningfulBindingMotion(binding.motion) &&
     !hasMeaningfulBindingCapabilities(binding.capabilities)
   );
 }

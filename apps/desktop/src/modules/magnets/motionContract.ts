@@ -62,7 +62,8 @@ function normalizeEasing(value: string | number | undefined): string {
 export function resolveMagnetMotionRuntime(
   lowRenderMode: boolean,
   capability: ThemeBindingMotionCapability | undefined,
-  prefersReducedMotion = readPrefersReducedMotion()
+  prefersReducedMotion = readPrefersReducedMotion(),
+  fallbackPrimaryChannel?: ThemeMotionChannelSpec
 ): MagnetMotionRuntimeConfig {
   if (lowRenderMode || capability?.enabled === false || capability?.mode === 'off') {
     return {
@@ -89,10 +90,12 @@ export function resolveMagnetMotionRuntime(
     ...(typeof capability?.layout?.sharedKey === 'string' && capability.layout.sharedKey.trim().length > 0
       ? { sharedKey: capability.layout.sharedKey.trim() }
       : {}),
-    ...(capability?.channels?.spaceSwitch
-      ? { primaryChannel: capability.channels.spaceSwitch }
-      : capability?.channels?.layout
-        ? { primaryChannel: capability.channels.layout }
+    ...(capability?.channels?.layout
+      ? { primaryChannel: capability.channels.layout }
+      : capability?.channels?.spaceSwitch
+        ? { primaryChannel: capability.channels.spaceSwitch }
+        : fallbackPrimaryChannel
+          ? { primaryChannel: fallbackPrimaryChannel }
         : {}),
   };
 }

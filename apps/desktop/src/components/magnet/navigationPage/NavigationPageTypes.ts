@@ -13,5 +13,6 @@ export interface NavigationPageLogic {
 export interface NavigationPageVariantProps {
   data: NavigationPageDataProps;
   logic: NavigationPageLogic;
-  variantConfig?: Record<string, unknown>;
+  skinProps?: Record<string, unknown>;
 }
+

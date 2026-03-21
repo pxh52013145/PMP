@@ -15,5 +15,6 @@ export interface ProgressBarVariantProps {
   logic: ProgressBarLogic;
   dynamicColors?: DynamicColors;
   dynamicColorConfig?: DynamicColorConfig;
-  variantConfig?: Record<string, unknown>;
+  skinProps?: Record<string, unknown>;
 }
+

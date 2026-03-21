@@ -142,11 +142,11 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 type MatrixChangeRendererProps = {
-  variantConfig?: Record<string, unknown>;
+  skinProps?: Record<string, unknown>;
 };
 
-function MatrixChangeMagnetDefaultRenderer({ variantConfig }: MatrixChangeRendererProps) {
-  const skinProps = useMemo(() => parseMatrixChangeSkinProps(variantConfig), [variantConfig]);
+function MatrixChangeMagnetDefaultRenderer({ skinProps: rawSkinProps }: MatrixChangeRendererProps) {
+  const skinProps = useMemo(() => parseMatrixChangeSkinProps(rawSkinProps), [rawSkinProps]);
   const t = useT();
   const { magnetLibrary, activeMagnetIds, setActiveMagnetIds, setMagnetLibrary, reloadFromStorage } =
     useMagnetConfig();
@@ -1381,5 +1381,5 @@ export function MatrixChangeMagnet() {
     defaultVariant: 'default',
   });
 
-  return <Renderer variantConfig={skin.props} />;
+  return <Renderer skinProps={skin.props} />;
 }

@@ -323,7 +323,7 @@ export const DesktopLyricsButton: React.FC = () => {
         onContextMenu={handleContextMenu}
         onMouseDown={handleMouseDown}
       >
-        <Renderer data={data} logic={logic} variantConfig={skin.props} />
+        <Renderer data={data} logic={logic} skinProps={skin.props} />
       </div>
       {contextMenu ? (
         <ContextMenu
@@ -336,4 +336,3 @@ export const DesktopLyricsButton: React.FC = () => {
     </>
   );
 };
-

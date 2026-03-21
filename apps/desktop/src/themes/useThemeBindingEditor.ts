@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetState
 
 import { useTheme } from './contexts/ThemeContextWithSync';
 import type { ComponentTheme, ThemeBinding, ThemeBindingId, ThemeSurfaceId } from './types/theme';
-import type { ThemeImportSurfaceSpec } from './types/themeImport';
+import type { ThemeBindingFragment } from './types/themeImport';
 import { materializeThemeBinding } from './importAdapters';
 
 export type ThemeBindingEditorMessage = { kind: 'error' | 'success'; text: string };
@@ -13,7 +13,7 @@ export type ThemeBindingEditorPreview = {
   resolvedBinding: ThemeBinding;
   surfaceDocument: ComponentTheme | null;
   surfaceDocumentSummary: ReturnType<typeof summarizeComponentTheme>;
-  materializedBindingTheme: ReturnType<typeof summarizeThemeImportSurface>;
+  materializedBindingTheme: ReturnType<typeof summarizeThemeBindingFragment>;
 };
 
 export interface ThemeBindingEditorModel {
@@ -83,13 +83,13 @@ function summarizeComponentTheme(themeValue: ComponentTheme) {
   };
 }
 
-function summarizeThemeImportSurface(themeValue: ThemeImportSurfaceSpec) {
+function summarizeThemeBindingFragment(themeValue: ThemeBindingFragment) {
   return {
     ...summarizeComponentTheme(themeValue),
     bindingOverlay: {
-      variantConfigKeys: Object.keys(themeValue.variantConfig ?? {}),
-      dynamicColor: themeValue.dynamicColor ?? null,
-      motionConfig: themeValue.motionConfig ?? null,
+      propKeys: Object.keys(themeValue.props ?? {}),
+      dynamicColor: themeValue.capabilities?.dynamicColor ?? null,
+      motion: themeValue.motion ?? null,
     },
   };
 }
@@ -204,7 +204,7 @@ export function useThemeBindingEditor({
       resolvedBinding,
       surfaceDocument,
       surfaceDocumentSummary: summarizeComponentTheme(surfaceDocument ?? {}),
-      materializedBindingTheme: summarizeThemeImportSurface(materializedTheme),
+      materializedBindingTheme: summarizeThemeBindingFragment(materializedTheme),
     }),
     [bindingId, explicitBinding, materializedTheme, resolvedBinding, surfaceDocument, surfaceDocumentId]
   );

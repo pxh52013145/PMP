@@ -2,8 +2,6 @@ import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { applyConfig, loadConfig, saveConfig } from '../configManager';
 import { Magnet } from '../../types/pixel';
-import { PROCESS_PERF_MONITOR_MAGNET } from '../../data/builtin/processPerfMonitorMagnet';
-import { SYSTEM_SPACE1_DEFAULT_ANCHORS_BY_MAGNET_ID } from '../../modules/magnets/systemLayouts';
 
 const createMockMagnet = (): Magnet => ({
   id: 'test-magnet',
@@ -93,32 +91,56 @@ describe('configManager baseline', () => {
     expect(state?.chromeInset).toEqual({ top: 4, right: 3, bottom: 2, left: 1 });
   });
 
-  it('migrates the legacy process perf top inset into the new top outset model', () => {
+  it('drops unsupported persisted fields instead of writing them back', () => {
     localStorage.setItem(
       'pixel-matrix-player-config',
       JSON.stringify({
         version: '1.2.0',
         gridSize: { columns: 27, rows: 20 },
         magnets: {
-          'process-perf-monitor': {
-            anchors: SYSTEM_SPACE1_DEFAULT_ANCHORS_BY_MAGNET_ID['process-perf-monitor'],
+          'test-magnet': {
+            anchors: createMockMagnet().anchors,
             isActive: true,
-            boundsInset: { top: 8 },
+            renderer: 'test-renderer',
+            variant: 'compact',
+            skinProps: {
+              density: 'dense',
+            },
+            unsupportedField: {
+              keep: false,
+            },
           },
         },
-        customMagnets: [],
+        customMagnets: [
+          {
+            ...createMockMagnet(),
+            id: 'custom-visualizer',
+            skinProps: {
+              bars: 24,
+            },
+            unsupportedField: {
+              keep: false,
+            },
+          },
+        ],
       })
     );
 
     const loaded = loadConfig();
-    expect(loaded?.magnets['process-perf-monitor']?.boundsInset).toBeUndefined();
-    expect(loaded?.magnets['process-perf-monitor']?.boundsOutset).toEqual({ top: 9 });
+    expect(loaded?.magnets['test-magnet']?.skinProps).toEqual({ density: 'dense' });
+    expect((loaded?.magnets['test-magnet'] as Record<string, unknown> | undefined)?.unsupportedField).toBeUndefined();
+    expect(loaded?.customMagnets[0]?.skinProps).toEqual({ bars: 24 });
+    expect((loaded?.customMagnets[0] as Record<string, unknown> | undefined)?.unsupportedField).toBeUndefined();
 
-    const applied = applyConfig(loaded!, [PROCESS_PERF_MONITOR_MAGNET]);
-    const perfMagnet = applied.magnetLibrary[0];
+    const applied = applyConfig(loaded!, [createMockMagnet()]);
+    expect(applied.magnetLibrary[0]?.skinProps).toEqual({ density: 'dense' });
 
-    expect(perfMagnet.boundsInset).toBeUndefined();
-    expect(perfMagnet.boundsOutset).toEqual({ top: 9 });
+    const customMagnet = applied.magnetLibrary.find((magnet) => magnet.id === 'custom-visualizer');
+    expect(customMagnet?.skinProps).toEqual({ bars: 24 });
+    expect((customMagnet as Record<string, unknown> | undefined)?.unsupportedField).toBeUndefined();
+
+    saveConfig(applied.magnetLibrary, new Set(['test-magnet', 'custom-visualizer']), { columns: 27, rows: 20 });
+    expect(localStorage.getItem('pixel-matrix-player-config')).not.toContain('unsupportedField');
   });
 
   it('applies saved layout and chrome inset fields back onto the magnet library', () => {

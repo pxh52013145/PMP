@@ -79,11 +79,11 @@ function resolveConfiguredPlatformMode(
 }
 
 type PlatformMagnetRendererProps = {
-  variantConfig?: Record<string, unknown>;
+  skinProps?: Record<string, unknown>;
 };
 
-const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ variantConfig }) => {
-  const skinProps = useMemo(() => parsePlatformMagnetSkinProps(variantConfig), [variantConfig]);
+const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ skinProps: rawSkinProps }) => {
+  const skinProps = useMemo(() => parsePlatformMagnetSkinProps(rawSkinProps), [rawSkinProps]);
   const t = useT();
   const audioService = useAudioService();
 
@@ -588,5 +588,5 @@ export const PlatformMagnet: React.FC = () => {
     defaultVariant: 'default',
   });
 
-  return <Renderer variantConfig={skin.props} />;
+  return <Renderer skinProps={skin.props} />;
 };

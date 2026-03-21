@@ -16,26 +16,26 @@ type AudioVisualizerRendererProps = {
   accentColor?: string;
   getFrequencyData: () => Uint8Array | null;
   isPlaying: boolean;
-  variantConfig?: Record<string, unknown>;
+  skinProps?: Record<string, unknown>;
 };
 
 const AudioVisualizerDefaultRenderer = memo(function AudioVisualizerDefaultRenderer({
   accentColor,
   getFrequencyData,
   isPlaying,
-  variantConfig,
+  skinProps,
 }: AudioVisualizerRendererProps) {
-  const skinProps = useMemo(() => parseAudioVisualizerSkinProps(variantConfig), [variantConfig]);
+  const resolvedSkinProps = useMemo(() => parseAudioVisualizerSkinProps(skinProps), [skinProps]);
 
   return (
     <AudioVisualizer
       getFrequencyData={getFrequencyData}
       isPlaying={isPlaying}
       accentColor={accentColor}
-      fallbackAccentColor={skinProps.fallbackAccentColor}
-      density={skinProps.density}
-      energyProfile={skinProps.energyProfile}
-      backdrop={skinProps.backdrop}
+      fallbackAccentColor={resolvedSkinProps.fallbackAccentColor}
+      density={resolvedSkinProps.density}
+      energyProfile={resolvedSkinProps.energyProfile}
+      backdrop={resolvedSkinProps.backdrop}
     />
   );
 });
@@ -88,8 +88,7 @@ export const AudioVisualizerMagnet: React.FC = () => {
       getFrequencyData={getFrequencyData}
       isPlaying={playbackState === 'playing'}
       accentColor={dynamicColorEnabled ? dynamicColors.accentColor : undefined}
-      variantConfig={skin.props}
+      skinProps={skin.props}
     />
   );
 };
-

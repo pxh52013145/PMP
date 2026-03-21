@@ -34,6 +34,30 @@ export interface ThemeMotionChannelSpec {
 }
 
 export type ThemeMotionChannelMap = Record<string, ThemeMotionChannelSpec>;
+export type ThemeMotionReference = string | ThemeMotionChannelSpec;
+
+export interface ThemeMotionSceneStaggerSpec {
+  by?: 'index' | 'x' | 'y' | 'grid' | 'distance';
+  from?: 'start' | 'center' | 'end';
+  step?: ThemeMotionValue;
+}
+
+export interface ThemeMotionSceneMatchSpec {
+  by?: 'magnet-id' | 'shared-key';
+}
+
+export interface ThemeMotionSceneSpec {
+  enter?: ThemeMotionReference;
+  exit?: ThemeMotionReference;
+  stagger?: ThemeMotionSceneStaggerSpec;
+  match?: ThemeMotionSceneMatchSpec;
+  sharedAxis?: 'x' | 'y' | 'scale';
+}
+
+export interface ThemeMotionDocument {
+  presets?: Record<string, ThemeMotionChannelSpec>;
+  scenes?: Record<string, ThemeMotionSceneSpec>;
+}
 
 export interface DynamicColorConfig {
   extractFromCover?: boolean;
@@ -66,6 +90,38 @@ export interface ThemeBindingMotionLayoutPolicy {
   sharedKey?: string;
 }
 
+export interface ThemeBindingMotionPresenceSpec {
+  enter?: ThemeMotionReference;
+  exit?: ThemeMotionReference;
+}
+
+export interface ThemeBindingMotionLayoutSpec extends ThemeBindingMotionLayoutPolicy {
+  move?: ThemeMotionReference;
+  resize?: ThemeMotionReference;
+}
+
+export interface ThemeBindingMotionAttentionSpec {
+  idle?: ThemeMotionReference;
+  hover?: ThemeMotionReference;
+  active?: ThemeMotionReference;
+  success?: ThemeMotionReference;
+  warning?: ThemeMotionReference;
+}
+
+export interface ThemeBindingMotionVisibilitySpec {
+  show?: ThemeMotionReference;
+  hide?: ThemeMotionReference;
+}
+
+export interface ThemeBindingMotionSpec {
+  enabled?: boolean;
+  mode?: 'full' | 'reduced' | 'off';
+  presence?: ThemeBindingMotionPresenceSpec;
+  layout?: ThemeBindingMotionLayoutSpec;
+  attention?: ThemeBindingMotionAttentionSpec;
+  visibility?: ThemeBindingMotionVisibilitySpec;
+}
+
 export interface ThemeBindingMotionCapability {
   enabled?: boolean;
   mode?: 'full' | 'reduced' | 'off';
@@ -75,7 +131,6 @@ export interface ThemeBindingMotionCapability {
 
 export interface ThemeBindingCapabilities {
   dynamicColor?: ThemeBindingDynamicColorCapability;
-  motion?: ThemeBindingMotionCapability;
 }
 
 export interface ThemeBinding {
@@ -83,6 +138,7 @@ export interface ThemeBinding {
   renderer?: string;
   variant?: string;
   props?: Record<string, unknown>;
+  motion?: ThemeBindingMotionSpec;
   capabilities?: ThemeBindingCapabilities;
 }
 
@@ -132,6 +188,7 @@ export interface Theme {
   thumbnail?: string;
 
   tokens?: ThemeTokens;
+  motion?: ThemeMotionDocument;
 
   pixel: {
     shape: 'circle' | 'square' | 'rounded-square' | 'diamond' | 'hexagon';

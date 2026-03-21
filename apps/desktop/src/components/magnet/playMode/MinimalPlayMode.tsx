@@ -58,9 +58,9 @@ function getModeMeta(mode: string): { icon: React.ReactNode; title: string; badg
   return { icon: <SequenceIcon />, title: 'Sequence', badge: 'SEQ' };
 }
 
-export const MinimalPlayMode: React.FC<PlayModeVariantProps> = ({ data, logic, variantConfig }) => {
+export const MinimalPlayMode: React.FC<PlayModeVariantProps> = ({ data, logic, skinProps: rawSkinProps }) => {
   const buttonRef = React.useRef<HTMLButtonElement | null>(null);
-  const skinProps = useMemo(() => parsePlayModeSkinProps(variantConfig), [variantConfig]);
+  const skinProps = useMemo(() => parsePlayModeSkinProps(rawSkinProps), [rawSkinProps]);
 
   const triggerPulse = () => {
     if (!skinProps.pulseOnSwitch) return;
@@ -95,3 +95,4 @@ export const MinimalPlayMode: React.FC<PlayModeVariantProps> = ({ data, logic, v
     </button>
   );
 };
+

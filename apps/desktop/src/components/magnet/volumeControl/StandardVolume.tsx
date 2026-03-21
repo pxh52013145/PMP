@@ -4,7 +4,7 @@ import { VolumeVariantProps } from './VolumeTypes';
 import { parseVolumeSkinProps } from './volumeSkin';
 import './StandardVolume.css';
 
-export const StandardVolume: React.FC<VolumeVariantProps> = ({ data, logic, variantConfig }) => {
+export const StandardVolume: React.FC<VolumeVariantProps> = ({ data, logic, skinProps: rawSkinProps }) => {
   const { volume, muted } = data;
   const {
     popupState,
@@ -16,7 +16,7 @@ export const StandardVolume: React.FC<VolumeVariantProps> = ({ data, logic, vari
     getVolumeIcon,
     formatVolumePercent,
   } = logic;
-  const skinProps = useMemo(() => parseVolumeSkinProps(variantConfig), [variantConfig]);
+  const skinProps = useMemo(() => parseVolumeSkinProps(rawSkinProps), [rawSkinProps]);
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const nextVolume = parseFloat(e.target.value);
@@ -65,3 +65,4 @@ export const StandardVolume: React.FC<VolumeVariantProps> = ({ data, logic, vari
     </>
   );
 };
+

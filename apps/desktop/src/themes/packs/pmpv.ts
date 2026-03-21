@@ -65,14 +65,13 @@ export function validateVariantPresetV1(value: unknown): asserts value is Varian
     throw new Error('preset.target.rendererId is required');
   }
 
-  const fragment = typeof preset.fragment !== 'undefined' ? preset.fragment : preset.componentTheme;
+  const fragment = preset.fragment;
   if (typeof fragment === 'undefined') {
     throw new Error('preset.fragment is required');
   }
 
-  assertPlainObject(fragment, typeof preset.fragment !== 'undefined' ? 'preset.fragment' : 'preset.componentTheme');
+  assertPlainObject(fragment, 'preset.fragment');
   preset.fragment = fragment;
-  delete preset.componentTheme;
 }
 
 export function parseVariantPresetFromText(text: string): VariantPresetV1 {

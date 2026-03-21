@@ -84,7 +84,7 @@ function sanitizeMagnetLike(value: unknown): Magnet | null {
     description: typeof value.description === 'string' ? value.description : undefined,
     tags: Array.isArray(value.tags) ? (value.tags.filter((t) => typeof t === 'string') as string[]) : undefined,
     variant: typeof value.variant === 'string' ? value.variant : undefined,
-    variantConfig: isRecord(value.variantConfig) ? (value.variantConfig as Record<string, unknown>) : undefined,
+    skinProps: isRecord(value.skinProps) ? (value.skinProps as Record<string, unknown>) : undefined,
     anchorType,
     anchors,
     gridFootprint,

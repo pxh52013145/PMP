@@ -16,13 +16,13 @@ import './NavigationPage.css';
 
 export const StandardNavigationPage: React.FC<NavigationPageVariantProps> = ({
   data,
-  variantConfig,
+  skinProps: rawSkinProps,
 }) => {
   const { currentPage } = data;
   const kernel = useKernel();
   const t = useT();
   const telemetry = useMemo(() => getTelemetryLogger('navigation', 'StandardNavigationPage'), []);
-  const skinProps = useMemo(() => parseNavigationPageSkinProps(variantConfig), [variantConfig]);
+  const skinProps = useMemo(() => parseNavigationPageSkinProps(rawSkinProps), [rawSkinProps]);
   const [registryRevision, setRegistryRevision] = useState(0);
   const [showSourcePopup, setShowSourcePopup] = useState(false);
   const [librarySourceMode, setLibrarySourceMode] = useState<MusicLibrarySourceMode>('local');
@@ -223,3 +223,4 @@ function Placeholder({
     </div>
   );
 }
+

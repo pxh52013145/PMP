@@ -11,5 +11,6 @@ import { VolumeLogic } from './useVolumeLogic';
 export interface VolumeVariantProps {
   data: VolumeData;
   logic: VolumeLogic;
-  variantConfig?: Record<string, unknown>;
+  skinProps?: Record<string, unknown>;
 }
+

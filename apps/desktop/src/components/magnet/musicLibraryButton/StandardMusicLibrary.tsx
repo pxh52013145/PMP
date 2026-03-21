@@ -17,11 +17,11 @@ const LibraryIcon: React.FC = () => (
 export const StandardMusicLibrary: React.FC<MusicLibraryVariantProps> = ({
   data,
   logic,
-  variantConfig,
+  skinProps: rawSkinProps,
 }) => {
   const { navigateToMusicLibrary } = logic;
   const t = useT();
-  const skinProps = useMemo(() => parseMusicLibrarySkinProps(variantConfig), [variantConfig]);
+  const skinProps = useMemo(() => parseMusicLibrarySkinProps(rawSkinProps), [rawSkinProps]);
 
   const handleClick = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -47,3 +47,4 @@ export const StandardMusicLibrary: React.FC<MusicLibraryVariantProps> = ({
     </button>
   );
 };
+

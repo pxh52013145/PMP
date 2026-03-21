@@ -1,12 +1,10 @@
 import { Magnet } from '../../types/pixel';
 import { createControlChromePreset } from '../../modules/magnets/chromePresets';
-import { createDockedSingleControlLayoutPreset } from '../../modules/magnets/layoutPresets';
+import { createCenteredSingleControlLayoutPreset } from '../../modules/magnets/layoutPresets';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 
 const BACK_BUTTON_CHROME = createControlChromePreset();
-const BACK_BUTTON_LAYOUT = createDockedSingleControlLayoutPreset({
-  dock: { x: 'start' },
-});
+const BACK_BUTTON_LAYOUT = createCenteredSingleControlLayoutPreset();
 const telemetry = getTelemetryLogger('magnets', 'backButtonMagnet');
 
 /**

@@ -4,6 +4,5 @@ import { DesktopLyricsButtonLogic } from './useDesktopLyricsButtonLogic';
 export interface DesktopLyricsButtonVariantProps {
   data: DesktopLyricsButtonData;
   logic: DesktopLyricsButtonLogic;
-  variantConfig?: Record<string, unknown>;
+  skinProps?: Record<string, unknown>;
 }
-

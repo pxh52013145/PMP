@@ -25,11 +25,11 @@ function parseOptionalEntryPoint(value: unknown): PmpsEntryPoint | undefined {
   return undefined;
 }
 
-export function parseMagnetShaderConfig(variantConfig: unknown): MagnetShaderConfig | null {
-  if (!isRecord(variantConfig)) return null;
+export function parseMagnetShaderConfig(skinProps: unknown): MagnetShaderConfig | null {
+  if (!isRecord(skinProps)) return null;
 
-  const direct = parseOptionalString(variantConfig.shaderPackId) ?? parseOptionalString(variantConfig.shaderId);
-  const shader = variantConfig.shader;
+  const direct = parseOptionalString(skinProps.shaderPackId) ?? parseOptionalString(skinProps.shaderId);
+  const shader = skinProps.shader;
 
   if (typeof shader === 'string') {
     return { shaderId: shader, enabled: true };
@@ -62,4 +62,3 @@ export function parseMagnetShaderConfig(variantConfig: unknown): MagnetShaderCon
     resolutionScale,
   };
 }
-

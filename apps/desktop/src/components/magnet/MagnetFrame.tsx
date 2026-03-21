@@ -19,7 +19,7 @@ export type MagnetFrameProps = {
 export function MagnetFrame({ magnet, bounds, children }: MagnetFrameProps) {
   const audioService = useAudioService();
   const binding = usePmpsMagnetShaderBinding(magnet.id);
-  const parsedShaderConfig = useMemo(() => parseMagnetShaderConfig(magnet.variantConfig), [magnet.variantConfig]);
+  const parsedShaderConfig = useMemo(() => parseMagnetShaderConfig(magnet.skinProps), [magnet.skinProps]);
 
   const effectiveShaderId = binding ? binding.shaderId : parsedShaderConfig?.shaderId ?? null;
   const enabled = binding ? binding.enabled !== false : parsedShaderConfig?.enabled === true;

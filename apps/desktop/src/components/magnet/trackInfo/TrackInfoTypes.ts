@@ -15,5 +15,5 @@ export interface TrackInfoVariantProps {
   logic: TrackInfoLogic;
   dynamicColors?: DynamicColors;
   dynamicColorConfig?: DynamicColorConfig;
-  variantConfig?: unknown;
+  skinProps?: unknown;
 }

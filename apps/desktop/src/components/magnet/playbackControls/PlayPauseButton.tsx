@@ -36,7 +36,8 @@ export const PlayPauseButton: React.FC = () => {
       logic={logic}
       dynamicColors={dynamicColorEnabled ? dynamicColors : undefined}
       dynamicColorConfig={skin.dynamicColor}
-      variantConfig={skin.props}
+      skinProps={skin.props}
     />
   );
 };
+

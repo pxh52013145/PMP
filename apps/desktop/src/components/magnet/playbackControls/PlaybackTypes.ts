@@ -15,5 +15,6 @@ export interface PlaybackVariantProps {
   logic: PlaybackLogic;
   dynamicColors?: DynamicColors;
   dynamicColorConfig?: DynamicColorConfig;
-  variantConfig?: Record<string, unknown>;
+  skinProps?: Record<string, unknown>;
 }
+

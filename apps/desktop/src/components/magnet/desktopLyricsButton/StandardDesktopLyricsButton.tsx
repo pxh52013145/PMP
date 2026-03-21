@@ -7,7 +7,7 @@ import './StandardDesktopLyricsButton.css';
 export const StandardDesktopLyricsButton: React.FC<DesktopLyricsButtonVariantProps> = ({
   data,
   logic,
-  variantConfig,
+  skinProps,
 }) => {
   const {
     enabled,
@@ -25,18 +25,18 @@ export const StandardDesktopLyricsButton: React.FC<DesktopLyricsButtonVariantPro
   } = data;
   const { toggleDesktopLyrics, getButtonTitle } = logic;
   const t = useT();
-  const skinProps = useMemo(() => parseDesktopLyricsSkinProps(variantConfig), [variantConfig]);
+  const resolvedSkinProps = useMemo(() => parseDesktopLyricsSkinProps(skinProps), [skinProps]);
   const title = getButtonTitle(enabled);
   const buttonLabel =
-    skinProps.labelMode === 'full'
+    resolvedSkinProps.labelMode === 'full'
       ? t('magnet.desktopLyricsButton.label.full')
-      : skinProps.labelMode === 'icon'
+      : resolvedSkinProps.labelMode === 'icon'
         ? null
         : 'LRC';
 
   return (
     <button
-      className={`magnet-control-button desktop-lyrics-button ${enabled ? 'active' : ''}${skinProps.labelMode === 'icon' ? ' icon-only' : ''}${skinProps.showActiveIndicator ? ' has-indicator' : ''}${skinProps.showClickThroughBadge ? ' has-badge' : ''}`}
+      className={`magnet-control-button desktop-lyrics-button ${enabled ? 'active' : ''}${resolvedSkinProps.labelMode === 'icon' ? ' icon-only' : ''}${resolvedSkinProps.showActiveIndicator ? ' has-indicator' : ''}${resolvedSkinProps.showClickThroughBadge ? ' has-badge' : ''}`}
       onClick={(event) =>
         void toggleDesktopLyrics(
           {
@@ -61,19 +61,19 @@ export const StandardDesktopLyricsButton: React.FC<DesktopLyricsButtonVariantPro
       aria-pressed={enabled}
     >
       <span className="desktop-lyrics-button-content">
-        {skinProps.labelMode === 'icon' ? (
+        {resolvedSkinProps.labelMode === 'icon' ? (
           <LyricsIcon />
         ) : (
           <span className="desktop-lyrics-button-label">{buttonLabel}</span>
         )}
       </span>
-      {skinProps.showActiveIndicator ? (
+      {resolvedSkinProps.showActiveIndicator ? (
         <span
           className={`desktop-lyrics-button-indicator ${enabled ? 'enabled' : 'disabled'}`}
           aria-hidden="true"
         />
       ) : null}
-      {skinProps.showClickThroughBadge && enabled && clickThrough ? (
+      {resolvedSkinProps.showClickThroughBadge && enabled && clickThrough ? (
         <span className="desktop-lyrics-button-badge" aria-hidden="true">
           CT
         </span>

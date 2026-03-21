@@ -18,5 +18,5 @@ export const BackButton: React.FC = () => {
     defaultVariant: 'default',
   });
 
-  return <Renderer data={data} logic={logic} variantConfig={skin.props} />;
+  return <Renderer data={data} logic={logic} skinProps={skin.props} />;
 };

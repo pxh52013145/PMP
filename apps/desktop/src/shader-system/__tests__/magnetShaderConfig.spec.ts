@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseMagnetShaderConfig } from '../magnetShaderConfig';
 
 describe('parseMagnetShaderConfig', () => {
-  it('returns null when variantConfig is not an object', () => {
+  it('returns null when skinProps is not an object', () => {
     expect(parseMagnetShaderConfig(null)).toBeNull();
     expect(parseMagnetShaderConfig('shader-demo')).toBeNull();
   });
@@ -45,4 +45,3 @@ describe('parseMagnetShaderConfig', () => {
     });
   });
 });
-

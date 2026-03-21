@@ -17,10 +17,10 @@ const PlaylistsIcon: React.FC = () => (
   </svg>
 );
 
-export const StandardPlaylists: React.FC<PlaylistsVariantProps> = ({ data, logic, variantConfig }) => {
+export const StandardPlaylists: React.FC<PlaylistsVariantProps> = ({ data, logic, skinProps: rawSkinProps }) => {
   const { isOpen, openPlaylists, closePlaylists } = logic;
   const t = useT();
-  const skinProps = useMemo(() => parsePlaylistsSkinProps(variantConfig), [variantConfig]);
+  const skinProps = useMemo(() => parsePlaylistsSkinProps(rawSkinProps), [rawSkinProps]);
 
   return (
     <>
@@ -48,3 +48,4 @@ export const StandardPlaylists: React.FC<PlaylistsVariantProps> = ({ data, logic
     </>
   );
 };
+

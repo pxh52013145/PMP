@@ -28,8 +28,9 @@ import {
   toOpaqueMagnetColor,
 } from '../../modules/magnets/runtimeStyle';
 import { useSkinSurfaceModel } from '../../themes/skinSurface';
-import type { ThemeBindingId } from '../../themes/types/theme';
+import type { ThemeBindingId, ThemeMotionChannelSpec } from '../../themes/types/theme';
 import { useMagnetSkin } from '../../themes/useMagnetSkin';
+import type { MagnetSceneAnimation } from './magnetSceneRuntime';
 import './Magnet.css';
 
 interface MagnetProps {
@@ -40,6 +41,8 @@ interface MagnetProps {
   boundsOverride?: MagnetBounds;
   layoutMode?: MagnetAdaptiveLayoutMode;
   joinEdges?: MagnetJoinEdges;
+  sceneAnimation?: MagnetSceneAnimation;
+  layoutMotionChannel?: ThemeMotionChannelSpec;
 }
 
 function MagnetComponentImpl({
@@ -50,6 +53,8 @@ function MagnetComponentImpl({
   boundsOverride,
   layoutMode = 'normal',
   joinEdges,
+  sceneAnimation,
+  layoutMotionChannel,
 }: MagnetProps) {
   const lowRenderMode = import.meta.env.VITE_PERF_NEXT_LOW_RENDER === '1';
   const magnetBindingId = `magnet.${magnet.id}` as ThemeBindingId;
@@ -183,8 +188,8 @@ function MagnetComponentImpl({
   );
 
   const motionRuntime = useMemo(
-    () => resolveMagnetMotionRuntime(lowRenderMode, magnetSkin.motion),
-    [lowRenderMode, magnetSkin.motion]
+    () => resolveMagnetMotionRuntime(lowRenderMode, magnetSkin.motion, undefined, layoutMotionChannel),
+    [layoutMotionChannel, lowRenderMode, magnetSkin.motion]
   );
 
   useLayoutEffect(() => {
@@ -298,11 +303,12 @@ function MagnetComponentImpl({
       height: `${bounds.height}px`,
       transition: shellTransitionValue,
       cursor,
+      ...(sceneAnimation?.style ?? {}),
       transform: layoutCompensationTransform ?? undefined,
       transformOrigin: layoutCompensationTransform ? 'top left' : undefined,
       willChange: layoutCompensationTransform ? 'transform' : undefined,
     };
-  }, [bounds, currentStyle.cursor, shellTransitionValue, layoutCompensationTransform]);
+  }, [bounds, currentStyle.cursor, shellTransitionValue, layoutCompensationTransform, sceneAnimation?.style]);
 
   const chromeStyle = useMemo(() => {
     const next: Record<string, string | number | undefined> = { ...chromeTokens };
@@ -451,6 +457,10 @@ function MagnetComponentImpl({
       data-layout-mode={layoutMode}
       data-pmp-motion-mode={motionRuntime.mode}
       data-pmp-motion-layout={motionRuntime.layoutStrategy}
+      {...(sceneAnimation?.sceneId ? { 'data-pmp-motion-scene': sceneAnimation.sceneId } : {})}
+      {...(sceneAnimation?.phase ? { 'data-pmp-motion-phase': sceneAnimation.phase } : {})}
+      {...(sceneAnimation?.channel ? { 'data-pmp-motion-channel': sceneAnimation.channel } : {})}
+      {...(sceneAnimation?.spec.preset ? { 'data-pmp-motion-preset': sceneAnimation.spec.preset } : {})}
       {...(motionRuntime.sharedKey ? { 'data-pmp-motion-shared-key': motionRuntime.sharedKey } : {})}
       style={shellStyle}
       onClick={handleClick}

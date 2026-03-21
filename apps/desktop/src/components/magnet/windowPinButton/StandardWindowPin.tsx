@@ -21,8 +21,8 @@ const PinIcon: React.FC<{ showPinnedAnchor: boolean; showPinnedShadow: boolean }
   </svg>
 );
 
-export const StandardWindowPin: React.FC<WindowPinVariantProps> = ({ data, logic, variantConfig }) => {
-  const skinProps = useMemo(() => parseWindowPinSkinProps(variantConfig), [variantConfig]);
+export const StandardWindowPin: React.FC<WindowPinVariantProps> = ({ data, logic, skinProps: rawSkinProps }) => {
+  const skinProps = useMemo(() => parseWindowPinSkinProps(rawSkinProps), [rawSkinProps]);
 
   return (
     <button
@@ -44,3 +44,4 @@ export const StandardWindowPin: React.FC<WindowPinVariantProps> = ({ data, logic
     </button>
   );
 };
+

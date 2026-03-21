@@ -3,14 +3,14 @@
  */
 
 /**
- * WindowPin 数据层接口
+ * WindowPin 数据层接�?
  */
 export interface WindowPinData {
   isPinned: boolean;
 }
 
 /**
- * WindowPin 逻辑层接口
+ * WindowPin 逻辑层接�?
  */
 export interface WindowPinLogic {
   togglePin: (e: React.MouseEvent) => Promise<void>;
@@ -23,5 +23,6 @@ export interface WindowPinLogic {
 export interface WindowPinVariantProps {
   data: WindowPinData;
   logic: WindowPinLogic;
-  variantConfig?: Record<string, unknown>;
+  skinProps?: Record<string, unknown>;
 }
+

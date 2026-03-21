@@ -10,7 +10,7 @@ export interface MagnetVariantPreset<TProps extends object> {
   metadata?: Record<string, unknown>;
 }
 
-export function buildMagnetVariantRenderers<TRendererProps extends { variantConfig?: Record<string, unknown> }>(
+export function buildMagnetVariantRenderers<TRendererProps extends { skinProps?: Record<string, unknown> }>(
   defaultRenderer: ComponentType<TRendererProps>,
   presets: readonly MagnetVariantPreset<object>[]
 ): Record<string, ComponentType<TRendererProps>> {
@@ -24,9 +24,9 @@ export function buildMagnetVariantRenderers<TRendererProps extends { variantConf
     const VariantRenderer = (props: TRendererProps) =>
       createElement(defaultRenderer, {
         ...props,
-        variantConfig: {
+        skinProps: {
           ...(preset.props ?? {}),
-          ...(props.variantConfig ?? {}),
+          ...(props.skinProps ?? {}),
         },
       });
 

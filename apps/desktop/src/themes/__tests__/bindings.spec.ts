@@ -72,18 +72,22 @@ describe('theme bindings', () => {
               apply: 'blend',
               blendRatio: 0.4,
             },
-            motion: {
-              enabled: true,
-              mode: 'full',
-              layout: {
-                strategy: 'flip',
-                largeChange: 'animate',
+          },
+          motion: {
+            enabled: true,
+            mode: 'full',
+            layout: {
+              strategy: 'flip',
+              largeChange: 'animate',
+              move: {
+                preset: 'shared-axis',
+                duration: 220,
               },
-              channels: {
-                enter: {
-                  preset: 'fade',
-                  duration: 180,
-                },
+            },
+            presence: {
+              enter: {
+                preset: 'fade',
+                duration: 180,
               },
             },
           },
@@ -100,13 +104,20 @@ describe('theme bindings', () => {
     expect(materialized.parts?.root?.classes).toContain('page-settings-glass');
     expect(materialized.parts?.root?.style?.opacity).toBe(0.92);
     expect(materialized.variant).toBe('glass');
-    expect(materialized.variantConfig?.layout).toBe('compact');
-    expect(materialized.dynamicColor?.extractFromCover).toBe(true);
-    expect(materialized.dynamicColor?.effect).toBe('gradient');
-    expect(materialized.dynamicColor?.applyMode).toBe('blend');
-    expect(materialized.dynamicColor?.blendRatio).toBe(0.4);
-    expect(materialized.motionConfig?.layout?.strategy).toBe('flip');
-    expect(materialized.motionConfig?.channels?.enter?.preset).toBe('fade');
+    expect(materialized.props?.layout).toBe('compact');
+    expect(materialized.capabilities?.dynamicColor?.enabled).toBe(true);
+    expect(materialized.capabilities?.dynamicColor?.mode).toBe('gradient');
+    expect(materialized.capabilities?.dynamicColor?.apply).toBe('blend');
+    expect(materialized.capabilities?.dynamicColor?.blendRatio).toBe(0.4);
+    expect(materialized.motion?.layout?.strategy).toBe('flip');
+    expect(materialized.motion?.layout?.move).toEqual({
+      preset: 'shared-axis',
+      duration: 220,
+    });
+    expect(materialized.motion?.presence?.enter).toEqual({
+      preset: 'fade',
+      duration: 180,
+    });
   });
 
   it('materializes magnet binding overlays on top of runtime surface documents', () => {
@@ -132,13 +143,13 @@ describe('theme bindings', () => {
               enabled: false,
               mode: 'tone',
             },
-            motion: {
-              enabled: true,
-              channels: {
-                hover: {
-                  preset: 'lift-sm',
-                  duration: 140,
-                },
+          },
+          motion: {
+            enabled: true,
+            attention: {
+              hover: {
+                preset: 'lift-sm',
+                duration: 140,
               },
             },
           },
@@ -152,10 +163,13 @@ describe('theme bindings', () => {
     expect(resolvedBinding.source).toBe('binding');
     expect(materialized.parts?.root?.classes).toContain('track-info-surface');
     expect(materialized.variant).toBe('spinning-vinyl');
-    expect(materialized.variantConfig?.layout).toBe('full');
-    expect(materialized.dynamicColor?.extractFromCover).toBe(false);
-    expect(materialized.dynamicColor?.effect).toBe('tone');
-    expect(materialized.motionConfig?.channels?.hover?.preset).toBe('lift-sm');
+    expect(materialized.props?.layout).toBe('full');
+    expect(materialized.capabilities?.dynamicColor?.enabled).toBe(false);
+    expect(materialized.capabilities?.dynamicColor?.mode).toBe('tone');
+    expect(materialized.motion?.attention?.hover).toEqual({
+      preset: 'lift-sm',
+      duration: 140,
+    });
   });
 
   it('writes bindings back to theme.bindings', () => {
@@ -174,7 +188,7 @@ describe('theme bindings', () => {
   it('writes magnet binding fragments into explicit self surfaces', () => {
     const theme = assignMagnetBindingFragment(createBaseTheme(), 'track-info', {
       variant: 'spinning-vinyl',
-      variantConfig: {
+      props: {
         layout: 'full',
       },
       parts: {
@@ -184,24 +198,26 @@ describe('theme bindings', () => {
           },
         },
       },
-      dynamicColor: {
-        extractFromCover: true,
-        effect: 'gradient',
+      capabilities: {
+        dynamicColor: {
+          enabled: true,
+          mode: 'gradient',
+        },
       },
-      motionConfig: {
+      motion: {
         enabled: true,
         mode: 'full',
         layout: {
           strategy: 'flip',
           largeChange: 'animate',
           sharedKey: 'track-info',
-        },
-        channels: {
-          spaceSwitch: {
+          move: {
             preset: 'shared-axis',
             duration: 240,
           },
-          attention: {
+        },
+        attention: {
+          idle: {
             preset: 'pulse-soft',
             iterationCount: 2,
           },
@@ -213,8 +229,11 @@ describe('theme bindings', () => {
     expect(theme.bindings?.['magnet.track-info']?.props?.layout).toBe('full');
     expect(theme.bindings?.['magnet.track-info']?.capabilities?.dynamicColor?.enabled).toBe(true);
     expect(theme.bindings?.['magnet.track-info']?.capabilities?.dynamicColor?.mode).toBe('gradient');
-    expect(theme.bindings?.['magnet.track-info']?.capabilities?.motion?.layout?.strategy).toBe('flip');
-    expect(theme.bindings?.['magnet.track-info']?.capabilities?.motion?.channels?.spaceSwitch?.preset).toBe('shared-axis');
+    expect(theme.bindings?.['magnet.track-info']?.motion?.layout?.strategy).toBe('flip');
+    expect(theme.bindings?.['magnet.track-info']?.motion?.layout?.move).toEqual({
+      preset: 'shared-axis',
+      duration: 240,
+    });
     expect(theme.surfaces?.['magnet.track-info']?.parts?.root?.style?.opacity).toBe(0.9);
     expect(theme.surfaces?.['magnet.track-info']?.variant).toBeUndefined();
   });
@@ -227,9 +246,7 @@ describe('theme bindings', () => {
     expect(isThemeBindingEmpty({})).toBe(true);
     expect(
       isThemeBindingEmpty({
-        capabilities: {
-          motion: {},
-        },
+        motion: {},
       })
     ).toBe(true);
 

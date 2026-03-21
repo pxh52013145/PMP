@@ -48,13 +48,13 @@ function buildSnapshotHash(snapshot: DisplaySnapshot): string {
 }
 
 type ProcessPerfMonitorRendererProps = {
-  variantConfig?: Record<string, unknown>;
+  skinProps?: Record<string, unknown>;
 };
 
 const ProcessPerfMonitorDefaultRenderer = memo(function ProcessPerfMonitorDefaultRenderer({
-  variantConfig,
+  skinProps: rawSkinProps,
 }: ProcessPerfMonitorRendererProps) {
-  const skinProps = useMemo(() => parseProcessPerfMonitorSkinProps(variantConfig), [variantConfig]);
+  const skinProps = useMemo(() => parseProcessPerfMonitorSkinProps(rawSkinProps), [rawSkinProps]);
   const t = useT();
   const navigation = useNavigation();
   const { renderMode, isVisible } = useWindowActivity();
@@ -216,5 +216,5 @@ export const ProcessPerfMonitorMagnet = memo(function ProcessPerfMonitorMagnet()
     }
   );
 
-  return <Renderer variantConfig={skin.props} />;
+  return <Renderer skinProps={skin.props} />;
 });

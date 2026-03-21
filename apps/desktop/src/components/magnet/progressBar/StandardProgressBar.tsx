@@ -9,14 +9,14 @@ export const StandardProgressBar: React.FC<ProgressBarVariantProps> = ({
   logic,
   dynamicColors,
   dynamicColorConfig,
-  variantConfig,
+  skinProps: rawSkinProps,
 }) => {
   const progressBarRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
   const latestSeekTimeRef = useRef<number | null>(null);
   const globalDragEndCleanupRef = useRef<(() => void) | null>(null);
   const [previewTime, setPreviewTime] = useState<number | null>(null);
-  const skinProps = useMemo(() => parseProgressBarSkinProps(variantConfig), [variantConfig]);
+  const skinProps = useMemo(() => parseProgressBarSkinProps(rawSkinProps), [rawSkinProps]);
 
   const getTimeFromClientX = (clientX: number) => {
     if (!progressBarRef.current || !data.duration) return;
@@ -190,3 +190,4 @@ export const StandardProgressBar: React.FC<ProgressBarVariantProps> = ({
     </div>
   );
 };
+

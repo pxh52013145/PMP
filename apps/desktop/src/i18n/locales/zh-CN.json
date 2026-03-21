@@ -1726,7 +1726,7 @@
   "editor.theme-editor.pmpv.message.fileLoadFailed": "读取预设文件失败：{message}",
   "editor.theme-editor.pmpv.message.applied": "已应用预设：{rendererId}",
   "editor.theme-editor.pmpv.import.confirm.title": "应用变体预设",
-  "editor.theme-editor.pmpv.import.confirm.message": "确认将 \"{name}\" 应用到 renderer \"{rendererId}\"？\n（会覆盖该 renderer 的 componentTheme）",
+  "editor.theme-editor.pmpv.import.confirm.message": "确认将 \"{name}\" 应用到 renderer \"{rendererId}\"？\n（会覆盖该 renderer 的皮肤片段）",
   "editor.theme-editor.pmpv.import.confirm.confirm": "应用",
   "editor.theme-editor.pmpk.section.title": "主题包 (.pmpk)",
   "editor.theme-editor.pmpk.importFile": "导入主题包",

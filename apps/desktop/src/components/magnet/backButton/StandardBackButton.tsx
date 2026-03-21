@@ -28,10 +28,10 @@ const BackIcon: React.FC<{ iconStyle: 'filled' | 'outline' }> = ({ iconStyle }) 
     </svg>
   );
 
-export const StandardBackButton: React.FC<BackButtonVariantProps> = ({ data, logic, variantConfig }) => {
+export const StandardBackButton: React.FC<BackButtonVariantProps> = ({ data, logic, skinProps }) => {
   const { canGoBack } = data;
   const { goBack, getButtonTitle } = logic;
-  const skinProps = useMemo(() => parseBackButtonSkinProps(variantConfig), [variantConfig]);
+  const resolvedSkinProps = useMemo(() => parseBackButtonSkinProps(skinProps), [skinProps]);
   const historyCount = Math.max(0, data.historyLength - 1);
 
   const handleClick = (e: React.MouseEvent) => {
@@ -44,15 +44,15 @@ export const StandardBackButton: React.FC<BackButtonVariantProps> = ({ data, log
 
   return (
     <button
-      className={`magnet-control-button back-button back-button-${skinProps.iconStyle} ${
+      className={`magnet-control-button back-button back-button-${resolvedSkinProps.iconStyle} ${
         !canGoBack ? 'back-button-disabled' : ''
       }`}
       onClick={handleClick}
       disabled={!canGoBack}
       title={getButtonTitle(canGoBack)}
     >
-      <BackIcon iconStyle={skinProps.iconStyle} />
-      {skinProps.showHistoryCount && historyCount > 0 ? (
+      <BackIcon iconStyle={resolvedSkinProps.iconStyle} />
+      {resolvedSkinProps.showHistoryCount && historyCount > 0 ? (
         <span className="back-button-count" aria-hidden="true">
           {historyCount}
         </span>

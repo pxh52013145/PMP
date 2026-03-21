@@ -10,27 +10,26 @@ describe('.pmpv variant preset', () => {
         type: 'variant-preset',
         metadata: { id: 'track-info-card', name: 'Card', version: '1.0.0' },
         target: { rendererId: 'track-info' },
-        fragment: { variant: 'card', variantConfig: { rounded: true } },
+        fragment: { variant: 'card', props: { rounded: true } },
       })
     );
 
     expect(preset.target.rendererId).toBe('track-info');
     expect(preset.fragment.variant).toBe('card');
+    expect(preset.fragment.props).toEqual({ rounded: true });
   });
 
-  it('normalizes legacy componentTheme into fragment', () => {
-    const preset = parseVariantPresetFromText(
-      JSON.stringify({
-        formatVersion: '1.0',
-        type: 'variant-preset',
-        metadata: { id: 'track-info-card', name: 'Card', version: '1.0.0' },
-        target: { rendererId: 'track-info' },
-        componentTheme: { variant: 'card', variantConfig: { rounded: true } },
-      })
-    );
-
-    expect(preset.fragment.variant).toBe('card');
-    expect(preset).not.toHaveProperty('componentTheme');
+  it('rejects payload without fragment', () => {
+    expect(() =>
+      parseVariantPresetFromText(
+        JSON.stringify({
+          formatVersion: '1.0',
+          type: 'variant-preset',
+          metadata: { id: 'track-info-card', name: 'Card', version: '1.0.0' },
+          target: { rendererId: 'track-info' },
+        })
+      )
+    ).toThrow(/preset\.fragment/);
   });
 
   it('rejects missing metadata.id', () => {

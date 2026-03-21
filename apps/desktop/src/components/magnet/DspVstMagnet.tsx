@@ -179,11 +179,11 @@ function computeWarmupState(enabledVstNodes: VstNodeSnapshot[], statuses: Record
 }
 
 type DspVstRendererProps = {
-  variantConfig?: Record<string, unknown>;
+  skinProps?: Record<string, unknown>;
 };
 
-const DspVstDefaultRenderer: React.FC<DspVstRendererProps> = ({ variantConfig }) => {
-  const skinProps = useMemo(() => parseDspVstSkinProps(variantConfig), [variantConfig]);
+const DspVstDefaultRenderer: React.FC<DspVstRendererProps> = ({ skinProps: rawSkinProps }) => {
+  const skinProps = useMemo(() => parseDspVstSkinProps(rawSkinProps), [rawSkinProps]);
   const t = useT();
   const navigation = useNavigation();
   const [graph, setGraph] = useState<DspGraphConfig | null>(() => readData<DspGraphConfig>(STORAGE_KEYS.NATIVE_AUDIO_DSP_GRAPH));
@@ -552,5 +552,5 @@ export const DspVstMagnet: React.FC = () => {
     defaultVariant: 'default',
   });
 
-  return <Renderer variantConfig={skin.props} />;
+  return <Renderer skinProps={skin.props} />;
 };

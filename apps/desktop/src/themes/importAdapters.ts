@@ -7,14 +7,12 @@ import type {
   Theme,
   ThemeBinding,
   ThemeBindingDynamicColorCapability,
-  ThemeBindingMotionCapability,
+  ThemeBindingMotionAttentionSpec,
+  ThemeBindingMotionSpec,
   ThemeBindingId,
-  ThemeMotionChannelMap,
-  ThemePartStateSpec,
-  ThemeSurfacePartSpec,
-  ThemeSurfaceStateSpec,
+  ThemeMotionReference,
 } from './types/theme';
-import type { ThemeImportSurfaceSpec } from './types/themeImport';
+import type { ThemeBindingFragment } from './types/themeImport';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -24,45 +22,139 @@ function hasOwnKeys(value: unknown): value is Record<string, unknown> {
   return isPlainObject(value) && Object.keys(value).length > 0;
 }
 
-function cloneMotionChannels(value: ThemeMotionChannelMap | undefined): ThemeMotionChannelMap | undefined {
-  if (!hasOwnKeys(value)) {
+function cloneMotionReference(value: ThemeMotionReference | undefined): ThemeMotionReference | undefined {
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : undefined;
+  }
+
+  if (isPlainObject(value)) {
+    return { ...value };
+  }
+
+  return undefined;
+}
+
+function cloneDynamicColorCapability(
+  value: ThemeBindingDynamicColorCapability | undefined
+): ThemeBindingDynamicColorCapability | undefined {
+  if (!value) {
     return undefined;
   }
 
-  const channels: ThemeMotionChannelMap = {};
-  for (const [key, channel] of Object.entries(value)) {
-    if (isPlainObject(channel)) {
-      channels[key] = { ...channel };
+  const next: ThemeBindingDynamicColorCapability = {
+    ...(typeof value.enabled === 'boolean' ? { enabled: value.enabled } : {}),
+    ...(value.source === 'cover' ? { source: value.source } : {}),
+    ...(typeof value.mode === 'string' ? { mode: value.mode } : {}),
+    ...(typeof value.apply === 'string' ? { apply: value.apply } : {}),
+    ...(typeof value.blendRatio === 'number' ? { blendRatio: value.blendRatio } : {}),
+    ...(typeof value.gradientAngle === 'number' ? { gradientAngle: value.gradientAngle } : {}),
+    ...(typeof value.dynamicSpeed === 'number' ? { dynamicSpeed: value.dynamicSpeed } : {}),
+    ...(value.colorAdjust ? { colorAdjust: { ...value.colorAdjust } } : {}),
+  };
+
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function cloneBindingMotionSpec(value: ThemeBindingMotionSpec | undefined): ThemeBindingMotionSpec | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const next: ThemeBindingMotionSpec = {};
+  const presence = value.presence;
+  const layout = value.layout;
+  const attention = value.attention;
+  const visibility = value.visibility;
+
+  if (typeof value.enabled === 'boolean') {
+    next.enabled = value.enabled;
+  }
+  if (value.mode === 'full' || value.mode === 'reduced' || value.mode === 'off') {
+    next.mode = value.mode;
+  }
+
+  const enter = cloneMotionReference(presence?.enter);
+  const exit = cloneMotionReference(presence?.exit);
+  if (enter || exit) {
+    next.presence = {
+      ...(enter ? { enter } : {}),
+      ...(exit ? { exit } : {}),
+    };
+  }
+
+  if (layout) {
+    const nextLayout: NonNullable<ThemeBindingMotionSpec['layout']> = {};
+    if (
+      layout.strategy === 'none' ||
+      layout.strategy === 'position' ||
+      layout.strategy === 'transform' ||
+      layout.strategy === 'flip'
+    ) {
+      nextLayout.strategy = layout.strategy;
+    }
+    if (layout.largeChange === 'snap' || layout.largeChange === 'animate') {
+      nextLayout.largeChange = layout.largeChange;
+    }
+    if (typeof layout.sharedKey === 'string' && layout.sharedKey.trim().length > 0) {
+      nextLayout.sharedKey = layout.sharedKey.trim();
+    }
+
+    const move = cloneMotionReference(layout.move);
+    const resize = cloneMotionReference(layout.resize);
+    if (move) {
+      nextLayout.move = move;
+    }
+    if (resize) {
+      nextLayout.resize = resize;
+    }
+
+    if (Object.keys(nextLayout).length > 0) {
+      next.layout = nextLayout;
     }
   }
 
-  return Object.keys(channels).length > 0 ? channels : undefined;
-}
+  if (attention) {
+    const nextAttention: ThemeBindingMotionAttentionSpec = {};
+    const idle = cloneMotionReference(attention.idle);
+    const hover = cloneMotionReference(attention.hover);
+    const active = cloneMotionReference(attention.active);
+    const success = cloneMotionReference(attention.success);
+    const warning = cloneMotionReference(attention.warning);
 
-function mergeMotionCapability(
-  base: ThemeBindingMotionCapability | undefined,
-  override: ThemeBindingMotionCapability | undefined
-): ThemeBindingMotionCapability | undefined {
-  if (!base && !override) {
-    return undefined;
+    if (idle) {
+      nextAttention.idle = idle;
+    }
+    if (hover) {
+      nextAttention.hover = hover;
+    }
+    if (active) {
+      nextAttention.active = active;
+    }
+    if (success) {
+      nextAttention.success = success;
+    }
+    if (warning) {
+      nextAttention.warning = warning;
+    }
+
+    if (Object.keys(nextAttention).length > 0) {
+      next.attention = nextAttention;
+    }
   }
 
-  const merged: ThemeBindingMotionCapability = {
-    ...(typeof base?.enabled === 'boolean' ? { enabled: base.enabled } : {}),
-    ...(typeof base?.mode === 'string' ? { mode: base.mode } : {}),
-    ...(hasOwnKeys(base?.layout) ? { layout: { ...base.layout } } : {}),
-    ...(hasOwnKeys(base?.channels) ? { channels: cloneMotionChannels(base.channels) } : {}),
-    ...(typeof override?.enabled === 'boolean' ? { enabled: override.enabled } : {}),
-    ...(typeof override?.mode === 'string' ? { mode: override.mode } : {}),
-    ...(hasOwnKeys(base?.layout) || hasOwnKeys(override?.layout)
-      ? { layout: { ...(base?.layout ?? {}), ...(override?.layout ?? {}) } }
-      : {}),
-    ...(hasOwnKeys(base?.channels) || hasOwnKeys(override?.channels)
-      ? { channels: { ...(cloneMotionChannels(base?.channels) ?? {}), ...(cloneMotionChannels(override?.channels) ?? {}) } }
-      : {}),
-  };
+  if (visibility) {
+    const show = cloneMotionReference(visibility.show);
+    const hide = cloneMotionReference(visibility.hide);
+    if (show || hide) {
+      next.visibility = {
+        ...(show ? { show } : {}),
+        ...(hide ? { hide } : {}),
+      };
+    }
+  }
 
-  return Object.keys(merged).length > 0 ? merged : undefined;
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 export function dynamicColorConfigToCapability(
@@ -118,239 +210,89 @@ export function dynamicColorCapabilityToConfig(
   return Object.keys(config).length > 0 ? config : undefined;
 }
 
-function legacyPartName(key: string): string {
-  return key === 'container' ? 'root' : key;
-}
-
-function toClassList(value: string | undefined): string[] | undefined {
-  if (typeof value !== 'string') {
-    return undefined;
-  }
-
-  const classList = value
-    .split(/\s+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-
-  return classList.length > 0 ? classList : undefined;
-}
-
-function mergeLegacyPartSpec(
-  partSpec: ThemeSurfacePartSpec | undefined,
-  className: string | undefined,
-  style: Record<string, unknown> | undefined
-): ThemeSurfacePartSpec | undefined {
-  const classes = toClassList(className);
-  if (!partSpec && !classes && !isPlainObject(style)) {
-    return undefined;
-  }
+export function bindingFragmentToBinding(fragment: ThemeBindingFragment): ThemeBinding {
+  const props = hasOwnKeys(fragment.props) ? fragment.props : undefined;
+  const motion = cloneBindingMotionSpec(fragment.motion);
+  const dynamicColor = cloneDynamicColorCapability(fragment.capabilities?.dynamicColor);
 
   return {
-    ...(partSpec ?? {}),
-    ...(classes?.length ? { classes: [...new Set([...(partSpec?.classes ?? []), ...classes])] } : {}),
-    ...(isPlainObject(style)
-      ? {
-          style: {
-            ...(isPlainObject(partSpec?.style) ? partSpec.style : {}),
-            ...style,
-          },
-        }
-      : {}),
-  };
-}
-
-function normalizeLegacyParts(surfaceSpec: ThemeImportSurfaceSpec): ThemeImportSurfaceSpec {
-  const { classNameOverride, styleOverride, ...rest } = surfaceSpec;
-  if (!classNameOverride && !styleOverride) {
-    return surfaceSpec;
-  }
-
-  const keys = new Set<string>([...Object.keys(classNameOverride ?? {}), ...Object.keys(styleOverride ?? {})]);
-  const parts = { ...(rest.parts ?? {}) };
-
-  for (const key of keys) {
-    const partName = legacyPartName(key);
-    parts[partName] = mergeLegacyPartSpec(
-      parts[partName],
-      classNameOverride?.[key],
-      isPlainObject(styleOverride?.[key]) ? (styleOverride?.[key] as Record<string, unknown>) : undefined
-    ) as ThemeSurfacePartSpec;
-  }
-
-  return {
-    ...rest,
-    ...(Object.keys(parts).length > 0 ? { parts } : {}),
-  };
-}
-
-function normalizeSurfaceStates(surfaceSpec: ThemeImportSurfaceSpec): ThemeImportSurfaceSpec {
-  if (!surfaceSpec.states) {
-    return surfaceSpec;
-  }
-
-  const states = Object.fromEntries(
-    Object.entries(surfaceSpec.states)
-      .map(([stateName, stateSpec]) => {
-        if (!stateSpec) {
-          return null;
-        }
-
-        const nextParts = Object.fromEntries(
-          Object.entries(stateSpec.parts ?? {})
-            .map(([partName, partSpec]) => [partName, partSpec])
-            .filter((entry): entry is [string, ThemePartStateSpec] => Boolean(entry[1]))
-        );
-
-        const nextState: ThemeSurfaceStateSpec = {
-          ...(stateSpec.classes?.length ? { classes: [...stateSpec.classes] } : {}),
-          ...(isPlainObject(stateSpec.style) ? { style: { ...stateSpec.style } } : {}),
-          ...(isPlainObject(stateSpec.tokens) ? { tokens: { ...stateSpec.tokens } } : {}),
-          ...(hasOwnKeys(stateSpec.motion) ? { motion: cloneMotionChannels(stateSpec.motion) } : {}),
-          ...(Object.keys(nextParts).length > 0 ? { parts: nextParts } : {}),
-        };
-
-        return [stateName, nextState];
-      })
-      .filter((entry): entry is [string, ThemeSurfaceStateSpec] => Boolean(entry))
-  );
-
-  return {
-    ...surfaceSpec,
-    ...(Object.keys(states).length > 0 ? { states } : { states: undefined }),
-  };
-}
-
-export function normalizeThemeImportSurfaceSpec(surfaceSpec: ThemeImportSurfaceSpec): ThemeImportSurfaceSpec {
-  return normalizeSurfaceStates(normalizeLegacyParts(surfaceSpec));
-}
-
-export function mergeThemeImportSurfaceSpecs(
-  ...surfaceSpecs: Array<ThemeImportSurfaceSpec | ComponentTheme | null | undefined>
-): ThemeImportSurfaceSpec {
-  return surfaceSpecs.reduce<ThemeImportSurfaceSpec>((acc, surfaceSpec) => {
-    if (!surfaceSpec) {
-      return acc;
-    }
-
-    const mergedSurface = mergeComponentThemes(acc, surfaceSpec as ComponentTheme);
-    const nextVariantConfig =
-      hasOwnKeys((acc as ThemeImportSurfaceSpec).variantConfig) || hasOwnKeys((surfaceSpec as ThemeImportSurfaceSpec).variantConfig)
-        ? {
-            ...(hasOwnKeys((acc as ThemeImportSurfaceSpec).variantConfig)
-              ? ((acc as ThemeImportSurfaceSpec).variantConfig as Record<string, unknown>)
-              : {}),
-            ...(hasOwnKeys((surfaceSpec as ThemeImportSurfaceSpec).variantConfig)
-              ? (((surfaceSpec as ThemeImportSurfaceSpec).variantConfig as Record<string, unknown>) ?? {})
-              : {}),
-          }
-        : undefined;
-    const nextStyleOverride =
-      hasOwnKeys((acc as ThemeImportSurfaceSpec).styleOverride) || hasOwnKeys((surfaceSpec as ThemeImportSurfaceSpec).styleOverride)
-        ? {
-            ...((acc as ThemeImportSurfaceSpec).styleOverride ?? {}),
-            ...((surfaceSpec as ThemeImportSurfaceSpec).styleOverride ?? {}),
-          }
-        : undefined;
-    const nextClassNameOverride =
-      hasOwnKeys((acc as ThemeImportSurfaceSpec).classNameOverride) ||
-      hasOwnKeys((surfaceSpec as ThemeImportSurfaceSpec).classNameOverride)
-        ? {
-            ...((acc as ThemeImportSurfaceSpec).classNameOverride ?? {}),
-            ...((surfaceSpec as ThemeImportSurfaceSpec).classNameOverride ?? {}),
-          }
-        : undefined;
-    const nextDynamicColor = (surfaceSpec as ThemeImportSurfaceSpec).dynamicColor
-      ? {
-          ...((acc as ThemeImportSurfaceSpec).dynamicColor ?? {}),
-          ...(surfaceSpec as ThemeImportSurfaceSpec).dynamicColor,
-        }
-      : (acc as ThemeImportSurfaceSpec).dynamicColor;
-    const nextMotionConfig = mergeMotionCapability(
-      (acc as ThemeImportSurfaceSpec).motionConfig,
-      (surfaceSpec as ThemeImportSurfaceSpec).motionConfig
-    );
-
-    return {
-      ...mergedSurface,
-      ...(nextVariantConfig ? { variantConfig: nextVariantConfig } : {}),
-      ...(nextStyleOverride ? { styleOverride: nextStyleOverride } : {}),
-      ...(nextClassNameOverride ? { classNameOverride: nextClassNameOverride } : {}),
-      ...(nextDynamicColor ? { dynamicColor: nextDynamicColor } : {}),
-      ...(nextMotionConfig ? { motionConfig: nextMotionConfig } : {}),
-    };
-  }, {});
-}
-
-export function importSurfaceToBinding(surfaceSpec: ThemeImportSurfaceSpec): ThemeBinding {
-  const dynamicColorCapability = dynamicColorConfigToCapability(surfaceSpec.dynamicColor);
-  const motionCapability = mergeMotionCapability(undefined, surfaceSpec.motionConfig);
-
-  return {
-    ...(typeof surfaceSpec.variant === 'string' ? { variant: surfaceSpec.variant } : {}),
-    ...(hasOwnKeys(surfaceSpec.variantConfig) ? { props: { ...surfaceSpec.variantConfig } } : {}),
-    ...(dynamicColorCapability || motionCapability
+    ...(typeof fragment.variant === 'string' ? { variant: fragment.variant } : {}),
+    ...(props ? { props: { ...props } } : {}),
+    ...(motion ? { motion } : {}),
+    ...(dynamicColor
       ? {
           capabilities: {
-            ...(dynamicColorCapability ? { dynamicColor: dynamicColorCapability } : {}),
-            ...(motionCapability ? { motion: motionCapability } : {}),
+            dynamicColor,
           },
         }
       : {}),
   };
 }
 
-export function bindingToImportSurfaceSpec(binding: ThemeBinding): ThemeImportSurfaceSpec {
-  const dynamicColor = dynamicColorCapabilityToConfig(binding.capabilities?.dynamicColor);
+export function bindingToFragment(binding: ThemeBinding): ThemeBindingFragment {
   const props = hasOwnKeys(binding.props) ? binding.props : undefined;
-  const motionConfig = mergeMotionCapability(undefined, binding.capabilities?.motion);
+  const motion = cloneBindingMotionSpec(binding.motion);
+  const dynamicColor = cloneDynamicColorCapability(binding.capabilities?.dynamicColor);
 
   return {
     ...(typeof binding.variant === 'string' ? { variant: binding.variant } : {}),
-    ...(props ? { variantConfig: { ...props } } : {}),
-    ...(dynamicColor ? { dynamicColor } : {}),
-    ...(motionConfig ? { motionConfig } : {}),
+    ...(props ? { props: { ...props } } : {}),
+    ...(motion ? { motion } : {}),
+    ...(dynamicColor
+      ? {
+          capabilities: {
+            dynamicColor,
+          },
+        }
+      : {}),
   };
 }
 
-export function extractRuntimeSurfaceDocument(surfaceSpec: ThemeImportSurfaceSpec): ComponentTheme {
-  const { variantConfig, dynamicColor, motionConfig, styleOverride, classNameOverride, ...surfaceTheme } = surfaceSpec;
-  void variantConfig;
-  void dynamicColor;
-  void motionConfig;
-  void styleOverride;
-  void classNameOverride;
-  return surfaceTheme;
-}
-
-export function extractMagnetSurfaceDocument(surfaceSpec: ThemeImportSurfaceSpec): ComponentTheme {
-  const { variant, ...surfaceTheme } = extractRuntimeSurfaceDocument(surfaceSpec);
+export function extractBindingFragmentSurfaceDocument(fragment: ThemeBindingFragment): ComponentTheme {
+  const { variant, props, motion, capabilities, ...surfaceTheme } = fragment;
   void variant;
+  void props;
+  void motion;
+  void capabilities;
   return surfaceTheme;
 }
 
-export function materializeThemeBinding(theme: Theme, bindingId: ThemeBindingId): ThemeImportSurfaceSpec {
+export function materializeThemeBinding(theme: Theme, bindingId: ThemeBindingId): ThemeBindingFragment {
   const resolvedBinding = resolveThemeBinding(theme, bindingId);
   const surfaceId = resolvedBinding.binding.surface ?? bindingId;
   const surfaceTheme = resolveThemeSurface(theme, surfaceId);
-  const bindingTheme = bindingToImportSurfaceSpec(resolvedBinding.binding);
+  const bindingTheme = bindingToFragment(resolvedBinding.binding);
+  const dynamicColor = cloneDynamicColorCapability(bindingTheme.capabilities?.dynamicColor);
+  const motion = cloneBindingMotionSpec(bindingTheme.motion);
 
-  return mergeThemeImportSurfaceSpecs(surfaceTheme, bindingTheme);
+  return {
+    ...mergeComponentThemes(surfaceTheme, bindingTheme),
+    ...(hasOwnKeys(bindingTheme.props) ? { props: { ...bindingTheme.props } } : {}),
+    ...(motion ? { motion } : {}),
+    ...(dynamicColor
+      ? {
+          capabilities: {
+            dynamicColor,
+          },
+        }
+      : {}),
+  };
 }
 
 export function assignMagnetBindingFragment(
   theme: Theme,
   componentId: string,
-  fragment: ThemeImportSurfaceSpec
+  fragment: ThemeBindingFragment
 ): Theme {
   const bindingId = `magnet.${componentId}` as ThemeBindingId;
-  const normalizedTheme = normalizeThemeImportSurfaceSpec(fragment);
   const currentBinding = resolveThemeBinding(theme, bindingId).binding;
   const nextBinding: ThemeBinding = {
     ...currentBinding,
-    ...importSurfaceToBinding(normalizedTheme),
+    ...bindingFragmentToBinding(fragment),
   };
   delete nextBinding.surface;
-  const surfaceTheme = extractMagnetSurfaceDocument(normalizedTheme);
+
+  const surfaceTheme = extractBindingFragmentSurfaceDocument(fragment);
   const nextTheme = isComponentThemeEmpty(surfaceTheme)
     ? removeThemeSurface(theme, bindingId)
     : assignThemeSurface(theme, bindingId, surfaceTheme);

@@ -52,9 +52,8 @@ import { filterMagnetConfigSnapshotForImport, filterMagnetSpaceLayoutForImport }
 import { parseVariantPresetFromText, type VariantPresetV1 } from '../../themes/packs/pmpv';
 import { satisfiesSemverRange } from '../../themes/packs/semver';
 import { assignMagnetBindingFragment, materializeThemeBinding } from '../../themes/importAdapters';
-import { resolveLegacyComponentThemeSurfaceId } from '../../themes/legacyComponentThemes';
 import type { Theme, ThemeBindingId } from '../../themes/types/theme';
-import type { ThemeImportCandidate, ThemeImportSurfaceSpec } from '../../themes/types/themeImport';
+import type { ThemeBindingFragment, ThemeImportCandidate } from '../../themes/types/themeImport';
 import { useThemeBindingEditor } from '../../themes/useThemeBindingEditor';
 import type { Magnet } from '../../types/pixel';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
@@ -82,8 +81,16 @@ function formatRendererGroup(
 type PanelMessage = { kind: 'error' | 'success'; text: string };
 
 function assertObject(value: unknown, path: string): asserts value is Record<string, unknown> {
-  if (!value || typeof value !== 'object') {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${path} must be an object`);
+  }
+}
+
+function assertOnlyKeys(value: Record<string, unknown>, path: string, allowedKeys: readonly string[]): void {
+  const allowed = new Set(allowedKeys);
+  const unsupportedKey = Object.keys(value).find((key) => !allowed.has(key));
+  if (unsupportedKey) {
+    throw new Error(`${path}.${unsupportedKey} is not supported`);
   }
 }
 
@@ -106,6 +113,7 @@ function assertThemeTokenAssignments(value: unknown, path: string): void {
 
 function assertThemeTokens(value: unknown, path: string): void {
   assertObject(value, path);
+  assertOnlyKeys(value, path, ['color', 'motion', 'typography', 'radius', 'space', 'size', 'shadow', 'border']);
   for (const [key, tokenValue] of Object.entries(value)) {
     assertThemeTokenAssignments(tokenValue, `${path}.${key}`);
   }
@@ -113,6 +121,19 @@ function assertThemeTokens(value: unknown, path: string): void {
 
 function assertThemeMotionChannelSpec(value: unknown, path: string): void {
   assertObject(value, path);
+  assertOnlyKeys(value, path, [
+    'preset',
+    'duration',
+    'easing',
+    'delay',
+    'iterationCount',
+    'direction',
+    'fillMode',
+    'playState',
+    'distance',
+    'scale',
+    'origin',
+  ]);
 
   const stringFields = ['preset', 'easing', 'direction', 'fillMode', 'playState', 'origin'] as const;
   for (const key of stringFields) {
@@ -154,16 +175,38 @@ function assertThemeMotionMap(value: unknown, path: string): void {
   }
 }
 
-function assertMotionCapabilityValue(value: unknown, path: string): void {
+function assertThemeMotionReference(value: unknown, path: string): void {
+  if (typeof value === 'string') {
+    return;
+  }
+
+  assertThemeMotionChannelSpec(value, path);
+}
+
+function assertThemeBindingMotionSpec(value: unknown, path: string): void {
   assertObject(value, path);
+  assertOnlyKeys(value, path, ['enabled', 'mode', 'presence', 'layout', 'attention', 'visibility']);
   if (typeof value.enabled !== 'undefined' && typeof value.enabled !== 'boolean') {
     throw new Error(`${path}.enabled must be a boolean`);
   }
   if (typeof value.mode !== 'undefined' && typeof value.mode !== 'string') {
     throw new Error(`${path}.mode must be a string`);
   }
+
+  if (typeof value.presence !== 'undefined') {
+    assertObject(value.presence, `${path}.presence`);
+    assertOnlyKeys(value.presence, `${path}.presence`, ['enter', 'exit']);
+    if (typeof value.presence.enter !== 'undefined') {
+      assertThemeMotionReference(value.presence.enter, `${path}.presence.enter`);
+    }
+    if (typeof value.presence.exit !== 'undefined') {
+      assertThemeMotionReference(value.presence.exit, `${path}.presence.exit`);
+    }
+  }
+
   if (typeof value.layout !== 'undefined') {
     assertObject(value.layout, `${path}.layout`);
+    assertOnlyKeys(value.layout, `${path}.layout`, ['strategy', 'largeChange', 'sharedKey', 'move', 'resize']);
     const layoutStringFields = ['strategy', 'largeChange', 'sharedKey'] as const;
     for (const key of layoutStringFields) {
       const fieldValue = value.layout[key];
@@ -171,27 +214,118 @@ function assertMotionCapabilityValue(value: unknown, path: string): void {
         throw new Error(`${path}.layout.${key} must be a string`);
       }
     }
+    if (typeof value.layout.move !== 'undefined') {
+      assertThemeMotionReference(value.layout.move, `${path}.layout.move`);
+    }
+    if (typeof value.layout.resize !== 'undefined') {
+      assertThemeMotionReference(value.layout.resize, `${path}.layout.resize`);
+    }
   }
-  if (typeof value.channels !== 'undefined') {
-    assertThemeMotionMap(value.channels, `${path}.channels`);
+
+  if (typeof value.attention !== 'undefined') {
+    assertObject(value.attention, `${path}.attention`);
+    assertOnlyKeys(value.attention, `${path}.attention`, ['idle', 'hover', 'active', 'success', 'warning']);
+    const attentionKeys = ['idle', 'hover', 'active', 'success', 'warning'] as const;
+    for (const key of attentionKeys) {
+      if (typeof value.attention[key] !== 'undefined') {
+        assertThemeMotionReference(value.attention[key], `${path}.attention.${key}`);
+      }
+    }
+  }
+
+  if (typeof value.visibility !== 'undefined') {
+    assertObject(value.visibility, `${path}.visibility`);
+    assertOnlyKeys(value.visibility, `${path}.visibility`, ['show', 'hide']);
+    if (typeof value.visibility.show !== 'undefined') {
+      assertThemeMotionReference(value.visibility.show, `${path}.visibility.show`);
+    }
+    if (typeof value.visibility.hide !== 'undefined') {
+      assertThemeMotionReference(value.visibility.hide, `${path}.visibility.hide`);
+    }
   }
 }
 
-function assertMotionCapability(value: unknown, path: string): void {
+function assertThemeMotionSceneSpec(value: unknown, path: string): void {
   assertObject(value, path);
-  if (typeof value.motion === 'undefined') {
-    return;
+  assertOnlyKeys(value, path, ['enter', 'exit', 'stagger', 'match', 'sharedAxis']);
+
+  if (typeof value.enter !== 'undefined') {
+    assertThemeMotionReference(value.enter, `${path}.enter`);
   }
-  assertMotionCapabilityValue(value.motion, `${path}.motion`);
+  if (typeof value.exit !== 'undefined') {
+    assertThemeMotionReference(value.exit, `${path}.exit`);
+  }
+
+  if (typeof value.stagger !== 'undefined') {
+    assertObject(value.stagger, `${path}.stagger`);
+    assertOnlyKeys(value.stagger, `${path}.stagger`, ['by', 'from', 'step']);
+    if (typeof value.stagger.by !== 'undefined' && typeof value.stagger.by !== 'string') {
+      throw new Error(`${path}.stagger.by must be a string`);
+    }
+    if (typeof value.stagger.from !== 'undefined' && typeof value.stagger.from !== 'string') {
+      throw new Error(`${path}.stagger.from must be a string`);
+    }
+    if (
+      typeof value.stagger.step !== 'undefined' &&
+      !['string', 'number'].includes(typeof value.stagger.step)
+    ) {
+      throw new Error(`${path}.stagger.step must be a string or number`);
+    }
+  }
+
+  if (typeof value.match !== 'undefined') {
+    assertObject(value.match, `${path}.match`);
+    assertOnlyKeys(value.match, `${path}.match`, ['by']);
+    if (typeof value.match.by !== 'undefined' && typeof value.match.by !== 'string') {
+      throw new Error(`${path}.match.by must be a string`);
+    }
+  }
+
+  if (typeof value.sharedAxis !== 'undefined' && typeof value.sharedAxis !== 'string') {
+    throw new Error(`${path}.sharedAxis must be a string`);
+  }
 }
 
-function assertDynamicColorCapability(value: unknown, path: string): void {
+function assertThemeMotionDocument(value: unknown, path: string): void {
   assertObject(value, path);
+  assertOnlyKeys(value, path, ['presets', 'scenes']);
+  if (!('presets' in value) && !('scenes' in value)) {
+    throw new Error(`${path} must contain presets or scenes`);
+  }
+
+  if (typeof value.presets !== 'undefined') {
+    assertObject(value.presets, `${path}.presets`);
+    for (const [key, entry] of Object.entries(value.presets)) {
+      assertThemeMotionChannelSpec(entry, `${path}.presets.${key}`);
+    }
+  }
+
+  if (typeof value.scenes !== 'undefined') {
+    assertObject(value.scenes, `${path}.scenes`);
+    for (const [key, entry] of Object.entries(value.scenes)) {
+      assertThemeMotionSceneSpec(entry, `${path}.scenes.${key}`);
+    }
+  }
+}
+
+function assertDynamicColorCapability(value: unknown, path: string): asserts value is Record<string, unknown> {
+  assertObject(value, path);
+  assertOnlyKeys(value, path, ['dynamicColor']);
   const dynamicColor = value.dynamicColor;
   if (typeof dynamicColor === 'undefined') {
     return;
   }
   assertObject(dynamicColor, `${path}.dynamicColor`);
+  assertOnlyKeys(dynamicColor, `${path}.dynamicColor`, [
+    'enabled',
+    'source',
+    'mode',
+    'apply',
+    'blendRatio',
+    'gradientAngle',
+    'dynamicSpeed',
+    'colorAdjust',
+  ]);
 
   const booleanFields = ['enabled'] as const;
   for (const key of booleanFields) {
@@ -219,42 +353,17 @@ function assertDynamicColorCapability(value: unknown, path: string): void {
 
   if (typeof dynamicColor.colorAdjust !== 'undefined') {
     assertObject(dynamicColor.colorAdjust, `${path}.dynamicColor.colorAdjust`);
+    assertOnlyKeys(dynamicColor.colorAdjust, `${path}.dynamicColor.colorAdjust`, [
+      'saturation',
+      'brightness',
+      'hueShift',
+    ]);
   }
 }
 
-function assertLegacyDynamicColorConfig(value: unknown, path: string): void {
+function assertThemePartStateSpec(value: unknown, path: string, extraAllowedKeys: readonly string[] = []): void {
   assertObject(value, path);
-  const booleanFields = ['extractFromCover'] as const;
-  for (const key of booleanFields) {
-    const fieldValue = value[key];
-    if (typeof fieldValue !== 'undefined' && typeof fieldValue !== 'boolean') {
-      throw new Error(`${path}.${key} must be a boolean`);
-    }
-  }
-
-  const stringFields = ['effect', 'applyMode'] as const;
-  for (const key of stringFields) {
-    const fieldValue = value[key];
-    if (typeof fieldValue !== 'undefined' && typeof fieldValue !== 'string') {
-      throw new Error(`${path}.${key} must be a string`);
-    }
-  }
-
-  const numberFields = ['gradientAngle', 'dynamicSpeed', 'blendRatio'] as const;
-  for (const key of numberFields) {
-    const fieldValue = value[key];
-    if (typeof fieldValue !== 'undefined' && (typeof fieldValue !== 'number' || !Number.isFinite(fieldValue))) {
-      throw new Error(`${path}.${key} must be a finite number`);
-    }
-  }
-
-  if (typeof value.colorAdjust !== 'undefined') {
-    assertObject(value.colorAdjust, `${path}.colorAdjust`);
-  }
-}
-
-function assertThemePartStateSpec(value: unknown, path: string): void {
-  assertObject(value, path);
+  assertOnlyKeys(value, path, ['classes', 'style', 'tokens', 'motion', ...extraAllowedKeys]);
   if (typeof value.classes !== 'undefined') {
     if (!Array.isArray(value.classes) || value.classes.some((entry) => typeof entry !== 'string')) {
       throw new Error(`${path}.classes must be an array of strings`);
@@ -272,7 +381,7 @@ function assertThemePartStateSpec(value: unknown, path: string): void {
 }
 
 function assertThemeSurfaceStateSpec(value: unknown, path: string): void {
-  assertThemePartStateSpec(value, path);
+  assertThemePartStateSpec(value, path, ['parts']);
   const record = value as Record<string, unknown>;
   if (typeof record.parts !== 'undefined') {
     assertObject(record.parts, `${path}.parts`);
@@ -283,7 +392,7 @@ function assertThemeSurfaceStateSpec(value: unknown, path: string): void {
 }
 
 function assertThemeSurfacePartSpec(value: unknown, path: string): void {
-  assertThemePartStateSpec(value, path);
+  assertThemePartStateSpec(value, path, ['states']);
   const record = value as Record<string, unknown>;
   if (typeof record.states !== 'undefined') {
     assertObject(record.states, `${path}.states`);
@@ -293,17 +402,19 @@ function assertThemeSurfacePartSpec(value: unknown, path: string): void {
   }
 }
 
-function assertComponentThemeDocument(value: unknown, path: string): void {
+function assertComponentThemeDocument(
+  value: unknown,
+  path: string,
+  extraAllowedKeys: readonly string[] = []
+): asserts value is Record<string, unknown> {
   assertObject(value, path);
+  assertOnlyKeys(value, path, ['extends', 'variant', 'tokens', 'parts', 'states', 'metadata', ...extraAllowedKeys]);
 
   if (typeof value.extends !== 'undefined' && typeof value.extends !== 'string') {
     throw new Error(`${path}.extends must be a string`);
   }
   if (typeof value.variant !== 'undefined' && typeof value.variant !== 'string') {
     throw new Error(`${path}.variant must be a string`);
-  }
-  if (typeof value.variantConfig !== 'undefined') {
-    assertObject(value.variantConfig, `${path}.variantConfig`);
   }
   if (typeof value.tokens !== 'undefined') {
     assertThemeTokenAssignments(value.tokens, `${path}.tokens`);
@@ -322,27 +433,16 @@ function assertComponentThemeDocument(value: unknown, path: string): void {
   }
   if (typeof value.metadata !== 'undefined') {
     assertObject(value.metadata, `${path}.metadata`);
+    assertOnlyKeys(value.metadata, `${path}.metadata`, ['description']);
     if (typeof value.metadata.description !== 'undefined' && typeof value.metadata.description !== 'string') {
       throw new Error(`${path}.metadata.description must be a string`);
     }
-  }
-
-  if (typeof value.styleOverride !== 'undefined') {
-    assertObject(value.styleOverride, `${path}.styleOverride`);
-  }
-  if (typeof value.classNameOverride !== 'undefined') {
-    assertObject(value.classNameOverride, `${path}.classNameOverride`);
-  }
-  if (typeof value.dynamicColor !== 'undefined') {
-    assertLegacyDynamicColorConfig(value.dynamicColor, `${path}.dynamicColor`);
-  }
-  if (typeof value.motionConfig !== 'undefined') {
-    assertMotionCapabilityValue(value.motionConfig, `${path}.motionConfig`);
   }
 }
 
 function assertThemeBindingValue(value: unknown, path: string): void {
   assertObject(value, path);
+  assertOnlyKeys(value, path, ['surface', 'renderer', 'variant', 'props', 'motion', 'capabilities']);
   if (typeof value.surface !== 'undefined' && typeof value.surface !== 'string') {
     throw new Error(`${path}.surface must be a string`);
   }
@@ -355,14 +455,48 @@ function assertThemeBindingValue(value: unknown, path: string): void {
   if (typeof value.props !== 'undefined') {
     assertObject(value.props, `${path}.props`);
   }
+  if (typeof value.motion !== 'undefined') {
+    assertThemeBindingMotionSpec(value.motion, `${path}.motion`);
+  }
   if (typeof value.capabilities !== 'undefined') {
-    assertDynamicColorCapability(value.capabilities, `${path}.capabilities`);
-    assertMotionCapability(value.capabilities, `${path}.capabilities`);
+    const capabilities = value.capabilities;
+    assertDynamicColorCapability(capabilities, `${path}.capabilities`);
+  }
+}
+
+function assertThemeBindingFragmentValue(value: unknown, path: string): void {
+  assertComponentThemeDocument(value, path, ['props', 'motion', 'capabilities']);
+
+  if (typeof value.props !== 'undefined') {
+    assertObject(value.props, `${path}.props`);
+  }
+  if (typeof value.motion !== 'undefined') {
+    assertThemeBindingMotionSpec(value.motion, `${path}.motion`);
+  }
+  if (typeof value.capabilities !== 'undefined') {
+    const capabilities = value.capabilities;
+    assertDynamicColorCapability(capabilities, `${path}.capabilities`);
   }
 }
 
 function validateThemeJson(value: unknown): asserts value is ThemeImportCandidate {
   assertObject(value, 'theme');
+  assertOnlyKeys(value, 'theme', [
+    'id',
+    'name',
+    'author',
+    'version',
+    'description',
+    'thumbnail',
+    'tokens',
+    'motion',
+    'pixel',
+    'background',
+    'fonts',
+    'globalEffects',
+    'surfaces',
+    'bindings',
+  ]);
 
   if (typeof value.id !== 'string' || value.id.length < 1) {
     throw new Error('theme.id is required');
@@ -373,32 +507,18 @@ function validateThemeJson(value: unknown): asserts value is ThemeImportCandidat
   if (typeof value.version !== 'string' || value.version.length < 1) {
     throw new Error('theme.version is required');
   }
-
-  if (typeof value.colors !== 'undefined') {
-    assertObject(value.colors, 'theme.colors');
-    for (const [key, tokenValue] of Object.entries(value.colors)) {
-      if (typeof tokenValue !== 'string') {
-        throw new Error(`theme.colors.${key} must be a string`);
-      }
-    }
+  if (typeof value.author !== 'undefined' && typeof value.author !== 'string') {
+    throw new Error('theme.author must be a string');
+  }
+  if (typeof value.description !== 'undefined' && typeof value.description !== 'string') {
+    throw new Error('theme.description must be a string');
+  }
+  if (typeof value.thumbnail !== 'undefined' && typeof value.thumbnail !== 'string') {
+    throw new Error('theme.thumbnail must be a string');
   }
 
   if (typeof value.motion !== 'undefined') {
-    assertObject(value.motion, 'theme.motion');
-    for (const [key, tokenValue] of Object.entries(value.motion)) {
-      if (!['string', 'number', 'boolean'].includes(typeof tokenValue)) {
-        throw new Error(`theme.motion.${key} must be a string, number, or boolean`);
-      }
-    }
-  }
-
-  if (typeof value.typography !== 'undefined') {
-    assertObject(value.typography, 'theme.typography');
-    for (const [key, tokenValue] of Object.entries(value.typography)) {
-      if (!['string', 'number'].includes(typeof tokenValue)) {
-        throw new Error(`theme.typography.${key} must be a string or number`);
-      }
-    }
+    assertThemeMotionDocument(value.motion, 'theme.motion');
   }
 
   if (typeof value.tokens !== 'undefined') {
@@ -406,6 +526,7 @@ function validateThemeJson(value: unknown): asserts value is ThemeImportCandidat
   }
 
   assertObject(value.pixel, 'theme.pixel');
+  assertOnlyKeys(value.pixel, 'theme.pixel', ['shape', 'size', 'opacity', 'colors']);
   if (typeof value.pixel.shape !== 'string') {
     throw new Error('theme.pixel.shape is required');
   }
@@ -415,20 +536,45 @@ function validateThemeJson(value: unknown): asserts value is ThemeImportCandidat
   if (typeof value.pixel.opacity !== 'number' || !Number.isFinite(value.pixel.opacity)) {
     throw new Error('theme.pixel.opacity must be a number');
   }
+  assertObject(value.pixel.colors, 'theme.pixel.colors');
+  assertOnlyKeys(value.pixel.colors, 'theme.pixel.colors', ['default', 'hover', 'active', 'occupied']);
+  for (const [key, tokenValue] of Object.entries(value.pixel.colors)) {
+    assertObject(tokenValue, `theme.pixel.colors.${key}`);
+    assertOnlyKeys(tokenValue, `theme.pixel.colors.${key}`, ['slot', 'alpha', 'state']);
+    if (typeof tokenValue.slot !== 'string') {
+      throw new Error(`theme.pixel.colors.${key}.slot is required`);
+    }
+    if (typeof tokenValue.alpha !== 'undefined' && (typeof tokenValue.alpha !== 'number' || !Number.isFinite(tokenValue.alpha))) {
+      throw new Error(`theme.pixel.colors.${key}.alpha must be a finite number`);
+    }
+    if (typeof tokenValue.state !== 'undefined' && typeof tokenValue.state !== 'string') {
+      throw new Error(`theme.pixel.colors.${key}.state must be a string`);
+    }
+  }
 
   assertObject(value.background, 'theme.background');
+  assertOnlyKeys(value.background, 'theme.background', ['maximized', 'windowed']);
   assertObject(value.background.maximized, 'theme.background.maximized');
   assertObject(value.background.windowed, 'theme.background.windowed');
 
   assertObject(value.fonts, 'theme.fonts');
+  assertOnlyKeys(value.fonts, 'theme.fonts', ['primary', 'secondary', 'mono']);
   if (typeof value.fonts.primary !== 'string' || value.fonts.primary.length < 1) {
     throw new Error('theme.fonts.primary is required');
   }
-
-  if (typeof value.componentThemes !== 'undefined') {
-    assertObject(value.componentThemes, 'theme.componentThemes');
-    for (const [key, entry] of Object.entries(value.componentThemes)) {
-      assertComponentThemeDocument(entry, `theme.componentThemes.${key}`);
+  if (typeof value.fonts.secondary !== 'undefined' && typeof value.fonts.secondary !== 'string') {
+    throw new Error('theme.fonts.secondary must be a string');
+  }
+  if (typeof value.fonts.mono !== 'undefined' && typeof value.fonts.mono !== 'string') {
+    throw new Error('theme.fonts.mono must be a string');
+  }
+  if (typeof value.globalEffects !== 'undefined') {
+    assertObject(value.globalEffects, 'theme.globalEffects');
+    assertOnlyKeys(value.globalEffects, 'theme.globalEffects', ['blur', 'brightness', 'contrast', 'saturation']);
+    for (const [key, effectValue] of Object.entries(value.globalEffects)) {
+      if (typeof effectValue !== 'number' || !Number.isFinite(effectValue)) {
+        throw new Error(`theme.globalEffects.${key} must be a finite number`);
+      }
     }
   }
   if (typeof value.surfaces !== 'undefined') {
@@ -535,16 +681,6 @@ function extractThemeRendererIds(themeValue: unknown): string[] {
   }
 
   const rendererIds = new Set<string>();
-
-  const componentThemes = themeValue.componentThemes;
-  if (isPlainObject(componentThemes)) {
-    for (const componentId of Object.keys(componentThemes)) {
-      const surfaceId = resolveLegacyComponentThemeSurfaceId(componentId);
-      if (surfaceId.startsWith('magnet.')) {
-        rendererIds.add(surfaceId.slice('magnet.'.length));
-      }
-    }
-  }
 
   const bindings = themeValue.bindings;
   if (isPlainObject(bindings)) {
@@ -696,9 +832,11 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   }, [isTauri]);
 
   const refreshLocalMagnetSpacesState = useCallback(async (): Promise<MagnetSpacesState> => {
-    const legacy = sanitizeMagnetSpacesState(readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState()));
+    const fallbackSpaces = sanitizeMagnetSpacesState(
+      readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState())
+    );
     const store = await loadMagnetLayoutStoreState();
-    const next = store?.spaces ?? legacy;
+    const next = store?.spaces ?? fallbackSpaces;
     setLocalMagnetSpacesState(next);
     return next;
   }, [loadMagnetLayoutStoreState]);
@@ -916,7 +1054,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         });
         if (!ok) return;
 
-        const fragment = parsed.fragment as unknown as ThemeImportSurfaceSpec;
+        assertThemeBindingFragmentValue(parsed.fragment, 'preset.fragment');
+        const fragment = parsed.fragment as ThemeBindingFragment;
         await applyTheme(assignMagnetBindingFragment(theme, rendererId, fragment));
 
         setVariantPresetMessage({

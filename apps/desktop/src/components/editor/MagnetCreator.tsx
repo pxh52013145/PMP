@@ -510,7 +510,7 @@ export function MagnetCreator({
       description: previewMagnet.description,
       tags: previewMagnet.tags,
       variant: previewMagnet.variant,
-      variantConfig: previewMagnet.variantConfig,
+      skinProps: previewMagnet.skinProps,
       name: previewMagnet.name,
       anchorType: previewMagnet.anchorType,
       anchors: previewMagnet.anchors,

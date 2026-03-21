@@ -1,40 +1,11 @@
-import type { CSSProperties } from 'react';
+import type { ComponentTheme, Theme, ThemeBindingDynamicColorCapability, ThemeBindingMotionSpec } from './theme';
 
-import type {
-  ComponentTheme,
-  DynamicColorConfig,
-  Theme,
-  ThemeBindingMotionCapability,
-  ThemeColorTokens,
-  ThemeMotionTokens,
-  ThemeTypographyTokens,
-} from './theme';
-
-export interface ThemeImportSurfaceSpec extends ComponentTheme {
-  variantConfig?: Record<string, unknown>;
-  dynamicColor?: DynamicColorConfig;
-  motionConfig?: ThemeBindingMotionCapability;
-  styleOverride?: {
-    container?: CSSProperties;
-    cover?: CSSProperties;
-    title?: CSSProperties;
-    subtitle?: CSSProperties;
-    [key: string]: CSSProperties | undefined;
-  };
-  classNameOverride?: {
-    container?: string;
-    cover?: string;
-    title?: string;
-    subtitle?: string;
-    [key: string]: string | undefined;
+export interface ThemeBindingFragment extends ComponentTheme {
+  props?: Record<string, unknown>;
+  motion?: ThemeBindingMotionSpec;
+  capabilities?: {
+    dynamicColor?: ThemeBindingDynamicColorCapability;
   };
 }
 
-export interface ThemeImportCandidate extends Omit<Theme, 'surfaces'> {
-  colors?: ThemeColorTokens;
-  motion?: ThemeMotionTokens;
-  typography?: ThemeTypographyTokens;
-  surfaces?: Record<string, ThemeImportSurfaceSpec>;
-  componentThemes?: Record<string, ThemeImportSurfaceSpec>;
-  shader?: unknown;
-}
+export type ThemeImportCandidate = Theme;

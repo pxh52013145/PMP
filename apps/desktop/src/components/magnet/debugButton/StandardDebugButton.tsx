@@ -27,10 +27,10 @@ const GearIcon: React.FC = () => (
   </svg>
 );
 
-export const StandardDebugButton: React.FC<DebugButtonVariantProps> = ({ data, logic, variantConfig }) => {
+export const StandardDebugButton: React.FC<DebugButtonVariantProps> = ({ data, logic, skinProps }) => {
   const { isOpen, setIsOpen } = data;
   const { toggleDebugWindow, getButtonTitle } = logic;
-  const skinProps = useMemo(() => parseDebugButtonSkinProps(variantConfig), [variantConfig]);
+  const resolvedSkinProps = useMemo(() => parseDebugButtonSkinProps(skinProps), [skinProps]);
 
   const handleClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -39,7 +39,7 @@ export const StandardDebugButton: React.FC<DebugButtonVariantProps> = ({ data, l
 
   return (
     <button
-      className={`magnet-control-button debug-button debug-button-indicator-${skinProps.activeIndicator} debug-button-spin-${skinProps.spinMode} ${
+      className={`magnet-control-button debug-button debug-button-indicator-${resolvedSkinProps.activeIndicator} debug-button-spin-${resolvedSkinProps.spinMode} ${
         isOpen ? 'active' : ''
       }`}
       onClick={handleClick}
@@ -48,7 +48,7 @@ export const StandardDebugButton: React.FC<DebugButtonVariantProps> = ({ data, l
       aria-pressed={isOpen}
     >
       <GearIcon />
-      {isOpen && skinProps.activeIndicator === 'dot' ? <span className="debug-button-dot" aria-hidden="true" /> : null}
+      {isOpen && resolvedSkinProps.activeIndicator === 'dot' ? <span className="debug-button-dot" aria-hidden="true" /> : null}
     </button>
   );
 };

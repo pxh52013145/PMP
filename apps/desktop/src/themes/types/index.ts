@@ -11,6 +11,11 @@ export type {
   ThemeBinding,
   ThemeBindingCapabilities,
   ThemeBindingDynamicColorCapability,
+  ThemeBindingMotionSpec,
+  ThemeBindingMotionPresenceSpec,
+  ThemeBindingMotionLayoutSpec,
+  ThemeBindingMotionAttentionSpec,
+  ThemeBindingMotionVisibilitySpec,
   ThemeBindingMotionCapability,
   ThemeBindingMotionLayoutPolicy,
   ThemeBindingId,
@@ -23,6 +28,11 @@ export type {
   ThemeTokenReference,
   ThemeMotionChannelMap,
   ThemeMotionChannelSpec,
+  ThemeMotionReference,
+  ThemeMotionSceneSpec,
+  ThemeMotionSceneStaggerSpec,
+  ThemeMotionSceneMatchSpec,
+  ThemeMotionDocument,
   ThemeMotionValue,
   ThemePartStateSpec,
   ThemeSurfacePartSpec,
@@ -36,4 +46,4 @@ export type {
   ThemeShadowTokens,
   ThemeBorderTokens,
 } from './theme';
-export type { ThemeImportCandidate, ThemeImportSurfaceSpec } from './themeImport';
+export type { ThemeBindingFragment, ThemeImportCandidate } from './themeImport';

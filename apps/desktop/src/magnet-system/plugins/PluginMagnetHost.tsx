@@ -111,7 +111,7 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
       surface: 'magnet' as const,
       theme: {
         variant,
-        ...(themeVariantConfig ? { variantConfig: themeVariantConfig } : {}),
+        ...(themeVariantConfig ? { props: themeVariantConfig } : {}),
       },
     };
   }, [plugin?.manifest.magnet?.defaultVariant, skin.props, skin.variant]);

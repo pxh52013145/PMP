@@ -10,12 +10,12 @@ export const CyberPlayPause: React.FC<PlaybackVariantProps> = ({
   logic,
   dynamicColors,
   dynamicColorConfig,
-  variantConfig,
+  skinProps: rawSkinProps,
 }) => {
   const { playbackState, queueLength } = data;
   const { togglePlayPause, getPlayPauseIcon, getPlayPauseTitle, isPlayPauseDisabled } = logic;
   const t = useT();
-  const skinProps = useMemo(() => parsePlayPauseSkinProps(variantConfig), [variantConfig]);
+  const skinProps = useMemo(() => parsePlayPauseSkinProps(rawSkinProps), [rawSkinProps]);
   const effect = dynamicColorConfig?.effect ?? 'tone';
   const gradientAngle =
     typeof dynamicColorConfig?.gradientAngle === 'number' && isFinite(dynamicColorConfig.gradientAngle)
@@ -76,4 +76,5 @@ export const CyberPlayPause: React.FC<PlaybackVariantProps> = ({
     </button>
   );
 };
+
 

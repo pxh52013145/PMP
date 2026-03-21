@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 
 import { dynamicColorCapabilityToConfig } from './importAdapters';
 import { useTheme } from './contexts/ThemeContextWithSync';
-import { resolveThemeMotionCapability } from './motion';
+import { resolveThemeBindingMotion } from './motion';
 import type { DynamicColorConfig, ThemeBindingId, ThemeBindingMotionCapability } from './types/theme';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -41,12 +41,7 @@ export function useMagnetSkin(
         : defaultVariant;
     const props = isPlainObject(binding.props) ? binding.props : undefined;
     const dynamicColor = dynamicColorCapabilityToConfig(binding.capabilities?.dynamicColor);
-    const motion = resolveThemeMotionCapability(
-      theme,
-      isPlainObject(binding.capabilities?.motion)
-        ? (binding.capabilities?.motion as ThemeBindingMotionCapability)
-        : undefined
-    );
+    const motion = resolveThemeBindingMotion(theme, binding.motion);
 
     return {
       bindingId,
@@ -58,7 +53,7 @@ export function useMagnetSkin(
     };
   }, [
     binding.capabilities?.dynamicColor,
-    binding.capabilities?.motion,
+    binding.motion,
     binding.props,
     binding.renderer,
     binding.variant,

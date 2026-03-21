@@ -11,5 +11,5 @@ import { BackButtonLogic } from './useBackButtonLogic';
 export interface BackButtonVariantProps {
   data: BackButtonData;
   logic: BackButtonLogic;
-  variantConfig?: Record<string, unknown>;
+  skinProps?: Record<string, unknown>;
 }

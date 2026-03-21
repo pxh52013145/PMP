@@ -17,7 +17,7 @@ const NoteIcon: React.FC = () => (
   </svg>
 );
 
-export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic, variantConfig }) => {
+export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic, skinProps: rawSkinProps }) => {
   const { queue, currentIndex, queueLength } = data;
   const {
     showQueue,
@@ -37,7 +37,7 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
     handleDragEnd,
     formatTime,
   } = logic;
-  const skinProps = useMemo(() => parsePlayQueueSkinProps(variantConfig), [variantConfig]);
+  const skinProps = useMemo(() => parsePlayQueueSkinProps(rawSkinProps), [rawSkinProps]);
   const t = useT();
 
   const listRef = React.useRef<HTMLDivElement | null>(null);
@@ -220,3 +220,4 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
     </>
   );
 };
+

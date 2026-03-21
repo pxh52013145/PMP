@@ -639,7 +639,12 @@ export function MatrixWorkbench({
 
       {/* Magnet 层 */}
       {!disableMagnetLayerForPerf && pixelPositions.size > 0 && (
-        <MagnetLayer magnets={activeMagnets} pixelPositions={pixelPositions} chromeOverrideMode={chromeOverrideMode} />
+        <MagnetLayer
+          magnets={activeMagnets}
+          pixelPositions={pixelPositions}
+          activeSpaceId={activeSpaceId}
+          chromeOverrideMode={chromeOverrideMode}
+        />
       )}
 
       {/* 编辑器覆盖层 */}

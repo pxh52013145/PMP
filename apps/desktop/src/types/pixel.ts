@@ -159,7 +159,7 @@ export interface Magnet {
   description?: string; // 说明
   tags?: string[];
   variant?: string; // 渲染变体名称
-  variantConfig?: Record<string, unknown>; // 变体配置参数
+  skinProps?: Record<string, unknown>; // 皮肤参数
 
   // 锚点配置 - 核心设计
   anchors: PixelAnchor[];

@@ -56,7 +56,7 @@ describe('.pmpk theme-pack', () => {
         id: 'neon',
         name: 'Neon',
         version: '1.0.0',
-        componentThemes: { 'btn-play-pause': { variant: 'cover-glow' } },
+        bindings: { 'magnet.btn-play-pause': { variant: 'cover-glow' } },
       },
       null,
       2

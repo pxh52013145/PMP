@@ -72,21 +72,17 @@ function createMotionTheme(): Theme {
     ...createSurfaceTheme(),
     bindings: {
       'magnet.content-style-test': {
-        capabilities: {
-          motion: {
-            enabled: true,
-            mode: 'full',
-            layout: {
-              strategy: 'flip',
-              largeChange: 'animate',
-              sharedKey: 'content-style-test',
-            },
-            channels: {
-              spaceSwitch: {
-                preset: 'shared-axis',
-                duration: 240,
-                easing: 'ease-out',
-              },
+        motion: {
+          enabled: true,
+          mode: 'full',
+          layout: {
+            strategy: 'flip',
+            largeChange: 'animate',
+            sharedKey: 'content-style-test',
+            move: {
+              preset: 'shared-axis',
+              duration: 240,
+              easing: 'ease-out',
             },
           },
         },
@@ -354,7 +350,7 @@ describe('MagnetComponent', () => {
     expect(chrome?.getAttribute('data-pmp-part')).toBe('root');
     expect(chrome?.getAttribute('data-pmp-binding')).toBe('magnet.content-style-test');
     expect(chrome?.getAttribute('data-pmp-state')).toBe('idle');
-    expect(chrome?.hasAttribute('data-pmp-variant')).toBe(false);
+    expect(chrome?.getAttribute('data-pmp-variant')).toBe('glass');
     expect(chrome?.className).toContain('magnet-surface-root');
     expect(chrome?.style.opacity).toBe('0.7');
     expect(chrome?.style.getPropertyValue('--pmp-color-accent')).toBe('#ff00ff');

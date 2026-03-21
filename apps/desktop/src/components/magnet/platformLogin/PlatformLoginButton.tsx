@@ -126,11 +126,11 @@ function updateConnectorScopedValue<TRecord extends Record<string, unknown>>(
 }
 
 type PlatformLoginButtonRendererProps = {
-  variantConfig?: Record<string, unknown>;
+  skinProps?: Record<string, unknown>;
 };
 
-const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererProps> = ({ variantConfig }) => {
-  const skinProps = useMemo(() => parsePlatformLoginSkinProps(variantConfig), [variantConfig]);
+const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererProps> = ({ skinProps: rawSkinProps }) => {
+  const skinProps = useMemo(() => parsePlatformLoginSkinProps(rawSkinProps), [rawSkinProps]);
   const t = useT();
 
   const [selectorOpen, setSelectorOpen] = useState(false);
@@ -582,5 +582,5 @@ export const PlatformLoginButton: React.FC = () => {
     defaultVariant: 'default',
   });
 
-  return <Renderer variantConfig={skin.props} />;
+  return <Renderer skinProps={skin.props} />;
 };

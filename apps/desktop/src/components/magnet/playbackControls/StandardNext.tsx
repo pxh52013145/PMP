@@ -17,11 +17,11 @@ const NextIcon: React.FC = () => (
   </svg>
 );
 
-export const StandardNext: React.FC<PlaybackVariantProps> = ({ data, logic, variantConfig }) => {
+export const StandardNext: React.FC<PlaybackVariantProps> = ({ data, logic, skinProps: rawSkinProps }) => {
   const { hasQueue, queueLength } = data;
   const { playNext } = logic;
   const t = useT();
-  const skinProps = useMemo(() => parsePlaybackStepSkinProps(variantConfig), [variantConfig]);
+  const skinProps = useMemo(() => parsePlaybackStepSkinProps(rawSkinProps), [rawSkinProps]);
 
   return (
     <button
@@ -41,3 +41,4 @@ export const StandardNext: React.FC<PlaybackVariantProps> = ({ data, logic, vari
     </button>
   );
 };
+

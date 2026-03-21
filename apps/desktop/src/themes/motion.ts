@@ -3,9 +3,12 @@ import type { CSSProperties } from 'react';
 import type {
   Theme,
   ThemeBindingMotionCapability,
+  ThemeBindingMotionSpec,
   ThemeBindingMotionLayoutPolicy,
   ThemeMotionChannelMap,
   ThemeMotionChannelSpec,
+  ThemeMotionReference,
+  ThemeMotionSceneSpec,
   ThemeTokenAssignments,
   ThemeTokenPrimitive,
 } from './types/theme';
@@ -14,6 +17,20 @@ const TOKEN_REFERENCE_PATTERN = /^\{([^}]+)\}$/;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+export interface ResolvedThemeMotionScene {
+  enter?: ThemeMotionChannelSpec;
+  exit?: ThemeMotionChannelSpec;
+  stagger?: {
+    by?: 'index' | 'x' | 'y' | 'grid' | 'distance';
+    from?: 'start' | 'center' | 'end';
+    step?: string | number;
+  };
+  match?: {
+    by?: 'magnet-id' | 'shared-key';
+  };
+  sharedAxis?: 'x' | 'y' | 'scale';
 }
 
 function flattenThemeTokens(theme: Theme): Record<string, ThemeTokenPrimitive> {
@@ -133,6 +150,32 @@ export function resolveThemeMotionChannelSpec(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+export function resolveThemeMotionReference(
+  theme: Theme,
+  reference: ThemeMotionReference | undefined,
+  assignments?: ThemeTokenAssignments
+): ThemeMotionChannelSpec | undefined {
+  if (!reference) {
+    return undefined;
+  }
+
+  if (typeof reference === 'string') {
+    const presetId = reference.trim();
+    if (!presetId) {
+      return undefined;
+    }
+
+    const presetSpec = theme.motion?.presets?.[presetId];
+    if (presetSpec) {
+      return resolveThemeMotionChannelSpec(theme, presetSpec, assignments);
+    }
+
+    return resolveThemeMotionChannelSpec(theme, { preset: presetId }, assignments);
+  }
+
+  return resolveThemeMotionChannelSpec(theme, reference, assignments);
+}
+
 export function mergeThemeMotionChannels(
   ...entries: Array<ThemeMotionChannelMap | undefined>
 ): ThemeMotionChannelMap | undefined {
@@ -157,7 +200,7 @@ export function resolveThemeMotionChannels(
   channels: ThemeMotionChannelMap | undefined,
   assignments?: ThemeTokenAssignments
 ): ThemeMotionChannelMap | undefined {
-  if (!channels || !isPlainObject(channels)) {
+  if (!channels) {
     return undefined;
   }
 
@@ -172,44 +215,158 @@ export function resolveThemeMotionChannels(
   return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
 
-export function resolveThemeMotionCapability(
-  theme: Theme,
-  capability: ThemeBindingMotionCapability | undefined
-): ThemeBindingMotionCapability | undefined {
-  if (!capability || !isPlainObject(capability)) {
+function normalizeMotionLayoutPolicy(
+  layout: ThemeBindingMotionLayoutPolicy | ThemeBindingMotionSpec['layout'] | undefined
+): ThemeBindingMotionLayoutPolicy | undefined {
+  if (!layout) {
     return undefined;
   }
 
-  const channels = resolveThemeMotionChannels(
-    theme,
-    isPlainObject(capability.channels) ? (capability.channels as ThemeMotionChannelMap) : undefined
-  );
-  const mode =
-    capability.mode === 'full' || capability.mode === 'reduced' || capability.mode === 'off'
-      ? capability.mode
-      : undefined;
-  let layout: ThemeBindingMotionLayoutPolicy | undefined;
-  if (isPlainObject(capability.layout)) {
-    layout = {
-      ...(capability.layout.strategy === 'none' ||
-      capability.layout.strategy === 'position' ||
-      capability.layout.strategy === 'transform' ||
-      capability.layout.strategy === 'flip'
-        ? { strategy: capability.layout.strategy }
-        : {}),
-      ...(capability.layout.largeChange === 'snap' || capability.layout.largeChange === 'animate'
-        ? { largeChange: capability.layout.largeChange }
-        : {}),
-      ...(typeof capability.layout.sharedKey === 'string' && capability.layout.sharedKey.trim().length > 0
-        ? { sharedKey: capability.layout.sharedKey.trim() }
-        : {}),
-    };
+  const next: ThemeBindingMotionLayoutPolicy = {};
+  if (
+    layout.strategy === 'none' ||
+    layout.strategy === 'position' ||
+    layout.strategy === 'transform' ||
+    layout.strategy === 'flip'
+  ) {
+    next.strategy = layout.strategy;
   }
+  if (layout.largeChange === 'snap' || layout.largeChange === 'animate') {
+    next.largeChange = layout.largeChange;
+  }
+  if (typeof layout.sharedKey === 'string' && layout.sharedKey.trim().length > 0) {
+    next.sharedKey = layout.sharedKey.trim();
+  }
+
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function buildResolvedBindingMotionChannels(
+  theme: Theme,
+  motion: ThemeBindingMotionSpec
+): ThemeMotionChannelMap | undefined {
+  const channels: ThemeMotionChannelMap = {};
+  const presence = motion.presence;
+  const layout = motion.layout;
+  const attention = motion.attention;
+  const visibility = motion.visibility;
+
+  const enter = resolveThemeMotionReference(theme, presence?.enter);
+  const exit = resolveThemeMotionReference(theme, presence?.exit);
+  const move = resolveThemeMotionReference(theme, layout?.move);
+  const resize = resolveThemeMotionReference(theme, layout?.resize);
+  const idle = resolveThemeMotionReference(theme, attention?.idle);
+  const hover = resolveThemeMotionReference(theme, attention?.hover);
+  const active = resolveThemeMotionReference(theme, attention?.active);
+  const success = resolveThemeMotionReference(theme, attention?.success);
+  const warning = resolveThemeMotionReference(theme, attention?.warning);
+  const show = resolveThemeMotionReference(theme, visibility?.show);
+  const hide = resolveThemeMotionReference(theme, visibility?.hide);
+
+  if (enter) {
+    channels.enter = enter;
+  }
+  if (exit) {
+    channels.exit = exit;
+  }
+  if (move) {
+    channels.layout = move;
+  }
+  if (resize) {
+    channels.layoutResize = resize;
+  }
+  if (idle) {
+    channels.attention = idle;
+  }
+  if (hover) {
+    channels.hover = hover;
+  }
+  if (active) {
+    channels.active = active;
+  }
+  if (success) {
+    channels.success = success;
+  }
+  if (warning) {
+    channels.warning = warning;
+  }
+  if (show) {
+    channels.show = show;
+  }
+  if (hide) {
+    channels.hide = hide;
+  }
+
+  return Object.keys(channels).length > 0 ? channels : undefined;
+}
+
+export function resolveThemeBindingMotion(
+  theme: Theme,
+  motion: ThemeBindingMotionSpec | undefined
+): ThemeBindingMotionCapability | undefined {
+  if (!motion) {
+    return undefined;
+  }
+
+  const channels = buildResolvedBindingMotionChannels(theme, motion);
+  const layout = normalizeMotionLayoutPolicy(motion.layout);
+
   const next: ThemeBindingMotionCapability = {
-    ...(typeof capability.enabled === 'boolean' ? { enabled: capability.enabled } : {}),
-    ...(mode ? { mode } : {}),
+    ...(typeof motion.enabled === 'boolean' ? { enabled: motion.enabled } : {}),
+    ...(motion.mode === 'full' || motion.mode === 'reduced' || motion.mode === 'off' ? { mode: motion.mode } : {}),
     ...(layout && Object.keys(layout).length > 0 ? { layout } : {}),
     ...(channels ? { channels } : {}),
+  };
+
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+export function resolveThemeMotionScene(
+  theme: Theme,
+  scene: string | ThemeMotionSceneSpec | undefined
+): ResolvedThemeMotionScene | undefined {
+  const sceneSpec = typeof scene === 'string' ? theme.motion?.scenes?.[scene] : scene;
+  if (!sceneSpec) {
+    return undefined;
+  }
+
+  const enter = resolveThemeMotionReference(theme, sceneSpec.enter);
+  const exit = resolveThemeMotionReference(theme, sceneSpec.exit);
+  const stagger = sceneSpec.stagger;
+  const match = sceneSpec.match;
+  const staggerStep =
+    typeof stagger?.step === 'string' || typeof stagger?.step === 'number'
+      ? resolveMotionTokenValue(theme, stagger.step)
+      : undefined;
+
+  const next: ResolvedThemeMotionScene = {
+    ...(enter ? { enter } : {}),
+    ...(exit ? { exit } : {}),
+    ...(stagger
+      ? {
+          stagger: {
+            ...(stagger.by === 'index' ||
+            stagger.by === 'x' ||
+            stagger.by === 'y' ||
+            stagger.by === 'grid' ||
+            stagger.by === 'distance'
+              ? { by: stagger.by }
+              : {}),
+            ...(stagger.from === 'start' ||
+            stagger.from === 'center' ||
+            stagger.from === 'end'
+              ? { from: stagger.from }
+              : {}),
+            ...(typeof staggerStep === 'string' || typeof staggerStep === 'number' ? { step: staggerStep } : {}),
+          },
+        }
+      : {}),
+    ...(match?.by === 'magnet-id' || match?.by === 'shared-key'
+      ? { match: { by: match.by } }
+      : {}),
+    ...(sceneSpec.sharedAxis === 'x' || sceneSpec.sharedAxis === 'y' || sceneSpec.sharedAxis === 'scale'
+      ? { sharedAxis: sceneSpec.sharedAxis }
+      : {}),
   };
 
   return Object.keys(next).length > 0 ? next : undefined;
