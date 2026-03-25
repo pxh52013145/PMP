@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { applyConfig, loadConfig, saveConfig } from '../configManager';
 import { Magnet } from '../../types/pixel';
+import { createDockedSingleControlLayoutPreset } from '../../modules/magnets/layoutPresets';
 
 const createMockMagnet = (): Magnet => ({
   id: 'test-magnet',
@@ -18,10 +19,7 @@ const createMockMagnet = (): Magnet => ({
     },
   ],
   anchorType: 'single',
-  boundsMode: 'docked',
-  boundsDock: { x: 'start' },
-  boundsInset: { top: 6, left: 2 },
-  boundsOutset: { top: 9 },
+  bounds: createDockedSingleControlLayoutPreset({ dock: { x: 'start' } }).bounds,
   content: 'Test Content' as unknown as React.ReactNode,
   style: {},
   chrome: {
@@ -83,24 +81,22 @@ describe('configManager baseline', () => {
     const loaded = loadConfig();
     const state = loaded?.magnets['test-magnet'];
 
-    expect(state?.boundsMode).toBe('docked');
-    expect(state?.boundsDock).toEqual({ x: 'start' });
-    expect(state?.boundsInset).toEqual({ top: 6, left: 2 });
-    expect(state?.boundsOutset).toEqual({ top: 9 });
-    expect(state?.chromeEnabled).toBe(true);
-    expect(state?.chromeInset).toEqual({ top: 4, right: 3, bottom: 2, left: 1 });
+    expect(state?.bounds).toEqual(createMockMagnet().bounds);
+    expect(state?.chrome).toEqual({ enabled: true, inset: { top: 4, right: 3, bottom: 2, left: 1 } });
   });
 
   it('drops unsupported persisted fields instead of writing them back', () => {
     localStorage.setItem(
       'pixel-matrix-player-config',
       JSON.stringify({
-        version: '1.2.0',
+        version: '1.3.0',
         gridSize: { columns: 27, rows: 20 },
         magnets: {
           'test-magnet': {
             anchors: createMockMagnet().anchors,
             isActive: true,
+            bounds: createMockMagnet().bounds,
+            chrome: createMockMagnet().chrome,
             renderer: 'test-renderer',
             variant: 'compact',
             skinProps: {
@@ -154,10 +150,7 @@ describe('configManager baseline', () => {
     const applied = applyConfig(loaded!, []);
     const magnet = applied.magnetLibrary[0];
 
-    expect(magnet.boundsMode).toBe('docked');
-    expect(magnet.boundsDock).toEqual({ x: 'start' });
-    expect(magnet.boundsInset).toEqual({ top: 6, left: 2 });
-    expect(magnet.boundsOutset).toEqual({ top: 9 });
+    expect(magnet.bounds).toEqual(createMockMagnet().bounds);
     expect(magnet.chrome?.enabled).toBe(true);
     expect(magnet.chrome?.inset).toEqual({ top: 4, right: 3, bottom: 2, left: 1 });
   });

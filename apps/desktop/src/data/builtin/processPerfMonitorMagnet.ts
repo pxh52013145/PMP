@@ -1,6 +1,9 @@
 import { Magnet } from '../../types/pixel';
 import { createPanelChromePreset } from '../../modules/magnets/chromePresets';
-import { createPanelLayoutPreset } from '../../modules/magnets/layoutPresets';
+import {
+  TOP_DOCKED_PANEL_CHROME_INSET,
+  createPanelLayoutPreset,
+} from '../../modules/magnets/layoutPresets';
 
 const PROCESS_PERF_MONITOR_CHROME = createPanelChromePreset({
   style: {
@@ -15,8 +18,7 @@ const PROCESS_PERF_MONITOR_CHROME = createPanelChromePreset({
   },
 });
 const PROCESS_PERF_MONITOR_LAYOUT = createPanelLayoutPreset({
-  boundsOutset: { top: 9 },
-  boundsAlign: { topToMagnetId: 'btn-back' },
+  chromeInset: TOP_DOCKED_PANEL_CHROME_INSET,
 });
 
 export const PROCESS_PERF_MONITOR_MAGNET: Magnet = {

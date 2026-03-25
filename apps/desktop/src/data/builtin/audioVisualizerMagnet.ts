@@ -1,6 +1,9 @@
 import { Magnet } from '../../types/pixel';
 import { createPanelChromePreset } from '../../modules/magnets/chromePresets';
-import { createPanelLayoutPreset } from '../../modules/magnets/layoutPresets';
+import {
+  STANDARD_PANEL_CHROME_INSET,
+  createPanelLayoutPreset,
+} from '../../modules/magnets/layoutPresets';
 
 const AUDIO_VISUALIZER_CHROME = createPanelChromePreset({
   style: {
@@ -15,7 +18,9 @@ const AUDIO_VISUALIZER_CHROME = createPanelChromePreset({
     boxShadow: '0 10px 25px rgba(0, 255, 136, 0.08)',
   },
 });
-const AUDIO_VISUALIZER_LAYOUT = createPanelLayoutPreset();
+const AUDIO_VISUALIZER_LAYOUT = createPanelLayoutPreset({
+  chromeInset: STANDARD_PANEL_CHROME_INSET,
+});
 
 /**
  * Audio Visualizer Magnet

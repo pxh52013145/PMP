@@ -5,8 +5,9 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  background: rgba(0, 0, 0, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0 10px;
+  background: transparent;
+  border: 0;
   border-radius: inherit;
   box-sizing: border-box;
   color: rgba(255, 255, 255, 0.92);
@@ -15,12 +16,11 @@
   letter-spacing: 0.5px;
   cursor: pointer;
   user-select: none;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: color 0.2s ease, opacity 0.2s ease;
 }
 
 .matrix-change-magnet:hover {
-  border: 1px solid rgba(0, 255, 136, 0.25);
-  box-shadow: 0 10px 25px rgba(0, 255, 136, 0.08);
+  color: rgba(255, 255, 255, 0.98);
 }
 
 .matrix-change-magnet:active {

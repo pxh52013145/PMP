@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Magnet, PixelAnchor, AnchorType, MagnetBoundsMode } from '../../types/pixel';
+import { Magnet, PixelAnchor, AnchorType } from '../../types/pixel';
 import { open } from '@tauri-apps/api/dialog';
 import { readTextFile } from '@tauri-apps/api/fs';
 import { useEditor } from '../../contexts/EditorContext';
 import { MagnetComponent } from '../magnet/Magnet';
-import { computeMagnetBounds } from '../../modules/magnets/geometry';
+import { computeMagnetVisualBounds } from '../../modules/magnets/geometry';
 import { getMagnetOccupiedPixels } from '../../utils/magnetEditor';
 import {
   appendMagnetHistory,
@@ -13,7 +13,6 @@ import {
   type MagnetHistoryItem,
 } from './magnetCreatorHistory';
 import {
-  type DockAxisDraft,
   type InsetDraft,
   INSET_SIDES,
   PREVIEW_PIXEL_POSITIONS,
@@ -24,9 +23,9 @@ import {
   createInsetDraft,
   getPreviewScaleFromBounds,
   hasMagnetConfigChanges,
-  parseDockAxis,
   parseInsetDraft,
 } from './magnetCreatorModel';
+import { createDefaultBoundsForMagnet } from '../../modules/magnets/layoutPresets';
 import { DEFAULT_MAGNET_TRANSITION } from '../../modules/magnets/chromePresets';
 import { useLocale, useT } from '../../i18n';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
@@ -67,12 +66,8 @@ export function MagnetCreator({
   const [name, setName] = useState('');
   const [anchorType, setAnchorType] = useState<AnchorType>('single');
   const [content, setContent] = useState('');
-  const [boundsMode, setBoundsMode] = useState<MagnetBoundsMode>('centered');
-  const [boundsDockX, setBoundsDockX] = useState<DockAxisDraft>('');
-  const [boundsDockY, setBoundsDockY] = useState<DockAxisDraft>('');
-  const [boundsInsetDraft, setBoundsInsetDraft] = useState<InsetDraft>(createEmptyInsetDraft());
-  const [boundsOutsetDraft, setBoundsOutsetDraft] = useState<InsetDraft>(createEmptyInsetDraft());
   const [chromeInsetDraft, setChromeInsetDraft] = useState<InsetDraft>(createEmptyInsetDraft());
+  const [chromeOutsetDraft, setChromeOutsetDraft] = useState<InsetDraft>(createEmptyInsetDraft());
 
   // 闂佹寧姘ㄩ崑锝夋煀瀹ュ洨鏋?- pixel 閻忓繐鎼敓?
   const [horizontalPixels, setHorizontalPixels] = useState(5); // 婵ɑ娼欓柦鈺呭棘閻熺増鍊?pixel 闁轰椒鍗抽敓?
@@ -91,6 +86,9 @@ export function MagnetCreator({
   "justifyContent": "center",
   "cursor": "pointer"
 }`);
+  const [boundsJson, setBoundsJson] = useState<string>(() =>
+    JSON.stringify(createDefaultBoundsForMagnet('single', { width: '36px', height: '36px' }), null, 2)
+  );
 
   // 闁告柣鍔庨弫楣冩煀瀹ュ洨鏋傞柨娑樻篂SON 閻庢稒顨堥浣圭▔鐠囇呯
   const [animationJson, setAnimationJson] = useState<string>(() =>
@@ -113,6 +111,7 @@ export function MagnetCreator({
 
   // 闁哄秴鍢茬槐锛勬喆閿濆棛鈧粙鏌ㄥ▎鎺濆殩
   const [styleError, setStyleError] = useState('');
+  const [boundsError, setBoundsError] = useState('');
   const [animationError, setAnimationError] = useState('');
 
   // 閻庣數鍘ч崣鍡涙偐閼哥鍋?
@@ -154,23 +153,29 @@ export function MagnetCreator({
     }
   }, [animationJson]);
 
-  const parsedBoundsInset = useMemo(() => parseInsetDraft(boundsInsetDraft), [boundsInsetDraft]);
-
-  const parsedBoundsOutset = useMemo(() => parseInsetDraft(boundsOutsetDraft), [boundsOutsetDraft]);
-
   const parsedChromeInset = useMemo(() => parseInsetDraft(chromeInsetDraft), [chromeInsetDraft]);
+  const parsedChromeOutset = useMemo(() => parseInsetDraft(chromeOutsetDraft), [chromeOutsetDraft]);
 
-  const parsedBoundsDock = useMemo(() => {
-    const x = parseDockAxis(boundsDockX);
-    const y = parseDockAxis(boundsDockY);
+  const parsedBounds = useMemo(() => {
+    try {
+      const parsed = JSON.parse(boundsJson) as Magnet['bounds'];
+      if (
+        !parsed ||
+        !parsed.horizontal?.start ||
+        !parsed.horizontal?.end ||
+        !parsed.vertical?.start ||
+        !parsed.vertical?.end
+      ) {
+        throw new Error('invalid-bounds');
+      }
 
-    if (x === undefined && y === undefined) return undefined;
-
-    return {
-      ...(x !== undefined ? { x } : {}),
-      ...(y !== undefined ? { y } : {}),
-    };
-  }, [boundsDockX, boundsDockY]);
+      setBoundsError('');
+      return parsed;
+    } catch (error) {
+      setBoundsError('common.error.jsonFormat');
+      return undefined;
+    }
+  }, [boundsJson]);
 
   const anchorDimensions = useMemo(
     () => ({ horizontalPixels, verticalPixels, rectWidth, rectHeight }),
@@ -185,12 +190,9 @@ export function MagnetCreator({
     setName(magnet.name);
     setAnchorType(magnet.anchorType);
     setContent(typeof magnet.content === 'string' ? magnet.content : '');
-    setBoundsMode(magnet.boundsMode ?? 'centered');
-    setBoundsDockX(magnet.boundsDock?.x ?? '');
-    setBoundsDockY(magnet.boundsDock?.y ?? '');
-    setBoundsInsetDraft(createInsetDraft(magnet.boundsInset));
-    setBoundsOutsetDraft(createInsetDraft(magnet.boundsOutset));
+    setBoundsJson(JSON.stringify(magnet.bounds, null, 2));
     setChromeInsetDraft(createInsetDraft(magnet.chrome?.inset));
+    setChromeOutsetDraft(createInsetDraft(magnet.chrome?.outset));
 
     // 闁告梻濮惧ù鍥煥濮樺崬浠梺鏉跨Ф閻ゅ棝鐛幆閭﹀悁閿?pixel 閻忓繐鎼敓?
     if (magnet.anchors.length >= 2) {
@@ -348,7 +350,7 @@ export function MagnetCreator({
     t,
   ]);
   const previewMagnet = useMemo<Magnet | null>(() => {
-    if (!id || !name) return null;
+    if (!id || !name || !parsedBounds) return null;
 
     return buildEditorMagnet({
       seedMagnet: sourceMagnet ?? undefined,
@@ -356,40 +358,36 @@ export function MagnetCreator({
       name,
       anchorType,
       anchors: generateAnchors,
-      boundsMode,
-      boundsDock: parsedBoundsDock,
-      boundsInset: parsedBoundsInset,
-      boundsOutset: parsedBoundsOutset,
+      bounds: parsedBounds,
       content,
       style: parsedStyle,
       animation: parsedAnimation,
       chromeInset: parsedChromeInset,
+      chromeOutset: parsedChromeOutset,
     });
   }, [
     anchorType,
-    boundsMode,
     content,
     generateAnchors,
     id,
     name,
     parsedAnimation,
-    parsedBoundsDock,
-    parsedBoundsInset,
-    parsedBoundsOutset,
+    parsedBounds,
     parsedChromeInset,
+    parsedChromeOutset,
     parsedStyle,
     sourceMagnet,
   ]);
 
   const previewBounds = useMemo(() => {
     if (!previewMagnet) return null;
-    return computeMagnetBounds(previewMagnet, PREVIEW_PIXEL_POSITIONS);
+    return computeMagnetVisualBounds(previewMagnet, PREVIEW_PIXEL_POSITIONS);
   }, [previewMagnet]);
 
   const previewScale = useMemo(() => getPreviewScaleFromBounds(previewBounds), [previewBounds]);
 
   const handleSave = () => {
-    if (!id || !name) return;
+    if (!id || !name || !parsedBounds) return;
 
     const anchorsToSave =
       mode === 'edit' && editingMagnet
@@ -409,14 +407,12 @@ export function MagnetCreator({
       name,
       anchorType,
       anchors: anchorsToSave,
-      boundsMode,
-      boundsDock: parsedBoundsDock,
-      boundsInset: parsedBoundsInset,
-      boundsOutset: parsedBoundsOutset,
+      bounds: parsedBounds,
       content,
       style: parsedStyle,
       animation: parsedAnimation,
       chromeInset: parsedChromeInset,
+      chromeOutset: parsedChromeOutset,
     });
 
     const lastMagnet = mode === 'edit' && history.length > 0 ? history[0].magnet : null;
@@ -457,6 +453,7 @@ export function MagnetCreator({
       if (!data.id) throw new Error(t('editor.magnet-creator.import.missingField.id'));
       if (!data.name) throw new Error(t('editor.magnet-creator.import.missingField.name'));
       if (!data.anchorType) throw new Error(t('editor.magnet-creator.import.missingField.anchorType'));
+      if (!data.bounds) throw new Error(t('editor.magnet-creator.import.missingField.bounds'));
       if (!data.style) throw new Error(t('editor.magnet-creator.import.missingField.style'));
 
       // 闁告梻濮惧ù鍥煀瀹ュ洨鏋?
@@ -514,11 +511,7 @@ export function MagnetCreator({
       name: previewMagnet.name,
       anchorType: previewMagnet.anchorType,
       anchors: previewMagnet.anchors,
-      boundsMode: previewMagnet.boundsMode,
-      boundsDock: previewMagnet.boundsDock,
-      boundsInset: previewMagnet.boundsInset,
-      boundsOutset: previewMagnet.boundsOutset,
-      boundsAlign: previewMagnet.boundsAlign,
+      bounds: previewMagnet.bounds,
       content: previewMagnet.content,
       style: previewMagnet.style,
       chrome: previewMagnet.chrome,
@@ -556,7 +549,7 @@ export function MagnetCreator({
   };
 
   // 濡ょ姴鐭侀惁澶屾偘閵娿儱绀?
-  const isValid = id && name && !anchorsValidation.hasErrors;
+  const isValid = id && name && !anchorsValidation.hasErrors && !boundsError && !styleError && !animationError;
 
 
 
@@ -677,7 +670,11 @@ export function MagnetCreator({
               <select
                 className="creator-select"
                 value={anchorType}
-                onChange={(e) => setAnchorType(e.target.value as AnchorType)}
+                onChange={(e) => {
+                  const nextAnchorType = e.target.value as AnchorType;
+                  setAnchorType(nextAnchorType);
+                  setBoundsJson(JSON.stringify(createDefaultBoundsForMagnet(nextAnchorType, parsedStyle), null, 2));
+                }}
               >
                 <option value="single">{t('editor.magnet-creator.anchorType.single')}</option>
                 <option value="horizontal">{t('editor.magnet-creator.anchorType.horizontal')}</option>
@@ -870,144 +867,20 @@ export function MagnetCreator({
           <div className="creator-section-title">{t('editor.magnet-creator.section.layout')}</div>
           <div className="creator-form">
             <div className="creator-layout-hint">{t('editor.magnet-creator.layout.hint')}</div>
-
-            {anchorType === 'single' && (
-              <div className="creator-layout-subsection">
-                <div className="creator-form-row">
-                  <label className="creator-label">
-                    {t('editor.magnet-creator.field.boundsMode')}
-                  </label>
-                  <select
-                    className="creator-select"
-                    value={boundsMode}
-                    onChange={(e) => setBoundsMode(e.target.value as MagnetBoundsMode)}
-                  >
-                    <option value="centered">
-                      {t('editor.magnet-creator.boundsMode.centered')}
-                    </option>
-                    <option value="docked">{t('editor.magnet-creator.boundsMode.docked')}</option>
-                  </select>
-                </div>
-
-                <div className="creator-layout-hint">
-                  {t('editor.magnet-creator.layout.singleModeHint')}
-                </div>
-
-                {boundsMode === 'docked' && (
-                  <div className="creator-layout-grid creator-layout-grid--dock">
-                    <div className="creator-form-column">
-                      <label className="creator-label">
-                        {t('editor.magnet-creator.field.boundsDockX')}
-                      </label>
-                      <select
-                        className="creator-select"
-                        value={boundsDockX}
-                        onChange={(e) => setBoundsDockX(e.target.value as DockAxisDraft)}
-                      >
-                        <option value="">
-                          {t('editor.magnet-creator.boundsDockAxis.none')}
-                        </option>
-                        <option value="start">
-                          {t('editor.magnet-creator.boundsDockAxis.start')}
-                        </option>
-                        <option value="center">
-                          {t('editor.magnet-creator.boundsDockAxis.center')}
-                        </option>
-                        <option value="end">
-                          {t('editor.magnet-creator.boundsDockAxis.end')}
-                        </option>
-                      </select>
-                    </div>
-
-                    <div className="creator-form-column">
-                      <label className="creator-label">
-                        {t('editor.magnet-creator.field.boundsDockY')}
-                      </label>
-                      <select
-                        className="creator-select"
-                        value={boundsDockY}
-                        onChange={(e) => setBoundsDockY(e.target.value as DockAxisDraft)}
-                      >
-                        <option value="">
-                          {t('editor.magnet-creator.boundsDockAxis.none')}
-                        </option>
-                        <option value="start">
-                          {t('editor.magnet-creator.boundsDockAxis.start')}
-                        </option>
-                        <option value="center">
-                          {t('editor.magnet-creator.boundsDockAxis.center')}
-                        </option>
-                        <option value="end">
-                          {t('editor.magnet-creator.boundsDockAxis.end')}
-                        </option>
-                      </select>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
             <div className="creator-layout-subsection">
               <div className="creator-layout-subtitle">
-                {t('editor.magnet-creator.layout.realInsetTitle')}
+                {t('editor.magnet-creator.layout.boundsTitle')}
               </div>
-              <div className="creator-layout-hint">
-                {t('editor.magnet-creator.layout.realInsetHint')}
-              </div>
-              <div className="creator-layout-grid">
-                {INSET_SIDES.map((side) => (
-                  <div key={`bounds-${side}`} className="creator-form-column">
-                    <label className="creator-label">
-                      {t(`editor.magnet-creator.field.boundsInset${side[0].toUpperCase()}${side.slice(1)}`)}
-                    </label>
-                    <input
-                      type="number"
-                      className="creator-input creator-input-number creator-layout-input"
-                      value={boundsInsetDraft[side]}
-                      onChange={(e) =>
-                        setBoundsInsetDraft((current) => ({
-                          ...current,
-                          [side]: e.target.value,
-                        }))
-                      }
-                      min="0"
-                      step="1"
-                      placeholder="0"
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="creator-layout-subsection">
-              <div className="creator-layout-subtitle">
-                {t('editor.magnet-creator.layout.realOutsetTitle')}
-              </div>
-              <div className="creator-layout-hint">
-                {t('editor.magnet-creator.layout.realOutsetHint')}
-              </div>
-              <div className="creator-layout-grid">
-                {INSET_SIDES.map((side) => (
-                  <div key={`bounds-outset-${side}`} className="creator-form-column">
-                    <label className="creator-label">
-                      {t(`editor.magnet-creator.field.boundsOutset${side[0].toUpperCase()}${side.slice(1)}`)}
-                    </label>
-                    <input
-                      type="number"
-                      className="creator-input creator-input-number creator-layout-input"
-                      value={boundsOutsetDraft[side]}
-                      onChange={(e) =>
-                        setBoundsOutsetDraft((current) => ({
-                          ...current,
-                          [side]: e.target.value,
-                        }))
-                      }
-                      min="0"
-                      step="1"
-                      placeholder="0"
-                    />
-                  </div>
-                ))}
+              <div className="creator-layout-hint">{t('editor.magnet-creator.layout.boundsHint')}</div>
+              <div className="creator-form-column">
+                <textarea
+                  className="creator-textarea"
+                  value={boundsJson}
+                  onChange={(e) => setBoundsJson(e.target.value)}
+                  placeholder='{"horizontal":{"start":{"source":"slot","edge":"center","offset":-18},"end":{"source":"slot","edge":"center","offset":18}},"vertical":{"start":{"source":"slot","edge":"center","offset":-18},"end":{"source":"slot","edge":"center","offset":18}}}'
+                  rows={12}
+                />
+                {boundsError && <div className="creator-error">{t(boundsError)}</div>}
               </div>
             </div>
 
@@ -1030,6 +903,38 @@ export function MagnetCreator({
                       value={chromeInsetDraft[side]}
                       onChange={(e) =>
                         setChromeInsetDraft((current) => ({
+                          ...current,
+                          [side]: e.target.value,
+                        }))
+                      }
+                      min="0"
+                      step="1"
+                      placeholder="0"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="creator-layout-subsection">
+              <div className="creator-layout-subtitle">
+                {t('editor.magnet-creator.layout.chromeOutsetTitle')}
+              </div>
+              <div className="creator-layout-hint">
+                {t('editor.magnet-creator.layout.chromeOutsetHint')}
+              </div>
+              <div className="creator-layout-grid">
+                {INSET_SIDES.map((side) => (
+                  <div key={`chrome-outset-${side}`} className="creator-form-column">
+                    <label className="creator-label">
+                      {t(`editor.magnet-creator.field.chromeOutset${side[0].toUpperCase()}${side.slice(1)}`)}
+                    </label>
+                    <input
+                      type="number"
+                      className="creator-input creator-input-number creator-layout-input"
+                      value={chromeOutsetDraft[side]}
+                      onChange={(e) =>
+                        setChromeOutsetDraft((current) => ({
                           ...current,
                           [side]: e.target.value,
                         }))

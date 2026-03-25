@@ -33,6 +33,7 @@ import {
   magnetLayoutStoreApplyPatchWithRetry,
   magnetLayoutStoreBootstrap,
   magnetLayoutStoreGetState,
+  patchMagnetStateConfigWithLayoutSnapshot,
   removeMagnetCatalogMagnet,
   resolveMagnetConfigStorageKey,
   resolveMagnetLayoutStorageKey,
@@ -962,18 +963,12 @@ export function EditorWindowApp() {
                 customMagnets: catalogMagnets,
               };
 
-          const patchedMagnets: Record<string, MagnetStateConfig> = { ...baseConfig.magnets };
-          const patchMagnet = (magnet: Magnet) => {
-            const existing = patchedMagnets[magnet.id];
-            patchedMagnets[magnet.id] = {
-              ...(existing ?? { anchors: magnet.anchors, isActive: false }),
-              anchors: layout.anchorsByMagnetId[magnet.id] ?? existing?.anchors ?? magnet.anchors,
-              isActive: activeFromLayout.has(magnet.id),
-            };
-          };
-
-          defaultMagnetLibrary.forEach(patchMagnet);
-          catalogMagnets.forEach(patchMagnet);
+          const patchedMagnets: Record<string, MagnetStateConfig> = patchMagnetStateConfigWithLayoutSnapshot({
+            magnets: [...defaultMagnetLibrary, ...catalogMagnets],
+            currentStates: baseConfig.magnets,
+            anchorsByMagnetId: layout.anchorsByMagnetId,
+            activeMagnetIds: activeFromLayout,
+          });
 
           const applied = applyConfig(
             { ...baseConfig, gridSize: { columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS }, magnets: patchedMagnets },
@@ -1043,7 +1038,7 @@ export function EditorWindowApp() {
       if (reloadTimer !== null) window.clearTimeout(reloadTimer);
       cleanupPromise.then((cleanup) => cleanup());
     };
-  }, [defaultMagnetLibrary, isTauri, needsMagnetConfigSync]);
+  }, [defaultMagnetLibrary, isTauri, needsMagnetConfigSync, windowType]);
 
   // Handlers
   const handleExitEditMode = async () => {

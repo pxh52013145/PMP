@@ -18,6 +18,7 @@ import {
   cancelScheduledMagnetConfigSave,
   flushScheduledMagnetConfigSave,
   loadMagnetConfig,
+  patchMagnetStateConfigWithLayoutSnapshot,
   resolveMagnetConfigStorageKey,
   saveMagnetConfig,
   scheduleSaveMagnetConfig,
@@ -351,23 +352,31 @@ export function MagnetLibraryProvider({
           };
 
       const baseLibrary = [...defaultMagnetLibrary, ...catalogMagnets];
-      const patchedMagnets: Record<string, MagnetStateConfig> = { ...baseConfig.magnets };
-      for (const magnet of baseLibrary) {
-        const existing = patchedMagnets[magnet.id];
-        patchedMagnets[magnet.id] = {
-          ...(existing ?? { anchors: magnet.anchors, isActive: false }),
-          anchors:
-            normalizedLayout.anchorsByMagnetId[magnet.id] ?? existing?.anchors ?? magnet.anchors,
-          isActive: activeFromLayout.has(magnet.id),
-        };
-      }
+      const patchedMagnets: Record<string, MagnetStateConfig> = patchMagnetStateConfigWithLayoutSnapshot({
+        magnets: baseLibrary,
+        currentStates: baseConfig.magnets,
+        anchorsByMagnetId: normalizedLayout.anchorsByMagnetId,
+        activeMagnetIds: activeFromLayout,
+      });
 
+      const baselineApplied = applyMagnetConfig(
+        { ...baseConfig, gridSize, magnets: baseConfig.magnets },
+        defaultMagnetLibrary
+      );
       const applied = applyMagnetConfig(
         { ...baseConfig, gridSize, magnets: patchedMagnets },
         defaultMagnetLibrary
       );
+      const baselineActive = new Set(baselineApplied.activeMagnetIds);
+      for (const id of REQUIRED_MAGNET_IDS) baselineActive.add(id);
       const ensuredActive = new Set(applied.activeMagnetIds);
       for (const id of REQUIRED_MAGNET_IDS) ensuredActive.add(id);
+      const shouldPersistNormalizedConfig =
+        JSON.stringify(baselineApplied.magnetLibrary) !== JSON.stringify(applied.magnetLibrary) ||
+        JSON.stringify([...baselineActive].sort()) !== JSON.stringify([...ensuredActive].sort());
+      if (shouldPersistNormalizedConfig) {
+        saveMagnetConfig(applied.magnetLibrary, ensuredActive, gridSize, defaultMagnetLibrary, configKey);
+      }
 
       loadedConfigKeyRef.current = configKey;
       loadedLayoutKeyRef.current = resolveMagnetLayoutStorageKey(args.activeSpaceId);
@@ -418,7 +427,6 @@ export function MagnetLibraryProvider({
     applyLayoutStorePatch,
     defaultMagnetLibrary,
     gridSize,
-    magnetSpaces.spaces,
     resolvedDefaultActiveMagnetIds,
     runtimeDefaultActiveMagnetIds,
     isTauri,

@@ -66,29 +66,41 @@
   border-color: rgba(255, 59, 48, 0.8);
 }
 
-/* Magnet 拖动预览 */
-.magnet-drag-preview {
+/* Magnet 预览层 */
+.magnet-preview-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
   z-index: 2000;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  transition: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   user-select: none;
   -webkit-user-select: none;
 }
 
-.magnet-placement-preview {
-  z-index: 2000;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  transition: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  user-select: none;
-  -webkit-user-select: none;
+.magnet-preview-layer,
+.magnet-preview-layer * {
+  pointer-events: none !important;
 }
 
-.magnet-drag-preview.collision {
-  background-color: rgba(255, 59, 48, 0.3) !important;
+.magnet-preview-ghost {
+  position: absolute;
+  inset: 0;
+}
+
+.magnet-preview-outline {
+  position: absolute;
+  box-sizing: border-box;
+  transition: none;
+  border: 2px dashed rgba(0, 122, 255, 0.8);
+}
+
+.magnet-preview-outline--drag {
+  border-color: rgba(0, 122, 255, 0.8);
+}
+
+.magnet-preview-outline--placement {
+  border-color: rgba(255, 0, 200, 0.85);
+}
+
+.magnet-preview-outline--collision {
+  border-color: rgba(255, 59, 48, 0.8);
 }

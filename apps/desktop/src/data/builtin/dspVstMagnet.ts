@@ -1,6 +1,9 @@
 import { Magnet } from '../../types/pixel';
 import { createPanelChromePreset } from '../../modules/magnets/chromePresets';
-import { createPanelLayoutPreset } from '../../modules/magnets/layoutPresets';
+import {
+  STANDARD_HORIZONTAL_BAR_CHROME_INSET,
+  createHorizontalBarLayoutPreset,
+} from '../../modules/magnets/layoutPresets';
 
 const DSP_VST_CHROME = createPanelChromePreset({
   style: {
@@ -16,7 +19,10 @@ const DSP_VST_CHROME = createPanelChromePreset({
     boxShadow: '0 10px 25px rgba(0, 255, 136, 0.08)',
   },
 });
-const DSP_VST_LAYOUT = createPanelLayoutPreset();
+const DSP_VST_LAYOUT = createHorizontalBarLayoutPreset({
+  height: 36,
+  chromeInset: STANDARD_HORIZONTAL_BAR_CHROME_INSET,
+});
 
 export const DSP_VST_MAGNET: Magnet = {
   id: 'dsp-vst',

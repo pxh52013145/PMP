@@ -1,9 +1,15 @@
 import type { Magnet } from '../../types/pixel';
 import { createDragHandleChromePreset } from '../../modules/magnets/chromePresets';
-import { createPanelLayoutPreset } from '../../modules/magnets/layoutPresets';
+import {
+  STANDARD_HORIZONTAL_BAR_CHROME_INSET,
+  createHorizontalBarLayoutPreset,
+} from '../../modules/magnets/layoutPresets';
 
 const DRAG_HANDLE_CHROME = createDragHandleChromePreset();
-const DRAG_HANDLE_LAYOUT = createPanelLayoutPreset();
+const DRAG_HANDLE_LAYOUT = createHorizontalBarLayoutPreset({
+  height: 36,
+  chromeInset: STANDARD_HORIZONTAL_BAR_CHROME_INSET,
+});
 
 export const DRAG_HANDLE_MAGNET: Magnet = {
   id: 'drag-handle',

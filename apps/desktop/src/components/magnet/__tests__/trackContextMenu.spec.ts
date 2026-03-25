@@ -115,7 +115,7 @@ describe('trackContextMenu', () => {
     });
 
     expect(menu.children).toHaveLength(1);
-    expect(menu.children?.[0].label).toBe('A ✓');
+    expect(menu.children?.[0].label).toBe('A (common.state.alreadyAdded)');
     expect(menu.children?.[0].disabled).toBe(true);
 
     menu.children?.[0].onClick?.();

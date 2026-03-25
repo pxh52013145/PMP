@@ -2,6 +2,8 @@ import { Magnet } from '../../types/pixel';
 import { createControlChromePreset, createPanelChromePreset } from '../../modules/magnets/chromePresets';
 import {
   createCenteredSingleControlLayoutPreset,
+  createHorizontalBarLayoutPreset,
+  STANDARD_PANEL_CHROME_INSET,
   createPanelLayoutPreset,
 } from '../../modules/magnets/layoutPresets';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
@@ -48,8 +50,12 @@ const TRACK_INFO_CHROME = createPanelChromePreset({
   },
 });
 const PLAYER_CONTROL_LAYOUT = createCenteredSingleControlLayoutPreset();
-const PROGRESS_BAR_LAYOUT = createPanelLayoutPreset();
-const TRACK_INFO_LAYOUT = createPanelLayoutPreset();
+const PROGRESS_BAR_LAYOUT = createHorizontalBarLayoutPreset({
+  height: 24,
+});
+const TRACK_INFO_LAYOUT = createPanelLayoutPreset({
+  chromeInset: STANDARD_PANEL_CHROME_INSET,
+});
 const telemetry = getTelemetryLogger('magnets', 'musicPlayerMagnets');
 
 /**

@@ -4,6 +4,7 @@
  */
 
 import { Magnet } from '../../types/pixel';
+import { createDefaultBoundsForMagnet } from '../../modules/magnets/layoutPresets';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 
 const telemetry = getTelemetryLogger('magnets', 'exampleCustomMagnet');
@@ -32,6 +33,7 @@ export const HELP_BUTTON_MAGNET: Magnet = {
     fontWeight: 'bold',
     cursor: 'pointer',
   },
+  bounds: createDefaultBoundsForMagnet('single', { width: '32px', height: '32px' }),
 
   animation: {
     transition: 'all 0.2s ease',
@@ -81,6 +83,7 @@ export const VOLUME_TOGGLE_MAGNET: Magnet = {
     cursor: 'pointer',
     fontSize: '18px',
   },
+  bounds: createDefaultBoundsForMagnet('single', { width: '36px', height: '36px' }),
 
   animation: {
     transition: 'all 0.2s ease',
@@ -138,6 +141,7 @@ export const CUSTOM_BUTTON_FROM_CREATOR: Magnet = {
     cursor: 'pointer',
     border: '2px solid rgba(255, 255, 255, 0.3)',
   },
+  bounds: createDefaultBoundsForMagnet('single', { width: '64px', height: '36px' }),
   animation: {
     transition: 'all 0.3s ease',
     hoverStyle: {

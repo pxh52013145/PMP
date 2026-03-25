@@ -1,370 +1,374 @@
 # Magnet Pattern Guide
 
-This document is the maintainable working guide for magnet layout, chrome, and content styling in Pixel Matrix Player.
+This document defines the active magnet layout model in Pixel Matrix Player.
 
 It complements:
 
 - `docs/architecture/magnet-generation-spec.md` for registration and generation flow
-- `docs/architecture/magnet-style-guidelines.md` for host-side DOM style contract
+- `docs/architecture/magnet-style-guidelines.md` for host DOM and surface styling rules
 
-## 1. Core model
+## 1. Core split
 
-A magnet is split into three concerns:
+Every magnet is authored across three separate layers:
 
-- **Layout**: where the shell lives on the pixel matrix
-- **Chrome**: how the outer frame is painted
-- **Content**: how the renderer lays out text, controls, and visuals inside the shell
+- `anchors`: matrix occupancy and grid relationship
+- `bounds`: real shell geometry
+- `chrome` and renderer content: visual frame and inner layout
 
 Do not mix these concerns.
 
-## 1.1 Builtin declaration pattern
+Rules:
 
-Every builtin magnet should declare two explicit preset constants:
+- `anchors` answer "which pixels / cells does this magnet belong to?"
+- `bounds` answer "where the authored shell starts and ends in screen space"
+- `chrome.outset` answers "how far the rendered shell should extend beyond authored bounds"
+- `chrome.inset` answers "how far inward should the renderer content be padded?"
+- renderer CSS answers "how do children lay out inside the shell?"
 
-- `*_CHROME` from `apps/desktop/src/modules/magnets/chromePresets.ts`
-- `*_LAYOUT` from `apps/desktop/src/modules/magnets/layoutPresets.ts`
+There is no longer any auxiliary per-mode bounds field family in runtime authoring. Layout is expressed only through explicit `bounds` references.
 
-Even when a layout preset is empty, keep it explicit in the builtin definition.
+## 2. Bounds contract
 
-Why:
+Runtime layout is driven by one explicit object:
 
-- avoids hidden reliance on fallback geometry behavior
-- makes single-vs-panel placement intent obvious in code review
-- keeps future layout migrations mechanical and low risk
+```ts
+interface MagnetBoundsReference {
+  source: 'slot' | 'span' | 'viewport' | 'magnet'
+  edge: 'start' | 'center' | 'end'
+  magnetId?: string
+  offset?: number
+}
+
+interface MagnetBoundsAxis {
+  start: MagnetBoundsReference
+  end: MagnetBoundsReference
+}
+
+interface MagnetBoundsSpec {
+  horizontal: MagnetBoundsAxis
+  vertical: MagnetBoundsAxis
+}
+```
+
+Each axis resolves two references:
+
+- `start`
+- `end`
+
+The resolved `end` must be greater than `start`, otherwise the bounds are invalid and the magnet will not render.
+
+## 2.1 Reference sources
+
+### `slot`
+
+Resolves against the first anchor cell.
+
+Use it when a single control must seam to the exact slot edge.
+
+Typical use:
+
+- left-docked back button
+- top-docked icon aligned to a panel seam
+
+### `span`
+
+Resolves against the full anchor footprint.
+
+Use it for normal centered controls and for panel/bar shells that should match the occupied anchor span.
+
+Typical use:
+
+- default single control
+- horizontal bar
+- vertical bar
+- rectangular panel
+
+### `viewport`
+
+Resolves against the full host viewport.
+
+Use it for overlays or full-screen shells that should not depend on the anchor footprint.
+
+### `magnet`
+
+Resolves against another magnet's computed shell bounds.
+
+Required field:
+
+- `magnetId`
+
+Use it when one shell must align to another shell, instead of approximating the relationship with hardcoded offsets.
+
+Typical use:
+
+- make a panel top edge align to `btn-back`
+- make two adjacent shells share an exact outer border
+
+Avoid cyclic references between magnets.
+
+## 2.2 Reference edges
+
+Each source exposes three edges:
+
+- `start`
+- `center`
+- `end`
+
+Meaning:
+
+- horizontal axis: left / center / right
+- vertical axis: top / center / bottom
+
+`offset` is always applied after the edge is resolved.
+
+## 2.3 Direct edge offsets
+
+Bounds tuning is now expressed as explicit per-edge offsets inside references or preset helpers.
+
+When using preset `edgeOffsets`, the sign is direct and literal:
+
+- left/top positive: move inward
+- left/top negative: move outward
+- right/bottom positive: move outward
+- right/bottom negative: move inward
+
+This replaces the old inset/outset split with one simpler rule: each edge can move independently.
+
+## 3. Preset vocabulary
+
+Builtin magnets should still declare explicit layout presets from `apps/desktop/src/modules/magnets/layoutPresets.ts`.
+
+### `createCenteredSingleControlLayoutPreset`
+
+Use for standard free-standing single magnets.
+
+Semantics:
+
+- horizontal bounds center on the anchor span
+- vertical bounds center on the anchor span
+- width and height come from the preset options
 
 Example:
 
 ```ts
-const BACK_BUTTON_CHROME = createControlChromePreset()
-const BACK_BUTTON_LAYOUT = createDockedSingleControlLayoutPreset({
+const layout = createCenteredSingleControlLayoutPreset({
+  width: 36,
+  height: 36,
+})
+```
+
+### `createDockedSingleControlLayoutPreset`
+
+Use for single magnets that must seam to a slot edge.
+
+Semantics:
+
+- explicitly docked axes resolve against `slot`
+- omitted dock axes fall back to centered single behavior
+
+Example:
+
+```ts
+const layout = createDockedSingleControlLayoutPreset({
+  width: 36,
+  height: 36,
   dock: { x: 'start' },
 })
-
-export const BACK_BUTTON_MAGNET: Magnet = {
-  ...BACK_BUTTON_LAYOUT,
-  style: BACK_BUTTON_CHROME.style,
-  animation: BACK_BUTTON_CHROME.animation,
-}
 ```
 
-## 2. DOM layers
+This means:
 
-Runtime DOM structure:
+- left edge is pinned to the slot start
+- right edge is `36px` from that left seam
+- vertical axis remains centered
 
-- `magnet-shell`
-  - absolute positioning, hit area, z-index, cursor
-- `magnet`
-  - host chrome container
-- `magnet-base-layer`
-  - background, stroke, blur, shadow
-- `magnet-content-layer`
-  - content layout and typography
+### `createPanelLayoutPreset`
 
-Rules:
+Use for rectangular shells that should follow the full anchor span by default.
 
-- `magnet-shell` owns real bounds
-- `magnet-base-layer` owns chrome paint only
-- `magnet-content-layer` owns content spacing only
-- renderer CSS must not try to reposition the shell
+Default behavior:
 
-## 3. Layout vocabulary
+- left/right use `span.start` / `span.end`
+- top/bottom use `span.start` / `span.end`
+- chrome is optional and visual-only
 
-### `anchors`
+Supports:
 
-- Define the occupied grid relationship
-- Are the source of truth for matrix placement
-- Must not be used for visual micro-offset hacks
+- `edgeOffsets`
+- `edgeOverrides`
+- `chromeInset`
+- `chromeOutset`
 
-### `anchorType`
+### `createHorizontalBarLayoutPreset`
 
-- `single`: one-slot control/button
-- `horizontal`: one-row strip
-- `vertical`: one-column strip
-- `rectangular`: panel/block area
+Use for one-row shells whose width follows the anchor span, while height is fixed.
 
-### `boundsMode`
+Default behavior:
 
-Only applies to `single` magnets.
+- horizontal axis follows `span`
+- vertical axis is centered to a fixed size
+- chrome is optional and visual-only
 
-- `centered`
-  - centers the control within its slot
-  - best default for free-standing controls
-- `docked`
-  - locks the control to a slot edge on the axes you specify
-  - use only when the control must maintain a seam relationship with a nearby panel or control
+### `createVerticalBarLayoutPreset`
 
-### `boundsDock`
+Use for one-column shells whose height follows the anchor span, while width is fixed.
 
-Only applies when `boundsMode: 'docked'`.
+Default behavior:
 
-- `x?: 'start' | 'center' | 'end'`
-- `y?: 'start' | 'center' | 'end'`
+- vertical axis follows `span`
+- horizontal axis is centered to a fixed size
+- chrome is optional and visual-only
 
-Important:
+### `createDefaultBoundsForMagnet`
 
-- omitted axes fall back to standard `single` centering
-- use single-axis docking whenever possible
-- avoid `y: 'end'` on top-row controls unless a hard seam is intentional
+Use this as the default authoring helper when a magnet is created from generic editor or plugin input.
 
-### `boundsInset`
+It derives an initial bounds preset from:
 
-Real layout inset.
-
-```ts
-boundsInset?: {
-  top?: number
-  right?: number
-  bottom?: number
-  left?: number
-}
-```
-
-Use `boundsInset` when you want to change the actual shell bounds.
-
-It affects:
-
-- layout position
-- occupied visual area
-- collision behavior
-- adaptive join detection
-- hit testing area
-
-Typical use cases:
-
-- give a top-row panel real breathing room from the window edge
-- reduce a panel's true footprint without changing its anchors
-- keep spacing stable across resize and adaptive layout passes
-
-
-### `boundsOutset`
-
-Real layout outset.
-
-```ts
-boundsOutset?: {
-  top?: number
-  right?: number
-  bottom?: number
-  left?: number
-}
-```
-
-Use `boundsOutset` when you want to expand the actual shell bounds outward without changing anchors.
-
-It affects:
-
-- layout position
-- occupied visual area
-- collision behavior
-- adaptive join detection
-- hit testing area
-
-Typical use cases:
-
-- align a top-row panel's outer border with a 36px single control that overhangs the first grid row
-- extend a panel shell to create a shared top baseline without moving internal content
-- keep seam logic host-driven instead of using renderer transforms
-### `chrome.inset`
-
-Visual inset only.
-
-```ts
-chrome?: {
-  enabled?: boolean
-  inset?: {
-    top?: number
-    right?: number
-    bottom?: number
-    left?: number
-  }
-}
-```
-
-Use `chrome.inset` when you want the frame and content box to draw inside the shell without changing layout math.
-
-It affects:
-
-- chrome paint area
-- content box area
-
-It does not affect:
-
-- shell bounds
-- collisions
-- joins
-- hit area
-
-Typical use cases:
-
-- visually soften a magnet that feels too edge-to-edge
-- add polish without changing geometry
-- create a controlled internal breathing box
-
-## 4. Style responsibilities
-
-### Host geometry tokens
-
-Use these for shell size:
-
+- `anchorType`
 - `style.width`
 - `style.height`
 
-Do not move a magnet by editing nested renderer wrappers.
+Important:
 
-### Host chrome tokens
+- these style sizes are authoring inputs for the preset
+- the runtime shell size comes from resolved `bounds`, not directly from DOM style width/height
 
-Use these for outer frame paint:
+## 4. Chrome and content
 
-- `backgroundColor`
-- `border`
-- `borderRadius`
-- `boxShadow`
-- `backdropFilter`
-- `filter`
-- `overflow`
+### `chrome.inset`
 
-Prefer shared presets:
+`chrome.inset` is visual-only and **content-only**.
 
-- `createControlChromePreset`
-- `createPanelChromePreset`
-- `createDragHandleChromePreset`
+It changes:
 
-### Content tokens
+- content box area
 
-Use these for inner layout only:
+It does not change:
 
-- `padding`
-- `display`
-- `alignItems`
-- `justifyContent`
-- `flexDirection`
-- `gap`
-- `color`
-- `fontSize`
-- `fontWeight`
-- `lineHeight`
-- `letterSpacing`
-- `fontVariantNumeric`
-- `textAlign`
+- frame paint area
+- shell bounds
+- collision behavior
+- seam alignment
+- hit area
 
-If the problem is “text is too close to the border”, use content spacing first.
+Use it when the magnet should look more padded without changing geometry.
 
-If the problem is "the frame itself should sit farther from the edge" or needs to extend outward to meet another shell, use `boundsInset`, `boundsOutset`, or `chrome.inset` instead.
+### `chrome.outset`
 
-## 5. Recommended archetypes
+`chrome.outset` is visual-only in the outward direction.
 
-### Free control
+It changes:
 
-Use for standard top-bar buttons and isolated icon magnets.
+- rendered shell size
+- visible outer frame reach
 
-- `anchorType: 'single'`
-- `boundsMode: 'centered'`
-- control preset chrome
+It does not change:
 
-### Seam-locked control
+- authored `bounds` references
+- anchor occupancy
+- collision behavior
+- hit area in runtime (the shell still receives pointer events)
+- referenced shell alignment when another magnet uses `source: 'magnet'` (magnet sources resolve structural bounds)
 
-Use for controls that must visually align to a panel seam.
+Use it when a bar or panel should visually bleed past the occupied span without baking that bleed into `bounds`.
 
-- `anchorType: 'single'`
-- `boundsMode: 'docked'`
-- prefer a single dock axis, such as `boundsDock: { x: 'start' }`
+### Renderer layout
 
-### Primary panel
+Renderer styles should solve inner layout only:
 
-Use for large content areas.
+- padding
+- flex/grid alignment
+- typography
+- internal gaps
 
-- `anchorType: 'rectangular'`
-- panel preset chrome
-- `boundsInset` or `boundsOutset` only when the shell itself needs true geometry adjustment
+Renderer CSS must not reposition the shell to compensate for layout design.
 
-### Top-row panel
+## 5. Authoring rules
 
-Use when a panel begins in row `0` and needs either inward breathing room or outward alignment to top-bar controls.
+### Rule 1
 
-- use `boundsInset.top` when the panel itself should sit lower inside its anchored footprint
-- use `boundsOutset.top` when the panel's outer border should align with an overhanging top-row single control
-- only use `chrome.inset.top` if you want a purely visual adjustment without changing layout relationships
+If the relationship is about matrix occupancy, edit `anchors`.
 
-## 6. How to adjust spacing correctly
+### Rule 2
 
-### Want a real gap between magnets?
+If the relationship is about real shell edges, edit `bounds`.
 
-Use one of:
+### Rule 3
 
-- anchors
-- `boundsInset`
-- `boundsOutset`
-- adaptive layout policy
+If the relationship is about content breathing room inward, edit `chrome.inset`.
 
-Do not use CSS margin hacks on `magnet-shell`.
+### Rule 4
 
-### Want only visual breathing inside a magnet?
+If the relationship is about visible shell extension outward, edit `chrome.outset`.
 
-Use one of:
+### Rule 5
 
-- `chrome.inset`
-- content `padding`
-- renderer CSS
+If one magnet must line up with another magnet, prefer `source: 'magnet'` over ad-hoc CSS transforms.
 
-### Want a control to align with a panel on one side only?
+### Rule 6
 
-Use:
+Do not add special-case layout code for a specific magnet if the same result can be expressed by `bounds`.
+
+## 6. Common patterns
+
+### Free single control
 
 ```ts
-boundsMode: 'docked'
-boundsDock: { x: 'start' }
+const layout = createCenteredSingleControlLayoutPreset({
+  width: 36,
+  height: 36,
+})
 ```
 
-Avoid docking both axes unless the relationship is intentionally rigid.
+### Left-seamed back button
 
-## 7. Current examples
+```ts
+const layout = createDockedSingleControlLayoutPreset({
+  width: 36,
+  height: 36,
+  dock: { x: 'start' },
+})
+```
 
-### Layout presets
+### Panel aligned to another magnet's top edge
 
-Use the shared layout presets in `apps/desktop/src/modules/magnets/layoutPresets.ts` when possible.
+```ts
+const layout = createPanelLayoutPreset({
+  edgeOverrides: {
+    top: createMagnetEdgeReference('btn-back', 'start'),
+  },
+})
+```
 
-- `createCenteredSingleControlLayoutPreset()`
-  - explicit default for free single-slot controls
-- `createDockedSingleControlLayoutPreset()`
-  - seam-locked single controls
-- `createPanelLayoutPreset()`
-  - panel layout tokens such as `boundsInset`
+### Panel with a slightly expanded outer shell
 
-### `btn-back`
+```ts
+const layout = createPanelLayoutPreset({
+  chromeOutset: {
+    left: 9,
+    right: 9,
+  },
+})
+```
 
-- uses `boundsMode: 'docked'`
-- currently docks only on `x`
-- keeps left seam alignment with the navigation page while preserving vertical freedom
+### Full-viewport overlay shell
 
-### `process-perf-monitor`
+```ts
+const bounds = {
+  horizontal: {
+    start: { source: 'viewport', edge: 'start' },
+    end: { source: 'viewport', edge: 'end' },
+  },
+  vertical: {
+    start: { source: 'viewport', edge: 'start' },
+    end: { source: 'viewport', edge: 'end' },
+  },
+}
+```
 
-- uses `boundsOutset.top`
-- extends its shell upward so the outer border aligns with top-row single controls while keeping anchors unchanged
+## 7. Migration note
 
-## 8. Anti-patterns
+Older layout authoring paths are removed from active runtime usage.
 
-Avoid these:
-
-- changing shell spacing via random `x += ...` or `y += ...` patches
-- using renderer CSS to fake shell movement
-- using `padding` to solve real inter-magnet spacing problems
-- docking both axes by default for top-row controls
-- mixing visual polish and layout math in one-off component CSS
-
-## 9. Review checklist
-
-Before shipping a magnet layout change, verify:
-
-- Does the shell spacing come from anchors, `boundsMode`, `boundsInset`, or `boundsOutset`?
-- Does the chrome paint come from presets and chrome tokens?
-- Does inner spacing come from content tokens or renderer CSS?
-- Does resize behavior stay stable in roomy and compact windows?
-- Are seam joins only happening when they are intended?
-
-## 10. Practical rule of thumb
-
-- **Move the shell** -> anchors / `boundsMode` / `boundsInset` / `boundsOutset`
-- **Move the frame visually inside the shell** -> `chrome.inset`
-- **Move content inside the frame** -> `padding` / renderer CSS
-
-If you are unsure, start from the shell outward, not the renderer inward.
+Any new magnet, editor surface, import/export path, or preset helper must use the explicit `bounds` contract only.

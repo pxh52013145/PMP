@@ -3,6 +3,7 @@
  */
 
 import { Magnet, PixelAnchor } from '../types/pixel';
+import { createDefaultBoundsForMagnet } from '../modules/magnets/layoutPresets';
 import {
   MagnetImportSchema,
   MagnetValidationResult,
@@ -232,6 +233,7 @@ export function validateMagnetImport(data: unknown): MagnetValidationResult {
     anchors: schema.anchors!,
     content: schema.content || '',
     style: schema.style!,
+    bounds: createDefaultBoundsForMagnet(schema.anchorType!, schema.style!),
     state: 'idle',
     interactions: {
       draggable: schema.interactions!.draggable ?? false,

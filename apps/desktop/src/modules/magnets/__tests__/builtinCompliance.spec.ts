@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BUILTIN_MAGNET_ID_LIST, REQUIRED_MAGNET_IDS } from '../../../constants/magnets';
 import { MATRIX_CONFIG } from '../../../constants/config';
-import type { PixelAnchor } from '../../../types/pixel';
+import type { Magnet, PixelAnchor } from '../../../types/pixel';
 import { createDefaultMagnetLibrary } from '../defaultLibrary';
 import { createDefaultMagnetSpaceLayout } from '../layoutStorage';
 
@@ -33,12 +33,18 @@ describe('builtin magnet compliance', () => {
     expect(unknownInLibrary).toEqual([]);
   });
 
-  it('single builtin magnets declare bounds mode explicitly', () => {
+  it('builtin magnets avoid band bounds (no spacing spill)', () => {
     const defaultLibrary = createDefaultMagnetLibrary();
-    const singleMagnets = defaultLibrary.filter((magnet) => magnet.anchorType === 'single');
 
-    expect(singleMagnets.length).toBeGreaterThan(0);
-    expect(singleMagnets.every((magnet) => magnet.boundsMode !== undefined)).toBe(true);
+    const usesBandSource = (bounds: Magnet['bounds']) =>
+      bounds.horizontal.start.source === 'band' ||
+      bounds.horizontal.end.source === 'band' ||
+      bounds.vertical.start.source === 'band' ||
+      bounds.vertical.end.source === 'band';
+
+    expect(defaultLibrary.some((magnet) => magnet.anchorType === 'single')).toBe(true);
+    expect(defaultLibrary.some((magnet) => magnet.anchorType !== 'single')).toBe(true);
+    expect(defaultLibrary.every((magnet) => !usesBandSource(magnet.bounds))).toBe(true);
   });
 
   it('space1 layout keeps required magnets active and anchored', () => {

@@ -1,6 +1,9 @@
 import { Magnet } from '../../types/pixel';
 import { createPanelChromePreset } from '../../modules/magnets/chromePresets';
-import { createPanelLayoutPreset } from '../../modules/magnets/layoutPresets';
+import {
+  TOP_DOCKED_PANEL_CHROME_INSET,
+  createPanelLayoutPreset,
+} from '../../modules/magnets/layoutPresets';
 
 const NAVIGATOR_CHROME = createPanelChromePreset({
   style: {
@@ -12,7 +15,9 @@ const NAVIGATOR_CHROME = createPanelChromePreset({
     boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
   },
 });
-const NAVIGATOR_LAYOUT = createPanelLayoutPreset();
+const NAVIGATOR_LAYOUT = createPanelLayoutPreset({
+  chromeInset: TOP_DOCKED_PANEL_CHROME_INSET,
+});
 
 /**
  * 路由导航 Magnet

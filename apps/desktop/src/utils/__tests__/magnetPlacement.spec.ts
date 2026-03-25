@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Magnet } from '../../types/pixel';
+import { createDefaultBoundsForMagnet } from '../../modules/magnets/layoutPresets';
 import {
   buildMagnetPlacementCandidates,
   findFirstMagnetPlacementCandidate,
@@ -14,6 +15,7 @@ function createSingleMagnet(id: string, x: number, y: number): Magnet {
     name: id,
     anchorType: 'single',
     anchors: [{ id: `${id}-anchor`, gridX: x, gridY: y, role: 'anchor' }],
+    bounds: createDefaultBoundsForMagnet('single', {}),
     content: '',
     style: {},
     state: 'idle',
@@ -32,6 +34,7 @@ describe('magnetPlacement', () => {
         { id: 'left', gridX: 0, gridY: 19, role: 'anchor' },
         { id: 'right', gridX: 26, gridY: 19, role: 'boundary' },
       ],
+      bounds: createDefaultBoundsForMagnet('horizontal', {}),
       content: '',
       style: {},
       state: 'idle',
@@ -59,6 +62,7 @@ describe('magnetPlacement', () => {
         { id: 'bottom-left', gridX: 0, gridY: 1, role: 'boundary' },
         { id: 'bottom-right', gridX: 1, gridY: 1, role: 'boundary' },
       ],
+      bounds: createDefaultBoundsForMagnet('rectangular', {}),
       content: '',
       style: {},
       state: 'idle',

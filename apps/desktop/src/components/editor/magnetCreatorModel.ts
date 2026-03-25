@@ -1,8 +1,6 @@
 import type {
   AnchorType,
   Magnet,
-  MagnetBoundsDockAxis,
-  MagnetBoundsMode,
   MagnetChromeConfig,
   MagnetInsetConfig,
   MagnetInteractions,
@@ -12,7 +10,6 @@ import type { MagnetBounds } from '../../modules/magnets/geometry';
 
 export type InsetSide = keyof MagnetInsetConfig;
 export type InsetDraft = Record<InsetSide, string>;
-export type DockAxisDraft = MagnetBoundsDockAxis | '';
 
 export const INSET_SIDES: InsetSide[] = ['top', 'right', 'bottom', 'left'];
 export const PREVIEW_PIXEL_SIZE = 8;
@@ -40,15 +37,12 @@ export interface BuildEditorMagnetOptions {
   name: string;
   anchorType: AnchorType;
   anchors: PixelAnchor[];
-  boundsMode: MagnetBoundsMode;
-  boundsDock?: Magnet['boundsDock'];
-  boundsInset?: MagnetInsetConfig;
-  boundsOutset?: MagnetInsetConfig;
-  boundsAlign?: Magnet['boundsAlign'];
+  bounds: Magnet['bounds'];
   content: Magnet['content'];
   style: Magnet['style'];
   animation?: Magnet['animation'];
   chromeInset?: MagnetInsetConfig;
+  chromeOutset?: MagnetInsetConfig;
 }
 
 export function createEmptyInsetDraft(): InsetDraft {
@@ -92,19 +86,17 @@ export function parseInsetDraft(draft: InsetDraft): MagnetInsetConfig | undefine
   return Object.keys(inset).length > 0 ? inset : undefined;
 }
 
-export function parseDockAxis(value: DockAxisDraft): MagnetBoundsDockAxis | undefined {
-  return value === '' ? undefined : value;
-}
-
 export function buildChromeConfig(
   enabled: boolean | undefined,
-  inset: MagnetInsetConfig | undefined
+  inset: MagnetInsetConfig | undefined,
+  outset?: MagnetInsetConfig
 ): MagnetChromeConfig | undefined {
-  if (enabled === undefined && inset === undefined) return undefined;
+  if (enabled === undefined && inset === undefined && outset === undefined) return undefined;
 
   return {
     ...(enabled !== undefined ? { enabled } : {}),
     ...(inset !== undefined ? { inset } : {}),
+    ...(outset !== undefined ? { outset } : {}),
   };
 }
 
@@ -133,9 +125,10 @@ export function getPreviewScaleFromBounds(bounds: MagnetBounds | null): number {
 
 export function buildPreviewChromeConfig(
   magnet: Pick<Magnet, 'chrome'> | null,
-  inset: MagnetInsetConfig | undefined
+  inset: MagnetInsetConfig | undefined,
+  outset?: MagnetInsetConfig
 ): MagnetChromeConfig | undefined {
-  return buildChromeConfig(magnet?.chrome?.enabled, inset);
+  return buildChromeConfig(magnet?.chrome?.enabled, inset, outset);
 }
 
 export function buildAnchorsFromOrigin(
@@ -202,15 +195,12 @@ export function buildEditorMagnet({
   name,
   anchorType,
   anchors,
-  boundsMode,
-  boundsDock,
-  boundsInset,
-  boundsOutset,
-  boundsAlign,
+  bounds,
   content,
   style,
   animation,
   chromeInset,
+  chromeOutset,
 }: BuildEditorMagnetOptions): Magnet {
   return {
     ...(seedMagnet ?? {}),
@@ -219,15 +209,11 @@ export function buildEditorMagnet({
     name,
     anchorType,
     anchors,
-    boundsMode: anchorType === 'single' ? boundsMode : undefined,
-    boundsDock: anchorType === 'single' && boundsMode === 'docked' ? boundsDock : undefined,
-    boundsInset,
-    boundsOutset,
-    boundsAlign: boundsAlign ?? seedMagnet?.boundsAlign,
+    bounds,
     content,
     style,
     animation,
-    chrome: buildChromeConfig(seedMagnet?.chrome?.enabled, chromeInset),
+    chrome: buildChromeConfig(seedMagnet?.chrome?.enabled, chromeInset, chromeOutset),
     state: 'idle',
     interactions: seedMagnet?.interactions ?? fallbackInteractions,
   };
@@ -240,11 +226,7 @@ function toComparableMagnetConfig(magnet: Magnet) {
     name: magnet.name,
     anchorType: magnet.anchorType,
     anchors: magnet.anchors,
-    boundsMode: magnet.boundsMode,
-    boundsDock: magnet.boundsDock ?? null,
-    boundsInset: magnet.boundsInset ?? null,
-    boundsOutset: magnet.boundsOutset ?? null,
-    boundsAlign: magnet.boundsAlign ?? null,
+    bounds: magnet.bounds,
     style: magnet.style,
     animation: magnet.animation ?? null,
     chrome: magnet.chrome ?? null,

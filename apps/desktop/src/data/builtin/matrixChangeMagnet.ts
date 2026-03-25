@@ -1,13 +1,19 @@
 import { Magnet } from '../../types/pixel';
 import { createPanelChromePreset } from '../../modules/magnets/chromePresets';
-import { createPanelLayoutPreset } from '../../modules/magnets/layoutPresets';
+import {
+  STANDARD_HORIZONTAL_BAR_CHROME_INSET,
+  createHorizontalBarLayoutPreset,
+} from '../../modules/magnets/layoutPresets';
 
 const MATRIX_CHANGE_CHROME = createPanelChromePreset({
   style: {
     height: '36px',
   },
 });
-const MATRIX_CHANGE_LAYOUT = createPanelLayoutPreset();
+const MATRIX_CHANGE_LAYOUT = createHorizontalBarLayoutPreset({
+  height: 36,
+  chromeInset: STANDARD_HORIZONTAL_BAR_CHROME_INSET,
+});
 
 export const MATRIX_CHANGE_MAGNET: Magnet = {
   id: 'btn-matrix-change',

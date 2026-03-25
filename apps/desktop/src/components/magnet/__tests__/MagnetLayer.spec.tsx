@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Magnet } from '../../../types/pixel';
 import { ThemeProvider } from '../../../themes/contexts/ThemeContextWithSync';
 import type { Theme } from '../../../themes/types/theme';
+import { createCenteredSingleControlLayoutPreset } from '../../../modules/magnets/layoutPresets';
 import { MagnetLayer } from '../MagnetLayer';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -17,6 +18,7 @@ const pixelPositions = new Map<string, { x: number; y: number }>([
 
 let container: HTMLDivElement | null = null;
 let root: Root | null = null;
+const SINGLE_BOUNDS = createCenteredSingleControlLayoutPreset().bounds;
 
 function createBaseTheme(): Theme {
   return {
@@ -51,6 +53,7 @@ function createSingleMagnet(id: string, gridX: number): Magnet {
     name: id,
     anchorType: 'single',
     anchors: [{ id: `${id}-anchor`, gridX, gridY: 0, role: 'anchor' }],
+    bounds: SINGLE_BOUNDS,
     content: id,
     style: {
       width: '36px',

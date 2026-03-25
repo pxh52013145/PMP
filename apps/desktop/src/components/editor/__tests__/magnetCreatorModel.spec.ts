@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { Magnet } from '../../../types/pixel';
 import {
+  createCenteredSingleControlLayoutPreset,
+  createPanelLayoutPreset,
+} from '../../../modules/magnets/layoutPresets';
+import {
   buildAnchorsFromOrigin,
   buildEditorMagnet,
   getPreviewScaleFromBounds,
@@ -21,8 +25,7 @@ function createSeedMagnet(): Magnet {
     name: 'Seed Magnet',
     anchorType: 'single',
     anchors: [{ id: 'anchor', gridX: 1, gridY: 2, role: 'anchor' }],
-    boundsOutset: { top: 9 },
-    boundsAlign: { topToMagnetId: 'btn-back' },
+    bounds: createCenteredSingleControlLayoutPreset().bounds,
     content: 'Seed',
     style: { width: '36px', height: '36px' },
     chrome: { enabled: true },
@@ -44,28 +47,23 @@ describe('magnetCreatorModel', () => {
     ]);
   });
 
-  it('builds editor magnets from shared defaults and strips single-only bounds on panels', () => {
+  it('builds editor magnets from shared defaults', () => {
     const magnet = buildEditorMagnet({
       seedMagnet: createSeedMagnet(),
       id: 'panel',
       name: 'Panel',
       anchorType: 'rectangular',
       anchors: buildAnchorsFromOrigin('rectangular', 2, 3, dimensions),
-      boundsMode: 'docked',
-      boundsDock: { x: 'start', y: 'end' },
-      boundsInset: { top: 1 },
-      boundsOutset: { top: 4 },
+      bounds: createPanelLayoutPreset().bounds,
       content: 'Panel content',
       style: { width: '72px', height: '36px' },
       chromeInset: { top: 2 },
+      chromeOutset: { top: 4 },
     });
 
     expect(magnet.type).toBe('navigation');
-    expect(magnet.boundsMode).toBeUndefined();
-    expect(magnet.boundsDock).toBeUndefined();
-    expect(magnet.boundsOutset).toEqual({ top: 4 });
-    expect(magnet.boundsAlign).toEqual({ topToMagnetId: 'btn-back' });
-    expect(magnet.chrome).toEqual({ enabled: true, inset: { top: 2 } });
+    expect(magnet.bounds).toEqual(createPanelLayoutPreset().bounds);
+    expect(magnet.chrome).toEqual({ enabled: true, inset: { top: 2 }, outset: { top: 4 } });
     expect(magnet.interactions).toEqual({ draggable: true, clickable: false });
   });
 
@@ -76,7 +74,7 @@ describe('magnetCreatorModel', () => {
       name: 'Seed Magnet',
       anchorType: 'single',
       anchors: [{ id: 'anchor', gridX: 1, gridY: 2, role: 'anchor' }],
-      boundsMode: 'centered',
+      bounds: createCenteredSingleControlLayoutPreset().bounds,
       content: 'Seed',
       style: { width: '36px', height: '36px' },
     });
@@ -87,7 +85,7 @@ describe('magnetCreatorModel', () => {
       name: 'Seed Magnet',
       anchorType: 'single',
       anchors: [{ id: 'anchor', gridX: 1, gridY: 2, role: 'anchor' }],
-      boundsMode: 'centered',
+      bounds: createCenteredSingleControlLayoutPreset().bounds,
       content: 'Seed',
       style: { width: '36px', height: '36px' },
       chromeInset: { left: 1 },

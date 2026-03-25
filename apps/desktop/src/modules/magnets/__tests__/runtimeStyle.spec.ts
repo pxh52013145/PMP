@@ -51,6 +51,7 @@ describe('runtimeStyle', () => {
     expect(toOpaqueMagnetColor('rgba(10, 20, 30, 0.4)')).toBe('rgb(10, 20, 30)');
     expect(extractMagnetBorderStroke('2px solid rgba(255, 255, 255, 0.2)')).toEqual({
       width: '2px',
+      style: 'solid',
       color: 'rgba(255, 255, 255, 0.2)',
     });
   });

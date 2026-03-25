@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Magnet } from '../../../types/pixel';
 import { ThemeProvider } from '../../../themes/contexts/ThemeContextWithSync';
 import type { Theme } from '../../../themes/types/theme';
+import { createCenteredSingleControlLayoutPreset } from '../../../modules/magnets/layoutPresets';
 import { MagnetComponent } from '../Magnet';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -12,6 +13,7 @@ const pixelPositions = new Map<string, { x: number; y: number }>([['0,0', { x: 0
 let container: HTMLDivElement | null = null;
 let root: Root | null = null;
 let lastTheme: Theme | null = null;
+const SINGLE_BOUNDS = createCenteredSingleControlLayoutPreset().bounds;
 
 function createBaseTheme(): Theme {
   return {
@@ -98,6 +100,7 @@ function createDraggableMagnet(onDrag: () => void): Magnet {
     name: 'Drag State Test',
     anchorType: 'single',
     anchors: [{ id: 'anchor-1', gridX: 0, gridY: 0, role: 'anchor' }],
+    bounds: SINGLE_BOUNDS,
     content: '::',
     style: {
       width: '36px',
@@ -135,6 +138,7 @@ function createPaddedMagnet(): Magnet {
     name: 'Content Style Test',
     anchorType: 'single',
     anchors: [{ id: 'anchor-1', gridX: 0, gridY: 0, role: 'anchor' }],
+    bounds: SINGLE_BOUNDS,
     content: 'Content',
     style: {
       width: '36px',
@@ -163,6 +167,7 @@ function createChromeInsetMagnet(): Magnet {
     name: 'Chrome Inset Test',
     anchorType: 'single',
     anchors: [{ id: 'anchor-1', gridX: 0, gridY: 0, role: 'anchor' }],
+    bounds: SINGLE_BOUNDS,
     content: 'Inset',
     style: {
       width: '36px',
@@ -318,10 +323,13 @@ describe('MagnetComponent', () => {
     const host = getContainer();
     const baseLayer = host.querySelector('.magnet-base-layer') as HTMLDivElement | null;
 
-    expect(baseLayer?.style.boxShadow).toContain('inset 0 0 0 1px');
+    expect(baseLayer?.style.borderTopWidth).toBe('1px');
+    expect(baseLayer?.style.borderRightWidth).toBe('1px');
+    expect(baseLayer?.style.borderBottomWidth).toBe('1px');
+    expect(baseLayer?.style.borderLeftWidth).toBe('1px');
   });
 
-  it('applies chrome inset to the base and content layers without changing shell bounds', async () => {
+  it('applies chrome inset to the content layer without changing shell bounds', async () => {
     await renderMagnet(createChromeInsetMagnet());
 
     const host = getContainer();
@@ -331,11 +339,13 @@ describe('MagnetComponent', () => {
 
     expect(shell?.style.width).toBe('36px');
     expect(shell?.style.height).toBe('36px');
-    expect(baseLayer?.style.top).toBe('8px');
-    expect(baseLayer?.style.right).toBe('4px');
-    expect(baseLayer?.style.bottom).toBe('2px');
-    expect(baseLayer?.style.left).toBe('6px');
+    expect(baseLayer?.style.top).toBe('0px');
+    expect(baseLayer?.style.right).toBe('0px');
+    expect(baseLayer?.style.bottom).toBe('0px');
+    expect(baseLayer?.style.left).toBe('0px');
     expect(contentLayer?.style.top).toBe('8px');
+    expect(contentLayer?.style.right).toBe('4px');
+    expect(contentLayer?.style.bottom).toBe('2px');
     expect(contentLayer?.style.left).toBe('6px');
   });
 
@@ -369,13 +379,13 @@ describe('MagnetComponent', () => {
     await renderMagnet(
       createPaddedMagnet(),
       {
-        boundsOverride: { x: 0, y: 0, width: 36, height: 36 },
+        layoutBoundsOverride: { x: 0, y: 0, width: 36, height: 36 },
       },
       createMotionTheme()
     );
 
     await rerenderMagnet(createPaddedMagnet(), {
-      boundsOverride: { x: 220, y: 140, width: 72, height: 48 },
+      layoutBoundsOverride: { x: 220, y: 140, width: 72, height: 48 },
     });
 
     const host = getContainer();

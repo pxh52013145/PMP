@@ -58,7 +58,7 @@ function isValidId(id: string): boolean {
 }
 
 function ensureUint8Array(data: Uint8Array): Uint8Array {
-  // Ensure `instanceof Uint8Array` matches the current realm (Vitest/jsdom may involve multiple realms).
+  // Ensure `instanceof Uint8Array` matches the current realm (multiple JS realms can exist).
   return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
 }
 

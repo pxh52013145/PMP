@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 import { ensureMagnetCatalogState, readMagnetCatalogState, sanitizeMagnetCatalogState } from '../catalog';
 import type { Magnet } from '../../../types/pixel';
+import { createCenteredSingleControlLayoutPreset } from '../layoutPresets';
 
 beforeEach(() => {
   localStorage.clear();
@@ -14,6 +15,7 @@ function createTestMagnet(id: string): Magnet {
     name: id,
     anchors: [{ id: 'a', gridX: 1, gridY: 2, role: 'anchor' }],
     anchorType: 'single',
+    bounds: createCenteredSingleControlLayoutPreset().bounds,
     content: id,
     style: { width: '36px', height: '36px' },
     state: 'idle',

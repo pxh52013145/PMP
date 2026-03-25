@@ -24,7 +24,7 @@ interface MagnetLayerProps {
 interface ExitingMagnetEntry {
   key: string;
   magnet: Magnet;
-  boundsOverride?: MagnetBounds;
+  layoutBoundsOverride?: MagnetBounds;
   joinEdges?: MagnetJoinEdges;
   sceneAnimation?: MagnetSceneAnimation;
 }
@@ -32,7 +32,7 @@ interface ExitingMagnetEntry {
 type MagnetSnapshot = {
   activeSpaceId: string;
   magnetsById: Record<string, Magnet>;
-  boundsByMagnetId: Record<string, MagnetBounds | undefined>;
+  layoutBoundsByMagnetId: Record<string, MagnetBounds | undefined>;
   joinsByMagnetId: Record<string, MagnetJoinEdges | undefined>;
 };
 
@@ -148,7 +148,7 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
       phase: 'enter',
       spec: appBootScene.enter,
       ids,
-      boundsByMagnetId: adaptiveLayout.boundsByMagnetId,
+      boundsByMagnetId: adaptiveLayout.layoutBoundsByMagnetId,
       stagger: appBootScene.stagger,
     });
     if (Object.keys(animationsById).length === 0) {
@@ -160,14 +160,14 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
       sceneAnimationTimerRef.current = null;
       setSceneAnimationsById((current) => removeKeys(current, ids));
     }, Math.max(0, maxTotalMs));
-  }, [adaptiveLayout.boundsByMagnetId, appBootScene, magnets]);
+  }, [adaptiveLayout.layoutBoundsByMagnetId, appBootScene, magnets]);
 
   useEffect(() => {
     const nextSnapshot: MagnetSnapshot = {
       activeSpaceId,
       magnetsById: toMagnetMap(magnets),
-      boundsByMagnetId: Object.fromEntries(
-        magnets.map((magnet) => [magnet.id, adaptiveLayout.boundsByMagnetId[magnet.id]])
+      layoutBoundsByMagnetId: Object.fromEntries(
+        magnets.map((magnet) => [magnet.id, adaptiveLayout.layoutBoundsByMagnetId[magnet.id]])
       ),
       joinsByMagnetId: Object.fromEntries(
         magnets.map((magnet) => [magnet.id, adaptiveLayout.joinsByMagnetId[magnet.id]])
@@ -198,7 +198,7 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
         phase: 'enter',
         spec: spaceSwitchScene.enter,
         ids: enteringIds,
-        boundsByMagnetId: nextSnapshot.boundsByMagnetId,
+        boundsByMagnetId: nextSnapshot.layoutBoundsByMagnetId,
         stagger: spaceSwitchScene.stagger,
       });
       if (Object.keys(animationsById).length > 0) {
@@ -212,7 +212,7 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
       const { channelsById, maxTotalMs: layoutMaxTotalMs } = buildMagnetSceneLayoutChannels({
         spec: spaceSwitchScene.enter,
         ids: persistentIds,
-        boundsByMagnetId: nextSnapshot.boundsByMagnetId,
+        boundsByMagnetId: nextSnapshot.layoutBoundsByMagnetId,
         stagger: spaceSwitchScene.stagger,
       });
       if (Object.keys(channelsById).length > 0) {
@@ -230,7 +230,7 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
         phase: 'exit',
         spec: spaceSwitchScene.exit,
         ids: exitingIds,
-        boundsByMagnetId: previousSnapshot.boundsByMagnetId,
+        boundsByMagnetId: previousSnapshot.layoutBoundsByMagnetId,
         stagger: spaceSwitchScene.stagger,
       });
 
@@ -244,7 +244,7 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
           return {
             key: `exit-${++exitBatchIdRef.current}-${id}`,
             magnet,
-            boundsOverride: previousSnapshot.boundsByMagnetId[id],
+            layoutBoundsOverride: previousSnapshot.layoutBoundsByMagnetId[id],
             joinEdges: previousSnapshot.joinsByMagnetId[id],
             sceneAnimation: animationsById[id],
           };
@@ -263,7 +263,7 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
     }
   }, [
     activeSpaceId,
-    adaptiveLayout.boundsByMagnetId,
+    adaptiveLayout.layoutBoundsByMagnetId,
     adaptiveLayout.joinsByMagnetId,
     magnets,
     spaceSwitchScene,
@@ -286,7 +286,7 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
             magnet={magnet}
             pixelPositions={pixelPositions}
             chromeOverrideMode={chromeOverrideMode}
-            boundsOverride={adaptiveLayout.boundsByMagnetId[magnet.id]}
+            layoutBoundsOverride={adaptiveLayout.layoutBoundsByMagnetId[magnet.id]}
             layoutMode={adaptiveLayout.mode}
             joinEdges={adaptiveLayout.joinsByMagnetId[magnet.id]}
             sceneAnimation={sceneAnimationsById[magnet.id]}
@@ -300,7 +300,7 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
             magnet={entry.magnet}
             pixelPositions={pixelPositions}
             chromeOverrideMode={chromeOverrideMode}
-            boundsOverride={entry.boundsOverride}
+            layoutBoundsOverride={entry.layoutBoundsOverride}
             layoutMode={adaptiveLayout.mode}
             joinEdges={entry.joinEdges}
             sceneAnimation={entry.sceneAnimation}

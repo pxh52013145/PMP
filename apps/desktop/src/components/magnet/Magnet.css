@@ -2,8 +2,16 @@
   box-sizing: border-box;
   user-select: none;
   -webkit-user-select: none;
-  z-index: 1;
+  z-index: var(--pmp-magnet-z, 1);
   overflow: visible;
+}
+
+/* Keep every renderer on the same box model so 100% + padding stays inside the shell. */
+.magnet-shell,
+.magnet-shell *,
+.magnet-shell *::before,
+.magnet-shell *::after {
+  box-sizing: border-box;
 }
 
 .magnet-shell:hover {
@@ -61,6 +69,14 @@
   align-items: center;
   justify-content: center;
   border-radius: inherit;
+}
+
+.magnet-content-layer > *,
+.magnet-renderer > * {
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
 }
 
 .magnet-shell button:focus,

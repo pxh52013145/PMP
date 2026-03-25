@@ -1,5 +1,6 @@
 import type { Magnet, AnchorType, PixelAnchor, MagnetGridFootprint } from '../../types/pixel';
 import { BUILTIN_MAGNET_IDS } from '../../constants/magnets';
+import { createDefaultBoundsForMagnet } from './layoutPresets';
 import { readJson } from '../storage';
 import {
   STORAGE_KEYS,
@@ -74,6 +75,8 @@ function sanitizeMagnetLike(value: unknown): Magnet | null {
       }
     : { draggable: false, clickable: true };
 
+  const style = isRecord(value.style) ? (value.style as Magnet['style']) : {};
+
   return {
     id,
     type: typeof value.type === 'string' && value.type.trim().length > 0 ? (value.type as Magnet['type']) : 'custom',
@@ -88,7 +91,8 @@ function sanitizeMagnetLike(value: unknown): Magnet | null {
     anchors,
     gridFootprint,
     content: typeof value.content === 'string' ? value.content : '',
-    style: isRecord(value.style) ? (value.style as Magnet['style']) : {},
+    style,
+    bounds: createDefaultBoundsForMagnet(anchorType, style),
     state: 'idle',
     interactions,
   };

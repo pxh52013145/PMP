@@ -107,17 +107,18 @@ export function toOpaqueMagnetColor(value: string | undefined): string | undefin
 
 export function extractMagnetBorderStroke(
   value: string | undefined
-): { width: string; color: string } | null {
+): { width: string; style: string; color: string } | null {
   if (typeof value !== 'string') return null;
 
   const normalized = value.trim();
   if (!normalized) return null;
 
-  const match = normalized.match(/^([0-9.]+px)\s+\S+\s+(.+)$/);
+  const match = normalized.match(/^([0-9.]+px)\s+(\S+)\s+(.+)$/);
   if (!match) return null;
 
   return {
     width: match[1],
-    color: match[2].trim(),
+    style: match[2],
+    color: match[3].trim(),
   };
 }

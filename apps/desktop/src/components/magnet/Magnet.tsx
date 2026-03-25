@@ -38,7 +38,7 @@ interface MagnetProps {
   pixelPositions: Map<string, { x: number; y: number }>;
   onInteract?: (magnetId: string, event: string) => void;
   chromeOverrideMode?: MagnetChromeOverrideMode;
-  boundsOverride?: MagnetBounds;
+  layoutBoundsOverride?: MagnetBounds;
   layoutMode?: MagnetAdaptiveLayoutMode;
   joinEdges?: MagnetJoinEdges;
   sceneAnimation?: MagnetSceneAnimation;
@@ -50,7 +50,7 @@ function MagnetComponentImpl({
   pixelPositions,
   onInteract,
   chromeOverrideMode,
-  boundsOverride,
+  layoutBoundsOverride,
   layoutMode = 'normal',
   joinEdges,
   sceneAnimation,
@@ -100,11 +100,11 @@ function MagnetComponentImpl({
     }, 240);
   }, [clearDragFeedbackTimer]);
 
-  const bounds = useMemo(() => {
-    if (boundsOverride) return alignMagnetBounds(boundsOverride);
+  const layoutBounds = useMemo(() => {
+    if (layoutBoundsOverride) return alignMagnetBounds(layoutBoundsOverride);
     const computedBounds = computeMagnetBounds(magnet, pixelPositions);
     return computedBounds ? alignMagnetBounds(computedBounds) : null;
-  }, [boundsOverride, magnet, pixelPositions]);
+  }, [layoutBoundsOverride, magnet, pixelPositions]);
 
   const handleClick = () => {
     if (magnet.interactions.clickable && magnet.interactions.onClick) {
@@ -197,15 +197,15 @@ function MagnetComponentImpl({
       clearLayoutCompensationFrame();
       setDisableTransition(true);
       setLayoutCompensationTransform(null);
-      lastBoundsRef.current = bounds;
+      lastBoundsRef.current = layoutBounds;
       return;
     }
 
-    if (!bounds) return;
+    if (!layoutBounds) return;
 
     if (isFirstRenderRef.current) {
       isFirstRenderRef.current = false;
-      lastBoundsRef.current = bounds;
+      lastBoundsRef.current = layoutBounds;
       setLayoutCompensationTransform(null);
       const timer = setTimeout(() => {
         setDisableTransition(false);
@@ -214,15 +214,15 @@ function MagnetComponentImpl({
     }
 
     if (!lastBoundsRef.current) {
-      lastBoundsRef.current = bounds;
+      lastBoundsRef.current = layoutBounds;
       return;
     }
 
     const last = lastBoundsRef.current;
-    const deltaX = Math.abs(bounds.x - last.x);
-    const deltaY = Math.abs(bounds.y - last.y);
-    const deltaW = Math.abs(bounds.width - last.width);
-    const deltaH = Math.abs(bounds.height - last.height);
+    const deltaX = Math.abs(layoutBounds.x - last.x);
+    const deltaY = Math.abs(layoutBounds.y - last.y);
+    const deltaW = Math.abs(layoutBounds.width - last.width);
+    const deltaH = Math.abs(layoutBounds.height - last.height);
     const totalDelta = deltaX + deltaY + deltaW + deltaH;
     const isLargeChange =
       deltaX > 100 || deltaY > 100 || deltaW > 100 || deltaH > 100 || totalDelta > 100;
@@ -234,7 +234,7 @@ function MagnetComponentImpl({
       setLayoutCompensationTransform(null);
       const timer = setTimeout(() => {
         setDisableTransition(false);
-        lastBoundsRef.current = bounds;
+        lastBoundsRef.current = layoutBounds;
       }, 50);
       return () => clearTimeout(timer);
     }
@@ -242,7 +242,7 @@ function MagnetComponentImpl({
     clearLayoutCompensationFrame();
     const nextCompensationTransform = buildMagnetLayoutCompensationTransform(
       last,
-      bounds,
+      layoutBounds,
       motionRuntime.layoutStrategy
     );
     if (nextCompensationTransform) {
@@ -256,11 +256,11 @@ function MagnetComponentImpl({
     }
 
     setDisableTransition(false);
-    lastBoundsRef.current = bounds;
+    lastBoundsRef.current = layoutBounds;
     return () => {
       clearLayoutCompensationFrame();
     };
-  }, [bounds, clearLayoutCompensationFrame, motionRuntime]);
+  }, [layoutBounds, clearLayoutCompensationFrame, motionRuntime]);
 
   useEffect(
     () => () => {
@@ -286,21 +286,31 @@ function MagnetComponentImpl({
 
   const chromeBaseOpacity = normalizeMagnetOpacity(currentStyle.opacity) ?? 1;
   const borderStroke = extractMagnetBorderStroke(currentStyle.border);
-  const chromeInsets = useMemo(() => resolveMagnetInsets(magnet.chrome?.inset), [magnet.chrome?.inset]);
-  const hasChromeInset = chromeInsets.top > 0 || chromeInsets.right > 0 || chromeInsets.bottom > 0 || chromeInsets.left > 0;
+  const contentInsets = useMemo(() => resolveMagnetInsets(magnet.chrome?.inset), [magnet.chrome?.inset]);
+  const chromeOutsets = useMemo(() => resolveMagnetInsets(magnet.chrome?.outset), [magnet.chrome?.outset]);
+  const hasChromeInset =
+    contentInsets.top > 0 || contentInsets.right > 0 || contentInsets.bottom > 0 || contentInsets.left > 0;
   const chromeInsetApplies = chromeEnabled && hasChromeInset;
+  const hasChromeOutset =
+    chromeOutsets.top > 0 ||
+    chromeOutsets.right > 0 ||
+    chromeOutsets.bottom > 0 ||
+    chromeOutsets.left > 0;
+  const chromeOutsetApplies = chromeEnabled && hasChromeOutset;
 
   const shellStyle = useMemo(() => {
-    if (!bounds) return null;
+    if (!layoutBounds) return null;
 
     const cursor = typeof currentStyle.cursor === 'string' ? currentStyle.cursor : undefined;
+    const stackLevel = magnet.anchorType === 'rectangular' ? 1 : 2;
 
     return {
       position: 'absolute' as const,
-      left: `${bounds.x}px`,
-      top: `${bounds.y}px`,
-      width: `${bounds.width}px`,
-      height: `${bounds.height}px`,
+      left: `${layoutBounds.x}px`,
+      top: `${layoutBounds.y}px`,
+      width: `${layoutBounds.width}px`,
+      height: `${layoutBounds.height}px`,
+      ['--pmp-magnet-z' as any]: stackLevel,
       transition: shellTransitionValue,
       cursor,
       ...(sceneAnimation?.style ?? {}),
@@ -308,7 +318,14 @@ function MagnetComponentImpl({
       transformOrigin: layoutCompensationTransform ? 'top left' : undefined,
       willChange: layoutCompensationTransform ? 'transform' : undefined,
     };
-  }, [bounds, currentStyle.cursor, shellTransitionValue, layoutCompensationTransform, sceneAnimation?.style]);
+  }, [
+    layoutBounds,
+    currentStyle.cursor,
+    shellTransitionValue,
+    layoutCompensationTransform,
+    sceneAnimation?.style,
+    magnet.anchorType,
+  ]);
 
   const chromeStyle = useMemo(() => {
     const next: Record<string, string | number | undefined> = { ...chromeTokens };
@@ -333,24 +350,32 @@ function MagnetComponentImpl({
   }, [chromeTokens, resolvedCornerRadii, chromeTransitionValue]);
 
   const chromeBaseStyle = useMemo(() => {
-    const shouldUseInsetStroke = Boolean(borderStroke);
-    const insetStrokeShadow = borderStroke
-      ? `inset 0 0 0 ${borderStroke.width} ${borderStroke.color}`
-      : undefined;
-    const boxShadow = [currentStyle.boxShadow, insetStrokeShadow].filter(Boolean).join(', ');
+    const boxShadow = typeof currentStyle.boxShadow === 'string' ? currentStyle.boxShadow : undefined;
+    const borderWidth = borderStroke?.width ?? null;
+    const shouldSuppressTop = Boolean(borderWidth && joinEdges?.top);
+    const shouldSuppressLeft = Boolean(borderWidth && joinEdges?.left);
 
     return {
       position: 'absolute' as const,
-      top: chromeInsets.top,
-      right: chromeInsets.right,
-      bottom: chromeInsets.bottom,
-      left: chromeInsets.left,
+      top: -(chromeOutsetApplies ? chromeOutsets.top : 0),
+      right: -(chromeOutsetApplies ? chromeOutsets.right : 0),
+      bottom: -(chromeOutsetApplies ? chromeOutsets.bottom : 0),
+      left: -(chromeOutsetApplies ? chromeOutsets.left : 0),
       pointerEvents: 'none' as const,
       transition: chromeTransitionValue,
       opacity: chromeBaseOpacity,
       backgroundColor: toOpaqueMagnetColor(currentStyle.backgroundColor),
-      border: shouldUseInsetStroke ? 'none' : currentStyle.border,
-      boxShadow: boxShadow || undefined,
+      ...(borderStroke
+        ? {
+            borderStyle: borderStroke.style,
+            borderColor: borderStroke.color,
+            borderTopWidth: shouldSuppressTop ? '0px' : borderStroke.width,
+            borderRightWidth: borderStroke.width,
+            borderBottomWidth: borderStroke.width,
+            borderLeftWidth: shouldSuppressLeft ? '0px' : borderStroke.width,
+          }
+        : { border: currentStyle.border }),
+      boxShadow,
       backdropFilter: currentStyle.backdropFilter,
       WebkitBackdropFilter: currentStyle.backdropFilter,
       filter: currentStyle.filter,
@@ -359,15 +384,18 @@ function MagnetComponentImpl({
   }, [
     borderStroke,
     chromeBaseOpacity,
+    chromeOutsetApplies,
+    chromeOutsets.top,
+    chromeOutsets.right,
+    chromeOutsets.bottom,
+    chromeOutsets.left,
     currentStyle.backgroundColor,
     currentStyle.border,
     currentStyle.boxShadow,
     currentStyle.backdropFilter,
     currentStyle.filter,
-    chromeInsets.top,
-    chromeInsets.right,
-    chromeInsets.bottom,
-    chromeInsets.left,
+    joinEdges?.top,
+    joinEdges?.left,
     resolvedCornerRadii,
     chromeTransitionValue,
   ]);
@@ -392,10 +420,10 @@ function MagnetComponentImpl({
 
     return {
       position: 'absolute' as const,
-      top: chromeInsets.top,
-      right: chromeInsets.right,
-      bottom: chromeInsets.bottom,
-      left: chromeInsets.left,
+      top: contentInsets.top,
+      right: contentInsets.right,
+      bottom: contentInsets.bottom,
+      left: contentInsets.left,
       width: 'auto',
       height: 'auto',
       ...baseStyle,
@@ -405,10 +433,10 @@ function MagnetComponentImpl({
     chromeTransitionValue,
     resolvedCornerRadii,
     chromeInsetApplies,
-    chromeInsets.top,
-    chromeInsets.right,
-    chromeInsets.bottom,
-    chromeInsets.left,
+    contentInsets.top,
+    contentInsets.right,
+    contentInsets.bottom,
+    contentInsets.left,
   ]);
 
   const renderedContent = useMemo(() => {
@@ -425,7 +453,7 @@ function MagnetComponentImpl({
     return magnet.content;
   }, [magnet.renderer, magnet.id, magnet.content]);
 
-  if (!bounds || !shellStyle) return null;
+  if (!layoutBounds || !shellStyle) return null;
 
   const interactionState = resolveMagnetInteractionState({
     isHovering,

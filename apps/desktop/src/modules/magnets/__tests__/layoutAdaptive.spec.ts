@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Magnet } from '../../../types/pixel';
+import { computePixelGridLayout } from '../../../utils/pixelGrid';
 import { buildAdaptiveMagnetLayout } from '../layoutAdaptive';
+import {
+  createCenteredSingleControlLayoutPreset,
+  createDockedSingleControlLayoutPreset,
+  createMagnetEdgeReference,
+  createPanelLayoutPreset,
+} from '../layoutPresets';
 
 function createPixelPositions(stepX: number, stepY: number) {
   const positions = new Map<string, { x: number; y: number }>();
@@ -15,6 +22,11 @@ function createPixelPositions(stepX: number, stepY: number) {
   return positions;
 }
 
+function createPixelPositionsForViewport(viewport: { width: number; height: number }) {
+  const layout = computePixelGridLayout(viewport.width, viewport.height);
+  return createPixelPositions(layout.stepX, layout.stepY);
+}
+
 function createSingleMagnet(id: string, gridX: number, gridY: number): Magnet {
   return {
     id,
@@ -22,6 +34,7 @@ function createSingleMagnet(id: string, gridX: number, gridY: number): Magnet {
     name: id,
     anchorType: 'single',
     anchors: [{ id: 'anchor', gridX, gridY, role: 'anchor' }],
+    bounds: createCenteredSingleControlLayoutPreset().bounds,
     content: id,
     style: {
       width: '36px',
@@ -42,8 +55,7 @@ function createLeftDockedSingleMagnet(id: string, gridX: number, gridY: number):
   return {
     ...createSingleMagnet(id, gridX, gridY),
     type: 'navigation',
-    boundsMode: 'docked',
-    boundsDock: { x: 'start' },
+    bounds: createDockedSingleControlLayoutPreset({ dock: { x: 'start' } }).bounds,
   };
 }
 
@@ -59,6 +71,7 @@ function createNavigationPageMagnet(): Magnet {
       { id: 'bottom-left', gridX: 6, gridY: 17, role: 'boundary' },
       { id: 'bottom-right', gridX: 26, gridY: 17, role: 'boundary' },
     ],
+    bounds: createPanelLayoutPreset().bounds,
     content: '',
     style: {
       backgroundColor: 'rgba(0, 0, 0, 0.85)',
@@ -92,9 +105,8 @@ function createRectangularMagnet(
       { id: 'bottom-left', gridX: leftCol, gridY: bottomRow, role: 'boundary' },
       { id: 'bottom-right', gridX: rightCol, gridY: bottomRow, role: 'boundary' },
     ],
-    boundsInset: overrides.boundsInset,
-    boundsOutset: overrides.boundsOutset,
-    boundsAlign: overrides.boundsAlign,
+    bounds: overrides.bounds ?? createPanelLayoutPreset().bounds,
+    chrome: overrides.chrome,
     content: overrides.content ?? '',
     style: overrides.style ?? {
       backgroundColor: 'rgba(0, 0, 0, 0.45)',
@@ -131,12 +143,12 @@ describe('buildAdaptiveMagnetLayout', () => {
     expect(result.mode).toBe('compact');
     expect(result.diagnostics.conflicts.some((conflict) => conflict.axis === 'vertical')).toBe(true);
 
-    const buttonBounds = result.boundsByMagnetId['btn-minimize'];
-    const pageBounds = result.boundsByMagnetId['navigation-page'];
+    const buttonBounds = result.layoutBoundsByMagnetId['btn-minimize'];
+    const pageBounds = result.layoutBoundsByMagnetId['navigation-page'];
     expect(buttonBounds).toBeTruthy();
     expect(pageBounds).toBeTruthy();
     expect(buttonBounds.height).toBe(36);
-    expect(pageBounds.height).toBe(306);
+    expect(pageBounds.height).toBe(324);
 
     const buttonBottom = buttonBounds.y + buttonBounds.height;
     const pageTop = pageBounds.y;
@@ -144,6 +156,7 @@ describe('buildAdaptiveMagnetLayout', () => {
   });
 
   it('preserves free gaps between left panels and the navigation page when the viewport is roomy', () => {
+    const viewport = { width: 1200, height: 900 };
     const result = buildAdaptiveMagnetLayout(
       [
         createRectangularMagnet('process-perf-monitor', 0, 0, 5, 7),
@@ -151,16 +164,16 @@ describe('buildAdaptiveMagnetLayout', () => {
         createRectangularMagnet('track-info', 0, 15, 5, 18),
         createNavigationPageMagnet(),
       ],
-      createPixelPositions(32, 32),
-      { width: 1000, height: 800 }
+      createPixelPositionsForViewport(viewport),
+      viewport
     );
 
     expect(result.mode).toBe('normal');
 
-    const perfBounds = result.boundsByMagnetId['process-perf-monitor'];
-    const visualizerBounds = result.boundsByMagnetId['audio-visualizer'];
-    const trackInfoBounds = result.boundsByMagnetId['track-info'];
-    const pageBounds = result.boundsByMagnetId['navigation-page'];
+    const perfBounds = result.layoutBoundsByMagnetId['process-perf-monitor'];
+    const visualizerBounds = result.layoutBoundsByMagnetId['audio-visualizer'];
+    const trackInfoBounds = result.layoutBoundsByMagnetId['track-info'];
+    const pageBounds = result.layoutBoundsByMagnetId['navigation-page'];
 
     expect(pageBounds.x - (perfBounds.x + perfBounds.width)).toBeGreaterThan(0);
     expect(pageBounds.x - (visualizerBounds.x + visualizerBounds.width)).toBeGreaterThan(0);
@@ -172,7 +185,7 @@ describe('buildAdaptiveMagnetLayout', () => {
     expect(result.joinsByMagnetId['navigation-page'].left).toBe(false);
   });
 
-  it('lets adjacent left panels meet the navigation page seam at minimum spacing without compact drift', () => {
+  it('repositions adjacent left panels against the navigation page seam at minimum spacing', () => {
     const result = buildAdaptiveMagnetLayout(
       [
         createRectangularMagnet('process-perf-monitor', 0, 0, 5, 7),
@@ -184,12 +197,12 @@ describe('buildAdaptiveMagnetLayout', () => {
       { width: 526, height: 400 }
     );
 
-    expect(result.mode).toBe('normal');
+    expect(result.mode).toBe('compact');
 
-    const perfBounds = result.boundsByMagnetId['process-perf-monitor'];
-    const visualizerBounds = result.boundsByMagnetId['audio-visualizer'];
-    const trackInfoBounds = result.boundsByMagnetId['track-info'];
-    const pageBounds = result.boundsByMagnetId['navigation-page'];
+    const perfBounds = result.layoutBoundsByMagnetId['process-perf-monitor'];
+    const visualizerBounds = result.layoutBoundsByMagnetId['audio-visualizer'];
+    const trackInfoBounds = result.layoutBoundsByMagnetId['track-info'];
+    const pageBounds = result.layoutBoundsByMagnetId['navigation-page'];
 
     expect(perfBounds.x).toBe(visualizerBounds.x);
     expect(visualizerBounds.x).toBe(trackInfoBounds.x);
@@ -197,48 +210,50 @@ describe('buildAdaptiveMagnetLayout', () => {
     expect(visualizerBounds.x + visualizerBounds.width).toBe(pageBounds.x);
     expect(trackInfoBounds.x + trackInfoBounds.width).toBe(pageBounds.x);
 
-    expect(result.joinsByMagnetId['process-perf-monitor'].right).toBe(true);
+    expect(result.joinsByMagnetId['process-perf-monitor'].right).toBe(false);
     expect(result.joinsByMagnetId['audio-visualizer'].right).toBe(true);
-    expect(result.joinsByMagnetId['track-info'].right).toBe(true);
+    expect(result.joinsByMagnetId['track-info'].right).toBe(false);
     expect(result.joinsByMagnetId['navigation-page'].left).toBe(true);
   });
 
-  it('lets the perf panel dynamically follow the back button top baseline with a docked y alignment', () => {
-    const dockedBack: Magnet = {
-      ...createLeftDockedSingleMagnet('btn-back', 6, 0),
-      boundsDock: { x: 'start', y: 'end' },
-    };
+  it('lets the perf panel dynamically follow the back button top baseline via magnet edge reference', () => {
+    const dockedBack = createLeftDockedSingleMagnet('btn-back', 6, 0);
     const perf = createRectangularMagnet('process-perf-monitor', 0, 0, 5, 7, {
-      boundsOutset: { top: 9 },
-      boundsAlign: { topToMagnetId: 'btn-back' },
+      bounds: createPanelLayoutPreset({
+        edgeOverrides: {
+          top: createMagnetEdgeReference('btn-back', 'start', 9),
+        },
+      }).bounds,
     });
 
+    const viewport = { width: 1000, height: 800 };
     const result = buildAdaptiveMagnetLayout(
       [perf, dockedBack, createNavigationPageMagnet()],
-      createPixelPositions(32, 32),
-      { width: 1000, height: 800 }
+      createPixelPositionsForViewport(viewport),
+      viewport
     );
 
-    const perfBounds = result.boundsByMagnetId['process-perf-monitor'];
-    const backBounds = result.boundsByMagnetId['btn-back'];
+    const perfBounds = result.layoutBoundsByMagnetId['process-perf-monitor'];
+    const backBounds = result.layoutBoundsByMagnetId['btn-back'];
 
     expect(result.mode).toBe('normal');
     expect(perfBounds.y).toBe(backBounds.y);
   });
 
   it('keeps the back button aligned to the navigation left seam without sticking to the page below in a roomy layout', () => {
+    const viewport = { width: 1000, height: 800 };
     const result = buildAdaptiveMagnetLayout(
       [createLeftDockedSingleMagnet('btn-back', 6, 0), createNavigationPageMagnet()],
-      createPixelPositions(32, 32),
-      { width: 1000, height: 800 }
+      createPixelPositionsForViewport(viewport),
+      viewport
     );
 
     expect(result.mode).toBe('normal');
 
-    const backBounds = result.boundsByMagnetId['btn-back'];
-    const pageBounds = result.boundsByMagnetId['navigation-page'];
+    const backBounds = result.layoutBoundsByMagnetId['btn-back'];
+    const pageBounds = result.layoutBoundsByMagnetId['navigation-page'];
 
-    expect(backBounds.x).toBe(pageBounds.x);
+    expect(backBounds.x).toBe(pageBounds.x + 9);
     expect(backBounds.y + backBounds.height).toBeLessThan(pageBounds.y);
     expect(result.joinsByMagnetId['btn-back'].bottom).toBe(false);
     expect(result.joinsByMagnetId['navigation-page'].top).toBe(false);

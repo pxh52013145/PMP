@@ -9,6 +9,8 @@ export const CONTENT_STYLE_KEYS = new Set([
   'justifyContent',
   'flexDirection',
   'gap',
+  // Content clipping belongs to the renderer box, not the outer chrome wrapper.
+  'overflow',
   'color',
   'fontSize',
   'fontWeight',

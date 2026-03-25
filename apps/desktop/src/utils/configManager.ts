@@ -4,9 +4,6 @@ import { resolveMagnetPositions, detectConflicts } from './magnetPositionResolve
 import { readString, removeKey, writeString } from '../modules/storage';
 import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 
-/**
- * 閰嶇疆鏂囦欢鏍煎紡
- */
 export interface MagnetStateConfig {
   anchors: PixelAnchor[];
   isActive: boolean;
@@ -14,13 +11,8 @@ export interface MagnetStateConfig {
   variant?: string;
   skinProps?: Record<string, unknown>;
   previewText?: string;
-  boundsMode?: Magnet['boundsMode'];
-  boundsDock?: Magnet['boundsDock'];
-  boundsInset?: Magnet['boundsInset'];
-  boundsOutset?: Magnet['boundsOutset'];
-  boundsAlign?: Magnet['boundsAlign'];
-  chromeEnabled?: boolean;
-  chromeInset?: NonNullable<Magnet['chrome']>['inset'];
+  bounds: Magnet['bounds'];
+  chrome?: Magnet['chrome'];
   styleOverride?: {
     style?: Magnet['style'];
     animation?: Magnet['animation'];
@@ -29,16 +21,16 @@ export interface MagnetStateConfig {
 }
 
 export interface MagnetConfig {
-  version: string; // 閰嶇疆鐗堟湰锛岀敤浜庡吋瀹规€ф鏌?
+  version: string;
   gridSize: {
     columns: number;
     rows: number;
   };
   magnets: Record<string, MagnetStateConfig>;
-  customMagnets: Magnet[]; // 鑷畾涔?Magnet 鐨勫畬鏁村畾涔?
+  customMagnets: Magnet[];
 }
 
-const CONFIG_VERSION = '1.2.0';
+const CONFIG_VERSION = '1.3.0';
 const CONFIG_KEY = 'pixel-matrix-player-config';
 const telemetry = getTelemetryLogger('magnets', 'configManager');
 
@@ -49,13 +41,8 @@ const MAGNET_STATE_CONFIG_KEYS = [
   'variant',
   'skinProps',
   'previewText',
-  'boundsMode',
-  'boundsDock',
-  'boundsInset',
-  'boundsOutset',
-  'boundsAlign',
-  'chromeEnabled',
-  'chromeInset',
+  'bounds',
+  'chrome',
   'styleOverride',
 ] as const;
 
@@ -72,11 +59,7 @@ const CUSTOM_MAGNET_KEYS = [
   'anchors',
   'anchorType',
   'gridFootprint',
-  'boundsMode',
-  'boundsDock',
-  'boundsInset',
-  'boundsOutset',
-  'boundsAlign',
+  'bounds',
   'content',
   'style',
   'chrome',
@@ -85,7 +68,6 @@ const CUSTOM_MAGNET_KEYS = [
   'interactions',
 ] as const;
 
-const BOUNDS_DOCK_AXES = new Set<NonNullable<Magnet['boundsDock']>['x']>(['start', 'center', 'end']);
 const ANCHOR_TYPES = new Set<Magnet['anchorType']>(['single', 'horizontal', 'vertical', 'rectangular']);
 const MAGNET_TYPES = new Set<Magnet['type']>([
   'window-control',
@@ -101,22 +83,20 @@ const MAGNET_TYPES = new Set<Magnet['type']>([
   'custom',
 ]);
 const MAGNET_STATES = new Set<Magnet['state']>(['idle', 'hover', 'active', 'disabled']);
+const BOUNDS_SOURCES = new Set<Magnet['bounds']['horizontal']['start']['source']>([
+  'slot',
+  'span',
+  'band',
+  'viewport',
+  'magnet',
+]);
+const BOUNDS_EDGES = new Set<Magnet['bounds']['horizontal']['start']['edge']>(['start', 'center', 'end']);
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-type SavedLayoutStateConfig = Pick<
-  MagnetStateConfig,
-  | 'boundsMode'
-  | 'boundsDock'
-  | 'boundsInset'
-  | 'boundsOutset'
-  | 'boundsAlign'
-  | 'chromeEnabled'
-  | 'chromeInset'
->;
-
+type SavedLayoutStateConfig = Pick<MagnetStateConfig, 'bounds' | 'chrome'>;
 type SavedPresentationStateConfig = Pick<
   MagnetStateConfig,
   'renderer' | 'variant' | 'skinProps' | 'previewText' | 'styleOverride'
@@ -130,12 +110,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function sanitizeFiniteInset(value: unknown): Magnet['boundsInset'] | undefined {
+function sanitizeFiniteInset(value: unknown): NonNullable<Magnet['chrome']>['inset'] | undefined {
   if (!isPlainObject(value)) {
     return undefined;
   }
 
-  const nextInset: NonNullable<Magnet['boundsInset']> = {};
+  const nextInset: NonNullable<NonNullable<Magnet['chrome']>['inset']> = {};
   for (const side of ['top', 'right', 'bottom', 'left'] as const) {
     const sideValue = value[side];
     if (typeof sideValue === 'number' && Number.isFinite(sideValue)) {
@@ -146,30 +126,118 @@ function sanitizeFiniteInset(value: unknown): Magnet['boundsInset'] | undefined 
   return Object.keys(nextInset).length > 0 ? nextInset : undefined;
 }
 
-function sanitizeBoundsDock(value: unknown): Magnet['boundsDock'] | undefined {
+export function mergeMagnetChromeConfig(
+  baseChrome: Magnet['chrome'] | undefined,
+  overrideChrome: Magnet['chrome'] | undefined
+): Magnet['chrome'] | undefined {
+  if (!baseChrome) return overrideChrome;
+  if (!overrideChrome) return baseChrome;
+
+  const nextChrome: NonNullable<Magnet['chrome']> = {
+    ...(baseChrome.enabled !== undefined ? { enabled: baseChrome.enabled } : {}),
+    ...(overrideChrome.enabled !== undefined ? { enabled: overrideChrome.enabled } : {}),
+  };
+
+  const inset = overrideChrome.inset ?? baseChrome.inset;
+  if (inset) {
+    nextChrome.inset = inset;
+  }
+
+  const outset = overrideChrome.outset ?? baseChrome.outset;
+  if (outset) {
+    nextChrome.outset = outset;
+  }
+
+  return Object.keys(nextChrome).length > 0 ? nextChrome : undefined;
+}
+
+function sanitizeBoundsReference(
+  value: unknown
+): Magnet['bounds']['horizontal']['start'] | undefined {
   if (!isPlainObject(value)) {
     return undefined;
   }
 
-  const nextDock: NonNullable<Magnet['boundsDock']> = {};
-  if (typeof value.x === 'string' && BOUNDS_DOCK_AXES.has(value.x as NonNullable<Magnet['boundsDock']>['x'])) {
-    nextDock.x = value.x as NonNullable<Magnet['boundsDock']>['x'];
-  }
-  if (typeof value.y === 'string' && BOUNDS_DOCK_AXES.has(value.y as NonNullable<Magnet['boundsDock']>['y'])) {
-    nextDock.y = value.y as NonNullable<Magnet['boundsDock']>['y'];
-  }
-
-  return Object.keys(nextDock).length > 0 ? nextDock : undefined;
-}
-
-function sanitizeBoundsAlign(value: unknown): Magnet['boundsAlign'] | undefined {
-  if (!isPlainObject(value) || typeof value.topToMagnetId !== 'string' || value.topToMagnetId.length < 1) {
+  if (
+    typeof value.source !== 'string' ||
+    typeof value.edge !== 'string' ||
+    !BOUNDS_SOURCES.has(value.source as Magnet['bounds']['horizontal']['start']['source']) ||
+    !BOUNDS_EDGES.has(value.edge as Magnet['bounds']['horizontal']['start']['edge'])
+  ) {
     return undefined;
   }
 
-  return {
-    topToMagnetId: value.topToMagnetId,
+  const nextReference: Magnet['bounds']['horizontal']['start'] = {
+    source: value.source as Magnet['bounds']['horizontal']['start']['source'],
+    edge: value.edge as Magnet['bounds']['horizontal']['start']['edge'],
   };
+
+  if (nextReference.source === 'magnet') {
+    if (typeof value.magnetId !== 'string' || value.magnetId.length < 1) {
+      return undefined;
+    }
+
+    nextReference.magnetId = value.magnetId;
+  }
+
+  if (typeof value.offset === 'number' && Number.isFinite(value.offset) && value.offset !== 0) {
+    nextReference.offset = value.offset;
+  }
+
+  return nextReference;
+}
+
+function sanitizeBoundsAxis(
+  value: unknown
+): Magnet['bounds']['horizontal'] | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+
+  const start = sanitizeBoundsReference(value.start);
+  const end = sanitizeBoundsReference(value.end);
+  if (!start || !end) {
+    return undefined;
+  }
+
+  return { start, end };
+}
+
+function sanitizeBounds(value: unknown): Magnet['bounds'] | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+
+  const horizontal = sanitizeBoundsAxis(value.horizontal);
+  const vertical = sanitizeBoundsAxis(value.vertical);
+  if (!horizontal || !vertical) {
+    return undefined;
+  }
+
+  return { horizontal, vertical };
+}
+
+function sanitizeChrome(value: unknown): Magnet['chrome'] | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+
+  const nextChrome: NonNullable<Magnet['chrome']> = {};
+  if (typeof value.enabled === 'boolean') {
+    nextChrome.enabled = value.enabled;
+  }
+
+  const inset = sanitizeFiniteInset(value.inset);
+  if (inset) {
+    nextChrome.inset = inset;
+  }
+
+  const outset = sanitizeFiniteInset(value.outset);
+  if (outset) {
+    nextChrome.outset = outset;
+  }
+
+  return Object.keys(nextChrome).length > 0 ? nextChrome : undefined;
 }
 
 function sanitizePixelAnchor(anchor: unknown): PixelAnchor | null {
@@ -229,40 +297,29 @@ function sanitizeMagnetStateConfig(value: unknown): { config: MagnetStateConfig 
     return { config: null, changed: false };
   }
 
-  let changed = Object.keys(value).some((key) => !MAGNET_STATE_CONFIG_KEYS.includes(key as (typeof MAGNET_STATE_CONFIG_KEYS)[number]));
+  let changed = Object.keys(value).some(
+    (key) => !MAGNET_STATE_CONFIG_KEYS.includes(key as (typeof MAGNET_STATE_CONFIG_KEYS)[number])
+  );
   const anchors = sanitizeAnchors(value.anchors);
+  const bounds = sanitizeBounds(value.bounds);
 
-  if (typeof value.isActive !== 'boolean' || anchors.length === 0) {
+  if (typeof value.isActive !== 'boolean' || anchors.length === 0 || !bounds) {
     return { config: null, changed: true };
   }
 
   const nextConfig: MagnetStateConfig = {
     anchors,
     isActive: value.isActive,
+    bounds,
   };
 
   if (typeof value.renderer === 'string') nextConfig.renderer = value.renderer;
   if (typeof value.variant === 'string') nextConfig.variant = value.variant;
   if (isPlainObject(value.skinProps)) nextConfig.skinProps = { ...value.skinProps };
   if (typeof value.previewText === 'string') nextConfig.previewText = value.previewText;
-  if (value.boundsMode === 'centered' || value.boundsMode === 'docked') nextConfig.boundsMode = value.boundsMode;
 
-  const boundsDock = sanitizeBoundsDock(value.boundsDock);
-  if (boundsDock) nextConfig.boundsDock = boundsDock;
-
-  const boundsInset = sanitizeFiniteInset(value.boundsInset);
-  if (boundsInset) nextConfig.boundsInset = boundsInset;
-
-  const boundsOutset = sanitizeFiniteInset(value.boundsOutset);
-  if (boundsOutset) nextConfig.boundsOutset = boundsOutset;
-
-  const boundsAlign = sanitizeBoundsAlign(value.boundsAlign);
-  if (boundsAlign) nextConfig.boundsAlign = boundsAlign;
-
-  if (typeof value.chromeEnabled === 'boolean') nextConfig.chromeEnabled = value.chromeEnabled;
-
-  const chromeInset = sanitizeFiniteInset(value.chromeInset);
-  if (chromeInset) nextConfig.chromeInset = chromeInset;
+  const chrome = sanitizeChrome(value.chrome);
+  if (chrome) nextConfig.chrome = chrome;
 
   const styleOverride = sanitizeStyleOverride(value.styleOverride);
   if (styleOverride) nextConfig.styleOverride = styleOverride;
@@ -276,8 +333,11 @@ function sanitizeCustomMagnet<TMagnet extends Magnet>(value: unknown): { magnet:
     return { magnet: null, changed: false };
   }
 
-  let changed = Object.keys(value).some((key) => !CUSTOM_MAGNET_KEYS.includes(key as (typeof CUSTOM_MAGNET_KEYS)[number]));
+  let changed = Object.keys(value).some(
+    (key) => !CUSTOM_MAGNET_KEYS.includes(key as (typeof CUSTOM_MAGNET_KEYS)[number])
+  );
   const anchors = sanitizeAnchors(value.anchors);
+  const bounds = sanitizeBounds(value.bounds);
 
   if (
     typeof value.id !== 'string' ||
@@ -292,6 +352,7 @@ function sanitizeCustomMagnet<TMagnet extends Magnet>(value: unknown): { magnet:
     typeof value.interactions.draggable !== 'boolean' ||
     typeof value.interactions.clickable !== 'boolean' ||
     anchors.length === 0 ||
+    !bounds ||
     !Object.prototype.hasOwnProperty.call(value, 'content')
   ) {
     return { magnet: null, changed: true };
@@ -303,6 +364,7 @@ function sanitizeCustomMagnet<TMagnet extends Magnet>(value: unknown): { magnet:
     name: value.name,
     anchors,
     anchorType: value.anchorType as Magnet['anchorType'],
+    bounds,
     content: value.content as Magnet['content'],
     style: { ...value.style } as Magnet['style'],
     state: value.state as Magnet['state'],
@@ -332,29 +394,10 @@ function sanitizeCustomMagnet<TMagnet extends Magnet>(value: unknown): { magnet:
       nextMagnet.gridFootprint = { width, height };
     }
   }
-  if (value.boundsMode === 'centered' || value.boundsMode === 'docked') nextMagnet.boundsMode = value.boundsMode;
 
-  const boundsDock = sanitizeBoundsDock(value.boundsDock);
-  if (boundsDock) nextMagnet.boundsDock = boundsDock;
+  const chrome = sanitizeChrome(value.chrome);
+  if (chrome) nextMagnet.chrome = chrome;
 
-  const boundsInset = sanitizeFiniteInset(value.boundsInset);
-  if (boundsInset) nextMagnet.boundsInset = boundsInset;
-
-  const boundsOutset = sanitizeFiniteInset(value.boundsOutset);
-  if (boundsOutset) nextMagnet.boundsOutset = boundsOutset;
-
-  const boundsAlign = sanitizeBoundsAlign(value.boundsAlign);
-  if (boundsAlign) nextMagnet.boundsAlign = boundsAlign;
-
-  if (isPlainObject(value.chrome)) {
-    const chrome: NonNullable<Magnet['chrome']> = {};
-    if (typeof value.chrome.enabled === 'boolean') chrome.enabled = value.chrome.enabled;
-    const chromeInset = sanitizeFiniteInset(value.chrome.inset);
-    if (chromeInset) chrome.inset = chromeInset;
-    if (Object.keys(chrome).length > 0) {
-      nextMagnet.chrome = chrome;
-    }
-  }
   if (isPlainObject(value.animation)) {
     nextMagnet.animation = { ...value.animation } as Magnet['animation'];
   }
@@ -442,6 +485,13 @@ function createStyleOverrideConfig(
   return Object.keys(styleOverride).length > 0 ? styleOverride : undefined;
 }
 
+function createLayoutStateConfig(magnet: Magnet): SavedLayoutStateConfig {
+  return {
+    bounds: magnet.bounds,
+    ...(magnet.chrome ? { chrome: magnet.chrome } : {}),
+  };
+}
+
 function createMagnetStateConfig(
   magnet: Magnet,
   isActive: boolean,
@@ -493,50 +543,22 @@ function applySavedPresentationState<TMagnet extends Magnet>(
   return nextMagnet;
 }
 
-function createLayoutStateConfig(magnet: Magnet): SavedLayoutStateConfig {
-  return {
-    boundsMode: magnet.boundsMode,
-    boundsDock: magnet.boundsDock,
-    boundsInset: magnet.boundsInset,
-    boundsOutset: magnet.boundsOutset,
-    boundsAlign: magnet.boundsAlign,
-    chromeEnabled: magnet.chrome?.enabled,
-    chromeInset: magnet.chrome?.inset,
-  };
-}
-
 function applySavedLayoutState<TMagnet extends Magnet>(
   magnet: TMagnet,
   savedConfig: SavedLayoutStateConfig
 ): TMagnet {
-  const nextMagnet = {
+  return {
     ...magnet,
-    boundsMode: savedConfig.boundsMode ?? magnet.boundsMode,
-    boundsDock: savedConfig.boundsDock ?? magnet.boundsDock,
-    boundsInset: savedConfig.boundsInset ?? magnet.boundsInset,
-    boundsOutset: savedConfig.boundsOutset ?? magnet.boundsOutset,
-    boundsAlign: savedConfig.boundsAlign ?? magnet.boundsAlign,
+    bounds: savedConfig.bounds ?? magnet.bounds,
+    chrome: mergeMagnetChromeConfig(magnet.chrome, savedConfig.chrome),
   };
-
-  if (typeof savedConfig.chromeEnabled === 'boolean' || savedConfig.chromeInset !== undefined) {
-    nextMagnet.chrome = {
-      ...(magnet.chrome ?? {}),
-      ...(typeof savedConfig.chromeEnabled === 'boolean' ? { enabled: savedConfig.chromeEnabled } : {}),
-      ...(savedConfig.chromeInset !== undefined ? { inset: savedConfig.chromeInset } : {}),
-    };
-  }
-
-  return nextMagnet;
 }
 
-/**
- * 淇濆瓨閰嶇疆鍒?localStorage
- */
 export function saveConfig(
   magnetLibrary: Magnet[],
   activeMagnetIds: Set<string>,
   gridSize: { columns: number; rows: number },
-  defaultMagnetLibrary?: Magnet[], // 鍙€夛細榛樿 Magnet 搴擄紝鐢ㄤ簬瀵规瘮妫€娴嬩慨鏀?
+  defaultMagnetLibrary?: Magnet[],
   storageKey: string = CONFIG_KEY,
   options: { includeCustomMagnets?: boolean } = {}
 ): void {
@@ -549,7 +571,6 @@ export function saveConfig(
       customMagnets: [],
     };
 
-    // 淇濆瓨鎵€鏈?Magnet 鐨勪綅缃拰婵€娲荤姸鎬?
     magnetLibrary.forEach((magnet) => {
       const isActive = activeMagnetIds.has(magnet.id);
       const defaultMagnet = BUILTIN_MAGNET_IDS.has(magnet.id)
@@ -560,7 +581,6 @@ export function saveConfig(
       config.magnets[magnet.id] = magnetConfig;
     });
 
-    // 淇濆瓨鑷畾涔?Magnet 鐨勫畬鏁村畾涔?
     config.customMagnets = includeCustomMagnets
       ? magnetLibrary
           .filter((m) => !BUILTIN_MAGNET_IDS.has(m.id))
@@ -579,21 +599,10 @@ export function saveConfig(
   }
 }
 
-/**
- * 杩佺Щ鏃х殑 Magnet ID 鍒版柊 ID
- */
 function parseStoredConfig(text: string): { config: MagnetConfig; changed: boolean } {
   return sanitizeConfigForPersistence(JSON.parse(text) as MagnetConfig);
-
-  // 杩佺Щ magnets 瀵硅薄涓殑 key
-
-  // 杩佺Щ customMagnets 涓殑 id
-
 }
 
-/**
- * 浠?localStorage 鍔犺浇閰嶇疆
- */
 export function loadConfig(storageKey: string = CONFIG_KEY): MagnetConfig | null {
   try {
     const configStr = readString(storageKey);
@@ -635,16 +644,12 @@ export function loadConfig(storageKey: string = CONFIG_KEY): MagnetConfig | null
   }
 }
 
-/**
- * 瀵煎嚭閰嶇疆鍒?JSON 鏂囦欢
- */
 export function exportConfig(
   magnetLibrary: Magnet[],
   activeMagnetIds: Set<string>,
   gridSize: { columns: number; rows: number },
   defaultMagnetLibrary?: Magnet[]
 ): string {
-  // 澶嶇敤 saveConfig 鐨勯€昏緫
   const config: MagnetConfig = {
     version: CONFIG_VERSION,
     gridSize,
@@ -652,7 +657,6 @@ export function exportConfig(
     customMagnets: [],
   };
 
-  // 淇濆瓨鎵€鏈?Magnet 鐨勪綅缃拰婵€娲荤姸鎬?
   magnetLibrary.forEach((magnet) => {
     const defaultMagnet = BUILTIN_MAGNET_IDS.has(magnet.id)
       ? defaultMagnetLibrary?.find((candidate) => candidate.id === magnet.id)
@@ -674,15 +678,11 @@ export function exportConfig(
   return JSON.stringify(config, null, 2);
 }
 
-/**
- * 瀵煎叆閰嶇疆浠?JSON 瀛楃涓?
- */
 export function importConfig(jsonStr: string): MagnetConfig | null {
   try {
     const sanitizedResult = parseStoredConfig(jsonStr);
     let config = sanitizedResult.config;
 
-    // 楠岃瘉蹇呰瀛楁
     if (!config.version || !config.gridSize || !config.magnets) {
       throw new Error('Invalid config file: missing required fields');
     }
@@ -707,9 +707,6 @@ export function importConfig(jsonStr: string): MagnetConfig | null {
   }
 }
 
-/**
- * 娓呴櫎淇濆瓨鐨勯厤缃?
- */
 export function clearConfig(): void {
   try {
     removeKey(CONFIG_KEY);
@@ -723,9 +720,6 @@ export function clearConfig(): void {
   }
 }
 
-/**
- * 鍘婚噸 Magnet 鏁扮粍锛堟寜 ID锛?
- */
 function deduplicateMagnets(magnets: Magnet[]): Magnet[] {
   const seen = new Set<string>();
   const result: Magnet[] = [];
@@ -747,9 +741,6 @@ function deduplicateMagnets(magnets: Magnet[]): Magnet[] {
   return result;
 }
 
-/**
- * 楠岃瘉 Magnet 閰嶇疆
- */
 function validateMagnet(magnet: Magnet): boolean {
   if (!magnet.id || typeof magnet.id !== 'string') {
     telemetry.error('config.magnet.invalid_missing_id', {
@@ -772,16 +763,22 @@ function validateMagnet(magnet: Magnet): boolean {
     return false;
   }
 
+  if (!magnet.bounds) {
+    telemetry.error('config.magnet.invalid_bounds', {
+      message: 'Invalid magnet: missing bounds.',
+      fields: {
+        magnetId: magnet.id,
+      },
+    });
+    return false;
+  }
+
   return true;
 }
 
-/**
- * 娓呯悊閰嶇疆涓殑閲嶅鍜屾棤鏁堟暟鎹?
- */
 function sanitizeConfig(config: MagnetConfig): MagnetConfig {
   const sanitized = sanitizeConfigForPersistence(config).config;
 
-  // 娓呯悊 customMagnets 涓殑鍐呯疆 magnet
   if (sanitized.customMagnets) {
     sanitized.customMagnets = sanitized.customMagnets
       .map((magnet) => sanitizeCustomMagnet(magnet).magnet)
@@ -799,16 +796,12 @@ function sanitizeConfig(config: MagnetConfig): MagnetConfig {
         return validateMagnet(m);
       });
 
-    // 鍘婚噸
     sanitized.customMagnets = deduplicateMagnets(sanitized.customMagnets);
   }
 
   return sanitized;
 }
 
-/**
- * 鍚堝苟閰嶇疆鍒扮幇鏈夊簱锛堢敤浜庡簲鐢ㄥ姞杞界殑閰嶇疆锛?
- */
 export function applyConfig(
   config: MagnetConfig,
   defaultMagnetLibrary: Magnet[]
@@ -816,16 +809,12 @@ export function applyConfig(
   magnetLibrary: Magnet[];
   activeMagnetIds: Set<string>;
 } {
-  // 娓呯悊閰嶇疆
   const cleanConfig = sanitizeConfig(config);
 
   const magnetLibrary: Magnet[] = [];
   const activeMagnetIds = new Set<string>();
-
-  // 鐢ㄤ簬鍘婚噸鐨勯泦鍚?
   const addedIds = new Set<string>();
 
-  // 1. 棣栧厛澶勭悊鍐呯疆 Magnet
   defaultMagnetLibrary.forEach((defaultMagnet) => {
     if (addedIds.has(defaultMagnet.id)) {
       telemetry.warn('config.apply.skip_duplicate_builtin', {
@@ -853,25 +842,20 @@ export function applyConfig(
       magnetLibrary.push(layoutAppliedMagnet);
       addedIds.add(defaultMagnet.id);
 
-      // 鎭㈠婵€娲荤姸鎬?
       if (savedConfig.isActive) {
         activeMagnetIds.add(defaultMagnet.id);
       }
     } else {
-      // 浣跨敤榛樿閰嶇疆
       magnetLibrary.push(defaultMagnet);
       addedIds.add(defaultMagnet.id);
-      // 榛樿婵€娲伙紙浠呭鈥滈粯璁ゆ縺娲婚泦鍚堚€濅腑鐨勫唴缃?Magnet锛?
       if (DEFAULT_ACTIVE_MAGNET_IDS.has(defaultMagnet.id)) {
         activeMagnetIds.add(defaultMagnet.id);
       }
     }
   });
 
-  // 2. 娣诲姞鑷畾涔?Magnet锛堟帓闄ゅ唴缃?magnet 鍜屽凡娣诲姞鐨勶級
   if (cleanConfig.customMagnets) {
     cleanConfig.customMagnets.forEach((customMagnet) => {
-      // 璺宠繃宸叉坊鍔犵殑鍜屽唴缃殑
       if (addedIds.has(customMagnet.id) || BUILTIN_MAGNET_IDS.has(customMagnet.id)) {
         telemetry.warn('config.apply.skip_duplicate_or_builtin_custom', {
           message: 'Skipping duplicate or builtin custom magnet.',
@@ -903,21 +887,16 @@ export function applyConfig(
         magnetLibrary.push(layoutAppliedMagnet);
         addedIds.add(customMagnet.id);
 
-        // 鎭㈠婵€娲荤姸鎬?
         if (savedConfig.isActive) {
           activeMagnetIds.add(customMagnet.id);
         }
       } else {
-        // 浣跨敤鍘熷閰嶇疆
         magnetLibrary.push(customMagnet);
         addedIds.add(customMagnet.id);
       }
     });
   }
 
-  // 浠呭鈥滄縺娲荤殑 magnets鈥濊繘琛屽啿绐佹娴?鑷姩瑙ｅ喅锛?
-  // - 鏈縺娲?magnets 涓嶅弬涓庡崰鐢紝涓嶉渶瑕佷负鍏惰€楁椂瑙ｆ瀽浣嶇疆
-  // - 鍙湁鍦ㄧ‘瀹炴娴嬪埌鍐茬獊鏃舵墠杩愯 resolve锛堥伩鍏嶆瘡娆￠兘鍋氬叏閲忚В鏋愶級
   const activeMagnets = magnetLibrary.filter((m) => activeMagnetIds.has(m.id));
   const conflicts = detectConflicts(activeMagnets);
   if (conflicts.length === 0) {

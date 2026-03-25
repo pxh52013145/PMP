@@ -2,6 +2,7 @@ import React from 'react';
 import { unzip, strFromU8 } from 'fflate';
 import type { Unzipped } from 'fflate';
 import type { Magnet } from '../../types/pixel';
+import { createDefaultBoundsForMagnet } from '../../modules/magnets/layoutPresets';
 import type { MagnetRendererDefinition } from '../registry';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { PluginMagnetHost } from './PluginMagnetHost';
@@ -1342,7 +1343,7 @@ export function createMagnetTemplateFromPlugin(plugin: InstalledPmpmPlugin): Mag
   const { id, name, description, tags } = plugin.manifest.metadata;
   const { anchorType, gridFootprint } = buildFootprintFromManifest(plugin);
 
-  const style = {
+  const style: Magnet['style'] = {
     backgroundColor: 'rgba(0, 0, 0, 0.35)',
     border: '1px solid rgba(255, 255, 255, 0.12)',
     borderRadius: '2.7px',
@@ -1363,6 +1364,10 @@ export function createMagnetTemplateFromPlugin(plugin: InstalledPmpmPlugin): Mag
     gridFootprint,
     content: '',
     style,
+    bounds: createDefaultBoundsForMagnet(anchorType, {
+      width: style.width,
+      height: style.height,
+    }),
     state: 'idle',
     interactions: {
       draggable: true,

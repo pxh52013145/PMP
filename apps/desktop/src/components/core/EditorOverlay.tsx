@@ -9,7 +9,13 @@ import { useEditor } from '../../contexts/EditorContext';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { Magnet, PixelAnchor } from '../../types/pixel';
 import { MATRIX_CONFIG } from '../../constants/config';
-import { alignMagnetBounds, computeMagnetBounds } from '../../modules/magnets/geometry';
+import {
+  alignMagnetBounds,
+  computeChromeBoundsFromLayoutBounds,
+  type MagnetBounds,
+} from '../../modules/magnets/geometry';
+import { buildAdaptiveMagnetLayout, type MagnetJoinEdges } from '../../modules/magnets/layoutAdaptive';
+import { MagnetComponent } from '../magnet/Magnet';
 import { calculateNewAnchors, checkMagnetCollision, getMagnetOccupiedPixels } from '../../utils/magnetEditor';
 import { buildMagnetAnchorsAtTopLeft, resolveMagnetFootprintShape } from '../../utils/magnetPlacement';
 import {
@@ -42,11 +48,18 @@ type DraggingMagnetState = {
 /**
  * 获取 Magnet 的边界框
  */
-function getMagnetBounds(
-  magnet: Magnet,
-  pixelPositions: Map<string, { x: number; y: number }>
-): { left: number; top: number; right: number; bottom: number } | null {
-  const bounds = computeMagnetBounds(magnet, pixelPositions);
+function readViewportSize() {
+  if (typeof window === 'undefined') {
+    return { width: 0, height: 0 };
+  }
+
+  return {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  };
+}
+
+function toAbsoluteBounds(bounds: MagnetBounds | null): { left: number; top: number; right: number; bottom: number } | null {
   if (!bounds) return null;
 
   const aligned = alignMagnetBounds(bounds);
@@ -57,6 +70,64 @@ function getMagnetBounds(
     right: aligned.x + aligned.width,
     bottom: aligned.y + aligned.height,
   };
+}
+
+function createPreviewMagnet(magnet: Magnet, anchors: PixelAnchor[]): Magnet {
+  return {
+    ...magnet,
+    anchors,
+  };
+}
+
+interface OverlayMagnetPreviewProps {
+  magnet: Magnet;
+  pixelPositions: Map<string, { x: number; y: number }>;
+  layoutBounds: MagnetBounds;
+  joinEdges?: MagnetJoinEdges;
+  outlineTone: 'drag' | 'placement' | 'collision';
+  ghostOpacity?: number;
+}
+
+function OverlayMagnetPreview({
+  magnet,
+  pixelPositions,
+  layoutBounds,
+  joinEdges,
+  outlineTone,
+  ghostOpacity = 0.72,
+}: OverlayMagnetPreviewProps) {
+  const alignedLayoutBounds = React.useMemo(() => alignMagnetBounds(layoutBounds), [layoutBounds]);
+  const outlineStyle = React.useMemo(() => {
+    const chromeBounds = computeChromeBoundsFromLayoutBounds(alignedLayoutBounds, magnet.chrome, {
+      joinEdges,
+    });
+    if (!chromeBounds) return null;
+
+    const aligned = alignMagnetBounds(chromeBounds);
+    return {
+      left: aligned.x,
+      top: aligned.y,
+      width: aligned.width,
+      height: aligned.height,
+      borderRadius: magnet.style.borderRadius,
+    } satisfies React.CSSProperties;
+  }, [alignedLayoutBounds, joinEdges, magnet.chrome, magnet.style.borderRadius]);
+
+  if (!outlineStyle) return null;
+
+  return (
+    <div className="magnet-preview-layer">
+      <div className="magnet-preview-ghost" style={{ opacity: ghostOpacity }}>
+        <MagnetComponent
+          magnet={magnet}
+          pixelPositions={pixelPositions}
+          layoutBoundsOverride={alignedLayoutBounds}
+          joinEdges={joinEdges}
+        />
+      </div>
+      <div className={`magnet-preview-outline magnet-preview-outline--${outlineTone}`} style={outlineStyle} />
+    </div>
+  );
 }
 
 export function EditorOverlay({
@@ -88,6 +159,11 @@ export function EditorOverlay({
   const pendingDrawRef = useRef(false);
   const renderModeRef = useRef(renderMode);
   renderModeRef.current = renderMode;
+  const [viewportSize, setViewportSize] = useState(readViewportSize);
+  const adaptiveLayout = React.useMemo(
+    () => buildAdaptiveMagnetLayout(magnets, pixelPositions, viewportSize),
+    [magnets, pixelPositions, viewportSize]
+  );
   const [pixelHintsVisible, setPixelHintsVisible] = useState(() =>
     readJson<boolean>(STORAGE_KEYS.EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE, true)
   );
@@ -167,13 +243,71 @@ export function EditorOverlay({
     if (!draggingMagnet) lastMagnetDeltaRef.current = null;
   }, [draggingMagnet]);
 
+  const draggingPreview = React.useMemo(() => {
+    if (!draggingMagnet) return null;
+
+    const previewMagnet = createPreviewMagnet(draggingMagnet.magnet, draggingMagnet.previewAnchors);
+    const previewMagnets = magnets.map((magnet) => (magnet.id === previewMagnet.id ? previewMagnet : magnet));
+    const previewLayout = buildAdaptiveMagnetLayout(previewMagnets, pixelPositions, viewportSize);
+    const layoutBounds = previewLayout.layoutBoundsByMagnetId[previewMagnet.id];
+    if (!layoutBounds) return null;
+
+    return {
+      magnet: previewMagnet,
+      layoutBounds,
+      joinEdges: previewLayout.joinsByMagnetId[previewMagnet.id],
+      outlineTone: draggingMagnet.hasCollision ? ('collision' as const) : ('drag' as const),
+    };
+  }, [draggingMagnet, magnets, pixelPositions, viewportSize]);
+
+  const placementPreview = React.useMemo(() => {
+    if (!placementMagnet || !editorState.hoverPixel) return null;
+
+    const hover = editorState.hoverPixel;
+    const shape = resolveMagnetFootprintShape(placementMagnet);
+    if (!shape) return null;
+    if (
+      hover.x < 0 ||
+      hover.y < 0 ||
+      hover.x + shape.width > MATRIX_CONFIG.COLUMNS ||
+      hover.y + shape.height > MATRIX_CONFIG.ROWS
+    ) {
+      return null;
+    }
+
+    for (let dy = 0; dy < shape.height; dy++) {
+      for (let dx = 0; dx < shape.width; dx++) {
+        const key = `${hover.x + dx},${hover.y + dy}`;
+        if (occupancyMap.get(key)?.isOccupied) return null;
+      }
+    }
+
+    const anchors = buildMagnetAnchorsAtTopLeft(placementMagnet, { x: hover.x, y: hover.y });
+    if (!anchors) return null;
+
+    const previewMagnet = createPreviewMagnet(placementMagnet, anchors);
+    const previewLayout = buildAdaptiveMagnetLayout([...magnets, previewMagnet], pixelPositions, viewportSize);
+    const layoutBounds = previewLayout.layoutBoundsByMagnetId[previewMagnet.id];
+    if (!layoutBounds) return null;
+
+    return {
+      magnet: previewMagnet,
+      layoutBounds,
+      joinEdges: previewLayout.joinsByMagnetId[previewMagnet.id],
+    };
+  }, [editorState.hoverPixel, magnets, occupancyMap, placementMagnet, pixelPositions, viewportSize]);
+
   // 检测鼠标是否点击在某个 Magnet 上
   const getMagnetAtPosition = useCallback(
     (mouseX: number, mouseY: number): Magnet | null => {
       // 从后往前遍历（后面的 Magnet z-index 更高，优先级更高）
       for (let i = magnets.length - 1; i >= 0; i--) {
         const magnet = magnets[i];
-        const bounds = getMagnetBounds(magnet, pixelPositions);
+        const bounds = toAbsoluteBounds(
+          computeChromeBoundsFromLayoutBounds(adaptiveLayout.layoutBoundsByMagnetId[magnet.id], magnet.chrome, {
+            joinEdges: adaptiveLayout.joinsByMagnetId[magnet.id],
+          })
+        );
 
         if (!bounds) continue;
 
@@ -188,7 +322,7 @@ export function EditorOverlay({
       }
       return null;
     },
-    [magnets, pixelPositions]
+    [adaptiveLayout.joinsByMagnetId, adaptiveLayout.layoutBoundsByMagnetId, magnets]
   );
 
   // 获取鼠标位置对应的 Pixel 坐标
@@ -783,7 +917,9 @@ export function EditorOverlay({
 
   useEffect(() => {
     const onResize = () => {
-      gridLayoutRef.current = computePixelGridLayout(window.innerWidth, window.innerHeight);
+      const nextViewportSize = readViewportSize();
+      gridLayoutRef.current = computePixelGridLayout(nextViewportSize.width, nextViewportSize.height);
+      setViewportSize(nextViewportSize);
       scheduleDraw();
     };
     window.addEventListener('resize', onResize);
@@ -819,95 +955,28 @@ export function EditorOverlay({
       />
 
       {/* 渲染拖动预览 */}
-      {draggingMagnet && (
-        <div
-          className={`magnet-drag-preview ${draggingMagnet.hasCollision ? 'collision' : ''}`}
-          style={{
-            position: 'absolute',
-            ...getMagnetPreviewStyle(
-              draggingMagnet.magnet,
-              draggingMagnet.previewAnchors,
-              pixelPositions
-            ),
-            ...draggingMagnet.magnet.style,
-            opacity: 0.7,
-            pointerEvents: 'none',
-            border: draggingMagnet.hasCollision
-              ? '2px dashed rgba(255, 59, 48, 0.8)'
-              : '2px dashed rgba(0, 122, 255, 0.8)',
-          }}
-        >
-          {draggingMagnet.magnet.content}
-        </div>
+      {draggingPreview && (
+        <OverlayMagnetPreview
+          magnet={draggingPreview.magnet}
+          pixelPositions={pixelPositions}
+          layoutBounds={draggingPreview.layoutBounds}
+          joinEdges={draggingPreview.joinEdges}
+          outlineTone={draggingPreview.outlineTone}
+        />
       )}
 
-      {placementMagnet &&
-        (() => {
-          const hover = editorState.hoverPixel;
-          if (!hover) return null;
-          const shape = resolveMagnetFootprintShape(placementMagnet);
-          if (!shape) return null;
-          if (
-            hover.x < 0 ||
-            hover.y < 0 ||
-            hover.x + shape.width > MATRIX_CONFIG.COLUMNS ||
-            hover.y + shape.height > MATRIX_CONFIG.ROWS
-          ) {
-            return null;
-          }
-          for (let dy = 0; dy < shape.height; dy++) {
-            for (let dx = 0; dx < shape.width; dx++) {
-              const key = `${hover.x + dx},${hover.y + dy}`;
-              if (occupancyMap.get(key)?.isOccupied) return null;
-            }
-          }
-          const anchors = buildMagnetAnchorsAtTopLeft(placementMagnet, { x: hover.x, y: hover.y });
-          if (!anchors) return null;
-
-          return (
-            <div
-              className="magnet-placement-preview"
-              style={{
-                position: 'absolute',
-                ...getMagnetPreviewStyle(placementMagnet, anchors, pixelPositions),
-                ...placementMagnet.style,
-                opacity: 0.75,
-                pointerEvents: 'none',
-                border: '2px dashed rgba(255, 0, 200, 0.85)',
-              }}
-            >
-              {placementMagnet.content}
-            </div>
-          );
-        })()}
+      {placementPreview && (
+        <OverlayMagnetPreview
+          magnet={placementPreview.magnet}
+          pixelPositions={pixelPositions}
+          layoutBounds={placementPreview.layoutBounds}
+          joinEdges={placementPreview.joinEdges}
+          outlineTone="placement"
+          ghostOpacity={0.75}
+        />
+      )}
     </div>
   );
-}
-
-/**
- * 获取 Magnet 预览样式
- */
-function getMagnetPreviewStyle(
-  magnet: Magnet,
-  anchors: PixelAnchor[],
-  pixelPositions: Map<string, { x: number; y: number }>
-): React.CSSProperties {
-  const previewMagnet: Magnet = {
-    ...magnet,
-    anchors,
-  };
-
-  const bounds = computeMagnetBounds(previewMagnet, pixelPositions);
-  if (!bounds) return {};
-
-  const aligned = alignMagnetBounds(bounds);
-
-  return {
-    left: aligned.x,
-    top: aligned.y,
-    width: aligned.width,
-    height: aligned.height,
-  };
 }
 
 /**

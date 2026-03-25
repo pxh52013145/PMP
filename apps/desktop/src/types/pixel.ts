@@ -46,19 +46,6 @@ export type MagnetType =
  */
 export type AnchorType = 'single' | 'horizontal' | 'vertical' | 'rectangular';
 
-// centered: single magnet stays centered within its own pixel slot.
-// docked: single magnet aligns to a slot edge so it can keep a stable seam
-// with a related panel even when the grid has extra spacing.
-export type MagnetBoundsMode = 'centered' | 'docked';
-
-export type MagnetBoundsDockAxis = 'start' | 'center' | 'end';
-
-export interface MagnetBoundsDockConfig {
-  // Omitted axes fall back to the standard single-magnet centering behavior.
-  x?: MagnetBoundsDockAxis;
-  y?: MagnetBoundsDockAxis;
-}
-
 export interface MagnetInsetConfig {
   top?: number;
   right?: number;
@@ -66,8 +53,24 @@ export interface MagnetInsetConfig {
   left?: number;
 }
 
-export interface MagnetBoundsAlignConfig {
-  topToMagnetId?: string;
+export type MagnetBoundsReferenceSource = 'slot' | 'span' | 'band' | 'viewport' | 'magnet';
+export type MagnetBoundsReferenceEdge = 'start' | 'center' | 'end';
+
+export interface MagnetBoundsReference {
+  source: MagnetBoundsReferenceSource;
+  edge: MagnetBoundsReferenceEdge;
+  magnetId?: string;
+  offset?: number;
+}
+
+export interface MagnetBoundsAxis {
+  start: MagnetBoundsReference;
+  end: MagnetBoundsReference;
+}
+
+export interface MagnetBoundsSpec {
+  horizontal: MagnetBoundsAxis;
+  vertical: MagnetBoundsAxis;
 }
 
 export interface MagnetGridFootprint {
@@ -144,6 +147,7 @@ export interface MagnetInteractions {
 export interface MagnetChromeConfig {
   enabled?: boolean;
   inset?: MagnetInsetConfig;
+  outset?: MagnetInsetConfig;
 }
 
 /**
@@ -174,18 +178,8 @@ export interface Magnet {
   // Optional grid footprint (size in matrix cells), used when anchors are intentionally left empty.
   gridFootprint?: MagnetGridFootprint;
 
-  // Only applies to single-anchor magnets.
-  boundsMode?: MagnetBoundsMode;
-  boundsDock?: MagnetBoundsDockConfig;
-
-  // Real layout inset. Affects shell bounds, collision, adaptive joins, and hit area.
-  boundsInset?: MagnetInsetConfig;
-
-  // Real layout outset. Expands shell bounds outward without changing anchors.
-  boundsOutset?: MagnetInsetConfig;
-
-  // Runtime shell alignment to another magnet edge.
-  boundsAlign?: MagnetBoundsAlignConfig;
+  // Structural layout bounds. These drive anchoring, joins, collision checks, and adaptive layout.
+  bounds: MagnetBoundsSpec;
 
   // 内容配置
   content: React.ReactNode | string;
@@ -193,7 +187,7 @@ export interface Magnet {
   // 样式配置（默认/空闲状态）
   style: MagnetStyle;
 
-  // Host-managed outer chrome (frame) configuration.
+  // Host-managed visual chrome. Inset affects the internal frame; outset only expands visual chrome.
   chrome?: MagnetChromeConfig;
 
   // 动画配置（可选）

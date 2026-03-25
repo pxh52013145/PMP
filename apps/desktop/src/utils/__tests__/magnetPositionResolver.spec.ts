@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { Magnet } from '../../types/pixel';
+import { createDefaultBoundsForMagnet } from '../../modules/magnets/layoutPresets';
 import { resolveMagnetPositions, detectConflicts } from '../magnetPositionResolver';
 
 const createMagnet = (id: string, gridX: number): Magnet => ({
@@ -16,6 +17,7 @@ const createMagnet = (id: string, gridX: number): Magnet => ({
     },
   ],
   anchorType: 'single',
+  bounds: createDefaultBoundsForMagnet('single', {}),
   content: id as unknown as React.ReactNode,
   style: {},
   state: 'idle',
@@ -45,6 +47,7 @@ describe('magnetPositionResolver', () => {
       name: 'wide',
       anchorType: 'horizontal',
       anchors: [],
+      bounds: createDefaultBoundsForMagnet('horizontal', {}),
       content: 'wide' as unknown as React.ReactNode,
       style: {},
       state: 'idle',

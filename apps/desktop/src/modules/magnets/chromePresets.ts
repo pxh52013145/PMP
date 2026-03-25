@@ -55,9 +55,9 @@ const DEFAULT_DRAG_HANDLE_STYLE: MagnetStyle = {
   backgroundColor: 'rgba(0, 0, 0, 0.72)',
   border: '1px solid rgba(255, 255, 255, 0.1)',
   borderRadius: DEFAULT_MAGNET_CORNER_RADIUS,
-  boxShadow: '0 4px 14px rgba(0, 0, 0, 0.32)',
-  fontSize: '15px',
+  fontSize: '14px',
   fontWeight: '700',
+  lineHeight: '1',
   letterSpacing: '2px',
   color: 'rgba(255, 255, 255, 0.62)',
   cursor: 'grab',
@@ -70,7 +70,7 @@ const DEFAULT_DRAG_HANDLE_HOVER_STYLE: MagnetStyle = {
   transform: 'translateY(-1px)',
   backgroundColor: 'rgba(60, 60, 60, 0.9)',
   border: '1px solid rgba(255, 255, 255, 0.16)',
-  boxShadow: '0 6px 18px rgba(0, 0, 0, 0.36)',
+  boxShadow: '0 3px 10px rgba(0, 0, 0, 0.28)',
   color: 'rgba(255, 255, 255, 0.82)',
 };
 
@@ -78,14 +78,14 @@ const DEFAULT_DRAG_HANDLE_ACTIVE_STYLE: MagnetStyle = {
   transform: 'translateY(0)',
   backgroundColor: 'rgba(32, 32, 32, 0.92)',
   border: '1px solid rgba(255, 255, 255, 0.22)',
-  boxShadow: '0 2px 10px rgba(0, 0, 0, 0.28)',
+  boxShadow: '0 1px 6px rgba(0, 0, 0, 0.22)',
   color: 'rgba(255, 255, 255, 0.92)',
 };
 
 const DEFAULT_DRAG_HANDLE_DRAG_STYLE: MagnetStyle = {
   backgroundColor: 'rgba(76, 76, 76, 0.96)',
   border: '1px solid rgba(255, 255, 255, 0.2)',
-  boxShadow: '0 10px 24px rgba(0, 0, 0, 0.42)',
+  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.32)',
   color: 'rgba(255, 255, 255, 0.96)',
   cursor: 'grabbing',
 };
