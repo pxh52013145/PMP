@@ -7,7 +7,7 @@ use rusqlite::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::{
-    collections::hash_map::DefaultHasher,
+    collections::{hash_map::DefaultHasher, HashMap, VecDeque},
     hash::{Hash, Hasher},
     path::PathBuf,
     sync::Mutex,
@@ -22,6 +22,62 @@ static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None))
 static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
 static OBSERVED_SCHEMA_STATE: Lazy<Mutex<Option<ObservedLibrarySchemaState>>> =
     Lazy::new(|| Mutex::new(None));
+
+const TRACK_QUERY_COUNT_CACHE_MAX_ENTRIES: usize = 64;
+const TRACK_QUERY_COUNT_CACHE_TTL_MS: i64 = 4_000;
+
+#[derive(Clone, Copy)]
+struct TrackQueryCountCacheEntry {
+    total: u64,
+    captured_at_ms: i64,
+}
+
+#[derive(Default)]
+struct TrackQueryCountCache {
+    order: VecDeque<u64>,
+    entries: HashMap<u64, TrackQueryCountCacheEntry>,
+}
+
+static TRACK_QUERY_COUNT_CACHE: Lazy<Mutex<TrackQueryCountCache>> =
+    Lazy::new(|| Mutex::new(TrackQueryCountCache::default()));
+
+fn invalidate_track_query_count_cache() {
+    if let Ok(mut cache) = TRACK_QUERY_COUNT_CACHE.lock() {
+        cache.order.clear();
+        cache.entries.clear();
+    }
+}
+
+fn hash_track_query_count_key(from_where_sql: &str, bind_values: &[Value]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    from_where_sql.hash(&mut hasher);
+
+    for value in bind_values {
+        match value {
+            Value::Null => {
+                0_u8.hash(&mut hasher);
+            }
+            Value::Integer(item) => {
+                1_u8.hash(&mut hasher);
+                item.hash(&mut hasher);
+            }
+            Value::Real(item) => {
+                2_u8.hash(&mut hasher);
+                item.to_bits().hash(&mut hasher);
+            }
+            Value::Text(item) => {
+                3_u8.hash(&mut hasher);
+                item.hash(&mut hasher);
+            }
+            Value::Blob(item) => {
+                4_u8.hash(&mut hasher);
+                item.hash(&mut hasher);
+            }
+        }
+    }
+
+    hasher.finish()
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1415,10 +1471,13 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         }
     }
 
+    invalidate_track_query_count_cache();
+
     let path = db_file_path(app)?;
     let _ = DB_PATH.set(path.clone());
     let connection = Connection::open(&path)
         .map_err(|error| format!("Failed to open music library DB: {error}"))?;
+    connection.set_prepared_statement_cache_capacity(64);
     migrate(&connection)?;
     let initial_schema_state = read_observed_schema_state(&connection)?;
 
@@ -1943,6 +2002,8 @@ pub fn upsert_source(
         )
         .map_err(|error| format!("Failed to upsert source: {error}"))?;
 
+        invalidate_track_query_count_cache();
+
         source_record_by_id(conn, source_id)
     })
 }
@@ -2005,6 +2066,7 @@ pub fn remove_source(app: &AppHandle, source_id: &str) -> Result<(), String> {
     with_conn(|conn| {
         conn.execute("DELETE FROM sources WHERE id = ?1", params![source_id])
             .map_err(|error| format!("Failed to remove source: {error}"))?;
+        invalidate_track_query_count_cache();
         Ok(())
     })
 }
@@ -3821,6 +3883,8 @@ pub fn sync_source_tracks(
         tx.commit()
             .map_err(|error| format!("Failed to commit source track sync transaction: {error}"))?;
 
+        invalidate_track_query_count_cache();
+
         Ok(LibraryTrackSyncResult {
             upserted,
             marked_missing,
@@ -3834,6 +3898,7 @@ pub fn clear_tracks(app: &AppHandle) -> Result<u64, String> {
         let affected = conn
             .execute("DELETE FROM local_tracks", [])
             .map_err(|error| format!("Failed to clear tracks: {error}"))?;
+        invalidate_track_query_count_cache();
         Ok(affected as u64)
     })
 }
@@ -3865,6 +3930,8 @@ pub fn delete_tracks(app: &AppHandle, track_ids: Vec<String>) -> Result<u64, Str
 
         tx.commit()
             .map_err(|error| format!("Failed to commit delete tracks transaction: {error}"))?;
+
+        invalidate_track_query_count_cache();
 
         Ok(deleted)
     })
@@ -5651,6 +5718,8 @@ pub fn cleanup_source_tracks(
         tx.commit()
             .map_err(|error| format!("Failed to commit source cleanup transaction: {error}"))?;
 
+        invalidate_track_query_count_cache();
+
         Ok(deleted as u64)
     })
 }
@@ -6203,11 +6272,11 @@ fn build_track_query_sql(
     if let Some(search_query) = normalized_search_query {
         let like_pattern = format!("%{search_query}%");
         sql.push_str(
-            "\n AND (\\
-                 LOWER(COALESCE(t.title, '')) LIKE ?\\
-                 OR LOWER(COALESCE(t.artist, '')) LIKE ?\\
-                 OR LOWER(COALESCE(t.album, '')) LIKE ?\\
-                 OR LOWER(t.file_path) LIKE ?\\
+            "\n AND (\n\
+                 LOWER(COALESCE(t.title, '')) LIKE ?\n\
+                 OR LOWER(COALESCE(t.artist, '')) LIKE ?\n\
+                 OR LOWER(COALESCE(t.album, '')) LIKE ?\n\
+                 OR LOWER(t.file_path) LIKE ?\n\
                 )",
         );
         bind_values.push(Value::Text(like_pattern.clone()));
@@ -6385,7 +6454,7 @@ fn execute_track_query(
     track_field_descriptors: &[LocalTrackFieldDescriptor],
 ) -> Result<Vec<LibraryTrackRecord>, String> {
     let mut stmt = conn
-        .prepare(sql)
+        .prepare_cached(sql)
         .map_err(|error| format!("Failed to prepare query tracks statement: {error}"))?;
 
     let rows = stmt
@@ -6489,16 +6558,68 @@ fn execute_track_query(
 }
 
 fn count_track_query(conn: &Connection, sql_parts: &TrackQuerySqlParts) -> Result<u64, String> {
+    let cache_key =
+        hash_track_query_count_key(sql_parts.from_where_sql.as_str(), sql_parts.bind_values.as_slice());
+    let now = now_ms();
+
+    if let Ok(mut cache) = TRACK_QUERY_COUNT_CACHE.lock() {
+        let maybe_total = match cache.entries.get(&cache_key) {
+            Some(entry) if now.saturating_sub(entry.captured_at_ms) <= TRACK_QUERY_COUNT_CACHE_TTL_MS => {
+                Some(entry.total)
+            }
+            _ => None,
+        };
+
+        if let Some(total) = maybe_total {
+            if let Some(position) = cache.order.iter().position(|item| item == &cache_key) {
+                let _ = cache.order.remove(position);
+                cache.order.push_back(cache_key);
+            }
+            return Ok(total);
+        }
+    }
+
     let count_sql = format!("SELECT COUNT(*) {}", sql_parts.from_where_sql);
-    conn.query_row(
-        count_sql.as_str(),
+    let mut stmt = conn
+        .prepare_cached(count_sql.as_str())
+        .map_err(|error| format!("Failed to prepare track count statement: {error}"))?;
+    let total = stmt
+        .query_row(
         params_from_iter(sql_parts.bind_values.iter()),
         |row| {
             let value = row.get::<_, i64>(0)?;
             Ok(value.max(0) as u64)
         },
     )
-    .map_err(|error| format!("Failed to count queried tracks: {error}"))
+    .map_err(|error| format!("Failed to count queried tracks: {error}"))?;
+
+    if let Ok(mut cache) = TRACK_QUERY_COUNT_CACHE.lock() {
+        if let Some(position) = cache.order.iter().position(|item| item == &cache_key) {
+            let _ = cache.order.remove(position);
+        }
+        while cache.entries.len() >= TRACK_QUERY_COUNT_CACHE_MAX_ENTRIES {
+            match cache.order.pop_front() {
+                Some(evicted) => {
+                    cache.entries.remove(&evicted);
+                }
+                None => {
+                    cache.entries.clear();
+                    break;
+                }
+            }
+        }
+
+        cache.order.push_back(cache_key);
+        cache.entries.insert(
+            cache_key,
+            TrackQueryCountCacheEntry {
+                total,
+                captured_at_ms: now,
+            },
+        );
+    }
+
+    Ok(total)
 }
 
 pub fn query_tracks(
@@ -6863,6 +6984,8 @@ pub fn notify_schema_envelope_changed_if_needed(
 
     app.emit_all(EVENT_MUSIC_LIBRARY_SCHEMA_CHANGED, payload)
         .map_err(|error| format!("Failed to emit music library schema changed event: {error}"))?;
+
+    invalidate_track_query_count_cache();
 
     Ok(true)
 }

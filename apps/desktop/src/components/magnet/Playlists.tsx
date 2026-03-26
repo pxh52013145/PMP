@@ -238,6 +238,35 @@ const PlaylistCoverImage: React.FC<PlaylistCoverImageProps> = ({
   );
 };
 
+const EMPTY_PLAYLIST_TRACK_PAGE: Array<{ playlistIndex: number; track: Track }> = [];
+
+function normalizePlaylistTrackSearchQuery(value: string): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase();
+}
+
+function buildPlaylistTrackPageQueryKey(options: {
+  playlistId: string;
+  playlistUpdatedAt?: number;
+  playlistTrackCount?: number;
+  searchQuery: string;
+  sortField: PlaylistTrackSortField;
+  sortDirection: PlaylistTrackSortDirection;
+}): string {
+  const normalizedPlaylistId = String(options.playlistId || '').trim();
+  const updatedAt =
+    typeof options.playlistUpdatedAt === 'number' && Number.isFinite(options.playlistUpdatedAt)
+      ? Math.max(0, Math.floor(options.playlistUpdatedAt))
+      : 0;
+  const trackCount =
+    typeof options.playlistTrackCount === 'number' && Number.isFinite(options.playlistTrackCount)
+      ? Math.max(0, Math.floor(options.playlistTrackCount))
+      : 0;
+  const searchQuery = normalizePlaylistTrackSearchQuery(options.searchQuery);
+  return `${normalizedPlaylistId}::${updatedAt}::${trackCount}::${options.sortField}::${options.sortDirection}::${searchQuery}`;
+}
+
 export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const t = useT();
   const audioService = useAudioService();
@@ -272,6 +301,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   >([]);
   const [selectedPlaylistTrackPageOffset, setSelectedPlaylistTrackPageOffset] = useState(0);
   const [selectedPlaylistTrackPageTotal, setSelectedPlaylistTrackPageTotal] = useState(0);
+  const selectedPlaylistTrackPageQueryKeyRef = useRef<string | null>(null);
   const [resolvedPlaylistCoverMap, setResolvedPlaylistCoverMap] = useState<Record<string, string>>({});
   const [selectedPlaylistHeroCover, setSelectedPlaylistHeroCover] =
     useState<SelectedPlaylistHeroCoverState>(EMPTY_SELECTED_PLAYLIST_HERO_COVER);
@@ -384,6 +414,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       setSelectedPlaylistTrackPage([]);
       setSelectedPlaylistTrackPageOffset(0);
       setSelectedPlaylistTrackPageTotal(0);
+      selectedPlaylistTrackPageQueryKeyRef.current = null;
       return () => {
         cancelled = true;
       };
@@ -393,11 +424,20 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     const shouldUseTrackPageQuery = supportsTrackPageQuery;
 
     if (shouldUseTrackPageQuery) {
+      const pageQueryKey = buildPlaylistTrackPageQueryKey({
+        playlistId: selectedPlaylist.id,
+        playlistUpdatedAt: selectedPlaylist.updatedAt,
+        playlistTrackCount: selectedPlaylist.trackCount,
+        searchQuery: playlistTrackSearchQuery,
+        sortField: playlistTrackSortField,
+        sortDirection: playlistTrackSortDirection,
+      });
       const queryPlaylistTracksPage = audioService.queryPlaylistTracksPage;
       if (!queryPlaylistTracksPage) {
         setIsSelectedPlaylistLoading(false);
         setSelectedPlaylistTrackPage([]);
         setSelectedPlaylistTrackPageTotal(0);
+        selectedPlaylistTrackPageQueryKeyRef.current = null;
         return () => {
           cancelled = true;
         };
@@ -415,6 +455,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       const currentWindowStart = selectedPlaylistTrackPageOffset;
       const currentWindowEnd = currentWindowStart + selectedPlaylistTrackPage.length;
       const canReuseWindow =
+        selectedPlaylistTrackPageQueryKeyRef.current === pageQueryKey &&
         selectedPlaylistTrackPage.length > 0 &&
         targetStart >= currentWindowStart &&
         targetEnd <= currentWindowEnd &&
@@ -460,6 +501,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
           setSelectedPlaylistTrackPage(page?.items ?? []);
           setSelectedPlaylistTrackPageOffset(pageOffset);
           setSelectedPlaylistTrackPageTotal(page?.total ?? 0);
+          selectedPlaylistTrackPageQueryKeyRef.current = pageQueryKey;
           telemetry.info('playlists.tracks.page-query.completed', {
             fields: {
               playlistId: selectedPlaylist.id,
@@ -490,6 +532,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
           setSelectedPlaylistTrackPage([]);
           setSelectedPlaylistTrackPageOffset(0);
           setSelectedPlaylistTrackPageTotal(0);
+          selectedPlaylistTrackPageQueryKeyRef.current = null;
         })
         .finally(() => {
           if (!cancelled) {
@@ -678,7 +721,10 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   useEffect(() => {
     setSelectedTrackIndexes([]);
     setPlaylistTrackListScrollTop(0);
+    setSelectedPlaylistTrackPage([]);
     setSelectedPlaylistTrackPageOffset(0);
+    setSelectedPlaylistTrackPageTotal(0);
+    selectedPlaylistTrackPageQueryKeyRef.current = null;
     if (playlistTrackListRef.current) {
       playlistTrackListRef.current.scrollTop = 0;
     }
@@ -691,8 +737,57 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     selectedPlaylist?.updatedAt,
   ]);
 
+  const selectedPlaylistTrackPageQueryKey = useMemo(() => {
+    if (!selectedPlaylist?.id) return null;
+    return buildPlaylistTrackPageQueryKey({
+      playlistId: selectedPlaylist.id,
+      playlistUpdatedAt: selectedPlaylist.updatedAt,
+      playlistTrackCount: selectedPlaylist.trackCount,
+      searchQuery: playlistTrackSearchQuery,
+      sortField: playlistTrackSortField,
+      sortDirection: playlistTrackSortDirection,
+    });
+  }, [
+    playlistTrackSearchQuery,
+    playlistTrackSortDirection,
+    playlistTrackSortField,
+    selectedPlaylist?.id,
+    selectedPlaylist?.trackCount,
+    selectedPlaylist?.updatedAt,
+  ]);
+
+  const selectedPlaylistTrackPageMatchesQuery =
+    !!selectedPlaylistTrackPageQueryKey &&
+    selectedPlaylistTrackPageQueryKeyRef.current === selectedPlaylistTrackPageQueryKey;
+
+  const selectedPlaylistTrackPageForRender = selectedPlaylistTrackPageMatchesQuery
+    ? selectedPlaylistTrackPage
+    : EMPTY_PLAYLIST_TRACK_PAGE;
+  const selectedPlaylistTrackPageOffsetForRender = selectedPlaylistTrackPageMatchesQuery
+    ? selectedPlaylistTrackPageOffset
+    : 0;
+  const selectedPlaylistTrackPageTotalForRender = selectedPlaylistTrackPageMatchesQuery
+    ? selectedPlaylistTrackPageTotal
+    : 0;
+
+  const sidebarPlaylists = useMemo(() => {
+    if (playlists.length <= 1) return playlists;
+
+    const recentIndex = playlists.findIndex((playlist) => isFixedRecentSmartPlaylist(playlist));
+    if (recentIndex <= 0) return playlists;
+
+    const recentPlaylist = playlists[recentIndex];
+    if (!recentPlaylist) return playlists;
+
+    return [
+      recentPlaylist,
+      ...playlists.slice(0, recentIndex),
+      ...playlists.slice(recentIndex + 1),
+    ];
+  }, [playlists]);
+
   const playlistVirtualWindow = useMemo(() => {
-    const total = playlists.length;
+    const total = sidebarPlaylists.length;
     if (total <= 0) {
       return {
         start: 0,
@@ -725,11 +820,11 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       topSpacerPx: start * PLAYLIST_LIST_VIRTUAL_ROW_HEIGHT,
       bottomSpacerPx: Math.max(0, (total - end) * PLAYLIST_LIST_VIRTUAL_ROW_HEIGHT),
     };
-  }, [playlists.length, playlistListScrollTop, playlistListViewportHeight]);
+  }, [playlistListScrollTop, playlistListViewportHeight, sidebarPlaylists.length]);
 
   const virtualizedSidebarPlaylists = useMemo(
-    () => playlists.slice(playlistVirtualWindow.start, playlistVirtualWindow.end),
-    [playlists, playlistVirtualWindow.end, playlistVirtualWindow.start]
+    () => sidebarPlaylists.slice(playlistVirtualWindow.start, playlistVirtualWindow.end),
+    [playlistVirtualWindow.end, playlistVirtualWindow.start, sidebarPlaylists]
   );
 
   const playlistById = useMemo(
@@ -1614,7 +1709,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     typeof audioService.queryPlaylistTracksPage === 'function';
 
   const selectedPlaylistTrackEntries = shouldUseSelectedPlaylistTrackPage
-    ? selectedPlaylistTrackPage
+    ? selectedPlaylistTrackPageForRender
     : (selectedPlaylist?.tracks ?? EMPTY_TRACKS).map((track, playlistIndex) => ({
         playlistIndex,
         track,
@@ -1645,8 +1740,14 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     ]
   );
   const filteredPlaylistTrackCount = shouldUseSelectedPlaylistTrackPage
-    ? selectedPlaylistTrackPageTotal
+    ? selectedPlaylistTrackPageTotalForRender
     : filteredPlaylistTrackIndexes.length;
+
+  const shouldShowSelectedPlaylistTracksLoading =
+    isSelectedPlaylistLoading ||
+    (shouldUseSelectedPlaylistTrackPage &&
+      !!selectedPlaylistTrackPageQueryKey &&
+      !selectedPlaylistTrackPageMatchesQuery);
 
   const playlistTrackRenderWindow = useMemo(() => {
     const viewportHeight = playlistTrackListViewportHeight > 0 ? playlistTrackListViewportHeight : 720;
@@ -1654,15 +1755,18 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     const overscan = PLAYLIST_TRACK_WINDOW_OVERSCAN_ROWS;
 
     if (shouldUseSelectedPlaylistTrackPage) {
-      const items: PlaylistTrackWindowItem[] = selectedPlaylistTrackPage.map((entry) => ({
+      const items: PlaylistTrackWindowItem[] = selectedPlaylistTrackPageForRender.map((entry) => ({
         playlistIndex: entry.playlistIndex,
         track: entry.track,
       }));
-      const windowEnd = selectedPlaylistTrackPageOffset + selectedPlaylistTrackPage.length;
+      const windowEnd =
+        selectedPlaylistTrackPageOffsetForRender + selectedPlaylistTrackPageForRender.length;
       return {
         items,
-        topSpacerPx: selectedPlaylistTrackPageOffset * PLAYLIST_TRACK_ROW_HEIGHT,
-        bottomSpacerPx: Math.max(0, selectedPlaylistTrackPageTotal - windowEnd) * PLAYLIST_TRACK_ROW_HEIGHT,
+        topSpacerPx: selectedPlaylistTrackPageOffsetForRender * PLAYLIST_TRACK_ROW_HEIGHT,
+        bottomSpacerPx:
+          Math.max(0, selectedPlaylistTrackPageTotalForRender - windowEnd) *
+          PLAYLIST_TRACK_ROW_HEIGHT,
       };
     }
 
@@ -1696,9 +1800,9 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     playlistTrackListScrollTop,
     playlistTrackListViewportHeight,
     selectedPlaylistTrackEntryMap,
-    selectedPlaylistTrackPage,
-    selectedPlaylistTrackPageOffset,
-    selectedPlaylistTrackPageTotal,
+    selectedPlaylistTrackPageForRender,
+    selectedPlaylistTrackPageOffsetForRender,
+    selectedPlaylistTrackPageTotalForRender,
     shouldUseSelectedPlaylistTrackPage,
   ]);
 
@@ -1713,7 +1817,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     }
 
     const maxPlaylistIndexExclusive = shouldUseSelectedPlaylistTrackPage
-      ? Math.max(selectedPlaylistTrackPageTotal, selectedPlaylist?.trackCount ?? 0)
+      ? Math.max(selectedPlaylistTrackPageTotalForRender, selectedPlaylist?.trackCount ?? 0)
       : selectedPlaylistTracks.length;
     if (maxPlaylistIndexExclusive <= 0) {
       return EMPTY_NUMBERS;
@@ -1730,7 +1834,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     return next.length > 0 ? next : EMPTY_NUMBERS;
   }, [
     selectedPlaylist?.trackCount,
-    selectedPlaylistTrackPageTotal,
+    selectedPlaylistTrackPageTotalForRender,
     selectedPlaylistTracks,
     selectedTrackIndexes,
     shouldUseSelectedPlaylistTrackPage,
@@ -1759,8 +1863,8 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const loadedPlaylistTrackCount = useMemo(
     () =>
       playlists.reduce((total, playlist) => total + playlist.tracks.length, 0) +
-      (shouldUseSelectedPlaylistTrackPage ? selectedPlaylistTrackPage.length : 0),
-    [playlists, selectedPlaylistTrackPage.length, shouldUseSelectedPlaylistTrackPage]
+      (shouldUseSelectedPlaylistTrackPage ? selectedPlaylistTrackPageForRender.length : 0),
+    [playlists, selectedPlaylistTrackPageForRender.length, shouldUseSelectedPlaylistTrackPage]
   );
   const selectedCoverDecodedBytes = useMemo(() => {
     const normalizedUrl = toNonEmptyString(selectedPlaylistCoverUrl);
@@ -1805,7 +1909,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       overlayOpen: isOpen,
       selectedPlaylistId,
       selectedPlaylistTrackCount: shouldUseSelectedPlaylistTrackPage
-        ? selectedPlaylistTrackPageTotal
+        ? selectedPlaylistTrackPageTotalForRender
         : selectedPlaylistTracks.length,
       totalPlaylistCount: playlists.length,
       hydratedPlaylistCount,
@@ -1839,7 +1943,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       selectedCoverDecodedBytes,
       selectedPlaylistCoverUrl,
       selectedPlaylistId,
-      selectedPlaylistTrackPageTotal,
+      selectedPlaylistTrackPageTotalForRender,
       selectedPlaylistTracks.length,
       selectedTrackCount,
       shouldUseSelectedPlaylistTrackPage,
@@ -2501,7 +2605,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                       </div>
                     </div>
 
-                    {isSelectedPlaylistLoading ? (
+                    {shouldShowSelectedPlaylistTracksLoading ? (
                       <div className="playlists-tracks-empty playlists-tracks-empty-query">
                         <div className="playlists-tracks-empty-text">
                           {t('common.state.loading')}
