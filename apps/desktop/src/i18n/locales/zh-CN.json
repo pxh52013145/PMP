@@ -959,6 +959,7 @@
   "pages.music-library.filter.selectGroupPlaceholder": "选择分组",
   "pages.music-library.filter.groupLabel": "规则组 {index}",
   "pages.music-library.filter.addGroupButton": "+ 分组",
+  "pages.music-library.filter.addGroupDisabledTitle": "最多支持 {count} 个分组",
   "pages.music-library.filter.valuePlaceholder": "值",
   "pages.music-library.filter.valuePlaceholderWithFacet": "值（可选候选）",
   "pages.music-library.filter.addButton": "添加筛选",

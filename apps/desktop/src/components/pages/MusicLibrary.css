@@ -13,6 +13,8 @@
   flex-direction: column;
   z-index: 10000;
   backdrop-filter: blur(10px);
+  --music-library-scrollbar-size: 12px;
+  --music-library-scrollbar-inset: 4px;
 }
 
 /* 嵌入模式样式 */
@@ -29,6 +31,8 @@
   border-radius: 0;
   z-index: auto;
   backdrop-filter: none;
+  --music-library-scrollbar-size: 10px;
+  --music-library-scrollbar-inset: 3px;
 }
 
 /* 嵌入模式下的toolbar调整 */
@@ -42,14 +46,6 @@
 }
 
 /* 嵌入模式下的滚动条优化 */
-.music-library-embedded .music-library-main::-webkit-scrollbar {
-  width: 8px;
-}
-
-.music-library-embedded .music-library-main::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.03);
-}
-
 .music-library-header {
   padding: 15px 20px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
@@ -696,39 +692,122 @@
 /* 侧边栏滚动条样式 */
 .music-library-main {
   flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   --music-library-main-padding: 20px;
   padding: var(--music-library-main-padding);
   min-height: 0;
+  position: relative;
 }
 
 .music-library-main-local {
   padding-top: 0;
 }
 
+.music-library-main-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 100, 255, 0.16) #000;
+}
+
 /* 主区域滚动条样式 */
-.music-library-main::-webkit-scrollbar {
-  width: 10px;
+.music-library-main-scroll::-webkit-scrollbar {
+  width: var(--music-library-scrollbar-size);
+  background: #000;
 }
 
-.music-library-main::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.1);
-  border-radius: 5px;
-  margin: 4px 0;
+.music-library-main-scroll::-webkit-scrollbar-button {
+  width: var(--music-library-scrollbar-size);
+  height: var(--music-library-scrollbar-size);
+  background: #000;
+  border-radius: 999px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.35);
 }
 
-.music-library-main::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(100, 100, 255, 0.3) 0%, rgba(100, 100, 255, 0.2) 100%);
-  border-radius: 5px;
-  border: 2px solid transparent;
+.music-library-main-scroll::-webkit-scrollbar-button:single-button {
+  background:
+    radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 42%, transparent 74%),
+    linear-gradient(180deg, rgba(100, 100, 255, 0.06) 0%, rgba(100, 100, 255, 0.02) 100%);
+}
+
+.music-library-main-scroll::-webkit-scrollbar-button:single-button:hover {
+  background:
+    radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.03) 42%, transparent 74%),
+    linear-gradient(180deg, rgba(100, 100, 255, 0.09) 0%, rgba(100, 100, 255, 0.03) 100%);
+}
+
+.music-library-main-scroll::-webkit-scrollbar-button:single-button:active {
+  background:
+    radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 42%, transparent 74%),
+    linear-gradient(180deg, rgba(100, 100, 255, 0.12) 0%, rgba(100, 100, 255, 0.04) 100%);
+}
+
+.music-library-main-scroll::-webkit-scrollbar-track {
+  background: #000;
+  margin: 10px 0;
+}
+
+.music-library-main-scroll::-webkit-scrollbar-track-piece {
+  background: #000;
+}
+
+.music-library-main-scroll::-webkit-scrollbar-thumb {
+  background:
+    linear-gradient(180deg, rgba(100, 100, 255, 0.14) 0%, rgba(100, 100, 255, 0.06) 100%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.045) 0,
+      rgba(255, 255, 255, 0.045) 3px,
+      rgba(255, 255, 255, 0.015) 3px,
+      rgba(255, 255, 255, 0.015) 6px
+    );
+  border-radius: 0;
+  border: var(--music-library-scrollbar-inset) solid transparent;
   background-clip: content-box;
-  transition: all 0.3s ease;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.25);
+  transition: background 0.18s ease;
 }
 
-.music-library-main::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(100, 100, 255, 0.5) 0%, rgba(100, 100, 255, 0.3) 100%);
+.music-library-main-scroll::-webkit-scrollbar-thumb:hover {
+  background:
+    linear-gradient(180deg, rgba(100, 100, 255, 0.2) 0%, rgba(100, 100, 255, 0.1) 100%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.055) 0,
+      rgba(255, 255, 255, 0.055) 3px,
+      rgba(255, 255, 255, 0.02) 3px,
+      rgba(255, 255, 255, 0.02) 6px
+    );
   background-clip: content-box;
+}
+
+.music-library-main-scroll::-webkit-scrollbar-thumb:active {
+  background:
+    linear-gradient(180deg, rgba(100, 100, 255, 0.26) 0%, rgba(100, 100, 255, 0.12) 100%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.07) 0,
+      rgba(255, 255, 255, 0.07) 3px,
+      rgba(255, 255, 255, 0.02) 3px,
+      rgba(255, 255, 255, 0.02) 6px
+    );
+  background-clip: content-box;
+}
+
+.music-library-main-scroll::-webkit-scrollbar-corner,
+.music-library-main-scroll::-webkit-resizer {
+  background: transparent;
 }
 
 .music-library-grid {
@@ -1089,26 +1168,29 @@
   position: sticky;
   top: 0;
   z-index: 8;
-  background: linear-gradient(180deg, rgba(14, 14, 22, 0.99) 0%, rgba(14, 14, 22, 0.94) 100%);
+  background: transparent;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  margin-top: -1px;
 }
 
 .music-library-list-header-track {
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(100, 100, 255, 0.3) rgba(0, 0, 0, 0.1);
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  background: rgba(18, 18, 28, 0.98);
   transform: scaleY(-1);
   transform-origin: center;
   padding-bottom: 0;
 }
 
 .music-library-list-header-track:hover {
-  scrollbar-color: rgba(100, 100, 255, 0.5) rgba(0, 0, 0, 0.1);
+  scrollbar-color: auto;
 }
 
 .music-library-list-header-track::-webkit-scrollbar {
-  height: 10px;
+  height: 0;
+  background: transparent;
 }
 
 .music-library-list-header-track::-webkit-scrollbar-button {
@@ -1150,26 +1232,57 @@
 }
 
 .music-library-list-header-track::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.1);
-  border-radius: 5px;
-  margin: 0 4px;
+  background: transparent;
+  margin: 0 10px;
+}
+
+.music-library-list-header-track::-webkit-scrollbar-track-piece {
+  background: transparent;
 }
 
 .music-library-list-header-track::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(100, 100, 255, 0.3) 0%, rgba(100, 100, 255, 0.2) 100%);
-  border-radius: 5px;
-  border: 2px solid transparent;
+  background:
+    linear-gradient(180deg, rgba(100, 100, 255, 0.14) 0%, rgba(100, 100, 255, 0.06) 100%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.045) 0,
+      rgba(255, 255, 255, 0.045) 3px,
+      rgba(255, 255, 255, 0.015) 3px,
+      rgba(255, 255, 255, 0.015) 6px
+    );
+  border-radius: 0;
+  border: var(--music-library-scrollbar-inset) solid transparent;
   background-clip: content-box;
-  transition: all 0.3s ease;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.25);
+  transition: background 0.18s ease;
 }
 
 .music-library-list-header-track::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(100, 100, 255, 0.5) 0%, rgba(100, 100, 255, 0.3) 100%);
+  background:
+    linear-gradient(180deg, rgba(100, 100, 255, 0.2) 0%, rgba(100, 100, 255, 0.1) 100%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.055) 0,
+      rgba(255, 255, 255, 0.055) 3px,
+      rgba(255, 255, 255, 0.02) 3px,
+      rgba(255, 255, 255, 0.02) 6px
+    );
   background-clip: content-box;
 }
 
 .music-library-list-header-track::-webkit-scrollbar-thumb:active {
-  background: linear-gradient(180deg, rgba(100, 100, 255, 0.45) 0%, rgba(100, 100, 255, 0.25) 100%);
+  background:
+    linear-gradient(180deg, rgba(100, 100, 255, 0.26) 0%, rgba(100, 100, 255, 0.12) 100%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.07) 0,
+      rgba(255, 255, 255, 0.07) 3px,
+      rgba(255, 255, 255, 0.02) 3px,
+      rgba(255, 255, 255, 0.02) 6px
+    );
   background-clip: content-box;
 }
 
@@ -1185,8 +1298,120 @@
   height: 0;
 }
 
+.music-library-list-footer-scroll {
+  position: sticky;
+  bottom: 0;
+  z-index: 7;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 100, 255, 0.16) transparent;
+  background: transparent;
+}
+
+.music-library-list-footer-scroll::-webkit-scrollbar {
+  height: var(--music-library-scrollbar-size);
+  background: transparent;
+}
+
+.music-library-list-footer-scroll::-webkit-scrollbar-button {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.music-library-list-footer-scroll::-webkit-scrollbar-button:single-button,
+.music-library-list-footer-scroll::-webkit-scrollbar-button:horizontal:decrement,
+.music-library-list-footer-scroll::-webkit-scrollbar-button:horizontal:increment,
+.music-library-list-footer-scroll::-webkit-scrollbar-button:horizontal:start:decrement,
+.music-library-list-footer-scroll::-webkit-scrollbar-button:horizontal:end:increment,
+.music-library-list-footer-scroll::-webkit-scrollbar-button:start,
+.music-library-list-footer-scroll::-webkit-scrollbar-button:end {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  background-image: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: 0 !important;
+  max-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: none !important;
+}
+
+.music-library-list-footer-scroll::-webkit-scrollbar-corner,
+.music-library-list-footer-scroll::-webkit-resizer {
+  background: transparent;
+}
+
+.music-library-list-footer-scroll::-webkit-scrollbar-track,
+.music-library-list-footer-scroll::-webkit-scrollbar-track-piece {
+  background: transparent;
+  margin: 0 10px;
+}
+
+.music-library-list-footer-scroll::-webkit-scrollbar-thumb {
+  background:
+    linear-gradient(180deg, rgba(100, 100, 255, 0.14) 0%, rgba(100, 100, 255, 0.06) 100%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.045) 0,
+      rgba(255, 255, 255, 0.045) 3px,
+      rgba(255, 255, 255, 0.015) 3px,
+      rgba(255, 255, 255, 0.015) 6px
+    );
+  border-radius: 0;
+  border: var(--music-library-scrollbar-inset) solid transparent;
+  background-clip: content-box;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.25);
+  transition: background 0.18s ease;
+}
+
+.music-library-list-footer-scroll::-webkit-scrollbar-thumb:hover {
+  background:
+    linear-gradient(180deg, rgba(100, 100, 255, 0.2) 0%, rgba(100, 100, 255, 0.1) 100%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.055) 0,
+      rgba(255, 255, 255, 0.055) 3px,
+      rgba(255, 255, 255, 0.02) 3px,
+      rgba(255, 255, 255, 0.02) 6px
+    );
+  background-clip: content-box;
+}
+
+.music-library-list-footer-scroll::-webkit-scrollbar-thumb:active {
+  background:
+    linear-gradient(180deg, rgba(100, 100, 255, 0.26) 0%, rgba(100, 100, 255, 0.12) 100%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.07) 0,
+      rgba(255, 255, 255, 0.07) 3px,
+      rgba(255, 255, 255, 0.02) 3px,
+      rgba(255, 255, 255, 0.02) 6px
+    );
+  background-clip: content-box;
+}
+
+.music-library-list-footer-spacer {
+  height: 1px;
+}
+
 .music-library-list-content {
   min-width: 100%;
+  padding-bottom: calc(var(--music-library-scrollbar-size) + 8px);
 }
 
 .music-library-stable-list {
@@ -1484,10 +1709,11 @@
   grid-template-columns: 40px 1fr 1fr 1fr 80px 72px;
   gap: 10px;
   padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.02);
-  border-radius: 4px;
+  background: transparent;
+  border-radius: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
   align-items: center;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.8);
@@ -1566,18 +1792,17 @@
 }
 
 .music-library-track:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: transparent;
+  border-bottom-color: rgba(138, 170, 255, 0.18);
+  box-shadow: inset 2px 0 0 rgba(138, 170, 255, 0.3);
 }
 
 .music-library-track.is-play-pending {
-  background: linear-gradient(90deg, rgba(108, 148, 255, 0.24), rgba(86, 228, 255, 0.14));
-  box-shadow: inset 0 0 0 1px rgba(138, 170, 255, 0.65);
-}
-
-.music-library-track.is-play-pending .music-library-track-actions {
-  opacity: 1;
-  pointer-events: auto;
-  background: rgba(30, 36, 50, 0.96);
+  background: transparent;
+  border-bottom-color: rgba(138, 170, 255, 0.28);
+  box-shadow:
+    inset 2px 0 0 rgba(138, 170, 255, 0.78),
+    inset 0 -1px 0 rgba(138, 170, 255, 0.28);
 }
 
 .music-library-track-number {
@@ -1627,40 +1852,25 @@
   text-align: right;
 }
 
-.music-library-track-actions {
-  position: sticky;
-  top: auto;
-  right: 10px;
-  transform: none;
+.music-library-track-action-btn {
+  --music-library-track-action-size: 26px;
+  --music-library-track-action-gap: 6px;
+  --music-library-track-action-right: 10px;
+
+  grid-column: -2 / -1;
+  grid-row: 1;
   justify-self: end;
   align-self: center;
-  min-width: 62px;
+
+  position: sticky;
+  top: auto;
   z-index: 4;
-  background: rgba(12, 12, 18, 0.95);
-  box-shadow: none;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 6px;
-  text-align: center;
-  color: rgba(255, 255, 255, 0.5);
-  display: flex;
-  gap: 6px;
-  justify-content: center;
-  align-items: center;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.2s ease;
-}
 
-.music-library-track:hover .music-library-track-actions {
-  opacity: 1;
-  pointer-events: auto;
-  background: rgba(24, 24, 30, 0.96);
-}
-
-.music-library-track-actions button {
-  width: 26px;
-  height: 26px;
-  min-width: 26px;
+  width: var(--music-library-track-action-size);
+  height: var(--music-library-track-action-size);
+  min-width: var(--music-library-track-action-size);
   padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: rgba(255, 255, 255, 0.05);
@@ -1677,14 +1887,32 @@
   justify-content: center;
 }
 
-.music-library-track-actions button:hover {
+.music-library-track-action-btn--primary {
+  right: var(--music-library-track-action-right);
+}
+
+.music-library-track-action-btn--secondary {
+  right: calc(
+    var(--music-library-track-action-right) +
+      var(--music-library-track-action-size) +
+      var(--music-library-track-action-gap)
+  );
+}
+
+.music-library-track:hover .music-library-track-action-btn,
+.music-library-track.is-play-pending .music-library-track-action-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.music-library-track-action-btn:hover {
   background: rgba(255, 255, 255, 0.15);
   border-color: rgba(255, 255, 255, 0.4);
   color: rgba(255, 255, 255, 1);
   transform: scale(1.05);
 }
 
-.music-library-track-actions button:active {
+.music-library-track-action-btn:active {
   transform: scale(0.95);
 }
 
@@ -2117,6 +2345,30 @@
   line-height: 1;
 }
 
+.path-item-action-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.path-item-action-icon--spin {
+  animation: music-library-action-spin 0.9s linear infinite;
+}
+
+@keyframes music-library-action-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .path-item-action-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(255, 255, 255, 0.2);
@@ -2175,15 +2427,7 @@
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.paths-manager-info {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.4);
-  text-align: center;
-  line-height: 1.5;
-}
-
 .paths-manager-health-info {
-  margin-top: 8px;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.65);
   text-align: center;
@@ -2414,4 +2658,82 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* ====== Buttons: cut corners (top-left & bottom-right) ====== */
+.music-library-btn,
+.music-library-card-group-header,
+.paths-scan-btn,
+.paths-clean-missing-btn,
+.music-library-scan-cancel {
+  --music-library-cut-size: 8px;
+  border-radius: 0;
+  -webkit-clip-path: polygon(
+    0% var(--music-library-cut-size),
+    var(--music-library-cut-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--music-library-cut-size)),
+    calc(100% - var(--music-library-cut-size)) 100%,
+    0% 100%
+  );
+  clip-path: polygon(
+    0% var(--music-library-cut-size),
+    var(--music-library-cut-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--music-library-cut-size)),
+    calc(100% - var(--music-library-cut-size)) 100%,
+    0% 100%
+  );
+}
+
+.music-library-close,
+.music-library-base-popover-icon-btn,
+.music-library-sort-order-btn,
+.music-library-base-view-btn,
+.music-library-source-btn,
+.paths-manager-close-btn,
+.path-item-action-btn,
+.music-library-modal-close,
+.music-library-column-move {
+  --music-library-cut-size: 6px;
+  border-radius: 0;
+  -webkit-clip-path: polygon(
+    0% var(--music-library-cut-size),
+    var(--music-library-cut-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--music-library-cut-size)),
+    calc(100% - var(--music-library-cut-size)) 100%,
+    0% 100%
+  );
+  clip-path: polygon(
+    0% var(--music-library-cut-size),
+    var(--music-library-cut-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--music-library-cut-size)),
+    calc(100% - var(--music-library-cut-size)) 100%,
+    0% 100%
+  );
+}
+
+.music-library-track-card-actions button,
+.music-library-stable-actions button,
+.music-library-track-action-btn {
+  --music-library-cut-size: 5px;
+  border-radius: 0;
+  -webkit-clip-path: polygon(
+    0% var(--music-library-cut-size),
+    var(--music-library-cut-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--music-library-cut-size)),
+    calc(100% - var(--music-library-cut-size)) 100%,
+    0% 100%
+  );
+  clip-path: polygon(
+    0% var(--music-library-cut-size),
+    var(--music-library-cut-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--music-library-cut-size)),
+    calc(100% - var(--music-library-cut-size)) 100%,
+    0% 100%
+  );
 }

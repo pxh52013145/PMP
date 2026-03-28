@@ -60,6 +60,8 @@ export interface MusicLibraryBaseQuery {
   sortRules: MusicLibraryBaseSortRule[];
 }
 
+export const MUSIC_LIBRARY_BASE_FILTER_GROUP_LIMIT = 3;
+
 export interface MusicLibraryBaseViewProperty {
   id: string;
   visible: boolean;
@@ -312,7 +314,7 @@ export function normalizeMusicLibraryBaseSchema(input: unknown): MusicLibraryBas
     ? rawQuery.filterGroups
         .map(normalizeFilterGroupInput)
         .filter((item): item is MusicLibraryBaseFilterGroup => item != null)
-        .slice(0, 20)
+        .slice(0, MUSIC_LIBRARY_BASE_FILTER_GROUP_LIMIT)
     : [];
 
   const legacyFilters = Array.isArray(rawQuery?.filters)

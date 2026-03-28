@@ -74,6 +74,7 @@ import {
 import {
 
   applyMusicLibraryBaseQuery,
+  MUSIC_LIBRARY_BASE_FILTER_GROUP_LIMIT,
 
   type MusicLibraryBaseField,
 
@@ -1107,7 +1108,7 @@ const LocalTrackCard: React.FC<LocalTrackCardProps> = ({
 
           >
 
-            ?
+            ▶
 
           </button>
 
@@ -1272,6 +1273,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   const [localTrackLayoutWidth, setLocalTrackLayoutWidth] = useState(0);
 
+  const [localTrackFooterScrollWidth, setLocalTrackFooterScrollWidth] = useState(0);
+
   const [pendingPlayTrackIdentity, setPendingPlayTrackIdentity] = useState<string | null>(null);
 
   const [draggingLocalTrackColumnId, setDraggingLocalTrackColumnId] =
@@ -1374,6 +1377,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const localTrackListHeaderScrollRef = useRef<HTMLDivElement | null>(null);
 
   const localTrackListBodyScrollRef = useRef<HTMLDivElement | null>(null);
+
+  const localTrackListFooterScrollRef = useRef<HTMLDivElement | null>(null);
 
   const localTrackListLayoutRef = useRef<HTMLDivElement | null>(null);
 
@@ -4644,7 +4649,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-  const syncLocalTrackHorizontalScroll = useCallback((source: 'header' | 'body') => {
+  const syncLocalTrackHorizontalScroll = useCallback((source: 'header' | 'body' | 'footer') => {
 
     if (localTrackHorizontalScrollSyncingRef.current) return;
 
@@ -4652,20 +4657,31 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     const body = localTrackListBodyScrollRef.current;
 
+    const footer = localTrackListFooterScrollRef.current;
+
     if (!header || !body) return;
+
+    const nextScrollLeft =
+      source === 'header'
+        ? header.scrollLeft
+        : source === 'body'
+          ? body.scrollLeft
+          : footer?.scrollLeft ?? body.scrollLeft;
 
 
 
     localTrackHorizontalScrollSyncingRef.current = true;
 
-    if (source === 'body') {
+    if (source !== 'header') {
+      header.scrollLeft = nextScrollLeft;
+    }
 
-      header.scrollLeft = body.scrollLeft;
+    if (source !== 'body') {
+      body.scrollLeft = nextScrollLeft;
+    }
 
-    } else {
-
-      body.scrollLeft = header.scrollLeft;
-
+    if (footer && source !== 'footer') {
+      footer.scrollLeft = nextScrollLeft;
     }
 
     localTrackHorizontalScrollSyncingRef.current = false;
@@ -4685,6 +4701,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const handleLocalTrackBodyScroll = useCallback(() => {
 
     syncLocalTrackHorizontalScroll('body');
+
+  }, [syncLocalTrackHorizontalScroll]);
+
+
+
+  const handleLocalTrackFooterScroll = useCallback(() => {
+
+    syncLocalTrackHorizontalScroll('footer');
 
   }, [syncLocalTrackHorizontalScroll]);
 
@@ -5152,6 +5176,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       !baseSortRules.some((rule) => rule.field === field)
 
   );
+
+  const canAddBaseFilterGroup =
+    baseFilterGroups.length < MUSIC_LIBRARY_BASE_FILTER_GROUP_LIMIT;
 
 
 
@@ -5792,15 +5819,27 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-  useEffect(() => {
+  useLayoutEffect(() => {
 
     const header = localTrackListHeaderScrollRef.current;
 
     const body = localTrackListBodyScrollRef.current;
 
+    const footer = localTrackListFooterScrollRef.current;
+
     if (!header || !body) return;
 
     header.scrollLeft = body.scrollLeft;
+
+    if (footer) {
+      footer.scrollLeft = body.scrollLeft;
+    }
+
+    const nextFooterScrollWidth = Math.max(header.scrollWidth, body.scrollWidth);
+
+    setLocalTrackFooterScrollWidth((prev) =>
+      prev === nextFooterScrollWidth ? prev : nextFooterScrollWidth
+    );
 
   }, [localTrackGridTemplate, renderedLocalTrackColumns.length]);
 
@@ -9028,7 +9067,18 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                       </select>
 
-                      <button className="music-library-btn" onClick={handleAddBaseFilterGroup}>
+                      <button
+                        className="music-library-btn"
+                        onClick={handleAddBaseFilterGroup}
+                        disabled={!canAddBaseFilterGroup}
+                        title={
+                          canAddBaseFilterGroup
+                            ? undefined
+                            : t('pages.music-library.filter.addGroupDisabledTitle', {
+                                count: MUSIC_LIBRARY_BASE_FILTER_GROUP_LIMIT,
+                              })
+                        }
+                      >
 
                         {t('pages.music-library.filter.addGroupButton')}
 
@@ -9180,7 +9230,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                     <div className="music-library-base-filter-groups">
 
                       {baseFilterGroups.map((group, index) => (
-
                         <div className="music-library-base-filter-group" key={group.id}>
 
                           <div className="music-library-base-filter-group-header">
@@ -9276,7 +9325,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                           )}
 
                         </div>
-
                       ))}
 
                     </div>
@@ -9541,7 +9589,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
         {librarySourceMode === 'stable' ? (
 
-          <div className="music-library-main music-library-main-stable" ref={mainScrollRef}>
+          <div className="music-library-main music-library-main-stable">
+            <div className="music-library-main-scroll" ref={mainScrollRef}>
 
             {isStableEntriesLoading ? (
 
@@ -9687,7 +9736,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                       </div>
 
-                      <div className="music-library-stable-actions">
+                        <div className="music-library-stable-actions">
 
                         <button
 
@@ -9725,7 +9774,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                         >
 
-                          ?
+                          ▶
 
                         </button>
 
@@ -9761,11 +9810,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
             )}
 
+            </div>
           </div>
 
         ) : (
 
-          <div className="music-library-main music-library-main-local" ref={mainScrollRef}>
+          <div
+            className={`music-library-main music-library-main-local${baseView === 'card' ? ' is-card-view' : ' is-table-view'}`}
+          >
+            <div className="music-library-main-scroll" ref={mainScrollRef}>
 
             {isLibraryStatsLoaded && libraryStats.totalTracks === 0 ? (
 
@@ -10151,45 +10204,41 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                         })}
 
-                        <div className="music-library-track-actions">
+                        {onPlayNow && (
 
-                          {onPlayNow && (
+                          <button
 
-                            <button
+                            onClick={(e) => handlePlaySingleTrack(track, e)}
 
-                              onClick={(e) => handlePlaySingleTrack(track, e)}
+                            title={t('pages.music-library.tracks.action.playOneTitle')}
 
-                              title={t('pages.music-library.tracks.action.playOneTitle')}
+                            className={`music-library-track-action-btn ${onAddToQueue ? 'music-library-track-action-btn--secondary' : 'music-library-track-action-btn--primary'} track-action-play`}
 
-                              className="track-action-play"
+                          >
 
-                            >
+                            ▶
 
-                              ?
+                          </button>
 
-                            </button>
+                        )}
 
-                          )}
+                        {onAddToQueue && (
 
-                          {onAddToQueue && (
+                          <button
 
-                            <button
+                            onClick={(e) => handleAddSingleTrack(track, e)}
 
-                              onClick={(e) => handleAddSingleTrack(track, e)}
+                            title={t('pages.music-library.tracks.action.addOneTitle')}
 
-                              title={t('pages.music-library.tracks.action.addOneTitle')}
+                            className="music-library-track-action-btn music-library-track-action-btn--primary track-action-add"
 
-                              className="track-action-add"
+                          >
 
-                            >
+                            +
 
-                              +
+                          </button>
 
-                            </button>
-
-                          )}
-
-                        </div>
+                        )}
 
                       </div>
 
@@ -10213,6 +10262,18 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                     </div>
 
+                  </div>
+
+                  <div
+                    className="music-library-list-footer-scroll"
+                    ref={localTrackListFooterScrollRef}
+                    onScroll={handleLocalTrackFooterScroll}
+                    aria-hidden="true"
+                  >
+                    <div
+                      className="music-library-list-footer-spacer"
+                      style={{ width: `${Math.max(localTrackFooterScrollWidth, localTrackLayoutWidth)}px` }}
+                    />
                   </div>
 
                   {showTrackLoadHint && (
@@ -10246,6 +10307,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
             )}
 
+            </div>
           </div>
 
         )}
@@ -10877,9 +10939,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           }
           footer={
             <>
-              <div className="paths-manager-info">
-                {t('pages.music-library.pathsManager.footer')}
-              </div>
               <div className="paths-manager-health-info">
                 {isLibraryPathHealthLoading
                   ? t('pages.music-library.pathsManager.health.loading')
@@ -11055,12 +11114,33 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                               : t('pages.music-library.pathsManager.path.showTitle')
 
                           }
+                          aria-label={
+                            path.isVisible
+                              ? t('pages.music-library.pathsManager.path.hideTitle')
+                              : t('pages.music-library.pathsManager.path.showTitle')
+                          }
 
                         >
 
-                          {path.isVisible
-                            ? t('pages.music-library.pathsManager.path.showButton')
-                            : t('pages.music-library.pathsManager.path.hideButton')}
+                          <svg
+                            viewBox="0 0 24 24"
+                            className="path-item-action-icon"
+                            aria-hidden="true"
+                            focusable="false"
+                          >
+                            <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+                            {path.isVisible ? (
+                              <>
+                                <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+                                <path d="M21 12c-2.4 4-5.4 6-9 6c-3.6 0-6.6-2-9-6c2.4-4 5.4-6 9-6c3.6 0 6.6 2 9 6" />
+                              </>
+                            ) : (
+                              <>
+                                <path d="M21 12c-2.4 4-5.4 6-9 6c-3.6 0-6.6-2-9-6c2.4-4 5.4-6 9-6c3.6 0 6.6 2 9 6" />
+                                <path d="M3 3l18 18" />
+                              </>
+                            )}
+                          </svg>
 
                         </button>
 
@@ -11101,12 +11181,30 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                               : t('pages.music-library.pathsManager.path.enableScanTitle')
 
                           }
+                          aria-label={
+                            path.isScanned
+                              ? t('pages.music-library.pathsManager.path.disableScanTitle')
+                              : t('pages.music-library.pathsManager.path.enableScanTitle')
+                          }
 
                         >
 
-                          {path.isScanned
-                            ? t('pages.music-library.pathsManager.path.disableScanButton')
-                            : t('pages.music-library.pathsManager.path.enableScanButton')}
+                          <svg
+                            viewBox="0 0 24 24"
+                            className="path-item-action-icon"
+                            aria-hidden="true"
+                            focusable="false"
+                          >
+                            <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+                            {path.isScanned ? (
+                              <>
+                                <path d="M9 8v8" />
+                                <path d="M15 8v8" />
+                              </>
+                            ) : (
+                              <path d="M8 5v14l11-7z" />
+                            )}
+                          </svg>
 
                         </button>
 
@@ -11147,14 +11245,31 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                               : t('pages.music-library.pathsManager.path.cleanupMissingDisabledTitle')
 
                           }
+                          aria-label={
+                            missingCount > 0
+                              ? t('pages.music-library.pathsManager.path.cleanupMissingTitle', { count: missingCount })
+                              : t('pages.music-library.pathsManager.path.cleanupMissingDisabledTitle')
+                          }
 
                         >
 
-                          {isPathCleanupBusy
-
-                            ? t('pages.music-library.pathsManager.path.cleanupMissingBusy')
-
-                            : t('pages.music-library.pathsManager.path.cleanupMissingButton')}
+                          <svg
+                            viewBox="0 0 24 24"
+                            className={`path-item-action-icon${isPathCleanupBusy ? ' path-item-action-icon--spin' : ''}`}
+                            aria-hidden="true"
+                            focusable="false"
+                          >
+                            <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+                            {isPathCleanupBusy ? (
+                              <path d="M12 3a9 9 0 1 0 9 9" />
+                            ) : (
+                              <>
+                                <path d="M6 21l10-10" />
+                                <path d="M16 7l4 4" />
+                                <path d="M5 20l5-5l4 4l-5 5h-4z" />
+                              </>
+                            )}
+                          </svg>
 
                         </button>
 
@@ -11194,10 +11309,20 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                           disabled={scanProgress?.isScanning}
 
                           title={t('pages.music-library.pathsManager.path.rescanTitle')}
+                          aria-label={t('pages.music-library.pathsManager.path.rescanTitle')}
 
                         >
 
-                          {t('pages.music-library.pathsManager.path.rescanButton')}
+                          <svg
+                            viewBox="0 0 24 24"
+                            className="path-item-action-icon"
+                            aria-hidden="true"
+                            focusable="false"
+                          >
+                            <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+                            <path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4" />
+                            <path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />
+                          </svg>
 
                         </button>
 
@@ -11224,10 +11349,23 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                           }}
 
                           title={t('pages.music-library.pathsManager.path.removeTitle')}
+                          aria-label={t('pages.music-library.pathsManager.path.removeTitle')}
 
                         >
 
-                          {t('pages.music-library.pathsManager.path.removeButton')}
+                          <svg
+                            viewBox="0 0 24 24"
+                            className="path-item-action-icon"
+                            aria-hidden="true"
+                            focusable="false"
+                          >
+                            <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+                            <path d="M4 7h16" />
+                            <path d="M10 11v6" />
+                            <path d="M14 11v6" />
+                            <path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12" />
+                            <path d="M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3" />
+                          </svg>
 
                         </button>
 

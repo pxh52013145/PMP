@@ -1,5 +1,6 @@
 import {
   createDefaultMusicLibraryBaseFilterGroup,
+  MUSIC_LIBRARY_BASE_FILTER_GROUP_LIMIT,
   type MusicLibraryBaseField,
   type MusicLibraryBaseFilter,
   type MusicLibraryBaseFilterGroup,
@@ -217,6 +218,9 @@ export function moveMusicLibraryBaseGroupByRule(
 export function appendMusicLibraryBaseFilterGroup(
   state: MusicLibraryBaseFilterGroupState
 ): MusicLibraryBaseFilterGroupState {
+  if (state.filterGroups.length >= MUSIC_LIBRARY_BASE_FILTER_GROUP_LIMIT) {
+    return state;
+  }
   const groupId = createMusicLibraryBaseEntityId('filter-group');
   return {
     filterGroups: [...state.filterGroups, createDefaultMusicLibraryBaseFilterGroup(groupId)],

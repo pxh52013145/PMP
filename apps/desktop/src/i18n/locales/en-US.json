@@ -1093,6 +1093,7 @@
   "pages.music-library.filter.selectGroupPlaceholder": "Select group",
   "pages.music-library.filter.groupLabel": "Group {index}",
   "pages.music-library.filter.addGroupButton": "+ Group",
+  "pages.music-library.filter.addGroupDisabledTitle": "Maximum {count} groups",
   "pages.music-library.filter.valuePlaceholder": "Value",
   "pages.music-library.filter.valuePlaceholderWithFacet": "Value (optional candidates)",
   "pages.music-library.filter.addButton": "Add filter",
