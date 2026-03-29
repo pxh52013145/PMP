@@ -1285,6 +1285,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     useState<LocalTrackColumnId | null>(null);
 
+  const [settlingLocalTrackColumnId, setSettlingLocalTrackColumnId] =
+
+    useState<LocalTrackColumnId | null>(null);
+
   const [isLocalTrackColumnReordering, setIsLocalTrackColumnReordering] = useState(false);
 
   const [resizingLocalTrackColumnId, setResizingLocalTrackColumnId] =
@@ -1385,6 +1389,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const localTrackHorizontalScrollSyncingRef = useRef(false);
 
   const dragOverLocalTrackColumnIdRef = useRef<LocalTrackColumnId | null>(null);
+
+  const localTrackColumnSettleTimeoutRef = useRef<number | null>(null);
 
   const pendingPlayTrackIdentityRef = useRef<string | null>(null);
 
@@ -4387,6 +4393,22 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
+  useEffect(() => {
+
+    return () => {
+
+      if (localTrackColumnSettleTimeoutRef.current != null) {
+
+        window.clearTimeout(localTrackColumnSettleTimeoutRef.current);
+
+      }
+
+    };
+
+  }, []);
+
+
+
   const setLocalTrackColumnHeaderElement = useCallback(
 
     (columnId: LocalTrackColumnId, element: HTMLDivElement | null) => {
@@ -4459,7 +4481,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   const handleLocalTrackColumnPointerDown = useCallback(
 
-    (columnId: LocalTrackColumnId, event: React.PointerEvent<HTMLDivElement>) => {
+    (columnId: LocalTrackColumnId, event: React.PointerEvent<HTMLElement>) => {
 
       if (event.button !== 0) return;
 
@@ -4598,6 +4620,26 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         if (targetId && targetId !== current.columnId) {
 
           moveLocalTrackColumnTo(current.columnId, targetId);
+
+          if (localTrackColumnSettleTimeoutRef.current != null) {
+
+            window.clearTimeout(localTrackColumnSettleTimeoutRef.current);
+
+          }
+
+          setSettlingLocalTrackColumnId(current.columnId);
+
+          localTrackColumnSettleTimeoutRef.current = window.setTimeout(() => {
+
+            setSettlingLocalTrackColumnId((previous) =>
+
+              previous === current.columnId ? null : previous
+
+            );
+
+            localTrackColumnSettleTimeoutRef.current = null;
+
+          }, 320);
 
         }
 
@@ -9910,6 +9952,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                             draggingLocalTrackColumnId !== column.id;
 
+                          const isSettling = settlingLocalTrackColumnId === column.id;
+
 
 
                           return (
@@ -9918,17 +9962,43 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                               key={column.id}
 
-                              className={`music-library-list-header-cell music-library-list-header-column${isDragging ? ' is-dragging' : ''}${isDropTarget ? ' is-drop-target' : ''}${resizingLocalTrackColumnId === column.id ? ' is-resizing' : ''}`}
+                              className={`music-library-list-header-cell music-library-list-header-column${isDragging ? ' is-dragging' : ''}${isDropTarget ? ' is-drop-target' : ''}${isSettling ? ' is-settling' : ''}${resizingLocalTrackColumnId === column.id ? ' is-resizing' : ''}`}
 
                               ref={(element) => setLocalTrackColumnHeaderElement(column.id, element)}
 
                               data-local-track-column-id={column.id}
 
-                              onPointerDown={(event) => handleLocalTrackColumnPointerDown(column.id, event)}
-
-                              title={t('pages.music-library.columns.action.dragToReorder')}
-
                             >
+                              <button
+                                type="button"
+                                className="music-library-column-drag-handle"
+                                onPointerDown={(event) => {
+                                  event.stopPropagation();
+                                  handleLocalTrackColumnPointerDown(column.id, event);
+                                }}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                }}
+                                tabIndex={-1}
+                                aria-label={t('pages.music-library.columns.action.dragToReorder')}
+                                title={t('pages.music-library.columns.action.dragToReorder')}
+                              >
+                                <svg viewBox="0 0 24 24" className="music-library-column-drag-icon" aria-hidden="true">
+                                  <circle
+                                    className="music-library-column-drag-icon-ring"
+                                    cx="12"
+                                    cy="12"
+                                    r="8.25"
+                                  />
+                                  <circle
+                                    className="music-library-column-drag-icon-dot"
+                                    cx="12"
+                                    cy="12"
+                                    r="3.15"
+                                  />
+                                </svg>
+                              </button>
 
                               {sortField ? (
 
@@ -9947,9 +10017,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                                 >
 
                                   <span className="music-library-list-header-label">
-
-                                    {t(LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].headerKey)}
-
+                                    <span
+                                      className="music-library-list-header-target-corners"
+                                      aria-hidden="true"
+                                    />
+                                    <span className="music-library-list-header-label-text">
+                                      {t(LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].headerKey)}
+                                    </span>
                                   </span>
 
                                   <span className="music-library-list-header-meta">
@@ -9995,9 +10069,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                               ) : (
 
                                 <span className="music-library-list-header-label">
-
-                                  {t(LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].headerKey)}
-
+                                  <span
+                                    className="music-library-list-header-target-corners"
+                                    aria-hidden="true"
+                                  />
+                                  <span className="music-library-list-header-label-text">
+                                    {t(LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].headerKey)}
+                                  </span>
                                 </span>
 
                               )}
