@@ -643,7 +643,15 @@
 .music-library-base-property-list {
   overflow: auto;
   max-height: min(44vh, 420px);
-  padding-right: 2px;
+  padding-right: 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.music-library-base-property-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 .music-library-base-property-footer {
