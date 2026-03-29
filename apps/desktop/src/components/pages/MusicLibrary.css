@@ -1724,9 +1724,8 @@
   color: rgba(255, 217, 217, 0.96);
 }
 
-.music-library-list-header-column.is-dragging .music-library-list-header-sort-priority {
-  background: rgba(255, 104, 104, 0.18);
-  color: rgba(255, 233, 233, 0.98);
+.music-library-list-header-column.is-dragging .music-library-list-header-sort-chevron {
+  filter: drop-shadow(0 0 4px rgba(255, 108, 108, 0.18));
 }
 
 .music-library-list-header-column.is-dragging .music-library-list-header-label::before,
@@ -1804,7 +1803,7 @@
   margin: 0;
   cursor: grab;
   z-index: 3;
-  color: rgba(255, 255, 255, 0.62);
+  color: var(--music-library-sort-accent, rgba(255, 255, 255, 0.62));
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1816,7 +1815,7 @@
   height: 24px;
   overflow: visible;
   display: block;
-  filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.04));
+  filter: drop-shadow(0 0 3px var(--music-library-sort-accent-glow, rgba(255, 255, 255, 0.04)));
 }
 
 .music-library-column-drag-icon-ring,
@@ -1846,8 +1845,8 @@
 
 .music-library-column-drag-handle:hover,
 .music-library-column-drag-handle:focus-visible {
-  color: rgba(255, 255, 255, 0.82);
-  filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.12));
+  color: var(--music-library-sort-accent, rgba(255, 255, 255, 0.82));
+  filter: drop-shadow(0 0 6px var(--music-library-sort-accent-glow, rgba(255, 255, 255, 0.12)));
 }
 
 .music-library-column-drag-handle:hover .music-library-column-drag-icon-ring,
@@ -1943,20 +1942,24 @@
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  color: rgba(160, 190, 255, 0.94);
+  color: var(--music-library-sort-accent, rgba(160, 190, 255, 0.94));
 }
 
-.music-library-list-header-sort-priority {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 999px;
-  background: rgba(108, 148, 255, 0.22);
-  color: rgba(222, 232, 255, 0.96);
-  font-size: 10px;
-  font-weight: 700;
+.music-library-list-header-sort-chevron {
+  width: 11px;
+  height: 11px;
+  display: block;
+  flex: none;
+  overflow: visible;
+  filter: drop-shadow(0 0 4px var(--music-library-sort-accent-glow, rgba(136, 182, 255, 0.12)));
+}
+
+.music-library-list-header-sort-chevron path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .music-library-column-resize-handle {

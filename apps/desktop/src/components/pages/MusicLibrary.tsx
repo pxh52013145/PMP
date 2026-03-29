@@ -488,6 +488,20 @@ const TRACK_WINDOW_OVERSCAN_ROWS = 8;
 const NATIVE_BASE_PAGE_SIZE = 120;
 const NATIVE_BASE_WINDOW_MIN_PAGES = 2;
 
+const MUSIC_LIBRARY_SORT_ACCENT_HUES = [4, 28, 52, 122, 178, 222, 278] as const;
+
+const getMusicLibraryHeaderSortAccent = (priorityIndex: number) => {
+  const hue = MUSIC_LIBRARY_SORT_ACCENT_HUES[priorityIndex % MUSIC_LIBRARY_SORT_ACCENT_HUES.length];
+  const cycle = Math.floor(priorityIndex / MUSIC_LIBRARY_SORT_ACCENT_HUES.length);
+  const saturation = Math.min(96, 86 + cycle * 2);
+  const lightness = Math.max(52, 62 - cycle * 4);
+
+  return {
+    accent: `hsla(${hue}, ${saturation}%, ${lightness}%, 1)`,
+    glow: `hsla(${hue}, ${saturation}%, ${lightness}%, 0.2)`,
+  };
+};
+
 const CARD_COVER_VISIBILITY_ROOT_MARGIN = '48px';
 
 const MUSIC_LIBRARY_MAIN_HORIZONTAL_PADDING_PX = 40;
@@ -9938,6 +9952,24 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                           const activeSortRule = activeSortIndex >= 0 ? baseSortRules[activeSortIndex] : null;
 
+                          const activeSortAccent = activeSortRule
+
+                            ? getMusicLibraryHeaderSortAccent(activeSortIndex)
+
+                            : null;
+
+                          const sortAccentStyle = activeSortAccent
+
+                            ? ({
+
+                                '--music-library-sort-accent': activeSortAccent.accent,
+
+                                '--music-library-sort-accent-glow': activeSortAccent.glow,
+
+                              } as React.CSSProperties)
+
+                            : undefined;
+
                           const isGroupedColumn = sortField
 
                             ? baseGroupByRules.some((rule) => rule.field === sortField)
@@ -9963,6 +9995,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                               key={column.id}
 
                               className={`music-library-list-header-cell music-library-list-header-column${isDragging ? ' is-dragging' : ''}${isDropTarget ? ' is-drop-target' : ''}${isSettling ? ' is-settling' : ''}${resizingLocalTrackColumnId === column.id ? ' is-resizing' : ''}`}
+                              style={sortAccentStyle}
 
                               ref={(element) => setLocalTrackColumnHeaderElement(column.id, element)}
 
@@ -10042,21 +10075,19 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                                       <span className="music-library-list-header-sort-indicator">
 
-                                        <span aria-hidden="true">
-
-                                          {activeSortRule.order === 'asc' ? '↑' : '↓'}
-
-                                        </span>
-
-                                        {baseSortRules.length > 1 && (
-
-                                          <span className="music-library-list-header-sort-priority">
-
-                                            {activeSortIndex + 1}
-
-                                          </span>
-
-                                        )}
+                                        <svg
+                                          viewBox="0 0 12 12"
+                                          className="music-library-list-header-sort-chevron"
+                                          aria-hidden="true"
+                                        >
+                                          <path
+                                            d={
+                                              activeSortRule.order === 'asc'
+                                                ? 'M2.5 7.75L6 4.25L9.5 7.75'
+                                                : 'M2.5 4.25L6 7.75L9.5 4.25'
+                                            }
+                                          />
+                                        </svg>
 
                                       </span>
 
