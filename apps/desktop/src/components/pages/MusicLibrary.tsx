@@ -8633,7 +8633,28 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
             />
 
-            <span className="music-library-search-icon">⌕</span>
+            {searchQuery.length > 0 ? (
+              <button
+                type="button"
+                className="music-library-search-clear"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => handleSearchInputChange('')}
+                aria-label={t('common.action.clear')}
+                title={t('common.action.clear')}
+              >
+                <svg viewBox="0 0 16 16" className="music-library-search-icon-svg" aria-hidden="true">
+                  <path d="M4.5 4.5L11.5 11.5" />
+                  <path d="M11.5 4.5L4.5 11.5" />
+                </svg>
+              </button>
+            ) : (
+              <span className="music-library-search-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" className="music-library-search-icon-svg">
+                  <circle cx="6.75" cy="6.75" r="4.25" />
+                  <path d="M9.9 9.9L13.25 13.25" />
+                </svg>
+              </span>
+            )}
 
           </div>
 
