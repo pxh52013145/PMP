@@ -55,10 +55,13 @@ import { assignMagnetBindingFragment, materializeThemeBinding } from '../../them
 import type { Theme, ThemeBindingId } from '../../themes/types/theme';
 import type { ThemeBindingFragment, ThemeImportCandidate } from '../../themes/types/themeImport';
 import { useThemeBindingEditor } from '../../themes/useThemeBindingEditor';
+import { applyMusicLibraryStarterTheme, isMusicLibrarySurfaceBinding } from '../../themes/starterPresets';
 import type { Magnet } from '../../types/pixel';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS, setupTauriListenerWithPayload } from '../../utils/windowCommunication';
 import { ThemeBindingEditorPanel } from '../theme/ThemeBindingEditorPanel';
+import { ThemeSurfaceWorkbench } from '../theme/ThemeSurfaceWorkbench';
+import { ThemeTokenWorkbench } from '../theme/ThemeTokenWorkbench';
 
 function formatRendererSource(
   t: (key: string, params?: Record<string, unknown>) => string,
@@ -79,6 +82,35 @@ function formatRendererGroup(
 }
 
 type PanelMessage = { kind: 'error' | 'success'; text: string };
+type ThemeEditorWorkspaceId = 'surface' | 'theme-source' | 'theme-pack' | 'profile-pack' | 'renderer';
+type ThemeEditorSidebarCardTone = 'default' | 'accent' | 'success' | 'warning';
+type ThemeEditorSidebarCard = {
+  id: string;
+  label: string;
+  value: string;
+  badge?: string;
+  tone?: ThemeEditorSidebarCardTone;
+};
+
+function formatBindingGroupLabel(
+  t: (key: string, params?: Record<string, unknown>) => string,
+  groupId: string
+): string {
+  if (groupId === 'magnet') return t('editor.theme-editor.bindingGroups.magnet');
+  if (groupId === 'page') return t('editor.theme-editor.bindingGroups.page');
+  if (groupId === 'overlay') return t('editor.theme-editor.bindingGroups.overlay');
+  if (groupId === 'primitive') return t('editor.theme-editor.bindingGroups.primitive');
+  return groupId;
+}
+
+function formatBindingSource(
+  t: (key: string, params?: Record<string, unknown>) => string,
+  source: 'binding' | 'surface' | 'none'
+): string {
+  if (source === 'binding') return t('editor.theme-editor.bindingSource.binding');
+  if (source === 'surface') return t('editor.theme-editor.bindingSource.surface');
+  return t('editor.theme-editor.bindingSource.none');
+}
 
 function assertObject(value: unknown, path: string): asserts value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -739,6 +771,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   const { theme, applyTheme } = useTheme();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const isTauri = useMemo(() => isTauriRuntime(), []);
+  const [activeWorkspace, setActiveWorkspace] = useState<ThemeEditorWorkspaceId>('theme-source');
   const [debugOpen, setDebugOpen] = useState(false);
   const [rendererList, setRendererList] = useState<MagnetRendererDefinition[]>(() =>
     listRegisteredMagnetRenderers()
@@ -824,6 +857,26 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     () => editableBindingGroups.flatMap((group) => group.bindingIds),
     [editableBindingGroups]
   );
+  const themeTokenStats = useMemo(() => {
+    let total = 0;
+    let color = 0;
+    let references = 0;
+
+    for (const [category, value] of Object.entries(theme.tokens ?? {})) {
+      if (!isPlainObject(value)) continue;
+      for (const tokenValue of Object.values(value)) {
+        total += 1;
+        if (category === 'color') {
+          color += 1;
+        }
+        if (typeof tokenValue === 'string' && /^\{[^}]+\}$/.test(tokenValue.trim())) {
+          references += 1;
+        }
+      }
+    }
+
+    return { total, color, references };
+  }, [theme.tokens]);
 
   const loadMagnetLayoutStoreState = useCallback(async (): Promise<MagnetLayoutStoreState | null> => {
     if (!isTauri) return null;
@@ -979,6 +1032,17 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       });
     }
   }, [debugOpen]);
+
+  const closeThemeWindow = useCallback(async () => {
+    try {
+      const { closeEditorWindow } = await import('../../utils/editorWindows');
+      await closeEditorWindow('theme');
+    } catch (error) {
+      telemetry.error('editor.theme-window.close.failed', {
+        message: getErrorMessage(error),
+      });
+    }
+  }, []);
 
   useEffect(() => {
     setThemeJson(JSON.stringify(theme, null, 2));
@@ -2251,6 +2315,19 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     return listMagnetVariants(selectedSurfaceBindingId.slice('magnet.'.length)).map((variant) => variant.id);
   }, [selectedSurfaceBindingId]);
 
+  const installSelectedSurfaceStarter = useCallback(async () => {
+    if (!isMusicLibrarySurfaceBinding(selectedSurfaceBindingId)) {
+      return;
+    }
+
+    const nextTheme = applyMusicLibraryStarterTheme(theme, selectedBindingEditor.surfaceDocumentId);
+    await applyTheme(nextTheme);
+    setThemeMessage({
+      kind: 'success',
+      text: t('editor.theme-editor.surfaceWorkbench.starter.applied'),
+    });
+  }, [applyTheme, selectedBindingEditor.surfaceDocumentId, selectedSurfaceBindingId, t, theme]);
+
   const profilePackApplyWarnings = useMemo(() => {
     if (!profilePack) {
       return {
@@ -2378,12 +2455,204 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [profilePackApplyBusy, profilePackApplyOpen]);
 
+  const workspaceTabs = useMemo(
+    () => [
+      {
+        id: 'surface' as const,
+        title: t('editor.theme-editor.workspace.surface.title'),
+        description: t('editor.theme-editor.workspace.surface.desc'),
+        badge: String(editableSurfaceBindingIds.length),
+      },
+      {
+        id: 'theme-source' as const,
+        title: t('editor.theme-editor.workspace.themeSource.title'),
+        description: t('editor.theme-editor.workspace.themeSource.desc'),
+        badge: String(themeTokenStats.total),
+      },
+      {
+        id: 'theme-pack' as const,
+        title: t('editor.theme-editor.workspace.themePack.title'),
+        description: t('editor.theme-editor.workspace.themePack.desc'),
+        badge: themePack ? t('editor.theme-editor.workspace.state.loaded') : undefined,
+      },
+      {
+        id: 'profile-pack' as const,
+        title: t('editor.theme-editor.workspace.profilePack.title'),
+        description: t('editor.theme-editor.workspace.profilePack.desc'),
+        badge: profilePack ? t('editor.theme-editor.workspace.state.loaded') : undefined,
+      },
+      {
+        id: 'renderer' as const,
+        title: t('editor.theme-editor.workspace.renderer.title'),
+        description: t('editor.theme-editor.workspace.renderer.desc'),
+        badge: String(rendererList.length),
+      },
+    ],
+    [editableSurfaceBindingIds.length, profilePack, rendererList.length, t, themeTokenStats.total, themePack]
+  );
+
+  const activeWorkspaceMeta =
+    workspaceTabs.find((workspace) => workspace.id === activeWorkspace) ?? workspaceTabs[0];
+  const profilePackWarningCount =
+    profilePackApplyWarnings.missingMagnetIds.length +
+    profilePackApplyWarnings.embeddedCustomMagnetIds.length +
+    profilePackApplyWarnings.missingRendererIds.length;
+
+  const workspaceSidebarCards = useMemo<ThemeEditorSidebarCard[]>(() => {
+    if (activeWorkspace === 'surface') {
+      return [
+        {
+          id: 'surface-groups',
+          label: t('editor.theme-editor.workspace.sidebar.groups'),
+          value: String(editableBindingGroups.length),
+        },
+        {
+          id: 'surface-bindings',
+          label: t('editor.theme-editor.workspace.sidebar.bindings'),
+          value: String(editableSurfaceBindingIds.length),
+          tone: 'accent',
+        },
+        {
+          id: 'surface-source',
+          label: t('editor.theme-editor.workspace.sidebar.selectedSource'),
+          value: formatBindingSource(t, selectedBindingEditor.bindingSource),
+        },
+      ];
+    }
+
+    if (activeWorkspace === 'theme-source') {
+      return [
+        {
+          id: 'theme-id',
+          label: t('editor.theme-editor.workspace.sidebar.themeId'),
+          value: theme.id,
+          badge: theme.version,
+          tone: 'accent',
+        },
+        {
+          id: 'theme-tokens',
+          label: t('editor.theme-editor.workspace.sidebar.tokens'),
+          value: String(themeTokenStats.total),
+        },
+        {
+          id: 'theme-colors',
+          label: t('editor.theme-editor.workspace.sidebar.colorTokens'),
+          value: String(themeTokenStats.color),
+          tone: 'success',
+        },
+      ];
+    }
+
+    if (activeWorkspace === 'theme-pack') {
+      return [
+        {
+          id: 'theme-pack-id',
+          label: t('editor.theme-editor.workspace.sidebar.package'),
+          value: themePack?.manifest.metadata.id ?? t('editor.theme-editor.workspace.state.empty'),
+          badge: themePack?.manifest.metadata.version,
+          tone: themePack ? 'accent' : 'default',
+        },
+        {
+          id: 'theme-pack-deps',
+          label: t('editor.theme-editor.workspace.sidebar.dependencies'),
+          value: String(themePackDepsView.length),
+          tone: themePackRequiresViolated ? 'warning' : 'default',
+        },
+        {
+          id: 'theme-pack-recommended',
+          label: t('editor.theme-editor.workspace.sidebar.recommended'),
+          value: String(themePackRecommendedBindings.length),
+          tone: themePackRecommendedBindings.length > 0 ? 'success' : 'default',
+        },
+      ];
+    }
+
+    if (activeWorkspace === 'profile-pack') {
+      return [
+        {
+          id: 'profile-pack-id',
+          label: t('editor.theme-editor.workspace.sidebar.package'),
+          value: profilePack?.manifest.metadata.id ?? t('editor.theme-editor.workspace.state.empty'),
+          badge: profilePack?.manifest.metadata.version,
+          tone: profilePack ? 'accent' : 'default',
+        },
+        {
+          id: 'profile-pack-spaces',
+          label: t('editor.theme-editor.workspace.sidebar.spaces'),
+          value: String(localMagnetSpacesState.spaces.length),
+        },
+        {
+          id: 'profile-pack-warnings',
+          label: t('editor.theme-editor.workspace.sidebar.warnings'),
+          value: String(profilePackWarningCount),
+          tone: profilePackWarningCount > 0 ? 'warning' : 'default',
+        },
+      ];
+    }
+
+    if (activeWorkspace === 'renderer') {
+      return [
+        {
+          id: 'renderer-count',
+          label: t('editor.theme-editor.workspace.sidebar.renderers'),
+          value: String(rendererList.length),
+          tone: 'accent',
+        },
+        {
+          id: 'renderer-groups',
+          label: t('editor.theme-editor.workspace.sidebar.groups'),
+          value: String(rendererGroups.length),
+        },
+        {
+          id: 'renderer-selected',
+          label: t('editor.theme-editor.workspace.sidebar.selectedRenderer'),
+          value: selectedRenderer?.id ?? t('editor.theme-editor.workspace.state.empty'),
+        },
+      ];
+    }
+
+    return [
+      {
+        id: 'current-module',
+        label: t('editor.theme-editor.workspace.sidebar.currentModule'),
+        value: activeWorkspaceMeta.title,
+        badge: activeWorkspaceMeta.badge,
+        tone: 'accent',
+      },
+    ];
+  }, [
+    activeWorkspace,
+    activeWorkspaceMeta.badge,
+    activeWorkspaceMeta.title,
+    editableBindingGroups.length,
+    editableSurfaceBindingIds.length,
+    localMagnetSpacesState.spaces.length,
+    profilePack,
+    profilePackWarningCount,
+    rendererGroups.length,
+    rendererList.length,
+    selectedBindingEditor.bindingSource,
+    selectedRenderer?.id,
+    t,
+    theme.id,
+    theme.version,
+    themeTokenStats.color,
+    themeTokenStats.total,
+    themePack,
+    themePackDepsView.length,
+    themePackRecommendedBindings.length,
+    themePackRequiresViolated,
+  ]);
+
   return (
     <div className="editor-theme">
       <div className="editor-window-header" data-tauri-drag-region>
         <span className="window-title" data-tauri-drag-region>
           {t('windows.editor.theme.title')}
         </span>
+        <button type="button" className="theme-editor-window-close" onClick={() => void closeThemeWindow()}>
+          {t('common.action.close')}
+        </button>
       </div>
 
       <div className="editor-window-content theme-editor-content">
@@ -2391,9 +2660,11 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           <div className="theme-editor-title-row">
             <div className="theme-editor-title-text">{t('editor.theme-editor.title')}</div>
             <div className="theme-editor-title-actions">
-              <button type="button" className="theme-editor-action-btn" onClick={refreshRenderers}>
-                {t('common.action.refresh')}
-              </button>
+              {activeWorkspace === 'renderer' ? (
+                <button type="button" className="theme-editor-action-btn" onClick={refreshRenderers}>
+                  {t('common.action.refresh')}
+                </button>
+              ) : null}
               <button type="button" className="theme-editor-action-btn" onClick={toggleDebug}>
                 {debugOpen
                   ? t('editor.theme-editor.debug.toggle.close')
@@ -2404,41 +2675,270 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           <p className="theme-editor-subtitle">{t('editor.theme-editor.subtitle')}</p>
         </div>
 
+        <div className="theme-editor-workspace-nav">
+          {workspaceTabs.map((workspace) => (
+            <button
+              key={workspace.id}
+              type="button"
+              className={`theme-editor-workspace-tab ${workspace.id === activeWorkspace ? 'is-active' : ''}`}
+              onClick={() => setActiveWorkspace(workspace.id)}
+              aria-pressed={workspace.id === activeWorkspace}
+            >
+              <span className="theme-editor-workspace-tab-copy">
+                <span className="theme-editor-workspace-tab-title">{workspace.title}</span>
+                <span className="theme-editor-workspace-tab-desc">{workspace.description}</span>
+              </span>
+              {workspace.badge ? (
+                <span className="theme-editor-workspace-tab-badge">{workspace.badge}</span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+
         <div className="theme-editor-main">
           <div className="theme-editor-sidebar">
-            <div className="theme-editor-sidebar-title">{t('editor.theme-debug.renderers.title')}</div>
-            <div className="theme-editor-renderer-groups">
-              {rendererList.length === 0 ? (
-                <div className="theme-editor-muted">{t('editor.theme-debug.renderers.empty')}</div>
-              ) : (
-                rendererGroups.map((group) => (
-                  <div key={group.id || '__default__'} className="theme-editor-renderer-group">
-                    <div className="theme-editor-renderer-group-title">{group.label}</div>
-                    <div className="theme-editor-renderer-items">
-                      {group.items.map((renderer) => (
-                        <button
-                          key={renderer.id}
-                          type="button"
-                          className={`theme-editor-renderer-item ${
-                            renderer.id === selectedRendererId ? 'is-selected' : ''
-                          }`}
-                          onClick={() => setSelectedRendererId(renderer.id)}
-                        >
-                          <div className="theme-editor-renderer-item-id">{renderer.id}</div>
-                          <div className="theme-editor-renderer-item-meta">
-                            {formatRendererSource(t, renderer.source)}
-                          </div>
-                        </button>
-                      ))}
+            {activeWorkspace === 'surface' ? (
+              <>
+                <div className="theme-editor-sidebar-title">
+                  {t('editor.theme-editor.surfaceStudio.browser.title')}
+                </div>
+                <div className="theme-editor-sidebar-desc">
+                  {t('editor.theme-editor.surfaceStudio.browser.desc')}
+                </div>
+                <div className="theme-editor-sidebar-summary">
+                  {workspaceSidebarCards.map((card) => (
+                    <div
+                      key={card.id}
+                      className={`theme-editor-sidebar-card theme-editor-sidebar-card--${card.tone ?? 'default'}`}
+                    >
+                      <div className="theme-editor-sidebar-card-title">{card.label}</div>
+                      <div className="theme-editor-sidebar-card-value">{card.value}</div>
+                      {card.badge ? (
+                        <div className="theme-editor-sidebar-card-badge">{card.badge}</div>
+                      ) : null}
                     </div>
+                  ))}
+                </div>
+                <div className="theme-editor-sidebar-scroll">
+                  <div className="theme-binding-groups">
+                    {editableBindingGroups.map((group) => (
+                      <div key={group.id} className="theme-binding-group">
+                        <div className="theme-binding-group-title">
+                          {formatBindingGroupLabel(t, group.id)}
+                        </div>
+                        <div className="theme-binding-group-items">
+                          {group.bindingIds.map((bindingId) => {
+                            const explicitBinding = theme.bindings?.[bindingId] ?? null;
+                            const hasSelfSurface = Boolean(theme.surfaces?.[bindingId]);
+                            const isSelected = bindingId === selectedSurfaceBindingId;
+                            return (
+                              <button
+                                key={bindingId}
+                                type="button"
+                                className={`theme-binding-item ${isSelected ? 'is-selected' : ''}`}
+                                onClick={() => setSelectedSurfaceBindingId(bindingId)}
+                              >
+                                <span className="theme-binding-item-id">{bindingId}</span>
+                                <span className="theme-binding-item-meta">
+                                  {explicitBinding?.surface ??
+                                    (hasSelfSurface
+                                      ? t('editor.theme-editor.bindingItem.selfSurface')
+                                      : t('editor.theme-editor.bindingItem.unbound'))}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))
-              )}
-            </div>
+                </div>
+              </>
+            ) : activeWorkspace === 'renderer' ? (
+              <>
+                <div className="theme-editor-sidebar-title">
+                  {t('editor.theme-editor.rendererLab.browser.title')}
+                </div>
+                <div className="theme-editor-sidebar-desc">
+                  {t('editor.theme-editor.rendererLab.browser.desc')}
+                </div>
+                <div className="theme-editor-sidebar-summary">
+                  {workspaceSidebarCards.map((card) => (
+                    <div
+                      key={card.id}
+                      className={`theme-editor-sidebar-card theme-editor-sidebar-card--${card.tone ?? 'default'}`}
+                    >
+                      <div className="theme-editor-sidebar-card-title">{card.label}</div>
+                      <div className="theme-editor-sidebar-card-value">{card.value}</div>
+                      {card.badge ? (
+                        <div className="theme-editor-sidebar-card-badge">{card.badge}</div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+                <div className="theme-editor-sidebar-scroll theme-editor-renderer-groups">
+                  {rendererList.length === 0 ? (
+                    <div className="theme-editor-muted">{t('editor.theme-debug.renderers.empty')}</div>
+                  ) : (
+                    rendererGroups.map((group) => (
+                      <div key={group.id || '__default__'} className="theme-editor-renderer-group">
+                        <div className="theme-editor-renderer-group-title">{group.label}</div>
+                        <div className="theme-editor-renderer-items">
+                          {group.items.map((renderer) => (
+                            <button
+                              key={renderer.id}
+                              type="button"
+                              className={`theme-editor-renderer-item ${
+                                renderer.id === selectedRendererId ? 'is-selected' : ''
+                              }`}
+                              onClick={() => setSelectedRendererId(renderer.id)}
+                            >
+                              <div className="theme-editor-renderer-item-id">{renderer.id}</div>
+                              <div className="theme-editor-renderer-item-meta">
+                                {formatRendererSource(t, renderer.source)}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="theme-editor-sidebar-title">{activeWorkspaceMeta.title}</div>
+                <div className="theme-editor-sidebar-desc">{activeWorkspaceMeta.description}</div>
+                <div className="theme-editor-sidebar-scroll">
+                  <div className="theme-editor-sidebar-card-grid">
+                    {workspaceSidebarCards.map((card) => (
+                      <div
+                        key={card.id}
+                        className={`theme-editor-sidebar-card theme-editor-sidebar-card--${card.tone ?? 'default'}`}
+                      >
+                        <div className="theme-editor-sidebar-card-title">{card.label}</div>
+                        <div className="theme-editor-sidebar-card-value">{card.value}</div>
+                        {card.badge ? (
+                          <div className="theme-editor-sidebar-card-badge">{card.badge}</div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="theme-editor-panel">
             <div className="theme-editor-panel-inner">
+              {activeWorkspace === 'surface' ? (
+                <div className="theme-editor-workspace-hero">
+                  <div className="theme-editor-workspace-hero-title">
+                    {t('editor.theme-editor.workspace.surface.title')}
+                  </div>
+                  <div className="theme-editor-workspace-hero-desc">
+                    {t('editor.theme-editor.workspace.surface.desc')}
+                  </div>
+                  <div className="theme-editor-panel-meta">
+                    <span className="theme-editor-panel-chip">
+                      {t('editor.theme-editor.surfaceStudio.hero.binding')}: {selectedSurfaceBindingId}
+                    </span>
+                    <span className="theme-editor-panel-chip">
+                      {t('editor.theme-editor.surfaceStudio.hero.source')}:{' '}
+                      {formatBindingSource(t, selectedBindingEditor.bindingSource)}
+                    </span>
+                    <span className="theme-editor-panel-chip">
+                      {t('editor.theme-editor.surfaceStudio.hero.surfaceDoc')}:{' '}
+                      {selectedBindingEditor.surfaceDocumentId}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
+
+              {activeWorkspace === 'theme-source' ? (
+                <div className="theme-editor-workspace-hero">
+                  <div className="theme-editor-workspace-hero-title">
+                    {t('editor.theme-editor.workspace.themeSource.title')}
+                  </div>
+                  <div className="theme-editor-workspace-hero-desc">
+                    {t('editor.theme-editor.workspace.themeSource.desc')}
+                  </div>
+                  <div className="theme-editor-panel-meta">
+                    <span className="theme-editor-panel-chip">{theme.id}</span>
+                    <span className="theme-editor-panel-chip">{theme.version}</span>
+                    <span className="theme-editor-panel-chip">
+                      {t('editor.theme-editor.workspace.sidebar.tokens')}: {themeTokenStats.total}
+                    </span>
+                    <span className="theme-editor-panel-chip">
+                      {t('editor.theme-editor.workspace.sidebar.colorTokens')}: {themeTokenStats.color}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
+
+              {activeWorkspace === 'theme-pack' ? (
+                <div className="theme-editor-workspace-hero">
+                  <div className="theme-editor-workspace-hero-title">
+                    {t('editor.theme-editor.workspace.themePack.title')}
+                  </div>
+                  <div className="theme-editor-workspace-hero-desc">
+                    {t('editor.theme-editor.workspace.themePack.desc')}
+                  </div>
+                  {themePack ? (
+                    <div className="theme-editor-panel-meta">
+                      <span className="theme-editor-panel-chip">{themePack.manifest.metadata.id}</span>
+                      <span className="theme-editor-panel-chip">{themePack.manifest.metadata.version}</span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {activeWorkspace === 'profile-pack' ? (
+                <div className="theme-editor-workspace-hero">
+                  <div className="theme-editor-workspace-hero-title">
+                    {t('editor.theme-editor.workspace.profilePack.title')}
+                  </div>
+                  <div className="theme-editor-workspace-hero-desc">
+                    {t('editor.theme-editor.workspace.profilePack.desc')}
+                  </div>
+                  {profilePack ? (
+                    <div className="theme-editor-panel-meta">
+                      <span className="theme-editor-panel-chip">{profilePack.manifest.metadata.id}</span>
+                      <span className="theme-editor-panel-chip">{profilePack.manifest.metadata.version}</span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {activeWorkspace === 'renderer' ? (
+                <div className="theme-editor-workspace-hero">
+                  <div className="theme-editor-workspace-hero-title">
+                    {t('editor.theme-editor.workspace.renderer.title')}
+                  </div>
+                  <div className="theme-editor-workspace-hero-desc">
+                    {t('editor.theme-editor.workspace.renderer.desc')}
+                  </div>
+                  {selectedRenderer ? (
+                    <div className="theme-editor-panel-meta">
+                      <span className="theme-editor-panel-chip">{selectedRenderer.id}</span>
+                      <span className="theme-editor-panel-chip">
+                        {formatRendererSource(t, selectedRenderer.source)}
+                      </span>
+                      {selectedRenderer.group ? (
+                        <span className="theme-editor-panel-chip">{selectedRenderer.group}</span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {activeWorkspace === 'theme-source' ? (
+              <div className="theme-editor-section">
+                <ThemeTokenWorkbench theme={theme} />
+              </div>
+              ) : null}
+
+              {activeWorkspace === 'theme-source' ? (
               <div className="theme-editor-section">
                 <div className="theme-editor-section-title">
                   {t('editor.theme-editor.pmpt.section.title')}
@@ -2473,36 +2973,12 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   spellCheck={false}
                 />
               </div>
+              ) : null}
 
+              {activeWorkspace === 'surface' ? (
               <div className="theme-editor-section">
-                <div className="theme-editor-section-title">Bindings / Surfaces</div>
-
-                <div className="theme-binding-groups">
-                  {editableBindingGroups.map((group) => (
-                    <div key={group.id} className="theme-binding-group">
-                      <div className="theme-binding-group-title">{group.label}</div>
-                      <div className="theme-binding-group-items">
-                        {group.bindingIds.map((bindingId) => {
-                          const explicitBinding = theme.bindings?.[bindingId] ?? null;
-                          const hasSelfSurface = Boolean(theme.surfaces?.[bindingId]);
-                          const isSelected = bindingId === selectedSurfaceBindingId;
-                          return (
-                            <button
-                              key={bindingId}
-                              type="button"
-                              className={`theme-binding-item ${isSelected ? 'is-selected' : ''}`}
-                              onClick={() => setSelectedSurfaceBindingId(bindingId)}
-                            >
-                              <span className="theme-binding-item-id">{bindingId}</span>
-                              <span className="theme-binding-item-meta">
-                                {explicitBinding?.surface ?? (hasSelfSurface ? '(self surface)' : '(unbound)')}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
+                <div className="theme-editor-section-title">
+                  {t('editor.theme-editor.surfaceStudio.bindingEditor.title')}
                 </div>
 
                 <div className="theme-binding-detail">
@@ -2512,7 +2988,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                     variantInput={{
                       kind: 'input',
                       suggestions: selectedBindingVariantSuggestions,
-                      placeholder: 'Optional explicit variant id',
+                      placeholder: t('editor.theme-editor.bindingPanel.placeholder.variant'),
                     }}
                     renderActionButton={(button) => (
                       <button
@@ -2526,7 +3002,21 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   />
                 </div>
               </div>
+              ) : null}
 
+              {activeWorkspace === 'surface' ? (
+              <div className="theme-editor-section">
+                <ThemeSurfaceWorkbench
+                  bindingId={selectedSurfaceBindingId}
+                  bindingEditor={selectedBindingEditor}
+                  onInstallStarter={
+                    isMusicLibrarySurfaceBinding(selectedSurfaceBindingId) ? installSelectedSurfaceStarter : undefined
+                  }
+                />
+              </div>
+              ) : null}
+
+              {activeWorkspace === 'theme-pack' ? (
               <div className="theme-editor-section">
                 <div className="theme-editor-section-title">
                   {t('editor.theme-editor.pmpk.section.title')}
@@ -2915,7 +3405,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   )}
                 </div>
               </div>
+              ) : null}
 
+              {activeWorkspace === 'profile-pack' ? (
               <div className="theme-editor-section">
                 <div className="theme-editor-section-title">{t('editor.theme-editor.profilePack.section.title')}</div>
 
@@ -3036,7 +3528,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   />
                 </div>
               </div>
+              ) : null}
 
+              {activeWorkspace === 'renderer' ? (
                 <div className="theme-editor-section">
                   <div className="theme-editor-section-title">{t('editor.theme-editor.renderers.section.title')}</div>
                   {!selectedRenderer ? (
@@ -3071,7 +3565,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   </>
                 )}
               </div>
+              ) : null}
 
+              {activeWorkspace === 'renderer' ? (
               <div className="theme-editor-section">
                 <div className="theme-editor-section-title">{t('editor.theme-editor.pmpv.section.title')}</div>
                 {!selectedRenderer ? (
@@ -3121,7 +3617,12 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   </>
                 )}
               </div>
+              ) : null}
             </div>
+          </div>
+
+          <div className="theme-editor-main-overlay" aria-hidden="true">
+            <div className="theme-editor-main-overlay-divider" />
           </div>
         </div>
       </div>

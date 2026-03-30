@@ -1192,6 +1192,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const viewMode: MusicLibraryViewMode = 'all';
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
 
   const [nativeBaseSearchQuery, setNativeBaseSearchQuery] = useState('');
 
@@ -8427,6 +8428,35 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     className: ['music-library', embedded ? 'music-library-embedded' : ''].filter(Boolean).join(' '),
     style: pageMotionStyle,
   });
+  const getPagePartProps = (
+    part: string,
+    options: {
+      state?: string;
+      className?: string;
+      style?: React.CSSProperties;
+    } = {}
+  ) =>
+    pageSurface.getElementProps({
+      part,
+      includeSurfaceTokens: true,
+      ...options,
+    });
+  const headerProps = getPagePartProps('header', { className: 'music-library-header' });
+  const headerMainProps = getPagePartProps('header-main', {
+    className: 'music-library-header-left',
+  });
+  const sourceModesProps = getPagePartProps('source-modes', {
+    className: 'music-library-source-modes',
+  });
+  const toolbarRegionProps = getPagePartProps('toolbar-region', {
+    className: 'music-library-toolbar-region',
+  });
+  const toolbarProps = getPagePartProps('toolbar', { className: 'music-library-toolbar' });
+  const actionsProps = getPagePartProps('actions', { className: 'music-library-actions' });
+  const searchProps = getPagePartProps('search', {
+    state: isSearchFocused ? 'focus' : undefined,
+    className: 'music-library-search',
+  });
 
   const libraryContent = (
 
@@ -8456,13 +8486,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       {!embedded && (
 
-        <div className="music-library-header" data-pmp-part="header">
+        <div {...headerProps}>
 
-          <div className="music-library-header-left" data-pmp-part="header-main">
+          <div {...headerMainProps}>
 
             <h2 className="music-library-title">{t('pages.music-library.title')}</h2>
 
-            <div className="music-library-source-modes" data-pmp-part="source-modes">
+            <div {...sourceModesProps}>
 
               <button
 
@@ -8509,17 +8539,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
       <div
-
-        className="music-library-toolbar-region"
-        data-pmp-part="toolbar-region"
+        {...toolbarRegionProps}
 
         ref={librarySourceMode === 'local' ? baseToolbarRegionRef : undefined}
 
       >
 
-        <div className="music-library-toolbar" data-pmp-part="toolbar">
+        <div {...toolbarProps}>
 
-          <div className="music-library-actions" data-pmp-part="actions">
+          <div {...actionsProps}>
 
             {librarySourceMode === 'local' ? (
 
@@ -8611,7 +8639,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-          <div className="music-library-search">
+          <div {...searchProps}>
 
             <input
 
@@ -8630,6 +8658,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
               value={searchQuery}
 
               onChange={(e) => handleSearchInputChange(e.target.value)}
+              onFocus={() => setIsSearchFocused(true)}
+              onBlur={() => setIsSearchFocused(false)}
 
             />
 
@@ -8717,7 +8747,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
               {showBaseSortPanel && (
 
                 <div
-                  className="music-library-base-popover-panel"
+                  {...getPagePartProps('popover', {
+                    className: 'music-library-base-popover-panel',
+                  })}
                   role="dialog"
                   aria-label={t('pages.music-library.sort.panelTitle')}
                 >
@@ -9079,7 +9111,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
               {showBaseFilterPanel && (
 
                 <div
-                  className="music-library-base-popover-panel"
+                  {...getPagePartProps('popover', {
+                    className: 'music-library-base-popover-panel',
+                  })}
                   role="dialog"
                   aria-label={t('pages.music-library.filter.panelTitle')}
                 >
@@ -9417,8 +9451,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
               {showColumnSettings && (
 
                 <div
-
-                  className="music-library-base-popover-panel music-library-base-properties-popover"
+                  {...getPagePartProps('popover', {
+                    className: 'music-library-base-popover-panel music-library-base-properties-popover',
+                  })}
 
                   role="dialog"
 
@@ -10006,6 +10041,34 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                             draggingLocalTrackColumnId !== column.id;
 
                           const isSettling = settlingLocalTrackColumnId === column.id;
+                          const columnState = isDropTarget
+                            ? 'drop-target'
+                            : isDragging
+                              ? 'dragging'
+                              : resizingLocalTrackColumnId === column.id
+                                ? 'focus'
+                                : undefined;
+                          const headerColumnProps = getPagePartProps('column-header', {
+                            state: columnState,
+                            className: `music-library-list-header-cell music-library-list-header-column${isDragging ? ' is-dragging' : ''}${isDropTarget ? ' is-drop-target' : ''}${isSettling ? ' is-settling' : ''}${resizingLocalTrackColumnId === column.id ? ' is-resizing' : ''}`,
+                            style: sortAccentStyle,
+                          });
+                          const dragHandleProps = getPagePartProps('column-drag-handle', {
+                            state: isDropTarget ? 'drop-target' : isDragging ? 'dragging' : undefined,
+                            className: 'music-library-column-drag-handle',
+                          });
+                          const labelProps = getPagePartProps('column-label', {
+                            state: columnState,
+                            className: 'music-library-list-header-label',
+                          });
+                          const sortButtonProps = getPagePartProps('column-sort', {
+                            state: activeSortRule ? 'selected' : undefined,
+                            className: `music-library-list-header-sort-btn${activeSortRule ? ' is-active' : ''}`,
+                          });
+                          const resizeHandleProps = getPagePartProps('column-resize-handle', {
+                            state: resizingLocalTrackColumnId === column.id ? 'focus' : undefined,
+                            className: 'music-library-column-resize-handle',
+                          });
 
 
 
@@ -10014,9 +10077,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                             <div
 
                               key={column.id}
-
-                              className={`music-library-list-header-cell music-library-list-header-column${isDragging ? ' is-dragging' : ''}${isDropTarget ? ' is-drop-target' : ''}${isSettling ? ' is-settling' : ''}${resizingLocalTrackColumnId === column.id ? ' is-resizing' : ''}`}
-                              style={sortAccentStyle}
+                              {...headerColumnProps}
 
                               ref={(element) => setLocalTrackColumnHeaderElement(column.id, element)}
 
@@ -10025,7 +10086,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                             >
                               <button
                                 type="button"
-                                className="music-library-column-drag-handle"
+                                {...dragHandleProps}
                                 onPointerDown={(event) => {
                                   event.stopPropagation();
                                   handleLocalTrackColumnPointerDown(column.id, event);
@@ -10059,8 +10120,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                                 <button
 
                                   type="button"
-
-                                  className={`music-library-list-header-sort-btn${activeSortRule ? ' is-active' : ''}`}
+                                  {...sortButtonProps}
 
                                   onPointerDown={(event) => event.stopPropagation()}
 
@@ -10070,7 +10130,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                                 >
 
-                                  <span className="music-library-list-header-label">
+                                  <span {...labelProps}>
                                     <span
                                       className="music-library-list-header-target-corners"
                                       aria-hidden="true"
@@ -10120,7 +10180,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                               ) : (
 
-                                <span className="music-library-list-header-label">
+                                <span {...labelProps}>
                                   <span
                                     className="music-library-list-header-target-corners"
                                     aria-hidden="true"
@@ -10135,8 +10195,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                               <button
 
                                 type="button"
-
-                                className="music-library-column-resize-handle"
+                                {...resizeHandleProps}
 
                                 onPointerDown={(event) =>
 
@@ -10199,6 +10258,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                   {trackVirtualWindow.rows.map((row) => {
 
                     if (row.kind === 'group-header') {
+                      const groupRowProps = getPagePartProps('group-row', {
+                        className: 'music-library-track-group-toggle',
+                      });
 
                       return (
 
@@ -10221,8 +10283,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                           <button
 
                             type="button"
-
-                            className="music-library-track-group-toggle"
+                            {...groupRowProps}
 
                             onClick={() => toggleTrackGroupCollapsed(row.groupKey)}
 
@@ -10279,6 +10340,21 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                       pendingPlayTrackIdentity !== null &&
 
                       resolveTrackIdentity(track) === pendingPlayTrackIdentity;
+                    const trackRowProps = getPagePartProps('row', {
+                      state: isPlayPending ? 'selected' : undefined,
+                      className: `music-library-track${isPlayPending ? ' is-play-pending' : ''}`,
+                      style: { gridTemplateColumns: localTrackGridTemplate },
+                    });
+                    const trackActionState = isPlayPending ? 'selected' : undefined;
+                    const playTrackActionProps = getPagePartProps('action-button', {
+                      state: trackActionState,
+                      className: `music-library-track-action-btn ${onAddToQueue ? 'music-library-track-action-btn--secondary' : 'music-library-track-action-btn--primary'} track-action-play`,
+                    });
+                    const addTrackActionProps = getPagePartProps('action-button', {
+                      state: trackActionState,
+                      className:
+                        'music-library-track-action-btn music-library-track-action-btn--primary track-action-add',
+                    });
 
                     return (
 
@@ -10287,10 +10363,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         key={track.id}
 
                         data-track-id={track.id}
-
-                        className={`music-library-track${isPlayPending ? ' is-play-pending' : ''}`}
-
-                        style={{ gridTemplateColumns: localTrackGridTemplate }}
+                        {...trackRowProps}
 
                         onDoubleClick={() => handleTrackDoubleClick(track, absoluteIndex)}
 
@@ -10337,12 +10410,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         {onPlayNow && (
 
                           <button
+                            {...playTrackActionProps}
 
                             onClick={(e) => handlePlaySingleTrack(track, e)}
 
                             title={t('pages.music-library.tracks.action.playOneTitle')}
-
-                            className={`music-library-track-action-btn ${onAddToQueue ? 'music-library-track-action-btn--secondary' : 'music-library-track-action-btn--primary'} track-action-play`}
 
                           >
 
@@ -10355,12 +10427,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         {onAddToQueue && (
 
                           <button
+                            {...addTrackActionProps}
 
                             onClick={(e) => handleAddSingleTrack(track, e)}
 
                             title={t('pages.music-library.tracks.action.addOneTitle')}
-
-                            className="music-library-track-action-btn music-library-track-action-btn--primary track-action-add"
 
                           >
 

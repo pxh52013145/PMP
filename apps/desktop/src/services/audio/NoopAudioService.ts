@@ -7,6 +7,14 @@ import type {
   PlaylistCreateOptions,
   Track,
 } from './types';
+import {
+  persistAudioPlaybackMuted,
+  persistAudioPlaybackPlayMode,
+  persistAudioPlaybackVolume,
+  readPersistedAudioPlaybackPreferences,
+  setupAudioPlaybackPreferencesListener,
+  type AudioPlaybackPreferences,
+} from './audioPlaybackPreferences';
 import { prependTrackWithDedup } from './trackIdentity';
 
 type TimeListener = (time: number) => void;
@@ -36,6 +44,7 @@ export class NoopAudioService implements IAudioService {
   private currentIndex = -1;
   private playlists: Playlist[] = [];
   private currentPlaylist: Playlist | null = null;
+  private playbackPreferencesListenerCleanup: (() => void) | null = null;
 
   private timeUpdateCallbacks = new Set<TimeListener>();
   private endedCallbacks = new Set<() => void>();
@@ -43,9 +52,42 @@ export class NoopAudioService implements IAudioService {
   private loadProgressCallbacks = new Set<ProgressListener>();
   private errorCallbacks = new Set<ErrorListener>();
 
+  constructor() {
+    this.applyPlaybackPreferences(readPersistedAudioPlaybackPreferences(), { emit: false });
+    void this.attachPlaybackPreferencesListener();
+  }
+
   private emitState() {
     const state = this.getState();
     this.stateChangeCallbacks.forEach((cb) => cb(state));
+  }
+
+  private applyPlaybackPreferences(
+    preferences: AudioPlaybackPreferences,
+    options?: { emit?: boolean }
+  ): void {
+    const changed =
+      this.volume !== preferences.volume ||
+      this.muted !== preferences.muted ||
+      this.playMode !== preferences.playMode;
+
+    if (!changed) return;
+
+    this.volume = preferences.volume;
+    this.muted = preferences.muted;
+    this.playMode = preferences.playMode;
+
+    if (options?.emit === false) return;
+    this.emitState();
+  }
+
+  private async attachPlaybackPreferencesListener(): Promise<void> {
+    if (this.playbackPreferencesListenerCleanup) return;
+    this.playbackPreferencesListenerCleanup = await setupAudioPlaybackPreferencesListener(
+      (preferences) => {
+        this.applyPlaybackPreferences(preferences);
+      }
+    );
   }
 
   async loadTrack(track: Track): Promise<void> {
@@ -87,6 +129,8 @@ export class NoopAudioService implements IAudioService {
   setVolume(volume: number): void {
     this.volume = clamp01(volume);
     this.emitState();
+    void persistAudioPlaybackVolume(this.volume);
+    void persistAudioPlaybackMuted(this.muted);
   }
 
   getVolume(): number {
@@ -96,6 +140,7 @@ export class NoopAudioService implements IAudioService {
   toggleMute(): void {
     this.muted = !this.muted;
     this.emitState();
+    void persistAudioPlaybackMuted(this.muted);
   }
 
   getCurrentTime(): number {
@@ -231,6 +276,7 @@ export class NoopAudioService implements IAudioService {
   setPlayMode(mode: PlayMode): void {
     this.playMode = mode;
     this.emitState();
+    void persistAudioPlaybackPlayMode(this.playMode);
   }
 
   getPlayMode(): PlayMode {
@@ -345,6 +391,8 @@ export class NoopAudioService implements IAudioService {
   }
 
   destroy(): void {
+    this.playbackPreferencesListenerCleanup?.();
+    this.playbackPreferencesListenerCleanup = null;
     this.timeUpdateCallbacks.clear();
     this.endedCallbacks.clear();
     this.stateChangeCallbacks.clear();

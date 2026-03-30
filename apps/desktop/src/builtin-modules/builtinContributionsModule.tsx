@@ -64,6 +64,9 @@ const SystemDemoSettingsPanelLazy = React.lazy(async () => ({
 const PerformanceSettingsPanelLazy = React.lazy(async () => ({
   default: (await import('../components/settings-panels/PerformanceSettingsPanel')).PerformanceSettingsPanel,
 }));
+const ThemeToolsSettingsPanelLazy = React.lazy(async () => ({
+  default: (await import('../components/settings-panels/ThemeToolsSettingsPanel')).ThemeToolsSettingsPanel,
+}));
 const PluginsSettingsPanelLazy = React.lazy(async () => ({
   default: (await import('../components/settings-panels/PluginsSettingsPanel')).PluginsSettingsPanel,
 }));
@@ -176,6 +179,18 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           render: () => renderWithLazyBoundary(<PerformanceSettingsPanelLazy />),
           source: 'builtin',
           order: 10,
+          group: 'core',
+          metadata: { settingsSection: 'system' },
+        });
+
+        register<SettingsPanelContribution>({
+          kind: 'settings-panel',
+          id: 'theme-tools',
+          title: t('settings.panels.themeTools.title'),
+          description: t('settings.panels.themeTools.desc'),
+          render: () => renderWithLazyBoundary(<ThemeToolsSettingsPanelLazy />),
+          source: 'builtin',
+          order: 11,
           group: 'core',
           metadata: { settingsSection: 'system' },
         });

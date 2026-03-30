@@ -1,0 +1,265 @@
+.theme-surface-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.theme-surface-workbench__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.theme-surface-workbench__header-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.theme-surface-workbench__subtitle {
+  max-width: 760px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.theme-surface-workbench__meta,
+.theme-surface-workbench__toolbar,
+.theme-surface-workbench__context,
+.theme-surface-workbench__chip-list,
+.theme-surface-workbench__token-heading,
+.theme-surface-workbench__token-value-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.theme-surface-workbench__toolbar {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.theme-surface-workbench__layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.72fr) minmax(0, 1.28fr);
+  gap: 12px;
+}
+
+.theme-surface-workbench__sidebar,
+.theme-surface-workbench__content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.theme-surface-workbench__inspector-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.02)),
+    rgba(7, 11, 18, 0.82);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.theme-surface-workbench__summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.theme-surface-workbench__summary-card {
+  min-width: 0;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.theme-surface-workbench__summary-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.theme-surface-workbench__summary-value {
+  margin-top: 6px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.theme-surface-workbench__section-note {
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.theme-surface-workbench__chip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+    'Courier New', monospace;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.theme-surface-workbench__chip:hover {
+  border-color: rgba(0, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.theme-surface-workbench__chip.is-active {
+  border-color: rgba(0, 255, 255, 0.42);
+  background: rgba(0, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.96);
+}
+
+.theme-surface-workbench__swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.theme-surface-workbench__swatch-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.theme-surface-workbench__swatch-head {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.theme-surface-workbench__swatch-preview {
+  position: relative;
+  min-height: 84px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.05) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.05) 75%),
+    linear-gradient(45deg, rgba(255, 255, 255, 0.05) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.05) 75%);
+  background-position: 0 0, 10px 10px;
+  background-size: 20px 20px;
+}
+
+.theme-surface-workbench__swatch-fill {
+  position: absolute;
+  inset: 0;
+}
+
+.theme-surface-workbench__swatch-fill.is-shadow {
+  inset: 18px;
+  border-radius: 10px;
+}
+
+.theme-surface-workbench__swatch-badge {
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.68);
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.theme-surface-workbench__swatch-name,
+.theme-surface-workbench__token-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.theme-surface-workbench__swatch-value,
+.theme-surface-workbench__token-value {
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.68);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+    'Courier New', monospace;
+}
+
+.theme-surface-workbench__token-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.theme-surface-workbench__token-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.theme-surface-workbench__token-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  margin-top: 3px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+.theme-surface-workbench__token-values {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.theme-surface-workbench__token-value-label {
+  min-width: 48px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.54);
+}
+
+@media (max-width: 1080px) {
+  .theme-surface-workbench__layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 680px) {
+  .theme-surface-workbench__summary-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .theme-surface-workbench__toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

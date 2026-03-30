@@ -163,6 +163,9 @@ export const STORAGE_KEYS = {
 
   // === Native Audio ===
   NATIVE_AUDIO_OUTPUT_BACKEND: 'pixel-matrix-native-audio-output-backend', // 输出后端 ID（string | null）
+  NATIVE_AUDIO_VOLUME: 'pixel-matrix-native-audio-volume', // Volume（number, 0.0 - 1.0）
+  NATIVE_AUDIO_MUTED: 'pixel-matrix-native-audio-muted', // Muted（boolean）
+  NATIVE_AUDIO_PLAY_MODE: 'pixel-matrix-native-audio-play-mode', // PlayMode（sequence/loop/single-loop/shuffle）
   NATIVE_AUDIO_INPUT_ID: 'pixel-matrix-native-audio-input-id', // 输入/解码组件 ID（string | null）
   NATIVE_AUDIO_GAIN_DB: 'pixel-matrix-native-audio-gain-db', // Gain（number，dB）
   NATIVE_AUDIO_DSP_CHAIN: 'pixel-matrix-native-audio-dsp-chain', // DSP chain（array）
@@ -314,6 +317,9 @@ export const TAURI_EVENTS = {
   // Native Audio
   NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED: 'native-audio-output-device-updated',
   NATIVE_AUDIO_OUTPUT_BACKEND_UPDATED: 'native-audio-output-backend-updated',
+  NATIVE_AUDIO_VOLUME_UPDATED: 'native-audio-volume-updated',
+  NATIVE_AUDIO_MUTED_UPDATED: 'native-audio-muted-updated',
+  NATIVE_AUDIO_PLAY_MODE_UPDATED: 'native-audio-play-mode-updated',
   NATIVE_AUDIO_GAIN_DB_UPDATED: 'native-audio-gain-db-updated',
   NATIVE_AUDIO_INPUT_ID_UPDATED: 'native-audio-input-id-updated',
   NATIVE_AUDIO_DSP_CHAIN_UPDATED: 'native-audio-dsp-chain-updated',

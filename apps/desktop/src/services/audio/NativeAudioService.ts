@@ -78,6 +78,14 @@ import {
   resolveStoredTuningAutoSettings,
 } from './nativeAudioAutoSettingsStorage';
 import {
+  persistAudioPlaybackMuted,
+  persistAudioPlaybackPlayMode,
+  persistAudioPlaybackVolume,
+  readPersistedAudioPlaybackPreferences,
+  setupAudioPlaybackPreferencesListener,
+  type AudioPlaybackPreferences,
+} from './audioPlaybackPreferences';
+import {
   clearNativeLibraryPlaylistItems,
   deleteNativeLibraryPlaylist,
   markNativeLibraryUserEntryPlayed,
@@ -262,6 +270,8 @@ export class NativeAudioService implements IAudioService {
   private dynamicSrcSettingsListenerInitPromise: Promise<void> | null = null;
   private tuningAutoSettingsListenerCleanup: (() => void) | null = null;
   private tuningAutoSettingsListenerInitPromise: Promise<void> | null = null;
+  private playbackPreferencesListenerCleanup: (() => void) | null = null;
+  private playbackPreferencesListenerInitPromise: Promise<void> | null = null;
   private spectrumData: Uint8Array | null = null;
   private spectrumFrames: Partial<Record<AudioSpectrumTap, AudioSpectrumFrame>> = {};
   private spectrumEnabled = false;
@@ -1923,6 +1933,7 @@ export class NativeAudioService implements IAudioService {
 
   constructor() {
     this.retainTypeScriptBaselineState();
+    const playbackPreferences = readPersistedAudioPlaybackPreferences();
     this.state = {
       currentTrack: null,
       playbackState: 'idle',
@@ -1932,9 +1943,9 @@ export class NativeAudioService implements IAudioService {
       bufferedAhead: 0,
       decodeBufferedAhead: 0,
       outputBufferedAhead: 0,
-      volume: 0.7,
-      muted: false,
-      playMode: 'sequence',
+      volume: playbackPreferences.volume,
+      muted: playbackPreferences.muted,
+      playMode: playbackPreferences.playMode,
       queue: [],
       currentIndex: -1,
       playlists: [],
@@ -1958,6 +1969,7 @@ export class NativeAudioService implements IAudioService {
     this.clearLegacyOutputDevicePersistence();
     await this.restoreOutputBackendFromStorage();
     await this.restoreAudioInputFromStorage();
+    await this.restorePlaybackPreferencesFromStorage();
     await this.restoreStreamingBufferSettingsFromStorage();
     await this.restoreEnginePolicyFromStorage();
     await this.restoreDynamicSrcAutoSettingsFromStorage();
@@ -1971,6 +1983,73 @@ export class NativeAudioService implements IAudioService {
 
     await this.restoreGainDbFromStorage();
     await this.restorePlaylistsFromLibraryDb();
+  }
+
+  private applyPlaybackPreferences(
+    preferences: AudioPlaybackPreferences,
+    options?: {
+      emitStateChange?: boolean;
+      syncBackend?: boolean;
+      forceBackendSync?: boolean;
+    }
+  ): void {
+    const volumeChanged = this.state.volume !== preferences.volume;
+    const mutedChanged = this.state.muted !== preferences.muted;
+    const playModeChanged = this.state.playMode !== preferences.playMode;
+
+    if (volumeChanged || mutedChanged || playModeChanged) {
+      this.updateState(
+        {
+          volume: preferences.volume,
+          muted: preferences.muted,
+          playMode: preferences.playMode,
+        },
+        { emitStateChange: options?.emitStateChange }
+      );
+    }
+
+    if (options?.syncBackend !== true) return;
+
+    if (options.forceBackendSync || volumeChanged) {
+      this.fireAndForgetCommand('native_audio_set_volume', { volume: preferences.volume });
+    }
+
+    if (options.forceBackendSync || mutedChanged) {
+      this.fireAndForgetCommand('native_audio_set_mute', { muted: preferences.muted });
+    }
+  }
+
+  private async restorePlaybackPreferencesFromStorage(): Promise<void> {
+    this.applyPlaybackPreferences(readPersistedAudioPlaybackPreferences(), {
+      emitStateChange: false,
+      syncBackend: true,
+      forceBackendSync: true,
+    });
+
+    if (this.playbackPreferencesListenerCleanup) {
+      return;
+    }
+    if (this.playbackPreferencesListenerInitPromise) {
+      await this.playbackPreferencesListenerInitPromise;
+      return;
+    }
+
+    const applyPersistedPreferences = () => {
+      this.applyPlaybackPreferences(readPersistedAudioPlaybackPreferences(), {
+        syncBackend: true,
+      });
+    };
+
+    this.playbackPreferencesListenerInitPromise = (async () => {
+      if (this.playbackPreferencesListenerCleanup) return;
+
+      const cleanup = await setupAudioPlaybackPreferencesListener(applyPersistedPreferences);
+      this.playbackPreferencesListenerCleanup = cleanup;
+    })().finally(() => {
+      this.playbackPreferencesListenerInitPromise = null;
+    });
+
+    await this.playbackPreferencesListenerInitPromise;
   }
 
   private readStreamingBufferSettings(): {
@@ -4780,6 +4859,8 @@ export class NativeAudioService implements IAudioService {
   // ===== 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵稿妽闁哄懏绻堥弻鏇熷緞濞戞﹩娲紓浣哄У閸庢娊鍩為幋锔藉亹闁告瑥顦伴幃娆撴⒒閸屾艾浜為柛銊ㄤ含閹广垹鈽夊鍡楁櫊濡炪倖妫佸畷鐢告儎鎼达絿纾藉ù锝呮惈瀛濈紒鍓ц檸閸欏啴鐛径宀€鐭欐繛鍡樺劤閹垶绻濋姀锝嗙【闁挎洏鍎卞嵄?=====
   setVolume(volume: number): void {
     setVolumeImpl(this.transportFacadeContext, volume);
+    void persistAudioPlaybackVolume(this.state.volume);
+    void persistAudioPlaybackMuted(this.state.muted);
   }
 
   getVolume(): number {
@@ -4790,6 +4871,7 @@ export class NativeAudioService implements IAudioService {
     const muted = !this.state.muted;
     this.fireAndForgetCommand('native_audio_set_mute', { muted });
     this.updateState({ muted });
+    void persistAudioPlaybackMuted(muted);
   }
 
   // ===== 闂傚倸鍊搁崐鎼佸磹閻戣姤鍤勯柛鎾茬閸ㄦ繃銇勯弽顐汗闁逞屽墾缁犳挸鐣锋總绋课ㄩ柕澶涢檮琚ｉ梻鍌欑閹碱偆绮欐笟鈧畷銏＄附閸涘﹤鈧潡鏌涢…鎴濅簴濞存粍绮撻弻鐔告綇閸撗吷戠紒缁㈠幖閻栧ジ寮诲☉銏犳閻犳亽鍓辫閺屸€崇暆鐎ｎ剛袦濡ょ姷鍋為悷鈺佺暦閻旂⒈鏁囬柣娆忔噽閸氬綊姊?=====
@@ -5345,6 +5427,7 @@ export class NativeAudioService implements IAudioService {
   // ===== 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝夋交閼板潡姊洪鈧粔鐢稿箚閻愬搫绠规繛锝庡墮婵″ジ鏌涚仦璇插闂囧鏌ｅΟ鐑樷枙闁稿骸绻戞穱濠囶敃閿涳綆浜﹢渚€姊洪幐搴ｇ畵闁绘妫濋崺鈧い鎴ｆ硶閻瑩鏌熼鍝勭伈闁诡喒鍓濋幆鏃堟晲閸曨厾顦梻浣筋嚙濮橈箓锝炴径濞掓椽寮介‖鈩冩そ婵℃悂鍩炴惔鎾充壕?=====
   setPlayMode(mode: PlayMode): void {
     this.updateState({ playMode: mode });
+    void persistAudioPlaybackPlayMode(this.state.playMode);
   }
 
   getPlayMode(): PlayMode {
@@ -6103,6 +6186,9 @@ export class NativeAudioService implements IAudioService {
     this.tuningAutoSettingsListenerCleanup?.();
     this.tuningAutoSettingsListenerCleanup = null;
     this.tuningAutoSettingsListenerInitPromise = null;
+    this.playbackPreferencesListenerCleanup?.();
+    this.playbackPreferencesListenerCleanup = null;
+    this.playbackPreferencesListenerInitPromise = null;
     this.clearTuningAutoLoop();
     this.timeUpdateCallbacks.clear();
     this.endedCallbacks.clear();
