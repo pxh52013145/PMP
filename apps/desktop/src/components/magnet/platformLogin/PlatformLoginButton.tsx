@@ -8,7 +8,6 @@ import {
   listPlatformConnectorDefinitions,
   logoutPlatformConnector,
   pollPlatformQrLogin,
-  refreshAndEmitPlatformConnectorAuthSnapshot,
   subscribePlatformConnectorAuthChanged,
   type PlatformConnectorAuthSnapshot,
   type PlatformConnectorDefinition,
@@ -300,8 +299,6 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
             })
           );
         }
-
-        await refreshAndEmitPlatformConnectorAuthSnapshot(targetConnectorId);
       } catch (err) {
         updateConnectorScopedValue(
           setErrorsByConnectorId,

@@ -14,6 +14,7 @@ import {
   type NativeNeteaseQrCodeSession,
   type NativeNeteaseQrPollResult,
 } from '../music-library';
+import { clearNeteaseFacadeCaches } from './neteaseFacade';
 
 export type PlatformConnectorId = `connector.platform.${string}`;
 
@@ -357,6 +358,7 @@ function createNeteaseAdapter(): PlatformConnectorAdapter {
         result.authState === 'revoked' ||
         result.authState === 'error'
       ) {
+        clearNeteaseFacadeCaches();
         const snapshot = mapNeteaseAuthStatus(await getNativeNeteaseAuthStatus());
         if (snapshot) {
           emitPlatformConnectorAuthChanged(snapshot);
@@ -366,6 +368,7 @@ function createNeteaseAdapter(): PlatformConnectorAdapter {
       return result;
     },
     logout: async () => {
+      clearNeteaseFacadeCaches();
       const snapshot = mapNeteaseAuthStatus(await logoutNativeNetease());
       if (snapshot) {
         emitPlatformConnectorAuthChanged(snapshot);

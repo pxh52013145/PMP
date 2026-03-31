@@ -56,6 +56,7 @@ export {
 } from './bilibiliFacade';
 
 export {
+  clearNeteaseFacadeCaches,
   listNeteasePlaylistTracks,
   listNeteaseRecommendedPlaylists,
   listNeteaseRecommendedSongs,

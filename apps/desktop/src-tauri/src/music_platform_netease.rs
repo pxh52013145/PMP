@@ -5,9 +5,9 @@ use base64::{
     Engine as _,
 };
 use image::Luma;
-use keyring::Entry;
+use keyring::{Entry, Error as KeyringError};
 use num_bigint::BigUint;
-use once_cell::sync::Lazy;
+use once_cell::sync::{Lazy, OnceCell};
 use qrcode::QrCode;
 use rand::Rng;
 use reqwest::{
@@ -57,6 +57,8 @@ const NETEASE_QR_URL_BASE: &str = "https://music.163.com/login?codekey=";
 
 const NETEASE_KEYRING_SERVICE: &str = "pixel-matrix-player.netease";
 const NETEASE_KEYRING_TOKEN_REF_PREFIX: &str = "keyring://netease-cookie/";
+const NETEASE_DEBUG_LOG_FILE_NAME: &str = "netease-auth.log";
+const NETEASE_DEBUG_LOG_MAX_BYTES: u64 = 512 * 1024;
 
 const NETEASE_QR_KEY_API: &str = "/api/login/qrcode/unikey";
 const NETEASE_QR_CHECK_API: &str = "/api/login/qrcode/client/login";
@@ -201,6 +203,9 @@ static QR_SESSIONS: Lazy<Mutex<HashMap<String, QrSessionState>>> =
 static AUTH_COOKIE_STATE: Lazy<Mutex<Option<AuthCookieState>>> = Lazy::new(|| Mutex::new(None));
 static ANONYMOUS_COOKIE_STATE: Lazy<Mutex<Option<AuthCookieState>>> =
     Lazy::new(|| Mutex::new(None));
+static NETEASE_DEBUG_LOG_PATH: OnceCell<PathBuf> = OnceCell::new();
+static NETEASE_DEBUG_LOG_INITIALIZED: OnceCell<()> = OnceCell::new();
+static NETEASE_DEBUG_LOG_WRITE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 static NETEASE_SESSION_DEVICE_ID: Lazy<String> = Lazy::new(|| generate_random_hex_string(52, true));
 static NETEASE_SESSION_WNMCID: Lazy<String> = Lazy::new(generate_wnmcid);
 static NETEASE_SESSION_NTES_NUID: Lazy<String> =
@@ -213,6 +218,64 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn resolve_netease_debug_log_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path_resolver()
+        .app_data_dir()
+        .ok_or_else(|| "Failed to resolve app data directory for Netease debug log".to_string())?;
+    let dir = app_data_dir.join("debug").join("music-platform");
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("Failed to create Netease debug log directory: {error}"))?;
+    Ok(dir.join(NETEASE_DEBUG_LOG_FILE_NAME))
+}
+
+fn init_netease_debug_logging(app: &AppHandle) {
+    match resolve_netease_debug_log_path(app) {
+        Ok(path) => {
+            let _ = NETEASE_DEBUG_LOG_PATH.set(path.clone());
+            if NETEASE_DEBUG_LOG_INITIALIZED.set(()).is_ok() {
+                netease_log(
+                    "debug",
+                    format!("persistent log path={}", path.to_string_lossy()),
+                );
+            }
+        }
+        Err(_error) => {}
+    }
+}
+
+fn netease_log(scope: &str, message: impl AsRef<str>) {
+    let formatted = format!("[music_platform_netease][{scope}] {}", message.as_ref());
+
+    let Some(path) = NETEASE_DEBUG_LOG_PATH.get() else {
+        return;
+    };
+
+    let Ok(_guard) = NETEASE_DEBUG_LOG_WRITE_LOCK.lock() else {
+        return;
+    };
+
+    if let Ok(metadata) = fs::metadata(path) {
+        if metadata.len() >= NETEASE_DEBUG_LOG_MAX_BYTES {
+            let _ = fs::write(
+                path,
+                format!(
+                    "[{}] [music_platform_netease][debug] log truncated after reaching {} bytes\n",
+                    now_ms(),
+                    NETEASE_DEBUG_LOG_MAX_BYTES
+                ),
+            );
+        }
+    }
+
+    match fs::OpenOptions::new().create(true).append(true).open(path) {
+        Ok(mut file) => {
+            let _ = writeln!(file, "[{}] {formatted}", now_ms());
+        }
+        Err(_error) => {}
+    }
 }
 
 fn lock_qr_sessions() -> Result<MutexGuard<'static, HashMap<String, QrSessionState>>, String> {
@@ -282,7 +345,6 @@ fn normalize_url(raw: &str) -> String {
 
 fn build_http_client() -> Result<Client, String> {
     Client::builder()
-        .user_agent("PixelMatrixPlayer/1.0 (+https://github.com/pxh52013145/PMP)")
         .connect_timeout(Duration::from_secs(8))
         .timeout(Duration::from_secs(30))
         .build()
@@ -675,8 +737,143 @@ fn merge_cookie_header_values(primary: Option<&str>, secondary: Option<&str>) ->
     }
 }
 
+fn summarize_cookie_header(cookie_header: Option<&str>) -> String {
+    let Some(cookie_header) = cookie_header
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return "present=false".to_string();
+    };
+
+    let pairs = parse_cookie_pairs(cookie_header);
+    format!(
+        "present=true pair_count={} has_music_a={} has_music_u={} has_csrf={} has_device_id={} len={}",
+        pairs.len(),
+        pairs.contains_key("MUSIC_A"),
+        pairs.contains_key("MUSIC_U"),
+        pairs.contains_key("__csrf"),
+        pairs.contains_key("sDeviceId"),
+        cookie_header.len()
+    )
+}
+
+fn summarize_token_ref(token_ref: Option<&str>) -> String {
+    let Some(token_ref) = token_ref.map(str::trim).filter(|value| !value.is_empty()) else {
+        return "present=false".to_string();
+    };
+
+    let account_id = parse_keyring_account_name_from_token_ref(token_ref)
+        .and_then(|account_name| decode_keyring_account_name(&account_name).or(Some(account_name)));
+    format!(
+        "present=true account={}",
+        account_id
+            .as_deref()
+            .map(redact_identifier)
+            .unwrap_or_else(|| "invalid".to_string())
+    )
+}
+
+fn redact_identifier(value: &str) -> String {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return "-".to_string();
+    }
+
+    let total = normalized.chars().count();
+    if total <= 8 {
+        return normalized.to_string();
+    }
+
+    let prefix: String = normalized.chars().take(4).collect();
+    let suffix: String = normalized
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{prefix}...{suffix}")
+}
+
+fn encode_keyring_account_name(account_id: &str) -> Option<String> {
+    let normalized = account_id.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+    Some(URL_SAFE_NO_PAD.encode(normalized.as_bytes()))
+}
+
+fn build_keyring_token_ref(account_name: &str) -> String {
+    format!("{NETEASE_KEYRING_TOKEN_REF_PREFIX}{account_name}")
+}
+
+fn parse_keyring_account_name_from_token_ref(token_ref: &str) -> Option<String> {
+    let normalized = token_ref.trim();
+    if !normalized.starts_with(NETEASE_KEYRING_TOKEN_REF_PREFIX) {
+        return None;
+    }
+
+    let account_name = &normalized[NETEASE_KEYRING_TOKEN_REF_PREFIX.len()..];
+    let account_name = account_name.trim();
+    if account_name.is_empty() {
+        return None;
+    }
+
+    Some(account_name.to_string())
+}
+
+fn decode_keyring_account_name(account_name: &str) -> Option<String> {
+    URL_SAFE_NO_PAD
+        .decode(account_name.as_bytes())
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map(|decoded| decoded.trim().to_string())
+        .filter(|decoded| !decoded.is_empty())
+}
+
+fn sanitize_auth_cookie_header_for_storage(cookie_header: &str) -> Result<String, String> {
+    let pairs = parse_cookie_pairs(cookie_header);
+    let mut filtered: HashMap<String, String> = HashMap::new();
+
+    // Persist only the minimal auth cookie set. The request layer reconstructs
+    // transient device/platform cookies per request, so storing all MUSIC_*
+    // variants only bloats the secret and exceeds Windows Credential Manager limits.
+    if let Some(value) = pairs.get("MUSIC_U").cloned() {
+        filtered.insert("MUSIC_U".to_string(), value);
+    } else if let Some(value) = pairs.get("MUSIC_A").cloned() {
+        filtered.insert("MUSIC_A".to_string(), value);
+    } else {
+        return Err(
+            "Netease auth cookie header did not contain MUSIC_U or MUSIC_A for persistence"
+                .to_string(),
+        );
+    }
+
+    if let Some(value) = pairs.get("__csrf").cloned() {
+        filtered.insert("__csrf".to_string(), value);
+    }
+
+    let normalized = build_cookie_header_from_pairs(&filtered);
+    let normalized = normalized.trim();
+    if normalized.is_empty() {
+        return Err(
+            "Netease auth cookie header is empty after persistence sanitization".to_string(),
+        );
+    }
+
+    Ok(normalized.to_string())
+}
+
 fn ensure_anonymous_cookie_header(client: &Client) -> Result<String, String> {
     if let Some(cookie_header) = get_anonymous_cookie_header() {
+        netease_log(
+            "anonymous_cookie",
+            format!(
+                "reusing cached anonymous cookie {}",
+                summarize_cookie_header(Some(cookie_header.as_str()))
+            ),
+        );
         return Ok(cookie_header);
     }
 
@@ -701,6 +898,13 @@ fn ensure_anonymous_cookie_header(client: &Client) -> Result<String, String> {
     let normalized = merge_cookie_header_values(Some(cookie_header.as_str()), None)
         .ok_or_else(|| "Netease anonymous cookie header is empty".to_string())?;
     set_anonymous_cookie_state(normalized.clone());
+    netease_log(
+        "anonymous_cookie",
+        format!(
+            "registered anonymous cookie {}",
+            summarize_cookie_header(Some(normalized.as_str()))
+        ),
+    );
     Ok(normalized)
 }
 
@@ -832,8 +1036,9 @@ fn request_netease_weapi_json(
     cookie_header: Option<&str>,
     context: &str,
 ) -> Result<NeteaseApiResponse, String> {
-    let effective_cookie_header = if let Some(cookie_header) =
-        cookie_header.map(str::trim).filter(|value| !value.is_empty())
+    let effective_cookie_header = if let Some(cookie_header) = cookie_header
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     {
         Some(cookie_header.to_string())
     } else if api_path == NETEASE_REGISTER_ANONYMOUS_API {
@@ -891,8 +1096,9 @@ fn request_netease_eapi_json(
     cookie_header: Option<&str>,
     context: &str,
 ) -> Result<NeteaseApiResponse, String> {
-    let effective_cookie_header = if let Some(cookie_header) =
-        cookie_header.map(str::trim).filter(|value| !value.is_empty())
+    let effective_cookie_header = if let Some(cookie_header) = cookie_header
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     {
         Some(cookie_header.to_string())
     } else {
@@ -1002,59 +1208,110 @@ fn to_u64(value: Option<&Value>) -> Option<u64> {
     value.and_then(Value::as_u64)
 }
 
-fn read_cookie_header_from_keyring_token_ref(token_ref: &str) -> Option<String> {
-    let account_id = token_ref
-        .strip_prefix(NETEASE_KEYRING_TOKEN_REF_PREFIX)?
-        .trim();
-    if account_id.is_empty() {
-        return None;
+fn read_cookie_header_from_keyring_token_ref(token_ref: &str) -> Result<Option<String>, String> {
+    let Some(account_name) = parse_keyring_account_name_from_token_ref(token_ref) else {
+        return Ok(None);
+    };
+    if account_name.is_empty() {
+        return Ok(None);
     }
 
-    let entry = Entry::new(NETEASE_KEYRING_SERVICE, account_id).ok()?;
-    let cookie = entry.get_password().ok()?;
+    let entry = Entry::new(NETEASE_KEYRING_SERVICE, &account_name)
+        .map_err(|error| format!("Failed to create Netease keyring entry: {error}"))?;
+    let cookie = match entry.get_password() {
+        Ok(value) => value,
+        Err(KeyringError::NoEntry) => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read Netease credential from keyring: {error}"
+            ))
+        }
+    };
     let normalized = cookie.trim();
     if normalized.is_empty() {
-        return None;
+        return Ok(None);
     }
 
-    Some(normalized.to_string())
+    Ok(Some(normalized.to_string()))
 }
 
 fn write_cookie_header_to_keyring(account_id: &str, cookie_header: &str) -> Result<String, String> {
-    let normalized_account_id = account_id.trim();
     let normalized_cookie = cookie_header.trim();
-    if normalized_account_id.is_empty() {
-        return Err("Netease keyring account id is empty".to_string());
-    }
     if normalized_cookie.is_empty() {
         return Err("Netease cookie header is empty".to_string());
     }
+    let account_name = encode_keyring_account_name(account_id)
+        .ok_or_else(|| "Netease keyring account id is empty".to_string())?;
 
-    let entry = Entry::new(NETEASE_KEYRING_SERVICE, normalized_account_id)
+    let entry = Entry::new(NETEASE_KEYRING_SERVICE, &account_name)
         .map_err(|error| format!("Failed to create Netease keyring entry: {error}"))?;
     entry
         .set_password(normalized_cookie)
         .map_err(|error| format!("Failed to store Netease credential in keyring: {error}"))?;
 
-    Ok(format!(
-        "{NETEASE_KEYRING_TOKEN_REF_PREFIX}{normalized_account_id}"
-    ))
+    Ok(build_keyring_token_ref(&account_name))
 }
 
-fn delete_cookie_header_from_keyring_token_ref(token_ref: &str) {
-    let Some(account_id) = token_ref
-        .strip_prefix(NETEASE_KEYRING_TOKEN_REF_PREFIX)
-        .map(str::trim)
-    else {
-        return;
+fn delete_cookie_header_from_keyring_token_ref(token_ref: &str) -> Result<(), String> {
+    let Some(account_name) = parse_keyring_account_name_from_token_ref(token_ref) else {
+        return Ok(());
     };
 
-    if account_id.is_empty() {
-        return;
+    if account_name.is_empty() {
+        return Ok(());
     }
 
-    if let Ok(entry) = Entry::new(NETEASE_KEYRING_SERVICE, account_id) {
-        let _ = entry.delete_password();
+    let entry = Entry::new(NETEASE_KEYRING_SERVICE, &account_name)
+        .map_err(|error| format!("Failed to create Netease keyring entry: {error}"))?;
+    match entry.delete_password() {
+        Ok(_) | Err(KeyringError::NoEntry) => Ok(()),
+        Err(error) => Err(format!(
+            "Failed to delete Netease credential from keyring: {error}"
+        )),
+    }
+}
+
+fn restore_cookie_header_from_token_ref(
+    token_ref: Option<&str>,
+    scope: &str,
+) -> Result<Option<String>, String> {
+    let Some(token_ref) = token_ref.map(str::trim).filter(|value| !value.is_empty()) else {
+        netease_log(scope, "no token_ref present");
+        return Ok(None);
+    };
+
+    match read_cookie_header_from_keyring_token_ref(token_ref) {
+        Ok(Some(cookie_header)) => {
+            netease_log(
+                scope,
+                format!(
+                    "loaded cookie from keyring token_ref={} {}",
+                    summarize_token_ref(Some(token_ref)),
+                    summarize_cookie_header(Some(cookie_header.as_str()))
+                ),
+            );
+            Ok(Some(cookie_header))
+        }
+        Ok(None) => {
+            netease_log(
+                scope,
+                format!(
+                    "no cookie stored in keyring token_ref={}",
+                    summarize_token_ref(Some(token_ref))
+                ),
+            );
+            Ok(None)
+        }
+        Err(error) => {
+            netease_log(
+                scope,
+                format!(
+                    "failed to read keyring token_ref={} error={error}",
+                    summarize_token_ref(Some(token_ref))
+                ),
+            );
+            Err(error)
+        }
     }
 }
 
@@ -1159,17 +1416,15 @@ fn ensure_auth_context(app: &AppHandle) -> Result<AuthContext, String> {
         return Err("Netease connector is not authorized".to_string());
     }
 
-    let cookie_header = get_auth_cookie_header()
-        .or_else(|| {
-            account
-                .token_ref
-                .as_deref()
-                .and_then(read_cookie_header_from_keyring_token_ref)
-        })
-        .ok_or_else(|| {
+    let cookie_header = if let Some(cookie_header) = get_auth_cookie_header() {
+        cookie_header
+    } else {
+        restore_cookie_header_from_token_ref(account.token_ref.as_deref(), "ensure_auth_context")?
+            .ok_or_else(|| {
             "Netease login token is unavailable in current session, please scan QR again"
                 .to_string()
-        })?;
+        })?
+    };
 
     set_auth_cookie_state(cookie_header.clone());
 
@@ -1326,6 +1581,8 @@ fn download_song_to_cache(
     let cache_dir = ensure_playback_cache_dir(app)?;
     let response = client
         .get(download_url)
+        .header(USER_AGENT, NETEASE_WEAPI_USER_AGENT)
+        .header(REFERER, NETEASE_DOMAIN)
         .send()
         .map_err(|error| format!("Failed to download Netease playback stream: {error}"))?;
 
@@ -1364,29 +1621,49 @@ fn download_song_to_cache(
 }
 
 pub fn init(app: &AppHandle) -> Result<(), String> {
+    init_netease_debug_logging(app);
     ensure_connector(app)?;
+    netease_log("init", "starting connector init");
 
     if let Some(account) = crate::music_library_db::get_latest_connector_account_by_connector_id(
         app,
         NETEASE_CONNECTOR_ID,
     )? {
+        netease_log(
+            "init",
+            format!(
+                "found connector account id={} auth_state={} token_ref={}",
+                redact_identifier(&account.id),
+                account.auth_state,
+                summarize_token_ref(account.token_ref.as_deref())
+            ),
+        );
         if account.auth_state.eq_ignore_ascii_case("authorized") {
-            if let Some(cookie_header) = account
-                .token_ref
-                .as_deref()
-                .and_then(read_cookie_header_from_keyring_token_ref)
-            {
-                set_auth_cookie_state(cookie_header);
+            match restore_cookie_header_from_token_ref(account.token_ref.as_deref(), "init") {
+                Ok(Some(cookie_header)) => {
+                    set_auth_cookie_state(cookie_header);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    netease_log(
+                        "init",
+                        format!("failed to restore persisted auth cookie during init: {error}"),
+                    );
+                }
             }
         }
+    } else {
+        netease_log("init", "no persisted connector account found");
     }
 
     Ok(())
 }
 
 pub fn qr_generate(app: &AppHandle) -> Result<NeteaseQrCodeSession, String> {
+    init_netease_debug_logging(app);
     ensure_connector(app)?;
     cleanup_expired_qr_sessions(now_ms());
+    netease_log("qr_generate", "starting qr session generation");
 
     let client = build_http_client()?;
     let key_response = request_netease_eapi_json(
@@ -1436,6 +1713,17 @@ pub fn qr_generate(app: &AppHandle) -> Result<NeteaseQrCodeSession, String> {
         );
     }
 
+    netease_log(
+        "qr_generate",
+        format!(
+            "generated session_id={} qr_key={} expires_at_ms={} response_cookie={}",
+            redact_identifier(&session_id),
+            redact_identifier(&qr_key),
+            expires_at_ms,
+            summarize_cookie_header(key_response.cookie_header.as_deref())
+        ),
+    );
+
     Ok(NeteaseQrCodeSession {
         connector_id: NETEASE_CONNECTOR_ID.to_string(),
         session_id,
@@ -1448,6 +1736,7 @@ pub fn qr_generate(app: &AppHandle) -> Result<NeteaseQrCodeSession, String> {
 }
 
 pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult, String> {
+    init_netease_debug_logging(app);
     ensure_connector(app)?;
     cleanup_expired_qr_sessions(now_ms());
 
@@ -1456,19 +1745,57 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
         return Err("Netease QR poll requires sessionId".to_string());
     }
 
+    netease_log(
+        "qr_poll",
+        format!(
+            "poll requested session_id={}",
+            redact_identifier(normalized_session_id)
+        ),
+    );
+
     let session = {
         let sessions = lock_qr_sessions()?;
         sessions
             .get(normalized_session_id)
             .cloned()
-            .ok_or_else(|| format!("Netease QR session not found: {normalized_session_id}"))?
+            .ok_or_else(|| {
+                let message = format!("Netease QR session not found: {normalized_session_id}");
+                netease_log(
+                    "qr_poll",
+                    format!(
+                        "session lookup failed session_id={}",
+                        redact_identifier(normalized_session_id)
+                    ),
+                );
+                message
+            })?
     };
 
     let now = now_ms();
+    netease_log(
+        "qr_poll",
+        format!(
+            "session loaded session_id={} qr_key={} now_ms={} expires_at_ms={} stored_cookie={}",
+            redact_identifier(normalized_session_id),
+            redact_identifier(&session.qr_key),
+            now,
+            session.expires_at_ms,
+            summarize_cookie_header(session.cookie_header.as_deref())
+        ),
+    );
     if now >= session.expires_at_ms {
         if let Ok(mut sessions) = lock_qr_sessions() {
             sessions.remove(normalized_session_id);
         }
+        netease_log(
+            "qr_poll",
+            format!(
+                "session expired locally session_id={} now_ms={} expires_at_ms={}",
+                redact_identifier(normalized_session_id),
+                now,
+                session.expires_at_ms
+            ),
+        );
         return Ok(NeteaseQrPollResult {
             connector_id: NETEASE_CONNECTOR_ID.to_string(),
             session_id: normalized_session_id.to_string(),
@@ -1507,6 +1834,22 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
         payload_cookie_header.as_deref(),
     );
 
+    netease_log(
+        "qr_poll",
+        format!(
+            "response session_id={} state_code={} state={} auth_state={} terminal={} message={} response_cookie={} payload_cookie={} merged_cookie={}",
+            redact_identifier(normalized_session_id),
+            state_code,
+            state,
+            auth_state,
+            terminal,
+            state_message,
+            summarize_cookie_header(response_cookie_header.as_deref()),
+            summarize_cookie_header(payload_cookie_header.as_deref()),
+            summarize_cookie_header(cookie_header.as_deref())
+        ),
+    );
+
     if !terminal {
         let next_cookie_header = response
             .cookie_header
@@ -1517,15 +1860,42 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
                 entry.cookie_header = next_cookie_header;
             }
         }
+        netease_log(
+            "qr_poll",
+            format!(
+                "updated in-memory qr session cookie session_id={} next_cookie={}",
+                redact_identifier(normalized_session_id),
+                summarize_cookie_header(
+                    response
+                        .cookie_header
+                        .as_deref()
+                        .or(session.cookie_header.as_deref())
+                )
+            ),
+        );
     }
 
     let account_uid = if auth_state == "authorized" {
         if let Some(cookie_header) = cookie_header {
+            let persisted_cookie_header = sanitize_auth_cookie_header_for_storage(&cookie_header)?;
+            netease_log(
+                "qr_poll",
+                format!(
+                    "authorization confirmed session_id={} cookie={} persisted_cookie={}",
+                    redact_identifier(normalized_session_id),
+                    summarize_cookie_header(Some(cookie_header.as_str())),
+                    summarize_cookie_header(Some(persisted_cookie_header.as_str()))
+                ),
+            );
             let account_uid = match fetch_login_status_payload(&client, &cookie_header) {
                 Ok(profile_payload) => extract_account_uid_from_login_status(&profile_payload),
                 Err(error) => {
-                    eprintln!(
-                        "[music_platform_netease] QR login authorized but login status lookup failed: {error}"
+                    netease_log(
+                        "qr_poll",
+                        format!(
+                            "authorized session but login status lookup failed session_id={} error={error}",
+                            redact_identifier(normalized_session_id)
+                        ),
                     );
                     None
                 }
@@ -1538,8 +1908,31 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
                     .filter(|value| !value.trim().is_empty())
                     .unwrap_or(normalized_session_id)
             );
-            let token_ref = write_cookie_header_to_keyring(&account_id, &cookie_header)?;
-            set_auth_cookie_state(cookie_header);
+            let token_ref =
+                match write_cookie_header_to_keyring(&account_id, &persisted_cookie_header) {
+                    Ok(token_ref) => token_ref,
+                    Err(error) => {
+                        netease_log(
+                            "qr_poll",
+                            format!(
+                                "failed to persist auth cookie account_id={} error={error}",
+                                redact_identifier(&account_id)
+                            ),
+                        );
+                        return Err(error);
+                    }
+                };
+            netease_log(
+                "qr_poll",
+                format!(
+                    "stored auth cookie account_id={} token_ref={} account_uid={} cookie={}",
+                    redact_identifier(&account_id),
+                    summarize_token_ref(Some(token_ref.as_str())),
+                    account_uid.as_deref().unwrap_or("-"),
+                    summarize_cookie_header(Some(persisted_cookie_header.as_str()))
+                ),
+            );
+            set_auth_cookie_state(persisted_cookie_header);
 
             let _ = crate::music_library_db::upsert_connector_account(
                 app,
@@ -1558,6 +1951,13 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
 
             account_uid
         } else {
+            netease_log(
+                "qr_poll",
+                format!(
+                    "authorized session missing auth cookie session_id={}",
+                    redact_identifier(normalized_session_id)
+                ),
+            );
             return Err("Netease QR login succeeded but no auth cookie was returned".to_string());
         }
     } else {
@@ -1568,6 +1968,15 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
         if let Ok(mut sessions) = lock_qr_sessions() {
             sessions.remove(normalized_session_id);
         }
+        netease_log(
+            "qr_poll",
+            format!(
+                "removed terminal qr session session_id={} state={} auth_state={}",
+                redact_identifier(normalized_session_id),
+                state,
+                auth_state
+            ),
+        );
     }
 
     Ok(NeteaseQrPollResult {
@@ -1583,13 +1992,16 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
 }
 
 pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
+    init_netease_debug_logging(app);
     ensure_connector(app)?;
+    netease_log("get_auth_status", "reading current auth status");
 
     let account = crate::music_library_db::get_latest_connector_account_by_connector_id(
         app,
         NETEASE_CONNECTOR_ID,
     )?;
     let Some(account) = account else {
+        netease_log("get_auth_status", "no connector account found");
         return Ok(NeteaseAuthStatus {
             connector_id: NETEASE_CONNECTOR_ID.to_string(),
             auth_state: "unauthorized".to_string(),
@@ -1611,13 +2023,42 @@ pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
     let mut availability_message = None;
     let mut updated_at_ms = Some(account.updated_at_ms);
 
+    netease_log(
+        "get_auth_status",
+        format!(
+            "account id={} auth_state={} in_memory_cookie={} token_ref={}",
+            redact_identifier(&account.id),
+            auth_state,
+            summarize_cookie_header(get_auth_cookie_header().as_deref()),
+            summarize_token_ref(account.token_ref.as_deref())
+        ),
+    );
+
     if auth_state == "authorized" {
-        let cookie_header = get_auth_cookie_header().or_else(|| {
-            account
-                .token_ref
-                .as_deref()
-                .and_then(read_cookie_header_from_keyring_token_ref)
-        });
+        let mut keyring_restore_failed = false;
+        let cookie_header = if let Some(cookie_header) = get_auth_cookie_header() {
+            Some(cookie_header)
+        } else {
+            match restore_cookie_header_from_token_ref(
+                account.token_ref.as_deref(),
+                "get_auth_status",
+            ) {
+                Ok(cookie_header) => cookie_header,
+                Err(error) => {
+                    availability = Some(AUTH_AVAILABILITY_DEGRADED.to_string());
+                    availability_message = Some(error.clone());
+                    keyring_restore_failed = true;
+                    netease_log(
+                        "get_auth_status",
+                        format!(
+                            "degrading availability because keyring restore failed id={} error={error}",
+                            redact_identifier(&account.id)
+                        ),
+                    );
+                    None
+                }
+            }
+        };
 
         if let Some(cookie_header) = cookie_header {
             set_auth_cookie_state(cookie_header.clone());
@@ -1631,6 +2072,15 @@ pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
 
                     if status_code == 200 {
                         availability = Some(AUTH_AVAILABILITY_AVAILABLE.to_string());
+                        netease_log(
+                            "get_auth_status",
+                            format!(
+                                "login status ok id={} status_code={} cookie={}",
+                                redact_identifier(&account.id),
+                                status_code,
+                                summarize_cookie_header(Some(cookie_header.as_str()))
+                            ),
+                        );
                         if let Some(next_uid) = extract_account_uid_from_login_status(&payload) {
                             if account_uid.as_deref() != Some(next_uid.as_str()) {
                                 account_uid = Some(next_uid.clone());
@@ -1660,19 +2110,42 @@ pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
                                     "Netease login status failed with code {status_code}"
                                 ))
                             });
+                        netease_log(
+                            "get_auth_status",
+                            format!(
+                                "login status reported unavailable id={} status_code={} message={}",
+                                redact_identifier(&account.id),
+                                status_code,
+                                availability_message.as_deref().unwrap_or("-")
+                            ),
+                        );
                     }
                 }
                 Err(error) => {
                     availability = Some(AUTH_AVAILABILITY_DEGRADED.to_string());
-                    availability_message = Some(error);
+                    availability_message = Some(error.clone());
+                    netease_log(
+                        "get_auth_status",
+                        format!(
+                            "login status request degraded id={} error={error}",
+                            redact_identifier(&account.id)
+                        ),
+                    );
                 }
             }
-        } else {
+        } else if !keyring_restore_failed {
             auth_state = "expired".to_string();
             availability = Some(AUTH_AVAILABILITY_UNAVAILABLE.to_string());
             availability_message = Some(
                 "Netease login token is unavailable in current session, please scan QR again"
                     .to_string(),
+            );
+            netease_log(
+                "get_auth_status",
+                format!(
+                    "authorized account missing cookie id={}",
+                    redact_identifier(&account.id)
+                ),
             );
         }
     } else if auth_state == "pending" {
@@ -1698,14 +2171,33 @@ pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
 }
 
 pub fn logout(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
+    init_netease_debug_logging(app);
     ensure_connector(app)?;
+    netease_log("logout", "starting logout");
 
     if let Some(account) = crate::music_library_db::get_latest_connector_account_by_connector_id(
         app,
         NETEASE_CONNECTOR_ID,
     )? {
         if let Some(token_ref) = account.token_ref.as_deref() {
-            delete_cookie_header_from_keyring_token_ref(token_ref);
+            match delete_cookie_header_from_keyring_token_ref(token_ref) {
+                Ok(_) => netease_log(
+                    "logout",
+                    format!(
+                        "deleted keyring credential id={} token_ref={}",
+                        redact_identifier(&account.id),
+                        summarize_token_ref(Some(token_ref))
+                    ),
+                ),
+                Err(error) => netease_log(
+                    "logout",
+                    format!(
+                        "failed to delete keyring credential id={} token_ref={} error={error}",
+                        redact_identifier(&account.id),
+                        summarize_token_ref(Some(token_ref))
+                    ),
+                ),
+            }
         }
 
         let _ = crate::music_library_db::upsert_connector_account(
@@ -1728,6 +2220,7 @@ pub fn logout(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
         sessions.clear();
     }
     clear_auth_cookie_state();
+    netease_log("logout", "cleared in-memory auth and qr sessions");
 
     get_auth_status(app)
 }
@@ -2049,4 +2542,51 @@ pub fn prepare_cached_playback(
         duration_seconds,
         song_id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_auth_cookie_prefers_music_u_and_csrf_only() {
+        let sanitized = sanitize_auth_cookie_header_for_storage(
+            "MUSIC_U=auth-token; MUSIC_T=drop-me; __csrf=csrf-token; WNMCID=drop-too",
+        )
+        .expect("expected sanitized cookie");
+
+        let pairs = parse_cookie_pairs(&sanitized);
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs.get("MUSIC_U").map(String::as_str), Some("auth-token"));
+        assert_eq!(pairs.get("__csrf").map(String::as_str), Some("csrf-token"));
+        assert!(!pairs.contains_key("MUSIC_T"));
+        assert!(!pairs.contains_key("WNMCID"));
+    }
+
+    #[test]
+    fn sanitize_auth_cookie_falls_back_to_music_a() {
+        let sanitized = sanitize_auth_cookie_header_for_storage(
+            "MUSIC_A=anon-token; __csrf=csrf-token; MUSIC_R_T=drop-me",
+        )
+        .expect("expected sanitized cookie");
+
+        let pairs = parse_cookie_pairs(&sanitized);
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs.get("MUSIC_A").map(String::as_str), Some("anon-token"));
+        assert_eq!(pairs.get("__csrf").map(String::as_str), Some("csrf-token"));
+        assert!(!pairs.contains_key("MUSIC_R_T"));
+    }
+
+    #[test]
+    fn keyring_token_ref_round_trip_preserves_account_id() {
+        let account_id = "connector.platform.netease::123456";
+        let account_name = encode_keyring_account_name(account_id).expect("encoded account name");
+        let token_ref = build_keyring_token_ref(&account_name);
+        let parsed_account_name =
+            parse_keyring_account_name_from_token_ref(&token_ref).expect("parsed token ref");
+        let decoded_account_id =
+            decode_keyring_account_name(&parsed_account_name).expect("decoded account name");
+
+        assert_eq!(decoded_account_id, account_id);
+    }
 }

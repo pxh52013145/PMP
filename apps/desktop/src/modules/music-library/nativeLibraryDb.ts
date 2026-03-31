@@ -3007,7 +3007,12 @@ export async function resolveNativeBilibiliLyricLocator(
 
 export async function generateNativeNeteaseQrCodeSession(): Promise<NativeNeteaseQrCodeSession | null> {
   if (!isTauriRuntime()) return null;
-  const raw = await invoke<unknown>('music_library_netease_qr_generate');
+  const raw = await invokeWithTelemetry<unknown>('music_library_netease_qr_generate', undefined, {
+    moduleId: 'music-library',
+    component: 'nativeLibraryDb',
+    event: 'music-library.netease.qr-generate',
+    includeResultSize: true,
+  });
   return ensureNeteaseQrCodeSession(raw);
 }
 
@@ -3018,21 +3023,46 @@ export async function pollNativeNeteaseQrCodeSession(
   const normalizedSessionId = sessionId.trim();
   if (!normalizedSessionId) return null;
 
-  const raw = await invoke<unknown>('music_library_netease_qr_poll', {
-    sessionId: normalizedSessionId,
-  });
+  const raw = await invokeWithTelemetry<unknown>(
+    'music_library_netease_qr_poll',
+    {
+      sessionId: normalizedSessionId,
+    },
+    {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.netease.qr-poll',
+      includeResultSize: true,
+    }
+  );
   return ensureNeteaseQrPollResult(raw);
 }
 
 export async function getNativeNeteaseAuthStatus(): Promise<NativeNeteaseAuthStatus | null> {
   if (!isTauriRuntime()) return null;
-  const raw = await invoke<unknown>('music_library_netease_get_auth_status').catch(() => null);
+  const raw = await invokeWithTelemetry<unknown>(
+    'music_library_netease_get_auth_status',
+    undefined,
+    {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.netease.get-auth-status',
+      includeResultSize: true,
+      failureLevel: 'warn',
+    }
+  ).catch(() => null);
   return ensureNeteaseAuthStatus(raw);
 }
 
 export async function logoutNativeNetease(): Promise<NativeNeteaseAuthStatus | null> {
   if (!isTauriRuntime()) return null;
-  const raw = await invoke<unknown>('music_library_netease_logout').catch(() => null);
+  const raw = await invokeWithTelemetry<unknown>('music_library_netease_logout', undefined, {
+    moduleId: 'music-library',
+    component: 'nativeLibraryDb',
+    event: 'music-library.netease.logout',
+    includeResultSize: true,
+    failureLevel: 'warn',
+  }).catch(() => null);
   return ensureNeteaseAuthStatus(raw);
 }
 

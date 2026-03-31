@@ -181,7 +181,7 @@ export function useNeteaseWorkspaceAdapterController(
     [selectedUserPlaylistId, userPlaylists]
   );
 
-  const loadCollections = useCallback(async () => {
+  const loadCollections = useCallback(async (forceRefresh = false) => {
     if (!neteaseAuthorized) {
       setUserPlaylists([]);
       setRecommendedPlaylists([]);
@@ -192,8 +192,8 @@ export function useNeteaseWorkspaceAdapterController(
     setCollectionError(null);
     try {
       const [nextUserPlaylists, nextRecommendedPlaylists] = await Promise.all([
-        listNeteaseUserPlaylists(),
-        listNeteaseRecommendedPlaylists(),
+        listNeteaseUserPlaylists({ forceRefresh }),
+        listNeteaseRecommendedPlaylists({ forceRefresh }),
       ]);
       setUserPlaylists(nextUserPlaylists);
       setRecommendedPlaylists(nextRecommendedPlaylists);
@@ -204,7 +204,7 @@ export function useNeteaseWorkspaceAdapterController(
     }
   }, [neteaseAuthorized, t]);
 
-  const loadRecommendedResources = useCallback(async () => {
+  const loadRecommendedResources = useCallback(async (forceRefresh = false) => {
     if (!neteaseAuthorized) {
       setResourcePage(null);
       return;
@@ -215,7 +215,7 @@ export function useNeteaseWorkspaceAdapterController(
     setResourceInfo(null);
 
     try {
-      const page = await listNeteaseRecommendedSongs();
+      const page = await listNeteaseRecommendedSongs({ forceRefresh });
       setSelectedUserPlaylistId(null);
       setResourcePage(page);
     } catch (error) {
@@ -226,10 +226,10 @@ export function useNeteaseWorkspaceAdapterController(
   }, [neteaseAuthorized, t]);
 
   const loadUserPlaylistResources = useCallback(
-    async (playlistId: string) => {
+    async (playlistId: string, forceRefresh = false) => {
       const normalizedPlaylistId = playlistId.trim();
       if (!normalizedPlaylistId) {
-        await loadRecommendedResources();
+        await loadRecommendedResources(forceRefresh);
         return;
       }
       if (!neteaseAuthorized) {
@@ -242,7 +242,7 @@ export function useNeteaseWorkspaceAdapterController(
       setResourceInfo(null);
 
       try {
-        const page = await listNeteasePlaylistTracks(normalizedPlaylistId);
+        const page = await listNeteasePlaylistTracks(normalizedPlaylistId, { forceRefresh });
         setSelectedUserPlaylistId(normalizedPlaylistId);
         setResourcePage(page);
       } catch (error) {
@@ -255,10 +255,10 @@ export function useNeteaseWorkspaceAdapterController(
   );
 
   const runSearch = useCallback(
-    async (keyword: string, pageNum = 1, append = false) => {
+    async (keyword: string, pageNum = 1, append = false, forceRefresh = false) => {
       const normalizedKeyword = keyword.trim();
       if (!normalizedKeyword) {
-        await loadRecommendedResources();
+        await loadRecommendedResources(forceRefresh);
         return;
       }
       if (!neteaseAuthorized) {
@@ -275,6 +275,7 @@ export function useNeteaseWorkspaceAdapterController(
           keyword: normalizedKeyword,
           pageNum,
           pageSize: NETEASE_SEARCH_PAGE_SIZE,
+          forceRefresh,
         });
         setSelectedUserPlaylistId(null);
         setResourcePage((prev) => (append && page ? mergeSongPages(prev, page) : page));
@@ -287,19 +288,19 @@ export function useNeteaseWorkspaceAdapterController(
     [loadRecommendedResources, neteaseAuthorized, t]
   );
 
-  const refreshResources = useCallback(async () => {
+  const refreshResources = useCallback(async (forceRefresh = false) => {
     const normalizedQuery = searchQuery.trim();
     if (normalizedQuery) {
-      await runSearch(normalizedQuery);
+      await runSearch(normalizedQuery, 1, false, forceRefresh);
       return;
     }
 
     if (selectedUserPlaylistId) {
-      await loadUserPlaylistResources(selectedUserPlaylistId);
+      await loadUserPlaylistResources(selectedUserPlaylistId, forceRefresh);
       return;
     }
 
-    await loadRecommendedResources();
+    await loadRecommendedResources(forceRefresh);
   }, [loadRecommendedResources, loadUserPlaylistResources, runSearch, searchQuery, selectedUserPlaylistId]);
 
   useEffect(() => {
@@ -430,10 +431,10 @@ export function useNeteaseWorkspaceAdapterController(
       void loadRecommendedResources();
     },
     onRefreshCollections: () => {
-      void loadCollections();
+      void loadCollections(true);
     },
     onRefreshResources: () => {
-      void refreshResources();
+      void refreshResources(true);
     },
   };
 
@@ -461,7 +462,7 @@ export function useNeteaseWorkspaceAdapterController(
     t,
     formatDuration,
     onRefreshCollections: () => {
-      void loadCollections();
+      void loadCollections(true);
     },
     onShowRecommended: () => {
       setSearchQuery('');
@@ -478,7 +479,7 @@ export function useNeteaseWorkspaceAdapterController(
       void refreshResources();
     },
     onRefreshResources: () => {
-      void refreshResources();
+      void refreshResources(true);
     },
     onLoadMoreResources: () => {
       if (!resourcePage?.hasMore || resourcePage.sourceKind !== 'search') return;

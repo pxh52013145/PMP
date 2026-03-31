@@ -1,7 +1,7 @@
 import type { MagnetVariantPreset } from '../shared/magnetVariantCatalog';
 import { readBooleanProp, readIntegerProp, readStringProp } from '../shared/skinPropUtils';
 
-export const PLATFORM_LOGIN_DEFAULT_QR_AUTO_POLL_INTERVAL_MS = 1_800;
+export const PLATFORM_LOGIN_DEFAULT_QR_AUTO_POLL_INTERVAL_MS = 2_400;
 
 export interface PlatformLoginSkinProps {
   defaultConnectorId?: string;
@@ -40,7 +40,7 @@ export const PLATFORM_LOGIN_VARIANT_PRESETS = [
     props: {
       defaultConnectorId: 'bilibili',
       openAuthOnTrigger: true,
-      qrAutoPollIntervalMs: 1_200,
+      qrAutoPollIntervalMs: 1_800,
       showSelectorTitle: false,
     },
   },
