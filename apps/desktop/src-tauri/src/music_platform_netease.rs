@@ -60,6 +60,7 @@ const NETEASE_KEYRING_TOKEN_REF_PREFIX: &str = "keyring://netease-cookie/";
 
 const NETEASE_QR_KEY_API: &str = "/api/login/qrcode/unikey";
 const NETEASE_QR_CHECK_API: &str = "/api/login/qrcode/client/login";
+const NETEASE_REGISTER_ANONYMOUS_API: &str = "/api/register/anonimous";
 const NETEASE_LOGIN_STATUS_API: &str = "/api/w/nuser/account/get";
 const NETEASE_RECOMMEND_SONGS_API: &str = "/api/v3/discovery/recommend/songs";
 const NETEASE_RECOMMEND_PLAYLISTS_API: &str = "/api/v1/discovery/recommend/resource";
@@ -73,6 +74,7 @@ const QR_SESSION_TTL_MS: i64 = 180_000;
 const NETEASE_PLAYBACK_CACHE_DIR_NAME: &str = "playback-cache";
 const NETEASE_PLAYBACK_CACHE_BR: i64 = 320_000;
 const NETEASE_QR_PLATFORM: &str = "web";
+const NETEASE_ANONYMOUS_ID_XOR_KEY: &str = "3go8&$8*3*3h0k(2)2";
 
 const AUTH_AVAILABILITY_AVAILABLE: &str = "available";
 const AUTH_AVAILABILITY_DEGRADED: &str = "degraded";
@@ -174,6 +176,7 @@ pub struct NeteasePlaybackPrepared {
 struct QrSessionState {
     qr_key: String,
     expires_at_ms: i64,
+    cookie_header: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -196,6 +199,8 @@ struct NeteaseApiResponse {
 static QR_SESSIONS: Lazy<Mutex<HashMap<String, QrSessionState>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static AUTH_COOKIE_STATE: Lazy<Mutex<Option<AuthCookieState>>> = Lazy::new(|| Mutex::new(None));
+static ANONYMOUS_COOKIE_STATE: Lazy<Mutex<Option<AuthCookieState>>> =
+    Lazy::new(|| Mutex::new(None));
 static NETEASE_SESSION_DEVICE_ID: Lazy<String> = Lazy::new(|| generate_random_hex_string(52, true));
 static NETEASE_SESSION_WNMCID: Lazy<String> = Lazy::new(generate_wnmcid);
 static NETEASE_SESSION_NTES_NUID: Lazy<String> =
@@ -222,6 +227,12 @@ fn lock_auth_cookie_state() -> Result<MutexGuard<'static, Option<AuthCookieState
         .map_err(|_| "Netease auth cookie store is locked".to_string())
 }
 
+fn lock_anonymous_cookie_state() -> Result<MutexGuard<'static, Option<AuthCookieState>>, String> {
+    ANONYMOUS_COOKIE_STATE
+        .lock()
+        .map_err(|_| "Netease anonymous cookie store is locked".to_string())
+}
+
 fn cleanup_expired_qr_sessions(now: i64) {
     if let Ok(mut sessions) = lock_qr_sessions() {
         sessions.retain(|_, session| session.expires_at_ms > now);
@@ -242,6 +253,18 @@ fn clear_auth_cookie_state() {
 
 fn get_auth_cookie_header() -> Option<String> {
     lock_auth_cookie_state()
+        .ok()
+        .and_then(|state| state.as_ref().map(|cookie| cookie.cookie_header.clone()))
+}
+
+fn set_anonymous_cookie_state(cookie_header: String) {
+    if let Ok(mut state) = lock_anonymous_cookie_state() {
+        *state = Some(AuthCookieState { cookie_header });
+    }
+}
+
+fn get_anonymous_cookie_header() -> Option<String> {
+    lock_anonymous_cookie_state()
         .ok()
         .and_then(|state| state.as_ref().map(|cookie| cookie.cookie_header.clone()))
 }
@@ -430,6 +453,24 @@ fn generate_request_id() -> String {
         now_ms(),
         format!("{:04}", rng.gen_range(0..1000_u32))
     )
+}
+
+fn encode_anonymous_device_id(device_id: &str) -> String {
+    let xor_key = NETEASE_ANONYMOUS_ID_XOR_KEY.as_bytes();
+    let xored: Vec<u8> = device_id
+        .as_bytes()
+        .iter()
+        .enumerate()
+        .map(|(index, byte)| byte ^ xor_key[index % xor_key.len()])
+        .collect();
+    let digest = md5::compute(xored);
+    BASE64_STANDARD.encode(digest.0)
+}
+
+fn build_anonymous_username() -> String {
+    let device_id = NETEASE_SESSION_DEVICE_ID.as_str();
+    let encoded = encode_anonymous_device_id(device_id);
+    BASE64_STANDARD.encode(format!("{device_id} {encoded}").as_bytes())
 }
 
 fn build_netease_request_cookie_pairs(
@@ -634,6 +675,35 @@ fn merge_cookie_header_values(primary: Option<&str>, secondary: Option<&str>) ->
     }
 }
 
+fn ensure_anonymous_cookie_header(client: &Client) -> Result<String, String> {
+    if let Some(cookie_header) = get_anonymous_cookie_header() {
+        return Ok(cookie_header);
+    }
+
+    let response = request_netease_weapi_json(
+        client,
+        NETEASE_REGISTER_ANONYMOUS_API,
+        json!({
+            "username": build_anonymous_username(),
+        }),
+        None,
+        "anonymous register",
+    )?;
+
+    let cookie_header = response
+        .cookie_header
+        .clone()
+        .or_else(|| to_non_empty_string(response.body.get("cookie")))
+        .ok_or_else(|| {
+            "Netease anonymous register succeeded but did not return MUSIC_A cookie".to_string()
+        })?;
+
+    let normalized = merge_cookie_header_values(Some(cookie_header.as_str()), None)
+        .ok_or_else(|| "Netease anonymous cookie header is empty".to_string())?;
+    set_anonymous_cookie_state(normalized.clone());
+    Ok(normalized)
+}
+
 fn build_netease_weapi_url(api_path: &str) -> Result<String, String> {
     let suffix = api_path
         .trim()
@@ -762,8 +832,18 @@ fn request_netease_weapi_json(
     cookie_header: Option<&str>,
     context: &str,
 ) -> Result<NeteaseApiResponse, String> {
+    let effective_cookie_header = if let Some(cookie_header) =
+        cookie_header.map(str::trim).filter(|value| !value.is_empty())
+    {
+        Some(cookie_header.to_string())
+    } else if api_path == NETEASE_REGISTER_ANONYMOUS_API {
+        None
+    } else {
+        Some(ensure_anonymous_cookie_header(client)?)
+    };
     let mut body = into_json_object(payload, context)?;
-    let cookie_pairs = build_netease_request_cookie_pairs(cookie_header, api_path);
+    let cookie_pairs =
+        build_netease_request_cookie_pairs(effective_cookie_header.as_deref(), api_path);
     body.insert(
         "csrf_token".to_string(),
         Value::String(cookie_pairs.get("__csrf").cloned().unwrap_or_default()),
@@ -811,8 +891,16 @@ fn request_netease_eapi_json(
     cookie_header: Option<&str>,
     context: &str,
 ) -> Result<NeteaseApiResponse, String> {
+    let effective_cookie_header = if let Some(cookie_header) =
+        cookie_header.map(str::trim).filter(|value| !value.is_empty())
+    {
+        Some(cookie_header.to_string())
+    } else {
+        Some(ensure_anonymous_cookie_header(client)?)
+    };
     let mut body = into_json_object(payload, context)?;
-    let cookie_pairs = build_netease_request_cookie_pairs(cookie_header, api_path);
+    let cookie_pairs =
+        build_netease_request_cookie_pairs(effective_cookie_header.as_deref(), api_path);
     let header_payload = build_eapi_header_payload(&cookie_pairs);
     body.insert("e_r".to_string(), Value::Bool(false));
     body.insert("header".to_string(), Value::Object(header_payload.clone()));
@@ -856,7 +944,6 @@ fn generate_chain_id(cookie_header: Option<&str>) -> String {
     let cookie_pairs = cookie_header.map(parse_cookie_pairs).unwrap_or_default();
     let device_id = cookie_pairs
         .get("sDeviceId")
-        .or_else(|| cookie_pairs.get("deviceId"))
         .cloned()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
@@ -1340,6 +1427,7 @@ pub fn qr_generate(app: &AppHandle) -> Result<NeteaseQrCodeSession, String> {
             QrSessionState {
                 qr_key: qr_key.clone(),
                 expires_at_ms,
+                cookie_header: key_response.cookie_header.clone(),
             },
         );
     }
@@ -1397,7 +1485,7 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
             "key": session.qr_key,
             "type": 3,
         }),
-        None,
+        session.cookie_header.as_deref(),
         "qr poll",
     )?;
     let payload = &response.body;
@@ -1414,6 +1502,18 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
         response_cookie_header.as_deref(),
         payload_cookie_header.as_deref(),
     );
+
+    if !terminal {
+        let next_cookie_header = response
+            .cookie_header
+            .clone()
+            .or_else(|| session.cookie_header.clone());
+        if let Ok(mut sessions) = lock_qr_sessions() {
+            if let Some(entry) = sessions.get_mut(normalized_session_id) {
+                entry.cookie_header = next_cookie_header;
+            }
+        }
+    }
 
     let account_uid = if auth_state == "authorized" {
         if let Some(cookie_header) = cookie_header {
