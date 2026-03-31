@@ -73,7 +73,7 @@ const NETEASE_SONG_URL_API: &str = "/api/song/enhance/player/url";
 const QR_SESSION_TTL_MS: i64 = 180_000;
 const NETEASE_PLAYBACK_CACHE_DIR_NAME: &str = "playback-cache";
 const NETEASE_PLAYBACK_CACHE_BR: i64 = 320_000;
-const NETEASE_QR_PLATFORM: &str = "web";
+const NETEASE_QR_PLATFORM: &str = "pc";
 const NETEASE_ANONYMOUS_ID_XOR_KEY: &str = "3go8&$8*3*3h0k(2)2";
 
 const AUTH_AVAILABILITY_AVAILABLE: &str = "available";
@@ -1408,12 +1408,16 @@ pub fn qr_generate(app: &AppHandle) -> Result<NeteaseQrCodeSession, String> {
     .or_else(|| to_non_empty_string(key_payload.get("data").and_then(|data| data.get("unikey"))))
     .or_else(|| to_non_empty_string(key_payload.get("unikey")))
     .ok_or_else(|| "Netease QR key response missing unikey".to_string())?;
-    let chain_id = generate_chain_id(key_response.cookie_header.as_deref());
-    let qr_url = format!(
-        "{NETEASE_QR_URL_BASE}{}&chainId={}",
-        percent_encode_component(&qr_key),
-        percent_encode_component(&chain_id)
-    );
+    let qr_url = if NETEASE_QR_PLATFORM.eq_ignore_ascii_case("web") {
+        let chain_id = generate_chain_id(key_response.cookie_header.as_deref());
+        format!(
+            "{NETEASE_QR_URL_BASE}{}&chainId={}",
+            percent_encode_component(&qr_key),
+            percent_encode_component(&chain_id)
+        )
+    } else {
+        format!("{NETEASE_QR_URL_BASE}{}", percent_encode_component(&qr_key))
+    };
     let qr_image_data_url = build_qr_image_data_url(&qr_url)?;
 
     let generated_at_ms = now_ms();
