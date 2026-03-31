@@ -1,45 +1,78 @@
+use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyInit, KeyIvInit};
+use aes::Aes128;
+use base64::{
+    engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
+    Engine as _,
+};
+use image::Luma;
 use keyring::Entry;
+use num_bigint::BigUint;
 use once_cell::sync::Lazy;
-use reqwest::blocking::Client;
+use qrcode::QrCode;
+use rand::Rng;
+use reqwest::{
+    blocking::Client,
+    header::{HeaderMap, HeaderValue, CONTENT_TYPE, COOKIE, REFERER, SET_COOKIE, USER_AGENT},
+};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 use std::{
     collections::HashMap,
     fs,
-    io::Write,
+    io::{Cursor, Write},
     path::{Path, PathBuf},
     sync::{Mutex, MutexGuard},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::AppHandle;
-use url::Url;
+use url::{form_urlencoded::byte_serialize, Url};
 
 const NETEASE_CONNECTOR_ID: &str = "connector.platform.netease";
 const NETEASE_CONNECTOR_KIND: &str = "platform";
-const NETEASE_CONNECTOR_DRIVER: &str = "netease-api-enhanced";
+const NETEASE_CONNECTOR_DRIVER: &str = "netease-web";
 const NETEASE_CONNECTOR_DISPLAY_NAME: &str = "Netease Cloud Music";
 const NETEASE_CONNECTOR_STATUS_ACTIVE: &str = "active";
 
-const NETEASE_API_BASE_URL_ENV: &str = "PMP_NETEASE_API_BASE_URL";
-const NETEASE_API_BASE_URL_DEFAULT: &str = "http://127.0.0.1:3000";
+const NETEASE_DOMAIN: &str = "https://music.163.com";
+const NETEASE_API_DOMAIN: &str = "https://interface.music.163.com";
+const NETEASE_WEAPI_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0";
+const NETEASE_EAPI_USER_AGENT: &str = "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)";
+const NETEASE_EAPI_KEY: &str = "e82ckenh8dichen8";
+const NETEASE_WEAPI_PRESET_KEY: &str = "0CoJUm6Qyw8W8jud";
+const NETEASE_WEAPI_IV: &str = "0102030405060708";
+const NETEASE_PUBLIC_KEY_MODULUS_B64URL: &str =
+    "4LUJ9iWd-GQtvDVmKQFHffImd-wVK1_2is5hW7e3JRUrOrF6h2rqilqnbS5BdinsTuNB9WE1_M9pUoAQTgMS7L2pJVfJOHARSvbJ0FxPfww2hbeka-4lWTJXXM4QtCTYE8_kh10-ggR7l93vUnQdVGuOKJ3Gk1s-zgRi2woiuOc";
+const NETEASE_PUBLIC_KEY_EXPONENT: u32 = 65_537;
+const NETEASE_PC_OS: &str = "pc";
+const NETEASE_PC_APPVER: &str = "3.1.17.204416";
+const NETEASE_PC_OSVER: &str = "Microsoft-Windows-10-Professional-build-19045-64bit";
+const NETEASE_PC_CHANNEL: &str = "netease";
+const NETEASE_COOKIE_VERSION_CODE: &str = "140";
+const NETEASE_COOKIE_MOBILENAME: &str = "";
+const NETEASE_COOKIE_RESOLUTION: &str = "1920x1080";
+const NETEASE_COOKIE_WEVNSM: &str = "1.0.0";
+const NETEASE_COOKIE_REMEMBER_ME: &str = "true";
+const NETEASE_COOKIE_KAOLA_AD: &str = "1";
+const NETEASE_QR_URL_BASE: &str = "https://music.163.com/login?codekey=";
 
 const NETEASE_KEYRING_SERVICE: &str = "pixel-matrix-player.netease";
 const NETEASE_KEYRING_TOKEN_REF_PREFIX: &str = "keyring://netease-cookie/";
 
-const NETEASE_QR_KEY_ENDPOINT: &str = "/login/qr/key";
-const NETEASE_QR_CREATE_ENDPOINT: &str = "/login/qr/create";
-const NETEASE_QR_CHECK_ENDPOINT: &str = "/login/qr/check";
-const NETEASE_LOGIN_STATUS_ENDPOINT: &str = "/login/status";
-const NETEASE_RECOMMEND_SONGS_ENDPOINT: &str = "/recommend/songs";
-const NETEASE_RECOMMEND_PLAYLISTS_ENDPOINT: &str = "/recommend/resource";
-const NETEASE_USER_PLAYLISTS_ENDPOINT: &str = "/user/playlist";
-const NETEASE_PLAYLIST_TRACKS_ENDPOINT: &str = "/playlist/track/all";
-const NETEASE_CLOUDSEARCH_ENDPOINT: &str = "/cloudsearch";
-const NETEASE_SONG_URL_ENDPOINT: &str = "/song/url";
+const NETEASE_QR_KEY_API: &str = "/api/login/qrcode/unikey";
+const NETEASE_QR_CHECK_API: &str = "/api/login/qrcode/client/login";
+const NETEASE_LOGIN_STATUS_API: &str = "/api/w/nuser/account/get";
+const NETEASE_RECOMMEND_SONGS_API: &str = "/api/v3/discovery/recommend/songs";
+const NETEASE_RECOMMEND_PLAYLISTS_API: &str = "/api/v1/discovery/recommend/resource";
+const NETEASE_USER_PLAYLISTS_API: &str = "/api/user/playlist";
+const NETEASE_PLAYLIST_DETAIL_API: &str = "/api/v6/playlist/detail";
+const NETEASE_SONG_DETAIL_API: &str = "/api/v3/song/detail";
+const NETEASE_CLOUDSEARCH_API: &str = "/api/cloudsearch/pc";
+const NETEASE_SONG_URL_API: &str = "/api/song/enhance/player/url";
 
 const QR_SESSION_TTL_MS: i64 = 180_000;
 const NETEASE_PLAYBACK_CACHE_DIR_NAME: &str = "playback-cache";
 const NETEASE_PLAYBACK_CACHE_BR: i64 = 320_000;
+const NETEASE_QR_PLATFORM: &str = "web";
 
 const AUTH_AVAILABILITY_AVAILABLE: &str = "available";
 const AUTH_AVAILABILITY_DEGRADED: &str = "degraded";
@@ -154,9 +187,21 @@ struct AuthContext {
     cookie_header: String,
 }
 
+#[derive(Debug, Clone)]
+struct NeteaseApiResponse {
+    body: Value,
+    cookie_header: Option<String>,
+}
+
 static QR_SESSIONS: Lazy<Mutex<HashMap<String, QrSessionState>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static AUTH_COOKIE_STATE: Lazy<Mutex<Option<AuthCookieState>>> = Lazy::new(|| Mutex::new(None));
+static NETEASE_SESSION_DEVICE_ID: Lazy<String> = Lazy::new(|| generate_random_hex_string(52, true));
+static NETEASE_SESSION_WNMCID: Lazy<String> = Lazy::new(generate_wnmcid);
+static NETEASE_SESSION_NTES_NUID: Lazy<String> =
+    Lazy::new(|| generate_random_hex_string(64, false));
+static NETEASE_SESSION_NTES_NNID: Lazy<String> =
+    Lazy::new(|| format!("{},{}", NETEASE_SESSION_NTES_NUID.as_str(), now_ms()));
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -212,23 +257,6 @@ fn normalize_url(raw: &str) -> String {
     trimmed.to_string()
 }
 
-fn normalize_api_base_url(raw: &str) -> String {
-    let trimmed = raw.trim();
-    let normalized = if trimmed.is_empty() {
-        NETEASE_API_BASE_URL_DEFAULT
-    } else {
-        trimmed
-    };
-    normalized.trim_end_matches('/').to_string()
-}
-
-fn resolve_api_base_url() -> String {
-    std::env::var(NETEASE_API_BASE_URL_ENV)
-        .ok()
-        .map(|value| normalize_api_base_url(&value))
-        .unwrap_or_else(|| NETEASE_API_BASE_URL_DEFAULT.to_string())
-}
-
 fn build_http_client() -> Result<Client, String> {
     Client::builder()
         .user_agent("PixelMatrixPlayer/1.0 (+https://github.com/pxh52013145/PMP)")
@@ -249,42 +277,619 @@ fn ensure_connector(app: &AppHandle) -> Result<(), String> {
     )
 }
 
-fn request_api_json(
-    client: &Client,
-    endpoint: &str,
-    mut query: Vec<(&'static str, String)>,
+fn truncate_error_text(raw: &str) -> String {
+    let normalized = raw.trim();
+    if normalized.len() <= 240 {
+        return normalized.to_string();
+    }
+    format!("{}...", &normalized[..240])
+}
+
+fn percent_encode_component(value: &str) -> String {
+    byte_serialize(value.as_bytes()).collect()
+}
+
+fn build_form_urlencoded_body(pairs: &[(&str, String)]) -> String {
+    pairs
+        .iter()
+        .map(|(key, value)| {
+            format!(
+                "{}={}",
+                percent_encode_component(key),
+                percent_encode_component(value)
+            )
+        })
+        .collect::<Vec<String>>()
+        .join("&")
+}
+
+fn parse_cookie_pairs(cookie_header: &str) -> HashMap<String, String> {
+    let mut pairs = HashMap::new();
+    for segment in cookie_header.split(';') {
+        let normalized = segment.trim();
+        if normalized.is_empty() {
+            continue;
+        }
+
+        let mut parts = normalized.splitn(2, '=');
+        let Some(name) = parts.next() else {
+            continue;
+        };
+        let Some(value) = parts.next() else {
+            continue;
+        };
+
+        let key = name.trim().to_string();
+        let value = value.trim().to_string();
+        if key.is_empty() || value.is_empty() {
+            continue;
+        }
+
+        pairs.insert(key, value);
+    }
+    pairs
+}
+
+fn build_cookie_header_from_pairs(pairs: &HashMap<String, String>) -> String {
+    let mut keys: Vec<&String> = pairs.keys().collect();
+    keys.sort();
+    keys.into_iter()
+        .filter_map(|key| pairs.get(key).map(|value| format!("{key}={value}")))
+        .collect::<Vec<String>>()
+        .join("; ")
+}
+
+fn extract_set_cookie_pairs(headers: &HeaderMap) -> HashMap<String, String> {
+    let mut pairs = HashMap::new();
+    for value in headers.get_all(SET_COOKIE).iter() {
+        let Ok(raw) = value.to_str() else {
+            continue;
+        };
+        let Some(first_segment) = raw.split(';').next() else {
+            continue;
+        };
+        let mut parts = first_segment.splitn(2, '=');
+        let Some(name) = parts.next() else {
+            continue;
+        };
+        let Some(cookie_value) = parts.next() else {
+            continue;
+        };
+
+        let key = name.trim();
+        let value = cookie_value.trim();
+        if key.is_empty() || value.is_empty() {
+            continue;
+        }
+
+        pairs.insert(key.to_string(), value.to_string());
+    }
+    pairs
+}
+
+fn merge_cookie_headers(
+    base_cookie_header: Option<&str>,
+    response_headers: &HeaderMap,
+) -> Option<String> {
+    let mut pairs = base_cookie_header
+        .map(parse_cookie_pairs)
+        .unwrap_or_default();
+    let response_pairs = extract_set_cookie_pairs(response_headers);
+    pairs.extend(response_pairs);
+
+    let normalized = build_cookie_header_from_pairs(&pairs);
+    if normalized.trim().is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn generate_random_hex_string(len: usize, uppercase: bool) -> String {
+    let alphabet = if uppercase {
+        b"0123456789ABCDEF"
+    } else {
+        b"0123456789abcdef"
+    };
+
+    let mut rng = rand::thread_rng();
+    let mut output = String::with_capacity(len);
+    for _ in 0..len {
+        let index = rng.gen_range(0..alphabet.len());
+        output.push(alphabet[index] as char);
+    }
+    output
+}
+
+fn generate_random_base62_string(len: usize) -> String {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let mut rng = rand::thread_rng();
+    let mut output = String::with_capacity(len);
+    for _ in 0..len {
+        let index = rng.gen_range(0..ALPHABET.len());
+        output.push(ALPHABET[index] as char);
+    }
+    output
+}
+
+fn generate_wnmcid() -> String {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
+    let mut rng = rand::thread_rng();
+    let mut prefix = String::with_capacity(6);
+    for _ in 0..6 {
+        let index = rng.gen_range(0..ALPHABET.len());
+        prefix.push(ALPHABET[index] as char);
+    }
+    format!("{prefix}.{}.01.0", now_ms())
+}
+
+fn generate_request_id() -> String {
+    let mut rng = rand::thread_rng();
+    format!(
+        "{}_{}",
+        now_ms(),
+        format!("{:04}", rng.gen_range(0..1000_u32))
+    )
+}
+
+fn build_netease_request_cookie_pairs(
     cookie_header: Option<&str>,
-    context: &str,
-) -> Result<Value, String> {
-    if let Some(cookie_header) = cookie_header {
-        let normalized_cookie = cookie_header.trim();
-        if !normalized_cookie.is_empty() {
-            query.push(("cookie", normalized_cookie.to_string()));
+    api_path: &str,
+) -> HashMap<String, String> {
+    let mut pairs = cookie_header.map(parse_cookie_pairs).unwrap_or_default();
+
+    pairs
+        .entry("__remember_me".to_string())
+        .or_insert_with(|| NETEASE_COOKIE_REMEMBER_ME.to_string());
+    pairs
+        .entry("ntes_kaola_ad".to_string())
+        .or_insert_with(|| NETEASE_COOKIE_KAOLA_AD.to_string());
+    pairs
+        .entry("_ntes_nuid".to_string())
+        .or_insert_with(|| NETEASE_SESSION_NTES_NUID.clone());
+    pairs
+        .entry("_ntes_nnid".to_string())
+        .or_insert_with(|| NETEASE_SESSION_NTES_NNID.clone());
+    pairs
+        .entry("WNMCID".to_string())
+        .or_insert_with(|| NETEASE_SESSION_WNMCID.clone());
+    pairs
+        .entry("WEVNSM".to_string())
+        .or_insert_with(|| NETEASE_COOKIE_WEVNSM.to_string());
+    pairs
+        .entry("osver".to_string())
+        .or_insert_with(|| NETEASE_PC_OSVER.to_string());
+    pairs
+        .entry("deviceId".to_string())
+        .or_insert_with(|| NETEASE_SESSION_DEVICE_ID.clone());
+    pairs
+        .entry("os".to_string())
+        .or_insert_with(|| NETEASE_PC_OS.to_string());
+    pairs
+        .entry("channel".to_string())
+        .or_insert_with(|| NETEASE_PC_CHANNEL.to_string());
+    pairs
+        .entry("appver".to_string())
+        .or_insert_with(|| NETEASE_PC_APPVER.to_string());
+    pairs
+        .entry("versioncode".to_string())
+        .or_insert_with(|| NETEASE_COOKIE_VERSION_CODE.to_string());
+    pairs
+        .entry("mobilename".to_string())
+        .or_insert_with(|| NETEASE_COOKIE_MOBILENAME.to_string());
+    pairs
+        .entry("resolution".to_string())
+        .or_insert_with(|| NETEASE_COOKIE_RESOLUTION.to_string());
+    pairs
+        .entry("buildver".to_string())
+        .or_insert_with(|| (now_ms() / 1000).to_string());
+
+    if !api_path.contains("login") {
+        pairs
+            .entry("NMTID".to_string())
+            .or_insert_with(|| generate_random_hex_string(32, false));
+    }
+
+    pairs
+}
+
+fn build_eapi_header_payload(cookie_pairs: &HashMap<String, String>) -> Map<String, Value> {
+    let mut payload = Map::new();
+    payload.insert(
+        "osver".to_string(),
+        Value::String(
+            cookie_pairs
+                .get("osver")
+                .cloned()
+                .unwrap_or_else(|| NETEASE_PC_OSVER.to_string()),
+        ),
+    );
+    payload.insert(
+        "deviceId".to_string(),
+        Value::String(
+            cookie_pairs
+                .get("deviceId")
+                .cloned()
+                .unwrap_or_else(|| NETEASE_SESSION_DEVICE_ID.clone()),
+        ),
+    );
+    payload.insert(
+        "os".to_string(),
+        Value::String(
+            cookie_pairs
+                .get("os")
+                .cloned()
+                .unwrap_or_else(|| NETEASE_PC_OS.to_string()),
+        ),
+    );
+    payload.insert(
+        "appver".to_string(),
+        Value::String(
+            cookie_pairs
+                .get("appver")
+                .cloned()
+                .unwrap_or_else(|| NETEASE_PC_APPVER.to_string()),
+        ),
+    );
+    payload.insert(
+        "versioncode".to_string(),
+        Value::String(
+            cookie_pairs
+                .get("versioncode")
+                .cloned()
+                .unwrap_or_else(|| NETEASE_COOKIE_VERSION_CODE.to_string()),
+        ),
+    );
+    payload.insert(
+        "mobilename".to_string(),
+        Value::String(
+            cookie_pairs
+                .get("mobilename")
+                .cloned()
+                .unwrap_or_else(|| NETEASE_COOKIE_MOBILENAME.to_string()),
+        ),
+    );
+    payload.insert(
+        "buildver".to_string(),
+        Value::String(
+            cookie_pairs
+                .get("buildver")
+                .cloned()
+                .unwrap_or_else(|| (now_ms() / 1000).to_string()),
+        ),
+    );
+    payload.insert(
+        "resolution".to_string(),
+        Value::String(
+            cookie_pairs
+                .get("resolution")
+                .cloned()
+                .unwrap_or_else(|| NETEASE_COOKIE_RESOLUTION.to_string()),
+        ),
+    );
+    payload.insert(
+        "__csrf".to_string(),
+        Value::String(cookie_pairs.get("__csrf").cloned().unwrap_or_default()),
+    );
+    payload.insert(
+        "channel".to_string(),
+        Value::String(
+            cookie_pairs
+                .get("channel")
+                .cloned()
+                .unwrap_or_else(|| NETEASE_PC_CHANNEL.to_string()),
+        ),
+    );
+    payload.insert(
+        "requestId".to_string(),
+        Value::String(generate_request_id()),
+    );
+    payload
+}
+
+fn build_eapi_cookie_header(
+    cookie_pairs: &HashMap<String, String>,
+    header_payload: &Map<String, Value>,
+) -> String {
+    let mut pairs = HashMap::new();
+
+    for key in [
+        "osver",
+        "deviceId",
+        "os",
+        "appver",
+        "versioncode",
+        "mobilename",
+        "buildver",
+        "resolution",
+        "__csrf",
+        "channel",
+        "requestId",
+    ] {
+        if let Some(value) = header_payload.get(key).and_then(Value::as_str) {
+            pairs.insert(key.to_string(), value.to_string());
         }
     }
 
-    let base_url = resolve_api_base_url();
-    let url = format!("{base_url}{}", endpoint.trim());
+    if let Some(value) = cookie_pairs.get("MUSIC_U").cloned() {
+        pairs.insert("MUSIC_U".to_string(), value);
+    }
+    if let Some(value) = cookie_pairs.get("MUSIC_A").cloned() {
+        pairs.insert("MUSIC_A".to_string(), value);
+    }
+
+    build_cookie_header_from_pairs(&pairs)
+}
+
+fn merge_cookie_header_values(primary: Option<&str>, secondary: Option<&str>) -> Option<String> {
+    let mut pairs = primary.map(parse_cookie_pairs).unwrap_or_default();
+    let next_pairs = secondary.map(parse_cookie_pairs).unwrap_or_default();
+    pairs.extend(next_pairs);
+
+    let normalized = build_cookie_header_from_pairs(&pairs);
+    if normalized.trim().is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn build_netease_weapi_url(api_path: &str) -> Result<String, String> {
+    let suffix = api_path
+        .trim()
+        .strip_prefix("/api/")
+        .ok_or_else(|| format!("Unsupported Netease weapi path: {api_path}"))?;
+    Ok(format!("{NETEASE_DOMAIN}/weapi/{suffix}"))
+}
+
+fn build_netease_eapi_url(api_path: &str) -> Result<String, String> {
+    let suffix = api_path
+        .trim()
+        .strip_prefix("/api/")
+        .ok_or_else(|| format!("Unsupported Netease eapi path: {api_path}"))?;
+    Ok(format!("{NETEASE_API_DOMAIN}/eapi/{suffix}"))
+}
+
+fn into_json_object(payload: Value, context: &str) -> Result<Map<String, Value>, String> {
+    match payload {
+        Value::Object(map) => Ok(map),
+        Value::Null => Ok(Map::new()),
+        _ => Err(format!("Netease {context} payload must be a JSON object")),
+    }
+}
+
+fn aes_cbc_encrypt_base64(plaintext: &str, key: &str, iv: &str) -> Result<String, String> {
+    type Aes128CbcEnc = cbc::Encryptor<Aes128>;
+
+    let encrypted = Aes128CbcEnc::new_from_slices(key.as_bytes(), iv.as_bytes())
+        .map_err(|error| format!("Failed to initialize Netease AES-CBC cipher: {error}"))?
+        .encrypt_padded_vec_mut::<Pkcs7>(plaintext.as_bytes());
+
+    Ok(BASE64_STANDARD.encode(encrypted))
+}
+
+fn aes_ecb_encrypt_hex_upper(plaintext: &str, key: &str) -> Result<String, String> {
+    type Aes128EcbEnc = ecb::Encryptor<Aes128>;
+
+    let encrypted = Aes128EcbEnc::new_from_slice(key.as_bytes())
+        .map_err(|error| format!("Failed to initialize Netease AES-ECB cipher: {error}"))?
+        .encrypt_padded_vec_mut::<Pkcs7>(plaintext.as_bytes());
+
+    Ok(encrypted
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<String>())
+}
+
+fn encrypt_weapi_payload(body: &Value) -> Result<(String, String), String> {
+    let serialized = serde_json::to_string(body)
+        .map_err(|error| format!("Failed to encode weapi JSON: {error}"))?;
+    let secret_key = generate_random_base62_string(16);
+    let first_pass =
+        aes_cbc_encrypt_base64(&serialized, NETEASE_WEAPI_PRESET_KEY, NETEASE_WEAPI_IV)?;
+    let params = aes_cbc_encrypt_base64(&first_pass, &secret_key, NETEASE_WEAPI_IV)?;
+
+    let modulus_bytes = URL_SAFE_NO_PAD
+        .decode(NETEASE_PUBLIC_KEY_MODULUS_B64URL.as_bytes())
+        .map_err(|error| format!("Failed to decode Netease public key modulus: {error}"))?;
+    let modulus = BigUint::from_bytes_be(&modulus_bytes);
+    let exponent = BigUint::from(NETEASE_PUBLIC_KEY_EXPONENT);
+    let reversed_secret: Vec<u8> = secret_key.as_bytes().iter().rev().copied().collect();
+    let secret_int = BigUint::from_bytes_be(&reversed_secret);
+    let encrypted = secret_int.modpow(&exponent, &modulus);
+    let width = modulus_bytes.len().saturating_mul(2);
+    let enc_sec_key = format!("{:0width$x}", encrypted, width = width);
+
+    Ok((params, enc_sec_key))
+}
+
+fn encrypt_eapi_payload(api_path: &str, body: &Value) -> Result<String, String> {
+    let serialized = serde_json::to_string(body)
+        .map_err(|error| format!("Failed to encode eapi JSON: {error}"))?;
+    let digest = format!(
+        "{:x}",
+        md5::compute(format!("nobody{api_path}use{serialized}md5forencrypt").as_bytes())
+    );
+    let message = format!("{api_path}-36cd479b6b5-{serialized}-36cd479b6b5-{digest}");
+    aes_ecb_encrypt_hex_upper(&message, NETEASE_EAPI_KEY)
+}
+
+fn send_netease_request(
+    client: &Client,
+    url: &str,
+    headers: HeaderMap,
+    form_pairs: Vec<(&str, String)>,
+    base_cookie_header: Option<&str>,
+    context: &str,
+) -> Result<NeteaseApiResponse, String> {
     let response = client
-        .get(url.clone())
-        .query(&query)
+        .post(url)
+        .headers(headers)
+        .body(build_form_urlencoded_body(&form_pairs))
         .send()
-        .map_err(|error| {
-            format!(
-                "Netease {context} request failed via {url}: {error}. Verify the api-enhanced service is running and {NETEASE_API_BASE_URL_ENV} is correct."
-            )
-        })?;
+        .map_err(|error| format!("Netease {context} request failed via {url}: {error}"))?;
 
     let status = response.status();
+    let response_headers = response.headers().clone();
+    let payload_text = response
+        .text()
+        .map_err(|error| format!("Failed to read Netease {context} response body: {error}"))?;
+
     if !status.is_success() {
         return Err(format!(
-            "Netease {context} returned non-success status: {status}"
+            "Netease {context} returned non-success status {status} via {url}: {}",
+            truncate_error_text(&payload_text)
         ));
     }
 
-    response
-        .json::<Value>()
-        .map_err(|error| format!("Failed to decode Netease {context} payload: {error}"))
+    let body = serde_json::from_str::<Value>(&payload_text).map_err(|error| {
+        format!(
+            "Failed to decode Netease {context} payload via {url}: {error}. Body: {}",
+            truncate_error_text(&payload_text)
+        )
+    })?;
+
+    Ok(NeteaseApiResponse {
+        body,
+        cookie_header: merge_cookie_headers(base_cookie_header, &response_headers),
+    })
+}
+
+fn request_netease_weapi_json(
+    client: &Client,
+    api_path: &str,
+    payload: Value,
+    cookie_header: Option<&str>,
+    context: &str,
+) -> Result<NeteaseApiResponse, String> {
+    let mut body = into_json_object(payload, context)?;
+    let cookie_pairs = build_netease_request_cookie_pairs(cookie_header, api_path);
+    body.insert(
+        "csrf_token".to_string(),
+        Value::String(cookie_pairs.get("__csrf").cloned().unwrap_or_default()),
+    );
+
+    let (params, enc_sec_key) = encrypt_weapi_payload(&Value::Object(body))?;
+    let normalized_cookie_header = build_cookie_header_from_pairs(&cookie_pairs);
+    let url = build_netease_weapi_url(api_path)?;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/x-www-form-urlencoded"),
+    );
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static(NETEASE_WEAPI_USER_AGENT),
+    );
+    headers.insert(REFERER, HeaderValue::from_static(NETEASE_DOMAIN));
+    if !normalized_cookie_header.is_empty() {
+        let header_value = HeaderValue::from_str(&normalized_cookie_header).map_err(|error| {
+            format!("Failed to encode Netease weapi cookie header for {context}: {error}")
+        })?;
+        headers.insert(COOKIE, header_value);
+    }
+
+    send_netease_request(
+        client,
+        &url,
+        headers,
+        vec![("params", params), ("encSecKey", enc_sec_key)],
+        if normalized_cookie_header.is_empty() {
+            None
+        } else {
+            Some(normalized_cookie_header.as_str())
+        },
+        context,
+    )
+}
+
+fn request_netease_eapi_json(
+    client: &Client,
+    api_path: &str,
+    payload: Value,
+    cookie_header: Option<&str>,
+    context: &str,
+) -> Result<NeteaseApiResponse, String> {
+    let mut body = into_json_object(payload, context)?;
+    let cookie_pairs = build_netease_request_cookie_pairs(cookie_header, api_path);
+    let header_payload = build_eapi_header_payload(&cookie_pairs);
+    body.insert("e_r".to_string(), Value::Bool(false));
+    body.insert("header".to_string(), Value::Object(header_payload.clone()));
+
+    let params = encrypt_eapi_payload(api_path, &Value::Object(body))?;
+    let normalized_cookie_header = build_eapi_cookie_header(&cookie_pairs, &header_payload);
+    let url = build_netease_eapi_url(api_path)?;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/x-www-form-urlencoded"),
+    );
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static(NETEASE_EAPI_USER_AGENT),
+    );
+    headers.insert(REFERER, HeaderValue::from_static(NETEASE_DOMAIN));
+    if !normalized_cookie_header.is_empty() {
+        let header_value = HeaderValue::from_str(&normalized_cookie_header).map_err(|error| {
+            format!("Failed to encode Netease eapi cookie header for {context}: {error}")
+        })?;
+        headers.insert(COOKIE, header_value);
+    }
+
+    send_netease_request(
+        client,
+        &url,
+        headers,
+        vec![("params", params)],
+        if normalized_cookie_header.is_empty() {
+            None
+        } else {
+            Some(normalized_cookie_header.as_str())
+        },
+        context,
+    )
+}
+
+fn generate_chain_id(cookie_header: Option<&str>) -> String {
+    let cookie_pairs = cookie_header.map(parse_cookie_pairs).unwrap_or_default();
+    let device_id = cookie_pairs
+        .get("sDeviceId")
+        .or_else(|| cookie_pairs.get("deviceId"))
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "unknown-{}",
+                rand::thread_rng().gen_range(100_000..1_000_000)
+            )
+        });
+
+    format!("v1_{device_id}_{NETEASE_QR_PLATFORM}_login_{}", now_ms())
+}
+
+fn build_qr_image_data_url(content: &str) -> Result<String, String> {
+    let code = QrCode::new(content.as_bytes())
+        .map_err(|error| format!("Failed to build Netease QR code matrix: {error}"))?;
+
+    let image = code
+        .render::<Luma<u8>>()
+        .min_dimensions(240, 240)
+        .max_dimensions(360, 360)
+        .build();
+    let mut bytes = Vec::new();
+    {
+        let mut cursor = Cursor::new(&mut bytes);
+        image::DynamicImage::ImageLuma8(image)
+            .write_to(&mut cursor, image::ImageFormat::Png)
+            .map_err(|error| format!("Failed to encode Netease QR image as PNG: {error}"))?;
+    }
+
+    Ok(format!(
+        "data:image/png;base64,{}",
+        BASE64_STANDARD.encode(bytes)
+    ))
 }
 
 fn to_non_empty_string(value: Option<&Value>) -> Option<String> {
@@ -386,15 +991,21 @@ fn parse_qr_poll_state(code: i64, message: &str) -> (String, String, bool) {
 
 fn extract_account_uid_from_login_status(payload: &Value) -> Option<String> {
     let data = payload.get("data").unwrap_or(payload);
-    to_u64(data.get("profile").and_then(|profile| profile.get("userId")))
-        .map(|value| value.to_string())
-        .or_else(|| {
-            to_u64(data.get("account").and_then(|account| account.get("id")))
-                .map(|value| value.to_string())
-        })
-        .or_else(|| {
-            to_non_empty_string(data.get("profile").and_then(|profile| profile.get("userId")))
-        })
+    to_u64(
+        data.get("profile")
+            .and_then(|profile| profile.get("userId")),
+    )
+    .map(|value| value.to_string())
+    .or_else(|| {
+        to_u64(data.get("account").and_then(|account| account.get("id")))
+            .map(|value| value.to_string())
+    })
+    .or_else(|| {
+        to_non_empty_string(
+            data.get("profile")
+                .and_then(|profile| profile.get("userId")),
+        )
+    })
 }
 
 fn extract_login_status_message(payload: &Value) -> Option<String> {
@@ -403,13 +1014,16 @@ fn extract_login_status_message(payload: &Value) -> Option<String> {
 }
 
 fn fetch_login_status_payload(client: &Client, cookie_header: &str) -> Result<Value, String> {
-    request_api_json(
+    request_netease_weapi_json(
         client,
-        NETEASE_LOGIN_STATUS_ENDPOINT,
-        vec![("timestamp", now_ms().to_string())],
+        NETEASE_LOGIN_STATUS_API,
+        json!({
+            "timestamp": now_ms(),
+        }),
         Some(cookie_header),
         "login status",
     )
+    .map(|response| response.body)
 }
 
 fn fetch_account_uid_and_persist(
@@ -574,7 +1188,9 @@ fn ensure_playback_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let root = app
         .path_resolver()
         .app_cache_dir()
-        .ok_or_else(|| "Failed to resolve app cache directory for Netease playback cache".to_string())?
+        .ok_or_else(|| {
+            "Failed to resolve app cache directory for Netease playback cache".to_string()
+        })?
         .join("music-platform")
         .join("netease")
         .join(NETEASE_PLAYBACK_CACHE_DIR_NAME);
@@ -688,13 +1304,16 @@ pub fn qr_generate(app: &AppHandle) -> Result<NeteaseQrCodeSession, String> {
     cleanup_expired_qr_sessions(now_ms());
 
     let client = build_http_client()?;
-    let key_payload = request_api_json(
+    let key_response = request_netease_eapi_json(
         &client,
-        NETEASE_QR_KEY_ENDPOINT,
-        vec![("timestamp", now_ms().to_string())],
+        NETEASE_QR_KEY_API,
+        json!({
+            "type": 3,
+        }),
         None,
         "qr key",
     )?;
+    let key_payload = &key_response.body;
     let qr_key = to_non_empty_string(
         key_payload
             .get("data")
@@ -702,28 +1321,15 @@ pub fn qr_generate(app: &AppHandle) -> Result<NeteaseQrCodeSession, String> {
             .and_then(|data| data.get("unikey")),
     )
     .or_else(|| to_non_empty_string(key_payload.get("data").and_then(|data| data.get("unikey"))))
+    .or_else(|| to_non_empty_string(key_payload.get("unikey")))
     .ok_or_else(|| "Netease QR key response missing unikey".to_string())?;
-
-    let created_payload = request_api_json(
-        &client,
-        NETEASE_QR_CREATE_ENDPOINT,
-        vec![
-            ("timestamp", now_ms().to_string()),
-            ("key", qr_key.clone()),
-            ("qrimg", "1".to_string()),
-            ("platform", "pc".to_string()),
-        ],
-        None,
-        "qr create",
-    )?;
-    let qr_data = created_payload
-        .get("data")
-        .and_then(|data| data.get("data"))
-        .or_else(|| created_payload.get("data"))
-        .unwrap_or(&Value::Null);
-    let qr_url = to_non_empty_string(qr_data.get("qrurl"))
-        .ok_or_else(|| "Netease QR create response missing qrurl".to_string())?;
-    let qr_image_data_url = to_non_empty_string(qr_data.get("qrimg")).unwrap_or_default();
+    let chain_id = generate_chain_id(key_response.cookie_header.as_deref());
+    let qr_url = format!(
+        "{NETEASE_QR_URL_BASE}{}&chainId={}",
+        percent_encode_component(&qr_key),
+        percent_encode_component(&chain_id)
+    );
+    let qr_image_data_url = build_qr_image_data_url(&qr_url)?;
 
     let generated_at_ms = now_ms();
     let expires_at_ms = generated_at_ms.saturating_add(QR_SESSION_TTL_MS);
@@ -786,21 +1392,30 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
     }
 
     let client = build_http_client()?;
-    let payload = request_api_json(
+    let response = request_netease_eapi_json(
         &client,
-        NETEASE_QR_CHECK_ENDPOINT,
-        vec![
-            ("timestamp", now_ms().to_string()),
-            ("key", session.qr_key.clone()),
-        ],
+        NETEASE_QR_CHECK_API,
+        json!({
+            "key": session.qr_key,
+            "type": 3,
+        }),
         None,
         "qr poll",
     )?;
+    let payload = &response.body;
     let state_code = to_i64(payload.get("code")).unwrap_or(500);
     let state_message =
         to_non_empty_string(payload.get("message")).unwrap_or_else(|| "unknown state".to_string());
     let (state, auth_state, terminal) = parse_qr_poll_state(state_code, &state_message);
-    let cookie_header = to_non_empty_string(payload.get("cookie"));
+    let response_cookie_header = response.cookie_header.clone().filter(|header| {
+        let pairs = parse_cookie_pairs(header);
+        pairs.contains_key("MUSIC_U") || pairs.contains_key("MUSIC_A")
+    });
+    let payload_cookie_header = to_non_empty_string(payload.get("cookie"));
+    let cookie_header = merge_cookie_header_values(
+        response_cookie_header.as_deref(),
+        payload_cookie_header.as_deref(),
+    );
 
     let account_uid = if auth_state == "authorized" {
         if let Some(cookie_header) = cookie_header {
@@ -930,8 +1545,12 @@ pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
                     } else {
                         auth_state = "expired".to_string();
                         availability = Some(AUTH_AVAILABILITY_UNAVAILABLE.to_string());
-                        availability_message = extract_login_status_message(&payload)
-                            .or_else(|| Some(format!("Netease login status failed with code {status_code}")));
+                        availability_message =
+                            extract_login_status_message(&payload).or_else(|| {
+                                Some(format!(
+                                    "Netease login status failed with code {status_code}"
+                                ))
+                            });
                     }
                 }
                 Err(error) => {
@@ -1010,18 +1629,19 @@ pub fn list_user_playlists(app: &AppHandle) -> Result<Vec<NeteaseUserPlaylist>, 
     let account_uid =
         fetch_account_uid_and_persist(app, &auth_context.account, &auth_context.cookie_header)?;
     let client = build_http_client()?;
-    let payload = request_api_json(
+    let payload = request_netease_weapi_json(
         &client,
-        NETEASE_USER_PLAYLISTS_ENDPOINT,
-        vec![
-            ("timestamp", now_ms().to_string()),
-            ("uid", account_uid),
-            ("limit", "200".to_string()),
-            ("offset", "0".to_string()),
-        ],
+        NETEASE_USER_PLAYLISTS_API,
+        json!({
+            "uid": account_uid,
+            "limit": 200,
+            "offset": 0,
+            "includeVideo": true,
+        }),
         Some(&auth_context.cookie_header),
         "user playlists",
-    )?;
+    )?
+    .body;
 
     let items = payload
         .get("playlist")
@@ -1060,13 +1680,14 @@ pub fn list_recommended_playlists(
     ensure_connector(app)?;
     let auth_context = ensure_auth_context(app)?;
     let client = build_http_client()?;
-    let payload = request_api_json(
+    let payload = request_netease_weapi_json(
         &client,
-        NETEASE_RECOMMEND_PLAYLISTS_ENDPOINT,
-        vec![("timestamp", now_ms().to_string())],
+        NETEASE_RECOMMEND_PLAYLISTS_API,
+        json!({}),
         Some(&auth_context.cookie_header),
         "recommended playlists",
-    )?;
+    )?
+    .body;
 
     let items = payload
         .get("recommend")
@@ -1104,13 +1725,14 @@ pub fn list_recommended_songs(app: &AppHandle) -> Result<NeteaseSongPage, String
     ensure_connector(app)?;
     let auth_context = ensure_auth_context(app)?;
     let client = build_http_client()?;
-    let payload = request_api_json(
+    let payload = request_netease_weapi_json(
         &client,
-        NETEASE_RECOMMEND_SONGS_ENDPOINT,
-        vec![("timestamp", now_ms().to_string())],
+        NETEASE_RECOMMEND_SONGS_API,
+        json!({}),
         Some(&auth_context.cookie_header),
         "recommended songs",
-    )?;
+    )?
+    .body;
 
     let items = payload
         .get("data")
@@ -1133,10 +1755,7 @@ pub fn list_recommended_songs(app: &AppHandle) -> Result<NeteaseSongPage, String
     })
 }
 
-pub fn list_playlist_tracks(
-    app: &AppHandle,
-    playlist_id: &str,
-) -> Result<NeteaseSongPage, String> {
+pub fn list_playlist_tracks(app: &AppHandle, playlist_id: &str) -> Result<NeteaseSongPage, String> {
     ensure_connector(app)?;
     let auth_context = ensure_auth_context(app)?;
     let normalized_playlist_id = playlist_id.trim();
@@ -1145,18 +1764,65 @@ pub fn list_playlist_tracks(
     }
 
     let client = build_http_client()?;
-    let payload = request_api_json(
+    let detail_payload = request_netease_eapi_json(
         &client,
-        NETEASE_PLAYLIST_TRACKS_ENDPOINT,
-        vec![
-            ("timestamp", now_ms().to_string()),
-            ("id", normalized_playlist_id.to_string()),
-            ("limit", "500".to_string()),
-            ("offset", "0".to_string()),
-        ],
+        NETEASE_PLAYLIST_DETAIL_API,
+        json!({
+            "id": normalized_playlist_id,
+            "n": 100000,
+            "s": 8,
+        }),
+        Some(&auth_context.cookie_header),
+        "playlist detail",
+    )?
+    .body;
+
+    let playlist = detail_payload.get("playlist").unwrap_or(&Value::Null);
+    let track_ids = playlist
+        .get("trackIds")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let song_ids: Vec<String> = track_ids
+        .iter()
+        .filter_map(|item| {
+            to_u64(item.get("id"))
+                .map(|value| value.to_string())
+                .or_else(|| to_non_empty_string(item.get("id")))
+        })
+        .collect();
+
+    if song_ids.is_empty() {
+        return Ok(NeteaseSongPage {
+            source_kind: "user-playlist".to_string(),
+            source_id: normalized_playlist_id.to_string(),
+            page_num: 1,
+            page_size: 1,
+            total: 0,
+            has_more: false,
+            items: Vec::new(),
+        });
+    }
+
+    let detail_items: Vec<Value> = song_ids
+        .iter()
+        .map(|song_id| match song_id.parse::<u64>() {
+            Ok(value) => json!({ "id": value }),
+            Err(_) => json!({ "id": song_id }),
+        })
+        .collect();
+    let c_payload = serde_json::to_string(&detail_items)
+        .map_err(|error| format!("Failed to encode Netease playlist track ids: {error}"))?;
+    let payload = request_netease_eapi_json(
+        &client,
+        NETEASE_SONG_DETAIL_API,
+        json!({
+            "c": c_payload,
+        }),
         Some(&auth_context.cookie_header),
         "playlist tracks",
-    )?;
+    )?
+    .body;
 
     let items = payload
         .get("songs")
@@ -1195,19 +1861,20 @@ pub fn search_songs(
     let offset = (normalized_page_num.saturating_sub(1) * normalized_page_size) as u64;
 
     let client = build_http_client()?;
-    let payload = request_api_json(
+    let payload = request_netease_eapi_json(
         &client,
-        NETEASE_CLOUDSEARCH_ENDPOINT,
-        vec![
-            ("timestamp", now_ms().to_string()),
-            ("keywords", normalized_keyword.to_string()),
-            ("type", "1".to_string()),
-            ("limit", normalized_page_size.to_string()),
-            ("offset", offset.to_string()),
-        ],
+        NETEASE_CLOUDSEARCH_API,
+        json!({
+            "s": normalized_keyword,
+            "type": 1,
+            "limit": normalized_page_size,
+            "offset": offset,
+            "total": true,
+        }),
         Some(&auth_context.cookie_header),
         "search songs",
-    )?;
+    )?
+    .body;
 
     let result = payload.get("result").unwrap_or(&Value::Null);
     let items = result
@@ -1240,17 +1907,18 @@ pub fn prepare_cached_playback(
         .ok_or_else(|| "Failed to resolve Netease song id from source locator".to_string())?;
 
     let client = build_http_client()?;
-    let payload = request_api_json(
+    let payload = request_netease_eapi_json(
         &client,
-        NETEASE_SONG_URL_ENDPOINT,
-        vec![
-            ("timestamp", now_ms().to_string()),
-            ("id", song_id.clone()),
-            ("br", NETEASE_PLAYBACK_CACHE_BR.to_string()),
-        ],
+        NETEASE_SONG_URL_API,
+        json!({
+            "ids": serde_json::to_string(&vec![song_id.clone()])
+                .map_err(|error| format!("Failed to encode Netease song id list: {error}"))?,
+            "br": NETEASE_PLAYBACK_CACHE_BR,
+        }),
         Some(&auth_context.cookie_header),
         "song url",
-    )?;
+    )?
+    .body;
 
     let stream = payload
         .get("data")

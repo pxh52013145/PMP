@@ -1089,6 +1089,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "ecb"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a8bfa975b1aec2145850fcaa1c6fe269a16578c44705a532ae3edc92b8881c7"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3312,18 +3321,23 @@ dependencies = [
 name = "pixel-matrix-player"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "asio-sys",
  "base64 0.22.1",
+ "cbc",
  "cpal",
  "crossbeam-queue",
  "dsf",
+ "ecb",
  "gif",
  "image 0.25.9",
  "keyring",
  "lofty",
  "md5",
+ "num-bigint",
  "once_cell",
  "qrcode",
+ "rand 0.8.5",
  "reqwest",
  "rodio",
  "rtrb",

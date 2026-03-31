@@ -99,7 +99,11 @@ function buildCapabilities(kind: MusicSourceKind, driver: string): MusicSourceCa
 
   if (
     isRemote &&
-    (normalizedDriver === 'netease-api-enhanced' || normalizedDriver === 'netease-api')
+    (
+      normalizedDriver === 'netease-web' ||
+      normalizedDriver === 'netease-api-enhanced' ||
+      normalizedDriver === 'netease-api'
+    )
   ) {
     return {
       canSearchTracks: true,
