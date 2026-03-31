@@ -21,6 +21,7 @@ import {
 import { resolvePlatformWorkspaceAdapter } from './platformWorkspaceAdapterRegistry';
 import { useBilibiliWorkspaceAdapterController } from './useBilibiliWorkspaceAdapterController';
 import { useDedicatedWorkspacePlaceholderController } from './useDedicatedWorkspacePlaceholderController';
+import { useNeteaseWorkspaceAdapterController } from './useNeteaseWorkspaceAdapterController';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import {
@@ -360,6 +361,27 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     setPlaylistError: setActiveScopePlaylistError,
   });
 
+  const {
+    neteaseUseDarkMode,
+    neteaseToolbarProps,
+    neteaseWorkspaceProps,
+  } = useNeteaseWorkspaceAdapterController({
+    activeWorkspaceConnectorId,
+    prefersDarkMode,
+    items,
+    audioService,
+    t,
+    platformPlaylists,
+    selectedPlaylist,
+    selectedPlaylistId,
+    newPlaylistName,
+    playlistError,
+    onCreatePlaylist: handleCreatePlaylist,
+    setSelectedPlaylistId: setActiveScopeSelectedPlaylistId,
+    setNewPlaylistName: setActiveScopeNewPlaylistName,
+    setPlaylistError: setActiveScopePlaylistError,
+  });
+
   const { placeholderToolbarProps, placeholderWorkspaceProps } =
     useDedicatedWorkspacePlaceholderController({
       activeWorkspaceDescriptor,
@@ -371,7 +393,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     [items]
   );
 
-  const rootClassName = bilibiliUseDarkMode
+  const rootClassName = bilibiliUseDarkMode || neteaseUseDarkMode
     ? 'platform-magnet-root platform-magnet-root--dark'
     : 'platform-magnet-root';
 
@@ -410,12 +432,13 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       case 'bilibili':
         return activeWorkspaceAdapter.renderToolbar(bilibiliToolbarProps);
       case 'netease':
+        return activeWorkspaceAdapter.renderToolbar(neteaseToolbarProps);
       case 'qqmusic':
         return activeWorkspaceAdapter.renderToolbar(placeholderToolbarProps);
       default:
         return null;
     }
-  }, [activeWorkspaceAdapter, bilibiliToolbarProps, placeholderToolbarProps]);
+  }, [activeWorkspaceAdapter, bilibiliToolbarProps, neteaseToolbarProps, placeholderToolbarProps]);
 
   const renderDedicatedWorkspaceContent = useCallback((): React.ReactNode => {
     if (!activeWorkspaceAdapter) return null;
@@ -424,12 +447,13 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       case 'bilibili':
         return activeWorkspaceAdapter.renderWorkspace(bilibiliWorkspaceProps);
       case 'netease':
+        return activeWorkspaceAdapter.renderWorkspace(neteaseWorkspaceProps);
       case 'qqmusic':
         return activeWorkspaceAdapter.renderWorkspace(placeholderWorkspaceProps);
       default:
         return null;
     }
-  }, [activeWorkspaceAdapter, bilibiliWorkspaceProps, placeholderWorkspaceProps]);
+  }, [activeWorkspaceAdapter, bilibiliWorkspaceProps, neteaseWorkspaceProps, placeholderWorkspaceProps]);
 
   return (
     <div className={rootClassName}>

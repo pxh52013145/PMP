@@ -97,6 +97,22 @@ function buildCapabilities(kind: MusicSourceKind, driver: string): MusicSourceCa
     };
   }
 
+  if (
+    isRemote &&
+    (normalizedDriver === 'netease-api-enhanced' || normalizedDriver === 'netease-api')
+  ) {
+    return {
+      canSearchTracks: true,
+      canSearchAlbums: false,
+      canListPlaylists: true,
+      canEditPlaylists: false,
+      canFetchLyrics: false,
+      canFetchCovers: true,
+      canResolveStream: true,
+      canRunIncrementalSync: false,
+    };
+  }
+
   return {
     canSearchTracks: true,
     canSearchAlbums: true,

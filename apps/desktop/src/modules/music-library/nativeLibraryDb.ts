@@ -220,6 +220,82 @@ export interface NativeBilibiliPlaybackQualityOption {
   available: boolean;
 }
 
+export interface NativeNeteaseQrCodeSession {
+  connectorId: string;
+  sessionId: string;
+  qrKey: string;
+  qrUrl: string;
+  qrImageDataUrl: string;
+  generatedAtMs: number;
+  expiresAtMs: number;
+}
+
+export interface NativeNeteaseQrPollResult {
+  connectorId: string;
+  sessionId: string;
+  state: string;
+  stateCode: number;
+  stateMessage: string;
+  authState: string;
+  accountUid?: string;
+  expiresAtMs?: number;
+}
+
+export interface NativeNeteaseAuthStatus {
+  connectorId: string;
+  authState: string;
+  accountUid?: string;
+  updatedAtMs?: number;
+  expiresAtMs?: number;
+  availability?: 'available' | 'degraded' | 'unavailable';
+  availabilityMessage?: string;
+}
+
+export interface NativeNeteaseUserPlaylist {
+  playlistId: string;
+  title: string;
+  trackCount: number;
+  coverUrl?: string;
+  updatedAtMs?: number;
+}
+
+export interface NativeNeteaseRecommendedPlaylist {
+  playlistId: string;
+  title: string;
+  trackCount: number;
+  coverUrl?: string;
+}
+
+export interface NativeNeteaseSongItem {
+  songId: string;
+  title: string;
+  artistNames: string;
+  albumName?: string;
+  durationSeconds?: number;
+  coverUrl?: string;
+  sourceLocator: string;
+  webUrl: string;
+}
+
+export interface NativeNeteaseSongPage {
+  sourceKind: string;
+  sourceId: string;
+  pageNum: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
+  items: NativeNeteaseSongItem[];
+}
+
+export interface NativeNeteasePlaybackPrepared {
+  sourceLocator: string;
+  streamUrl: string;
+  cachePath: string;
+  mimeType?: string;
+  durationSeconds?: number;
+  songId: string;
+}
+
 export interface NativeLibraryTrackUpsertInput {
   id: string;
   filePath: string;
@@ -1501,6 +1577,225 @@ function ensureBilibiliPlaybackQualityOption(
   };
 }
 
+function ensureNeteaseQrCodeSession(value: unknown): NativeNeteaseQrCodeSession | null {
+  if (!isRecord(value)) return null;
+
+  const connectorId = asTrimmedString(readRecordField(value, 'connectorId', 'connector_id'));
+  const sessionId = asTrimmedString(readRecordField(value, 'sessionId', 'session_id'));
+  const qrKey = asTrimmedString(readRecordField(value, 'qrKey', 'qr_key'));
+  const qrUrl = asTrimmedString(readRecordField(value, 'qrUrl', 'qr_url'));
+  const qrImageDataUrl = asTrimmedString(readRecordField(value, 'qrImageDataUrl', 'qr_image_data_url'));
+  const generatedAtMs = asNumber(readRecordField(value, 'generatedAtMs', 'generated_at_ms'));
+  const expiresAtMs = asNumber(readRecordField(value, 'expiresAtMs', 'expires_at_ms'));
+  if (
+    !connectorId ||
+    !sessionId ||
+    !qrKey ||
+    !qrUrl ||
+    !qrImageDataUrl ||
+    generatedAtMs === undefined ||
+    expiresAtMs === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    connectorId,
+    sessionId,
+    qrKey,
+    qrUrl,
+    qrImageDataUrl,
+    generatedAtMs,
+    expiresAtMs,
+  };
+}
+
+function ensureNeteaseQrPollResult(value: unknown): NativeNeteaseQrPollResult | null {
+  if (!isRecord(value)) return null;
+
+  const connectorId = asTrimmedString(readRecordField(value, 'connectorId', 'connector_id'));
+  const sessionId = asTrimmedString(readRecordField(value, 'sessionId', 'session_id'));
+  const state = asTrimmedString(readRecordField(value, 'state'));
+  const stateCode = asNumber(readRecordField(value, 'stateCode', 'state_code'));
+  const stateMessage = asTrimmedString(readRecordField(value, 'stateMessage', 'state_message'));
+  const authState = asTrimmedString(readRecordField(value, 'authState', 'auth_state'));
+  if (
+    !connectorId ||
+    !sessionId ||
+    !state ||
+    stateCode === undefined ||
+    !stateMessage ||
+    !authState
+  ) {
+    return null;
+  }
+
+  return {
+    connectorId,
+    sessionId,
+    state,
+    stateCode,
+    stateMessage,
+    authState,
+    accountUid: asOptionalString(readRecordField(value, 'accountUid', 'account_uid')),
+    expiresAtMs: asNumber(readRecordField(value, 'expiresAtMs', 'expires_at_ms')),
+  };
+}
+
+function ensureNeteaseAuthStatus(value: unknown): NativeNeteaseAuthStatus | null {
+  if (!isRecord(value)) return null;
+
+  const connectorId = asTrimmedString(readRecordField(value, 'connectorId', 'connector_id'));
+  const authState = asTrimmedString(readRecordField(value, 'authState', 'auth_state'));
+  if (!connectorId || !authState) return null;
+
+  const availabilityRaw = asTrimmedString(readRecordField(value, 'availability'));
+  const availability = (() => {
+    const normalized = availabilityRaw.toLowerCase();
+    if (normalized === 'available' || normalized === 'degraded' || normalized === 'unavailable') {
+      return normalized;
+    }
+    return undefined;
+  })();
+
+  return {
+    connectorId,
+    authState,
+    accountUid: asOptionalString(readRecordField(value, 'accountUid', 'account_uid')),
+    updatedAtMs: asNumber(readRecordField(value, 'updatedAtMs', 'updated_at_ms')),
+    expiresAtMs: asNumber(readRecordField(value, 'expiresAtMs', 'expires_at_ms')),
+    availability,
+    availabilityMessage: asOptionalString(
+      readRecordField(value, 'availabilityMessage', 'availability_message')
+    ),
+  };
+}
+
+function ensureNeteaseUserPlaylist(value: unknown): NativeNeteaseUserPlaylist | null {
+  if (!isRecord(value)) return null;
+
+  const playlistId = asTrimmedString(readRecordField(value, 'playlistId', 'playlist_id'));
+  const title = asTrimmedString(readRecordField(value, 'title'));
+  const trackCount = asNumber(readRecordField(value, 'trackCount', 'track_count'));
+  if (!playlistId || !title || trackCount === undefined) return null;
+
+  return {
+    playlistId,
+    title,
+    trackCount: Math.max(0, Math.floor(trackCount)),
+    coverUrl: asOptionalString(readRecordField(value, 'coverUrl', 'cover_url')),
+    updatedAtMs: asNumber(readRecordField(value, 'updatedAtMs', 'updated_at_ms')),
+  };
+}
+
+function ensureNeteaseRecommendedPlaylist(
+  value: unknown
+): NativeNeteaseRecommendedPlaylist | null {
+  if (!isRecord(value)) return null;
+
+  const playlistId = asTrimmedString(readRecordField(value, 'playlistId', 'playlist_id'));
+  const title = asTrimmedString(readRecordField(value, 'title'));
+  const trackCount = asNumber(readRecordField(value, 'trackCount', 'track_count'));
+  if (!playlistId || !title || trackCount === undefined) return null;
+
+  return {
+    playlistId,
+    title,
+    trackCount: Math.max(0, Math.floor(trackCount)),
+    coverUrl: asOptionalString(readRecordField(value, 'coverUrl', 'cover_url')),
+  };
+}
+
+function ensureNeteaseSongItem(value: unknown): NativeNeteaseSongItem | null {
+  if (!isRecord(value)) return null;
+
+  const songId = asTrimmedString(readRecordField(value, 'songId', 'song_id'));
+  const title = asTrimmedString(readRecordField(value, 'title'));
+  const artistNames = asTrimmedString(readRecordField(value, 'artistNames', 'artist_names'));
+  const sourceLocator = asTrimmedString(readRecordField(value, 'sourceLocator', 'source_locator'));
+  const webUrl = asTrimmedString(readRecordField(value, 'webUrl', 'web_url'));
+  if (!songId || !title || !artistNames || !sourceLocator || !webUrl) return null;
+
+  const durationSeconds = asNumber(readRecordField(value, 'durationSeconds', 'duration_seconds'));
+
+  return {
+    songId,
+    title,
+    artistNames,
+    albumName: asOptionalString(readRecordField(value, 'albumName', 'album_name')),
+    durationSeconds:
+      durationSeconds === undefined ? undefined : Math.max(0, Math.floor(durationSeconds)),
+    coverUrl: asOptionalString(readRecordField(value, 'coverUrl', 'cover_url')),
+    sourceLocator,
+    webUrl,
+  };
+}
+
+function ensureNeteaseSongPage(value: unknown): NativeNeteaseSongPage | null {
+  if (!isRecord(value)) return null;
+
+  const sourceKind = asTrimmedString(readRecordField(value, 'sourceKind', 'source_kind'));
+  const sourceId = asTrimmedString(readRecordField(value, 'sourceId', 'source_id'));
+  const pageNum = asNumber(readRecordField(value, 'pageNum', 'page_num'));
+  const pageSize = asNumber(readRecordField(value, 'pageSize', 'page_size'));
+  const total = asNumber(readRecordField(value, 'total'));
+  const hasMore = asBool(readRecordField(value, 'hasMore', 'has_more'));
+  if (
+    !sourceKind ||
+    !sourceId ||
+    pageNum === undefined ||
+    pageSize === undefined ||
+    total === undefined ||
+    hasMore === undefined
+  ) {
+    return null;
+  }
+
+  const itemsRaw = readRecordField(value, 'items');
+  const items: NativeNeteaseSongItem[] = [];
+  if (Array.isArray(itemsRaw)) {
+    for (const item of itemsRaw) {
+      const parsed = ensureNeteaseSongItem(item);
+      if (!parsed) continue;
+      items.push(parsed);
+    }
+  }
+
+  return {
+    sourceKind,
+    sourceId,
+    pageNum: Math.max(1, Math.floor(pageNum)),
+    pageSize: Math.max(1, Math.floor(pageSize)),
+    total: Math.max(0, Math.floor(total)),
+    hasMore,
+    items,
+  };
+}
+
+function ensureNeteasePlaybackPrepared(
+  value: unknown
+): NativeNeteasePlaybackPrepared | null {
+  if (!isRecord(value)) return null;
+
+  const sourceLocator = asTrimmedString(readRecordField(value, 'sourceLocator', 'source_locator'));
+  const streamUrl = asTrimmedString(readRecordField(value, 'streamUrl', 'stream_url'));
+  const cachePath = asTrimmedString(readRecordField(value, 'cachePath', 'cache_path'));
+  const songId = asTrimmedString(readRecordField(value, 'songId', 'song_id'));
+  if (!sourceLocator || !streamUrl || !cachePath || !songId) return null;
+
+  const durationSeconds = asNumber(readRecordField(value, 'durationSeconds', 'duration_seconds'));
+
+  return {
+    sourceLocator,
+    streamUrl,
+    cachePath,
+    mimeType: asOptionalString(readRecordField(value, 'mimeType', 'mime_type')),
+    durationSeconds:
+      durationSeconds === undefined ? undefined : Math.max(0, Math.floor(durationSeconds)),
+    songId,
+  };
+}
+
 function ensureTrackSyncResult(value: unknown): NativeLibraryTrackSyncResult | null {
   if (!isRecord(value)) return null;
   const upserted = asNumber(value.upserted);
@@ -2708,6 +3003,133 @@ export async function resolveNativeBilibiliLyricLocator(
     lyricLocator: normalizedLocator,
   }).catch(() => null);
   return ensureBilibiliLyricLocatorRef(raw);
+}
+
+export async function generateNativeNeteaseQrCodeSession(): Promise<NativeNeteaseQrCodeSession | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invoke<unknown>('music_library_netease_qr_generate').catch(() => null);
+  return ensureNeteaseQrCodeSession(raw);
+}
+
+export async function pollNativeNeteaseQrCodeSession(
+  sessionId: string
+): Promise<NativeNeteaseQrPollResult | null> {
+  if (!isTauriRuntime()) return null;
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) return null;
+
+  const raw = await invoke<unknown>('music_library_netease_qr_poll', {
+    sessionId: normalizedSessionId,
+  }).catch(() => null);
+  return ensureNeteaseQrPollResult(raw);
+}
+
+export async function getNativeNeteaseAuthStatus(): Promise<NativeNeteaseAuthStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invoke<unknown>('music_library_netease_get_auth_status').catch(() => null);
+  return ensureNeteaseAuthStatus(raw);
+}
+
+export async function logoutNativeNetease(): Promise<NativeNeteaseAuthStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invoke<unknown>('music_library_netease_logout').catch(() => null);
+  return ensureNeteaseAuthStatus(raw);
+}
+
+export async function listNativeNeteaseRecommendedPlaylists(): Promise<
+  NativeNeteaseRecommendedPlaylist[]
+> {
+  if (!isTauriRuntime()) return [];
+  const raw = await invoke<unknown>('music_library_netease_list_recommended_playlists').catch(
+    () => null
+  );
+  if (!Array.isArray(raw)) return [];
+
+  const result: NativeNeteaseRecommendedPlaylist[] = [];
+  for (const item of raw) {
+    const parsed = ensureNeteaseRecommendedPlaylist(item);
+    if (!parsed) continue;
+    result.push(parsed);
+  }
+
+  return result;
+}
+
+export async function listNativeNeteaseRecommendedSongs(): Promise<NativeNeteaseSongPage | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invoke<unknown>('music_library_netease_list_recommended_songs').catch(
+    () => null
+  );
+  return ensureNeteaseSongPage(raw);
+}
+
+export async function listNativeNeteaseUserPlaylists(): Promise<NativeNeteaseUserPlaylist[]> {
+  if (!isTauriRuntime()) return [];
+  const raw = await invoke<unknown>('music_library_netease_list_user_playlists').catch(
+    () => null
+  );
+  if (!Array.isArray(raw)) return [];
+
+  const result: NativeNeteaseUserPlaylist[] = [];
+  for (const item of raw) {
+    const parsed = ensureNeteaseUserPlaylist(item);
+    if (!parsed) continue;
+    result.push(parsed);
+  }
+
+  return result;
+}
+
+export async function listNativeNeteasePlaylistTracks(
+  playlistId: string
+): Promise<NativeNeteaseSongPage | null> {
+  if (!isTauriRuntime()) return null;
+  const normalizedPlaylistId = playlistId.trim();
+  if (!normalizedPlaylistId) return null;
+
+  const raw = await invoke<unknown>('music_library_netease_list_playlist_tracks', {
+    playlistId: normalizedPlaylistId,
+  }).catch(() => null);
+  return ensureNeteaseSongPage(raw);
+}
+
+export async function searchNativeNeteaseSongs(options: {
+  keyword: string;
+  pageNum?: number;
+  pageSize?: number;
+}): Promise<NativeNeteaseSongPage | null> {
+  if (!isTauriRuntime()) return null;
+  const keyword = options.keyword.trim();
+  if (!keyword) return null;
+
+  const pageNum =
+    typeof options.pageNum === 'number' && Number.isFinite(options.pageNum)
+      ? Math.max(1, Math.floor(options.pageNum))
+      : undefined;
+  const pageSize =
+    typeof options.pageSize === 'number' && Number.isFinite(options.pageSize)
+      ? Math.max(1, Math.floor(options.pageSize))
+      : undefined;
+
+  const raw = await invoke<unknown>('music_library_netease_search_songs', {
+    keyword,
+    pageNum,
+    pageSize,
+  }).catch(() => null);
+  return ensureNeteaseSongPage(raw);
+}
+
+export async function prepareNativeNeteaseCachedPlayback(
+  sourceLocator: string
+): Promise<NativeNeteasePlaybackPrepared | null> {
+  if (!isTauriRuntime()) return null;
+  const normalizedSourceLocator = sourceLocator.trim();
+  if (!normalizedSourceLocator) return null;
+
+  const raw = await invoke<unknown>('music_library_netease_prepare_cached_playback', {
+    sourceLocator: normalizedSourceLocator,
+  }).catch(() => null);
+  return ensureNeteasePlaybackPrepared(raw);
 }
 
 export async function resolveNativeLibraryLyrics(

@@ -1,11 +1,18 @@
 import {
   generateNativeBilibiliQrCodeSession,
   getNativeBilibiliAuthStatus,
+  generateNativeNeteaseQrCodeSession,
+  getNativeNeteaseAuthStatus,
   logoutNativeBilibili,
+  logoutNativeNetease,
   pollNativeBilibiliQrCodeSession,
+  pollNativeNeteaseQrCodeSession,
   type NativeBilibiliAuthStatus,
   type NativeBilibiliQrCodeSession,
   type NativeBilibiliQrPollResult,
+  type NativeNeteaseAuthStatus,
+  type NativeNeteaseQrCodeSession,
+  type NativeNeteaseQrPollResult,
 } from '../music-library';
 
 export type PlatformConnectorId = `connector.platform.${string}`;
@@ -56,6 +63,8 @@ export interface PlatformQrLoginPollResult {
 
 export type BilibiliQrLoginSession = PlatformQrLoginSession;
 export type BilibiliQrLoginPollResult = PlatformQrLoginPollResult;
+export type NeteaseQrLoginSession = PlatformQrLoginSession;
+export type NeteaseQrLoginPollResult = PlatformQrLoginPollResult;
 
 export interface PlatformConnectorDefinition {
   connectorId: PlatformConnectorId;
@@ -104,8 +113,8 @@ const BUILTIN_CONNECTOR_DEFINITIONS: PlatformConnectorDefinition[] = [
     displayName: 'Netease',
     labelKey: 'magnet.platform-login.platform.netease',
     iconKey: 'netease',
-    enabled: false,
-    authFlow: 'none',
+    enabled: true,
+    authFlow: 'qr',
     workspaceKind: 'netease',
     workspaceMode: 'dedicated',
     sortOrder: 20,
@@ -208,6 +217,55 @@ function mapBilibiliQrPollResult(
   };
 }
 
+function mapNeteaseAuthStatus(
+  status: NativeNeteaseAuthStatus | null
+): PlatformConnectorAuthSnapshot | null {
+  if (!status) return null;
+  const connectorId = normalizeConnectorId(status.connectorId) ?? NETEASE_CONNECTOR_ID;
+
+  return {
+    connectorId,
+    displayName: 'Netease',
+    authState: normalizeAuthState(status.authState),
+    accountUid: status.accountUid,
+    updatedAtMs: status.updatedAtMs,
+    expiresAtMs: status.expiresAtMs,
+    availability: normalizeAvailability(status.availability),
+    availabilityMessage: status.availabilityMessage,
+  };
+}
+
+function mapNeteaseQrSession(
+  session: NativeNeteaseQrCodeSession | null
+): PlatformQrLoginSession | null {
+  if (!session) return null;
+  return {
+    connectorId: normalizeConnectorId(session.connectorId) ?? NETEASE_CONNECTOR_ID,
+    sessionId: session.sessionId,
+    qrcodeKey: session.qrKey,
+    qrUrl: session.qrUrl,
+    qrImageDataUrl: session.qrImageDataUrl,
+    generatedAtMs: session.generatedAtMs,
+    expiresAtMs: session.expiresAtMs,
+  };
+}
+
+function mapNeteaseQrPollResult(
+  result: NativeNeteaseQrPollResult | null
+): PlatformQrLoginPollResult | null {
+  if (!result) return null;
+  return {
+    connectorId: normalizeConnectorId(result.connectorId) ?? NETEASE_CONNECTOR_ID,
+    sessionId: result.sessionId,
+    state: result.state,
+    stateCode: result.stateCode,
+    stateMessage: result.stateMessage,
+    authState: normalizeAuthState(result.authState),
+    accountUid: result.accountUid,
+    expiresAtMs: result.expiresAtMs,
+  };
+}
+
 function createUnsupportedSnapshot(
   definition: PlatformConnectorDefinition
 ): PlatformConnectorAuthSnapshot {
@@ -276,11 +334,54 @@ function createBilibiliAdapter(): PlatformConnectorAdapter {
   };
 }
 
+function createNeteaseAdapter(): PlatformConnectorAdapter {
+  const definition = BUILTIN_CONNECTOR_DEFINITIONS[1];
+  return {
+    definition,
+    getAuthSnapshot: async () => mapNeteaseAuthStatus(await getNativeNeteaseAuthStatus()),
+    refreshAndEmitAuthSnapshot: async () => {
+      const snapshot = mapNeteaseAuthStatus(await getNativeNeteaseAuthStatus());
+      if (snapshot) {
+        emitPlatformConnectorAuthChanged(snapshot);
+      }
+      return snapshot;
+    },
+    beginQrLogin: async () => mapNeteaseQrSession(await generateNativeNeteaseQrCodeSession()),
+    pollQrLogin: async (sessionId: string) => {
+      const result = mapNeteaseQrPollResult(await pollNativeNeteaseQrCodeSession(sessionId));
+      if (!result) return null;
+
+      if (
+        result.authState === 'authorized' ||
+        result.authState === 'expired' ||
+        result.authState === 'revoked' ||
+        result.authState === 'error'
+      ) {
+        const snapshot = mapNeteaseAuthStatus(await getNativeNeteaseAuthStatus());
+        if (snapshot) {
+          emitPlatformConnectorAuthChanged(snapshot);
+        }
+      }
+
+      return result;
+    },
+    logout: async () => {
+      const snapshot = mapNeteaseAuthStatus(await logoutNativeNetease());
+      if (snapshot) {
+        emitPlatformConnectorAuthChanged(snapshot);
+      }
+      return snapshot;
+    },
+  };
+}
+
 function registerBuiltinPlatformConnectorAdapters(): void {
   if (platformConnectorAdapterRegistry.size > 0) return;
 
   const bilibili = createBilibiliAdapter();
   platformConnectorAdapterRegistry.set(bilibili.definition.connectorId, bilibili);
+  const netease = createNeteaseAdapter();
+  platformConnectorAdapterRegistry.set(netease.definition.connectorId, netease);
 
   for (const definition of BUILTIN_CONNECTOR_DEFINITIONS) {
     if (platformConnectorAdapterRegistry.has(definition.connectorId)) continue;

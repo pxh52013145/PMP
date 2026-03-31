@@ -1,4 +1,7 @@
-use crate::{lyrics, music_library, music_library_db, music_library_sync, music_platform_bilibili};
+use crate::{
+    lyrics, music_library, music_library_db, music_library_sync, music_platform_bilibili,
+    music_platform_netease,
+};
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_scan(
@@ -366,6 +369,116 @@ pub async fn music_library_bilibili_resolve_lyric_locator(
     })
     .await
     .map_err(|e| format!("Bilibili lyric locator resolve task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_netease_qr_generate(
+    app: tauri::AppHandle,
+) -> Result<music_platform_netease::NeteaseQrCodeSession, String> {
+    tauri::async_runtime::spawn_blocking(move || music_platform_netease::qr_generate(&app))
+        .await
+        .map_err(|e| format!("Netease QR generate task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_netease_qr_poll(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<music_platform_netease::NeteaseQrPollResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_netease::qr_poll(&app, &session_id)
+    })
+    .await
+    .map_err(|e| format!("Netease QR poll task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_netease_get_auth_status(
+    app: tauri::AppHandle,
+) -> Result<music_platform_netease::NeteaseAuthStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || music_platform_netease::get_auth_status(&app))
+        .await
+        .map_err(|e| format!("Netease auth status task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_netease_logout(
+    app: tauri::AppHandle,
+) -> Result<music_platform_netease::NeteaseAuthStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || music_platform_netease::logout(&app))
+        .await
+        .map_err(|e| format!("Netease logout task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_netease_list_recommended_playlists(
+    app: tauri::AppHandle,
+) -> Result<Vec<music_platform_netease::NeteaseRecommendedPlaylist>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_netease::list_recommended_playlists(&app)
+    })
+    .await
+    .map_err(|e| format!("Netease recommended playlists task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_netease_list_recommended_songs(
+    app: tauri::AppHandle,
+) -> Result<music_platform_netease::NeteaseSongPage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_netease::list_recommended_songs(&app)
+    })
+    .await
+    .map_err(|e| format!("Netease recommended songs task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_netease_list_user_playlists(
+    app: tauri::AppHandle,
+) -> Result<Vec<music_platform_netease::NeteaseUserPlaylist>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_netease::list_user_playlists(&app)
+    })
+    .await
+    .map_err(|e| format!("Netease user playlists task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_netease_list_playlist_tracks(
+    app: tauri::AppHandle,
+    playlist_id: String,
+) -> Result<music_platform_netease::NeteaseSongPage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_netease::list_playlist_tracks(&app, &playlist_id)
+    })
+    .await
+    .map_err(|e| format!("Netease playlist tracks task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_netease_search_songs(
+    app: tauri::AppHandle,
+    keyword: String,
+    page_num: Option<u32>,
+    page_size: Option<u32>,
+) -> Result<music_platform_netease::NeteaseSongPage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_netease::search_songs(&app, &keyword, page_num, page_size)
+    })
+    .await
+    .map_err(|e| format!("Netease search songs task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_netease_prepare_cached_playback(
+    app: tauri::AppHandle,
+    source_locator: String,
+) -> Result<music_platform_netease::NeteasePlaybackPrepared, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_netease::prepare_cached_playback(&app, &source_locator)
+    })
+    .await
+    .map_err(|e| format!("Netease prepare cached playback task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]

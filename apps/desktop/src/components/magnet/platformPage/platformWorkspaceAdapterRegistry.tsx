@@ -11,6 +11,12 @@ import {
 } from './BilibiliWorkspaceAdapter';
 import type { BilibiliWorkspaceProps } from './BilibiliWorkspace';
 import {
+  NeteaseWorkspaceAdapter,
+  NeteaseWorkspaceToolbar,
+  type NeteaseWorkspaceToolbarProps,
+} from './NeteaseWorkspaceAdapter';
+import type { NeteaseWorkspaceProps } from './NeteaseWorkspace';
+import {
   DedicatedWorkspacePlaceholderAdapter,
   DedicatedWorkspacePlaceholderToolbar,
   type DedicatedWorkspacePlaceholderProps,
@@ -23,8 +29,8 @@ export interface PlatformWorkspaceAdapterPayloadMap {
     workspace: BilibiliWorkspaceProps;
   };
   netease: {
-    toolbar: DedicatedWorkspacePlaceholderToolbarProps;
-    workspace: DedicatedWorkspacePlaceholderProps;
+    toolbar: NeteaseWorkspaceToolbarProps;
+    workspace: NeteaseWorkspaceProps;
   };
   qqmusic: {
     toolbar: DedicatedWorkspacePlaceholderToolbarProps;
@@ -54,8 +60,8 @@ const bilibiliWorkspaceAdapter: PlatformWorkspaceAdapter<'bilibili'> = {
 
 const neteaseWorkspaceAdapter: PlatformWorkspaceAdapter<'netease'> = {
   workspaceKind: 'netease',
-  renderToolbar: (payload) => <DedicatedWorkspacePlaceholderToolbar {...payload} />,
-  renderWorkspace: (payload) => <DedicatedWorkspacePlaceholderAdapter {...payload} />,
+  renderToolbar: (payload) => <NeteaseWorkspaceToolbar {...payload} />,
+  renderWorkspace: (payload) => <NeteaseWorkspaceAdapter {...payload} />,
 };
 
 const qqmusicWorkspaceAdapter: PlatformWorkspaceAdapter<'qqmusic'> = {

@@ -26,6 +26,8 @@ export {
   type PlatformQrLoginSession,
   type BilibiliQrLoginPollResult,
   type BilibiliQrLoginSession,
+  type NeteaseQrLoginPollResult,
+  type NeteaseQrLoginSession,
   type PlatformConnectorAuthSnapshot,
   type PlatformConnectorAuthState,
   type PlatformConnectorId,
@@ -52,6 +54,20 @@ export {
   type BilibiliPlaybackQualityOption,
   type BilibiliLyricLocatorResolved,
 } from './bilibiliFacade';
+
+export {
+  listNeteasePlaylistTracks,
+  listNeteaseRecommendedPlaylists,
+  listNeteaseRecommendedSongs,
+  listNeteaseUserPlaylists,
+  prepareNeteaseCachedPlayback,
+  searchNeteaseSongs,
+  type NeteasePreparedPlayback,
+  type NeteaseRecommendedPlaylistItem,
+  type NeteaseSongItem,
+  type NeteaseSongPage,
+  type NeteaseUserPlaylistItem,
+} from './neteaseFacade';
 
 export {
   listPlatformConnectorFacadeItems,
