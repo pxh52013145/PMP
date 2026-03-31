@@ -1017,9 +1017,7 @@ fn fetch_login_status_payload(client: &Client, cookie_header: &str) -> Result<Va
     request_netease_weapi_json(
         client,
         NETEASE_LOGIN_STATUS_API,
-        json!({
-            "timestamp": now_ms(),
-        }),
+        json!({}),
         Some(cookie_header),
         "login status",
     )
@@ -1419,8 +1417,15 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
 
     let account_uid = if auth_state == "authorized" {
         if let Some(cookie_header) = cookie_header {
-            let profile_payload = fetch_login_status_payload(&client, &cookie_header)?;
-            let account_uid = extract_account_uid_from_login_status(&profile_payload);
+            let account_uid = match fetch_login_status_payload(&client, &cookie_header) {
+                Ok(profile_payload) => extract_account_uid_from_login_status(&profile_payload),
+                Err(error) => {
+                    eprintln!(
+                        "[music_platform_netease] QR login authorized but login status lookup failed: {error}"
+                    );
+                    None
+                }
+            };
             let account_id = format!(
                 "{}::{}",
                 NETEASE_CONNECTOR_ID,
@@ -1449,7 +1454,7 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
 
             account_uid
         } else {
-            None
+            return Err("Netease QR login succeeded but no auth cookie was returned".to_string());
         }
     } else {
         None
