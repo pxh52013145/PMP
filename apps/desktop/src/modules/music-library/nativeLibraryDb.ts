@@ -3007,7 +3007,7 @@ export async function resolveNativeBilibiliLyricLocator(
 
 export async function generateNativeNeteaseQrCodeSession(): Promise<NativeNeteaseQrCodeSession | null> {
   if (!isTauriRuntime()) return null;
-  const raw = await invoke<unknown>('music_library_netease_qr_generate').catch(() => null);
+  const raw = await invoke<unknown>('music_library_netease_qr_generate');
   return ensureNeteaseQrCodeSession(raw);
 }
 
@@ -3020,7 +3020,7 @@ export async function pollNativeNeteaseQrCodeSession(
 
   const raw = await invoke<unknown>('music_library_netease_qr_poll', {
     sessionId: normalizedSessionId,
-  }).catch(() => null);
+  });
   return ensureNeteaseQrPollResult(raw);
 }
 
@@ -3040,9 +3040,7 @@ export async function listNativeNeteaseRecommendedPlaylists(): Promise<
   NativeNeteaseRecommendedPlaylist[]
 > {
   if (!isTauriRuntime()) return [];
-  const raw = await invoke<unknown>('music_library_netease_list_recommended_playlists').catch(
-    () => null
-  );
+  const raw = await invoke<unknown>('music_library_netease_list_recommended_playlists');
   if (!Array.isArray(raw)) return [];
 
   const result: NativeNeteaseRecommendedPlaylist[] = [];
@@ -3057,17 +3055,13 @@ export async function listNativeNeteaseRecommendedPlaylists(): Promise<
 
 export async function listNativeNeteaseRecommendedSongs(): Promise<NativeNeteaseSongPage | null> {
   if (!isTauriRuntime()) return null;
-  const raw = await invoke<unknown>('music_library_netease_list_recommended_songs').catch(
-    () => null
-  );
+  const raw = await invoke<unknown>('music_library_netease_list_recommended_songs');
   return ensureNeteaseSongPage(raw);
 }
 
 export async function listNativeNeteaseUserPlaylists(): Promise<NativeNeteaseUserPlaylist[]> {
   if (!isTauriRuntime()) return [];
-  const raw = await invoke<unknown>('music_library_netease_list_user_playlists').catch(
-    () => null
-  );
+  const raw = await invoke<unknown>('music_library_netease_list_user_playlists');
   if (!Array.isArray(raw)) return [];
 
   const result: NativeNeteaseUserPlaylist[] = [];
@@ -3089,7 +3083,7 @@ export async function listNativeNeteasePlaylistTracks(
 
   const raw = await invoke<unknown>('music_library_netease_list_playlist_tracks', {
     playlistId: normalizedPlaylistId,
-  }).catch(() => null);
+  });
   return ensureNeteaseSongPage(raw);
 }
 
@@ -3115,7 +3109,7 @@ export async function searchNativeNeteaseSongs(options: {
     keyword,
     pageNum,
     pageSize,
-  }).catch(() => null);
+  });
   return ensureNeteaseSongPage(raw);
 }
 
@@ -3128,7 +3122,7 @@ export async function prepareNativeNeteaseCachedPlayback(
 
   const raw = await invoke<unknown>('music_library_netease_prepare_cached_playback', {
     sourceLocator: normalizedSourceLocator,
-  }).catch(() => null);
+  });
   return ensureNeteasePlaybackPrepared(raw);
 }
 

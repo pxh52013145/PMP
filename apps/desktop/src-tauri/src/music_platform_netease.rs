@@ -266,10 +266,14 @@ fn request_api_json(
     let base_url = resolve_api_base_url();
     let url = format!("{base_url}{}", endpoint.trim());
     let response = client
-        .get(url)
+        .get(url.clone())
         .query(&query)
         .send()
-        .map_err(|error| format!("Netease {context} request failed: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "Netease {context} request failed via {url}: {error}. Verify the api-enhanced service is running and {NETEASE_API_BASE_URL_ENV} is correct."
+            )
+        })?;
 
     let status = response.status();
     if !status.is_success() {
