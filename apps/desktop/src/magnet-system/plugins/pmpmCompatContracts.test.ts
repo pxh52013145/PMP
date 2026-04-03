@@ -153,15 +153,9 @@ describe('plugin compat pmpm', () => {
     expect(mapPmpmPermissionToCapabilityId('api:music-platform-search')).toBe(
       'host.pmp.music-platform.search'
     );
-    expect(mapPmpmPermissionToCapabilityId('api:connector-auth')).toBe(
-      'host.pmp.connector-auth'
-    );
-    expect(mapPmpmPermissionToCapabilityId('api:magnets-catalog')).toBe(
-      'host.pmp.magnets.catalog'
-    );
-    expect(mapPmpmPermissionToCapabilityId('api:magnets-layout')).toBe(
-      'host.pmp.magnets.layout'
-    );
+    expect(mapPmpmPermissionToCapabilityId('api:connector-auth')).toBe('host.pmp.connector-auth');
+    expect(mapPmpmPermissionToCapabilityId('api:magnets-catalog')).toBe('host.pmp.magnets.catalog');
+    expect(mapPmpmPermissionToCapabilityId('api:magnets-layout')).toBe('host.pmp.magnets.layout');
     expect(mapPmpmPermissionToCapabilityId('storage:durable-text')).toBe(
       'host.pmp.storage.durable-text'
     );

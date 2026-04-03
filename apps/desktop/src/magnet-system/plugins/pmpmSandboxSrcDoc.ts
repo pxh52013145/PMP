@@ -40,6 +40,8 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
       let runtimeActivateSnapshot = null;
       let runtimeHealthSnapshot = null;
       let viewMountRequestSnapshot = null;
+      let runtimeRevokeSnapshot = null;
+      let runtimeRevokeAckSnapshot = null;
       let audioState = null;
       let audioSpectrum = null;
       let audioSpectrumFramePre = null;
@@ -241,6 +243,20 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
               return null;
             }
             return viewMountRequestSnapshot;
+          },
+          getRuntimeRevokeSnapshot: () => {
+            if (!permissions.has('api:host')) {
+              warnDenied('api:host', 'host.getRuntimeRevokeSnapshot()');
+              return null;
+            }
+            return runtimeRevokeSnapshot;
+          },
+          getRuntimeRevokeAckSnapshot: () => {
+            if (!permissions.has('api:host')) {
+              warnDenied('api:host', 'host.getRuntimeRevokeAckSnapshot()');
+              return null;
+            }
+            return runtimeRevokeAckSnapshot;
           },
           listCapabilities: () => {
             if (!permissions.has('api:host')) {
@@ -593,6 +609,56 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
 
         if (data.type === 'pmpm:ping') {
           post({ type: 'pmpm:pong', pingId: Number(data.pingId || 0) });
+          return;
+        }
+
+        if (data.type === 'pmpm:capabilities-revoke') {
+          const requestId =
+            typeof data.requestId === 'string' ? data.requestId : 'runtime-capability-revoke:unknown';
+          const capabilityIds = Array.isArray(data.capabilityIds)
+            ? data.capabilityIds.filter((id) => typeof id === 'string' && id.length > 0)
+            : [];
+          const reason =
+            typeof data.reason === 'string' && data.reason.length > 0
+              ? data.reason
+              : 'compat-drill:no-op';
+
+          runtimeRevokeSnapshot = {
+            bridgeVersion:
+              runtimeInitSnapshot && typeof runtimeInitSnapshot.bridgeVersion === 'string'
+                ? runtimeInitSnapshot.bridgeVersion
+                : 'compat.pmpm.bridge.v1',
+            op: 'runtime.capabilities.revoke',
+            pluginId,
+            runtimeId:
+              runtimeInitSnapshot && typeof runtimeInitSnapshot.runtimeId === 'string'
+                ? runtimeInitSnapshot.runtimeId
+                : 'compat.pmpm.main',
+            runtimeInstanceId:
+              runtimeInitSnapshot && typeof runtimeInitSnapshot.runtimeInstanceId === 'string'
+                ? runtimeInitSnapshot.runtimeInstanceId
+                : FRAME_ID,
+            requestId,
+            capabilityIds,
+            reason,
+            dryRun: Boolean(data.dryRun),
+          };
+
+          runtimeRevokeAckSnapshot = {
+            op: 'runtime.capabilities.revoke.ack',
+            requestId,
+            ok: true,
+            ignored: true,
+            reason,
+          };
+
+          post({
+            type: 'pmpm:capabilities-revoke-ack',
+            requestId,
+            ok: true,
+            ignored: true,
+            reason,
+          });
           return;
         }
 

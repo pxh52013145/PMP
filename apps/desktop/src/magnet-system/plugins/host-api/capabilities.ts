@@ -2,6 +2,12 @@ import { HOST_API_VERSION } from '../../../constants/versions';
 import { BUILTIN_MAGNET_IDS } from '../../../constants/magnets';
 import type { CommandContribution } from '../../../contracts/contributions';
 import {
+  PMP_HOST_CAPABILITY_FAMILIES,
+  PMP_HOST_CAPABILITY_PACK_DESCRIPTOR,
+  type PmpHostCapabilityFamilyId,
+  type PmpHostCapabilityPackDescriptor,
+} from '@pixel-matrix/plugin-platform-contracts';
+import {
   createDefaultMagnetSpaceLayout,
   ensureMagnetCatalogState,
   ensureMagnetSpaceLayout,
@@ -57,11 +63,7 @@ import {
   listNativeLibraryTextFacetValues,
   listNativeLibraryTrackFieldCatalog,
 } from '../../../modules/music-library';
-import {
-  readDurableText,
-  removeDurableText,
-  writeDurableText,
-} from '../../../modules/storage';
+import { readDurableText, removeDurableText, writeDurableText } from '../../../modules/storage';
 import { resolveThemeBinding, resolveThemeSurfaceTargetId } from '../../../themes/bindings';
 import { getStoredOrDefaultTheme } from '../../../themes/runtimeTheme';
 import { resolveThemeSurface } from '../../../themes/surfaces';
@@ -286,7 +288,9 @@ type AudioInputAdapterProviderEntry = {
   probe?: PluginHostAudioInputAdapterProviderRegistration['probe'];
   openSession: PluginHostAudioInputAdapterProviderRegistration['openSession'];
   closeSession?: PluginHostAudioInputAdapterProviderRegistration['closeSession'];
-  health?: () => Promise<PluginHostAudioInputAdapterProviderHealth> | PluginHostAudioInputAdapterProviderHealth;
+  health?: () =>
+    | Promise<PluginHostAudioInputAdapterProviderHealth>
+    | PluginHostAudioInputAdapterProviderHealth;
 };
 
 const audioInputAdapterProviders = new Map<string, AudioInputAdapterProviderEntry>();
@@ -326,24 +330,21 @@ const audioInputAdapterProviderRuntimeState = new Map<
   AudioInputAdapterProviderRuntimeState
 >();
 
-const AI_ADAPTER_PROVIDER_CAPABILITIES: ReadonlySet<PluginHostAiAdapterProviderCapability> = new Set<
-  PluginHostAiAdapterProviderCapability
->([
-  'chat',
-  'completion',
-  'embedding',
-  'image-generation',
-  'audio-transcription',
-  'audio-synthesis',
-  'tool-calling',
-  'streaming',
-]);
+const AI_ADAPTER_PROVIDER_CAPABILITIES: ReadonlySet<PluginHostAiAdapterProviderCapability> =
+  new Set<PluginHostAiAdapterProviderCapability>([
+    'chat',
+    'completion',
+    'embedding',
+    'image-generation',
+    'audio-transcription',
+    'audio-synthesis',
+    'tool-calling',
+    'streaming',
+  ]);
 
 type AiAdapterProviderEntry = {
   info: PluginHostAiAdapterProviderInfo;
-  invoke: (
-    request: PluginHostAiAdapterProviderInvokeRequest
-  ) => Promise<unknown> | unknown;
+  invoke: (request: PluginHostAiAdapterProviderInvokeRequest) => Promise<unknown> | unknown;
   health?: () => Promise<PluginHostAiAdapterProviderHealth> | PluginHostAiAdapterProviderHealth;
 };
 
@@ -574,14 +575,12 @@ function sanitizeTelemetryFieldValue(
     if (options.depth >= TELEMETRY_MAX_FIELD_DEPTH) {
       return `[Array(${value.length})]`;
     }
-    return value
-      .slice(0, TELEMETRY_MAX_FIELD_ITEMS)
-      .map((entry) =>
-        sanitizeTelemetryFieldValue(entry, {
-          key: null,
-          depth: options.depth + 1,
-        })
-      );
+    return value.slice(0, TELEMETRY_MAX_FIELD_ITEMS).map((entry) =>
+      sanitizeTelemetryFieldValue(entry, {
+        key: null,
+        depth: options.depth + 1,
+      })
+    );
   }
 
   if (value && typeof value === 'object') {
@@ -723,10 +722,7 @@ function listSortedMagnetRendererDescriptors() {
 }
 
 function getShellMenuItemRequiredPermission(commandId: string): string | null | undefined {
-  return Object.prototype.hasOwnProperty.call(
-    SHELL_MENU_ITEM_PERMISSION_BY_COMMAND_ID,
-    commandId
-  )
+  return Object.prototype.hasOwnProperty.call(SHELL_MENU_ITEM_PERMISSION_BY_COMMAND_ID, commandId)
     ? SHELL_MENU_ITEM_PERMISSION_BY_COMMAND_ID[commandId]
     : undefined;
 }
@@ -763,10 +759,7 @@ function getBuiltinShellMenuCommand(
   return command;
 }
 
-function toShellMenuItemDescriptor(
-  command: CommandContribution,
-  permissions: ReadonlySet<string>
-) {
+function toShellMenuItemDescriptor(command: CommandContribution, permissions: ReadonlySet<string>) {
   const requiredPermission = getShellMenuItemRequiredPermission(command.id) ?? null;
   return {
     id: command.id,
@@ -792,10 +785,7 @@ function listShellTrayItemDescriptors(permissions: ReadonlySet<string>) {
   }));
 }
 
-function getShellTrayItemDescriptor(
-  itemId: string,
-  permissions: ReadonlySet<string>
-) {
+function getShellTrayItemDescriptor(itemId: string, permissions: ReadonlySet<string>) {
   const item = SHELL_TRAY_ITEMS.find((entry) => entry.id === itemId) ?? null;
   if (!item) return null;
 
@@ -830,23 +820,27 @@ function buildPluginDurableTextId(pluginId: string, key: string): string {
 }
 
 function sanitizeCatalogMagnet(value: unknown): Magnet | null {
-  return sanitizeMagnetCatalogState({
-    version: 1,
-    magnets: [value],
-  }).magnets[0] ?? null;
+  return (
+    sanitizeMagnetCatalogState({
+      version: 1,
+      magnets: [value],
+    }).magnets[0] ?? null
+  );
 }
 
 function sanitizeLayoutAnchors(
   magnetId: string,
   value: unknown
 ): MagnetSpaceLayout['anchorsByMagnetId'][string] {
-  return sanitizeMagnetSpaceLayout({
-    version: 1,
-    activeMagnetIds: [],
-    anchorsByMagnetId: {
-      [magnetId]: value,
-    },
-  }).anchorsByMagnetId[magnetId] ?? [];
+  return (
+    sanitizeMagnetSpaceLayout({
+      version: 1,
+      activeMagnetIds: [],
+      anchorsByMagnetId: {
+        [magnetId]: value,
+      },
+    }).anchorsByMagnetId[magnetId] ?? []
+  );
 }
 
 function buildLayoutWithActiveMagnetIds(
@@ -1147,6 +1141,40 @@ function listVisibleCapabilities(permissions: ReadonlySet<string>): PluginHostCa
     .sort((left, right) => left.id.localeCompare(right.id));
 }
 
+function clonePmpHostCapabilityPackDescriptor(): PmpHostCapabilityPackDescriptor {
+  return {
+    ...PMP_HOST_CAPABILITY_PACK_DESCRIPTOR,
+    capabilityFamilies: [...PMP_HOST_CAPABILITY_PACK_DESCRIPTOR.capabilityFamilies],
+  };
+}
+
+function resolvePmpHostCapabilityFamilyId(capabilityId: string): PmpHostCapabilityFamilyId | null {
+  if (!capabilityId.startsWith('host.pmp.')) {
+    return null;
+  }
+
+  for (const familyId of PMP_HOST_CAPABILITY_FAMILIES) {
+    if (capabilityId === familyId || capabilityId.startsWith(`${familyId}.`)) {
+      return familyId;
+    }
+  }
+
+  return null;
+}
+
+function listVisiblePmpHostCapabilityFamilies(
+  permissions: ReadonlySet<string>
+): PmpHostCapabilityFamilyId[] {
+  const visibleFamilies = new Set<PmpHostCapabilityFamilyId>();
+  for (const capability of listVisibleCapabilities(permissions)) {
+    const familyId = resolvePmpHostCapabilityFamilyId(capability.id);
+    if (!familyId) continue;
+    visibleFamilies.add(familyId);
+  }
+
+  return Array.from(visibleFamilies.values()).sort((left, right) => left.localeCompare(right));
+}
+
 function assertCapabilityId(id: string): void {
   if (!/^[a-z0-9]+(?:[.-][a-z0-9]+)+$/.test(id)) {
     throw new Error(`Invalid capability id: "${id}"`);
@@ -1186,7 +1214,11 @@ function toTimeoutMs(value: unknown, fallback: number): number {
   return Math.max(250, Math.min(AUDIO_INPUT_ADAPTER_PROVIDER_MAX_TIMEOUT_MS, normalized));
 }
 
-async function withAdapterTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+async function withAdapterTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
   let timeoutHandle: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   const timeoutPromise = new Promise<T>((_, reject) => {
@@ -1242,9 +1274,10 @@ function toAiAdapterTrackSummary(track: unknown): AiAdapterTrackSummary | null {
   const album = asNonEmptyString(record.album);
   if (album) summary.album = album;
 
-  const duration = typeof record.duration === 'number' && Number.isFinite(record.duration)
-    ? Math.max(0, record.duration)
-    : null;
+  const duration =
+    typeof record.duration === 'number' && Number.isFinite(record.duration)
+      ? Math.max(0, record.duration)
+      : null;
   if (duration !== null) summary.duration = duration;
 
   const sourcePath =
@@ -1536,7 +1569,9 @@ function listAudioInputAdapterProviderRuntimeStats(): Array<{
     .sort((left, right) => left.providerId.localeCompare(right.providerId));
 }
 
-function recordAudioInputAdapterAuditEvent(event: Parameters<typeof recordPmpmAuditEvent>[0]): void {
+function recordAudioInputAdapterAuditEvent(
+  event: Parameters<typeof recordPmpmAuditEvent>[0]
+): void {
   try {
     recordPmpmAuditEvent(event);
   } catch {
@@ -1802,7 +1837,8 @@ function resolveAudioInputAdapterProvider(
   if (!audioInputAdapterDefaultProviderId) return null;
 
   return (
-    available.find((candidate) => candidate.providerId === audioInputAdapterDefaultProviderId) ?? null
+    available.find((candidate) => candidate.providerId === audioInputAdapterDefaultProviderId) ??
+    null
   );
 }
 
@@ -1811,9 +1847,11 @@ function normalizeAudioInputAdapterProviderScore(score: unknown): number {
   return Math.max(0, Math.min(1, score));
 }
 
-function normalizeAudioInputAdapterProviderOpenResult(
-  value: unknown
-): { providerSessionId?: string; selectedInputId?: string; metadata?: unknown } {
+function normalizeAudioInputAdapterProviderOpenResult(value: unknown): {
+  providerSessionId?: string;
+  selectedInputId?: string;
+  metadata?: unknown;
+} {
   const payload = asObject(value);
   if (!payload) return {};
 
@@ -1962,7 +2000,9 @@ function createAudioInputAdapterHandler(): PluginHostCapabilityHandler {
           });
         }
 
-        const pluginOpenSessionCount = countPluginAudioInputAdapterSessions(request.context.pluginId);
+        const pluginOpenSessionCount = countPluginAudioInputAdapterSessions(
+          request.context.pluginId
+        );
         return resultOk({
           capabilityId: AUDIO_INPUT_ADAPTER_CAPABILITY_ID,
           ready: inputIds.length > 0,
@@ -2107,7 +2147,10 @@ function createAudioInputAdapterHandler(): PluginHostCapabilityHandler {
         const provider = resolveAudioInputAdapterProvider(requestedProviderId);
         if (requestedProviderId && !provider) {
           if (!audioInputAdapterProviders.has(requestedProviderId)) {
-            return resultError('NOT_FOUND', `Unknown audio input adapter provider: ${requestedProviderId}`);
+            return resultError(
+              'NOT_FOUND',
+              `Unknown audio input adapter provider: ${requestedProviderId}`
+            );
           }
 
           return resultError(
@@ -2151,9 +2194,7 @@ function createAudioInputAdapterHandler(): PluginHostCapabilityHandler {
               markAudioInputAdapterProviderSuccess(provider.providerId);
 
               const selectedInputId =
-                asNonEmptyString(probeResult.inputId) ??
-                preferredInputId ??
-                provider.providerId;
+                asNonEmptyString(probeResult.inputId) ?? preferredInputId ?? provider.providerId;
               return resultOk({
                 sourcePath,
                 selectedAdapterKind: 'provider',
@@ -2228,7 +2269,9 @@ function createAudioInputAdapterHandler(): PluginHostCapabilityHandler {
         const allowFallbackToBuiltin = payload.fallbackToBuiltin !== false;
         const preferredInputId = asNonEmptyString(payload.preferredInputId);
 
-        const pluginOpenSessionCount = countPluginAudioInputAdapterSessions(request.context.pluginId);
+        const pluginOpenSessionCount = countPluginAudioInputAdapterSessions(
+          request.context.pluginId
+        );
         if (pluginOpenSessionCount >= audioInputAdapterGovernance.maxOpenSessionsPerPlugin) {
           return resultError(
             'RESOURCE_EXHAUSTED',
@@ -2249,7 +2292,10 @@ function createAudioInputAdapterHandler(): PluginHostCapabilityHandler {
         const provider = resolveAudioInputAdapterProvider(requestedProviderId);
         if (requestedProviderId && !provider) {
           if (!audioInputAdapterProviders.has(requestedProviderId)) {
-            return resultError('NOT_FOUND', `Unknown audio input adapter provider: ${requestedProviderId}`);
+            return resultError(
+              'NOT_FOUND',
+              `Unknown audio input adapter provider: ${requestedProviderId}`
+            );
           }
 
           return resultError(
@@ -2575,15 +2621,12 @@ function createAiAdapterHandler(): PluginHostCapabilityHandler {
         const payload = asObject(request.payload);
         const requestedCapability = asNonEmptyString(payload?.capability);
 
-        if (
-          requestedCapability &&
-          !isAiAdapterProviderCapability(requestedCapability)
-        ) {
+        if (requestedCapability && !isAiAdapterProviderCapability(requestedCapability)) {
           return resultError(
             'INVALID_PAYLOAD',
-            `payload.capability must be one of: ${Array.from(
-              AI_ADAPTER_PROVIDER_CAPABILITIES
-            ).join(', ')}`
+            `payload.capability must be one of: ${Array.from(AI_ADAPTER_PROVIDER_CAPABILITIES).join(
+              ', '
+            )}`
           );
         }
 
@@ -2593,9 +2636,7 @@ function createAiAdapterHandler(): PluginHostCapabilityHandler {
             : null;
 
         const providers = listAiAdapterProviderInfos().filter((provider) =>
-          capabilityFilter
-            ? provider.capabilities.includes(capabilityFilter)
-            : true
+          capabilityFilter ? provider.capabilities.includes(capabilityFilter) : true
         );
 
         return resultOk({
@@ -2756,7 +2797,10 @@ function createAiAdapterHandler(): PluginHostCapabilityHandler {
         }
       }
       default:
-        return resultError('METHOD_NOT_SUPPORTED', `Unsupported AI adapter method: ${request.method}`);
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported AI adapter method: ${request.method}`
+        );
     }
   };
 }
@@ -2960,11 +3004,11 @@ function createPmpNavigationHandler(): PluginHostCapabilityHandler {
         });
       case 'getSnapshot':
         return resultOk(
-          typeof navigation.getSnapshot === 'function' ? navigation.getSnapshot() ?? null : null
+          typeof navigation.getSnapshot === 'function' ? (navigation.getSnapshot() ?? null) : null
         );
       case 'canGoBack': {
         const snapshot =
-          typeof navigation.getSnapshot === 'function' ? navigation.getSnapshot() ?? null : null;
+          typeof navigation.getSnapshot === 'function' ? (navigation.getSnapshot() ?? null) : null;
         return resultOk({
           canGoBack: Boolean(
             snapshot &&
@@ -2980,7 +3024,11 @@ function createPmpNavigationHandler(): PluginHostCapabilityHandler {
         if (!page) {
           return resultError('INVALID_PAYLOAD', 'payload.page is required');
         }
-        if (typeof payload?.params !== 'undefined' && payload.params !== null && !asObject(payload.params)) {
+        if (
+          typeof payload?.params !== 'undefined' &&
+          payload.params !== null &&
+          !asObject(payload.params)
+        ) {
           return resultError('INVALID_PAYLOAD', 'payload.params must be an object when provided');
         }
 
@@ -3032,7 +3080,11 @@ function createPmpWindowHandler(): PluginHostCapabilityHandler {
         if (!windowId) {
           return resultError('INVALID_PAYLOAD', 'payload.windowId is required');
         }
-        if (typeof payload?.options !== 'undefined' && payload.options !== null && !asObject(payload.options)) {
+        if (
+          typeof payload?.options !== 'undefined' &&
+          payload.options !== null &&
+          !asObject(payload.options)
+        ) {
           return resultError('INVALID_PAYLOAD', 'payload.options must be an object when provided');
         }
 
@@ -3579,7 +3631,8 @@ function createPmpMagnetsCatalogHandler(): PluginHostCapabilityHandler {
           return resultError('INVALID_PAYLOAD', 'payload.magnetId is required');
         }
 
-        const magnet = readMagnetCatalogState().magnets.find((entry) => entry.id === magnetId) ?? null;
+        const magnet =
+          readMagnetCatalogState().magnets.find((entry) => entry.id === magnetId) ?? null;
         return resultOk({
           magnetId,
           found: magnet !== null,
@@ -3944,10 +3997,7 @@ function createPmpMagnetsRendererHandler(): PluginHostCapabilityHandler {
 
         return resultOk({
           rendererCount: variantsByRenderer.length,
-          variantCount: variantsByRenderer.reduce(
-            (count, entry) => count + entry.variantCount,
-            0
-          ),
+          variantCount: variantsByRenderer.reduce((count, entry) => count + entry.variantCount, 0),
           variantsByRenderer,
         });
       }
@@ -4080,10 +4130,7 @@ function createPmpMusicPlatformPrepareHandler(): PluginHostCapabilityHandler {
           stage: 'host-pack',
           implementation: 'platform-facade',
           methods: ['describe', 'preparePlayback'],
-          supportedConnectorIds: [
-            BILIBILI_PLATFORM_CONNECTOR_ID,
-            NETEASE_PLATFORM_CONNECTOR_ID,
-          ],
+          supportedConnectorIds: [BILIBILI_PLATFORM_CONNECTOR_ID, NETEASE_PLATFORM_CONNECTOR_ID],
         });
       case 'preparePlayback': {
         const payload = asObject(request.payload);
@@ -4134,10 +4181,7 @@ function createPmpMusicPlatformPrepareHandler(): PluginHostCapabilityHandler {
           });
         }
 
-        return resultError(
-          'NOT_SUPPORTED',
-          `Unsupported platform connector: ${connectorId}`
-        );
+        return resultError('NOT_SUPPORTED', `Unsupported platform connector: ${connectorId}`);
       }
       default:
         return resultError(
@@ -4291,7 +4335,9 @@ function createPmpAudioPlaybackHandler(): PluginHostCapabilityHandler {
         const denied = readMethodPermissionError(request, 'api:audio-state');
         if (denied) return denied;
         return resultOk(
-          typeof audioService.getPlayMode === 'function' ? audioService.getPlayMode() ?? null : null
+          typeof audioService.getPlayMode === 'function'
+            ? (audioService.getPlayMode() ?? null)
+            : null
         );
       }
       case 'getCover': {
@@ -4447,7 +4493,13 @@ function createPmpThemeBindingsHandler(): PluginHostCapabilityHandler {
           implementation: 'theme-binding-snapshot',
           themeId: theme.id,
           themeVersion: theme.version,
-          methods: ['describe', 'listBindingIds', 'listSurfaceIds', 'resolveBinding', 'resolveSurface'],
+          methods: [
+            'describe',
+            'listBindingIds',
+            'listSurfaceIds',
+            'resolveBinding',
+            'resolveSurface',
+          ],
         });
       case 'listBindingIds': {
         const bindingIds = new Set<string>([
@@ -4459,11 +4511,15 @@ function createPmpThemeBindingsHandler(): PluginHostCapabilityHandler {
           themeId: theme.id,
           themeVersion: theme.version,
           bindingCount: bindingIds.size,
-          bindingIds: Array.from(bindingIds.values()).sort((left, right) => left.localeCompare(right)),
+          bindingIds: Array.from(bindingIds.values()).sort((left, right) =>
+            left.localeCompare(right)
+          ),
         });
       }
       case 'listSurfaceIds': {
-        const surfaceIds = Object.keys(theme.surfaces ?? {}).sort((left, right) => left.localeCompare(right));
+        const surfaceIds = Object.keys(theme.surfaces ?? {}).sort((left, right) =>
+          left.localeCompare(right)
+        );
         return resultOk({
           themeId: theme.id,
           themeVersion: theme.version,
@@ -4495,14 +4551,15 @@ function createPmpThemeBindingsHandler(): PluginHostCapabilityHandler {
         const requestedId =
           asNonEmptyString(payload?.surfaceId) ?? asNonEmptyString(payload?.bindingId);
         if (!requestedId) {
-          return resultError('INVALID_PAYLOAD', 'payload.surfaceId or payload.bindingId is required');
+          return resultError(
+            'INVALID_PAYLOAD',
+            'payload.surfaceId or payload.bindingId is required'
+          );
         }
 
         const surfaceId =
-          resolveThemeSurfaceTargetId(
-            theme,
-            requestedId as ThemeBindingId | ThemeSurfaceId
-          ) ?? null;
+          resolveThemeSurfaceTargetId(theme, requestedId as ThemeBindingId | ThemeSurfaceId) ??
+          null;
 
         return resultOk({
           themeId: theme.id,
@@ -4751,7 +4808,11 @@ function createPmpI18nHandler(): PluginHostCapabilityHandler {
       }
       case 'clearMessages': {
         const payload = asObject(request.payload);
-        if (payload && Object.prototype.hasOwnProperty.call(payload, 'locale') && !asLocale(payload.locale)) {
+        if (
+          payload &&
+          Object.prototype.hasOwnProperty.call(payload, 'locale') &&
+          !asLocale(payload.locale)
+        ) {
           return resultError('INVALID_PAYLOAD', 'payload.locale must be a supported locale');
         }
 
@@ -4793,7 +4854,11 @@ function createPmpI18nHandler(): PluginHostCapabilityHandler {
           return resultError('INVALID_PAYLOAD', 'payload.key is required');
         }
 
-        if (payload && Object.prototype.hasOwnProperty.call(payload, 'locale') && !asLocale(payload.locale)) {
+        if (
+          payload &&
+          Object.prototype.hasOwnProperty.call(payload, 'locale') &&
+          !asLocale(payload.locale)
+        ) {
           return resultError('INVALID_PAYLOAD', 'payload.locale must be a supported locale');
         }
 
@@ -4941,6 +5006,17 @@ function createPmpTelemetryHandler(): PluginHostCapabilityHandler {
 function createRegistryHandler(): PluginHostCapabilityHandler {
   return async (request) => {
     switch (request.method) {
+      case 'describe': {
+        return resultOk({
+          id: CORE_CAPABILITY_REGISTRY_CAPABILITY_ID,
+          version: CORE_CAPABILITY_REGISTRY_CAPABILITY_VERSION,
+          methods: ['describe', 'list', 'get', 'has'],
+          hostCapabilityPack: clonePmpHostCapabilityPackDescriptor(),
+          visibleHostCapabilityFamilies: listVisiblePmpHostCapabilityFamilies(
+            request.context.permissions
+          ),
+        });
+      }
       case 'list': {
         return resultOk(listVisibleCapabilities(request.context.permissions));
       }
@@ -5230,6 +5306,14 @@ function bootstrapBuiltins(): void {
       source: 'builtin',
     });
   }
+}
+
+export function getPmpHostCapabilityPackDescriptor(): PmpHostCapabilityPackDescriptor {
+  return clonePmpHostCapabilityPackDescriptor();
+}
+
+export function listPmpHostCapabilityFamilies(): PmpHostCapabilityFamilyId[] {
+  return [...PMP_HOST_CAPABILITY_FAMILIES];
 }
 
 export function listPluginHostCapabilities(): PluginHostCapabilityInfo[] {
@@ -5548,7 +5632,9 @@ export function registerVoiceTrainingRuntimeProvider(
     voiceTrainingRuntimeProviders.delete(info.id);
 
     if (voiceTrainingRuntimeDefaultProviderId === info.id) {
-      voiceTrainingRuntimeDefaultProviderId = nextRuntimeDefaultProviderId(voiceTrainingRuntimeProviders);
+      voiceTrainingRuntimeDefaultProviderId = nextRuntimeDefaultProviderId(
+        voiceTrainingRuntimeProviders
+      );
     }
   };
 }

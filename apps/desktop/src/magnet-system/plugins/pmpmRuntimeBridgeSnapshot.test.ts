@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setLocale } from '../../i18n/core';
 import { buildPmpmSandboxSrcDoc } from './pmpmSandboxSrcDoc';
+import * as hostApiModule from './host-api';
 import {
   buildPmpmRuntimeActivateSnapshot,
+  buildPmpmRuntimeCapabilityRevokeDrillSnapshot,
   buildPmpmRuntimeHealthSnapshot,
   buildPmpmRuntimeHelloSnapshot,
   buildPmpmRuntimeInitSnapshot,
@@ -11,6 +13,7 @@ import {
 
 afterEach(() => {
   setLocale('zh-CN');
+  vi.restoreAllMocks();
 });
 
 describe('pmpm runtime bridge snapshot', () => {
@@ -44,12 +47,12 @@ describe('pmpm runtime bridge snapshot', () => {
         {
           capabilityId: 'host.pmp.navigation',
           version: '1.0.0',
-          mode: 'required',
+          mode: 'optional',
         },
         {
           capabilityId: 'compat.pmpm.permission.net-fetch',
           version: 'compat.pmpm.v1',
-          mode: 'required',
+          mode: 'optional',
         },
       ],
       runtimePolicy: {
@@ -72,26 +75,26 @@ describe('pmpm runtime bridge snapshot', () => {
     expect(srcdoc).toContain('let runtimeActivateSnapshot = null;');
     expect(srcdoc).toContain('let runtimeHealthSnapshot = null;');
     expect(srcdoc).toContain('let viewMountRequestSnapshot = null;');
-    expect(srcdoc).toContain("host.getRuntimeHelloSnapshot()");
-    expect(srcdoc).toContain("host.getRuntimeInitSnapshot()");
-    expect(srcdoc).toContain("host.getRuntimeActivateSnapshot()");
-    expect(srcdoc).toContain("host.getRuntimeHealthSnapshot()");
-    expect(srcdoc).toContain("host.getViewMountRequestSnapshot()");
+    expect(srcdoc).toContain('let runtimeRevokeSnapshot = null;');
+    expect(srcdoc).toContain('let runtimeRevokeAckSnapshot = null;');
+    expect(srcdoc).toContain('host.getRuntimeHelloSnapshot()');
+    expect(srcdoc).toContain('host.getRuntimeInitSnapshot()');
+    expect(srcdoc).toContain('host.getRuntimeActivateSnapshot()');
+    expect(srcdoc).toContain('host.getRuntimeHealthSnapshot()');
+    expect(srcdoc).toContain('host.getViewMountRequestSnapshot()');
+    expect(srcdoc).toContain('host.getRuntimeRevokeSnapshot()');
+    expect(srcdoc).toContain('host.getRuntimeRevokeAckSnapshot()');
     expect(srcdoc).toContain(
       "data.runtimeHello && typeof data.runtimeHello === 'object' ? data.runtimeHello : null"
     );
     expect(srcdoc).toContain(
       "data.runtimeInit && typeof data.runtimeInit === 'object' ? data.runtimeInit : null"
     );
-    expect(srcdoc).toContain(
-      "data.runtimeActivate && typeof data.runtimeActivate === 'object'"
-    );
-    expect(srcdoc).toContain(
-      "data.runtimeHealth && typeof data.runtimeHealth === 'object'"
-    );
-    expect(srcdoc).toContain(
-      "data.viewMountRequest && typeof data.viewMountRequest === 'object'"
-    );
+    expect(srcdoc).toContain("data.runtimeActivate && typeof data.runtimeActivate === 'object'");
+    expect(srcdoc).toContain("data.runtimeHealth && typeof data.runtimeHealth === 'object'");
+    expect(srcdoc).toContain("data.viewMountRequest && typeof data.viewMountRequest === 'object'");
+    expect(srcdoc).toContain("if (data.type === 'pmpm:capabilities-revoke')");
+    expect(srcdoc).toContain("type: 'pmpm:capabilities-revoke-ack'");
   });
 
   it('builds runtime.hello snapshots for view and command compat carriers', () => {
@@ -233,5 +236,87 @@ describe('pmpm runtime bridge snapshot', () => {
         commandArgs: { force: true },
       })
     ).toBeNull();
+  });
+
+  it('derives required/optional capability modes from permissions and manifest hints', () => {
+    const snapshot = buildPmpmRuntimeInitSnapshot({
+      pluginId: 'demo-plugin',
+      runtimeInstanceId: 'frame-1',
+      permissions: ['api:host', 'api:navigation', 'api:audio-control'],
+      manifestPermissions: ['api:host', 'api:navigation', 'api:audio-control'],
+      deniedPermissions: ['api:audio-control'],
+      requiredPermissions: ['api:host'],
+      optionalPermissions: ['api:navigation'],
+    });
+
+    expect(snapshot.grantedCapabilities).toEqual([
+      {
+        capabilityId: 'core.capability-registry',
+        version: '1.1.0',
+        mode: 'required',
+      },
+      {
+        capabilityId: 'host.pmp.navigation',
+        version: '1.0.0',
+        mode: 'optional',
+      },
+    ]);
+  });
+
+  it('builds runtime.capabilities.revoke compat drill snapshots', () => {
+    expect(
+      buildPmpmRuntimeCapabilityRevokeDrillSnapshot({
+        pluginId: 'demo-plugin',
+        runtimeInstanceId: 'frame-1',
+        capabilityIds: ['host.pmp.navigation'],
+      })
+    ).toEqual({
+      bridgeVersion: 'compat.pmpm.bridge.v1',
+      op: 'runtime.capabilities.revoke',
+      pluginId: 'demo-plugin',
+      runtimeId: 'compat.pmpm.main',
+      runtimeInstanceId: 'frame-1',
+      requestId: 'runtime-capability-revoke:frame-1',
+      capabilityIds: ['host.pmp.navigation'],
+      reason: 'compat-drill:no-op',
+    });
+  });
+
+  it('fails runtime.init negotiation when host pack families drift from exported families', () => {
+    vi.spyOn(hostApiModule, 'getPmpHostCapabilityPackDescriptor').mockReturnValue({
+      hostId: 'pmp',
+      packVersion: '1.0.0',
+      coreCompatibility: 'core.contracts@2.0',
+      capabilityFamilies: ['host.pmp.navigation'],
+    });
+    vi.spyOn(hostApiModule, 'listPmpHostCapabilityFamilies').mockReturnValue([
+      'host.pmp.navigation',
+      'host.pmp.audio-engine.playback',
+    ]);
+
+    expect(() =>
+      buildPmpmRuntimeInitSnapshot({
+        pluginId: 'demo-plugin',
+        runtimeInstanceId: 'frame-1',
+        permissions: ['api:navigation'],
+      })
+    ).toThrow('Host capability pack negotiation failed');
+  });
+
+  it('fails runtime.init negotiation when a mapped host capability is not registered', () => {
+    vi.spyOn(hostApiModule, 'listPluginHostCapabilities').mockReturnValue([
+      {
+        id: 'core.capability-registry',
+        version: '1.1.0',
+      },
+    ]);
+
+    expect(() =>
+      buildPmpmRuntimeInitSnapshot({
+        pluginId: 'demo-plugin',
+        runtimeInstanceId: 'frame-1',
+        permissions: ['api:navigation'],
+      })
+    ).toThrow('is not registered');
   });
 });

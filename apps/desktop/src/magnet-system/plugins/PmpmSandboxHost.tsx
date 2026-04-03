@@ -27,6 +27,7 @@ import { buildPmpmSandboxSrcDoc } from './pmpmSandboxSrcDoc';
 import { usePmpmRuntimeRestartToken } from './usePmpmRuntimeRestartToken';
 import {
   buildPmpmRuntimeActivateSnapshot,
+  buildPmpmRuntimeCapabilityRevokeDrillSnapshot,
   buildPmpmRuntimeHealthSnapshot,
   buildPmpmRuntimeHelloSnapshot,
   buildPmpmRuntimeInitSnapshot,
@@ -45,8 +46,27 @@ type SandboxSurface =
   | { kind: 'window'; windowId: string };
 
 type RpcRequest = Extract<PmpmBridgeIncomingMessage, { type: 'pmpm:rpc' }>;
-type FrameMessage = PmpmBridgeIncomingMessage;
-type FramePostMessage = Omit<PmpmBridgeOutgoingMessage, 'frameId'>;
+type PmpmCompatCapabilityRevokeDrillMessage = {
+  type: 'pmpm:capabilities-revoke';
+  requestId: string;
+  capabilityIds: string[];
+  reason: string;
+  dryRun?: boolean;
+};
+
+type PmpmCompatCapabilityRevokeAckMessage = {
+  frameId: string;
+  type: 'pmpm:capabilities-revoke-ack';
+  requestId: string;
+  ok: boolean;
+  ignored?: boolean;
+  reason?: string;
+};
+
+type FrameMessage = PmpmBridgeIncomingMessage | PmpmCompatCapabilityRevokeAckMessage;
+type FramePostMessage =
+  | Omit<PmpmBridgeOutgoingMessage, 'frameId'>
+  | PmpmCompatCapabilityRevokeDrillMessage;
 
 function resolveCrashSurface(surface: SandboxSurface['kind']): PmpmPluginCrashSurface {
   switch (surface) {
@@ -125,12 +145,16 @@ export function PmpmSandboxHost({
 
   const navigation = useMemo(() => {
     return {
-      navigateTo: (page: Parameters<typeof navigationService.navigateTo>[0], params?: Record<string, unknown>) =>
-        navigationService.navigateTo(page, params),
+      navigateTo: (
+        page: Parameters<typeof navigationService.navigateTo>[0],
+        params?: Record<string, unknown>
+      ) => navigationService.navigateTo(page, params),
       goBack: () => navigationService.goBack(),
       getSnapshot: () => navigationService.getSnapshot(),
       subscribe: (cb: (snapshot: PluginNavigationSnapshot) => void) =>
-        kernel.events.on('navigation/changed', (payload) => cb(payload as PluginNavigationSnapshot)),
+        kernel.events.on('navigation/changed', (payload) =>
+          cb(payload as PluginNavigationSnapshot)
+        ),
     };
   }, [kernel.events, navigationService]);
 
@@ -154,7 +178,7 @@ export function PmpmSandboxHost({
         : surface.kind === 'window'
           ? surface.windowId
           : surface.kind === 'settings'
-            ? surface.panelId ?? null
+            ? (surface.panelId ?? null)
             : null;
 
   const initialConfig = useMemo(() => {
@@ -244,6 +268,10 @@ export function PmpmSandboxHost({
 
       if (data.type === 'pmpm:pong') {
         lastPongAtRef.current = Date.now();
+        return;
+      }
+
+      if (data.type === 'pmpm:capabilities-revoke-ack') {
         return;
       }
 
@@ -349,7 +377,11 @@ export function PmpmSandboxHost({
       if (frameReadyRef.current) return;
       if (crashReportedRef.current) return;
       crashReportedRef.current = true;
-      recordPmpmPluginCrash(pluginId, 'Plugin sandbox boot timeout', resolveCrashSurface(surface.kind));
+      recordPmpmPluginCrash(
+        pluginId,
+        'Plugin sandbox boot timeout',
+        resolveCrashSurface(surface.kind)
+      );
     }, bootTimeoutMs);
     return () => {
       disposed = true;
@@ -371,6 +403,28 @@ export function PmpmSandboxHost({
         const entryCode = await readVerifiedPmpmPluginEntryCode(pluginId);
         if (disposed) return;
 
+        const runtimeInitSnapshot = buildPmpmRuntimeInitSnapshot({
+          pluginId,
+          runtimeInstanceId: frameId,
+          permissions,
+          manifestPermissions: plugin?.manifest.permissions,
+          deniedPermissions: plugin?.deniedPermissions,
+          startupTimeoutMs: PMPM_SANDBOX_STARTUP_TIMEOUT_MS,
+          heartbeatIntervalMs: PMPM_SANDBOX_HEARTBEAT_INTERVAL_MS,
+          unresponsiveTimeoutMs: PMPM_SANDBOX_UNRESPONSIVE_TIMEOUT_MS,
+        });
+
+        const optionalCapabilityIds = runtimeInitSnapshot.grantedCapabilities
+          .filter((capability) => capability.mode === 'optional')
+          .map((capability) => capability.capabilityId);
+
+        const runtimeRevokeDrillSnapshot = buildPmpmRuntimeCapabilityRevokeDrillSnapshot({
+          pluginId,
+          runtimeInstanceId: frameId,
+          capabilityIds: optionalCapabilityIds,
+          reason: 'compat-drill:no-op',
+        });
+
         postToFrame({
           type: 'pmpm:init',
           pluginId,
@@ -382,14 +436,7 @@ export function PmpmSandboxHost({
             carrier: 'webview-frame',
             supportsViewMount: true,
           }),
-          runtimeInit: buildPmpmRuntimeInitSnapshot({
-            pluginId,
-            runtimeInstanceId: frameId,
-            permissions,
-            startupTimeoutMs: PMPM_SANDBOX_STARTUP_TIMEOUT_MS,
-            heartbeatIntervalMs: PMPM_SANDBOX_HEARTBEAT_INTERVAL_MS,
-            unresponsiveTimeoutMs: PMPM_SANDBOX_UNRESPONSIVE_TIMEOUT_MS,
-          }),
+          runtimeInit: runtimeInitSnapshot,
           runtimeActivate: buildPmpmRuntimeActivateSnapshot({
             pluginId,
             runtimeInstanceId: frameId,
@@ -415,7 +462,9 @@ export function PmpmSandboxHost({
           permissions: Array.from(permissions),
           entryCode,
           initialAudioState: permissions.has('api:audio-state') ? audioService.getState() : null,
-          initialAudioSpectrum: permissions.has('api:audio-visual') ? hostApi.visualizer.getSpectrum() : null,
+          initialAudioSpectrum: permissions.has('api:audio-visual')
+            ? hostApi.visualizer.getSpectrum()
+            : null,
           initialAudioSpectrumFramePre:
             permissions.has('api:audio-visual') &&
             typeof hostApi.visualizer.getSpectrumFrame === 'function'
@@ -428,6 +477,14 @@ export function PmpmSandboxHost({
               : null,
           initialNavigation,
           initialConfig,
+        });
+
+        postToFrame({
+          type: 'pmpm:capabilities-revoke',
+          requestId: runtimeRevokeDrillSnapshot.requestId,
+          capabilityIds: [...runtimeRevokeDrillSnapshot.capabilityIds],
+          reason: runtimeRevokeDrillSnapshot.reason,
+          dryRun: true,
         });
       } catch (bootError) {
         if (disposed) return;
@@ -568,6 +625,7 @@ export function PmpmSandboxHost({
     kernel.events,
     mountContext,
     permissions,
+    plugin,
     pluginId,
     postToFrame,
     surface.kind,

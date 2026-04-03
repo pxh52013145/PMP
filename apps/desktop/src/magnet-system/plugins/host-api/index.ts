@@ -18,6 +18,8 @@ export {
   setDefaultDesktopPetRuntimeProvider,
   setDefaultAiAdapterProvider,
   setDefaultVoiceTrainingRuntimeProvider,
+  getPmpHostCapabilityPackDescriptor,
+  listPmpHostCapabilityFamilies,
   getPluginHostCapability,
   invokePluginHostCapability,
   listPluginHostCapabilities,
@@ -66,4 +68,3 @@ export type {
   PluginMountApi,
   PluginNavigationSnapshot,
 } from './types';
-

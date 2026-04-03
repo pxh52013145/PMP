@@ -1,11 +1,12 @@
-import type {
-  HostAudioService,
-  HostNavigation,
-  PluginMountApi,
-} from './pluginHostApi';
+import type { HostAudioService, HostNavigation, PluginMountApi } from './pluginHostApi';
 import { createPluginMountApi } from './pluginHostApi';
 import { readPmpmPluginConfig, subscribePmpmPluginConfig } from './pluginConfig';
-import { getPmpmPluginEffectivePermissions, recordPmpmPermissionDenied, recordPmpmPluginCrash } from './pmpm';
+import {
+  getInstalledPmpmPlugin,
+  getPmpmPluginEffectivePermissions,
+  recordPmpmPermissionDenied,
+  recordPmpmPluginCrash,
+} from './pmpm';
 import { recordPmpmAuditEvent } from './pmpmGovernance';
 import { readVerifiedPmpmPluginEntryCode } from './pmpmRuntime';
 import { buildPmpmSandboxSrcDoc } from './pmpmSandboxSrcDoc';
@@ -14,6 +15,7 @@ import type { CommandsService } from '../../services/commands';
 import type { KeybindingsService } from '../../services/keybindings';
 import {
   buildPmpmRuntimeActivateSnapshot,
+  buildPmpmRuntimeCapabilityRevokeDrillSnapshot,
   buildPmpmRuntimeHealthSnapshot,
   buildPmpmRuntimeHelloSnapshot,
   buildPmpmRuntimeInitSnapshot,
@@ -30,8 +32,27 @@ const PMPM_SANDBOX_COMMAND_HEARTBEAT_INTERVAL_MS = 1_500;
 const PMPM_SANDBOX_COMMAND_UNRESPONSIVE_TIMEOUT_MS = 8_000;
 
 type RpcRequest = Extract<PmpmBridgeIncomingMessage, { type: 'pmpm:rpc' }>;
-type FrameMessage = PmpmBridgeIncomingMessage;
-type FramePostMessage = Omit<PmpmBridgeOutgoingMessage, 'frameId'>;
+type PmpmCompatCapabilityRevokeDrillMessage = {
+  type: 'pmpm:capabilities-revoke';
+  requestId: string;
+  capabilityIds: string[];
+  reason: string;
+  dryRun?: boolean;
+};
+
+type PmpmCompatCapabilityRevokeAckMessage = {
+  frameId: string;
+  type: 'pmpm:capabilities-revoke-ack';
+  requestId: string;
+  ok: boolean;
+  ignored?: boolean;
+  reason?: string;
+};
+
+type FrameMessage = PmpmBridgeIncomingMessage | PmpmCompatCapabilityRevokeAckMessage;
+type FramePostMessage =
+  | Omit<PmpmBridgeOutgoingMessage, 'frameId'>
+  | PmpmCompatCapabilityRevokeDrillMessage;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object';
@@ -43,11 +64,7 @@ async function runRpc(api: PluginMountApi, request: RpcRequest): Promise<unknown
     case 'host.listCapabilities':
       return await api.host.listCapabilities();
     case 'host.invokeCapability':
-      return await api.host.invokeCapability(
-        String(args[0] ?? ''),
-        String(args[1] ?? ''),
-        args[2]
-      );
+      return await api.host.invokeCapability(String(args[0] ?? ''), String(args[1] ?? ''), args[2]);
     case 'audio.play':
       return await api.audio.play();
     case 'audio.pause':
@@ -105,6 +122,8 @@ let runtimeInitSnapshot = null;
 let runtimeActivateSnapshot = null;
 let runtimeHealthSnapshot = null;
 let viewMountRequestSnapshot = null;
+let runtimeRevokeSnapshot = null;
+let runtimeRevokeAckSnapshot = null;
 let audioState = null;
 let audioSpectrum = null;
 let audioSpectrumFramePre = null;
@@ -267,6 +286,20 @@ const api = {
         return null;
       }
       return viewMountRequestSnapshot;
+    },
+    getRuntimeRevokeSnapshot: () => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.getRuntimeRevokeSnapshot()');
+        return null;
+      }
+      return runtimeRevokeSnapshot;
+    },
+    getRuntimeRevokeAckSnapshot: () => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.getRuntimeRevokeAckSnapshot()');
+        return null;
+      }
+      return runtimeRevokeAckSnapshot;
     },
     listCapabilities: () => {
       if (!permissions.has('api:host')) {
@@ -544,6 +577,55 @@ addEventListener('message', async (event) => {
     return;
   }
 
+  if (data.type === 'pmpm:capabilities-revoke') {
+    const requestId = typeof data.requestId === 'string' ? data.requestId : 'runtime-capability-revoke:unknown';
+    const capabilityIds = Array.isArray(data.capabilityIds)
+      ? data.capabilityIds.filter((id) => typeof id === 'string' && id.length > 0)
+      : [];
+    const reason =
+      typeof data.reason === 'string' && data.reason.length > 0
+        ? data.reason
+        : 'compat-drill:no-op';
+
+    runtimeRevokeSnapshot = {
+      bridgeVersion:
+        runtimeInitSnapshot && typeof runtimeInitSnapshot.bridgeVersion === 'string'
+          ? runtimeInitSnapshot.bridgeVersion
+          : 'compat.pmpm.bridge.v1',
+      op: 'runtime.capabilities.revoke',
+      pluginId,
+      runtimeId:
+        runtimeInitSnapshot && typeof runtimeInitSnapshot.runtimeId === 'string'
+          ? runtimeInitSnapshot.runtimeId
+          : 'compat.pmpm.main',
+      runtimeInstanceId:
+        runtimeInitSnapshot && typeof runtimeInitSnapshot.runtimeInstanceId === 'string'
+          ? runtimeInitSnapshot.runtimeInstanceId
+          : FRAME_ID,
+      requestId,
+      capabilityIds,
+      reason,
+      dryRun: Boolean(data.dryRun),
+    };
+
+    runtimeRevokeAckSnapshot = {
+      op: 'runtime.capabilities.revoke.ack',
+      requestId,
+      ok: true,
+      ignored: true,
+      reason,
+    };
+
+    post({
+      type: 'pmpm:capabilities-revoke-ack',
+      requestId,
+      ok: true,
+      ignored: true,
+      reason,
+    });
+    return;
+  }
+
   if (data.type === 'pmpm:event') {
     if (data.name === 'audio.state') {
       audioState = data.payload ?? null;
@@ -661,6 +743,7 @@ async function runPmpmSandboxedCommandInWorker(options: {
   }
 
   const permissions = getPmpmPluginEffectivePermissions(options.pluginId);
+  const plugin = getInstalledPmpmPlugin(options.pluginId);
   const api: PluginMountApi = createPluginMountApi({
     pluginId: options.pluginId,
     hostLabel: options.hostLabel,
@@ -679,7 +762,10 @@ async function runPmpmSandboxedCommandInWorker(options: {
     new Blob([buildPmpmSandboxCommandWorkerScript(frameId)], { type: 'text/javascript' })
   );
 
-  const worker = new Worker(workerUrl, { type: 'module', name: `pmpm:${options.pluginId}:command` });
+  const worker = new Worker(workerUrl, {
+    type: 'module',
+    name: `pmpm:${options.pluginId}:command`,
+  });
 
   return await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -770,7 +856,7 @@ async function runPmpmSandboxedCommandInWorker(options: {
 
       const data = event.data as FrameMessage;
 
-    if (data.type === 'pmpm:worker-ready') {
+      if (data.type === 'pmpm:worker-ready') {
         if (bootTimer !== null) window.clearTimeout(bootTimer);
         bootTimer = null;
 
@@ -799,6 +885,28 @@ async function runPmpmSandboxedCommandInWorker(options: {
           crashAsUnresponsive(`Plugin command timeout (${elapsed}ms)`, options.timeoutMs);
         }, options.timeoutMs);
 
+        const runtimeInitSnapshot = buildPmpmRuntimeInitSnapshot({
+          pluginId: options.pluginId,
+          runtimeInstanceId: frameId,
+          permissions,
+          manifestPermissions: plugin?.manifest.permissions,
+          deniedPermissions: plugin?.deniedPermissions,
+          startupTimeoutMs: PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS,
+          heartbeatIntervalMs: PMPM_SANDBOX_COMMAND_HEARTBEAT_INTERVAL_MS,
+          unresponsiveTimeoutMs: PMPM_SANDBOX_COMMAND_UNRESPONSIVE_TIMEOUT_MS,
+        });
+
+        const optionalCapabilityIds = runtimeInitSnapshot.grantedCapabilities
+          .filter((capability) => capability.mode === 'optional')
+          .map((capability) => capability.capabilityId);
+
+        const runtimeRevokeDrillSnapshot = buildPmpmRuntimeCapabilityRevokeDrillSnapshot({
+          pluginId: options.pluginId,
+          runtimeInstanceId: frameId,
+          capabilityIds: optionalCapabilityIds,
+          reason: 'compat-drill:no-op',
+        });
+
         postToWorker({
           type: 'pmpm:init',
           pluginId: options.pluginId,
@@ -810,14 +918,7 @@ async function runPmpmSandboxedCommandInWorker(options: {
             carrier: 'dedicated-worker',
             supportsViewMount: false,
           }),
-          runtimeInit: buildPmpmRuntimeInitSnapshot({
-            pluginId: options.pluginId,
-            runtimeInstanceId: frameId,
-            permissions,
-            startupTimeoutMs: PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS,
-            heartbeatIntervalMs: PMPM_SANDBOX_COMMAND_HEARTBEAT_INTERVAL_MS,
-            unresponsiveTimeoutMs: PMPM_SANDBOX_COMMAND_UNRESPONSIVE_TIMEOUT_MS,
-          }),
+          runtimeInit: runtimeInitSnapshot,
           runtimeActivate: buildPmpmRuntimeActivateSnapshot({
             pluginId: options.pluginId,
             runtimeInstanceId: frameId,
@@ -829,13 +930,14 @@ async function runPmpmSandboxedCommandInWorker(options: {
             pluginId: options.pluginId,
             runtimeInstanceId: frameId,
           }),
-          viewMountRequest: buildPmpmViewMountRequestSnapshot({
-            pluginId: options.pluginId,
-            runtimeInstanceId: frameId,
-            kind: 'command',
-            surfaceId: options.commandId,
-            commandArgs: options.args,
-          }) ?? undefined,
+          viewMountRequest:
+            buildPmpmViewMountRequestSnapshot({
+              pluginId: options.pluginId,
+              runtimeInstanceId: frameId,
+              kind: 'command',
+              surfaceId: options.commandId,
+              commandArgs: options.args,
+            }) ?? undefined,
           hostInfo: permissions.has('api:host')
             ? {
                 pluginId: options.pluginId,
@@ -850,21 +952,36 @@ async function runPmpmSandboxedCommandInWorker(options: {
           commandArgs: options.args,
           permissions: Array.from(permissions),
           entryCode,
-          initialAudioState: permissions.has('api:audio-state') ? options.audioService.getState() : null,
-          initialAudioSpectrum: permissions.has('api:audio-visual') ? api.visualizer.getSpectrum() : null,
+          initialAudioState: permissions.has('api:audio-state')
+            ? options.audioService.getState()
+            : null,
+          initialAudioSpectrum: permissions.has('api:audio-visual')
+            ? api.visualizer.getSpectrum()
+            : null,
           initialAudioSpectrumFramePre:
-            permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrumFrame === 'function'
+            permissions.has('api:audio-visual') &&
+            typeof api.visualizer.getSpectrumFrame === 'function'
               ? api.visualizer.getSpectrumFrame({ tap: 'pre-dsp' })
               : null,
           initialAudioSpectrumFramePost:
-            permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrumFrame === 'function'
+            permissions.has('api:audio-visual') &&
+            typeof api.visualizer.getSpectrumFrame === 'function'
               ? api.visualizer.getSpectrumFrame({ tap: 'post-dsp' })
               : null,
           initialNavigation:
-            permissions.has('api:navigation') && typeof options.navigation.getSnapshot === 'function'
+            permissions.has('api:navigation') &&
+            typeof options.navigation.getSnapshot === 'function'
               ? options.navigation.getSnapshot()
               : null,
           initialConfig,
+        });
+
+        postToWorker({
+          type: 'pmpm:capabilities-revoke',
+          requestId: runtimeRevokeDrillSnapshot.requestId,
+          capabilityIds: [...runtimeRevokeDrillSnapshot.capabilityIds],
+          reason: runtimeRevokeDrillSnapshot.reason,
+          dryRun: true,
         });
         return;
       }
@@ -881,6 +998,10 @@ async function runPmpmSandboxedCommandInWorker(options: {
           capability: data.capability,
           action: data.action,
         });
+        return;
+      }
+
+      if (data.type === 'pmpm:capabilities-revoke-ack') {
         return;
       }
 
@@ -973,6 +1094,7 @@ export async function runPmpmSandboxedCommand(options: {
   }
 
   const permissions = getPmpmPluginEffectivePermissions(options.pluginId);
+  const plugin = getInstalledPmpmPlugin(options.pluginId);
   const api: PluginMountApi = createPluginMountApi({
     pluginId: options.pluginId,
     hostLabel,
@@ -1100,10 +1222,7 @@ export async function runPmpmSandboxedCommand(options: {
 
           const elapsedSincePong = Date.now() - lastPongAt;
           if (elapsedSincePong < pingTimeoutMs) return;
-          crashAsUnresponsive(
-            `Plugin runtime unresponsive (${elapsedSincePong}ms)`,
-            pingTimeoutMs
-          );
+          crashAsUnresponsive(`Plugin runtime unresponsive (${elapsedSincePong}ms)`, pingTimeoutMs);
         }, PMPM_SANDBOX_COMMAND_HEARTBEAT_INTERVAL_MS);
 
         totalTimer = window.setTimeout(() => {
@@ -1111,73 +1230,104 @@ export async function runPmpmSandboxedCommand(options: {
           crashAsUnresponsive(`Plugin command timeout (${elapsed}ms)`, timeoutMs);
         }, timeoutMs);
 
-    postToFrame({
-      type: 'pmpm:init',
-      pluginId: options.pluginId,
-      hostLabel,
-      runtimeHello: buildPmpmRuntimeHelloSnapshot({
-        pluginId: options.pluginId,
-        runtimeInstanceId: frameId,
-        runtimeKind: 'webview',
-        carrier: 'webview-frame',
-        supportsViewMount: false,
-      }),
-      runtimeInit: buildPmpmRuntimeInitSnapshot({
-        pluginId: options.pluginId,
-        runtimeInstanceId: frameId,
-        permissions,
-        startupTimeoutMs: PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS,
-        heartbeatIntervalMs: PMPM_SANDBOX_COMMAND_HEARTBEAT_INTERVAL_MS,
-        unresponsiveTimeoutMs: PMPM_SANDBOX_COMMAND_UNRESPONSIVE_TIMEOUT_MS,
-      }),
-      runtimeActivate: buildPmpmRuntimeActivateSnapshot({
-        pluginId: options.pluginId,
-        runtimeInstanceId: frameId,
-        kind: 'command',
-        surfaceId: options.commandId,
-        commandArgs: options.args,
-      }),
-      runtimeHealth: buildPmpmRuntimeHealthSnapshot({
-        pluginId: options.pluginId,
-        runtimeInstanceId: frameId,
-      }),
-      viewMountRequest: buildPmpmViewMountRequestSnapshot({
-        pluginId: options.pluginId,
-        runtimeInstanceId: frameId,
-        kind: 'command',
-        surfaceId: options.commandId,
-        commandArgs: options.args,
-      }) ?? undefined,
-      hostInfo: permissions.has('api:host')
-        ? {
+        const runtimeInitSnapshot = buildPmpmRuntimeInitSnapshot({
+          pluginId: options.pluginId,
+          runtimeInstanceId: frameId,
+          permissions,
+          manifestPermissions: plugin?.manifest.permissions,
+          deniedPermissions: plugin?.deniedPermissions,
+          startupTimeoutMs: PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS,
+          heartbeatIntervalMs: PMPM_SANDBOX_COMMAND_HEARTBEAT_INTERVAL_MS,
+          unresponsiveTimeoutMs: PMPM_SANDBOX_COMMAND_UNRESPONSIVE_TIMEOUT_MS,
+        });
+
+        const optionalCapabilityIds = runtimeInitSnapshot.grantedCapabilities
+          .filter((capability) => capability.mode === 'optional')
+          .map((capability) => capability.capabilityId);
+
+        const runtimeRevokeDrillSnapshot = buildPmpmRuntimeCapabilityRevokeDrillSnapshot({
+          pluginId: options.pluginId,
+          runtimeInstanceId: frameId,
+          capabilityIds: optionalCapabilityIds,
+          reason: 'compat-drill:no-op',
+        });
+
+        postToFrame({
+          type: 'pmpm:init',
+          pluginId: options.pluginId,
+          hostLabel,
+          runtimeHello: buildPmpmRuntimeHelloSnapshot({
             pluginId: options.pluginId,
-            hostLabel,
-            hostApiVersion: HOST_API_VERSION,
-            appVersion: APP_VERSION,
-            runtime: isTauriRuntime() ? 'tauri' : 'web',
-          }
-        : null,
-      surface: 'command',
-      surfaceId: options.commandId,
-      commandArgs: options.args,
-      permissions: Array.from(permissions),
-      entryCode,
-      initialAudioState: permissions.has('api:audio-state') ? options.audioService.getState() : null,
-      initialAudioSpectrum: permissions.has('api:audio-visual') ? api.visualizer.getSpectrum() : null,
-      initialAudioSpectrumFramePre:
-        permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrumFrame === 'function'
-          ? api.visualizer.getSpectrumFrame({ tap: 'pre-dsp' })
-          : null,
-      initialAudioSpectrumFramePost:
-        permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrumFrame === 'function'
-          ? api.visualizer.getSpectrumFrame({ tap: 'post-dsp' })
-          : null,
-      initialNavigation:
-        permissions.has('api:navigation') && typeof options.navigation.getSnapshot === 'function'
-          ? options.navigation.getSnapshot()
-          : null,
-      initialConfig,
-    });
+            runtimeInstanceId: frameId,
+            runtimeKind: 'webview',
+            carrier: 'webview-frame',
+            supportsViewMount: false,
+          }),
+          runtimeInit: runtimeInitSnapshot,
+          runtimeActivate: buildPmpmRuntimeActivateSnapshot({
+            pluginId: options.pluginId,
+            runtimeInstanceId: frameId,
+            kind: 'command',
+            surfaceId: options.commandId,
+            commandArgs: options.args,
+          }),
+          runtimeHealth: buildPmpmRuntimeHealthSnapshot({
+            pluginId: options.pluginId,
+            runtimeInstanceId: frameId,
+          }),
+          viewMountRequest:
+            buildPmpmViewMountRequestSnapshot({
+              pluginId: options.pluginId,
+              runtimeInstanceId: frameId,
+              kind: 'command',
+              surfaceId: options.commandId,
+              commandArgs: options.args,
+            }) ?? undefined,
+          hostInfo: permissions.has('api:host')
+            ? {
+                pluginId: options.pluginId,
+                hostLabel,
+                hostApiVersion: HOST_API_VERSION,
+                appVersion: APP_VERSION,
+                runtime: isTauriRuntime() ? 'tauri' : 'web',
+              }
+            : null,
+          surface: 'command',
+          surfaceId: options.commandId,
+          commandArgs: options.args,
+          permissions: Array.from(permissions),
+          entryCode,
+          initialAudioState: permissions.has('api:audio-state')
+            ? options.audioService.getState()
+            : null,
+          initialAudioSpectrum: permissions.has('api:audio-visual')
+            ? api.visualizer.getSpectrum()
+            : null,
+          initialAudioSpectrumFramePre:
+            permissions.has('api:audio-visual') &&
+            typeof api.visualizer.getSpectrumFrame === 'function'
+              ? api.visualizer.getSpectrumFrame({ tap: 'pre-dsp' })
+              : null,
+          initialAudioSpectrumFramePost:
+            permissions.has('api:audio-visual') &&
+            typeof api.visualizer.getSpectrumFrame === 'function'
+              ? api.visualizer.getSpectrumFrame({ tap: 'post-dsp' })
+              : null,
+          initialNavigation:
+            permissions.has('api:navigation') &&
+            typeof options.navigation.getSnapshot === 'function'
+              ? options.navigation.getSnapshot()
+              : null,
+          initialConfig,
+        });
+
+        postToFrame({
+          type: 'pmpm:capabilities-revoke',
+          requestId: runtimeRevokeDrillSnapshot.requestId,
+          capabilityIds: [...runtimeRevokeDrillSnapshot.capabilityIds],
+          reason: runtimeRevokeDrillSnapshot.reason,
+          dryRun: true,
+        });
         return;
       }
 
@@ -1193,6 +1343,10 @@ export async function runPmpmSandboxedCommand(options: {
           capability: data.capability,
           action: data.action,
         });
+        return;
+      }
+
+      if (data.type === 'pmpm:capabilities-revoke-ack') {
         return;
       }
 

@@ -1,7 +1,4 @@
-import type {
-  ExtensionDefaultAnchorDescriptor,
-  ExtensionVariantDescriptor,
-} from './manifest';
+import type { ExtensionDefaultAnchorDescriptor, ExtensionVariantDescriptor } from './manifest';
 import type {
   PageContributionDescriptor,
   SettingsPanelContributionDescriptor,
@@ -53,6 +50,9 @@ export interface PmpHostCapabilityPackDescriptor {
   coreCompatibility: string;
 }
 
+export const PMP_HOST_CAPABILITY_PACK_VERSION = '1.0.0' as const;
+export const PMP_HOST_CAPABILITY_PACK_CORE_COMPATIBILITY = 'core.contracts@2.0' as const;
+
 export const PMP_HOST_CAPABILITY_FAMILIES = [
   'host.pmp.navigation',
   'host.pmp.shell.window',
@@ -81,6 +81,13 @@ export const PMP_HOST_CAPABILITY_FAMILIES = [
 ] as const;
 
 export type PmpHostCapabilityFamilyId = (typeof PMP_HOST_CAPABILITY_FAMILIES)[number];
+
+export const PMP_HOST_CAPABILITY_PACK_DESCRIPTOR: PmpHostCapabilityPackDescriptor = {
+  hostId: 'pmp',
+  packVersion: PMP_HOST_CAPABILITY_PACK_VERSION,
+  capabilityFamilies: [...PMP_HOST_CAPABILITY_FAMILIES],
+  coreCompatibility: PMP_HOST_CAPABILITY_PACK_CORE_COMPATIBILITY,
+};
 
 export const PMP_FOUNDATION_CAPABILITY_COMPAT_MAP = {
   'foundation.capability-registry': 'core.capability-registry',

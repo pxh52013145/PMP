@@ -10,6 +10,8 @@ export {
   registerDesktopPetRuntimeProvider,
   registerAiAdapterProvider,
   registerVoiceTrainingRuntimeProvider,
+  getPmpHostCapabilityPackDescriptor,
+  listPmpHostCapabilityFamilies,
   setDefaultAudioInputAdapterProvider,
   setDefaultDesktopPetRuntimeProvider,
   setDefaultAiAdapterProvider,
@@ -63,4 +65,3 @@ export type {
   PluginMountApi,
   PluginNavigationSnapshot,
 } from './host-api';
-

@@ -3,10 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const durableTextState = new Map<string, string>();
 
 vi.mock('../../modules/music-platform', async () => {
-  const actual =
-    await vi.importActual<typeof import('../../modules/music-platform')>(
-      '../../modules/music-platform'
-    );
+  const actual = await vi.importActual<typeof import('../../modules/music-platform')>(
+    '../../modules/music-platform'
+  );
 
   return {
     ...actual,
@@ -113,16 +112,14 @@ vi.mock('../../modules/music-platform', async () => {
         },
       ],
     })),
-    prepareBilibiliCachedPlayback: vi.fn(
-      async (sourceLocator: string, qualityHint?: string) => ({
-        sourceLocator,
-        streamUrl: 'https://example.test/bilibili-stream',
-        cachePath: '/cache/bilibili-track',
-        contentKind: 'video',
-        selectedQualityKey: qualityHint ?? 'auto',
-        selectedQualityLabel: qualityHint ?? 'Auto',
-      })
-    ),
+    prepareBilibiliCachedPlayback: vi.fn(async (sourceLocator: string, qualityHint?: string) => ({
+      sourceLocator,
+      streamUrl: 'https://example.test/bilibili-stream',
+      cachePath: '/cache/bilibili-track',
+      contentKind: 'video',
+      selectedQualityKey: qualityHint ?? 'auto',
+      selectedQualityLabel: qualityHint ?? 'Auto',
+    })),
     prepareNeteaseCachedPlayback: vi.fn(async (sourceLocator: string) => ({
       sourceLocator,
       streamUrl: 'https://example.test/netease-stream',
@@ -133,10 +130,9 @@ vi.mock('../../modules/music-platform', async () => {
 });
 
 vi.mock('../../modules/music-library', async () => {
-  const actual =
-    await vi.importActual<typeof import('../../modules/music-library')>(
-      '../../modules/music-library'
-    );
+  const actual = await vi.importActual<typeof import('../../modules/music-library')>(
+    '../../modules/music-library'
+  );
 
   return {
     ...actual,
@@ -197,7 +193,9 @@ vi.mock('../../modules/storage', async () => {
 
   return {
     ...actual,
-    readDurableText: vi.fn(async (_namespace: string, id: string) => durableTextState.get(id) ?? null),
+    readDurableText: vi.fn(
+      async (_namespace: string, id: string) => durableTextState.get(id) ?? null
+    ),
     writeDurableText: vi.fn(async (_namespace: string, id: string, value: string) => {
       durableTextState.set(id, value);
       return true;
@@ -214,14 +212,8 @@ import * as storageModule from '../../modules/storage';
 import type { CommandContribution } from '../../contracts/contributions';
 import { DEFAULT_TELEMETRY_POLICY, type TelemetryRecord } from '../../contracts/telemetry';
 import { setLocale } from '../../i18n/core';
-import {
-  clearMagnetRenderers,
-  registerMagnetRenderer,
-} from '../../magnet-system/registry';
-import {
-  clearMagnetVariants,
-  registerMagnetVariant,
-} from '../../magnet-system/variantRegistry';
+import { clearMagnetRenderers, registerMagnetRenderer } from '../../magnet-system/registry';
+import { clearMagnetVariants, registerMagnetVariant } from '../../magnet-system/variantRegistry';
 import type { CommandsService } from '../../services/commands';
 import type { KeybindingsService } from '../../services/keybindings';
 import {
@@ -234,7 +226,12 @@ import {
   type TelemetrySpanStartOptions,
 } from '../../services/telemetry';
 import { DEFAULT_THEME } from '../../themes/runtimeTheme';
-import { createPluginMountApi, listPluginHostCapabilities } from './pluginHostApi';
+import {
+  createPluginMountApi,
+  getPmpHostCapabilityPackDescriptor,
+  listPmpHostCapabilityFamilies,
+  listPluginHostCapabilities,
+} from './pluginHostApi';
 import type { HostAudioService, HostNavigation, PluginHostTrayApi } from './pluginHostApi';
 import { clearPmpmPluginConfig } from './pluginConfig';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
@@ -290,9 +287,7 @@ function createNavigationStub(overrides: Partial<HostNavigation> = {}): HostNavi
   };
 }
 
-function createKeybindingsStub(
-  context: Record<string, unknown> = {}
-): KeybindingsService {
+function createKeybindingsStub(context: Record<string, unknown> = {}): KeybindingsService {
   return {
     getSnapshot: () => ({
       defaults: [],
@@ -309,9 +304,7 @@ function createKeybindingsStub(
   };
 }
 
-function createCommandsStub(
-  commandList: CommandContribution[] = []
-) {
+function createCommandsStub(commandList: CommandContribution[] = []) {
   const commands = new Map(commandList.map((command) => [command.id, command]));
   const dispatch = vi.fn(async (id: string, args?: unknown) => {
     const command = commands.get(id);
@@ -382,17 +375,22 @@ function createNoopTelemetryLogger(): TelemetryLogger {
   };
 }
 
-function createTelemetryServiceStub(options: {
-  snapshot?: Partial<TelemetrySnapshot> & {
-    status?: Partial<TelemetrySnapshot['status']>;
-    policy?: Partial<TelemetrySnapshot['policy']>;
-  };
-} = {}): {
+function createTelemetryServiceStub(
+  options: {
+    snapshot?: Partial<TelemetrySnapshot> & {
+      status?: Partial<TelemetrySnapshot['status']>;
+      policy?: Partial<TelemetrySnapshot['policy']>;
+    };
+  } = {}
+): {
   service: TelemetryService;
   ingested: Array<{ moduleId: string; record: TelemetryRecordInput; component?: string | null }>;
 } {
-  const ingested: Array<{ moduleId: string; record: TelemetryRecordInput; component?: string | null }> =
-    [];
+  const ingested: Array<{
+    moduleId: string;
+    record: TelemetryRecordInput;
+    component?: string | null;
+  }> = [];
 
   const snapshot: TelemetrySnapshot = {
     policy: {
@@ -533,6 +531,40 @@ describe('host.pmp capabilities', () => {
     });
   });
 
+  it('exposes host capability pack descriptor through public helpers and registry describe', async () => {
+    const descriptor = getPmpHostCapabilityPackDescriptor();
+    const familyIds = listPmpHostCapabilityFamilies();
+
+    expect(descriptor).toMatchObject({
+      hostId: 'pmp',
+      packVersion: '1.0.0',
+      coreCompatibility: 'core.contracts@2.0',
+    });
+    expect(descriptor.capabilityFamilies).toEqual(familyIds);
+
+    const api = createMountApi({
+      permissions: ['api:host', 'api:host-capability', 'api:navigation'],
+    });
+    const describeResult = await api.host.invokeCapability('core.capability-registry', 'describe');
+
+    expect(describeResult).toMatchObject({
+      ok: true,
+      data: {
+        id: 'core.capability-registry',
+        version: '1.1.0',
+        methods: ['describe', 'list', 'get', 'has'],
+        hostCapabilityPack: descriptor,
+      },
+    });
+    expect(
+      (
+        describeResult as {
+          data: { visibleHostCapabilityFamilies: string[] };
+        }
+      ).data.visibleHostCapabilityFamilies
+    ).toEqual(expect.arrayContaining(['host.pmp.navigation', 'host.pmp.audio-engine.playback']));
+  });
+
   it('routes host.pmp.navigation calls into the existing navigation bridge', async () => {
     const navigateTo = vi.fn();
     const goBack = vi.fn();
@@ -545,10 +577,7 @@ describe('host.pmp capabilities', () => {
       navigation,
     });
 
-    const snapshotResult = await api.host.invokeCapability(
-      'host.pmp.navigation',
-      'getSnapshot'
-    );
+    const snapshotResult = await api.host.invokeCapability('host.pmp.navigation', 'getSnapshot');
 
     expect(snapshotResult).toEqual({
       ok: true,
@@ -1087,21 +1116,13 @@ describe('host.pmp capabilities', () => {
       permissions: ['api:host', 'api:host-capability', 'storage:durable-text'],
     });
 
-    const writeResult = await api.host.invokeCapability(
-      'host.pmp.storage.durable-text',
-      'write',
-      {
-        key: 'lyrics-cache',
-        value: 'hello world',
-      }
-    );
-    const readResult = await api.host.invokeCapability(
-      'host.pmp.storage.durable-text',
-      'read',
-      {
-        key: 'lyrics-cache',
-      }
-    );
+    const writeResult = await api.host.invokeCapability('host.pmp.storage.durable-text', 'write', {
+      key: 'lyrics-cache',
+      value: 'hello world',
+    });
+    const readResult = await api.host.invokeCapability('host.pmp.storage.durable-text', 'read', {
+      key: 'lyrics-cache',
+    });
     const removeResult = await api.host.invokeCapability(
       'host.pmp.storage.durable-text',
       'remove',
@@ -1238,9 +1259,13 @@ describe('host.pmp capabilities', () => {
       permissions: ['api:host', 'api:host-capability', 'api:magnets-layout'],
     });
 
-    const ensureResult = await api.host.invokeCapability('host.pmp.magnets.layout', 'ensureLayout', {
-      spaceId: 'plugin-space',
-    });
+    const ensureResult = await api.host.invokeCapability(
+      'host.pmp.magnets.layout',
+      'ensureLayout',
+      {
+        spaceId: 'plugin-space',
+      }
+    );
     const setActiveResult = await api.host.invokeCapability(
       'host.pmp.magnets.layout',
       'setActiveMagnetIds',
@@ -1267,9 +1292,13 @@ describe('host.pmp capabilities', () => {
         active: false,
       }
     );
-    const getLayoutResult = await api.host.invokeCapability('host.pmp.magnets.layout', 'getLayout', {
-      spaceId: 'plugin-space',
-    });
+    const getLayoutResult = await api.host.invokeCapability(
+      'host.pmp.magnets.layout',
+      'getLayout',
+      {
+        spaceId: 'plugin-space',
+      }
+    );
 
     expect(ensureResult).toMatchObject({
       ok: true,
@@ -1315,9 +1344,10 @@ describe('host.pmp capabilities', () => {
         source: 'storage',
       },
     });
-    expect((deactivateResult as { ok: true; data: { layout: { activeMagnetIds: string[] } } }).data.layout.activeMagnetIds).not.toContain(
-      'plugin-clock'
-    );
+    expect(
+      (deactivateResult as { ok: true; data: { layout: { activeMagnetIds: string[] } } }).data
+        .layout.activeMagnetIds
+    ).not.toContain('plugin-clock');
     expect(getLayoutResult).toMatchObject({
       ok: true,
       data: {
@@ -1376,10 +1406,7 @@ describe('host.pmp capabilities', () => {
       permissions: ['api:host', 'api:host-capability'],
     });
 
-    const describeResult = await api.host.invokeCapability(
-      'host.pmp.magnets.renderer',
-      'describe'
-    );
+    const describeResult = await api.host.invokeCapability('host.pmp.magnets.renderer', 'describe');
     const listRenderersResult = await api.host.invokeCapability(
       'host.pmp.magnets.renderer',
       'listRenderers'
@@ -1672,28 +1699,16 @@ describe('host.pmp capabilities', () => {
         connectorId: 'connector.platform.bilibili',
       }
     );
-    const beginResult = await api.host.invokeCapability(
-      'host.pmp.connector-auth',
-      'beginQrLogin',
-      {
-        connectorId: 'connector.platform.bilibili',
-      }
-    );
-    const pollResult = await api.host.invokeCapability(
-      'host.pmp.connector-auth',
-      'pollQrLogin',
-      {
-        connectorId: 'connector.platform.bilibili',
-        sessionId: 'session-1',
-      }
-    );
-    const logoutResult = await api.host.invokeCapability(
-      'host.pmp.connector-auth',
-      'logout',
-      {
-        connectorId: 'connector.platform.bilibili',
-      }
-    );
+    const beginResult = await api.host.invokeCapability('host.pmp.connector-auth', 'beginQrLogin', {
+      connectorId: 'connector.platform.bilibili',
+    });
+    const pollResult = await api.host.invokeCapability('host.pmp.connector-auth', 'pollQrLogin', {
+      connectorId: 'connector.platform.bilibili',
+      sessionId: 'session-1',
+    });
+    const logoutResult = await api.host.invokeCapability('host.pmp.connector-auth', 'logout', {
+      connectorId: 'connector.platform.bilibili',
+    });
 
     expect(definitionsResult).toMatchObject({
       ok: true,
@@ -1848,23 +1863,15 @@ describe('host.pmp capabilities', () => {
       'host.pmp.keybinding-context',
       'listKeys'
     );
-    const valueResult = await api.host.invokeCapability(
-      'host.pmp.keybinding-context',
-      'getValue',
-      {
-        key: 'audio.hasQueue',
-      }
-    );
+    const valueResult = await api.host.invokeCapability('host.pmp.keybinding-context', 'getValue', {
+      key: 'audio.hasQueue',
+    });
 
     expect(listKeysResult).toMatchObject({
       ok: true,
       data: {
         keyCount: 3,
-        keys: expect.arrayContaining([
-          'app.windowType',
-          'audio.hasQueue',
-          'ui.commandPaletteOpen',
-        ]),
+        keys: expect.arrayContaining(['app.windowType', 'audio.hasQueue', 'ui.commandPaletteOpen']),
       },
     });
     expect(valueResult).toEqual({
@@ -1975,9 +1982,9 @@ describe('host.pmp capabilities', () => {
         transportAvailable: true,
       },
     });
-    expect((statusResult as { ok: true; data: { status: Record<string, unknown> } }).data.status).not.toHaveProperty(
-      'currentFilePath'
-    );
+    expect(
+      (statusResult as { ok: true; data: { status: Record<string, unknown> } }).data.status
+    ).not.toHaveProperty('currentFilePath');
     expect(logResult).toEqual({
       ok: true,
       data: {
@@ -2115,10 +2122,7 @@ describe('host.pmp capabilities', () => {
       'host.pmp.audio-engine.playback',
       'getState'
     );
-    const playResult = await api.host.invokeCapability(
-      'host.pmp.audio-engine.playback',
-      'play'
-    );
+    const playResult = await api.host.invokeCapability('host.pmp.audio-engine.playback', 'play');
 
     expect(stateResult).toEqual({
       ok: true,
