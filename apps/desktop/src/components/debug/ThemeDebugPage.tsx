@@ -253,13 +253,18 @@ export const ThemeDebugPage: React.FC = () => {
     setRendererList(listRegisteredMagnetRenderers());
   }, []);
 
-  const handleApplyThemeJson = () => {
+  const handleApplyThemeJson = async () => {
     try {
       const parsed = JSON.parse(themeJson);
-      applyTheme(parsed);
+      await applyTheme(parsed);
     } catch (error) {
-      alert(t('editor.theme-debug.alert.invalidThemeJson'));
-      telemetry.error('theme_debug.theme_json.parse_failed', {
+      const parseFailed = error instanceof SyntaxError;
+      alert(
+        parseFailed
+          ? t('editor.theme-debug.alert.invalidThemeJson')
+          : t('editor.theme-debug.alert.themeFileLoadFailed')
+      );
+      telemetry.error(parseFailed ? 'theme_debug.theme_json.parse_failed' : 'theme_debug.theme_json.apply_failed', {
         message: getErrorMessage(error),
         fields: {
           configMode,

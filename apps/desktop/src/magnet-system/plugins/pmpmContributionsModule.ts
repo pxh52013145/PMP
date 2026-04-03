@@ -10,6 +10,8 @@ import type {
 } from '../../contracts/contributions';
 import type { GovernanceService } from '../../services/governance';
 import { GOVERNANCE_SERVICE_TOKEN } from '../../services/governance';
+import { COMMANDS_SERVICE_TOKEN } from '../../services/commands';
+import { KEYBINDINGS_SERVICE_TOKEN } from '../../services/keybindings';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import { AUDIO_ENGINE_SERVICE_TOKEN } from '../../services/audio';
 import { closePluginWindow, openPluginWindow } from '../../utils/pluginWindows';
@@ -235,7 +237,9 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
               run: async (args?: unknown) => {
                 const audioEngine = services.get(AUDIO_ENGINE_SERVICE_TOKEN);
                 const audioService = audioEngine.getSnapshot().audioService;
+                const commands = services.getOptional(COMMANDS_SERVICE_TOKEN);
                 const navigation = services.get(NAVIGATION_SERVICE_TOKEN);
+                const keybindings = services.getOptional(KEYBINDINGS_SERVICE_TOKEN);
 
                 try {
                   if (getPmpmSandboxRuntimeEnabled()) {
@@ -245,7 +249,9 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
                       args,
                       hostLabel: 'PluginCommand',
                       audioService,
+                      commands,
                       navigation,
+                      keybindings,
                     });
                     return;
                   }
@@ -256,7 +262,9 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
                     hostLabel: 'PluginCommand',
                     permissions,
                     audioService,
+                    commands,
                     navigation,
+                    keybindings,
                   });
 
                   const runtime = await ensurePmpmPluginRuntime(pluginId);

@@ -11,11 +11,18 @@ export const PLUGIN_PERMISSIONS = {
   audioInputAdapter: 'api:audio-input-adapter',
   desktopPet: 'api:desktop-pet',
   voiceTraining: 'api:voice-training',
+  connectorAuth: 'api:connector-auth',
+  magnetsCatalog: 'api:magnets-catalog',
+  magnetsLayout: 'api:magnets-layout',
+  musicPlatformCatalog: 'api:music-platform-catalog',
+  musicPlatformSearch: 'api:music-platform-search',
+  musicPlatformPrepare: 'api:music-platform-prepare',
 
   navigation: 'api:navigation',
   window: 'api:window',
 
   configLocal: 'storage:local',
+  durableText: 'storage:durable-text',
 
   netAll: 'net:all',
   netWildcard: 'net:*',

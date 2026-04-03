@@ -67,7 +67,7 @@ export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ trackId }) => 
     return () => {
       cancelled = true;
     };
-  }, [trackId]);
+  }, [trackId, telemetry]);
 
   useEffect(() => {
     const applyState = (state: TrackDetailAudioState) => {
@@ -278,6 +278,7 @@ export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ trackId }) => 
     currentTrack?.title,
     currentTrack?.artist,
     currentTrack?.duration,
+    telemetry,
   ]);
 
   const resolvedLyricsText = useMemo(() => {

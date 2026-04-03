@@ -3,10 +3,14 @@ import type { NavigationPageType, NavigationParamsFor } from '../../../contracts
 import { parseNavigationParams } from '../../../contracts/navigationParams';
 import type { PlayMode, Track } from '../../../services/audio';
 import { musicLibraryService } from '../../../services/audio/MusicLibraryService';
+import type { CommandsService } from '../../../services/commands';
+import { flushStorageWrites } from '../../../modules/storage';
 import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../../../services/telemetry/tauriInvokeTelemetry';
 import { getDynamicColorsForImageUrl } from '../../../utils/dynamicColors';
 import { closePluginWindow, openPluginWindow } from '../../../utils/pluginWindows';
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
+import { broadcastSignal, TAURI_EVENTS } from '../../../utils/windowCommunication';
 import {
   patchPmpmPluginConfig,
   readPmpmPluginConfig,
@@ -16,6 +20,7 @@ import {
   type PmpmPluginConfig,
 } from '../pluginConfig';
 import { recordPmpmPermissionDenied } from '../pmpmGovernance';
+import type { KeybindingsService } from '../../../services/keybindings';
 import {
   getPluginHostCapability,
   invokePluginHostCapability,
@@ -27,6 +32,7 @@ import type {
   HostNavigation,
   PluginCoverSnapshot,
   PluginHostAudioInputAdapterBridge,
+  PluginHostTrayApi,
   PluginMountApi,
   PluginNavigationSnapshot,
 } from './types';
@@ -95,18 +101,50 @@ function safeQueueLength(audioService: HostAudioService): number {
   }
 }
 
+type MainWindowHandle = {
+  label: string;
+  isVisible: () => Promise<boolean>;
+  show: () => Promise<void>;
+  hide: () => Promise<void>;
+  setFocus: () => Promise<void>;
+};
+
+async function resolveMainWindowHandle(): Promise<MainWindowHandle | null> {
+  if (!isTauriRuntime()) return null;
+
+  const { getAll } = await import('@tauri-apps/api/window');
+  return (getAll().find((window) => window.label === 'main') as MainWindowHandle | undefined) ?? null;
+}
+
+async function readMainWindowVisibleState(): Promise<boolean | null> {
+  const mainWindow = await resolveMainWindowHandle();
+  if (!mainWindow) return null;
+
+  try {
+    return await mainWindow.isVisible();
+  } catch {
+    return null;
+  }
+}
+
 export function createPluginMountApi({
   pluginId,
   hostLabel,
   permissions,
   audioService,
   navigation,
+  keybindings,
+  commands,
+  trayApi: trayApiOverride,
 }: {
   pluginId: string;
   hostLabel: string;
   permissions: Set<string>;
   audioService: HostAudioService;
   navigation: HostNavigation;
+  keybindings?: KeybindingsService | null;
+  commands?: CommandsService | null;
+  trayApi?: PluginHostTrayApi | null;
 }): PluginMountApi {
   const allowHost = hasPermission(permissions, PLUGIN_PERMISSIONS.host);
   const allowAudioState = hasPermission(permissions, PLUGIN_PERMISSIONS.audioState);
@@ -311,6 +349,71 @@ export function createPluginMountApi({
     },
   };
 
+  const trayApi: PluginHostTrayApi =
+    trayApiOverride ?? {
+      supported: isTauriRuntime(),
+      getMainWindowVisible: async () => {
+        return await readMainWindowVisibleState();
+      },
+      activateItem: async (itemId: string) => {
+        if (!isTauriRuntime()) {
+          throw new Error('System tray is not available');
+        }
+
+        const normalizedItemId = typeof itemId === 'string' ? itemId.trim() : '';
+        if (!normalizedItemId) {
+          throw new Error('Tray item id is required');
+        }
+
+        if (normalizedItemId === 'quit') {
+          flushStorageWrites();
+          await invokeWithTelemetry('app_request_exit', undefined, {
+            moduleId: 'windowing',
+            component: 'trayApi',
+            event: 'window.main.request-exit',
+            successLevel: 'info',
+          });
+          return;
+        }
+
+        const mainWindow = await resolveMainWindowHandle();
+        if (!mainWindow) {
+          throw new Error('Main window not found');
+        }
+
+        if (normalizedItemId === 'show') {
+          await mainWindow.show();
+          await mainWindow.setFocus().catch(() => {});
+          await broadcastSignal(TAURI_EVENTS.MAIN_WINDOW_SHOWN);
+          return;
+        }
+
+        if (normalizedItemId === 'hide') {
+          flushStorageWrites();
+          await mainWindow.hide();
+          await broadcastSignal(TAURI_EVENTS.MAIN_WINDOW_HIDDEN);
+          return;
+        }
+
+        if (normalizedItemId === 'toggle-main-window') {
+          const visible = await mainWindow.isVisible().catch(() => false);
+          if (visible) {
+            flushStorageWrites();
+            await mainWindow.hide();
+            await broadcastSignal(TAURI_EVENTS.MAIN_WINDOW_HIDDEN);
+            return;
+          }
+
+          await mainWindow.show();
+          await mainWindow.setFocus().catch(() => {});
+          await broadcastSignal(TAURI_EVENTS.MAIN_WINDOW_SHOWN);
+          return;
+        }
+
+        throw new Error(`Unknown tray item: ${normalizedItemId}`);
+      },
+    };
+
   const getNavigationSnapshot = (): PluginNavigationSnapshot | null => {
     if (!allowNavigation) {
       warnDenied('api:navigation', 'navigation.getSnapshot()');
@@ -333,6 +436,51 @@ export function createPluginMountApi({
       );
       return null;
     }
+  };
+
+  const configApi = {
+    get: () => {
+      if (!allowPluginConfig) {
+        warnDenied('storage:local', 'config.get()');
+        return {};
+      }
+      return readPmpmPluginConfig(pluginId);
+    },
+    set: (next: Record<string, unknown>) => {
+      if (!allowPluginConfig) {
+        warnDenied('storage:local', 'config.set(next)');
+        return;
+      }
+      writePmpmPluginConfig(pluginId, next as PmpmPluginConfig);
+    },
+    patch: (next: Record<string, unknown>) => {
+      if (!allowPluginConfig) {
+        warnDenied('storage:local', 'config.patch(next)');
+        return;
+      }
+      patchPmpmPluginConfig(pluginId, next);
+    },
+    reset: () => {
+      if (!allowPluginConfig) {
+        warnDenied('storage:local', 'config.reset()');
+        return;
+      }
+      clearPmpmPluginConfig(pluginId);
+    },
+    onChange: (cb: (config: Record<string, unknown>) => void) => {
+      if (!allowPluginConfig) {
+        warnDenied('storage:local', 'config.onChange(cb)');
+        return () => {};
+      }
+      if (typeof cb !== 'function') {
+        warnApiIssue(
+          'config.on_change.invalid_callback',
+          `[${hostLabel}] Invalid config.onChange callback (plugin=${pluginId})`
+        );
+        return () => {};
+      }
+      return subscribePmpmPluginConfig(pluginId, cb);
+    },
   };
 
   return {
@@ -426,16 +574,24 @@ export function createPluginMountApi({
             method: normalizedMethod,
             payload,
             context: {
-              pluginId,
-              hostLabel,
-              permissions,
-              aiControl: aiControlBridge,
-              audioInputAdapter: audioInputAdapterBridge,
-            },
-          }),
-          HOST_CAPABILITY_INVOKE_TIMEOUT_MS,
-          `Host capability invocation timed out: ${normalizedCapabilityId}.${normalizedMethod}`
-        );
+            pluginId,
+            hostLabel,
+            permissions,
+            aiControl: aiControlBridge,
+            audioInputAdapter: audioInputAdapterBridge,
+            audioService,
+            commands: commands ?? undefined,
+            getCover,
+            keybindings: keybindings ?? undefined,
+            navigation,
+            configApi,
+            trayApi,
+            windowApi,
+          },
+        }),
+        HOST_CAPABILITY_INVOKE_TIMEOUT_MS,
+        `Host capability invocation timed out: ${normalizedCapabilityId}.${normalizedMethod}`
+      );
       },
     },
     audio: {
@@ -832,50 +988,7 @@ export function createPluginMountApi({
         return Boolean(snap && typeof snap.currentIndex === 'number' && snap.currentIndex > 0);
       },
     },
-    config: {
-      get: () => {
-        if (!allowPluginConfig) {
-          warnDenied('storage:local', 'config.get()');
-          return {};
-        }
-        return readPmpmPluginConfig(pluginId);
-      },
-      set: (next) => {
-        if (!allowPluginConfig) {
-          warnDenied('storage:local', 'config.set(next)');
-          return;
-        }
-        writePmpmPluginConfig(pluginId, next as PmpmPluginConfig);
-      },
-      patch: (next) => {
-        if (!allowPluginConfig) {
-          warnDenied('storage:local', 'config.patch(next)');
-          return;
-        }
-        patchPmpmPluginConfig(pluginId, next);
-      },
-      reset: () => {
-        if (!allowPluginConfig) {
-          warnDenied('storage:local', 'config.reset()');
-          return;
-        }
-        clearPmpmPluginConfig(pluginId);
-      },
-      onChange: (cb) => {
-        if (!allowPluginConfig) {
-          warnDenied('storage:local', 'config.onChange(cb)');
-          return () => {};
-        }
-        if (typeof cb !== 'function') {
-          warnApiIssue(
-            'config.on_change.invalid_callback',
-            `[${hostLabel}] Invalid config.onChange callback (plugin=${pluginId})`
-          );
-          return () => {};
-        }
-        return subscribePmpmPluginConfig(pluginId, cb);
-      },
-    },
+    config: configApi,
     window: windowApi,
   };
 }

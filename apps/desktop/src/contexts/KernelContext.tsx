@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { createKernel, ModuleLoader, type Kernel, type KernelModule } from '../kernel';
+import { createKernel, ModuleLoader, setKernelLogSink, type Kernel, type KernelModule } from '../kernel';
 import type { AppEvents } from '../contracts/events';
 import { createLifecycleModule } from '../services/lifecycle';
 import { createNavigationModule } from '../services/navigation';
@@ -31,6 +31,39 @@ type KernelRuntime = {
 const KernelContext = createContext<DesktopKernel | undefined>(undefined);
 
 let cachedRuntime: KernelRuntime | null = null;
+
+function forwardKernelLog(
+  component: string,
+  level: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal',
+  event: string,
+  options?: { message?: string; fields?: Record<string, unknown> }
+): void {
+  const logger = getTelemetryLogger('kernel', component);
+  switch (level) {
+    case 'trace':
+      logger.trace(event, options);
+      return;
+    case 'debug':
+      logger.debug(event, options);
+      return;
+    case 'info':
+      logger.info(event, options);
+      return;
+    case 'warn':
+      logger.warn(event, options);
+      return;
+    case 'error':
+      logger.error(event, options);
+      return;
+    case 'fatal':
+      logger.fatal(event, options);
+      return;
+    default: {
+      const exhaustive: never = level;
+      throw new Error(`Unsupported kernel log level: ${String(exhaustive)}`);
+    }
+  }
+}
 
 export function hasEnabledPmpmPluginCandidates(raw: string | null | undefined): boolean {
   if (typeof raw !== 'string') return false;
@@ -83,6 +116,11 @@ async function loadBuiltinContributionsModule(): Promise<KernelModule<AppEvents>
 
 function createRuntime(): KernelRuntime {
   const telemetry = getTelemetryLogger('kernel', 'KernelContext');
+  setKernelLogSink({
+    log(component, level, event, options) {
+      forwardKernelLog(component, level, event, options);
+    },
+  });
   const kernel = createKernel<AppEvents>();
   const loader = new ModuleLoader<AppEvents>(kernel.services, kernel.events, kernel.contributions);
 

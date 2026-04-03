@@ -6,7 +6,7 @@ export type Messages = Record<string, string>;
 export const SUPPORTED_LOCALES = ['zh-CN', 'en-US'] as const;
 export type Locale = (typeof SUPPORTED_LOCALES)[number];
 
-const FALLBACK_LOCALE: Locale = 'zh-CN';
+export const FALLBACK_LOCALE: Locale = 'zh-CN';
 
 const resources: Record<Locale, Messages> = {
   'zh-CN': zhCN as Messages,

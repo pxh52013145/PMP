@@ -15,6 +15,14 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
+      '@pixel-matrix/plugin-platform-contracts': resolve(
+        __dirname,
+        '../../packages/plugin-platform-contracts/src/index.ts'
+      ),
+      '@pixel-matrix/plugin-compat-pmpm': resolve(
+        __dirname,
+        '../../packages/plugin-compat-pmpm/src/index.ts'
+      ),
     },
   },
 });

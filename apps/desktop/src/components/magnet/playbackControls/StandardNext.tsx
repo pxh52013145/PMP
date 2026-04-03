@@ -32,7 +32,7 @@ export const StandardNext: React.FC<PlaybackVariantProps> = ({ data, logic, skin
       aria-label={t('commands.audio.next-track.description')}
     >
       <NextIcon />
-      {skinProps.showLabel ? <span className="playback-step-label">Next</span> : null}
+      {skinProps.showLabel ? <span className="playback-step-label">{t('magnet.renderers.btn-next.preview')}</span> : null}
       {skinProps.showQueueCount && queueLength > 0 ? (
         <span className="playback-step-count" aria-hidden="true">
           {queueLength}

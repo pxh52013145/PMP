@@ -4662,7 +4662,7 @@ export class NativeAudioService implements IAudioService {
     }
   }
 
-  // ===== 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝夋交閼板潡姊洪鈧粔鐢稿箚閻愬搫绠规繛锝庡墮婵″ジ鏌涚仦璇插闂囧鏌ｅΟ鐑樷枙闁稿骸绻戞穱濠囶敃閿涳綆浜俊鎾箳閹搭厽鍍甸梺鎸庣箓閹冲秵绔熼弴鐔剁箚闁靛牆娲ゅ暩闂佺顑囬崑鐔煎极椤曗偓閹垺淇婇幘铏枠鐎殿喖顭锋俊鐑芥晜閹冪疄?=====
+  // Track loading and native transport handoff.
   private async loadTrackInternal(track: Track): Promise<boolean> {
     cancelScheduledProcessWorkingSetTrim('tree');
     this.clearPendingSeek();
@@ -4856,7 +4856,7 @@ export class NativeAudioService implements IAudioService {
     seekImpl(this.transportFacadeContext, time);
   }
 
-  // ===== 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵稿妽闁哄懏绻堥弻鏇熷緞濞戞﹩娲紓浣哄У閸庢娊鍩為幋锔藉亹闁告瑥顦伴幃娆撴⒒閸屾艾浜為柛銊ㄤ含閹广垹鈽夊鍡楁櫊濡炪倖妫佸畷鐢告儎鎼达絿纾藉ù锝呮惈瀛濈紒鍓ц檸閸欏啴鐛径宀€鐭欐繛鍡樺劤閹垶绻濋姀锝嗙【闁挎洏鍎卞嵄?=====
+  // Volume and mute controls.
   setVolume(volume: number): void {
     setVolumeImpl(this.transportFacadeContext, volume);
     void persistAudioPlaybackVolume(this.state.volume);
@@ -4874,7 +4874,7 @@ export class NativeAudioService implements IAudioService {
     void persistAudioPlaybackMuted(muted);
   }
 
-  // ===== 闂傚倸鍊搁崐鎼佸磹閻戣姤鍤勯柛鎾茬閸ㄦ繃銇勯弽顐汗闁逞屽墾缁犳挸鐣锋總绋课ㄩ柕澶涢檮琚ｉ梻鍌欑閹碱偆绮欐笟鈧畷銏＄附閸涘﹤鈧潡鏌涢…鎴濅簴濞存粍绮撻弻鐔告綇閸撗吷戠紒缁㈠幖閻栧ジ寮诲☉銏犳閻犳亽鍓辫閺屸€崇暆鐎ｎ剛袦濡ょ姷鍋為悷鈺佺暦閻旂⒈鏁囬柣娆忔噽閸氬綊姊?=====
+  // Playback state accessors.
   getCurrentTime(): number {
     return this.state.currentTime;
   }
@@ -4887,7 +4887,7 @@ export class NativeAudioService implements IAudioService {
     return this.state;
   }
 
-  // ===== 濠电姷鏁告慨鐑藉极閹间礁纾绘繛鎴欏灪閸嬨倝鏌曟繛褍鍟悘濠囨倵閸忓浜鹃梺鍛婃礀閻忔岸寮查悙鐑樷拺闁告稑锕ユ径鍕煕鐎Ｑ冧壕闂備礁鎼鍛存煀閿濆钃熼柡鍥风磿閻も偓闁诲函缍嗘禍鏍磻閹捐鍐€妞ゆ挾鍋熼敍鐔兼煙閸忚偐鏆橀柛鏂跨Ч閹€斥枎閹炬潙鈧灚绻涢幋鐐垫噽闁绘帞鏅槐鎺楁偐瀹曞洤鈷岄梺?=====
+  // Playback event subscriptions.
   onTimeUpdate(callback: (time: number) => void): () => void {
     this.timeUpdateCallbacks.add(callback);
     return () => this.timeUpdateCallbacks.delete(callback);
@@ -4914,7 +4914,7 @@ export class NativeAudioService implements IAudioService {
     return () => this.errorCallbacks.delete(callback);
   }
 
-  // ===== 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝夋交閼板潡姊洪鈧粔鐢稿箚閻愬搫绠规繛锝庡墮婵″ジ鏌涚仦璇插闂囧鏌ｅΟ鐑樷枙闁稿骸绻戞穱濠囶敃閿涳綆浜俊鎾箳閹搭厽鍍甸梺鎸庣箓閹冲秵绔熼弴鐔虹瘈婵炲牆鐏濋弸娑㈡煥閺囨ê鈧繃淇婇崼鏇炵濞达絽鎽滈悾娲⒑闂堟稓绠冲┑顔惧厴瀵磭鈧綆鍠楅悡娆愮箾閸繄浠㈤柡瀣懅缁?=====
+  // Queue mutation helpers.
   addToQueue(track: Track): void {
     if (!track) return;
     const queuedTrack = compactTrackForQueueState(track);
@@ -5424,7 +5424,7 @@ export class NativeAudioService implements IAudioService {
     }
   }
 
-  // ===== 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝夋交閼板潡姊洪鈧粔鐢稿箚閻愬搫绠规繛锝庡墮婵″ジ鏌涚仦璇插闂囧鏌ｅΟ鐑樷枙闁稿骸绻戞穱濠囶敃閿涳綆浜﹢渚€姊洪幐搴ｇ畵闁绘妫濋崺鈧い鎴ｆ硶閻瑩鏌熼鍝勭伈闁诡喒鍓濋幆鏃堟晲閸曨厾顦梻浣筋嚙濮橈箓锝炴径濞掓椽寮介‖鈩冩そ婵℃悂鍩炴惔鎾充壕?=====
+  // Playback mode and transport helpers.
   setPlayMode(mode: PlayMode): void {
     this.updateState({ playMode: mode });
     void persistAudioPlaybackPlayMode(this.state.playMode);
@@ -5444,7 +5444,7 @@ export class NativeAudioService implements IAudioService {
     this.seek(nextTime);
   }
 
-  // ===== 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝夋交閼板潡姊洪鈧粔鐢稿箚閻愬搫绠规繛锝庡墮婵″ジ鏌涚仦璇插闂囧鏌ｅΟ鐑樷枙闁稿骸绻戞穱濠囶敃閿涳綆浜俊鎾箳閹搭厽鍍甸梺鎸庣箓閹冲秵绔熼弴銏＄厽閹兼番鍊ゅ鎰箾閸欏鑰块柟铏箞楠炴垿骞囬鑽よ兒闂傚倸鍊风粈渚€骞夐垾瓒佸搫顓兼径濠冾棟婵炴挻鍩冮崑鎾垛偓瑙勬礃閸ㄥ潡鐛Ο鍏煎珰闁肩⒈鍓﹀Σ鐗堜繆閻愵亜鈧洜鎹㈤幇顑╂盯寮崒婊呯暥婵犮垼鍩栭崝鏍煕閹达附鐓欑紒瀣閹癸綁鏌嶉挊澶樻█闁诡喗顨呴～婵嬫偂鎼达紕鐫勯柣?=====
+  // Playlist creation and mutation helpers.
   createPlaylist(name: string, description?: string, options?: PlaylistCreateOptions): Playlist {
     const kind =
       options?.kind === NativeAudioService.PLAYLIST_KIND_SMART
@@ -6139,7 +6139,7 @@ export class NativeAudioService implements IAudioService {
     }
   }
 
-  // ===== 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵稿妽闁哄懏绻堥弻鏇熷緞濞戞﹩娲紓浣哄У閸庢娊鍩為幋锔藉亹闁告瑥顦崑宥夋⒑闁偛鑻晶顕€鏌涙繝鍌滀虎闁伙綁鏀辩缓鐣岀矙閸喖绁梻浣虹帛閸旀寮幖浣稿偍妞ゆ帊妞掔换鍡涙煟閹板吀绨婚柍褜鍓氶悧鐘诲箖瑜嶈灃闁告劏鏅涙惔濠囨倵楠炲灝鍔氶柟宄邦儔閹偞绂掔€ｎ偆鍘甸梺缁樺灦閿曗晛鈻撻弴銏＄厽?(placeholder) =====
+  // Spectrum data accessors.
   getFrequencyData(): Uint8Array | null {
     this.touchSpectrumUsage();
     return this.spectrumData;
@@ -6150,7 +6150,7 @@ export class NativeAudioService implements IAudioService {
     return this.spectrumFrames[tap] ?? null;
   }
 
-  // ===== 婵犵數濮烽弫鍛婃叏閻戣棄鏋侀柟闂寸绾惧鏌ｉ幇顒佹儓缂佺姳鍗抽弻鐔兼⒒鐎靛壊妲紓浣哄Х婵炩偓闁哄瞼鍠栭幃褔宕奸悢鍝勫殥缂?=====
+  // Lifecycle teardown.
   destroy(): void {
     this.disposed = true;
     cancelScheduledProcessWorkingSetTrim('tree');

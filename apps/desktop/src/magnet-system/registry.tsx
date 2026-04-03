@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import type { Magnet } from '../types/pixel';
+import { t } from '../i18n/core';
+import { getMagnetPreviewText } from '../modules/magnets/display';
 import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 
 export type MagnetRendererSource = 'builtin' | 'plugin' | 'runtime';
@@ -70,7 +72,7 @@ export function getMagnetPreviewNode(magnet: Magnet): ReactNode | null {
   const rendererId = magnet.renderer ?? magnet.id;
   const entry =
     getMagnetRenderer(rendererId) ?? (rendererId === magnet.id ? null : getMagnetRenderer(magnet.id));
-  return normalizePreview(entry?.preview) ?? magnet.previewText ?? null;
+  return normalizePreview(entry?.preview) ?? getMagnetPreviewText(magnet, t) ?? null;
 }
 
 export function listRegisteredMagnetRenderers(): MagnetRendererDefinition[] {

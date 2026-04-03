@@ -2,6 +2,12 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import { APP_VERSION, HOST_API_VERSION } from '../../constants/versions';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { useKernel } from '../../contexts/KernelContext';
+import type {
+  PmpmBridgeIncomingMessage,
+  PmpmBridgeOutgoingMessage,
+} from '@pixel-matrix/plugin-compat-pmpm';
+import { COMMANDS_SERVICE_TOKEN } from '../../services/commands';
+import { KEYBINDINGS_SERVICE_TOKEN } from '../../services/keybindings';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import type { PmpmPluginCrashSurface } from './pmpm';
@@ -19,6 +25,17 @@ import { recordPmpmAuditEvent } from './pmpmGovernance';
 import { readVerifiedPmpmPluginEntryCode } from './pmpmRuntime';
 import { buildPmpmSandboxSrcDoc } from './pmpmSandboxSrcDoc';
 import { usePmpmRuntimeRestartToken } from './usePmpmRuntimeRestartToken';
+import {
+  buildPmpmRuntimeActivateSnapshot,
+  buildPmpmRuntimeHealthSnapshot,
+  buildPmpmRuntimeHelloSnapshot,
+  buildPmpmRuntimeInitSnapshot,
+  buildPmpmViewMountRequestSnapshot,
+} from './pmpmRuntimeBridgeSnapshot';
+
+const PMPM_SANDBOX_STARTUP_TIMEOUT_MS = 5_000;
+const PMPM_SANDBOX_HEARTBEAT_INTERVAL_MS = 1_500;
+const PMPM_SANDBOX_UNRESPONSIVE_TIMEOUT_MS = 8_000;
 
 type SandboxSurface =
   | { kind: 'magnet' }
@@ -27,31 +44,9 @@ type SandboxSurface =
   | { kind: 'visualizer'; visualizerId: string }
   | { kind: 'window'; windowId: string };
 
-type RpcRequest = {
-  frameId: string;
-  type: 'pmpm:rpc';
-  id: string;
-  method: string;
-  args: unknown[];
-};
-
-type PermissionDeniedMessage = {
-  frameId: string;
-  type: 'pmpm:permission-denied';
-  pluginId: string;
-  hostLabel: string;
-  capability: string;
-  action: string;
-};
-
-type FrameMessage =
-  | { frameId: string; type: 'pmpm:iframe-ready' }
-  | { frameId: string; type: 'pmpm:mounted' }
-  | { frameId: string; type: 'pmpm:disposed' }
-  | { frameId: string; type: 'pmpm:pong'; pingId: number }
-  | { frameId: string; type: 'pmpm:error'; message: string }
-  | RpcRequest
-  | PermissionDeniedMessage;
+type RpcRequest = Extract<PmpmBridgeIncomingMessage, { type: 'pmpm:rpc' }>;
+type FrameMessage = PmpmBridgeIncomingMessage;
+type FramePostMessage = Omit<PmpmBridgeOutgoingMessage, 'frameId'>;
 
 function resolveCrashSurface(surface: SandboxSurface['kind']): PmpmPluginCrashSurface {
   switch (surface) {
@@ -97,6 +92,8 @@ export function PmpmSandboxHost({
 }: { pluginId: string; hostLabel: string; mountContext?: unknown } & SandboxSurface) {
   const kernel = useKernel();
   const audioService = useAudioService();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
+  const keybindings = kernel.services.getOptional(KEYBINDINGS_SERVICE_TOKEN);
   const navigationService = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const restartToken = usePmpmRuntimeRestartToken(pluginId);
@@ -143,9 +140,11 @@ export function PmpmSandboxHost({
       hostLabel,
       permissions,
       audioService,
+      commands,
       navigation,
+      keybindings,
     });
-  }, [audioService, hostLabel, navigation, permissions, pluginId]);
+  }, [audioService, commands, hostLabel, keybindings, navigation, permissions, pluginId]);
 
   const surfaceId =
     surface.kind === 'page'
@@ -197,7 +196,7 @@ export function PmpmSandboxHost({
   }, [frameId]);
 
   const postToFrame = useMemo(() => {
-    return (message: Record<string, unknown>) => {
+    return <T extends FramePostMessage>(message: T) => {
       const win = iframeRef.current?.contentWindow;
       if (!win) return;
       try {
@@ -344,7 +343,7 @@ export function PmpmSandboxHost({
 
     window.addEventListener('message', handler);
 
-    const bootTimeoutMs = 5_000;
+    const bootTimeoutMs = PMPM_SANDBOX_STARTUP_TIMEOUT_MS;
     const bootTimer = window.setTimeout(() => {
       if (disposed) return;
       if (frameReadyRef.current) return;
@@ -376,6 +375,39 @@ export function PmpmSandboxHost({
           type: 'pmpm:init',
           pluginId,
           hostLabel,
+          runtimeHello: buildPmpmRuntimeHelloSnapshot({
+            pluginId,
+            runtimeInstanceId: frameId,
+            runtimeKind: 'webview',
+            carrier: 'webview-frame',
+            supportsViewMount: true,
+          }),
+          runtimeInit: buildPmpmRuntimeInitSnapshot({
+            pluginId,
+            runtimeInstanceId: frameId,
+            permissions,
+            startupTimeoutMs: PMPM_SANDBOX_STARTUP_TIMEOUT_MS,
+            heartbeatIntervalMs: PMPM_SANDBOX_HEARTBEAT_INTERVAL_MS,
+            unresponsiveTimeoutMs: PMPM_SANDBOX_UNRESPONSIVE_TIMEOUT_MS,
+          }),
+          runtimeActivate: buildPmpmRuntimeActivateSnapshot({
+            pluginId,
+            runtimeInstanceId: frameId,
+            kind: surface.kind,
+            surfaceId,
+            mountContext,
+          }),
+          runtimeHealth: buildPmpmRuntimeHealthSnapshot({
+            pluginId,
+            runtimeInstanceId: frameId,
+          }),
+          viewMountRequest: buildPmpmViewMountRequestSnapshot({
+            pluginId,
+            runtimeInstanceId: frameId,
+            kind: surface.kind,
+            surfaceId,
+            mountContext,
+          }),
           hostInfo,
           surface: surface.kind,
           surfaceId,
@@ -492,7 +524,7 @@ export function PmpmSandboxHost({
       postToFrame({ type: 'pmpm:ping', pingId: pingSeq });
 
       const elapsed = Date.now() - lastPongAtRef.current;
-      const timeoutMs = 8_000;
+      const timeoutMs = PMPM_SANDBOX_UNRESPONSIVE_TIMEOUT_MS;
       if (elapsed < timeoutMs) return;
       if (crashReportedRef.current) return;
       crashReportedRef.current = true;
@@ -504,7 +536,7 @@ export function PmpmSandboxHost({
         timeoutMs,
       });
       recordPmpmPluginCrash(pluginId, `Plugin runtime unresponsive (${elapsed}ms)`, crashSurface);
-    }, 1500);
+    }, PMPM_SANDBOX_HEARTBEAT_INTERVAL_MS);
 
     return () => {
       disposed = true;
@@ -527,6 +559,7 @@ export function PmpmSandboxHost({
     audioService,
     enabled,
     frameReady,
+    frameId,
     hostApi,
     hostInfo,
     hostLabel,

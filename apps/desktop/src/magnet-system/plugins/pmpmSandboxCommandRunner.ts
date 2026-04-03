@@ -1,4 +1,8 @@
-import type { HostAudioService, HostNavigation, PluginMountApi } from './pluginHostApi';
+import type {
+  HostAudioService,
+  HostNavigation,
+  PluginMountApi,
+} from './pluginHostApi';
 import { createPluginMountApi } from './pluginHostApi';
 import { readPmpmPluginConfig, subscribePmpmPluginConfig } from './pluginConfig';
 import { getPmpmPluginEffectivePermissions, recordPmpmPermissionDenied, recordPmpmPluginCrash } from './pmpm';
@@ -6,39 +10,28 @@ import { recordPmpmAuditEvent } from './pmpmGovernance';
 import { readVerifiedPmpmPluginEntryCode } from './pmpmRuntime';
 import { buildPmpmSandboxSrcDoc } from './pmpmSandboxSrcDoc';
 import { APP_VERSION, HOST_API_VERSION } from '../../constants/versions';
+import type { CommandsService } from '../../services/commands';
+import type { KeybindingsService } from '../../services/keybindings';
+import {
+  buildPmpmRuntimeActivateSnapshot,
+  buildPmpmRuntimeHealthSnapshot,
+  buildPmpmRuntimeHelloSnapshot,
+  buildPmpmRuntimeInitSnapshot,
+  buildPmpmViewMountRequestSnapshot,
+} from './pmpmRuntimeBridgeSnapshot';
+import type {
+  PmpmBridgeIncomingMessage,
+  PmpmBridgeOutgoingMessage,
+} from '@pixel-matrix/plugin-compat-pmpm';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 
-type RpcRequest = {
-  frameId: string;
-  type: 'pmpm:rpc';
-  id: string;
-  method: string;
-  args: unknown[];
-};
+const PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS = 3_000;
+const PMPM_SANDBOX_COMMAND_HEARTBEAT_INTERVAL_MS = 1_500;
+const PMPM_SANDBOX_COMMAND_UNRESPONSIVE_TIMEOUT_MS = 8_000;
 
-type PermissionDeniedMessage = {
-  frameId: string;
-  type: 'pmpm:permission-denied';
-  pluginId: string;
-  hostLabel: string;
-  capability: string;
-  action: string;
-};
-
-type CommandFinishedMessage = {
-  frameId: string;
-  type: 'pmpm:command-finished';
-  ok: boolean;
-};
-
-type FrameMessage =
-  | { frameId: string; type: 'pmpm:iframe-ready' }
-  | { frameId: string; type: 'pmpm:worker-ready' }
-  | { frameId: string; type: 'pmpm:pong'; pingId: number }
-  | { frameId: string; type: 'pmpm:error'; message: string }
-  | RpcRequest
-  | PermissionDeniedMessage
-  | CommandFinishedMessage;
+type RpcRequest = Extract<PmpmBridgeIncomingMessage, { type: 'pmpm:rpc' }>;
+type FrameMessage = PmpmBridgeIncomingMessage;
+type FramePostMessage = Omit<PmpmBridgeOutgoingMessage, 'frameId'>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object';
@@ -107,6 +100,11 @@ let permissions = new Set();
 let pluginId = '';
 let hostLabel = '';
 let hostInfo = null;
+let runtimeHelloSnapshot = null;
+let runtimeInitSnapshot = null;
+let runtimeActivateSnapshot = null;
+let runtimeHealthSnapshot = null;
+let viewMountRequestSnapshot = null;
 let audioState = null;
 let audioSpectrum = null;
 let audioSpectrumFramePre = null;
@@ -234,6 +232,41 @@ const api = {
         return false;
       }
       return hasPermission(String(capability || ''));
+    },
+    getRuntimeHelloSnapshot: () => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.getRuntimeHelloSnapshot()');
+        return null;
+      }
+      return runtimeHelloSnapshot;
+    },
+    getRuntimeInitSnapshot: () => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.getRuntimeInitSnapshot()');
+        return null;
+      }
+      return runtimeInitSnapshot;
+    },
+    getRuntimeActivateSnapshot: () => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.getRuntimeActivateSnapshot()');
+        return null;
+      }
+      return runtimeActivateSnapshot;
+    },
+    getRuntimeHealthSnapshot: () => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.getRuntimeHealthSnapshot()');
+        return null;
+      }
+      return runtimeHealthSnapshot;
+    },
+    getViewMountRequestSnapshot: () => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.getViewMountRequestSnapshot()');
+        return null;
+      }
+      return viewMountRequestSnapshot;
     },
     listCapabilities: () => {
       if (!permissions.has('api:host')) {
@@ -460,6 +493,21 @@ addEventListener('message', async (event) => {
     pluginId = String(data.pluginId || '');
     hostLabel = String(data.hostLabel || '');
     hostInfo = data.hostInfo && typeof data.hostInfo === 'object' ? data.hostInfo : null;
+    runtimeHelloSnapshot =
+      data.runtimeHello && typeof data.runtimeHello === 'object' ? data.runtimeHello : null;
+    runtimeInitSnapshot = data.runtimeInit && typeof data.runtimeInit === 'object' ? data.runtimeInit : null;
+    runtimeActivateSnapshot =
+      data.runtimeActivate && typeof data.runtimeActivate === 'object'
+        ? data.runtimeActivate
+        : null;
+    runtimeHealthSnapshot =
+      data.runtimeHealth && typeof data.runtimeHealth === 'object'
+        ? data.runtimeHealth
+        : null;
+    viewMountRequestSnapshot =
+      data.viewMountRequest && typeof data.viewMountRequest === 'object'
+        ? data.viewMountRequest
+        : null;
     const commandId = String(data.surfaceId || '');
     const commandArgs = data.commandArgs;
     permissions = new Set(Array.isArray(data.permissions) ? data.permissions.filter((p) => typeof p === 'string') : []);
@@ -603,7 +651,9 @@ async function runPmpmSandboxedCommandInWorker(options: {
   args?: unknown;
   hostLabel: string;
   audioService: HostAudioService;
+  commands?: CommandsService | null;
   navigation: HostNavigation;
+  keybindings?: KeybindingsService | null;
   timeoutMs: number;
 }): Promise<void> {
   if (typeof Worker === 'undefined') {
@@ -616,7 +666,9 @@ async function runPmpmSandboxedCommandInWorker(options: {
     hostLabel: options.hostLabel,
     permissions,
     audioService: options.audioService,
+    commands: options.commands,
     navigation: options.navigation,
+    keybindings: options.keybindings,
   });
 
   const entryCode = await readVerifiedPmpmPluginEntryCode(options.pluginId);
@@ -640,7 +692,7 @@ async function runPmpmSandboxedCommandInWorker(options: {
     let totalTimer: number | null = null;
     let bootTimer: number | null = null;
 
-    const postToWorker = (message: Record<string, unknown>) => {
+    const postToWorker = <T extends FramePostMessage>(message: T) => {
       try {
         worker.postMessage({ frameId, ...message });
       } catch {
@@ -731,7 +783,7 @@ async function runPmpmSandboxedCommandInWorker(options: {
           });
         }
 
-        const pingTimeoutMs = 8_000;
+        const pingTimeoutMs = PMPM_SANDBOX_COMMAND_UNRESPONSIVE_TIMEOUT_MS;
         pingTimer = window.setInterval(() => {
           if (settled) return;
           pingSeq += 1;
@@ -740,7 +792,7 @@ async function runPmpmSandboxedCommandInWorker(options: {
           const elapsedSincePong = Date.now() - lastPongAt;
           if (elapsedSincePong < pingTimeoutMs) return;
           crashAsUnresponsive(`Plugin runtime unresponsive (${elapsedSincePong}ms)`, pingTimeoutMs);
-        }, 1500);
+        }, PMPM_SANDBOX_COMMAND_HEARTBEAT_INTERVAL_MS);
 
         totalTimer = window.setTimeout(() => {
           const elapsed = Date.now() - startedAt;
@@ -751,6 +803,39 @@ async function runPmpmSandboxedCommandInWorker(options: {
           type: 'pmpm:init',
           pluginId: options.pluginId,
           hostLabel: options.hostLabel,
+          runtimeHello: buildPmpmRuntimeHelloSnapshot({
+            pluginId: options.pluginId,
+            runtimeInstanceId: frameId,
+            runtimeKind: 'extension-host',
+            carrier: 'dedicated-worker',
+            supportsViewMount: false,
+          }),
+          runtimeInit: buildPmpmRuntimeInitSnapshot({
+            pluginId: options.pluginId,
+            runtimeInstanceId: frameId,
+            permissions,
+            startupTimeoutMs: PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS,
+            heartbeatIntervalMs: PMPM_SANDBOX_COMMAND_HEARTBEAT_INTERVAL_MS,
+            unresponsiveTimeoutMs: PMPM_SANDBOX_COMMAND_UNRESPONSIVE_TIMEOUT_MS,
+          }),
+          runtimeActivate: buildPmpmRuntimeActivateSnapshot({
+            pluginId: options.pluginId,
+            runtimeInstanceId: frameId,
+            kind: 'command',
+            surfaceId: options.commandId,
+            commandArgs: options.args,
+          }),
+          runtimeHealth: buildPmpmRuntimeHealthSnapshot({
+            pluginId: options.pluginId,
+            runtimeInstanceId: frameId,
+          }),
+          viewMountRequest: buildPmpmViewMountRequestSnapshot({
+            pluginId: options.pluginId,
+            runtimeInstanceId: frameId,
+            kind: 'command',
+            surfaceId: options.commandId,
+            commandArgs: options.args,
+          }) ?? undefined,
           hostInfo: permissions.has('api:host')
             ? {
                 pluginId: options.pluginId,
@@ -835,7 +920,7 @@ async function runPmpmSandboxedCommandInWorker(options: {
       if (settled) return;
       recordPmpmPluginCrash(options.pluginId, 'Plugin worker boot timeout', 'command');
       finishError(new Error('Plugin worker boot timeout'));
-    }, 3000);
+    }, PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS);
   });
 }
 
@@ -845,7 +930,9 @@ export async function runPmpmSandboxedCommand(options: {
   args?: unknown;
   hostLabel?: string;
   audioService: HostAudioService;
+  commands?: CommandsService | null;
   navigation: HostNavigation;
+  keybindings?: KeybindingsService | null;
   timeoutMs?: number;
 }): Promise<void> {
   if (typeof window === 'undefined') {
@@ -862,7 +949,9 @@ export async function runPmpmSandboxedCommand(options: {
       args: options.args,
       hostLabel,
       audioService: options.audioService,
+      commands: options.commands,
       navigation: options.navigation,
+      keybindings: options.keybindings,
       timeoutMs,
     });
     return;
@@ -889,7 +978,9 @@ export async function runPmpmSandboxedCommand(options: {
     hostLabel,
     permissions,
     audioService: options.audioService,
+    commands: options.commands,
     navigation: options.navigation,
+    keybindings: options.keybindings,
   });
 
   const entryCode = await readVerifiedPmpmPluginEntryCode(options.pluginId);
@@ -908,7 +999,7 @@ export async function runPmpmSandboxedCommand(options: {
   iframe.srcdoc = buildPmpmSandboxSrcDoc(frameId);
   document.body.appendChild(iframe);
 
-  const postToFrame = (message: Record<string, unknown>) => {
+  const postToFrame = <T extends FramePostMessage>(message: T) => {
     const win = iframe.contentWindow;
     if (!win) return;
     try {
@@ -918,7 +1009,7 @@ export async function runPmpmSandboxedCommand(options: {
     }
   };
 
-  const pingTimeoutMs = 8_000;
+  const pingTimeoutMs = PMPM_SANDBOX_COMMAND_UNRESPONSIVE_TIMEOUT_MS;
 
   return await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -1013,7 +1104,7 @@ export async function runPmpmSandboxedCommand(options: {
             `Plugin runtime unresponsive (${elapsedSincePong}ms)`,
             pingTimeoutMs
           );
-        }, 1500);
+        }, PMPM_SANDBOX_COMMAND_HEARTBEAT_INTERVAL_MS);
 
         totalTimer = window.setTimeout(() => {
           const elapsed = Date.now() - startedAt;
@@ -1024,6 +1115,39 @@ export async function runPmpmSandboxedCommand(options: {
       type: 'pmpm:init',
       pluginId: options.pluginId,
       hostLabel,
+      runtimeHello: buildPmpmRuntimeHelloSnapshot({
+        pluginId: options.pluginId,
+        runtimeInstanceId: frameId,
+        runtimeKind: 'webview',
+        carrier: 'webview-frame',
+        supportsViewMount: false,
+      }),
+      runtimeInit: buildPmpmRuntimeInitSnapshot({
+        pluginId: options.pluginId,
+        runtimeInstanceId: frameId,
+        permissions,
+        startupTimeoutMs: PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS,
+        heartbeatIntervalMs: PMPM_SANDBOX_COMMAND_HEARTBEAT_INTERVAL_MS,
+        unresponsiveTimeoutMs: PMPM_SANDBOX_COMMAND_UNRESPONSIVE_TIMEOUT_MS,
+      }),
+      runtimeActivate: buildPmpmRuntimeActivateSnapshot({
+        pluginId: options.pluginId,
+        runtimeInstanceId: frameId,
+        kind: 'command',
+        surfaceId: options.commandId,
+        commandArgs: options.args,
+      }),
+      runtimeHealth: buildPmpmRuntimeHealthSnapshot({
+        pluginId: options.pluginId,
+        runtimeInstanceId: frameId,
+      }),
+      viewMountRequest: buildPmpmViewMountRequestSnapshot({
+        pluginId: options.pluginId,
+        runtimeInstanceId: frameId,
+        kind: 'command',
+        surfaceId: options.commandId,
+        commandArgs: options.args,
+      }) ?? undefined,
       hostInfo: permissions.has('api:host')
         ? {
             pluginId: options.pluginId,
@@ -1109,6 +1233,6 @@ export async function runPmpmSandboxedCommand(options: {
       if (settled) return;
       recordPmpmPluginCrash(options.pluginId, 'Plugin sandbox boot timeout', 'command');
       finishError(new Error('Plugin sandbox boot timeout'));
-    }, 3000);
+    }, PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS);
   });
 }

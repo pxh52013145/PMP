@@ -40,13 +40,49 @@ function getErrorMessage(error: unknown): string {
 interface MagnetCreatorProps {
   mode: 'create' | 'edit';
   editingMagnet?: Magnet;
-  defaultMagnet?: Magnet; // 濮掓稒顭堥濠氭煀瀹ュ洨鏋傞柨娑樼墢閺併倖绂嶆惔銈囩闁告鍣﹂敓?
+  defaultMagnet?: Magnet;
   onSave: (magnet: Magnet) => void;
   onCancel: () => void;
 }
 
-// 闁告ê妫楄ぐ鍓佹媼閺夎法绉块柟鎭掑劚閿?
 type MagnetHistory = MagnetHistoryItem;
+type AnchorValidationState = {
+  hasErrors: boolean;
+  errors: string[];
+  warnings: string[];
+};
+
+function AnchorValidationNotice({
+  validation,
+  t,
+}: {
+  validation: AnchorValidationState;
+  t: (key: string, params?: Record<string, unknown>) => string;
+}) {
+  if (validation.hasErrors) {
+    return (
+      <div className="creator-validation-error">
+        <div>{t('editor.magnet-creator.validation.outOfBounds')}</div>
+        {validation.errors.map((err, index) => (
+          <div key={`${index}:${err}`}>{err}</div>
+        ))}
+      </div>
+    );
+  }
+
+  if (validation.warnings.length > 0) {
+    return (
+      <div className="creator-validation-warning">
+        <div>{t('editor.magnet-creator.validation.hintTitle')}</div>
+        {validation.warnings.map((warn, index) => (
+          <div key={`${index}:${warn}`}>{warn}</div>
+        ))}
+      </div>
+    );
+  }
+
+  return null;
+}
 
 export function MagnetCreator({
   mode,
@@ -57,25 +93,17 @@ export function MagnetCreator({
 }: MagnetCreatorProps) {
   const t = useT();
   const locale = useLocale();
-
-  // 闁兼儳鍢茶ぐ鍥╃磽閺嶎剛甯嗛柛锝冨妺缁楀倹绋夌€ｎ偅鐎柨娑樼墢閺併倖绂嶆惔鈥虫毐缂佹劒鐒﹂ˉ鍛圭€ｅ墎绀?
   const { occupancyMap } = useEditor();
-
-  // 閻炴稏鍔屽畷鐔衡偓娑欘殕椤斿矂鎮╅懜纰樺亾?
   const [id, setId] = useState('');
   const [name, setName] = useState('');
   const [anchorType, setAnchorType] = useState<AnchorType>('single');
   const [content, setContent] = useState('');
   const [chromeInsetDraft, setChromeInsetDraft] = useState<InsetDraft>(createEmptyInsetDraft());
   const [chromeOutsetDraft, setChromeOutsetDraft] = useState<InsetDraft>(createEmptyInsetDraft());
-
-  // 闂佹寧姘ㄩ崑锝夋煀瀹ュ洨鏋?- pixel 閻忓繐鎼敓?
-  const [horizontalPixels, setHorizontalPixels] = useState(5); // 婵ɑ娼欓柦鈺呭棘閻熺増鍊?pixel 闁轰椒鍗抽敓?
-  const [verticalPixels, setVerticalPixels] = useState(3); // 闁搞劌鍊诲ú鍧楀棘閻熺増鍊?pixel 闁轰椒鍗抽敓?
-  const [rectWidth, setRectWidth] = useState(5); // 闁活厸鏅涢懜鎵偓纭呮鐎规娊鏁嶉崸顪痻el閿?
-  const [rectHeight, setRectHeight] = useState(3); // 闁活厸鏅涢懜鐗堫殗濡搫顔婇柨娑樻椒ixel閿?
-
-  // 闁哄秴鍢茬槐锟犳煀瀹ュ洨鏋傞柨娑樻篂SON 閻庢稒顨堥浣圭▔鐠囇呯
+  const [horizontalPixels, setHorizontalPixels] = useState(5);
+  const [verticalPixels, setVerticalPixels] = useState(3);
+  const [rectWidth, setRectWidth] = useState(5);
+  const [rectHeight, setRectHeight] = useState(3);
   const [styleJson, setStyleJson] = useState<string>(`{
   "width": "36px",
   "height": "36px",
@@ -89,8 +117,6 @@ export function MagnetCreator({
   const [boundsJson, setBoundsJson] = useState<string>(() =>
     JSON.stringify(createDefaultBoundsForMagnet('single', { width: '36px', height: '36px' }), null, 2)
   );
-
-  // 闁告柣鍔庨弫楣冩煀瀹ュ洨鏋傞柨娑樻篂SON 閻庢稒顨堥浣圭▔鐠囇呯
   const [animationJson, setAnimationJson] = useState<string>(() =>
     JSON.stringify(
       {
@@ -108,28 +134,18 @@ export function MagnetCreator({
       2
     )
   );
-
-  // 闁哄秴鍢茬槐锛勬喆閿濆棛鈧粙鏌ㄥ▎鎺濆殩
   const [styleError, setStyleError] = useState('');
   const [boundsError, setBoundsError] = useState('');
   const [animationError, setAnimationError] = useState('');
-
-  // 閻庣數鍘ч崣鍡涙偐閼哥鍋?
   const [showImport, setShowImport] = useState(false);
   const [importJson, setImportJson] = useState('');
   const [importError, setImportError] = useState('');
-
-  // 闁告ê妫楄ぐ鍓佹媼閺夎法绉块柣鈺冾焾閿?
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<MagnetHistory[]>([]);
   const [sourceMagnet, setSourceMagnet] = useState<Magnet | null>(editingMagnet ?? null);
-
-  // 闁哄嫷鍨伴幆浣圭▔閸濆嫬鏁堕敓?Magnet闁挎稑鐗嗛崹浠嬪棘椤撶喐笑闁告熬闄勫Ο澶岀矆妤﹁法绠烽柛妯煎枑鐎垫粓鏌﹂鍡欑
   const isBuiltinMagnet = useMemo(() => {
     return mode === 'edit' && defaultMagnet !== undefined;
   }, [mode, defaultMagnet]);
-
-  // 閻熸瑱绲鹃悗浠嬪冀瀹勬壆纭€ JSON
   const parsedStyle = useMemo(() => {
     try {
       const parsed = JSON.parse(styleJson);
@@ -140,8 +156,6 @@ export function MagnetCreator({
       return {};
     }
   }, [styleJson]);
-
-  // 閻熸瑱绲鹃悗浠嬪礉閵娧勬毎 JSON
   const parsedAnimation = useMemo(() => {
     try {
       const parsed = JSON.parse(animationJson);
@@ -182,8 +196,6 @@ export function MagnetCreator({
     [horizontalPixels, verticalPixels, rectWidth, rectHeight]
   );
 
-
-  // 闁告梻濮鹃敓?Magnet 闂佹澘绉堕悿鍡涙儍閸曨喚绐￠柛鏂烘櫅閸ら亶寮?
   const loadMagnetConfig = useCallback((magnet: Magnet) => {
     setSourceMagnet(magnet);
     setId(magnet.id);
@@ -194,7 +206,6 @@ export function MagnetCreator({
     setChromeInsetDraft(createInsetDraft(magnet.chrome?.inset));
     setChromeOutsetDraft(createInsetDraft(magnet.chrome?.outset));
 
-    // 闁告梻濮惧ù鍥煥濮樺崬浠梺鏉跨Ф閻ゅ棝鐛幆閭﹀悁閿?pixel 閻忓繐鎼敓?
     if (magnet.anchors.length >= 2) {
       if (magnet.anchorType === 'horizontal') {
         const width = Math.abs(magnet.anchors[1].gridX - magnet.anchors[0].gridX) + 1;
@@ -210,39 +221,33 @@ export function MagnetCreator({
       }
     }
 
-    // 闁告梻濮惧ù鍥冀瀹勬壆纭€ JSON
     if (magnet.style) {
       setStyleJson(JSON.stringify(magnet.style, null, 2));
     }
 
-    // 闁告梻濮惧ù鍥礉閵娧勬毎 JSON
     if (magnet.animation) {
       setAnimationJson(JSON.stringify(magnet.animation, null, 2));
     }
   }, []);
 
-  // 闁告梻濮惧ù鍥╃磽閺嶎剛甯嗛柡浣哄閿?
   useEffect(() => {
     if (mode === 'edit' && editingMagnet) {
       loadMagnetConfig(editingMagnet);
-      // 闁告梻濮惧ù鍥储閸℃钑夐悹浣规緲閿?
+
       setHistory(loadMagnetHistory(editingMagnet.id));
     }
   }, [mode, editingMagnet, loadMagnetConfig]);
 
-  // 闁哄秷顫夊畵渚€鏌ㄥ鍗炰化缂侇偉顕ч悗鐑藉椽?pixel 閻忓繐鎼顓㈡偨閻旂鐏囬梺鎸庢皑閿?
   const generateAnchors = useMemo((): PixelAnchor[] => {
     return buildAnchorsFromOrigin(anchorType, 10, 10, anchorDimensions);
   }, [anchorType, anchorDimensions]);
 
-  // 濡ょ姴鐭侀惁澶愭煥濮樺崬浠柡鍕靛灠閹胶鎼鹃崨顓炴瘔缂傚啯鍨堕悧鍛婃綇閸︻厽娅?
   const anchorsValidation = useMemo(() => {
-    const maxX = 26; // 缂傚啯鍨堕悧鎼佸嫉閳ь剚寰?X 闁秆勫姈閿?
-    const maxY = 19; // 缂傚啯鍨堕悧鎼佸嫉閳ь剚寰?Y 闁秆勫姈閿?
+    const maxX = 26;
+    const maxY = 19;
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    // 闁革负鍔庣槐顏呮綇閹寸伣浣割嚕韫囧海鐟撻柨娑樿嫰閻斺偓濞存粌楠搁悿鍕⒔閸涱剛绉寸紓鍐惧櫍閻涙瑧鎷犳笟濠勫耿闁革负鍔岄崹鍗烆嚈閻戞◥浣割嚕韫囧海鐟撻柨娑樿嫰閻斺偓濞存粌楠搁弰鍌溾偓鍨倐閻涙瑧鎷?
     let anchorsToValidate: PixelAnchor[];
 
     if (mode === 'edit' && editingMagnet) {
@@ -252,11 +257,10 @@ export function MagnetCreator({
 
       anchorsToValidate = buildAnchorsFromOrigin(anchorType, baseX, baseY, anchorDimensions);
     } else {
-      // 闁告帗绋戠紓鎾澄熼垾宕囩闁挎稒鐭繛鍥偨閵娾晩鏆曢悷娆忕墦閺佸鎮欒ぐ鎺斿矗閿?
+
       anchorsToValidate = generateAnchors;
     }
 
-    // 濡ょ姴鐭侀惁澶愭煥濮樺崬浠柛褎鍔栭敓?
     anchorsToValidate.forEach((anchor) => {
       if (anchor.gridX < 0 || anchor.gridX > maxX) {
         errors.push(
@@ -276,25 +280,21 @@ export function MagnetCreator({
       }
     });
 
-    // 闁革负鍔庣槐顏呮綇閹寸伣浣割嚕韫囧海鐟撻柨娑樻湰椤ュ懘寮婚妷锔叫﹂柛姘剧細缁楀矂宕楅張鐢甸搨 magnet 闁告劘灏欓敓?
     if (mode === 'edit' && editingMagnet && anchorsToValidate.length > 0) {
-      // 闁告帗绋戠紓鎾寸▔鐎涙ɑ顦?magnet 閻庣數顢婇挅鍕晬鐏炵厧鈻忛柣顫妽閺屽﹪鎯冮崟顖涙櫔闁绘劗鎳撻幏鎵尵鐠囪鎷?
+
       const tempMagnet: Magnet = {
         ...editingMagnet,
         anchorType,
         anchors: anchorsToValidate,
       };
 
-      // 閻犱緤绱曢悾濠氬棘閺夋寧妲€閻庣敻鏅茬粭鍛村础閻樺灚鏆忛敓?pixels
       const occupiedPixels = getMagnetOccupiedPixels(tempMagnet);
 
-      // 婵☆偀鍋撻柡灞诲劚閸熻法绮?
       const conflictingPixels: Array<{ x: number; y: number; occupiedBy: string }> = [];
       occupiedPixels.forEach((pixel) => {
         const key = `${pixel.x},${pixel.y}`;
         const occupancy = occupancyMap.get(key);
 
-        // 濠碘€冲€归敓?pixel 閻炴凹鍋勫畷浼存偨椤帞绀夊☉鎾存煣缁楀寮伴婵愭蕉鐟滅増鎸告晶鐘电磽閺嶎剛甯嗛敓?magnet 闁告濮烽敓?
         if (
           occupancy?.isOccupied &&
           occupancy.occupiedBy &&
@@ -308,9 +308,8 @@ export function MagnetCreator({
         }
       });
 
-      // 濠碘€冲€归悘澶愬嫉婢跺﹤鏆辩紒鎰筏缁辨繂菐鐠囨彃顫ｉ梺鎸庣懆椤曘倖绌遍埄鍐х礀
       if (conflictingPixels.length > 0) {
-        // 缂備胶鍠曢鎼佸礃閼碱剛宕愰敓?magnet
+
         const conflictingMagnets = new Set(conflictingPixels.map((p) => p.occupiedBy));
         errors.push(
           t('editor.magnet-creator.validation.conflict', {
@@ -321,7 +320,6 @@ export function MagnetCreator({
       }
     }
 
-    // 闁告帗绋戠紓鎾澄熼垾宕囩濞戞挸顑囧▓鎴烇紣閸曨噮娼斿ù锝呯Ф閻ゅ棝骞撻幇顔轰粵
     if (mode === 'create') {
       if (anchorType === 'horizontal' && horizontalPixels > 17) {
         warnings.push(t('editor.magnet-creator.validation.largeWidthWarning'));
@@ -430,33 +428,27 @@ export function MagnetCreator({
     onCancel();
   };
 
-
-  // 閺夆晜锚鐢偊宕氭导瀵稿笡閻犱降鍊濋崢銈囩磾?
   const handleRestore = () => {
     if (!defaultMagnet) return;
     loadMagnetConfig(defaultMagnet);
     appendMagnetHistory(defaultMagnet, 'editor.magnet-creator.history.restoreDefault');
   };
 
-  // 閹煎瓨姊婚弫銈夊储閸℃钑夐悹浣规緲閿?
   const handleApplyHistory = (historyItem: MagnetHistory) => {
     loadMagnetConfig(historyItem.magnet);
     setShowHistory(false);
   };
 
-  // 閻庣數鍘ч崣鍡涙煀瀹ュ洨鏋傞柨娑樼墔缁娀寮崶銊︽嫳婵℃妫撮敓?
   const handleImport = () => {
     try {
       const data = JSON.parse(importJson);
 
-      // 濡ょ姴鐭侀惁澶庣疀閸涱叏缍栭悗娑欘殕閿?
       if (!data.id) throw new Error(t('editor.magnet-creator.import.missingField.id'));
       if (!data.name) throw new Error(t('editor.magnet-creator.import.missingField.name'));
       if (!data.anchorType) throw new Error(t('editor.magnet-creator.import.missingField.anchorType'));
       if (!data.bounds) throw new Error(t('editor.magnet-creator.import.missingField.bounds'));
       if (!data.style) throw new Error(t('editor.magnet-creator.import.missingField.style'));
 
-      // 闁告梻濮惧ù鍥煀瀹ュ洨鏋?
       loadMagnetConfig(data as Magnet);
       setShowImport(false);
       setImportJson('');
@@ -466,7 +458,6 @@ export function MagnetCreator({
     }
   };
 
-  // 濞寸姴瀛╅弸鍐╃鐠轰警鍤ら敓?
   const handleImportFromFile = async () => {
     try {
       const selected = await open({
@@ -495,7 +486,6 @@ export function MagnetCreator({
     }
   };
 
-  // 閻庣數鍘ч崵顓㈡煀瀹ュ洨鏋?
   const handleExport = () => {
     if (!previewMagnet) return;
 
@@ -539,7 +529,6 @@ export function MagnetCreator({
       });
   };
 
-  // 闁告帞濞€濞呭酣宕㈤崱妤€钑夐悹浣规緲閿?
   const handleDeleteHistory = (historyId: string) => {
     const newHistory = history.filter((h) => h.id !== historyId);
     setHistory(newHistory);
@@ -548,21 +537,18 @@ export function MagnetCreator({
     }
   };
 
-  // 濡ょ姴鐭侀惁澶屾偘閵娿儱绀?
-  const isValid = id && name && !anchorsValidation.hasErrors && !boundsError && !styleError && !animationError;
-
-
+  const isValid = Boolean(
+    id && name && !anchorsValidation.hasErrors && !boundsError && !styleError && !animationError
+  );
 
   return (
     <div className="editor-creator">
-      {/* 闁归攱鐗曟慨鈺呭冀閸ヮ剦鏆敓?*/}
       <div className="editor-window-header" data-tauri-drag-region>
         <span className="window-title" data-tauri-drag-region>
           {t('windows.editor.creator.title')}
         </span>
       </div>
 
-      {/* 闁搞儱鎼悾鐐紣閸曨噮娼旈柛鏍ф惈閿?*/}
       <div className="creator-preview-fixed">
         <div className="creator-section-title">{t('editor.magnet-creator.preview.title')}</div>
         {previewMagnet ? (
@@ -607,16 +593,13 @@ export function MagnetCreator({
         )}
       </div>
 
-      {/* 闁告劕鎳庨鎰板礌閸濆嫮鍘?*/}
       <div className="editor-window-content">
-        {/* 婵☆垪鈧磭纭€闁哄秴娲敓?*/}
         <div className="creator-mode-title">
           {mode === 'edit'
             ? t('editor.magnet-creator.mode.edit')
             : t('editor.magnet-creator.mode.create')}
         </div>
 
-        {/* 闊洤鎳庨敐鐐碘偓娑欘殕閿?*/}
         <div className="creator-section">
           <div className="creator-section-title">{t('editor.magnet-creator.section.basic')}</div>
           <div className="creator-form">
@@ -715,23 +698,7 @@ export function MagnetCreator({
                     />
                   </div>
                 </div>
-                {/* 濡ょ姴鐭侀惁澶愬箵閹邦喓浠?- 婵ɑ娼欓敓?*/}
-                {anchorsValidation.hasErrors && (
-                  <div className="creator-validation-error">
-                    闁宠法濯撮敓?{t('editor.magnet-creator.validation.outOfBounds')}
-                    {anchorsValidation.errors.map((err, i) => (
-                      <div key={i}>{err}</div>
-                    ))}
-                  </div>
-                )}
-                {!anchorsValidation.hasErrors && anchorsValidation.warnings.length > 0 && (
-                  <div className="creator-validation-warning">
-                    閿?{t('editor.magnet-creator.validation.hintTitle')}
-                    {anchorsValidation.warnings.map((warn, i) => (
-                      <div key={i}>{warn}</div>
-                    ))}
-                  </div>
-                )}
+                <AnchorValidationNotice validation={anchorsValidation} t={t} />
               </>
             )}
 
@@ -765,23 +732,7 @@ export function MagnetCreator({
                     />
                   </div>
                 </div>
-                {/* 濡ょ姴鐭侀惁澶愬箵閹邦喓浠?- 闁搞劌鍊婚敓?*/}
-                {anchorsValidation.hasErrors && (
-                  <div className="creator-validation-error">
-                    闁宠法濯撮敓?{t('editor.magnet-creator.validation.outOfBounds')}
-                    {anchorsValidation.errors.map((err, i) => (
-                      <div key={i}>{err}</div>
-                    ))}
-                  </div>
-                )}
-                {!anchorsValidation.hasErrors && anchorsValidation.warnings.length > 0 && (
-                  <div className="creator-validation-warning">
-                    閿?{t('editor.magnet-creator.validation.hintTitle')}
-                    {anchorsValidation.warnings.map((warn, i) => (
-                      <div key={i}>{warn}</div>
-                    ))}
-                  </div>
-                )}
+                <AnchorValidationNotice validation={anchorsValidation} t={t} />
               </>
             )}
 
@@ -840,29 +791,12 @@ export function MagnetCreator({
                     />
                   </div>
                 </div>
-                {/* 濡ょ姴鐭侀惁澶愬箵閹邦喓浠?- 闁活厸鏅涢敓?*/}
-                {anchorsValidation.hasErrors && (
-                  <div className="creator-validation-error">
-                    闁宠法濯撮敓?{t('editor.magnet-creator.validation.outOfBounds')}
-                    {anchorsValidation.errors.map((err, i) => (
-                      <div key={i}>{err}</div>
-                    ))}
-                  </div>
-                )}
-                {!anchorsValidation.hasErrors && anchorsValidation.warnings.length > 0 && (
-                  <div className="creator-validation-warning">
-                    閿?{t('editor.magnet-creator.validation.hintTitle')}
-                    {anchorsValidation.warnings.map((warn, i) => (
-                      <div key={i}>{warn}</div>
-                    ))}
-                  </div>
-                )}
+                <AnchorValidationNotice validation={anchorsValidation} t={t} />
               </>
             )}
           </div>
         </div>
 
-        {/* 闁哄秴鍢茬槐锟犳煀瀹ュ洨鏋?*/}
         <div className="creator-section">
           <div className="creator-section-title">{t('editor.magnet-creator.section.layout')}</div>
           <div className="creator-form">
@@ -972,7 +906,6 @@ export function MagnetCreator({
           </div>
         </div>
 
-        {/* 闁告柣鍔庨弫楣冩煀瀹ュ洨鏋?*/}
         <div className="creator-section">
           <div className="creator-section-title">
             {t('editor.magnet-creator.section.animationJson')}
@@ -989,22 +922,23 @@ export function MagnetCreator({
               />
               {animationError && <div className="creator-error">{t(animationError)}</div>}
               <div className="creator-hint">
-                妫ｅ啯瀵?{t('editor.magnet-creator.animation.hint.title')}
-                <br />閿?<strong>transition</strong>: {t('editor.magnet-creator.animation.hint.transition')}
-                <br />閿?<strong>hoverStyle</strong>:{' '}
-                {t('editor.magnet-creator.animation.hint.hoverStyle')}
-                <br />閿?<strong>activeStyle</strong>:{' '}
-                {t('editor.magnet-creator.animation.hint.activeStyle')}
-                <br />
-                <br />
-                {t('editor.magnet-creator.animation.hint.commonProps')}
+                <div>{t('editor.magnet-creator.animation.hint.title')}</div>
+                <div>
+                  <strong>transition</strong>: {t('editor.magnet-creator.animation.hint.transition')}
+                </div>
+                <div>
+                  <strong>hoverStyle</strong>: {t('editor.magnet-creator.animation.hint.hoverStyle')}
+                </div>
+                <div>
+                  <strong>activeStyle</strong>: {t('editor.magnet-creator.animation.hint.activeStyle')}
+                </div>
+                <div>{t('editor.magnet-creator.animation.hint.commonProps')}</div>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* 閹煎瓨娲熼崕鎾炊閸濆嫮鏆伴柟绋款樀閿?*/}
       <div className="creator-footer-fixed">
         <button className="creator-btn creator-btn-cancel" onClick={onCancel}>
           {t('common.action.cancel')}
@@ -1024,7 +958,6 @@ export function MagnetCreator({
               : t('editor.magnet-creator.action.history')}
           </button>
         )}
-        {/* 闁告帗绋戠紓鎾澄熼垾宕囩闁挎稒纰嶅Ο澶岀矆閸濆嫷鍤ら柛蹇嬪劜鐎垫粓鏌?*/}
         {mode === 'create' && (
           <button
             className="creator-btn creator-btn-import"
@@ -1033,7 +966,6 @@ export function MagnetCreator({
             {t('editor.magnet-creator.action.importConfig')}
           </button>
         )}
-        {/* 缂傚倹鐗炵欢顐⑽熼垾宕囩闁挎稒纰嶅Ο澶岀矆閸濆嫷鍤ら柛鎴犲劋鐎垫粓鏌?*/}
         {mode === 'edit' && (
           <button
             className="creator-btn creator-btn-export"
@@ -1048,7 +980,6 @@ export function MagnetCreator({
         </button>
       </div>
 
-      {/* 闁告ê妫楄ぐ鍓佹媼閺夎法绉块梻鍫涘灪閿?*/}
       {showHistory && mode === 'edit' && (
         <div className="creator-history-panel">
           <div className="creator-history-header">
@@ -1084,7 +1015,7 @@ export function MagnetCreator({
                       onClick={() => handleDeleteHistory(item.id)}
                       title={t('editor.magnet-creator.history.action.deleteTitle')}
                     >
-                      閿?
+                      &times;
                     </button>
                   </div>
                 </div>
@@ -1094,7 +1025,6 @@ export function MagnetCreator({
         </div>
       )}
 
-      {/* 閻庣數鍘ч崣鍡涙閵忊剝绶?- 濞寸姴鎳庡﹢顏堝礆濞戞绱︽俊顖椻偓宕囩闁哄嫬澧介敓?*/}
       {showImport && mode === 'create' && (
         <div className="creator-import-panel">
           <div className="creator-import-header">
@@ -1107,7 +1037,7 @@ export function MagnetCreator({
                 setImportError('');
               }}
             >
-              閿?
+              &times;
             </button>
           </div>
           <div className="creator-import-content">
@@ -1126,23 +1056,23 @@ export function MagnetCreator({
             />
             {importError && <div className="creator-import-error">{t(importError)}</div>}
             <div className="creator-import-hint">
-              妫ｅ啯瀵?{t('editor.magnet-creator.import.hint.usageTitle')}
-              <br />閿?{t('editor.magnet-creator.import.hint.usage1')}
-              <br />閿?{t('editor.magnet-creator.import.hint.usage2')}
-              <br />閿?{t('editor.magnet-creator.import.hint.usage3')}
-              <br />
-              <br />
-              闁宠法濯撮敓?{t('editor.magnet-creator.import.hint.limitsTitle')}
-              <br />閿?{t('editor.magnet-creator.import.hint.limit1')}
-              <br />閿?{t('editor.magnet-creator.import.hint.limit2')}
-              <br />閿?{t('editor.magnet-creator.import.hint.limit3')}
-              <br />
-              <br />
-              妫ｅ啯鎲?{t('editor.magnet-creator.import.hint.howToTitle')}
-              <br />閿?{t('editor.magnet-creator.import.hint.howToSee')}{' '}
-              <code>apps/desktop/src/data/custom/exampleCustomMagnet.ts</code>
-              <br />閿?{t('editor.magnet-creator.import.hint.howToDoc')}{' '}
-              <code>mannual/Magnet/how-to-add-magnets.md</code>
+              <div>{t('editor.magnet-creator.import.hint.usageTitle')}</div>
+              <div>- {t('editor.magnet-creator.import.hint.usage1')}</div>
+              <div>- {t('editor.magnet-creator.import.hint.usage2')}</div>
+              <div>- {t('editor.magnet-creator.import.hint.usage3')}</div>
+              <div style={{ marginTop: 8 }}>{t('editor.magnet-creator.import.hint.limitsTitle')}</div>
+              <div>- {t('editor.magnet-creator.import.hint.limit1')}</div>
+              <div>- {t('editor.magnet-creator.import.hint.limit2')}</div>
+              <div>- {t('editor.magnet-creator.import.hint.limit3')}</div>
+              <div style={{ marginTop: 8 }}>{t('editor.magnet-creator.import.hint.howToTitle')}</div>
+              <div>
+                {t('editor.magnet-creator.import.hint.howToSee')}{' '}
+                <code>apps/desktop/src/data/custom/exampleCustomMagnet.ts</code>
+              </div>
+              <div>
+                {t('editor.magnet-creator.import.hint.howToDoc')}{' '}
+                <code>docs/architecture/magnet-generation-spec.md</code>
+              </div>
             </div>
           </div>
           <div className="creator-import-actions">

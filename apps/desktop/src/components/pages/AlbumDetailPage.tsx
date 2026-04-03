@@ -127,7 +127,7 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
       setTracks(compactTracks);
       setRenderedTrackLimit(ALBUM_TRACK_RENDER_CHUNK_SIZE);
 
-      // 使用第一首歌的封面作为专辑封面（Desktop/Tauri 下优先走磁盘缓存懒加载）
+      // Prefer the first resolved track cover as the album preview.
       const candidate = compactTracks[0];
       if (!candidate) {
         setAlbumCover(undefined);
@@ -162,7 +162,7 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [albumName, artist]);
+  }, [albumName, artist, telemetry]);
 
   useEffect(() => {
     const nextCoverUrl = typeof albumCover === 'string' ? albumCover.trim() : '';

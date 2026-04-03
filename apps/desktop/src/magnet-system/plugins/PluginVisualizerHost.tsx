@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { useKernel } from '../../contexts/KernelContext';
+import { COMMANDS_SERVICE_TOKEN } from '../../services/commands';
+import { KEYBINDINGS_SERVICE_TOKEN } from '../../services/keybindings';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import {
   getInstalledPmpmPlugin,
@@ -28,6 +30,8 @@ export function PluginVisualizerHost({
 }) {
   const kernel = useKernel();
   const audioService = useAudioService();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
+  const keybindings = kernel.services.getOptional(KEYBINDINGS_SERVICE_TOKEN);
   const navigationService = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
@@ -80,9 +84,11 @@ export function PluginVisualizerHost({
       hostLabel: 'PluginVisualizerHost',
       permissions,
       audioService,
+      commands,
       navigation,
+      keybindings,
     });
-  }, [audioService, navigation, permissions, pluginId]);
+  }, [audioService, commands, keybindings, navigation, permissions, pluginId]);
 
   useEffect(() => {
     if (!enabled) return;

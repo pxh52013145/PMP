@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { useKernel } from '../../contexts/KernelContext';
+import { COMMANDS_SERVICE_TOKEN } from '../../services/commands';
+import { KEYBINDINGS_SERVICE_TOKEN } from '../../services/keybindings';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import { useMagnetSkin } from '../../themes/useMagnetSkin';
 import {
@@ -31,6 +33,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
   const kernel = useKernel();
   const audioService = useAudioService();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
+  const keybindings = kernel.services.getOptional(KEYBINDINGS_SERVICE_TOKEN);
   const navigationService = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
@@ -91,9 +95,11 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
       hostLabel: 'PluginMagnetHost',
       permissions,
       audioService,
+      commands,
       navigation,
+      keybindings,
     });
-  }, [audioService, navigation, permissions, pluginId]);
+  }, [audioService, commands, keybindings, navigation, permissions, pluginId]);
 
   const mountContext = useMemo(() => {
     const themeVariant = typeof skin.variant === 'string' && skin.variant.trim().length > 0 ? skin.variant.trim() : null;

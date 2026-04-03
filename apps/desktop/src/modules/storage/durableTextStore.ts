@@ -1,7 +1,12 @@
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 
-export type DurableTextNamespace = 'pmpm-entry' | 'pmps-fragment' | 'migration-backup' | 'profile-pack-backup';
+export type DurableTextNamespace =
+  | 'pmpm-entry'
+  | 'pmps-fragment'
+  | 'migration-backup'
+  | 'profile-pack-backup'
+  | 'plugin-data';
 
 const IDB_DB_NAME = 'pixel-matrix-player';
 const IDB_STORE_NAME = 'durableText';

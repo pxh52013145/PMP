@@ -5,6 +5,18 @@ import { resolve } from 'path';
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      '@pixel-matrix/plugin-platform-contracts': resolve(
+        __dirname,
+        '../../packages/plugin-platform-contracts/src/index.ts'
+      ),
+      '@pixel-matrix/plugin-compat-pmpm': resolve(
+        __dirname,
+        '../../packages/plugin-compat-pmpm/src/index.ts'
+      ),
+    },
+  },
 
   // Tauri expects a fixed port will fail if that port is not available
   server: {

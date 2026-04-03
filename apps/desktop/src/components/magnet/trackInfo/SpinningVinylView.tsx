@@ -5,6 +5,7 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useT } from '../../../i18n';
 import { TrackInfoVariantProps } from './TrackInfoTypes';
 import { buildCoverGradient } from '../shared/useDynamicColor';
 import './SpinningVinylView.css';
@@ -15,6 +16,7 @@ export const SpinningVinylView: React.FC<TrackInfoVariantProps> = ({
   dynamicColors,
   dynamicColorConfig,
 }) => {
+  const t = useT();
   const [showInfo, setShowInfo] = useState(false);
   const [infoPosition, setInfoPosition] = useState({ x: 0, y: 0 });
   const [titleOverflow, setTitleOverflow] = useState(false);
@@ -173,32 +175,32 @@ export const SpinningVinylView: React.FC<TrackInfoVariantProps> = ({
         }}
       >
         <div className="track-info-popup-header">
-          <h3>歌曲信息</h3>
+          <h3>{t('magnet.renderers.track-info.preview')}</h3>
         </div>
 
         <div className="track-info-popup-body">
           <div className="track-info-popup-section">
             <div className="track-info-popup-item">
-              <span className="label">标题</span>
-              <span className="value">{data.track.title}</span>
+              <span className="label">{t('pages.track.meta.title')}</span>
+              <span className="value">{data.track.title || t('common.unknown.audioFile')}</span>
             </div>
             <div className="track-info-popup-item">
-              <span className="label">艺术家</span>
-              <span className="value">{data.track.artist || '未知'}</span>
+              <span className="label">{t('pages.track.meta.artist')}</span>
+              <span className="value">{data.track.artist || t('common.unknown.artist')}</span>
             </div>
             <div className="track-info-popup-item">
-              <span className="label">专辑</span>
-              <span className="value">{data.track.album || '未知'}</span>
+              <span className="label">{t('pages.track.meta.album')}</span>
+              <span className="value">{data.track.album || t('common.unknown.album')}</span>
             </div>
             {data.track.year && (
               <div className="track-info-popup-item">
-                <span className="label">年份</span>
+                <span className="label">{t('pages.track.meta.year')}</span>
                 <span className="value">{data.track.year}</span>
               </div>
             )}
             {data.track.genre && (
               <div className="track-info-popup-item">
-                <span className="label">流派</span>
+                <span className="label">{t('pages.track.meta.genre')}</span>
                 <span className="value">{data.track.genre}</span>
               </div>
             )}
@@ -211,25 +213,25 @@ export const SpinningVinylView: React.FC<TrackInfoVariantProps> = ({
             <div className="track-info-popup-section">
               {data.track.duration && (
                 <div className="track-info-popup-item">
-                  <span className="label">时长</span>
+                  <span className="label">{t('pages.track.meta.duration')}</span>
                   <span className="value">{formatDuration(data.track.duration)}</span>
                 </div>
               )}
               {data.track.bitrate && (
                 <div className="track-info-popup-item">
-                  <span className="label">比特率</span>
+                  <span className="label">{t('pages.track.meta.bitrate')}</span>
                   <span className="value">{data.track.bitrate} kbps</span>
                 </div>
               )}
               {data.track.sampleRate && (
                 <div className="track-info-popup-item">
-                  <span className="label">采样率</span>
+                  <span className="label">{t('pages.track.meta.sampleRate')}</span>
                   <span className="value">{(data.track.sampleRate / 1000).toFixed(1)} kHz</span>
                 </div>
               )}
               {data.track.format && (
                 <div className="track-info-popup-item">
-                  <span className="label">格式</span>
+                  <span className="label">{t('pages.track.meta.format')}</span>
                   <span className="value">{data.track.format}</span>
                 </div>
               )}
@@ -251,7 +253,7 @@ export const SpinningVinylView: React.FC<TrackInfoVariantProps> = ({
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         style={containerStyle}
-        title={data.track ? '点击进入歌曲页 / 悬停查看信息' : '未加载音频'}
+        title={data.track ? t('magnet.renderers.track-info.description') : t('pages.native-debug.currentTrack.none')}
       >
         {/* 圆形唱片封面 */}
         <div
@@ -259,7 +261,7 @@ export const SpinningVinylView: React.FC<TrackInfoVariantProps> = ({
           className={`track-vinyl ${data.isPlaying ? 'spinning' : ''}`}
         >
           {data.track?.coverUrl ? (
-            <img src={data.track.coverUrl} alt="Cover" className="track-cover-image" />
+            <img src={data.track.coverUrl} alt={t('pages.track.cover.alt')} className="track-cover-image" />
           ) : (
             <div className="track-cover-placeholder">♪</div>
           )}
@@ -268,13 +270,13 @@ export const SpinningVinylView: React.FC<TrackInfoVariantProps> = ({
         {/* 歌曲信息 */}
         <div className="track-info-text">
           <div ref={titleRef} className={`track-title-compact ${titleOverflow ? 'overflow' : ''}`}>
-            <span className="track-text-inner">{data.track?.title || '未加载音频'}</span>
+            <span className="track-text-inner">{data.track?.title || t('pages.native-debug.currentTrack.none')}</span>
           </div>
           <div
             ref={artistRef}
             className={`track-artist-compact ${artistOverflow ? 'overflow' : ''}`}
           >
-            <span className="track-text-inner">{data.track?.artist || '请选择音频文件'}</span>
+            <span className="track-text-inner">{data.track?.artist || t('pages.track.empty.noTrack')}</span>
           </div>
         </div>
       </div>

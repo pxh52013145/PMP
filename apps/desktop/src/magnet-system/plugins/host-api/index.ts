@@ -58,6 +58,7 @@ export type {
   PluginHostCapabilityResult,
   PluginCoverSnapshot,
   PluginHostInfo,
+  PluginHostTrayApi,
   PluginHostVoiceTrainingProviderHealth,
   PluginHostVoiceTrainingProviderInfo,
   PluginHostVoiceTrainingProviderInvokeRequest,

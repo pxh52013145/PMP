@@ -18,6 +18,7 @@ import {
   broadcastDataUpdate,
 } from '../../utils/windowCommunication';
 import { readJson, removeKey, writeJson, writeString } from '../../modules/storage';
+import { getMagnetDisplayName } from '../../modules/magnets/display';
 import { getMagnetPreviewNode, getMagnetRenderer } from '../../magnet-system/registry';
 import {
   createMagnetTemplateFromPlugin,
@@ -252,9 +253,11 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
       const rendererId = magnet.renderer ?? magnet.id;
       const renderer =
         getMagnetRenderer(rendererId) ?? (rendererId === magnet.id ? null : getMagnetRenderer(magnet.id));
+      const displayName = getMagnetDisplayName(magnet, t);
       const searchable: string[] = [
         magnet.id,
         rendererId,
+        displayName,
         magnet.name,
         magnet.type,
         magnet.anchorType,
@@ -269,7 +272,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
       return searchable.some((value) => value.includes(normalizedQuery));
     });
-  }, [categorizedMagnets, deferredSearchQuery, filterMode, viewMode]);
+  }, [categorizedMagnets, deferredSearchQuery, filterMode, t, viewMode]);
 
   // 监听 creator 窗口状态
   useEffect(() => {
@@ -397,7 +400,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
       if (!candidate) {
         await confirm({
           title: t('editor.magnet-library.placement.noSpace.title'),
-          message: t('editor.magnet-library.placement.noSpace.message', { name: magnet.name || magnet.id }),
+          message: t('editor.magnet-library.placement.noSpace.message', {
+            name: getMagnetDisplayName(magnet, t),
+          }),
           confirmText: t('common.action.ok'),
         });
         return;
@@ -877,6 +882,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
               const isBuiltIn = builtInMagnetIds.has(magnet.id);
               const isActive = activeMagnetIds.has(magnet.id);
               const isRequired = REQUIRED_MAGNET_IDS.has(magnet.id);
+              const magnetDisplayName = getMagnetDisplayName(magnet, t);
               const pixelCount = estimateMagnetPixelCount(magnet);
               const chromeEnabled = magnet.chrome?.enabled !== false;
               const magnetRendererOpacity =
@@ -899,9 +905,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                 } else if (isValidElement(content)) {
                   previewContent = content;
                 } else if (content === null || content === undefined) {
-                  previewContent = magnet.name || magnet.id;
+                  previewContent = magnetDisplayName;
                 } else {
-                  previewContent = `[${magnet.name || magnet.id}]`;
+                  previewContent = `[${magnetDisplayName}]`;
                 }
               }
 
@@ -934,7 +940,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                   </div>
                   <div className="magnet-body">
                     <div className="magnet-info">
-                    <div className="magnet-name">{magnet.name || magnet.id}</div>
+                    <div className="magnet-name">{magnetDisplayName}</div>
                     <div className="magnet-id">{magnet.id}</div>
                     {rendererDescription && (
                       <div className="magnet-description">{rendererDescription}</div>

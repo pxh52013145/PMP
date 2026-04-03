@@ -3,6 +3,8 @@ export { createServiceToken } from './tokens';
 export { ServiceRegistry } from './ServiceRegistry';
 export type { RegisterOptions } from './ServiceRegistry';
 export type { ServiceRegistryApi } from './ServiceRegistry';
+export { getKernelLogger, setKernelLogSink } from './logging';
+export type { KernelLogger, KernelLogLevel, KernelLogOptions, KernelLogSink } from './logging';
 export { EventBus } from './EventBus';
 export type { EventMap, EventMeta, EventListener, Unsubscribe, ScopedEventBus } from './EventBus';
 export { ContributionRegistry } from './ContributionRegistry';

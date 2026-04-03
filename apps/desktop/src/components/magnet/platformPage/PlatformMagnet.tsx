@@ -504,7 +504,11 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
           <div className="platform-magnet-generic">
             <section className="platform-magnet-panel">
               <div className="platform-magnet-panel-header">
-                <h4>{activeWorkspaceDescriptor?.displayName ?? t('magnet.platform.mode.generic')}</h4>
+                <h4>
+                  {activeWorkspaceDescriptor
+                    ? getWorkspaceModeLabel(activeWorkspaceDescriptor)
+                    : t('magnet.platform.mode.generic')}
+                </h4>
                 <span className="platform-magnet-panel-tag">{t('magnet.platform-login.status.comingSoon')}</span>
               </div>
               <p className="platform-magnet-panel-desc">{t('magnet.platform.panel.search.desc')}</p>

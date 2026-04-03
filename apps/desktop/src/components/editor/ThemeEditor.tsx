@@ -15,6 +15,7 @@ import {
   magnetLayoutStoreApplyPatch,
   magnetLayoutStoreBootstrap,
   magnetLayoutStoreGetState,
+  getMagnetDisplayName,
   resolveMagnetConfigStorageKey,
   resolveMagnetLayoutStorageKey,
   sanitizeMagnetSpaceLayout,
@@ -3229,7 +3230,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
                                 <div className="theme-pack-dep-chips">
                                   <span className="theme-pack-chip">
-                                    {item.magnet?.name ?? item.binding.magnetId}
+                                    {item.magnet ? getMagnetDisplayName(item.magnet, t) : item.binding.magnetId}
                                   </span>
                                   <span
                                     className={`theme-pack-chip theme-pack-chip--${

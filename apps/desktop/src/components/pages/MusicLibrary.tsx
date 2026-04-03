@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { createPortal } from 'react-dom';
 
@@ -283,8 +283,6 @@ import { PmpButton, PmpDialog } from '../primitives';
 
 import './MusicLibrary.css';
 
-
-
 interface MusicLibraryProps {
 
   isOpen?: boolean;
@@ -295,14 +293,9 @@ interface MusicLibraryProps {
 
   onPlayNow?: (tracks: Track[], startIndex?: number) => void;
 
-  embedded?: boolean; // 闁哄嫷鍨伴幆浣哥暤鐏炶棄寮虫俊顖椻偓宕囩闁挎稑鐗嗗﹢鐙絘vigationPage濞戞搩鍙忕槐?
+  embedded?: boolean;
 
 }
-
-
-
-// 闁?婵☆垪鈧櫕鍋ョ紒鐙欏懐澶勯悗娑欙公缁辨壆鎹勯妸褏鐭嬪ù鐘烘硾閻ゅ嫭绗熺€ｎ亜褰欏ù婊庡亾缁辨繃绋夊鍕獥闁搞儳濮崇拹鐔虹磼閸曨亝顐介柛妤佺摃濞村洭鎳撶仦鍏间涪濠?
-
 type ModuleCacheSnapshot = {
 
   tracks: Track[];
@@ -368,11 +361,6 @@ function getSelectableSortRuleFields(
 
 
 let moduleCache: ModuleCacheSnapshot | null = null;
-
-
-
-// ? 婵☆垪鈧櫕鍋ョ紒鐙欏嫮娉婇柛鏂诲妺缂嶅懐绱旈鍓у閻庢稒锕槐浼村箰?viewMode 閻犱焦婢樼换鍌涚▔缂佹娉婇柛鏂诲妽濞碱垱鎷呭鍥╂瀭濞戞挸閰ｉ弫瀣倷閻у摜绀勯悹鎭掑姂閵嗗妫冮姀锝囧劜閺?缂備礁瀚▎銏ゅ础濮濆本绁板ǎ鍥ㄧ箖鐎垫棃鏁?
-
 type MainScrollAnchor =
 
   | { kind: 'track'; id: string; offset: number };
@@ -465,7 +453,7 @@ type MainViewportSnapshot = {
 
 
 
-const CACHE_DURATION = 5 * 60 * 1000; // 5闁告帒妫濋幐鎾剁磽閹惧磭鎽?
+const CACHE_DURATION = 5 * 60 * 1000;
 
 const INITIAL_TRACK_LOAD_LIMIT = 120;
 
@@ -1153,11 +1141,6 @@ const LocalTrackCard: React.FC<LocalTrackCardProps> = ({
   );
 
 };
-
-
-
-// 婵炴挸鎳樺▍搴∥熼垾铏仴缂傚倹鎸搁悺?
-
 export function clearModuleCache() {
 
   moduleCache = null;
@@ -1590,11 +1573,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     };
 
   }, [audioService, clearPendingPlayTrack, resolveTrackIdentity]);
-
-
-
-  // ? 閻犱焦婢樼换鍌氼煥濮橆剙袟濞达絽绉堕悿鍡涙晬濮橆厼鐦?viewMode 缂備礁鐡ㄦ慨銏＄▔缂佹娉婇柛鏂诲妽濞?scrollTop + 闂佹寧姘ㄩ崑锝夋晬瀹€鍕級闁稿繐绉峰▔鏇熴亜閻㈠憡妗?闁告帒娲﹀畷?tab 濞戞挶鍨归妵鎴炴媴瀹ュ洨鏋?
-
   const isRestoringMainScrollRef = useRef(false);
 
   const mainScrollUserDirtyRef = useRef(false);
@@ -1968,11 +1946,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     };
 
   }, [captureMainScrollMemory, getMainScrollRoot, isOpen, librarySourceMode, viewMode]);
-
-
-
-  // 闁圭儤甯掔花顓㈡偐閼哥鍋?
-
   const [baseView, setBaseView] = useState<MusicLibraryBaseView>('table');
 
   const [baseFilterJoinOperator, setBaseFilterJoinOperator] =
@@ -2636,11 +2609,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     shouldUseNativeBaseWindowedQuery,
 
   ]);
-
-
-
-
-
   const handleMainScroll = useCallback(() => {
 
     const root = getMainScrollRoot(moduleScrollMemory[viewMode]?.rootKind);
@@ -2935,7 +2903,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-    // ???yO?gQ?mTuua??m?S???dwO?|uZ&?W'???jK??0}L??m-\????R?[??`k??o?0??cz??U0??[?z??U??su??p?y??p?i?
+    // Reuse the cached module snapshot for the default local-library view when it is still valid.
 
     const now = Date.now();
 
@@ -2969,15 +2937,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       void loadLibraryStats();
 
-      return; // ??????p[f!?'1nep;j?N???P?[?~? ??cz?o?e?|?o-aBq9p?0?h?? ??JT?h?o?`??
+      return; // Cache hit; skip the primary library read.
 
     }
 
 
 
-    // uZ?pYS??ob?cmy??x???`?x???r?gp<j?X?a?Y'??zm?"XbcP????Z???f;P?~
+    // Reset stale module snapshots when bypassing the legacy cache path.
 
-// [legacy garbled comment omitted]
+
 
     if (!shouldUseLegacyModuleCache) {
       clearModuleCache();
@@ -2994,7 +2962,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     try {
 
-      // ????oQgT???Waq???]]?Hg'1?Q????NN???ha?X[?Y??R`2QZX?g?t3 ?j??H~?Y?NG^R?? ?b	&?1000 ?o??~}?`??iZ?d<q????U/u?b?h???c"$iA?\???r?b???c?`???
+      // Load the first page eagerly so the list can render before incremental fetching continues.
 
       const initialTracks = await musicLibraryService.getAllTracks(INITIAL_TRACK_LOAD_LIMIT);
 
@@ -3024,7 +2992,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-      // ???T$m!?)1;_?o?V?S???dwO?|??p????o@iuun? ?[F??N?P??}?[?z?P?D?)滕?
+      // Refresh the module snapshot after a successful primary read.
 
       if (shouldUseLegacyModuleCache) {
         moduleCache = buildModuleCacheSnapshot({
@@ -3063,7 +3031,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     }
 
-  }, [beginAudioProtection, searchQuery, shouldUseLegacyModuleCache, telemetry]);
+  }, [beginAudioProtection, loadLibraryStats, searchQuery, shouldUseLegacyModuleCache, telemetry]);
 
   const reloadCurrentLocalTrackSource = useCallback(async () => {
 
@@ -3119,7 +3087,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-  // ??JT?h?o?`?e?&1Q???`qn?oT? ?
+  // Stable library entry loading.
 
   const loadStableLibraryEntries = useCallback(
 
@@ -3611,7 +3579,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-  // ???rM?h???U??{$i6a}}|m?^6_:??P	&??
+  // Refresh local library state after scan progress completes.
 
   useEffect(() => {
 
@@ -3623,7 +3591,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-      // ?????K?mT??t"1SP?Hrpn??&1?\?[?0?`??nT????JT?gT??\:]Z 2?h??@iJrZX?g?t3 ?g????X???R??Y??ns??JT^h?Y?Y?
+      // When a scan finishes, refresh both the visible track source and derived path metadata.
 
       if (!progress.isScanning && progress.current > 0) {
         telemetry.info('music-library.scan.refresh-requested', {
@@ -3633,11 +3601,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           },
         });
 
-        clearModuleCache(); // ???uZ?p8c??:j?%4dG??x???`?x???
+        clearModuleCache(); // Scans invalidate the cached module snapshot.
 
-        // ??pPN???bcJZ?R?%??L_R??k7]S??mSP?Yd?
+        // Give the backend a short settle window before reloading local-library views.
 
-// [legacy garbled comment omitted]
+
 
         setTimeout(() => {
 
@@ -3645,11 +3613,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
             reloadCurrentLocalTrackSource(),
 
-            loadLibraryPaths(), // ??JT~????L??py???W???? ???rf?h?nb"k??Ty?o?0?Z'??
+            loadLibraryPaths(),
 
           ]);
 
-        }, 300); // ??JT?W?~0a?`V?<l?V????X?~WW?g?300ms
+        }, 300);
 
       }
 
@@ -3726,18 +3694,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     updateCoverRuntimePolicy,
 
   ]);
-
-
-
-  // Desktop/Tauri: ?ob;c??zO"kP??0
-
-// [legacy garbled comment omitted]
-
-  
-
-
-
-  // ?o#2?lp??C^?o?V?h???0D?P???篓??PobZpt?P???
+  // Desktop/Tauri local-library scan flow.
+  // Trigger a local library rescan and refresh the derived views afterward.
 
   const handleScanFolder = async () => {
 
@@ -3752,15 +3710,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       await musicLibraryService.scanFolder();
 
-      // ?????K?mT??t"1SP?Hrpn??&1?\?[?0?`??)2O??P?ZJ?Ci?i?/?SPZ?jH??a?Nqy???W???? ??p????o@iuun? ?[D?]uP?F?4U??W?op?9]O??UXP?
+      // Force a refresh after scanning so the UI does not keep serving stale local data.
 
-      clearModuleCache(); // ???uZ?p8c??:j?%4dG??x???`?x???r?gZ?j?Z9pd?N?[6l<]ǔ?p_????T9PbZ;jha?X[?Y?
+      clearModuleCache(); // Scans invalidate the cached module snapshot.
 
       await Promise.all([
 
         reloadCurrentLocalTrackSource(),
 
-        loadLibraryPaths(), // ??JT!^??M?;_?o?R	]$i(h(l?~?p?g???d?k???
+        loadLibraryPaths(),
 
       ]);
 
@@ -5653,11 +5611,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     setActiveBaseFilterGroupId(quickFilterState.activeFilterGroupId);
 
   }, []);
-
-
-
-
-
   useEffect(() => {
 
     if (!isOpen || !shouldUseNativeBaseQuery) {
@@ -5810,7 +5763,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     return nativeBaseTrackWindowMatchesRequest ? nativeBaseTracks : [];
   }, [nativeBaseTracks, nativeBaseTrackWindowMatchesRequest, shouldUseNativeBaseWindowedQuery]);
 
-  // 闁兼儳鍢茶ぐ鍥ㄦ交閸ャ劍濮㈤柛婊冩湰鐢挻鎯旇箛鎾村€甸柣銊ュ瀵ゆ椽鏌?
+
 
   const filteredTracks = useMemo(() => {
 
@@ -5823,11 +5776,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     return shouldUseWebFallbackBaseQuery ? applyMusicLibraryBaseQuery(tracks, baseQueryState) : tracks;
 
   }, [baseQueryState, nativeBaseTracksForRender, shouldUseWebFallbackBaseQuery, tracks]);
-
-
-
-  // 闁兼儳鍢茶ぐ鍥箳閹烘垹纰嶉柛姘捣濞堟垶绋夐幘鍦竼闁告帗顨夐妴?
-
   const sortedStableEntries = useMemo(() => {
 
     return [...stableEntries].sort((a, b) => {
@@ -5841,9 +5789,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     });
 
   }, [stableEntries]);
-
-
-
   const stableLibraryStats = useMemo(() => deriveStableLibraryStats(stableEntries), [stableEntries]);
 
 
@@ -6785,17 +6730,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     viewMode,
 
   ]);
-
-
-
-  // 闁告娲栭崵顔界▔閹惧湱甯?- 閻庝絻澹堥崺鍛村礆妫颁胶鐟╅弶鍫熷灱椤曟盯骞嗛崨娣偓?
-
-  // 闁告瑥鑻崵顔界▔閹惧湱甯?- 闁圭虎鍘介弬浣圭▔閹惧湱甯?
-
-  // 闁圭虎鍘介弬渚€鎳濋悜妯婚挬閻?
-
-  // 闁告瑥鑻崵顔碱潰鐏炵偓閿ら柨娑欑閸у﹪宕濋悩鍐差暡闁哄牆顦崇换鍐煥閵堝懏鍊甸柣銊ュ閻℃洟寮撮幓鎺戠厒闂傚啰鍠庨崹顏堟晬鐏炶偐鐭ら梺顐㈩槷閼垫垿鎯冮崟顒傛憙闁哄洦褰冪槐鎴炴叏鐎ｎ偅灏￠柡鈧?
-
   const resolvePlayableTracksForCurrentView = useCallback(async (): Promise<Track[]> => {
 
     if (!shouldUseNativeBaseWindowedQuery || filteredTracks.length >= filteredTracksTotal) {
@@ -6920,11 +6854,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     telemetry,
 
   ]);
-
-
-
-  // 闁告瑯浜濋幐閬嶅绩閹冪濡絾鐗楅悺鏇㈠即?
-
   const handlePlaySingleTrack = useCallback((track: Track, e?: React.MouseEvent) => {
 
     e?.stopPropagation();
@@ -6956,11 +6885,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     onPlayNow([track]);
 
   }, [markPendingPlayTrack, onPlayNow, telemetry]);
-
-
-
-  // 闁告瑯浜濋崸濠囧礉閻樻彃绀嬪Λ锝嗙墬閻℃洟寮撮幓鎺戠厒闂傚啰鍠庨崹?
-
   const handleAddSingleTrack = useCallback((track: Track, e?: React.MouseEvent) => {
 
     e?.stopPropagation();
@@ -7438,11 +7362,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     }
 
   }, [loadStableLibraryEntries, loadStableQueueData, searchQuery, showStableQueuePanel]);
-
-
-
-  // 濠㈣泛瀚幃濠傤潰鐏炵偓閿ら柛娆愬▕閺侇參鎳ｅ鍐ㄧ
-
   const handleTrackContextMenu = useCallback((track: Track, index: number, e: React.MouseEvent) => {
 
     e.preventDefault();
@@ -7780,13 +7699,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     toggleTrackGroupCollapsed,
 
   ]);
-
-
-
-  // 濠㈣泛瀚幃濠冪▔閹惧湱甯嗛柛娆愬▕閺侇參鎳ｅ鍐ㄧ
-
-  // 闁哄秶鍘х槐锟犲礌閺嶃劍鐎ù鐘烘硾閵囧洨浜?
-
   const formatStableUpdatedAt = useCallback(
 
     (timestampMs?: number) => {
@@ -7824,11 +7736,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     return formatMusicLibraryFileSize(bytes);
 
   }, []);
-
-
-
-  // 闁哄秶鍘х槐锟犲礌閺嶃劍顦ч梻鈧?
-
   const formatTotalDuration = useCallback(
 
     (seconds: number): string => {
@@ -7850,11 +7757,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     [t]
 
   );
-
-
-
-  // 闁哄秶鍘х槐锟犲礌閺嶎剙缂撻梺顒佹尰濡炲倿姊?
-
   const formatOptionalTimestamp = useCallback(
 
     (value?: number) => {
@@ -11026,11 +10928,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         </div>
 
       )}
-
-
-
-      {/* 婵炴挸鎳愰埞鏍兜椤旀鍚囬悗鐢殿攰閻﹁棄顩?*/}
-
       <ConfirmDialog
 
         isOpen={showClearConfirm}
@@ -11076,11 +10973,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         onCancel={() => setCleanupConfirmTarget(null)}
 
       />
-
-
-
-      {/* 閹煎瓨鎹侀惌鎯ь嚗閸曨収鍚€闁荤偛妫楀▍?*/}
-
       {showPathsManager && (
         <PmpDialog
           open={showPathsManager}
@@ -11584,11 +11476,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
         </PmpDialog>
       )}
-
-
-
-      {/* 闂佹寧鐟ㄩ銈夊箵閹邦喓浠涢悗鐢殿攰閻﹁棄顩?*/}
-
       {errorMessage && (
 
         <ConfirmDialog
@@ -11616,11 +11503,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     </div>
 
   );
-
-
-
-  // 鐎规挸鑻崣鍡椢熼垾宕囩闁烩晛鐡ㄧ敮瀛樻交閺傛寧绀€闁告劕鎳庨鎰版晬瀹€鍕鐎规挸鑻崣鍡椢熼垾宕囩濞达綀娉曢弫顥秓rtal
-
   return (
 
     <>
@@ -11648,4 +11530,3 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   );
 
 };
-

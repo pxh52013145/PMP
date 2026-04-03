@@ -35,6 +35,11 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
       let pluginId = '';
       let hostLabel = '';
       let hostInfo = null;
+      let runtimeHelloSnapshot = null;
+      let runtimeInitSnapshot = null;
+      let runtimeActivateSnapshot = null;
+      let runtimeHealthSnapshot = null;
+      let viewMountRequestSnapshot = null;
       let audioState = null;
       let audioSpectrum = null;
       let audioSpectrumFramePre = null;
@@ -201,6 +206,41 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
               return false;
             }
             return hasPermission(String(capability || ''));
+          },
+          getRuntimeHelloSnapshot: () => {
+            if (!permissions.has('api:host')) {
+              warnDenied('api:host', 'host.getRuntimeHelloSnapshot()');
+              return null;
+            }
+            return runtimeHelloSnapshot;
+          },
+          getRuntimeInitSnapshot: () => {
+            if (!permissions.has('api:host')) {
+              warnDenied('api:host', 'host.getRuntimeInitSnapshot()');
+              return null;
+            }
+            return runtimeInitSnapshot;
+          },
+          getRuntimeActivateSnapshot: () => {
+            if (!permissions.has('api:host')) {
+              warnDenied('api:host', 'host.getRuntimeActivateSnapshot()');
+              return null;
+            }
+            return runtimeActivateSnapshot;
+          },
+          getRuntimeHealthSnapshot: () => {
+            if (!permissions.has('api:host')) {
+              warnDenied('api:host', 'host.getRuntimeHealthSnapshot()');
+              return null;
+            }
+            return runtimeHealthSnapshot;
+          },
+          getViewMountRequestSnapshot: () => {
+            if (!permissions.has('api:host')) {
+              warnDenied('api:host', 'host.getViewMountRequestSnapshot()');
+              return null;
+            }
+            return viewMountRequestSnapshot;
           },
           listCapabilities: () => {
             if (!permissions.has('api:host')) {
@@ -479,6 +519,22 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
           pluginId = String(data.pluginId || '');
           hostLabel = String(data.hostLabel || '');
           hostInfo = data.hostInfo && typeof data.hostInfo === 'object' ? data.hostInfo : null;
+          runtimeHelloSnapshot =
+            data.runtimeHello && typeof data.runtimeHello === 'object' ? data.runtimeHello : null;
+          runtimeInitSnapshot =
+            data.runtimeInit && typeof data.runtimeInit === 'object' ? data.runtimeInit : null;
+          runtimeActivateSnapshot =
+            data.runtimeActivate && typeof data.runtimeActivate === 'object'
+              ? data.runtimeActivate
+              : null;
+          runtimeHealthSnapshot =
+            data.runtimeHealth && typeof data.runtimeHealth === 'object'
+              ? data.runtimeHealth
+              : null;
+          viewMountRequestSnapshot =
+            data.viewMountRequest && typeof data.viewMountRequest === 'object'
+              ? data.viewMountRequest
+              : null;
           mountedKind = String(data.surface || '');
           mountedId = data.surfaceId == null ? null : String(data.surfaceId);
           mountContext = data.mountContext ?? null;

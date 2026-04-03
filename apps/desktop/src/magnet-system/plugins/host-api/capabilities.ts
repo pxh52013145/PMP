@@ -1,4 +1,87 @@
 import { HOST_API_VERSION } from '../../../constants/versions';
+import { BUILTIN_MAGNET_IDS } from '../../../constants/magnets';
+import type { CommandContribution } from '../../../contracts/contributions';
+import {
+  createDefaultMagnetSpaceLayout,
+  ensureMagnetCatalogState,
+  ensureMagnetSpaceLayout,
+  magnetLayoutStoreApplyPatchWithRetry,
+  magnetLayoutStoreBootstrap,
+  magnetLayoutStoreGetState,
+  readMagnetCatalogState,
+  removeMagnetCatalogMagnet,
+  resolveMagnetLayoutStorageKey,
+  sanitizeMagnetCatalogState,
+  sanitizeMagnetSpaceLayout,
+  upsertMagnetCatalogMagnet,
+  type MagnetLayoutStorePatch,
+  type MagnetSpaceLayout,
+} from '../../../modules/magnets';
+import {
+  getMagnetRenderer,
+  listRegisteredMagnetRenderers,
+  type MagnetRendererDefinition,
+} from '../../../magnet-system/registry';
+import {
+  listMagnetVariants,
+  type MagnetVariantDefinition,
+} from '../../../magnet-system/variantRegistry';
+import {
+  SYSTEM_REQUIRED_ANCHORS_BY_MAGNET_ID,
+  getSystemAnchorsByMagnetId,
+} from '../../../modules/magnets/systemLayouts';
+import {
+  beginPlatformQrLogin,
+  getPlatformConnectorAuthSnapshot,
+  listPlatformConnectorAuthSnapshots,
+  listPlatformConnectorDefinitions,
+  listPlatformConnectorFacadeItems,
+  logoutPlatformConnector,
+  pollPlatformQrLogin,
+  prepareBilibiliCachedPlayback,
+  prepareNeteaseCachedPlayback,
+  searchPlatformTracks,
+} from '../../../modules/music-platform';
+import {
+  FALLBACK_LOCALE,
+  SUPPORTED_LOCALES,
+  getLocale,
+  isLocale,
+  setLocale,
+  type Locale,
+  type Messages,
+} from '../../../i18n/core';
+import {
+  listNativeLibraryFacetCatalog,
+  listNativeLibraryFacetEntries,
+  listNativeLibraryTextFacetValues,
+  listNativeLibraryTrackFieldCatalog,
+} from '../../../modules/music-library';
+import {
+  readDurableText,
+  removeDurableText,
+  writeDurableText,
+} from '../../../modules/storage';
+import { resolveThemeBinding, resolveThemeSurfaceTargetId } from '../../../themes/bindings';
+import { getStoredOrDefaultTheme } from '../../../themes/runtimeTheme';
+import { resolveThemeSurface } from '../../../themes/surfaces';
+import type { ThemeBindingId, ThemeSurfaceId } from '../../../themes/types/theme';
+import type { Magnet, PixelAnchor } from '../../../types/pixel';
+import {
+  TELEMETRY_KINDS,
+  TELEMETRY_LEVELS,
+  type TelemetryFields,
+  type TelemetryKind,
+  type TelemetryLevel,
+} from '../../../contracts/telemetry';
+import { getGlobalTelemetryService } from '../../../services/telemetry/TelemetryService';
+import {
+  broadcastDataUpdate,
+  STORAGE_KEYS,
+  TAURI_EVENTS,
+} from '../../../utils/windowCommunication';
+import { isTauriRuntime } from '../../../utils/tauriRuntime';
+import { readPmpmPluginConfigSyncState } from '../pluginConfig';
 import { recordPmpmAuditEvent } from '../pmpmGovernance';
 import { hasPermission } from './permissions';
 import type {
@@ -37,12 +120,64 @@ let initialized = false;
 
 const AI_ADAPTER_CAPABILITY_ID = 'foundation.ai-adapter';
 const AI_ADAPTER_CAPABILITY_VERSION = '0.4.0';
+const CORE_CAPABILITY_REGISTRY_CAPABILITY_ID = 'core.capability-registry';
+const CORE_CAPABILITY_REGISTRY_CAPABILITY_VERSION = '1.1.0';
 const AUDIO_INPUT_ADAPTER_CAPABILITY_ID = 'foundation.audio-input-adapter';
 const AUDIO_INPUT_ADAPTER_CAPABILITY_VERSION = '0.4.0';
+const HOST_PMP_NAVIGATION_CAPABILITY_ID = 'host.pmp.navigation';
+const HOST_PMP_NAVIGATION_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_WINDOW_CAPABILITY_ID = 'host.pmp.shell.window';
+const HOST_PMP_WINDOW_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_SHELL_MENU_CAPABILITY_ID = 'host.pmp.shell.menu';
+const HOST_PMP_SHELL_MENU_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_SHELL_CONTEXT_MENU_CAPABILITY_ID = 'host.pmp.shell.context-menu';
+const HOST_PMP_SHELL_CONTEXT_MENU_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_SHELL_TRAY_CAPABILITY_ID = 'host.pmp.shell.tray';
+const HOST_PMP_SHELL_TRAY_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_SHELL_STATUS_ITEM_CAPABILITY_ID = 'host.pmp.shell.status-item';
+const HOST_PMP_SHELL_STATUS_ITEM_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_STORAGE_CONFIG_CAPABILITY_ID = 'host.pmp.storage.config';
+const HOST_PMP_STORAGE_CONFIG_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_STORAGE_DURABLE_TEXT_CAPABILITY_ID = 'host.pmp.storage.durable-text';
+const HOST_PMP_STORAGE_DURABLE_TEXT_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_STORAGE_SYNC_CAPABILITY_ID = 'host.pmp.storage.sync';
+const HOST_PMP_STORAGE_SYNC_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_MAGNETS_CATALOG_CAPABILITY_ID = 'host.pmp.magnets.catalog';
+const HOST_PMP_MAGNETS_CATALOG_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_MAGNETS_LAYOUT_CAPABILITY_ID = 'host.pmp.magnets.layout';
+const HOST_PMP_MAGNETS_LAYOUT_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_MAGNETS_RENDERER_CAPABILITY_ID = 'host.pmp.magnets.renderer';
+const HOST_PMP_MAGNETS_RENDERER_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_AUDIO_PLAYBACK_CAPABILITY_ID = 'host.pmp.audio-engine.playback';
+const HOST_PMP_AUDIO_PLAYBACK_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_AUDIO_ANALYSIS_CAPABILITY_ID = 'host.pmp.audio-engine.analysis';
+const HOST_PMP_AUDIO_ANALYSIS_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_AUDIO_INPUT_CAPABILITY_ID = 'host.pmp.audio-engine.input';
+const HOST_PMP_AUDIO_INPUT_CAPABILITY_VERSION = '0.4.0';
+const HOST_PMP_MUSIC_PLATFORM_CATALOG_CAPABILITY_ID = 'host.pmp.music-platform.catalog';
+const HOST_PMP_MUSIC_PLATFORM_CATALOG_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_MUSIC_PLATFORM_SEARCH_CAPABILITY_ID = 'host.pmp.music-platform.search';
+const HOST_PMP_MUSIC_PLATFORM_SEARCH_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_MUSIC_PLATFORM_PREPARE_CAPABILITY_ID = 'host.pmp.music-platform.prepare';
+const HOST_PMP_MUSIC_PLATFORM_PREPARE_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_CONNECTOR_AUTH_CAPABILITY_ID = 'host.pmp.connector-auth';
+const HOST_PMP_CONNECTOR_AUTH_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_THEME_BINDINGS_CAPABILITY_ID = 'host.pmp.theme-bindings';
+const HOST_PMP_THEME_BINDINGS_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_LIBRARY_FIELDS_CAPABILITY_ID = 'host.pmp.library-fields';
+const HOST_PMP_LIBRARY_FIELDS_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_KEYBINDING_CONTEXT_CAPABILITY_ID = 'host.pmp.keybinding-context';
+const HOST_PMP_KEYBINDING_CONTEXT_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_I18N_CAPABILITY_ID = 'host.pmp.i18n';
+const HOST_PMP_I18N_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_TELEMETRY_CAPABILITY_ID = 'host.pmp.telemetry';
+const HOST_PMP_TELEMETRY_CAPABILITY_VERSION = '1.0.0';
 const DESKTOP_PET_RUNTIME_CAPABILITY_ID = 'foundation.desktop-pet-runtime';
 const DESKTOP_PET_RUNTIME_CAPABILITY_VERSION = '0.3.0';
 const VOICE_TRAINING_RUNTIME_CAPABILITY_ID = 'foundation.voice-training-runtime';
 const VOICE_TRAINING_RUNTIME_CAPABILITY_VERSION = '0.3.0';
+const BILIBILI_PLATFORM_CONNECTOR_ID = 'connector.platform.bilibili';
+const NETEASE_PLATFORM_CONNECTOR_ID = 'connector.platform.netease';
 const AUDIO_INPUT_ADAPTER_PROVIDER_DEFAULT_TIMEOUT_MS = 2000;
 const AUDIO_INPUT_ADAPTER_PROVIDER_MAX_TIMEOUT_MS = 10_000;
 const AUDIO_INPUT_ADAPTER_MAX_OPEN_SESSIONS_PER_PLUGIN_DEFAULT = 24;
@@ -51,6 +186,67 @@ const AUDIO_INPUT_ADAPTER_QUARANTINE_THRESHOLD_DEFAULT = 3;
 const AUDIO_INPUT_ADAPTER_QUARANTINE_THRESHOLD_MAX = 20;
 const AUDIO_INPUT_ADAPTER_QUARANTINE_MS_DEFAULT = 120_000;
 const AUDIO_INPUT_ADAPTER_QUARANTINE_MS_MAX = 86_400_000;
+const TELEMETRY_IDENTIFIER_PATTERN = /^[a-z][a-z0-9._-]{0,127}$/i;
+const TELEMETRY_REDACTED_VALUE = '[REDACTED]';
+const TELEMETRY_PLUGIN_MODULE_ID = 'pmpm-plugin';
+const TELEMETRY_MAX_TEXT_LENGTH = 2_048;
+const TELEMETRY_MAX_FIELD_DEPTH = 4;
+const TELEMETRY_MAX_FIELD_ITEMS = 50;
+const SHELL_MENU_ITEM_PERMISSION_BY_COMMAND_ID: Record<string, string | null> = {
+  'commandPalette:toggle': null,
+  'commandPalette:close': null,
+  'app:open-keyboard-shortcuts-window': 'api:window',
+  'app:navigate-home': 'api:navigation',
+  'app:navigate-settings': 'api:navigation',
+  'app:navigate-music-library': 'api:navigation',
+  'app:navigate-dsp-rack': 'api:navigation',
+  'app:navigate-native-debug': 'api:navigation',
+  'app:navigate-debug-center': 'api:navigation',
+  'app:open-vst3-plugin-manager': 'api:window',
+  'app:go-back': 'api:navigation',
+  'audio:previous-track': 'api:audio-control',
+  'audio:next-track': 'api:audio-control',
+  'audio:toggle-play-pause': 'api:audio-control',
+};
+const SHELL_TRAY_PRIMARY_ACTION_ID = 'toggle-main-window';
+const SHELL_TRAY_ITEMS = [
+  {
+    id: 'show',
+    label: 'Show Window',
+    action: 'show-main-window',
+    requiredPermission: 'api:window',
+  },
+  {
+    id: 'hide',
+    label: 'Hide Window',
+    action: 'hide-main-window',
+    requiredPermission: 'api:window',
+  },
+  {
+    id: 'quit',
+    label: 'Quit',
+    action: 'request-app-exit',
+    requiredPermission: 'api:window',
+  },
+] as const;
+const SHELL_CONTEXT_MENU_SURFACE_SCHEMA = {
+  supported: true,
+  bridgeMode: 'schema-only',
+  surfaceId: 'overlay.context-menu',
+  itemKinds: ['action', 'divider', 'submenu'],
+  supportsIcons: true,
+  supportsDangerState: true,
+  supportsNestedMenus: true,
+  closeTriggers: ['outside-pointerdown', 'escape', 'item-activation'],
+  placement: 'viewport-clamped-pointer-anchor',
+} as const;
+const SHELL_STATUS_ITEM_SLOT_SNAPSHOT = {
+  supported: false,
+  bridgeMode: 'unavailable',
+  reason: 'not-wired',
+  slotCount: 0,
+  slots: [],
+} as const;
 
 const SACD_AUDIO_EXTENSIONS = new Set<string>(['.dsf', '.dff', '.iso']);
 const SYMPHONIA_AUDIO_EXTENSIONS = new Set<string>([
@@ -174,6 +370,9 @@ let desktopPetRuntimeDefaultProviderId: string | null = null;
 
 const voiceTrainingRuntimeProviders = new Map<string, RuntimeProviderEntry>();
 let voiceTrainingRuntimeDefaultProviderId: string | null = null;
+const pluginI18nMessageStores = new Map<string, Map<Locale, Messages>>();
+const telemetryLevelSet = new Set<TelemetryLevel>(TELEMETRY_LEVELS);
+const telemetryKindSet = new Set<TelemetryKind>(TELEMETRY_KINDS);
 
 function resultOk<T>(data: T): PluginHostCapabilityResult<T> {
   return {
@@ -206,6 +405,721 @@ function asObject(value: unknown): Record<string, unknown> | null {
 function asNonEmptyString(value: unknown): string | null {
   const normalized = typeof value === 'string' ? value.trim() : '';
   return normalized.length > 0 ? normalized : null;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function asBoolean(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function asNonNegativeInt(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  const normalized = Math.floor(value);
+  return normalized >= 0 ? normalized : null;
+}
+
+function asWindowId(value: unknown): string | null {
+  const normalized = asNonEmptyString(value);
+  if (!normalized) return null;
+  return /^[a-z0-9-]{1,48}$/.test(normalized) ? normalized : null;
+}
+
+function resolvePayloadRecord(value: unknown, key?: string): Record<string, unknown> | null {
+  const record = asObject(value);
+  if (!record) return null;
+  if (!key) return record;
+  const nested = asObject(record[key]);
+  return nested ?? record;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  const values = new Set<string>();
+  for (const item of value) {
+    const normalized = asNonEmptyString(item);
+    if (normalized) {
+      values.add(normalized);
+    }
+  }
+
+  return Array.from(values.values());
+}
+
+function asLocale(value: unknown): Locale | null {
+  return isLocale(value) ? value : null;
+}
+
+function sanitizePluginMessages(value: unknown): Messages {
+  const record = asObject(value);
+  if (!record) return {};
+
+  const messages: Messages = {};
+  for (const [rawKey, rawValue] of Object.entries(record)) {
+    const key = rawKey.trim();
+    if (!key || typeof rawValue !== 'string') continue;
+    messages[key] = rawValue;
+  }
+  return messages;
+}
+
+function getPluginI18nMessageStore(pluginId: string): Map<Locale, Messages> {
+  let store = pluginI18nMessageStores.get(pluginId);
+  if (!store) {
+    store = new Map<Locale, Messages>();
+    pluginI18nMessageStores.set(pluginId, store);
+  }
+  return store;
+}
+
+function listPluginI18nRegisteredLocales(pluginId: string): Locale[] {
+  const store = pluginI18nMessageStores.get(pluginId);
+  if (!store) return [];
+  return Array.from(store.keys()).sort((left, right) => left.localeCompare(right));
+}
+
+function formatPluginMessage(template: string, params?: Record<string, unknown>): string {
+  if (!params) return template;
+  return template.replace(/\{(\w+)\}/g, (_, name: string) => {
+    const value = params[name];
+    if (value === null || typeof value === 'undefined') return '';
+    return String(value);
+  });
+}
+
+function resolvePluginMessageTemplate(
+  pluginId: string,
+  locale: Locale,
+  key: string
+): { template: string | null; resolvedLocale: Locale | null } {
+  const store = pluginI18nMessageStores.get(pluginId);
+  if (!store) {
+    return {
+      template: null,
+      resolvedLocale: null,
+    };
+  }
+
+  const primary = store.get(locale);
+  if (primary && typeof primary[key] === 'string') {
+    return {
+      template: primary[key],
+      resolvedLocale: locale,
+    };
+  }
+
+  const fallback = store.get(FALLBACK_LOCALE);
+  if (fallback && typeof fallback[key] === 'string') {
+    return {
+      template: fallback[key],
+      resolvedLocale: FALLBACK_LOCALE,
+    };
+  }
+
+  return {
+    template: null,
+    resolvedLocale: null,
+  };
+}
+
+function sanitizeTelemetryText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+
+  let text = value
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/gi, 'Bearer [REDACTED]')
+    .replace(
+      /\b(authorization|auth[_-]?header|cookie|access[_-]?token|refresh[_-]?token|csrf(?:[_-]?token)?|music[_-]?u)\s*[:=]\s*([^\s;]+)/gi,
+      '$1=[REDACTED]'
+    )
+    .replace(/\bhttps?:\/\/\S*(?:qr|qrcode)\S*/gi, '[REDACTED_URL]');
+
+  if (text.length > TELEMETRY_MAX_TEXT_LENGTH) {
+    text = `${text.slice(0, TELEMETRY_MAX_TEXT_LENGTH)}...`;
+  }
+
+  return text;
+}
+
+function shouldRedactTelemetryField(key: string | null): boolean {
+  if (!key) return false;
+  return /token|secret|cookie|authorization|auth[_-]?header|password|credential|qrcode|qr[_-]?(url|image)|music[_-]?u|csrf/i.test(
+    key
+  );
+}
+
+function sanitizeTelemetryFieldValue(
+  value: unknown,
+  options: { key: string | null; depth: number }
+): unknown {
+  if (shouldRedactTelemetryField(options.key)) {
+    return TELEMETRY_REDACTED_VALUE;
+  }
+
+  if (
+    value === null ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value))
+  ) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    return sanitizeTelemetryText(value);
+  }
+
+  if (Array.isArray(value)) {
+    if (options.depth >= TELEMETRY_MAX_FIELD_DEPTH) {
+      return `[Array(${value.length})]`;
+    }
+    return value
+      .slice(0, TELEMETRY_MAX_FIELD_ITEMS)
+      .map((entry) =>
+        sanitizeTelemetryFieldValue(entry, {
+          key: null,
+          depth: options.depth + 1,
+        })
+      );
+  }
+
+  if (value && typeof value === 'object') {
+    if (options.depth >= TELEMETRY_MAX_FIELD_DEPTH) {
+      return '[Object]';
+    }
+
+    const sanitized: Record<string, unknown> = {};
+    let count = 0;
+    for (const [entryKey, entryValue] of Object.entries(value as Record<string, unknown>)) {
+      const normalizedKey = entryKey.trim();
+      if (!normalizedKey) continue;
+
+      if (count >= TELEMETRY_MAX_FIELD_ITEMS) {
+        sanitized.__truncated = true;
+        break;
+      }
+
+      sanitized[normalizedKey] = sanitizeTelemetryFieldValue(entryValue, {
+        key: normalizedKey,
+        depth: options.depth + 1,
+      });
+      count += 1;
+    }
+    return sanitized;
+  }
+
+  return String(value);
+}
+
+function sanitizeTelemetryFields(value: unknown): TelemetryFields | null {
+  const record = asObject(value);
+  if (!record) return null;
+
+  const fields: TelemetryFields = {};
+  for (const [rawKey, rawValue] of Object.entries(record)) {
+    const key = rawKey.trim();
+    if (!key) continue;
+    fields[key] = sanitizeTelemetryFieldValue(rawValue, {
+      key,
+      depth: 0,
+    });
+  }
+
+  return Object.keys(fields).length > 0 ? fields : null;
+}
+
+function asTelemetryLevel(value: unknown): TelemetryLevel | null {
+  return typeof value === 'string' && telemetryLevelSet.has(value as TelemetryLevel)
+    ? (value as TelemetryLevel)
+    : null;
+}
+
+function asTelemetryKind(value: unknown): TelemetryKind | null {
+  return typeof value === 'string' && telemetryKindSet.has(value as TelemetryKind)
+    ? (value as TelemetryKind)
+    : null;
+}
+
+function buildPmpTelemetryStatus() {
+  const service = getGlobalTelemetryService();
+  if (!service) return null;
+
+  const snapshot = service.getSnapshot();
+  return {
+    policy: {
+      enabled: snapshot.policy.enabled,
+      uiTailEnabled: snapshot.policy.uiTailEnabled,
+      frontendMinLevel: snapshot.policy.frontendMinLevel,
+      backendMinLevel: snapshot.policy.backendMinLevel,
+      persistMinLevel: snapshot.policy.persistMinLevel,
+      batchFlushMs: snapshot.policy.batchFlushMs,
+      batchMaxItems: snapshot.policy.batchMaxItems,
+    },
+    status: {
+      enabled: snapshot.status.enabled,
+      currentSessionId: snapshot.status.currentSessionId,
+      queuedRecords: snapshot.status.queuedRecords,
+      flushedRecords: snapshot.status.flushedRecords,
+      droppedRecords: snapshot.status.droppedRecords,
+      currentFileBytes: snapshot.status.currentFileBytes,
+      frontendMinLevel: snapshot.status.frontendMinLevel,
+      backendMinLevel: snapshot.status.backendMinLevel,
+      persistMinLevel: snapshot.status.persistMinLevel,
+      lastError: snapshot.status.lastError,
+    },
+    transportAvailable: snapshot.transportAvailable,
+    bootstrapState: snapshot.bootstrapState,
+    bufferedRecords: snapshot.bufferedRecords,
+    queueDroppedRecords: snapshot.queueDroppedRecords,
+    tailDroppedRecords: snapshot.tailDroppedRecords,
+    lastFlushAtMs: snapshot.lastFlushAtMs,
+    lastBootstrapAtMs: snapshot.lastBootstrapAtMs,
+  };
+}
+
+function clonePixelAnchors(anchors: readonly PixelAnchor[]): PixelAnchor[] {
+  return anchors.map((anchor) => ({ ...anchor }));
+}
+
+function cloneAnchorsByMagnetId(
+  anchorsByMagnetId: Record<string, readonly PixelAnchor[]>
+): Record<string, PixelAnchor[]> {
+  return Object.fromEntries(
+    Object.entries(anchorsByMagnetId)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([magnetId, anchors]) => [magnetId, clonePixelAnchors(anchors)])
+  );
+}
+
+function toMagnetRendererDescriptor(renderer: MagnetRendererDefinition) {
+  return {
+    id: renderer.id,
+    description: renderer.description,
+    group: renderer.group,
+    tags: renderer.tags ? [...renderer.tags] : [],
+    source: renderer.source ?? 'runtime',
+    hasPreview: typeof renderer.preview !== 'undefined',
+    metadata: renderer.metadata ? { ...renderer.metadata } : undefined,
+  };
+}
+
+function toMagnetVariantDescriptor(rendererId: string, variant: MagnetVariantDefinition) {
+  return {
+    rendererId,
+    id: variant.id,
+    label: variant.label,
+    description: variant.description,
+    source: variant.source ?? 'runtime',
+    metadata: variant.metadata ? { ...variant.metadata } : undefined,
+  };
+}
+
+function listSortedMagnetRendererDescriptors() {
+  return listRegisteredMagnetRenderers()
+    .slice()
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map((renderer) => toMagnetRendererDescriptor(renderer));
+}
+
+function getShellMenuItemRequiredPermission(commandId: string): string | null | undefined {
+  return Object.prototype.hasOwnProperty.call(
+    SHELL_MENU_ITEM_PERMISSION_BY_COMMAND_ID,
+    commandId
+  )
+    ? SHELL_MENU_ITEM_PERMISSION_BY_COMMAND_ID[commandId]
+    : undefined;
+}
+
+function listBuiltinShellMenuCommands(
+  commands: NonNullable<PluginHostCapabilityInvokeRequest['context']['commands']>
+): CommandContribution[] {
+  return commands
+    .list()
+    .filter((command) => {
+      const requiredPermission = getShellMenuItemRequiredPermission(command.id);
+      if (typeof requiredPermission === 'undefined') return false;
+      return command.source === 'builtin';
+    })
+    .slice()
+    .sort((left, right) => {
+      const leftOrder = typeof left.order === 'number' ? left.order : Number.MAX_SAFE_INTEGER;
+      const rightOrder = typeof right.order === 'number' ? right.order : Number.MAX_SAFE_INTEGER;
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      return left.id.localeCompare(right.id);
+    });
+}
+
+function getBuiltinShellMenuCommand(
+  commands: NonNullable<PluginHostCapabilityInvokeRequest['context']['commands']>,
+  commandId: string
+): CommandContribution | null {
+  const command = commands.get(commandId);
+  if (!command) return null;
+
+  const requiredPermission = getShellMenuItemRequiredPermission(command.id);
+  if (typeof requiredPermission === 'undefined') return null;
+  if (command.source !== 'builtin') return null;
+  return command;
+}
+
+function toShellMenuItemDescriptor(
+  command: CommandContribution,
+  permissions: ReadonlySet<string>
+) {
+  const requiredPermission = getShellMenuItemRequiredPermission(command.id) ?? null;
+  return {
+    id: command.id,
+    title: command.title,
+    description: command.description,
+    group: command.group ?? 'general',
+    order: typeof command.order === 'number' ? command.order : null,
+    source: command.source ?? 'runtime',
+    tags: command.tags ? [...command.tags] : [],
+    requiredPermission,
+    available: !requiredPermission || hasPermission(permissions, requiredPermission),
+    metadata: command.metadata ? { ...command.metadata } : undefined,
+  };
+}
+
+function listShellTrayItemDescriptors(permissions: ReadonlySet<string>) {
+  return SHELL_TRAY_ITEMS.map((item) => ({
+    id: item.id,
+    label: item.label,
+    action: item.action,
+    requiredPermission: item.requiredPermission,
+    available: hasPermission(permissions, item.requiredPermission),
+  }));
+}
+
+function getShellTrayItemDescriptor(
+  itemId: string,
+  permissions: ReadonlySet<string>
+) {
+  const item = SHELL_TRAY_ITEMS.find((entry) => entry.id === itemId) ?? null;
+  if (!item) return null;
+
+  return {
+    id: item.id,
+    label: item.label,
+    action: item.action,
+    requiredPermission: item.requiredPermission,
+    available: hasPermission(permissions, item.requiredPermission),
+  };
+}
+
+function buildPluginTelemetryComponent(
+  pluginId: string,
+  loggerId: string,
+  explicitComponent: string | null
+): string {
+  if (explicitComponent) {
+    return `${pluginId}:${explicitComponent}`;
+  }
+  return `${pluginId}:${loggerId}`;
+}
+
+function asPluginDurableTextKey(value: unknown): string | null {
+  const normalized = asNonEmptyString(value);
+  if (!normalized) return null;
+  return /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(normalized) ? normalized : null;
+}
+
+function buildPluginDurableTextId(pluginId: string, key: string): string {
+  return `${pluginId}__${key}`;
+}
+
+function sanitizeCatalogMagnet(value: unknown): Magnet | null {
+  return sanitizeMagnetCatalogState({
+    version: 1,
+    magnets: [value],
+  }).magnets[0] ?? null;
+}
+
+function sanitizeLayoutAnchors(
+  magnetId: string,
+  value: unknown
+): MagnetSpaceLayout['anchorsByMagnetId'][string] {
+  return sanitizeMagnetSpaceLayout({
+    version: 1,
+    activeMagnetIds: [],
+    anchorsByMagnetId: {
+      [magnetId]: value,
+    },
+  }).anchorsByMagnetId[magnetId] ?? [];
+}
+
+function buildLayoutWithActiveMagnetIds(
+  layout: MagnetSpaceLayout,
+  activeMagnetIds: string[]
+): MagnetSpaceLayout {
+  return sanitizeMagnetSpaceLayout({
+    version: 1,
+    activeMagnetIds,
+    anchorsByMagnetId: layout.anchorsByMagnetId,
+  });
+}
+
+function buildLayoutWithMagnetActive(
+  layout: MagnetSpaceLayout,
+  magnetId: string,
+  active: boolean
+): MagnetSpaceLayout {
+  const activeMagnetIds = new Set(layout.activeMagnetIds);
+  if (active) {
+    activeMagnetIds.add(magnetId);
+  } else {
+    activeMagnetIds.delete(magnetId);
+  }
+  return buildLayoutWithActiveMagnetIds(layout, Array.from(activeMagnetIds));
+}
+
+function buildLayoutWithUpdatedAnchors(
+  layout: MagnetSpaceLayout,
+  magnetId: string,
+  anchors: MagnetSpaceLayout['anchorsByMagnetId'][string]
+): MagnetSpaceLayout {
+  const anchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId'] = {
+    ...layout.anchorsByMagnetId,
+  };
+
+  if (anchors.length > 0) {
+    anchorsByMagnetId[magnetId] = anchors;
+  } else {
+    delete anchorsByMagnetId[magnetId];
+  }
+
+  return sanitizeMagnetSpaceLayout({
+    version: 1,
+    activeMagnetIds: layout.activeMagnetIds,
+    anchorsByMagnetId,
+  });
+}
+
+type PmpMagnetLayoutSnapshot = {
+  layout: MagnetSpaceLayout;
+  revision: number | null;
+  source: 'layout-store' | 'storage';
+  didCreate: boolean;
+};
+
+async function getPmpMagnetLayoutStoreState() {
+  const bootstrapped = await magnetLayoutStoreBootstrap();
+  return bootstrapped?.state ?? (await magnetLayoutStoreGetState());
+}
+
+async function readPmpMagnetLayoutSnapshot(spaceId: string): Promise<PmpMagnetLayoutSnapshot> {
+  if (isTauriRuntime()) {
+    const store = await getPmpMagnetLayoutStoreState();
+    if (store) {
+      const layout = store.layoutsBySpaceId[spaceId] ?? createDefaultMagnetSpaceLayout(spaceId);
+      return {
+        layout: sanitizeMagnetSpaceLayout(layout),
+        revision: store.revision,
+        source: 'layout-store',
+        didCreate: false,
+      };
+    }
+  }
+
+  const ensured = ensureMagnetSpaceLayout(spaceId);
+  return {
+    layout: ensured.layout,
+    revision: null,
+    source: 'storage',
+    didCreate: false,
+  };
+}
+
+async function ensurePmpMagnetLayoutSnapshot(
+  spaceId: string
+): Promise<
+  | { ok: true; snapshot: PmpMagnetLayoutSnapshot }
+  | { ok: false; errorResult: PluginHostCapabilityResult }
+> {
+  if (!isTauriRuntime()) {
+    const ensured = ensureMagnetSpaceLayout(spaceId);
+    return {
+      ok: true,
+      snapshot: {
+        layout: ensured.layout,
+        revision: null,
+        source: 'storage',
+        didCreate: ensured.didCreate,
+      },
+    };
+  }
+
+  const store = await getPmpMagnetLayoutStoreState();
+  if (!store) {
+    return {
+      ok: false,
+      errorResult: resultError('NOT_AVAILABLE', 'Magnet layout store is not available', {
+        retryable: true,
+      }),
+    };
+  }
+
+  const existing = store.layoutsBySpaceId[spaceId];
+  if (existing) {
+    return {
+      ok: true,
+      snapshot: {
+        layout: sanitizeMagnetSpaceLayout(existing),
+        revision: store.revision,
+        source: 'layout-store',
+        didCreate: false,
+      },
+    };
+  }
+
+  const createdLayout = createDefaultMagnetSpaceLayout(spaceId);
+  const applied = await applyPmpMagnetLayoutPatches({
+    spaceId,
+    reason: 'ensureLayout',
+    patches: [{ kind: 'setSpaceLayout', spaceId, layout: createdLayout }],
+    fallbackLayout: createdLayout,
+  });
+  if (!applied.ok) {
+    return applied;
+  }
+
+  return {
+    ok: true,
+    snapshot: {
+      ...applied.snapshot,
+      didCreate: true,
+    },
+  };
+}
+
+async function applyPmpMagnetLayoutPatches(options: {
+  spaceId: string;
+  reason: string;
+  patches: MagnetLayoutStorePatch[];
+  fallbackLayout: MagnetSpaceLayout;
+}): Promise<
+  | { ok: true; snapshot: PmpMagnetLayoutSnapshot }
+  | { ok: false; errorResult: PluginHostCapabilityResult }
+> {
+  if (isTauriRuntime()) {
+    const store = await getPmpMagnetLayoutStoreState();
+    if (!store) {
+      return {
+        ok: false,
+        errorResult: resultError('NOT_AVAILABLE', 'Magnet layout store is not available', {
+          retryable: true,
+        }),
+      };
+    }
+
+    const response = await magnetLayoutStoreApplyPatchWithRetry(
+      {
+        expectedRevision: store.revision,
+        patches: options.patches,
+        reason: options.reason,
+      },
+      { maxRetries: 2 }
+    );
+
+    if (!response) {
+      return {
+        ok: false,
+        errorResult: resultError('WRITE_FAILED', 'Failed to apply magnet layout patch', {
+          retryable: true,
+          details: {
+            spaceId: options.spaceId,
+            reason: options.reason,
+          },
+        }),
+      };
+    }
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        errorResult: resultError(
+          response.error?.code ?? 'WRITE_FAILED',
+          response.error?.message ?? 'Failed to apply magnet layout patch',
+          {
+            retryable: response.error?.code === 'revisionConflict',
+            details: {
+              spaceId: options.spaceId,
+              reason: options.reason,
+            },
+          }
+        ),
+      };
+    }
+
+    const nextLayout =
+      response.state.layoutsBySpaceId[options.spaceId] ??
+      createDefaultMagnetSpaceLayout(options.spaceId);
+
+    return {
+      ok: true,
+      snapshot: {
+        layout: sanitizeMagnetSpaceLayout(nextLayout),
+        revision: response.state.revision,
+        source: 'layout-store',
+        didCreate: false,
+      },
+    };
+  }
+
+  const nextLayout = sanitizeMagnetSpaceLayout(options.fallbackLayout);
+  await broadcastDataUpdate(resolveMagnetLayoutStorageKey(options.spaceId), nextLayout);
+  return {
+    ok: true,
+    snapshot: {
+      layout: nextLayout,
+      revision: null,
+      source: 'storage',
+      didCreate: false,
+    },
+  };
+}
+
+function inferPlatformPrepareConnectorId(
+  sourceLocator: string,
+  requestedConnectorId: string | null
+): string | null {
+  if (requestedConnectorId === BILIBILI_PLATFORM_CONNECTOR_ID) {
+    return BILIBILI_PLATFORM_CONNECTOR_ID;
+  }
+  if (requestedConnectorId === NETEASE_PLATFORM_CONNECTOR_ID) {
+    return NETEASE_PLATFORM_CONNECTOR_ID;
+  }
+
+  const normalized = sourceLocator.trim().toLowerCase();
+  if (
+    normalized.startsWith('bilibili://') ||
+    normalized.includes('bilibili.com/video/') ||
+    normalized.includes('bvid=')
+  ) {
+    return BILIBILI_PLATFORM_CONNECTOR_ID;
+  }
+  if (normalized.startsWith('netease://') || normalized.includes('music.163.com')) {
+    return NETEASE_PLATFORM_CONNECTOR_ID;
+  }
+
+  return null;
+}
+
+function readMethodPermissionError(
+  request: PluginHostCapabilityInvokeRequest,
+  permission: string
+): PluginHostCapabilityResult | null {
+  if (hasPermission(request.context.permissions, permission)) {
+    return null;
+  }
+
+  return resultError('FORBIDDEN', `Permission denied: ${permission}`, {
+    details: {
+      method: request.method,
+      permission,
+    },
+  });
 }
 
 function toCapabilityInfo(entry: PluginHostCapabilityEntry): PluginHostCapabilityInfo {
@@ -2024,6 +2938,2006 @@ function createRuntimeProviderCapabilityHandler(options: {
   };
 }
 
+function createPmpNavigationHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:navigation');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    const navigation = request.context.navigation;
+    if (!navigation) {
+      return resultError('NOT_AVAILABLE', 'Navigation bridge is not available');
+    }
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_NAVIGATION_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'pmp-legacy-navigation',
+          methods: ['describe', 'getSnapshot', 'canGoBack', 'navigateTo', 'goBack'],
+        });
+      case 'getSnapshot':
+        return resultOk(
+          typeof navigation.getSnapshot === 'function' ? navigation.getSnapshot() ?? null : null
+        );
+      case 'canGoBack': {
+        const snapshot =
+          typeof navigation.getSnapshot === 'function' ? navigation.getSnapshot() ?? null : null;
+        return resultOk({
+          canGoBack: Boolean(
+            snapshot &&
+              typeof snapshot === 'object' &&
+              typeof snapshot.currentIndex === 'number' &&
+              snapshot.currentIndex > 0
+          ),
+        });
+      }
+      case 'navigateTo': {
+        const payload = asObject(request.payload);
+        const page = asNonEmptyString(payload?.page);
+        if (!page) {
+          return resultError('INVALID_PAYLOAD', 'payload.page is required');
+        }
+        if (typeof payload?.params !== 'undefined' && payload.params !== null && !asObject(payload.params)) {
+          return resultError('INVALID_PAYLOAD', 'payload.params must be an object when provided');
+        }
+
+        navigation.navigateTo(page as never, (asObject(payload?.params) ?? undefined) as never);
+        return resultOk({
+          capabilityId: HOST_PMP_NAVIGATION_CAPABILITY_ID,
+          page,
+          navigated: true,
+        });
+      }
+      case 'goBack':
+        navigation.goBack();
+        return resultOk({
+          capabilityId: HOST_PMP_NAVIGATION_CAPABILITY_ID,
+          wentBack: true,
+        });
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported navigation method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpWindowHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:window');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    const windowApi = request.context.windowApi;
+    if (!windowApi) {
+      return resultError('NOT_AVAILABLE', 'Window bridge is not available');
+    }
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_WINDOW_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'pmp-legacy-window-shell',
+          methods: ['describe', 'open', 'close'],
+        });
+      case 'open': {
+        const payload = asObject(request.payload);
+        const windowId = asWindowId(payload?.windowId);
+        if (!windowId) {
+          return resultError('INVALID_PAYLOAD', 'payload.windowId is required');
+        }
+        if (typeof payload?.options !== 'undefined' && payload.options !== null && !asObject(payload.options)) {
+          return resultError('INVALID_PAYLOAD', 'payload.options must be an object when provided');
+        }
+
+        await windowApi.open(windowId, (asObject(payload?.options) ?? undefined) as never);
+        return resultOk({
+          capabilityId: HOST_PMP_WINDOW_CAPABILITY_ID,
+          opened: true,
+          windowId,
+        });
+      }
+      case 'close': {
+        const payload = asObject(request.payload);
+        const windowId = asWindowId(payload?.windowId);
+        if (!windowId) {
+          return resultError('INVALID_PAYLOAD', 'payload.windowId is required');
+        }
+
+        await windowApi.close(windowId);
+        return resultOk({
+          capabilityId: HOST_PMP_WINDOW_CAPABILITY_ID,
+          closed: true,
+          windowId,
+        });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported shell.window method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpShellMenuHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:host');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    const commands = request.context.commands;
+    if (!commands) {
+      return resultError('NOT_AVAILABLE', 'Shell menu command service is not available', {
+        retryable: true,
+      });
+    }
+
+    const items = listBuiltinShellMenuCommands(commands).map((command) =>
+      toShellMenuItemDescriptor(command, request.context.permissions)
+    );
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_SHELL_MENU_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'builtin-command-catalog',
+          methods: ['describe', 'listItems', 'getItem', 'activateItem'],
+          itemCount: items.length,
+          availableItemCount: items.filter((item) => item.available).length,
+          groups: Array.from(new Set(items.map((item) => item.group))).sort((left, right) =>
+            left.localeCompare(right)
+          ),
+        });
+      case 'listItems': {
+        const payload = asObject(request.payload);
+        const group = asNonEmptyString(payload?.group);
+        const availableOnly = payload?.availableOnly === true;
+        const filtered = items.filter((item) => {
+          if (group && item.group !== group) return false;
+          if (availableOnly && !item.available) return false;
+          return true;
+        });
+
+        return resultOk({
+          itemCount: filtered.length,
+          items: filtered,
+        });
+      }
+      case 'getItem': {
+        const payload = asObject(request.payload);
+        const itemId = asNonEmptyString(payload?.itemId ?? payload?.id);
+        if (!itemId) {
+          return resultError('INVALID_PAYLOAD', 'payload.itemId is required');
+        }
+
+        const command = getBuiltinShellMenuCommand(commands, itemId);
+        const item = command
+          ? toShellMenuItemDescriptor(command, request.context.permissions)
+          : null;
+
+        return resultOk({
+          itemId,
+          found: item !== null,
+          item,
+        });
+      }
+      case 'activateItem': {
+        const payload = asObject(request.payload);
+        const itemId = asNonEmptyString(payload?.itemId ?? payload?.id);
+        if (!itemId) {
+          return resultError('INVALID_PAYLOAD', 'payload.itemId is required');
+        }
+
+        const command = getBuiltinShellMenuCommand(commands, itemId);
+        if (!command) {
+          return resultError('NOT_FOUND', `Unknown shell menu item: ${itemId}`);
+        }
+
+        const requiredPermission = getShellMenuItemRequiredPermission(command.id) ?? null;
+        if (requiredPermission && !hasPermission(request.context.permissions, requiredPermission)) {
+          return resultError('FORBIDDEN', `Permission denied: ${requiredPermission}`, {
+            details: {
+              itemId,
+              requiredPermission,
+            },
+          });
+        }
+
+        try {
+          await commands.dispatch(command.id, payload?.args);
+        } catch (error) {
+          return resultError('COMMAND_FAILED', toErrorMessage(error), {
+            details: {
+              itemId,
+            },
+          });
+        }
+
+        return resultOk({
+          itemId,
+          activated: true,
+          requiredPermission,
+        });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported shell.menu method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpShellContextMenuHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:host');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_SHELL_CONTEXT_MENU_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'pmp-react-context-menu-surface',
+          methods: ['describe', 'getSchema'],
+          ...SHELL_CONTEXT_MENU_SURFACE_SCHEMA,
+        });
+      case 'getSchema':
+        return resultOk({
+          ...SHELL_CONTEXT_MENU_SURFACE_SCHEMA,
+        });
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported shell.context-menu method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpShellTrayHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:host');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    const trayApi = request.context.trayApi;
+    if (!trayApi) {
+      return resultError('NOT_AVAILABLE', 'Shell tray bridge is not available', {
+        retryable: true,
+      });
+    }
+
+    const items = listShellTrayItemDescriptors(request.context.permissions);
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_SHELL_TRAY_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'tauri-system-tray-bridge',
+          methods: ['describe', 'getState', 'listItems', 'activateItem'],
+          supported: trayApi.supported,
+          primaryActionId: SHELL_TRAY_PRIMARY_ACTION_ID,
+          itemCount: items.length,
+          availableItemCount: items.filter((item) => item.available).length,
+        });
+      case 'getState': {
+        const mainWindowVisible = await Promise.resolve(trayApi.getMainWindowVisible());
+        return resultOk({
+          supported: trayApi.supported,
+          primaryActionId: SHELL_TRAY_PRIMARY_ACTION_ID,
+          mainWindowVisible,
+          itemCount: items.length,
+          items,
+        });
+      }
+      case 'listItems':
+        return resultOk({
+          supported: trayApi.supported,
+          primaryActionId: SHELL_TRAY_PRIMARY_ACTION_ID,
+          itemCount: items.length,
+          items,
+        });
+      case 'activateItem': {
+        const payload = asObject(request.payload);
+        const itemId = asNonEmptyString(payload?.itemId ?? payload?.id);
+        if (!itemId) {
+          return resultError('INVALID_PAYLOAD', 'payload.itemId is required');
+        }
+
+        const requestedDescriptor =
+          itemId === SHELL_TRAY_PRIMARY_ACTION_ID
+            ? {
+                id: SHELL_TRAY_PRIMARY_ACTION_ID,
+                label: 'Toggle Main Window',
+                action: 'toggle-main-window',
+                requiredPermission: 'api:window',
+                available: hasPermission(request.context.permissions, 'api:window'),
+              }
+            : getShellTrayItemDescriptor(itemId, request.context.permissions);
+
+        if (!requestedDescriptor) {
+          return resultError('NOT_FOUND', `Unknown shell tray item: ${itemId}`);
+        }
+
+        if (!hasPermission(request.context.permissions, requestedDescriptor.requiredPermission)) {
+          return resultError(
+            'FORBIDDEN',
+            `Permission denied: ${requestedDescriptor.requiredPermission}`,
+            {
+              details: {
+                itemId,
+                requiredPermission: requestedDescriptor.requiredPermission,
+              },
+            }
+          );
+        }
+
+        if (!trayApi.supported) {
+          return resultError('NOT_AVAILABLE', 'System tray is not available', {
+            retryable: true,
+          });
+        }
+
+        try {
+          await trayApi.activateItem(itemId);
+        } catch (error) {
+          return resultError('TRAY_ACTION_FAILED', toErrorMessage(error), {
+            details: {
+              itemId,
+            },
+          });
+        }
+
+        return resultOk({
+          itemId,
+          activated: true,
+          mainWindowVisible: await Promise.resolve(trayApi.getMainWindowVisible()),
+        });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported shell.tray method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpShellStatusItemHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:host');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_SHELL_STATUS_ITEM_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'host-shell-status-item-placeholder',
+          methods: ['describe', 'listSlots'],
+          ...SHELL_STATUS_ITEM_SLOT_SNAPSHOT,
+        });
+      case 'listSlots':
+        return resultOk({
+          ...SHELL_STATUS_ITEM_SLOT_SNAPSHOT,
+        });
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported shell.status-item method: ${request.method}`
+        );
+    }
+  };
+}
+
+function buildPmpStorageSyncSnapshot(pluginId: string, config: Record<string, unknown>) {
+  return {
+    config,
+    syncState: readPmpmPluginConfigSyncState(pluginId),
+  };
+}
+
+function createPmpStorageConfigHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'storage:local');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    const configApi = request.context.configApi;
+    if (!configApi) {
+      return resultError('NOT_AVAILABLE', 'Config bridge is not available');
+    }
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_STORAGE_CONFIG_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'pmp-plugin-config',
+          methods: ['describe', 'get', 'set', 'patch', 'reset'],
+        });
+      case 'get':
+        return resultOk(configApi.get());
+      case 'set': {
+        const next = resolvePayloadRecord(request.payload, 'value');
+        if (!next) {
+          return resultError('INVALID_PAYLOAD', 'payload must be an object');
+        }
+        configApi.set(next);
+        return resultOk(configApi.get());
+      }
+      case 'patch': {
+        const patch = resolvePayloadRecord(request.payload, 'value');
+        if (!patch) {
+          return resultError('INVALID_PAYLOAD', 'payload must be an object');
+        }
+        configApi.patch(patch);
+        return resultOk(configApi.get());
+      }
+      case 'reset':
+        configApi.reset();
+        return resultOk(configApi.get());
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported storage.config method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpStorageSyncHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'storage:local');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    const configApi = request.context.configApi;
+    if (!configApi) {
+      return resultError('NOT_AVAILABLE', 'Config bridge is not available');
+    }
+
+    const pluginId = request.context.pluginId;
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_STORAGE_SYNC_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'plugin-config-sync-snapshot',
+          methods: [
+            'describe',
+            'readConfig',
+            'writeConfig',
+            'patchConfig',
+            'removeConfig',
+            'getSyncState',
+          ],
+          subscriptionMode: 'revision-poll',
+          scope: 'plugin-config',
+        });
+      case 'readConfig':
+        return resultOk(buildPmpStorageSyncSnapshot(pluginId, configApi.get()));
+      case 'getSyncState':
+        return resultOk({
+          syncState: readPmpmPluginConfigSyncState(pluginId),
+        });
+      case 'writeConfig': {
+        const next = resolvePayloadRecord(request.payload, 'value');
+        if (!next) {
+          return resultError('INVALID_PAYLOAD', 'payload must be an object');
+        }
+
+        configApi.set(next);
+        return resultOk(buildPmpStorageSyncSnapshot(pluginId, configApi.get()));
+      }
+      case 'patchConfig': {
+        const patch = resolvePayloadRecord(request.payload, 'value');
+        if (!patch) {
+          return resultError('INVALID_PAYLOAD', 'payload must be an object');
+        }
+
+        configApi.patch(patch);
+        return resultOk(buildPmpStorageSyncSnapshot(pluginId, configApi.get()));
+      }
+      case 'removeConfig':
+        configApi.reset();
+        return resultOk(buildPmpStorageSyncSnapshot(pluginId, configApi.get()));
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported storage.sync method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpStorageDurableTextHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'storage:durable-text');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_STORAGE_DURABLE_TEXT_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'plugin-scoped-durable-text',
+          methods: ['describe', 'read', 'write', 'remove'],
+          keyPattern: '^[a-z0-9][a-z0-9._-]{0,127}$',
+        });
+      case 'read': {
+        const payload = asObject(request.payload);
+        const key = asPluginDurableTextKey(payload?.key);
+        if (!key) {
+          return resultError('INVALID_PAYLOAD', 'payload.key is required');
+        }
+
+        const value = await readDurableText(
+          'plugin-data',
+          buildPluginDurableTextId(request.context.pluginId, key)
+        );
+        return resultOk({ key, value });
+      }
+      case 'write': {
+        const payload = asObject(request.payload);
+        const key = asPluginDurableTextKey(payload?.key);
+        const value = typeof payload?.value === 'string' ? payload.value : null;
+        if (!key) {
+          return resultError('INVALID_PAYLOAD', 'payload.key is required');
+        }
+        if (value === null) {
+          return resultError('INVALID_PAYLOAD', 'payload.value must be a string');
+        }
+
+        const ok = await writeDurableText(
+          'plugin-data',
+          buildPluginDurableTextId(request.context.pluginId, key),
+          value
+        );
+        if (!ok) {
+          return resultError('WRITE_FAILED', 'Failed to persist durable text', {
+            retryable: true,
+            details: { key },
+          });
+        }
+
+        return resultOk({ key, written: true });
+      }
+      case 'remove': {
+        const payload = asObject(request.payload);
+        const key = asPluginDurableTextKey(payload?.key);
+        if (!key) {
+          return resultError('INVALID_PAYLOAD', 'payload.key is required');
+        }
+
+        await removeDurableText(
+          'plugin-data',
+          buildPluginDurableTextId(request.context.pluginId, key)
+        );
+        return resultOk({ key, removed: true });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported storage.durable-text method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpMagnetsCatalogHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:magnets-catalog');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_MAGNETS_CATALOG_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'magnets-domain-catalog',
+          methods: ['describe', 'list', 'get', 'upsert', 'remove'],
+          writePolicy: {
+            builtinIdsReadonly: true,
+          },
+        });
+      case 'list': {
+        const ensured = ensureMagnetCatalogState();
+        return resultOk({
+          didCreate: ensured.didCreate,
+          magnetCount: ensured.state.magnets.length,
+          magnets: ensured.state.magnets,
+        });
+      }
+      case 'get': {
+        const payload = asObject(request.payload);
+        const magnetId = asNonEmptyString(payload?.magnetId ?? payload?.id);
+        if (!magnetId) {
+          return resultError('INVALID_PAYLOAD', 'payload.magnetId is required');
+        }
+
+        const magnet = readMagnetCatalogState().magnets.find((entry) => entry.id === magnetId) ?? null;
+        return resultOk({
+          magnetId,
+          found: magnet !== null,
+          magnet,
+        });
+      }
+      case 'upsert': {
+        const magnetPayload = resolvePayloadRecord(request.payload, 'magnet');
+        const requestedMagnetId = asNonEmptyString(magnetPayload?.id);
+        if (!magnetPayload) {
+          return resultError('INVALID_PAYLOAD', 'payload.magnet must be an object');
+        }
+        if (requestedMagnetId && BUILTIN_MAGNET_IDS.has(requestedMagnetId)) {
+          return resultError('FORBIDDEN', 'Built-in magnet ids are host-managed');
+        }
+
+        const magnet = sanitizeCatalogMagnet(magnetPayload);
+        if (!magnet) {
+          return resultError('INVALID_PAYLOAD', 'payload.magnet must be a valid custom magnet');
+        }
+
+        const next = upsertMagnetCatalogMagnet(magnet);
+        return resultOk({
+          magnetId: magnet.id,
+          magnet,
+          magnetCount: next.magnets.length,
+          state: next,
+        });
+      }
+      case 'remove': {
+        const payload = asObject(request.payload);
+        const magnetId = asNonEmptyString(payload?.magnetId ?? payload?.id);
+        if (!magnetId) {
+          return resultError('INVALID_PAYLOAD', 'payload.magnetId is required');
+        }
+
+        const before = readMagnetCatalogState();
+        const next = removeMagnetCatalogMagnet(magnetId);
+        return resultOk({
+          magnetId,
+          removed: next.magnets.length < before.magnets.length,
+          magnetCount: next.magnets.length,
+          state: next,
+        });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported magnets.catalog method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpMagnetsLayoutHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:magnets-layout');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_MAGNETS_LAYOUT_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'magnets-domain-layout',
+          methods: [
+            'describe',
+            'getLayout',
+            'ensureLayout',
+            'setLayout',
+            'setActiveMagnetIds',
+            'setMagnetActive',
+            'updateMagnetAnchors',
+          ],
+          runtime: {
+            tauri: 'layout-store',
+            web: 'storage-key',
+          },
+        });
+      case 'getLayout': {
+        const payload = asObject(request.payload);
+        const spaceId = asNonEmptyString(payload?.spaceId);
+        if (!spaceId) {
+          return resultError('INVALID_PAYLOAD', 'payload.spaceId is required');
+        }
+
+        const snapshot = await readPmpMagnetLayoutSnapshot(spaceId);
+        return resultOk({
+          spaceId,
+          layout: snapshot.layout,
+          revision: snapshot.revision,
+          source: snapshot.source,
+        });
+      }
+      case 'ensureLayout': {
+        const payload = asObject(request.payload);
+        const spaceId = asNonEmptyString(payload?.spaceId);
+        if (!spaceId) {
+          return resultError('INVALID_PAYLOAD', 'payload.spaceId is required');
+        }
+
+        const ensured = await ensurePmpMagnetLayoutSnapshot(spaceId);
+        if (!ensured.ok) {
+          return ensured.errorResult;
+        }
+
+        return resultOk({
+          spaceId,
+          didCreate: ensured.snapshot.didCreate,
+          layout: ensured.snapshot.layout,
+          revision: ensured.snapshot.revision,
+          source: ensured.snapshot.source,
+        });
+      }
+      case 'setLayout': {
+        const payload = asObject(request.payload);
+        const spaceId = asNonEmptyString(payload?.spaceId);
+        const layoutPayload = asObject(payload?.layout);
+        if (!spaceId) {
+          return resultError('INVALID_PAYLOAD', 'payload.spaceId is required');
+        }
+        if (!layoutPayload) {
+          return resultError('INVALID_PAYLOAD', 'payload.layout must be an object');
+        }
+
+        const nextLayout = sanitizeMagnetSpaceLayout(layoutPayload);
+        const applied = await applyPmpMagnetLayoutPatches({
+          spaceId,
+          reason: 'setLayout',
+          patches: [{ kind: 'setSpaceLayout', spaceId, layout: nextLayout }],
+          fallbackLayout: nextLayout,
+        });
+        if (!applied.ok) {
+          return applied.errorResult;
+        }
+
+        return resultOk({
+          spaceId,
+          layout: applied.snapshot.layout,
+          revision: applied.snapshot.revision,
+          source: applied.snapshot.source,
+        });
+      }
+      case 'setActiveMagnetIds': {
+        const payload = asObject(request.payload);
+        const spaceId = asNonEmptyString(payload?.spaceId);
+        if (!spaceId) {
+          return resultError('INVALID_PAYLOAD', 'payload.spaceId is required');
+        }
+        if (!Array.isArray(payload?.activeMagnetIds)) {
+          return resultError('INVALID_PAYLOAD', 'payload.activeMagnetIds must be an array');
+        }
+
+        const current = await readPmpMagnetLayoutSnapshot(spaceId);
+        const nextLayout = buildLayoutWithActiveMagnetIds(
+          current.layout,
+          asStringArray(payload.activeMagnetIds)
+        );
+        const applied = await applyPmpMagnetLayoutPatches({
+          spaceId,
+          reason: 'setActiveMagnetIds',
+          patches: [
+            {
+              kind: 'setActiveMagnetIds',
+              spaceId,
+              activeMagnetIds: nextLayout.activeMagnetIds,
+            },
+          ],
+          fallbackLayout: nextLayout,
+        });
+        if (!applied.ok) {
+          return applied.errorResult;
+        }
+
+        return resultOk({
+          spaceId,
+          layout: applied.snapshot.layout,
+          revision: applied.snapshot.revision,
+          source: applied.snapshot.source,
+        });
+      }
+      case 'setMagnetActive': {
+        const payload = asObject(request.payload);
+        const spaceId = asNonEmptyString(payload?.spaceId);
+        const magnetId = asNonEmptyString(payload?.magnetId);
+        const active = asBoolean(payload?.active);
+        if (!spaceId) {
+          return resultError('INVALID_PAYLOAD', 'payload.spaceId is required');
+        }
+        if (!magnetId) {
+          return resultError('INVALID_PAYLOAD', 'payload.magnetId is required');
+        }
+        if (active === null) {
+          return resultError('INVALID_PAYLOAD', 'payload.active must be a boolean');
+        }
+
+        const current = await readPmpMagnetLayoutSnapshot(spaceId);
+        const nextLayout = buildLayoutWithMagnetActive(current.layout, magnetId, active);
+        const applied = await applyPmpMagnetLayoutPatches({
+          spaceId,
+          reason: 'setMagnetActive',
+          patches: [{ kind: 'setMagnetActive', spaceId, magnetId, active }],
+          fallbackLayout: nextLayout,
+        });
+        if (!applied.ok) {
+          return applied.errorResult;
+        }
+
+        return resultOk({
+          spaceId,
+          magnetId,
+          active,
+          layout: applied.snapshot.layout,
+          revision: applied.snapshot.revision,
+          source: applied.snapshot.source,
+        });
+      }
+      case 'updateMagnetAnchors': {
+        const payload = asObject(request.payload);
+        const spaceId = asNonEmptyString(payload?.spaceId);
+        const magnetId = asNonEmptyString(payload?.magnetId);
+        if (!spaceId) {
+          return resultError('INVALID_PAYLOAD', 'payload.spaceId is required');
+        }
+        if (!magnetId) {
+          return resultError('INVALID_PAYLOAD', 'payload.magnetId is required');
+        }
+        if (!Array.isArray(payload?.anchors)) {
+          return resultError('INVALID_PAYLOAD', 'payload.anchors must be an array');
+        }
+
+        const anchors = sanitizeLayoutAnchors(magnetId, payload.anchors);
+        const current = await readPmpMagnetLayoutSnapshot(spaceId);
+        const nextLayout = buildLayoutWithUpdatedAnchors(current.layout, magnetId, anchors);
+        const applied = await applyPmpMagnetLayoutPatches({
+          spaceId,
+          reason: 'updateMagnetAnchors',
+          patches: [{ kind: 'updateMagnetAnchors', spaceId, magnetId, anchors }],
+          fallbackLayout: nextLayout,
+        });
+        if (!applied.ok) {
+          return applied.errorResult;
+        }
+
+        return resultOk({
+          spaceId,
+          magnetId,
+          anchors,
+          layout: applied.snapshot.layout,
+          revision: applied.snapshot.revision,
+          source: applied.snapshot.source,
+        });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported magnets.layout method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpMagnetsRendererHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:host');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    switch (request.method) {
+      case 'describe': {
+        const renderers = listSortedMagnetRendererDescriptors();
+        const variantRendererCount = renderers.filter(
+          (renderer) => listMagnetVariants(renderer.id).length > 0
+        ).length;
+        const variantCount = renderers.reduce(
+          (count, renderer) => count + listMagnetVariants(renderer.id).length,
+          0
+        );
+
+        return resultOk({
+          capabilityId: HOST_PMP_MAGNETS_RENDERER_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'renderer-registry-variant-registry-system-layouts',
+          methods: [
+            'describe',
+            'listRenderers',
+            'getRenderer',
+            'listVariants',
+            'getSystemLayoutRules',
+          ],
+          rendererCount: renderers.length,
+          variantRendererCount,
+          variantCount,
+          systemSpaces: ['space1', 'space2'],
+          fallbackScope: 'required',
+        });
+      }
+      case 'listRenderers': {
+        const renderers = listSortedMagnetRendererDescriptors();
+        return resultOk({
+          rendererCount: renderers.length,
+          renderers,
+        });
+      }
+      case 'getRenderer': {
+        const payload = asObject(request.payload);
+        const rendererId = asNonEmptyString(payload?.rendererId ?? payload?.id);
+        if (!rendererId) {
+          return resultError('INVALID_PAYLOAD', 'payload.rendererId is required');
+        }
+
+        const renderer = getMagnetRenderer(rendererId);
+        const variants = renderer
+          ? listMagnetVariants(rendererId)
+              .slice()
+              .sort((left, right) => left.id.localeCompare(right.id))
+              .map((variant) => toMagnetVariantDescriptor(rendererId, variant))
+          : [];
+
+        return resultOk({
+          rendererId,
+          found: renderer !== null,
+          renderer: renderer ? toMagnetRendererDescriptor(renderer) : null,
+          variantCount: variants.length,
+          variants,
+        });
+      }
+      case 'listVariants': {
+        const payload = asObject(request.payload);
+        const rendererId = asNonEmptyString(payload?.rendererId ?? payload?.id);
+
+        if (rendererId) {
+          const variants = listMagnetVariants(rendererId)
+            .slice()
+            .sort((left, right) => left.id.localeCompare(right.id))
+            .map((variant) => toMagnetVariantDescriptor(rendererId, variant));
+
+          return resultOk({
+            rendererId,
+            variantCount: variants.length,
+            variants,
+          });
+        }
+
+        const variantsByRenderer = listSortedMagnetRendererDescriptors()
+          .map((renderer) => {
+            const variants = listMagnetVariants(renderer.id)
+              .slice()
+              .sort((left, right) => left.id.localeCompare(right.id))
+              .map((variant) => toMagnetVariantDescriptor(renderer.id, variant));
+
+            return {
+              rendererId: renderer.id,
+              variantCount: variants.length,
+              variants,
+            };
+          })
+          .filter((entry) => entry.variantCount > 0);
+
+        return resultOk({
+          rendererCount: variantsByRenderer.length,
+          variantCount: variantsByRenderer.reduce(
+            (count, entry) => count + entry.variantCount,
+            0
+          ),
+          variantsByRenderer,
+        });
+      }
+      case 'getSystemLayoutRules': {
+        const payload = asObject(request.payload);
+        const spaceId = asNonEmptyString(payload?.spaceId);
+        if (!spaceId) {
+          return resultError('INVALID_PAYLOAD', 'payload.spaceId is required');
+        }
+
+        const normalizedSpaceId = spaceId.trim();
+        const knownSpace =
+          normalizedSpaceId === 'space1' || normalizedSpaceId === 'space2'
+            ? normalizedSpaceId
+            : null;
+        const requiredAnchorsByMagnetId = cloneAnchorsByMagnetId(
+          SYSTEM_REQUIRED_ANCHORS_BY_MAGNET_ID
+        );
+        const defaultAnchorsByMagnetId = cloneAnchorsByMagnetId(
+          getSystemAnchorsByMagnetId(normalizedSpaceId)
+        );
+
+        return resultOk({
+          spaceId: normalizedSpaceId,
+          resolvedSpaceId: knownSpace ?? 'required',
+          usesFallbackRules: knownSpace === null,
+          requiredMagnetIds: Object.keys(requiredAnchorsByMagnetId),
+          defaultMagnetIds: Object.keys(defaultAnchorsByMagnetId),
+          requiredAnchorsByMagnetId,
+          defaultAnchorsByMagnetId,
+        });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported magnets.renderer method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpMusicPlatformCatalogHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:music-platform-catalog');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_MUSIC_PLATFORM_CATALOG_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'platform-facade',
+          methods: ['describe', 'listConnectors'],
+        });
+      case 'listConnectors': {
+        const connectors = await listPlatformConnectorFacadeItems();
+        return resultOk({
+          connectorCount: connectors.length,
+          connectors,
+        });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported music-platform.catalog method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpMusicPlatformSearchHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:music-platform-search');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_MUSIC_PLATFORM_SEARCH_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'platform-facade',
+          methods: ['describe', 'searchTracks'],
+        });
+      case 'searchTracks': {
+        const payload = asObject(request.payload);
+        const query = asNonEmptyString(payload?.query);
+        if (!query) {
+          return resultError('INVALID_PAYLOAD', 'payload.query is required');
+        }
+
+        const limit = asNonNegativeInt(payload?.limit) ?? undefined;
+        const connectorIds = asStringArray(payload?.connectorIds);
+        const result = await searchPlatformTracks({
+          query,
+          limit,
+          connectorIds,
+        });
+
+        return resultOk({
+          query,
+          connectorCount: result.connectorViews.length,
+          trackCount: result.tracks.length,
+          ...result,
+        });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported music-platform.search method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpMusicPlatformPrepareHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:music-platform-prepare');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_MUSIC_PLATFORM_PREPARE_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'platform-facade',
+          methods: ['describe', 'preparePlayback'],
+          supportedConnectorIds: [
+            BILIBILI_PLATFORM_CONNECTOR_ID,
+            NETEASE_PLATFORM_CONNECTOR_ID,
+          ],
+        });
+      case 'preparePlayback': {
+        const payload = asObject(request.payload);
+        const sourceLocator = asNonEmptyString(payload?.sourceLocator);
+        if (!sourceLocator) {
+          return resultError('INVALID_PAYLOAD', 'payload.sourceLocator is required');
+        }
+
+        const connectorId = inferPlatformPrepareConnectorId(
+          sourceLocator,
+          asNonEmptyString(payload?.connectorId)
+        );
+        if (!connectorId) {
+          return resultError(
+            'NOT_SUPPORTED',
+            'Unsupported platform connector for playback preparation',
+            {
+              details: {
+                sourceLocator,
+                connectorId: asNonEmptyString(payload?.connectorId) ?? undefined,
+              },
+            }
+          );
+        }
+
+        if (connectorId === BILIBILI_PLATFORM_CONNECTOR_ID) {
+          const prepared = await prepareBilibiliCachedPlayback(
+            sourceLocator,
+            asNonEmptyString(payload?.qualityHint) ?? undefined
+          );
+          if (!prepared) {
+            return resultError('NOT_FOUND', 'Unable to prepare Bilibili playback');
+          }
+          return resultOk({
+            connectorId,
+            prepared,
+          });
+        }
+
+        if (connectorId === NETEASE_PLATFORM_CONNECTOR_ID) {
+          const prepared = await prepareNeteaseCachedPlayback(sourceLocator);
+          if (!prepared) {
+            return resultError('NOT_FOUND', 'Unable to prepare Netease playback');
+          }
+          return resultOk({
+            connectorId,
+            prepared,
+          });
+        }
+
+        return resultError(
+          'NOT_SUPPORTED',
+          `Unsupported platform connector: ${connectorId}`
+        );
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported music-platform.prepare method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:connector-auth');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_CONNECTOR_AUTH_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'platform-connector-auth',
+          methods: [
+            'describe',
+            'listDefinitions',
+            'listAuthSnapshots',
+            'getAuthSnapshot',
+            'beginQrLogin',
+            'pollQrLogin',
+            'logout',
+          ],
+        });
+      case 'listDefinitions':
+        return resultOk({
+          definitions: listPlatformConnectorDefinitions(),
+        });
+      case 'listAuthSnapshots':
+        return resultOk({
+          snapshots: await listPlatformConnectorAuthSnapshots(),
+        });
+      case 'getAuthSnapshot': {
+        const payload = asObject(request.payload);
+        const connectorId = asNonEmptyString(payload?.connectorId);
+        if (!connectorId) {
+          return resultError('INVALID_PAYLOAD', 'payload.connectorId is required');
+        }
+        return resultOk({
+          connectorId,
+          snapshot: await getPlatformConnectorAuthSnapshot(connectorId as never),
+        });
+      }
+      case 'beginQrLogin': {
+        const payload = asObject(request.payload);
+        const connectorId = asNonEmptyString(payload?.connectorId);
+        if (!connectorId) {
+          return resultError('INVALID_PAYLOAD', 'payload.connectorId is required');
+        }
+        return resultOk({
+          connectorId,
+          session: await beginPlatformQrLogin(connectorId as never),
+        });
+      }
+      case 'pollQrLogin': {
+        const payload = asObject(request.payload);
+        const connectorId = asNonEmptyString(payload?.connectorId);
+        const sessionId = asNonEmptyString(payload?.sessionId);
+        if (!connectorId) {
+          return resultError('INVALID_PAYLOAD', 'payload.connectorId is required');
+        }
+        if (!sessionId) {
+          return resultError('INVALID_PAYLOAD', 'payload.sessionId is required');
+        }
+        return resultOk({
+          connectorId,
+          sessionId,
+          result: await pollPlatformQrLogin(connectorId as never, sessionId),
+        });
+      }
+      case 'logout': {
+        const payload = asObject(request.payload);
+        const connectorId = asNonEmptyString(payload?.connectorId);
+        if (!connectorId) {
+          return resultError('INVALID_PAYLOAD', 'payload.connectorId is required');
+        }
+        return resultOk({
+          connectorId,
+          snapshot: await logoutPlatformConnector(connectorId as never),
+        });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported connector-auth method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpAudioPlaybackHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const audioService = request.context.audioService;
+    if (!audioService) {
+      return resultError('NOT_AVAILABLE', 'Audio playback bridge is not available');
+    }
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_AUDIO_PLAYBACK_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'pmp-audio-service',
+          methods: [
+            'describe',
+            'getState',
+            'getPlayMode',
+            'getCover',
+            'play',
+            'pause',
+            'stop',
+            'seek',
+            'setVolume',
+            'toggleMute',
+            'playNext',
+            'playPrevious',
+            'playTrackAtIndex',
+            'setPlayMode',
+          ],
+          methodPermissions: {
+            getState: 'api:audio-state',
+            getPlayMode: 'api:audio-state',
+            getCover: 'api:audio-cover',
+            play: 'api:audio-control',
+            pause: 'api:audio-control',
+            stop: 'api:audio-control',
+            seek: 'api:audio-control',
+            setVolume: 'api:audio-control',
+            toggleMute: 'api:audio-control',
+            playNext: 'api:audio-control',
+            playPrevious: 'api:audio-control',
+            playTrackAtIndex: 'api:audio-control',
+            setPlayMode: 'api:audio-control',
+          },
+        });
+      case 'getState': {
+        const denied = readMethodPermissionError(request, 'api:audio-state');
+        if (denied) return denied;
+        return resultOk(audioService.getState());
+      }
+      case 'getPlayMode': {
+        const denied = readMethodPermissionError(request, 'api:audio-state');
+        if (denied) return denied;
+        return resultOk(
+          typeof audioService.getPlayMode === 'function' ? audioService.getPlayMode() ?? null : null
+        );
+      }
+      case 'getCover': {
+        const denied = readMethodPermissionError(request, 'api:audio-cover');
+        if (denied) return denied;
+        if (typeof request.context.getCover !== 'function') {
+          return resultError('NOT_AVAILABLE', 'Cover bridge is not available');
+        }
+        return resultOk(await request.context.getCover());
+      }
+      case 'play': {
+        const denied = readMethodPermissionError(request, 'api:audio-control');
+        if (denied) return denied;
+        await audioService.play();
+        return resultOk({ played: true });
+      }
+      case 'pause': {
+        const denied = readMethodPermissionError(request, 'api:audio-control');
+        if (denied) return denied;
+        await audioService.pause();
+        return resultOk({ paused: true });
+      }
+      case 'stop': {
+        const denied = readMethodPermissionError(request, 'api:audio-control');
+        if (denied) return denied;
+        audioService.stop();
+        return resultOk({ stopped: true });
+      }
+      case 'seek': {
+        const denied = readMethodPermissionError(request, 'api:audio-control');
+        if (denied) return denied;
+        const payload = asObject(request.payload);
+        const time = asFiniteNumber(payload?.time);
+        if (time === null || time < 0) {
+          return resultError('INVALID_PAYLOAD', 'payload.time must be a non-negative number');
+        }
+        audioService.seek(time);
+        return resultOk({ time });
+      }
+      case 'setVolume': {
+        const denied = readMethodPermissionError(request, 'api:audio-control');
+        if (denied) return denied;
+        const payload = asObject(request.payload);
+        const volume = asFiniteNumber(payload?.volume);
+        if (volume === null) {
+          return resultError('INVALID_PAYLOAD', 'payload.volume must be a number');
+        }
+        audioService.setVolume(volume);
+        return resultOk({ volume });
+      }
+      case 'toggleMute': {
+        const denied = readMethodPermissionError(request, 'api:audio-control');
+        if (denied) return denied;
+        audioService.toggleMute();
+        return resultOk({ toggled: true });
+      }
+      case 'playNext': {
+        const denied = readMethodPermissionError(request, 'api:audio-control');
+        if (denied) return denied;
+        if (typeof audioService.playNext === 'function') {
+          await audioService.playNext();
+        }
+        return resultOk({ playedNext: true });
+      }
+      case 'playPrevious': {
+        const denied = readMethodPermissionError(request, 'api:audio-control');
+        if (denied) return denied;
+        if (typeof audioService.playPrevious === 'function') {
+          await audioService.playPrevious();
+        }
+        return resultOk({ playedPrevious: true });
+      }
+      case 'playTrackAtIndex': {
+        const denied = readMethodPermissionError(request, 'api:audio-control');
+        if (denied) return denied;
+        const payload = asObject(request.payload);
+        const index = asNonNegativeInt(payload?.index);
+        if (index === null) {
+          return resultError('INVALID_PAYLOAD', 'payload.index must be a non-negative integer');
+        }
+        if (typeof audioService.playTrackAtIndex === 'function') {
+          await audioService.playTrackAtIndex(index);
+        }
+        return resultOk({ index });
+      }
+      case 'setPlayMode': {
+        const denied = readMethodPermissionError(request, 'api:audio-control');
+        if (denied) return denied;
+        const payload = asObject(request.payload);
+        const mode = asNonEmptyString(payload?.mode);
+        if (!mode) {
+          return resultError('INVALID_PAYLOAD', 'payload.mode is required');
+        }
+        if (typeof audioService.setPlayMode === 'function') {
+          audioService.setPlayMode(mode as never);
+        }
+        return resultOk({ mode });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported audio-engine.playback method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpAudioAnalysisHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:audio-visual');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    const audioService = request.context.audioService;
+    if (!audioService) {
+      return resultError('NOT_AVAILABLE', 'Audio analysis bridge is not available');
+    }
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_AUDIO_ANALYSIS_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'pmp-audio-spectrum',
+          methods: ['describe', 'getSpectrum', 'getSpectrumFrame'],
+        });
+      case 'getSpectrum':
+        return resultOk(audioService.getFrequencyData?.() ?? null);
+      case 'getSpectrumFrame': {
+        const payload = asObject(request.payload);
+        const tap = payload?.tap === 'pre-dsp' ? 'pre-dsp' : 'post-dsp';
+        return resultOk(audioService.getSpectrumFrame?.(tap) ?? null);
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported audio-engine.analysis method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpThemeBindingsHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const theme = getStoredOrDefaultTheme();
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_THEME_BINDINGS_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'theme-binding-snapshot',
+          themeId: theme.id,
+          themeVersion: theme.version,
+          methods: ['describe', 'listBindingIds', 'listSurfaceIds', 'resolveBinding', 'resolveSurface'],
+        });
+      case 'listBindingIds': {
+        const bindingIds = new Set<string>([
+          ...Object.keys(theme.bindings ?? {}),
+          ...Object.keys(theme.surfaces ?? {}),
+        ]);
+
+        return resultOk({
+          themeId: theme.id,
+          themeVersion: theme.version,
+          bindingCount: bindingIds.size,
+          bindingIds: Array.from(bindingIds.values()).sort((left, right) => left.localeCompare(right)),
+        });
+      }
+      case 'listSurfaceIds': {
+        const surfaceIds = Object.keys(theme.surfaces ?? {}).sort((left, right) => left.localeCompare(right));
+        return resultOk({
+          themeId: theme.id,
+          themeVersion: theme.version,
+          surfaceCount: surfaceIds.length,
+          surfaceIds,
+        });
+      }
+      case 'resolveBinding': {
+        const payload = asObject(request.payload);
+        const bindingId = asNonEmptyString(payload?.bindingId);
+        if (!bindingId) {
+          return resultError('INVALID_PAYLOAD', 'payload.bindingId is required');
+        }
+
+        const resolved = resolveThemeBinding(theme, bindingId as ThemeBindingId);
+        const surfaceId = resolveThemeSurfaceTargetId(theme, bindingId as ThemeBindingId) ?? null;
+
+        return resultOk({
+          themeId: theme.id,
+          themeVersion: theme.version,
+          bindingId,
+          source: resolved.source,
+          surfaceId,
+          binding: resolved.binding,
+        });
+      }
+      case 'resolveSurface': {
+        const payload = asObject(request.payload);
+        const requestedId =
+          asNonEmptyString(payload?.surfaceId) ?? asNonEmptyString(payload?.bindingId);
+        if (!requestedId) {
+          return resultError('INVALID_PAYLOAD', 'payload.surfaceId or payload.bindingId is required');
+        }
+
+        const surfaceId =
+          resolveThemeSurfaceTargetId(
+            theme,
+            requestedId as ThemeBindingId | ThemeSurfaceId
+          ) ?? null;
+
+        return resultOk({
+          themeId: theme.id,
+          themeVersion: theme.version,
+          requestedId,
+          surfaceId,
+          exists: surfaceId ? Boolean(theme.surfaces?.[surfaceId]) : false,
+          surface: surfaceId ? resolveThemeSurface(theme, surfaceId) : {},
+        });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported theme-bindings method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpLibraryFieldsHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_LIBRARY_FIELDS_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'music-library-schema',
+          methods: [
+            'describe',
+            'listFieldCatalog',
+            'listFacetCatalog',
+            'listFacetEntries',
+            'listTextFacetValues',
+          ],
+        });
+      case 'listFieldCatalog': {
+        const fields = await listNativeLibraryTrackFieldCatalog();
+        return resultOk({
+          fieldCount: fields.length,
+          fields,
+        });
+      }
+      case 'listFacetCatalog': {
+        const facets = await listNativeLibraryFacetCatalog();
+        return resultOk({
+          facetCount: facets.length,
+          facets,
+        });
+      }
+      case 'listFacetEntries': {
+        const payload = asObject(request.payload);
+        const kind =
+          payload?.kind === 'text-values'
+            ? 'text-values'
+            : payload?.kind === 'album-summaries'
+              ? 'album-summaries'
+              : null;
+        if (!kind) {
+          return resultError(
+            'INVALID_PAYLOAD',
+            'payload.kind must be "text-values" or "album-summaries"'
+          );
+        }
+
+        const field = asNonEmptyString(payload?.field);
+        const includeMissing = asBoolean(payload?.includeMissing);
+        const visibleOnly = asBoolean(payload?.visibleOnly);
+        const limit = asNonNegativeInt(payload?.limit);
+
+        const query: NonNullable<Parameters<typeof listNativeLibraryFacetEntries>[0]> = {
+          kind,
+          ...(field ? { field } : {}),
+          ...(includeMissing !== null ? { includeMissing } : {}),
+          ...(visibleOnly !== null ? { visibleOnly } : {}),
+          ...(limit !== null ? { limit } : {}),
+        };
+
+        const result = await listNativeLibraryFacetEntries(query);
+        if (!result) {
+          return resultError('NOT_AVAILABLE', 'Library facet entry query is not available', {
+            retryable: true,
+            details: { query },
+          });
+        }
+
+        return resultOk({
+          query,
+          result,
+        });
+      }
+      case 'listTextFacetValues': {
+        const payload = asObject(request.payload);
+        const field = asNonEmptyString(payload?.field);
+        if (!field) {
+          return resultError('INVALID_PAYLOAD', 'payload.field is required');
+        }
+
+        const includeMissing = asBoolean(payload?.includeMissing);
+        const visibleOnly = asBoolean(payload?.visibleOnly);
+        const limit = asNonNegativeInt(payload?.limit);
+
+        const query = {
+          field,
+          ...(includeMissing !== null ? { includeMissing } : {}),
+          ...(visibleOnly !== null ? { visibleOnly } : {}),
+          ...(limit !== null ? { limit } : {}),
+        };
+
+        const values = await listNativeLibraryTextFacetValues(query);
+        return resultOk({
+          query,
+          valueCount: values.length,
+          values,
+        });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported library-fields method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpKeybindingContextHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const keybindings = request.context.keybindings;
+    if (!keybindings) {
+      return resultError('NOT_AVAILABLE', 'Keybinding context service is not available', {
+        retryable: true,
+      });
+    }
+
+    const context = keybindings.getContext();
+    const keys = Object.keys(context).sort((left, right) => left.localeCompare(right));
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_KEYBINDING_CONTEXT_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'keybindings-service-context',
+          methods: ['describe', 'listKeys', 'getContext', 'getValue'],
+          keyCount: keys.length,
+          keys,
+        });
+      case 'listKeys':
+        return resultOk({
+          keyCount: keys.length,
+          keys,
+        });
+      case 'getContext':
+        return resultOk({
+          keyCount: keys.length,
+          context,
+        });
+      case 'getValue': {
+        const payload = asObject(request.payload);
+        const key = asNonEmptyString(payload?.key);
+        if (!key) {
+          return resultError('INVALID_PAYLOAD', 'payload.key is required');
+        }
+
+        return resultOk({
+          key,
+          exists: Object.prototype.hasOwnProperty.call(context, key),
+          value: context[key],
+        });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported keybinding-context method: ${request.method}`
+        );
+    }
+  };
+}
+
+function createPmpI18nHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    const pluginId = request.context.pluginId;
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_I18N_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'shared-locale-plugin-bundles',
+          methods: [
+            'describe',
+            'getState',
+            'setLocale',
+            'registerMessages',
+            'clearMessages',
+            'translate',
+          ],
+          activeLocale: getLocale(),
+          fallbackLocale: FALLBACK_LOCALE,
+          supportedLocales: [...SUPPORTED_LOCALES],
+          registeredLocales: listPluginI18nRegisteredLocales(pluginId),
+        });
+      case 'getState':
+        return resultOk({
+          activeLocale: getLocale(),
+          fallbackLocale: FALLBACK_LOCALE,
+          supportedLocales: [...SUPPORTED_LOCALES],
+          registeredLocales: listPluginI18nRegisteredLocales(pluginId),
+        });
+      case 'setLocale': {
+        const payload = asObject(request.payload);
+        const locale = asLocale(payload?.locale);
+        if (!locale) {
+          return resultError('INVALID_PAYLOAD', 'payload.locale must be a supported locale');
+        }
+
+        const previousLocale = getLocale();
+        setLocale(locale);
+        await broadcastDataUpdate(STORAGE_KEYS.LOCALE, locale, TAURI_EVENTS.LOCALE_UPDATED);
+
+        return resultOk({
+          locale,
+          previousLocale,
+          changed: previousLocale !== locale,
+        });
+      }
+      case 'registerMessages': {
+        const payload = asObject(request.payload);
+        const locale = asLocale(payload?.locale);
+        if (!locale) {
+          return resultError('INVALID_PAYLOAD', 'payload.locale must be a supported locale');
+        }
+
+        const messages = sanitizePluginMessages(payload?.messages);
+        const replace = payload?.replace === true;
+        const store = getPluginI18nMessageStore(pluginId);
+        const previousMessages = store.get(locale) ?? {};
+        const nextMessages = replace ? messages : { ...previousMessages, ...messages };
+
+        store.set(locale, nextMessages);
+
+        return resultOk({
+          locale,
+          messageCount: Object.keys(nextMessages).length,
+          registeredLocales: listPluginI18nRegisteredLocales(pluginId),
+        });
+      }
+      case 'clearMessages': {
+        const payload = asObject(request.payload);
+        if (payload && Object.prototype.hasOwnProperty.call(payload, 'locale') && !asLocale(payload.locale)) {
+          return resultError('INVALID_PAYLOAD', 'payload.locale must be a supported locale');
+        }
+
+        const locale =
+          payload && Object.prototype.hasOwnProperty.call(payload, 'locale')
+            ? asLocale(payload.locale)
+            : null;
+        const store = pluginI18nMessageStores.get(pluginId);
+        if (!store) {
+          return resultOk({
+            cleared: false,
+            registeredLocales: [],
+          });
+        }
+
+        if (locale) {
+          const cleared = store.delete(locale);
+          if (store.size === 0) {
+            pluginI18nMessageStores.delete(pluginId);
+          }
+          return resultOk({
+            locale,
+            cleared,
+            registeredLocales: listPluginI18nRegisteredLocales(pluginId),
+          });
+        }
+
+        const hadAny = store.size > 0;
+        pluginI18nMessageStores.delete(pluginId);
+        return resultOk({
+          cleared: hadAny,
+          registeredLocales: [],
+        });
+      }
+      case 'translate': {
+        const payload = asObject(request.payload);
+        const key = asNonEmptyString(payload?.key);
+        if (!key) {
+          return resultError('INVALID_PAYLOAD', 'payload.key is required');
+        }
+
+        if (payload && Object.prototype.hasOwnProperty.call(payload, 'locale') && !asLocale(payload.locale)) {
+          return resultError('INVALID_PAYLOAD', 'payload.locale must be a supported locale');
+        }
+
+        const locale = asLocale(payload?.locale) ?? getLocale();
+        const params = asObject(payload?.params) ?? undefined;
+        const resolved = resolvePluginMessageTemplate(pluginId, locale, key);
+
+        return resultOk({
+          key,
+          requestedLocale: locale,
+          resolvedLocale: resolved.resolvedLocale,
+          found: typeof resolved.template === 'string',
+          message:
+            typeof resolved.template === 'string'
+              ? formatPluginMessage(resolved.template, params)
+              : key,
+        });
+      }
+      default:
+        return resultError('METHOD_NOT_SUPPORTED', `Unsupported i18n method: ${request.method}`);
+    }
+  };
+}
+
+function createPmpTelemetryHandler(): PluginHostCapabilityHandler {
+  return async (request) => {
+    switch (request.method) {
+      case 'describe': {
+        const snapshot = buildPmpTelemetryStatus();
+        return resultOk({
+          capabilityId: HOST_PMP_TELEMETRY_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'frontend-telemetry-sink',
+          methods: ['describe', 'getStatus', 'log', 'flush'],
+          identityInjection: {
+            pluginId: true,
+            hostLabel: true,
+            loggerId: true,
+            trustLevel: 'unknown',
+          },
+          redaction: 'host-adapter',
+          sink: 'frontend-telemetry-service',
+          ...(snapshot ? { snapshot } : {}),
+        });
+      }
+      case 'getStatus': {
+        const snapshot = buildPmpTelemetryStatus();
+        if (!snapshot) {
+          return resultError('NOT_AVAILABLE', 'Telemetry service is not available', {
+            retryable: true,
+          });
+        }
+
+        return resultOk(snapshot);
+      }
+      case 'flush': {
+        const service = getGlobalTelemetryService();
+        if (!service) {
+          return resultError('NOT_AVAILABLE', 'Telemetry service is not available', {
+            retryable: true,
+          });
+        }
+
+        await service.flushNow();
+        return resultOk({
+          flushed: true,
+          ...(buildPmpTelemetryStatus() ?? {}),
+        });
+      }
+      case 'log': {
+        const service = getGlobalTelemetryService();
+        if (!service) {
+          return resultError('NOT_AVAILABLE', 'Telemetry service is not available', {
+            retryable: true,
+          });
+        }
+
+        const payload = asObject(request.payload);
+        const loggerId = asNonEmptyString(payload?.loggerId);
+        if (!loggerId || !TELEMETRY_IDENTIFIER_PATTERN.test(loggerId)) {
+          return resultError(
+            'INVALID_PAYLOAD',
+            'payload.loggerId is required and must match [a-z0-9._-]'
+          );
+        }
+
+        const event = asNonEmptyString(payload?.event);
+        if (!event || !TELEMETRY_IDENTIFIER_PATTERN.test(event)) {
+          return resultError(
+            'INVALID_PAYLOAD',
+            'payload.event is required and must match [a-z0-9._-]'
+          );
+        }
+
+        const level = asTelemetryLevel(payload?.level) ?? 'info';
+        const kind = asTelemetryKind(payload?.kind) ?? 'log';
+        const component = asNonEmptyString(payload?.component);
+        const runtimeId = asNonEmptyString(payload?.runtimeId);
+        const fields = {
+          ...(sanitizeTelemetryFields(payload?.fields) ?? {}),
+          pluginId: request.context.pluginId,
+          hostLabel: request.context.hostLabel,
+          loggerId,
+          runtimeId: runtimeId ?? 'unknown',
+          trustLevel: 'unknown',
+          hostCapabilityId: HOST_PMP_TELEMETRY_CAPABILITY_ID,
+          pluginTelemetry: true,
+        } satisfies TelemetryFields;
+
+        service.ingest(
+          TELEMETRY_PLUGIN_MODULE_ID,
+          {
+            level,
+            event,
+            kind,
+            component: buildPluginTelemetryComponent(request.context.pluginId, loggerId, component),
+            message: sanitizeTelemetryText(payload?.message),
+            traceId: asNonEmptyString(payload?.traceId),
+            spanId: asNonEmptyString(payload?.spanId),
+            windowId: asNonEmptyString(payload?.windowId),
+            fields,
+          },
+          buildPluginTelemetryComponent(request.context.pluginId, loggerId, component)
+        );
+
+        return resultOk({
+          acceptedCount: 1,
+          moduleId: TELEMETRY_PLUGIN_MODULE_ID,
+          pluginId: request.context.pluginId,
+          loggerId,
+          event,
+          level,
+          kind,
+        });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported telemetry method: ${request.method}`
+        );
+    }
+  };
+}
+
 function createRegistryHandler(): PluginHostCapabilityHandler {
   return async (request) => {
     switch (request.method) {
@@ -2075,11 +4989,178 @@ const BUILTIN_CAPABILITIES: PluginHostCapabilityRegistration[] = [
     description: 'Core PMPM host API surface',
   },
   {
+    id: CORE_CAPABILITY_REGISTRY_CAPABILITY_ID,
+    version: CORE_CAPABILITY_REGISTRY_CAPABILITY_VERSION,
+    permission: 'api:host',
+    description: 'Core capability discovery and query contract',
+    handler: createRegistryHandler(),
+  },
+  {
     id: 'foundation.capability-registry',
-    version: '1.1.0',
+    version: CORE_CAPABILITY_REGISTRY_CAPABILITY_VERSION,
     permission: 'api:host',
     description: 'Capability discovery and invocation contract',
     handler: createRegistryHandler(),
+  },
+  {
+    id: HOST_PMP_NAVIGATION_CAPABILITY_ID,
+    version: HOST_PMP_NAVIGATION_CAPABILITY_VERSION,
+    permission: 'api:navigation',
+    description: 'PMP host navigation bridge',
+    handler: createPmpNavigationHandler(),
+  },
+  {
+    id: HOST_PMP_WINDOW_CAPABILITY_ID,
+    version: HOST_PMP_WINDOW_CAPABILITY_VERSION,
+    permission: 'api:window',
+    description: 'PMP host window shell bridge',
+    handler: createPmpWindowHandler(),
+  },
+  {
+    id: HOST_PMP_SHELL_MENU_CAPABILITY_ID,
+    version: HOST_PMP_SHELL_MENU_CAPABILITY_VERSION,
+    permission: 'api:host',
+    description: 'PMP host shell menu action catalog bridge',
+    handler: createPmpShellMenuHandler(),
+  },
+  {
+    id: HOST_PMP_SHELL_CONTEXT_MENU_CAPABILITY_ID,
+    version: HOST_PMP_SHELL_CONTEXT_MENU_CAPABILITY_VERSION,
+    permission: 'api:host',
+    description: 'PMP host context menu surface schema bridge',
+    handler: createPmpShellContextMenuHandler(),
+  },
+  {
+    id: HOST_PMP_SHELL_TRAY_CAPABILITY_ID,
+    version: HOST_PMP_SHELL_TRAY_CAPABILITY_VERSION,
+    permission: 'api:host',
+    description: 'PMP host system tray bridge',
+    handler: createPmpShellTrayHandler(),
+  },
+  {
+    id: HOST_PMP_SHELL_STATUS_ITEM_CAPABILITY_ID,
+    version: HOST_PMP_SHELL_STATUS_ITEM_CAPABILITY_VERSION,
+    permission: 'api:host',
+    description: 'PMP host shell status item slot catalog bridge',
+    handler: createPmpShellStatusItemHandler(),
+  },
+  {
+    id: HOST_PMP_STORAGE_CONFIG_CAPABILITY_ID,
+    version: HOST_PMP_STORAGE_CONFIG_CAPABILITY_VERSION,
+    permission: 'storage:local',
+    description: 'PMP plugin config storage bridge',
+    handler: createPmpStorageConfigHandler(),
+  },
+  {
+    id: HOST_PMP_STORAGE_DURABLE_TEXT_CAPABILITY_ID,
+    version: HOST_PMP_STORAGE_DURABLE_TEXT_CAPABILITY_VERSION,
+    permission: 'storage:durable-text',
+    description: 'PMP plugin durable text storage bridge',
+    handler: createPmpStorageDurableTextHandler(),
+  },
+  {
+    id: HOST_PMP_STORAGE_SYNC_CAPABILITY_ID,
+    version: HOST_PMP_STORAGE_SYNC_CAPABILITY_VERSION,
+    permission: 'storage:local',
+    description: 'PMP plugin config sync snapshot bridge',
+    handler: createPmpStorageSyncHandler(),
+  },
+  {
+    id: HOST_PMP_MAGNETS_CATALOG_CAPABILITY_ID,
+    version: HOST_PMP_MAGNETS_CATALOG_CAPABILITY_VERSION,
+    permission: 'api:magnets-catalog',
+    description: 'PMP magnet catalog bridge for custom/plugin magnets',
+    handler: createPmpMagnetsCatalogHandler(),
+  },
+  {
+    id: HOST_PMP_MAGNETS_LAYOUT_CAPABILITY_ID,
+    version: HOST_PMP_MAGNETS_LAYOUT_CAPABILITY_VERSION,
+    permission: 'api:magnets-layout',
+    description: 'PMP magnet layout bridge by space',
+    handler: createPmpMagnetsLayoutHandler(),
+  },
+  {
+    id: HOST_PMP_MAGNETS_RENDERER_CAPABILITY_ID,
+    version: HOST_PMP_MAGNETS_RENDERER_CAPABILITY_VERSION,
+    permission: 'api:host',
+    description: 'PMP magnet renderer, variant, and system layout rules bridge',
+    handler: createPmpMagnetsRendererHandler(),
+  },
+  {
+    id: HOST_PMP_AUDIO_PLAYBACK_CAPABILITY_ID,
+    version: HOST_PMP_AUDIO_PLAYBACK_CAPABILITY_VERSION,
+    description: 'PMP audio playback and cover bridge',
+    handler: createPmpAudioPlaybackHandler(),
+  },
+  {
+    id: HOST_PMP_AUDIO_ANALYSIS_CAPABILITY_ID,
+    version: HOST_PMP_AUDIO_ANALYSIS_CAPABILITY_VERSION,
+    permission: 'api:audio-visual',
+    description: 'PMP audio spectrum and analysis bridge',
+    handler: createPmpAudioAnalysisHandler(),
+  },
+  {
+    id: HOST_PMP_MUSIC_PLATFORM_CATALOG_CAPABILITY_ID,
+    version: HOST_PMP_MUSIC_PLATFORM_CATALOG_CAPABILITY_VERSION,
+    permission: 'api:music-platform-catalog',
+    description: 'PMP music platform connector catalog bridge',
+    handler: createPmpMusicPlatformCatalogHandler(),
+  },
+  {
+    id: HOST_PMP_MUSIC_PLATFORM_SEARCH_CAPABILITY_ID,
+    version: HOST_PMP_MUSIC_PLATFORM_SEARCH_CAPABILITY_VERSION,
+    permission: 'api:music-platform-search',
+    description: 'PMP music platform track search bridge',
+    handler: createPmpMusicPlatformSearchHandler(),
+  },
+  {
+    id: HOST_PMP_MUSIC_PLATFORM_PREPARE_CAPABILITY_ID,
+    version: HOST_PMP_MUSIC_PLATFORM_PREPARE_CAPABILITY_VERSION,
+    permission: 'api:music-platform-prepare',
+    description: 'PMP music platform playback preparation bridge',
+    handler: createPmpMusicPlatformPrepareHandler(),
+  },
+  {
+    id: HOST_PMP_CONNECTOR_AUTH_CAPABILITY_ID,
+    version: HOST_PMP_CONNECTOR_AUTH_CAPABILITY_VERSION,
+    permission: 'api:connector-auth',
+    description: 'PMP connector auth bridge',
+    handler: createPmpConnectorAuthHandler(),
+  },
+  {
+    id: HOST_PMP_THEME_BINDINGS_CAPABILITY_ID,
+    version: HOST_PMP_THEME_BINDINGS_CAPABILITY_VERSION,
+    permission: 'api:host',
+    description: 'PMP theme binding and surface resolution bridge',
+    handler: createPmpThemeBindingsHandler(),
+  },
+  {
+    id: HOST_PMP_LIBRARY_FIELDS_CAPABILITY_ID,
+    version: HOST_PMP_LIBRARY_FIELDS_CAPABILITY_VERSION,
+    permission: 'api:host',
+    description: 'PMP music library field and facet catalog bridge',
+    handler: createPmpLibraryFieldsHandler(),
+  },
+  {
+    id: HOST_PMP_KEYBINDING_CONTEXT_CAPABILITY_ID,
+    version: HOST_PMP_KEYBINDING_CONTEXT_CAPABILITY_VERSION,
+    permission: 'api:host',
+    description: 'PMP keybinding context snapshot bridge',
+    handler: createPmpKeybindingContextHandler(),
+  },
+  {
+    id: HOST_PMP_I18N_CAPABILITY_ID,
+    version: HOST_PMP_I18N_CAPABILITY_VERSION,
+    permission: 'api:host',
+    description: 'PMP locale state and plugin bundle bridge',
+    handler: createPmpI18nHandler(),
+  },
+  {
+    id: HOST_PMP_TELEMETRY_CAPABILITY_ID,
+    version: HOST_PMP_TELEMETRY_CAPABILITY_VERSION,
+    permission: 'api:host',
+    description: 'PMP plugin telemetry sink with host redaction',
+    handler: createPmpTelemetryHandler(),
   },
   {
     id: AI_ADAPTER_CAPABILITY_ID,
@@ -2095,6 +5176,14 @@ const BUILTIN_CAPABILITIES: PluginHostCapabilityRegistration[] = [
     permission: 'api:audio-input-adapter',
     experimental: true,
     description: 'Hybrid audio input adapter bridge with optional third-party provider fallback',
+    handler: createAudioInputAdapterHandler(),
+  },
+  {
+    id: HOST_PMP_AUDIO_INPUT_CAPABILITY_ID,
+    version: HOST_PMP_AUDIO_INPUT_CAPABILITY_VERSION,
+    permission: 'api:audio-input-adapter',
+    experimental: true,
+    description: 'PMP audio input adapter bridge',
     handler: createAudioInputAdapterHandler(),
   },
   {

@@ -23,8 +23,16 @@ export function useDedicatedWorkspacePlaceholderController(
 ): DedicatedWorkspacePlaceholderControllerResult {
   const { activeWorkspaceDescriptor, t } = params;
 
-  const connectorDisplayName =
-    activeWorkspaceDescriptor?.displayName?.trim() || t('magnet.platform.mode.generic');
+  const connectorDisplayName = useMemo(() => {
+    if (!activeWorkspaceDescriptor) {
+      return t('magnet.platform.mode.generic');
+    }
+    if (activeWorkspaceDescriptor.labelKey) {
+      return t(activeWorkspaceDescriptor.labelKey);
+    }
+    const displayName = activeWorkspaceDescriptor.displayName?.trim();
+    return displayName || t('magnet.platform.mode.generic');
+  }, [activeWorkspaceDescriptor, t]);
 
   const placeholderToolbarProps = useMemo<DedicatedWorkspacePlaceholderToolbarProps>(
     () => ({ t }),
@@ -44,4 +52,3 @@ export function useDedicatedWorkspacePlaceholderController(
     placeholderWorkspaceProps,
   };
 }
-

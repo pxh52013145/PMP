@@ -64,6 +64,10 @@ design/
 design/*
 !design/audio-score-gate-baseline.json
 packages/
+!packages/
+packages/*
+!packages/plugin-platform-contracts/
+!packages/plugin-platform-contracts/**
 scripts/
 !scripts/
 scripts/*
@@ -123,8 +127,8 @@ docs/examples/**/*.pmpm
 # Root docs and local architecture notes
 /docs/
 
-# Local blueprint drafts (do not commit)
-/documents/local/
+# Local blueprint drafts and docs (do not commit)
+/documents/
 
 # Manuals (work-in-progress)
 Mannuals/

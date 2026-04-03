@@ -2,10 +2,10 @@ export type Contribution = {
   kind: string;
   id: string;
 };
-import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
+import { getKernelLogger } from './logging';
 
 export type ContributionListener = () => void;
-const telemetry = getTelemetryLogger('kernel', 'ContributionRegistry');
+const telemetry = getKernelLogger('ContributionRegistry');
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

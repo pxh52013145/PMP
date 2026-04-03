@@ -45,6 +45,10 @@ interface MagnetProps {
   layoutMotionChannel?: ThemeMotionChannelSpec;
 }
 
+type MagnetShellStyle = React.CSSProperties & {
+  '--pmp-magnet-z': number;
+};
+
 function MagnetComponentImpl({
   magnet,
   pixelPositions,
@@ -298,7 +302,7 @@ function MagnetComponentImpl({
     chromeOutsets.left > 0;
   const chromeOutsetApplies = chromeEnabled && hasChromeOutset;
 
-  const shellStyle = useMemo(() => {
+  const shellStyle = useMemo<MagnetShellStyle | null>(() => {
     if (!layoutBounds) return null;
 
     const cursor = typeof currentStyle.cursor === 'string' ? currentStyle.cursor : undefined;
@@ -310,7 +314,7 @@ function MagnetComponentImpl({
       top: `${layoutBounds.y}px`,
       width: `${layoutBounds.width}px`,
       height: `${layoutBounds.height}px`,
-      ['--pmp-magnet-z' as any]: stackLevel,
+      '--pmp-magnet-z': stackLevel,
       transition: shellTransitionValue,
       cursor,
       ...(sceneAnimation?.style ?? {}),

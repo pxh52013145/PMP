@@ -1,11 +1,17 @@
 import { emit } from '@tauri-apps/api/event';
-import { readJson, removeKey } from '../../modules/storage';
+import { readJson, readString, removeKey, writeJson } from '../../modules/storage';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { TAURI_EVENTS, broadcastDataUpdate } from '../../utils/windowCommunication';
 
 export type PmpmPluginConfig = Record<string, unknown>;
+export type PmpmPluginConfigSyncState = {
+  revision: number;
+  updatedAt: number | null;
+  present: boolean;
+};
 
 const CONFIG_PREFIX = 'pixel-matrix-pmpm-plugin-config:';
+const CONFIG_SYNC_STATE_PREFIX = 'pixel-matrix-pmpm-plugin-config-sync:';
 const telemetry = getTelemetryLogger('pmpm', 'pluginConfig');
 
 function readErrorMessage(error: unknown): string {
@@ -37,8 +43,54 @@ export function getPmpmPluginConfigKey(pluginId: string): string {
   return `${CONFIG_PREFIX}${pluginId}`;
 }
 
+function getPmpmPluginConfigSyncStateKey(pluginId: string): string {
+  return `${CONFIG_SYNC_STATE_PREFIX}${pluginId}`;
+}
+
 export function readPmpmPluginConfig(pluginId: string): PmpmPluginConfig {
   return readJson<PmpmPluginConfig>(getPmpmPluginConfigKey(pluginId), {});
+}
+
+export function readPmpmPluginConfigSyncState(pluginId: string): PmpmPluginConfigSyncState {
+  const fallbackPresent = readString(getPmpmPluginConfigKey(pluginId)) !== null;
+  const fallback: PmpmPluginConfigSyncState = {
+    revision: 0,
+    updatedAt: null,
+    present: fallbackPresent,
+  };
+
+  const parsed = readJson<unknown>(getPmpmPluginConfigSyncStateKey(pluginId), fallback);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return fallback;
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const revision =
+    typeof record.revision === 'number' && Number.isFinite(record.revision) && record.revision >= 0
+      ? Math.floor(record.revision)
+      : fallback.revision;
+  const updatedAt =
+    typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt)
+      ? Math.floor(record.updatedAt)
+      : fallback.updatedAt;
+  const present = typeof record.present === 'boolean' ? record.present : fallback.present;
+
+  return {
+    revision,
+    updatedAt,
+    present,
+  };
+}
+
+function writePmpmPluginConfigSyncState(pluginId: string, present: boolean): PmpmPluginConfigSyncState {
+  const previous = readPmpmPluginConfigSyncState(pluginId);
+  const next: PmpmPluginConfigSyncState = {
+    revision: previous.revision + 1,
+    updatedAt: Date.now(),
+    present,
+  };
+  writeJson(getPmpmPluginConfigSyncStateKey(pluginId), next, { mode: 'sync' });
+  return next;
 }
 
 function ensureCrossWindowSync(pluginId: string): void {
@@ -95,6 +147,7 @@ function teardownCrossWindowSync(pluginId: string): void {
 
 export function writePmpmPluginConfig(pluginId: string, config: PmpmPluginConfig): void {
   const key = getPmpmPluginConfigKey(pluginId);
+  writePmpmPluginConfigSyncState(pluginId, true);
   void broadcastDataUpdate(key, config, TAURI_EVENTS.PMPM_PLUGIN_CONFIG_UPDATED);
   notify(pluginId, config);
 }
@@ -110,6 +163,7 @@ export function patchPmpmPluginConfig(
 
 export function clearPmpmPluginConfig(pluginId: string): void {
   const key = getPmpmPluginConfigKey(pluginId);
+  writePmpmPluginConfigSyncState(pluginId, false);
   removeKey(key);
   // Fan out to other windows (storage event will cover browsers; Tauri windows also get an event).
   void emit(TAURI_EVENTS.PMPM_PLUGIN_CONFIG_UPDATED, { timestamp: Date.now(), key }).catch(() => {});

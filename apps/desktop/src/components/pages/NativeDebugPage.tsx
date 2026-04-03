@@ -817,14 +817,7 @@ export const NativeDebugPage: React.FC = () => {
 
   const currentBufferDebugSnapshot = useMemo(
     () => captureBufferDebugSnapshot(state, retireStats),
-    [
-      retireStats,
-      state.bufferedAhead,
-      state.currentTrack,
-      state.decodeBufferedAhead,
-      state.outputBufferedAhead,
-      state.playbackState,
-    ]
+    [retireStats, state]
   );
 
   useEffect(() => {
@@ -1730,6 +1723,7 @@ export const NativeDebugPage: React.FC = () => {
       processResidencyComparison,
       queuePathsPayloadDiagnostics,
       queueResidencyDiagnostics,
+      robustness.estimatedAudioBufferBytes,
       retireStats,
       trackSwitchSnapshot,
     ]

@@ -1,20 +1,23 @@
+import type {
+  CommandContributionDescriptor,
+  ContributionSource,
+  KeybindingContributionDescriptor,
+  PageContributionDescriptor,
+  SettingsPanelContributionDescriptor,
+  VisualizerContributionDescriptor,
+  WindowContributionDescriptor,
+} from '@pixel-matrix/plugin-platform-contracts';
 import type { NavigationPageData, NavigationPageType } from './navigation';
 
-export type ContributionSource = 'builtin' | 'plugin' | 'runtime';
-
-export type PageContribution = {
+export type PageContribution = Omit<PageContributionDescriptor, 'kind' | 'id'> & {
   kind: 'page';
   id: NavigationPageType;
   title: string;
   render: (page: NavigationPageData) => unknown;
   source?: ContributionSource;
-  order?: number;
-  group?: string;
-  tags?: string[];
-  metadata?: Record<string, unknown>;
 };
 
-export type WindowContribution = {
+export type WindowContribution = Omit<WindowContributionDescriptor, 'kind'> & {
   kind: 'window';
   id: string;
   title: string;
@@ -23,23 +26,18 @@ export type WindowContribution = {
   open: (options?: Record<string, unknown>) => Promise<void>;
   close?: () => Promise<void>;
   source?: ContributionSource;
-  metadata?: Record<string, unknown>;
 };
 
-export type SettingsPanelContribution = {
+export type SettingsPanelContribution = Omit<SettingsPanelContributionDescriptor, 'kind'> & {
   kind: 'settings-panel';
   id: string;
   title: string;
   description?: string;
   render: () => unknown;
   source?: ContributionSource;
-  order?: number;
-  group?: string;
-  tags?: string[];
-  metadata?: Record<string, unknown>;
 };
 
-export type VisualizerContribution = {
+export type VisualizerContribution = Omit<VisualizerContributionDescriptor, 'kind'> & {
   kind: 'visualizer';
   id: string;
   title: string;
@@ -47,26 +45,18 @@ export type VisualizerContribution = {
   inputs?: string[];
   open: (options?: Record<string, unknown>) => void | Promise<void>;
   source?: ContributionSource;
-  order?: number;
-  group?: string;
-  tags?: string[];
-  metadata?: Record<string, unknown>;
 };
 
-export type CommandContribution = {
+export type CommandContribution = Omit<CommandContributionDescriptor, 'kind'> & {
   kind: 'command';
   id: string;
   title: string;
   description?: string;
   run: (args?: unknown) => void | Promise<void>;
   source?: ContributionSource;
-  order?: number;
-  group?: string;
-  tags?: string[];
-  metadata?: Record<string, unknown>;
 };
 
-export type KeybindingContribution = {
+export type KeybindingContribution = Omit<KeybindingContributionDescriptor, 'kind'> & {
   kind: 'keybinding';
   id: string;
   /** Space-separated chords, each chord is '+' separated. Example: "ctrl+k ctrl+s" */
@@ -84,7 +74,6 @@ export type KeybindingContribution = {
   source?: ContributionSource;
   /** Priority among defaults; higher weight means later in default ordering. */
   weight?: number;
-  metadata?: Record<string, unknown>;
 };
 
 export type DesktopContribution =

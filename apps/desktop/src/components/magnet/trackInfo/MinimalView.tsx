@@ -4,10 +4,12 @@
  */
 
 import React, { useRef, useEffect, useState } from 'react';
+import { useT } from '../../../i18n';
 import { TrackInfoVariantProps } from './TrackInfoTypes';
 import './MinimalView.css';
 
 export const MinimalView: React.FC<TrackInfoVariantProps> = ({ data, logic }) => {
+  const t = useT();
   const [titleOverflow, setTitleOverflow] = useState(false);
   const [artistOverflow, setArtistOverflow] = useState(false);
   const titleRef = useRef<HTMLSpanElement>(null);
@@ -50,15 +52,15 @@ export const MinimalView: React.FC<TrackInfoVariantProps> = ({ data, logic }) =>
     <div
       className="track-info-minimal"
       onClick={handleClick}
-      title={data.track ? '点击进入歌曲页' : '未加载音频'}
+      title={data.track ? t('magnet.renderers.track-info.description') : t('pages.native-debug.currentTrack.none')}
     >
       <div className="minimal-text">
         <span ref={titleRef} className={`minimal-title ${titleOverflow ? 'overflow' : ''}`}>
-          <span className="minimal-text-inner">{data.track?.title || '未加载音频'}</span>
+          <span className="minimal-text-inner">{data.track?.title || t('pages.native-debug.currentTrack.none')}</span>
         </span>
         <span className="minimal-separator">—</span>
         <span ref={artistRef} className={`minimal-artist ${artistOverflow ? 'overflow' : ''}`}>
-          <span className="minimal-text-inner">{data.track?.artist || '请选择音频文件'}</span>
+          <span className="minimal-text-inner">{data.track?.artist || t('pages.track.empty.noTrack')}</span>
         </span>
       </div>
     </div>

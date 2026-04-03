@@ -257,7 +257,7 @@ function AppContent() {
       if (blurTimer !== null) window.clearTimeout(blurTimer);
       if (unlisten) unlisten();
     };
-  }, [isTauri]);
+  }, [isTauri, telemetry]);
 
   useEffect(() => {
     if (!isTauri) return;

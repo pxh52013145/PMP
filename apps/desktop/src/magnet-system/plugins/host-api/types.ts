@@ -1,6 +1,15 @@
+import type {
+  HostCapabilityError as SharedHostCapabilityError,
+  HostCapabilityInfo as SharedHostCapabilityInfo,
+  HostCapabilityInvokeContext as SharedHostCapabilityInvokeContext,
+  HostCapabilityInvokeRequest as SharedHostCapabilityInvokeRequest,
+  HostCapabilityResult as SharedHostCapabilityResult,
+} from '@pixel-matrix/plugin-platform-contracts';
 import type { NavigationPageData, NavigationPageType } from '../../../contracts/navigation';
 import type { PlayMode, Track } from '../../../services/audio';
 import type { AudioSpectrumFrame, AudioSpectrumTap } from '../../../services/audio/types';
+import type { CommandsService } from '../../../services/commands';
+import type { KeybindingsService } from '../../../services/keybindings';
 import type { DynamicColors } from '../../../utils/dynamicColors';
 
 export type PluginCoverSnapshot = {
@@ -16,20 +25,19 @@ export type PluginHostInfo = {
   runtime: 'tauri' | 'web';
 };
 
-export type PluginHostCapabilityInfo = {
-  id: string;
-  version: string;
-  permission?: string;
-  description?: string;
-  experimental?: boolean;
-};
+export type PluginHostCapabilityInfo = SharedHostCapabilityInfo;
 
-export type PluginHostCapabilityInvokeContext = {
-  pluginId: string;
-  hostLabel: string;
-  permissions: ReadonlySet<string>;
+export type PluginHostCapabilityInvokeContext = SharedHostCapabilityInvokeContext & {
   aiControl?: PluginHostAiControlBridge;
   audioInputAdapter?: PluginHostAudioInputAdapterBridge;
+  audioService?: HostAudioService;
+  commands?: CommandsService;
+  getCover?: () => Promise<PluginCoverSnapshot | null>;
+  keybindings?: KeybindingsService;
+  navigation?: HostNavigation;
+  configApi?: PluginConfigApi;
+  trayApi?: PluginHostTrayApi;
+  windowApi?: PluginWindowApi;
 };
 
 export type PluginHostAiControlBridge = {
@@ -161,18 +169,11 @@ export type PluginHostVoiceTrainingProviderInvokeRequest = PluginHostRuntimeProv
 export type PluginHostVoiceTrainingProviderHealth = PluginHostRuntimeProviderHealth;
 export type PluginHostVoiceTrainingProviderRegistration = PluginHostRuntimeProviderRegistration;
 
-export type PluginHostCapabilityInvokeRequest = {
-  method: string;
-  payload: unknown;
+export type PluginHostCapabilityInvokeRequest = Omit<SharedHostCapabilityInvokeRequest, 'context'> & {
   context: PluginHostCapabilityInvokeContext;
 };
 
-export type PluginHostCapabilityError = {
-  code: string;
-  message: string;
-  retryable?: boolean;
-  details?: unknown;
-};
+export type PluginHostCapabilityError = SharedHostCapabilityError;
 
 export type PluginHostAiAdapterProviderHealthStatus = 'ready' | 'degraded' | 'offline';
 
@@ -224,15 +225,7 @@ export type PluginHostAiAdapterProviderRegistration = {
   health?: () => Promise<PluginHostAiAdapterProviderHealth> | PluginHostAiAdapterProviderHealth;
 };
 
-export type PluginHostCapabilityResult<T = unknown> =
-  | {
-      ok: true;
-      data: T;
-    }
-  | {
-      ok: false;
-      error: PluginHostCapabilityError;
-    };
+export type PluginHostCapabilityResult<T = unknown> = SharedHostCapabilityResult<T>;
 
 export type PluginHostCapabilityHandler = (
   request: PluginHostCapabilityInvokeRequest
@@ -318,6 +311,12 @@ export type PluginWindowApi = {
     }
   ) => Promise<void>;
   close: (windowId: string) => Promise<void>;
+};
+
+export type PluginHostTrayApi = {
+  supported: boolean;
+  getMainWindowVisible: () => Promise<boolean | null> | boolean | null;
+  activateItem: (itemId: string) => Promise<void>;
 };
 
 export type PluginMountApi = {

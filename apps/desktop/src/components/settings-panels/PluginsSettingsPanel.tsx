@@ -10,6 +10,8 @@ import {
   createMagnetTemplateFromPlugin,
   getPmpmPluginsRevision,
   installPmpmPluginFromFilePath,
+  listPmpmPermissionCapabilityBindings,
+  loadInstalledPmpmExtensionRecords,
   loadInstalledPmpmPlugins,
   parsePmpmPluginFromFilePath,
   setPmpmPluginDeniedPermissions,
@@ -127,6 +129,17 @@ export function PluginsSettingsPanel() {
     void pluginStoreRevision;
     return loadInstalledPmpmPlugins();
   }, [pluginStoreRevision]);
+
+  const installedExtensionRecords = useMemo(() => {
+    void pluginStoreRevision;
+    return loadInstalledPmpmExtensionRecords();
+  }, [pluginStoreRevision]);
+
+  const installedExtensionRecordById = useMemo(() => {
+    return new Map(
+      installedExtensionRecords.map((record) => [record.manifest.identity.id, record] as const)
+    );
+  }, [installedExtensionRecords]);
 
   const trustedKeyIds = useMemo(() => {
     void trustedKeysRevision;
@@ -379,12 +392,24 @@ export function PluginsSettingsPanel() {
           installedPlugins.map((plugin) => {
             const meta = plugin.manifest.metadata;
             const permissions = plugin.manifest.permissions ?? [];
+            const extensionRecord = installedExtensionRecordById.get(meta.id) ?? null;
+            const permissionCapabilityBindings = listPmpmPermissionCapabilityBindings(plugin);
+            const capabilityIdByPermission = new Map(
+              permissionCapabilityBindings.map((binding) => [binding.permission, binding.capabilityId] as const)
+            );
             const deniedPermissions = plugin.deniedPermissions ?? [];
             const deniedSet = new Set(deniedPermissions);
             const isActive = activeMagnetIds.has(meta.id);
             const enabled = plugin.enabled ?? true;
             const signatureKeyId = plugin.signature?.keyId ?? null;
             const signatureTrusted = signatureKeyId ? trustedKeySet.has(signatureKeyId) : false;
+            const extensionProjectionTitle = extensionRecord
+              ? [
+                  ...extensionRecord.manifest.hostTargets.map((target) => target.hostId),
+                  ...extensionRecord.manifest.runtimes.map((runtime) => runtime.runtimeId),
+                  ...(extensionRecord.manifest.compat?.map((entry) => entry.compatLayerId) ?? []),
+                ].join('\n')
+              : undefined;
             const panels = plugin.manifest.contributions?.settingsPanels?.length ?? 0;
             const pages = plugin.manifest.contributions?.pages?.length ?? 0;
             const windows = plugin.manifest.contributions?.windows?.length ?? 0;
@@ -400,7 +425,10 @@ export function PluginsSettingsPanel() {
                 <div className="settings-plugin-meta">
                   <div className="settings-plugin-title">
                     {meta.name}{' '}
-                    <span className="settings-plugin-subtitle">
+                    <span
+                      className="settings-plugin-subtitle"
+                      title={extensionProjectionTitle}
+                    >
                       ({meta.id}@{meta.version})
                     </span>
                   </div>
@@ -468,7 +496,9 @@ export function PluginsSettingsPanel() {
                                   restartPmpmRuntime(meta.id, 'permissions-updated');
                               }}
                             >
-                              {perm}
+                              <span title={capabilityIdByPermission.get(perm) ?? undefined}>
+                                {perm}
+                              </span>
                             </PmpCheckbox>
                           );
                         })}

@@ -123,7 +123,6 @@ function toUserRuleJson(rules: KeybindingRule[]): string {
       command: r.command,
       ...(typeof r.when === 'string' && r.when.trim() ? { when: r.when } : {}),
       ...(typeof r.args !== 'undefined' ? { args: r.args } : {}),
-      ...(typeof r.weight === 'number' && Number.isFinite(r.weight) ? { weight: r.weight } : {}),
     }));
   return JSON.stringify(payload, null, 2);
 }
@@ -144,7 +143,6 @@ function parseUserRulesJson(input: string): {
     | { kind: 'keyInvalid'; index: number }
     | { kind: 'commandInvalid'; index: number }
     | { kind: 'whenInvalidType'; index: number }
-    | { kind: 'weightInvalid'; index: number }
     | { kind: 'whenParseFailed'; index: number; message: string };
 } {
   let raw: unknown;
@@ -170,7 +168,6 @@ function parseUserRulesJson(input: string): {
     const command = item.command;
     const when = item.when;
     const args = item.args;
-    const weight = item.weight;
 
     if (typeof key !== 'string' || key.trim().length === 0) {
       return { ok: false, error: { kind: 'keyInvalid', index: i } };
@@ -180,11 +177,6 @@ function parseUserRulesJson(input: string): {
     }
     if (typeof when !== 'undefined' && typeof when !== 'string') {
       return { ok: false, error: { kind: 'whenInvalidType', index: i } };
-    }
-    if (typeof weight !== 'undefined') {
-      if (typeof weight !== 'number' || !Number.isFinite(weight)) {
-        return { ok: false, error: { kind: 'weightInvalid', index: i } };
-      }
     }
 
     if (typeof when === 'string' && when.trim()) {
@@ -199,7 +191,6 @@ function parseUserRulesJson(input: string): {
       command,
       ...(typeof when === 'string' && when.trim() ? { when } : {}),
       ...(typeof args !== 'undefined' ? { args } : {}),
-      ...(typeof weight === 'number' ? { weight } : {}),
     });
   }
 
@@ -386,10 +377,6 @@ export const KeyboardShortcutsPage: React.FC = () => {
       }
       if (err.kind === 'whenInvalidType') {
         setUserJsonError(t('pages.keyboard-shortcuts.error.whenInvalidType', { index: err.index }));
-        return;
-      }
-      if (err.kind === 'weightInvalid') {
-        setUserJsonError(t('pages.keyboard-shortcuts.error.weightInvalid', { index: err.index }));
         return;
       }
       if (err.kind === 'whenParseFailed') {

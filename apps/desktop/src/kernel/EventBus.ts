@@ -1,11 +1,11 @@
 export type EventMap = Record<string, unknown>;
-import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
+import { getKernelLogger } from './logging';
 
 export type EventMeta = {
   timestamp: number;
   source?: string;
 };
-const telemetry = getTelemetryLogger('kernel', 'EventBus');
+const telemetry = getKernelLogger('EventBus');
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

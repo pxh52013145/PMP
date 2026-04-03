@@ -55,6 +55,7 @@ export function buildPlatformWorkspaceDescriptors(
       mode: GENERIC_PLATFORM_WORKSPACE_MODE,
       workspaceKind: 'generic',
       displayName: 'Generic',
+      labelKey: 'magnet.platform.mode.generic',
     },
   ];
 }

@@ -7,8 +7,6 @@ import {
   type ReactNode,
 } from 'react';
 
-import { DEFAULT_BACKGROUND_SETTINGS } from '../../constants/defaultBackground';
-import { readJson } from '../../modules/storage';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { broadcastDataUpdate, setupDualListener, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import {
@@ -19,42 +17,10 @@ import {
   resolveThemeSurfaceTargetId,
 } from '../bindings';
 import { normalizeTheme } from '../normalizeTheme';
+import { DEFAULT_THEME, loadThemeFromStorage } from '../runtimeTheme';
 import { assignThemeSurface, isComponentThemeEmpty, removeThemeSurface, resolveThemeSurface } from '../surfaces';
 import type { ComponentTheme, Theme, ThemeBinding, ThemeBindingId, ThemeSurfaceId } from '../types/theme';
 import type { ThemeImportCandidate } from '../types/themeImport';
-
-const DEFAULT_THEME: Theme = {
-  id: 'theme-default',
-  name: '榛樿涓婚',
-  version: '1.0.0',
-  pixel: {
-    shape: 'circle',
-    size: 1.0,
-    opacity: 1.0,
-    colors: {
-      default: { slot: 'primary', alpha: 0.6 },
-      hover: { slot: 'accent', state: 'hover' },
-      active: { slot: 'primary', state: 'active' },
-      occupied: { slot: 'secondary', alpha: 0.3 },
-    },
-  },
-  background: DEFAULT_BACKGROUND_SETTINGS,
-  fonts: {
-    primary: 'Inter, sans-serif',
-  },
-  bindings: {
-    'magnet.track-info': {
-      variant: 'spinning-vinyl',
-      capabilities: {
-        dynamicColor: {
-          enabled: true,
-          source: 'cover',
-          apply: 'full',
-        },
-      },
-    },
-  },
-};
 const telemetry = getTelemetryLogger('theme', 'ThemeContextWithSync');
 
 function readErrorMessage(error: unknown): string {
@@ -63,11 +29,11 @@ function readErrorMessage(error: unknown): string {
 
 interface ThemeContextValue {
   theme: Theme;
-  applyTheme: (theme: ThemeImportCandidate) => void;
+  applyTheme: (theme: ThemeImportCandidate) => Promise<void>;
   getBinding: (bindingId: ThemeBindingId) => ThemeBinding;
-  updateBinding: (bindingId: ThemeBindingId, binding: ThemeBinding) => void;
+  updateBinding: (bindingId: ThemeBindingId, binding: ThemeBinding) => Promise<void>;
   getSurfaceTheme: (surfaceId: ThemeSurfaceId) => ComponentTheme;
-  updateSurfaceTheme: (surfaceId: ThemeSurfaceId, surfaceTheme: ComponentTheme) => void;
+  updateSurfaceTheme: (surfaceId: ThemeSurfaceId, surfaceTheme: ComponentTheme) => Promise<void>;
 }
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
@@ -75,11 +41,6 @@ const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 interface ThemeProviderProps {
   children: ReactNode;
   initialTheme?: ThemeImportCandidate;
-}
-
-function loadThemeFromStorage(): Theme | null {
-  const theme = readJson<ThemeImportCandidate | null>(STORAGE_KEYS.THEME_CONFIG, null);
-  return theme ? normalizeTheme(theme) : null;
 }
 
 async function saveAndBroadcastTheme(theme: Theme): Promise<void> {
@@ -93,6 +54,7 @@ async function saveAndBroadcastTheme(theme: Theme): Promise<void> {
         themeId: normalizedTheme.id,
       },
     });
+    throw error;
   }
 }
 

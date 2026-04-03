@@ -732,7 +732,7 @@
   }
 }
 
-/* 鏈€夋嫨姝屽崟 */
+/* Empty selection state */
 .playlists-no-selection {
   display: flex;
   flex-direction: column;
@@ -754,7 +754,7 @@
   line-height: 1.6;
 }
 
-/* 娣诲姞姝屾洸妯℃€佹 */
+/* Playlists modal layout */
 
 /* Kugou-like hierarchy refresh */
 .playlists-container {

@@ -6,10 +6,10 @@ import type { ServiceToken } from './tokens';
 import type { RegisterOptions } from './ServiceRegistry';
 import type { Contribution, RegisterContributionOptions } from './ContributionRegistry';
 import type { EventListener, ScopedEventBus } from './EventBus';
-import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
+import { getKernelLogger } from './logging';
 
 type Disposable = () => void;
-const telemetry = getTelemetryLogger('kernel', 'ModuleLoader');
+const telemetry = getKernelLogger('ModuleLoader');
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

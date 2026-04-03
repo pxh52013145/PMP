@@ -32,7 +32,7 @@ export const StandardPrevious: React.FC<PlaybackVariantProps> = ({ data, logic, 
       aria-label={t('commands.audio.previous-track.description')}
     >
       <PreviousIcon />
-      {skinProps.showLabel ? <span className="playback-step-label">Prev</span> : null}
+      {skinProps.showLabel ? <span className="playback-step-label">{t('magnet.renderers.btn-previous.preview')}</span> : null}
       {skinProps.showQueueCount && queueLength > 0 ? (
         <span className="playback-step-count" aria-hidden="true">
           {queueLength}
