@@ -5,6 +5,7 @@ import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { useKernel } from '../../contexts/KernelContext';
 import { GOVERNANCE_SERVICE_TOKEN } from '../../services/governance';
+import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import { useT } from '../../i18n';
 import {
   createMagnetTemplateFromPlugin,
@@ -39,6 +40,11 @@ import {
   setPmpmSandboxRuntimeEnabled,
   subscribePmpmSandbox,
 } from '../../magnet-system/plugins/pmpmSandboxConfig';
+import {
+  installStreamProtocolDemoPlugin,
+  STREAM_PROTOCOL_DEMO_PLUGIN_ID,
+  STREAM_PROTOCOL_DEMO_VISUALIZER_ID,
+} from '../../magnet-system/plugins/streamProtocolDemoPlugin';
 import { resolveInstalledPmpmPluginRuntime } from '../../magnet-system/plugins/runtime';
 import { useConfirmDialog } from '../core/ConfirmDialog';
 import { PmpButton, PmpCard, PmpCheckbox } from '../primitives';
@@ -87,6 +93,7 @@ export function PluginsSettingsPanel() {
   const kernel = useKernel();
   const t = useT();
   const governance = kernel.services.getOptional(GOVERNANCE_SERVICE_TOKEN);
+  const navigationService = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
   const { activeMagnetIds, magnetLibrary, setMagnetLibrary } = useMagnetConfig();
   const isTauri = isTauriRuntime();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
@@ -285,6 +292,25 @@ export function PluginsSettingsPanel() {
     trustedKeySet,
   ]);
 
+  const handleInstallStreamDemo = useCallback(async () => {
+    if (busy) return;
+
+    setBusy(true);
+    setError(null);
+
+    try {
+      const installed = await installStreamProtocolDemoPlugin();
+      navigationService.navigateTo('plugin-visualizer', {
+        pluginId: installed.pluginId,
+        visualizerId: installed.visualizerId,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, navigationService]);
+
   const handleUninstall = useCallback(
     async (pluginId: string) => {
       if (busy) return;
@@ -359,9 +385,25 @@ export function PluginsSettingsPanel() {
           <p className="settings-card-desc">{t('settings.plugins.pmpm.desc')}</p>
         </div>
 
-        <PmpButton className="settings-action-btn" variant="default" onClick={() => void handleInstall()} disabled={busy}>
-          {t('common.action.installEllipsis')}
-        </PmpButton>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <PmpButton
+            className="settings-action-btn"
+            variant="default"
+            onClick={() => void handleInstallStreamDemo()}
+            disabled={busy}
+            title={STREAM_PROTOCOL_DEMO_PLUGIN_ID}
+          >
+            {t('settings.plugins.demo.install')}
+          </PmpButton>
+          <PmpButton
+            className="settings-action-btn"
+            variant="default"
+            onClick={() => void handleInstall()}
+            disabled={busy}
+          >
+            {t('common.action.installEllipsis')}
+          </PmpButton>
+        </div>
       </div>
 
       {error && <div className="settings-inline-error">{error}</div>}
@@ -540,6 +582,11 @@ export function PluginsSettingsPanel() {
                         {t('settings.plugins.tag.visualizersCount', { count: visualizers })}
                       </span>
                     )}
+                    {meta.id === STREAM_PROTOCOL_DEMO_PLUGIN_ID && (
+                      <span className="settings-plugin-tag">
+                        {t('settings.plugins.demo.tag')}
+                      </span>
+                    )}
                     {commands > 0 && (
                       <span className="settings-plugin-tag">
                         {t('settings.plugins.tag.commandsCount', { count: commands })}
@@ -612,6 +659,22 @@ export function PluginsSettingsPanel() {
                 </div>
 
                 <div className="settings-plugin-actions">
+                  {meta.id === STREAM_PROTOCOL_DEMO_PLUGIN_ID && (
+                    <PmpButton
+                      type="button"
+                      className="settings-action-btn"
+                      variant="default"
+                      disabled={busy}
+                      onClick={() =>
+                        navigationService.navigateTo('plugin-visualizer', {
+                          pluginId: STREAM_PROTOCOL_DEMO_PLUGIN_ID,
+                          visualizerId: STREAM_PROTOCOL_DEMO_VISUALIZER_ID,
+                        })
+                      }
+                    >
+                      {t('common.action.open')}
+                    </PmpButton>
+                  )}
                   <PmpButton
                     type="button"
                     className="settings-action-btn"

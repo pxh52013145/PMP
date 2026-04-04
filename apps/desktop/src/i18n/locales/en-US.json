@@ -865,6 +865,8 @@
   "settings.plugins.tag.runtimeMissing": "runtime: missing",
   "settings.plugins.tag.launcher": "launcher: {launcherId}",
   "settings.plugins.tag.transport": "transport: {transport}",
+  "settings.plugins.demo.install": "Install Stream Demo",
+  "settings.plugins.demo.tag": "demo:stream-protocol",
   "settings.plugins.runtime.issue": "issue: {issue}",
   "settings.plugins.runtime.candidates": "candidates: {launchers}",
   "settings.plugins.tag.settingsPanelsCount": "settings: {count}",
