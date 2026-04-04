@@ -227,10 +227,12 @@ import {
 } from '../../services/telemetry';
 import { DEFAULT_THEME } from '../../themes/runtimeTheme';
 import {
+  configureAudioInputAdapterGovernance,
   createPluginMountApi,
   getPmpHostCapabilityPackDescriptor,
   listPmpHostCapabilityFamilies,
   listPluginHostCapabilities,
+  registerAudioInputAdapterProvider,
 } from './pluginHostApi';
 import type { HostAudioService, HostNavigation, PluginHostTrayApi } from './pluginHostApi';
 import { clearPmpmPluginConfig } from './pluginConfig';
@@ -466,6 +468,14 @@ function createMountApi(options: {
 }
 
 afterEach(() => {
+  configureAudioInputAdapterGovernance({
+    thirdPartyEnabled: false,
+    allowedProviderIds: null,
+    timeoutMs: 2_000,
+    maxOpenSessionsPerPlugin: 24,
+    quarantineThreshold: 3,
+    quarantineMs: 120_000,
+  });
   durableTextState.clear();
   clearMagnetRenderers();
   clearMagnetVariants();
@@ -475,6 +485,7 @@ afterEach(() => {
   if (typeof localStorage !== 'undefined') {
     localStorage.clear();
   }
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -1586,6 +1597,138 @@ describe('host.pmp capabilities', () => {
         inputs: [{ id: 'symphonia', builtin: true }],
       },
     });
+  });
+
+  it('opens and closes audio input sessions through the host session facade', async () => {
+    const api = createMountApi({
+      permissions: ['api:host', 'api:host-capability', 'api:audio-input-adapter'],
+      audioService: createAudioServiceStub({
+        listAudioInputs: () => ['symphonia'],
+      }),
+    });
+
+    const opened = await api.host.openSession('host.pmp.audio-engine.input', 'openSession', {
+      path: 'D:/music/demo.flac',
+    });
+
+    expect(opened).toMatchObject({
+      sessionId: expect.stringMatching(/^audio-input-session-/),
+      metadata: {
+        sourcePath: 'D:/music/demo.flac',
+        selectedAdapterKind: 'builtin',
+        selectedInputId: 'symphonia',
+      },
+    });
+
+    await expect(
+      api.host.closeSession('host.pmp.audio-engine.input', opened?.sessionId ?? '')
+    ).resolves.toBeUndefined();
+  });
+
+  it('opens audio analysis streams through the host stream facade', async () => {
+    vi.useFakeTimers();
+
+    const api = createMountApi({
+      permissions: ['api:host', 'api:host-capability', 'api:audio-visual'],
+    });
+
+    const stream = await api.host.openStream(
+      'host.pmp.audio-engine.analysis',
+      'openSpectrumFrameStream',
+      {
+        tap: 'pre-dsp',
+        intervalMs: 20,
+      }
+    );
+
+    expect(stream).toMatchObject({
+      streamId: expect.stringMatching(/^audio-analysis-stream-/),
+      mode: 'push',
+      transport: 'inline-json',
+    });
+
+    const onData = vi.fn();
+    const onEnd = vi.fn();
+    const unlistenData = stream?.onData(onData);
+    const unlistenEnd = stream?.onEnd(onEnd);
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(onData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tap: 'pre-dsp',
+      }),
+      expect.objectContaining({
+        streamId: stream?.streamId,
+        sequence: 0,
+      })
+    );
+
+    await stream?.dispose('done');
+
+    expect(onEnd).toHaveBeenCalledWith(
+      'done',
+      expect.objectContaining({
+        streamId: stream?.streamId,
+        reason: 'done',
+      })
+    );
+
+    unlistenData?.();
+    unlistenEnd?.();
+  });
+
+  it('best-effort closes provider sessions during runtime cleanup reasons', async () => {
+    configureAudioInputAdapterGovernance({
+      thirdPartyEnabled: true,
+      allowedProviderIds: ['provider.cleanup-test'],
+    });
+
+    const unregisterProvider = registerAudioInputAdapterProvider({
+      info: {
+        id: 'provider.cleanup-test',
+        name: 'Cleanup Test Provider',
+        version: '1.0.0',
+        protocolVersion: '1.0.0',
+      },
+      openSession: async () => ({
+        providerSessionId: 'provider-session-cleanup',
+        selectedInputId: 'provider.cleanup-test',
+      }),
+      closeSession: async () => {
+        throw new Error('provider close failed');
+      },
+    });
+
+    try {
+      const api = createMountApi({
+        permissions: ['api:host', 'api:host-capability', 'api:audio-input-adapter'],
+      });
+
+      const opened = await api.host.openSession('host.pmp.audio-engine.input', 'openSession', {
+        path: 'D:/music/demo.flac',
+        providerId: 'provider.cleanup-test',
+        fallbackToBuiltin: false,
+      });
+
+      await expect(
+        api.host.closeSession(
+          'host.pmp.audio-engine.input',
+          opened?.sessionId ?? '',
+          'runtime-dispose'
+        )
+      ).resolves.toBeUndefined();
+
+      await expect(
+        api.host.closeSession(
+          'host.pmp.audio-engine.input',
+          opened?.sessionId ?? '',
+          'runtime-dispose'
+        )
+      ).rejects.toThrow(/Unknown audio input adapter session/);
+    } finally {
+      unregisterProvider();
+    }
   });
 
   it('routes music platform catalog/search/prepare through existing facades', async () => {

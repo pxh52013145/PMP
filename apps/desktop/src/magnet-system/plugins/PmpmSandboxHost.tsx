@@ -33,19 +33,20 @@ import {
   buildPmpmRuntimeInitSnapshot,
   buildPmpmViewMountRequestSnapshot,
 } from './pmpmRuntimeBridgeSnapshot';
+import { dispatchPmpmCompatRpcRequest } from './runtime/pmpmCompatCapabilityTransport';
+import { createPmpmCompatRuntimeResourceRegistry } from './runtime/pmpmCompatRuntimeResources';
 
 const PMPM_SANDBOX_STARTUP_TIMEOUT_MS = 5_000;
 const PMPM_SANDBOX_HEARTBEAT_INTERVAL_MS = 1_500;
 const PMPM_SANDBOX_UNRESPONSIVE_TIMEOUT_MS = 8_000;
 
-type SandboxSurface =
+export type PmpmSandboxSurface =
   | { kind: 'magnet' }
   | { kind: 'settings'; panelId?: string }
   | { kind: 'page'; pageId: string }
   | { kind: 'visualizer'; visualizerId: string }
   | { kind: 'window'; windowId: string };
 
-type RpcRequest = Extract<PmpmBridgeIncomingMessage, { type: 'pmpm:rpc' }>;
 type PmpmCompatCapabilityRevokeDrillMessage = {
   type: 'pmpm:capabilities-revoke';
   requestId: string;
@@ -68,7 +69,7 @@ type FramePostMessage =
   | Omit<PmpmBridgeOutgoingMessage, 'frameId'>
   | PmpmCompatCapabilityRevokeDrillMessage;
 
-function resolveCrashSurface(surface: SandboxSurface['kind']): PmpmPluginCrashSurface {
+function resolveCrashSurface(surface: PmpmSandboxSurface['kind']): PmpmPluginCrashSurface {
   switch (surface) {
     case 'magnet':
       return 'magnet';
@@ -109,7 +110,7 @@ export function PmpmSandboxHost({
   hostLabel,
   mountContext,
   ...surface
-}: { pluginId: string; hostLabel: string; mountContext?: unknown } & SandboxSurface) {
+}: { pluginId: string; hostLabel: string; mountContext?: unknown } & PmpmSandboxSurface) {
   const kernel = useKernel();
   const audioService = useAudioService();
   const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
@@ -169,6 +170,10 @@ export function PmpmSandboxHost({
       keybindings,
     });
   }, [audioService, commands, hostLabel, keybindings, navigation, permissions, pluginId]);
+  const runtimeResources = useMemo(() => {
+    void frameId;
+    return createPmpmCompatRuntimeResourceRegistry();
+  }, [frameId]);
 
   const surfaceId =
     surface.kind === 'page'
@@ -261,6 +266,7 @@ export function PmpmSandboxHost({
         if (crashReportedRef.current) return;
         crashReportedRef.current = true;
         const message = typeof data.message === 'string' ? data.message : 'Plugin error';
+        void runtimeResources.cleanup('runtime-crash');
         recordPmpmPluginCrash(pluginId, message, resolveCrashSurface(surface.kind));
         setError(message);
         return;
@@ -287,83 +293,12 @@ export function PmpmSandboxHost({
 
       if (data.type === 'pmpm:rpc') {
         void (async () => {
-          const request = data as RpcRequest;
-          const respond = (payload: { ok: boolean; result?: unknown; error?: string }) => {
-            postToFrame({
-              type: 'pmpm:rpc-result',
-              id: request.id,
-              ...payload,
-            });
-          };
-
-          try {
-            const args = Array.isArray(request.args) ? request.args : [];
-            let result: unknown;
-            switch (request.method) {
-              case 'audio.play':
-                result = await hostApi.audio.play();
-                break;
-              case 'audio.pause':
-                result = await hostApi.audio.pause();
-                break;
-              case 'audio.stop':
-                result = hostApi.audio.stop();
-                break;
-              case 'audio.seek':
-                result = hostApi.audio.seek(args[0] as number);
-                break;
-              case 'audio.setVolume':
-                result = hostApi.audio.setVolume(args[0] as number);
-                break;
-              case 'audio.toggleMute':
-                result = hostApi.audio.toggleMute();
-                break;
-              case 'audio.playNext':
-                result = await hostApi.audio.playNext();
-                break;
-              case 'audio.playPrevious':
-                result = await hostApi.audio.playPrevious();
-                break;
-              case 'audio.playTrackAtIndex':
-                result = await hostApi.audio.playTrackAtIndex(args[0] as number);
-                break;
-              case 'audio.setPlayMode':
-                result = hostApi.audio.setPlayMode(args[0] as never);
-                break;
-              case 'audio.getCover':
-                result = await hostApi.audio.getCover();
-                break;
-              case 'navigation.navigateTo':
-                result = hostApi.navigation.navigateTo(args[0] as never, args[1] as never);
-                break;
-              case 'navigation.goBack':
-                result = hostApi.navigation.goBack();
-                break;
-              case 'config.set':
-                result = hostApi.config.set(args[0] as never);
-                break;
-              case 'config.patch':
-                result = hostApi.config.patch(args[0] as never);
-                break;
-              case 'config.reset':
-                result = hostApi.config.reset();
-                break;
-              case 'window.open':
-                result = await hostApi.window.open(args[0] as never, args[1] as never);
-                break;
-              case 'window.close':
-                result = await hostApi.window.close(args[0] as never);
-                break;
-              default:
-                throw new Error(`Unsupported RPC method: ${request.method}`);
-            }
-            respond({ ok: true, result });
-          } catch (rpcError) {
-            respond({
-              ok: false,
-              error: rpcError instanceof Error ? rpcError.message : String(rpcError),
-            });
-          }
+          const response = await dispatchPmpmCompatRpcRequest(hostApi, permissions, data, {
+            runtimeResources,
+            emitProtocolMessage: (message) =>
+              postToFrame({ type: 'pmpm:event', name: 'protocol.message', payload: message }),
+          });
+          postToFrame(response);
         })();
         return;
       }
@@ -377,6 +312,7 @@ export function PmpmSandboxHost({
       if (frameReadyRef.current) return;
       if (crashReportedRef.current) return;
       crashReportedRef.current = true;
+      void runtimeResources.cleanup('runtime-crash');
       recordPmpmPluginCrash(
         pluginId,
         'Plugin sandbox boot timeout',
@@ -388,7 +324,17 @@ export function PmpmSandboxHost({
       window.removeEventListener('message', handler);
       window.clearTimeout(bootTimer);
     };
-  }, [enabled, frameId, hostApi, hostLabel, pluginId, postToFrame, surface.kind]);
+  }, [
+    enabled,
+    frameId,
+    hostApi,
+    hostLabel,
+    permissions,
+    pluginId,
+    postToFrame,
+    runtimeResources,
+    surface.kind,
+  ]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -490,6 +436,7 @@ export function PmpmSandboxHost({
         if (disposed) return;
         if (crashReportedRef.current) return;
         crashReportedRef.current = true;
+        void runtimeResources.cleanup('runtime-crash');
         recordPmpmPluginCrash(pluginId, bootError, crashSurface);
         setError(bootError instanceof Error ? bootError.message : String(bootError));
       }
@@ -592,6 +539,7 @@ export function PmpmSandboxHost({
         surface: crashSurface,
         timeoutMs,
       });
+      void runtimeResources.cleanup('runtime-unresponsive');
       recordPmpmPluginCrash(pluginId, `Plugin runtime unresponsive (${elapsed}ms)`, crashSurface);
     }, PMPM_SANDBOX_HEARTBEAT_INTERVAL_MS);
 
@@ -610,6 +558,7 @@ export function PmpmSandboxHost({
       }
       if (spectrumHandle !== null) window.clearInterval(spectrumHandle);
       window.clearInterval(pingInterval);
+      void runtimeResources.cleanup('runtime-dispose');
       postToFrame({ type: 'pmpm:dispose' });
     };
   }, [
@@ -628,6 +577,7 @@ export function PmpmSandboxHost({
     plugin,
     pluginId,
     postToFrame,
+    runtimeResources,
     surface.kind,
     surfaceId,
   ]);

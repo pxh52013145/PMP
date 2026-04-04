@@ -12,13 +12,13 @@ import {
   recordPmpmPluginCrash,
   subscribePmpmPlugins,
 } from './pmpm';
-import {
-  clearPmpmPluginRuntimeCache,
-  ensurePmpmPluginRuntime,
-  type PmpmPluginRuntime,
-} from './pmpmRuntime';
-import { PmpmSandboxHost } from './PmpmSandboxHost';
+import { clearPmpmPluginRuntimeCache } from './pmpmRuntime';
 import { createPluginMountApi, type PluginMountApi, type PluginNavigationSnapshot } from './pluginHostApi';
+import {
+  getResolvedPmpmLauncherAdapter,
+  getResolvedPmpmLauncherAdapterError,
+  resolveInstalledPmpmPluginRuntime,
+} from './runtime';
 import {
   getPmpmSandboxRevision,
   getPmpmSandboxRuntimeEnabled,
@@ -77,6 +77,20 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
     void pluginStoreRevision;
     return getPmpmPluginEffectivePermissions(pluginId);
   }, [pluginId, pluginStoreRevision]);
+  const runtimeResolution = useMemo(() => {
+    void pluginStoreRevision;
+    return resolveInstalledPmpmPluginRuntime(pluginId, {
+      preferSandbox: sandboxEnabled,
+    });
+  }, [pluginId, pluginStoreRevision, sandboxEnabled]);
+  const launcherAdapter = useMemo(
+    () => getResolvedPmpmLauncherAdapter(runtimeResolution),
+    [runtimeResolution]
+  );
+  const runtimeResolutionError =
+    plugin && enabled
+      ? getResolvedPmpmLauncherAdapterError(runtimeResolution)
+      : null;
 
   const navigation = useMemo(() => {
     return {
@@ -124,22 +138,25 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
 
   useEffect(() => {
     if (!enabled) return;
-    if (sandboxEnabled) return;
+    if (!launcherAdapter || launcherAdapter.mode !== 'inline') return;
     const container = containerRef.current;
     if (!container) return;
 
     let cancelled = false;
     setError(null);
 
-    void ensurePmpmPluginRuntime(pluginId)
-      .then((runtime) => {
+    void launcherAdapter
+      .mountSurface({
+        pluginId,
+        hostLabel: 'PluginMagnetHost',
+        surface: { kind: 'magnet' },
+        mountContext,
+        container,
+        api,
+      })
+      .then((cleanup) => {
         if (cancelled) return;
-        try {
-          const cleanup = (runtime as PmpmPluginRuntime).mount(container, api, mountContext);
-          cleanupRef.current = typeof cleanup === 'function' ? cleanup : null;
-        } catch (err) {
-          throw err instanceof Error ? err : new Error(String(err));
-        }
+        cleanupRef.current = typeof cleanup === 'function' ? cleanup : null;
       })
       .catch((err) => {
         if (cancelled) return;
@@ -157,7 +174,7 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
         container.innerHTML = '';
       }
     };
-  }, [api, enabled, mountContext, pluginId, restartToken, sandboxEnabled]);
+  }, [api, enabled, launcherAdapter, mountContext, pluginId, restartToken]);
 
   if (!plugin) {
     return (
@@ -177,22 +194,20 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
     );
   }
 
-  if (sandboxEnabled) {
-    return (
-      <PmpmSandboxHost
-        pluginId={pluginId}
-        hostLabel="PluginMagnetHost"
-        kind="magnet"
-        mountContext={mountContext}
-      />
-    );
+  if (launcherAdapter?.mode === 'sandbox') {
+    return launcherAdapter.renderSurface({
+      pluginId,
+      hostLabel: 'PluginMagnetHost',
+      surface: { kind: 'magnet' },
+      mountContext,
+    });
   }
 
-  if (error) {
+  if (runtimeResolutionError ?? error) {
     return (
       <div style={{ width: '100%', height: '100%', padding: 10, color: 'rgba(255,255,255,0.75)' }}>
         <div style={{ fontWeight: 600 }}>Plugin Error</div>
-        <div style={{ fontSize: 12, marginTop: 6 }}>{error}</div>
+        <div style={{ fontSize: 12, marginTop: 6 }}>{runtimeResolutionError ?? error}</div>
       </div>
     );
   }

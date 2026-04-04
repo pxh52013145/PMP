@@ -2480,6 +2480,12 @@ function createAudioInputAdapterHandler(): PluginHostCapabilityHandler {
       case 'closeSession': {
         const payload = asObject(request.payload);
         const sessionId = asNonEmptyString(payload?.sessionId);
+        const closeReason = asNonEmptyString(payload?.reason) ?? 'requested';
+        const bestEffortClose =
+          closeReason === 'runtime-dispose' ||
+          closeReason === 'runtime-crash' ||
+          closeReason === 'runtime-unresponsive' ||
+          closeReason === 'runtime-command-finished';
         if (!sessionId) {
           return resultError('INVALID_PAYLOAD', 'payload.sessionId is required');
         }
@@ -2517,13 +2523,15 @@ function createAudioInputAdapterHandler(): PluginHostCapabilityHandler {
                 toErrorMessage(error),
                 request.context
               );
-              return resultError('CLOSE_SESSION_FAILED', toErrorMessage(error), {
-                retryable: true,
-                details: {
-                  sessionId,
-                  providerId: existing.adapterId,
-                },
-              });
+              if (!bestEffortClose) {
+                return resultError('CLOSE_SESSION_FAILED', toErrorMessage(error), {
+                  retryable: true,
+                  details: {
+                    sessionId,
+                    providerId: existing.adapterId,
+                  },
+                });
+              }
             }
           }
         }
@@ -2538,7 +2546,7 @@ function createAudioInputAdapterHandler(): PluginHostCapabilityHandler {
           adapterKind: existing.adapterKind,
           adapterId: existing.adapterId,
           providerSessionId: existing.providerSessionId,
-          reason: 'requested',
+          reason: closeReason,
         });
 
         return resultOk({
@@ -4464,6 +4472,7 @@ function createPmpAudioAnalysisHandler(): PluginHostCapabilityHandler {
           stage: 'host-pack',
           implementation: 'pmp-audio-spectrum',
           methods: ['describe', 'getSpectrum', 'getSpectrumFrame'],
+          streamMethods: ['openSpectrumFrameStream'],
         });
       case 'getSpectrum':
         return resultOk(audioService.getFrequencyData?.() ?? null);

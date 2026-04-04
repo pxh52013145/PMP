@@ -15,20 +15,22 @@ import { KEYBINDINGS_SERVICE_TOKEN } from '../../services/keybindings';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import { AUDIO_ENGINE_SERVICE_TOKEN } from '../../services/audio';
 import { closePluginWindow, openPluginWindow } from '../../utils/pluginWindows';
-import { createPluginMountApi } from './pluginHostApi';
 import { PluginSettingsHost } from './PluginSettingsHost';
 import { PluginPageHost } from './PluginPageHost';
 import {
-  getPmpmPluginEffectivePermissions,
   loadInstalledPmpmPlugins,
   recordPmpmPluginCrash,
   subscribePmpmPlugins,
 } from './pmpm';
-import { clearPmpmPluginRuntimeCache, ensurePmpmPluginRuntime } from './pmpmRuntime';
+import { clearPmpmPluginRuntimeCache } from './pmpmRuntime';
 import { requestPmpmPluginRuntimeRestart } from './pmpmRuntimeSupervisor';
-import { runPmpmSandboxedCommand } from './pmpmSandboxCommandRunner';
 import { getPmpmSandboxRuntimeEnabled } from './pmpmSandboxConfig';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import {
+  getResolvedPmpmLauncherAdapterError,
+  resolveInstalledPmpmPluginRuntime,
+  runResolvedPmpmPluginCommand,
+} from './runtime';
 
 const telemetry = getTelemetryLogger('pmpm', 'pmpmContributionsModule');
 
@@ -242,37 +244,26 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
                 const keybindings = services.getOptional(KEYBINDINGS_SERVICE_TOKEN);
 
                 try {
-                  if (getPmpmSandboxRuntimeEnabled()) {
-                    await runPmpmSandboxedCommand({
-                      pluginId,
-                      commandId: command.id,
-                      args,
-                      hostLabel: 'PluginCommand',
-                      audioService,
-                      commands,
-                      navigation,
-                      keybindings,
-                    });
-                    return;
+                  const runtimeResolution = resolveInstalledPmpmPluginRuntime(pluginId, {
+                    preferSandbox: getPmpmSandboxRuntimeEnabled(),
+                  });
+                  const runtimeResolutionError =
+                    getResolvedPmpmLauncherAdapterError(runtimeResolution);
+                  if (runtimeResolutionError) {
+                    throw new Error(runtimeResolutionError);
                   }
 
-                  const permissions = getPmpmPluginEffectivePermissions(pluginId);
-                  const api = createPluginMountApi({
+                  await runResolvedPmpmPluginCommand({
                     pluginId,
+                    resolution: runtimeResolution,
+                    commandId: command.id,
+                    args,
                     hostLabel: 'PluginCommand',
-                    permissions,
                     audioService,
                     commands,
                     navigation,
                     keybindings,
                   });
-
-                  const runtime = await ensurePmpmPluginRuntime(pluginId);
-                  const runCommand = runtime.runCommand;
-                  if (typeof runCommand !== 'function') {
-                    throw new Error('Plugin entry must export `runCommand(api, commandId, args?)`');
-                  }
-                  await runCommand(api, command.id, args);
                 } catch (error) {
                   recordPmpmPluginCrash(pluginId, error, 'command');
                   clearPmpmPluginRuntimeCache(pluginId);

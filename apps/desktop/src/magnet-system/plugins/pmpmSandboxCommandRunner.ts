@@ -26,12 +26,13 @@ import type {
   PmpmBridgeOutgoingMessage,
 } from '@pixel-matrix/plugin-compat-pmpm';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { dispatchPmpmCompatRpcRequest } from './runtime/pmpmCompatCapabilityTransport';
+import { createPmpmCompatRuntimeResourceRegistry } from './runtime/pmpmCompatRuntimeResources';
 
 const PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS = 3_000;
 const PMPM_SANDBOX_COMMAND_HEARTBEAT_INTERVAL_MS = 1_500;
 const PMPM_SANDBOX_COMMAND_UNRESPONSIVE_TIMEOUT_MS = 8_000;
 
-type RpcRequest = Extract<PmpmBridgeIncomingMessage, { type: 'pmpm:rpc' }>;
 type PmpmCompatCapabilityRevokeDrillMessage = {
   type: 'pmpm:capabilities-revoke';
   requestId: string;
@@ -58,60 +59,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object';
 }
 
-async function runRpc(api: PluginMountApi, request: RpcRequest): Promise<unknown> {
-  const args = Array.isArray(request.args) ? request.args : [];
-  switch (request.method) {
-    case 'host.listCapabilities':
-      return await api.host.listCapabilities();
-    case 'host.invokeCapability':
-      return await api.host.invokeCapability(String(args[0] ?? ''), String(args[1] ?? ''), args[2]);
-    case 'audio.play':
-      return await api.audio.play();
-    case 'audio.pause':
-      return await api.audio.pause();
-    case 'audio.stop':
-      return api.audio.stop();
-    case 'audio.seek':
-      return api.audio.seek(args[0] as number);
-    case 'audio.setVolume':
-      return api.audio.setVolume(args[0] as number);
-    case 'audio.toggleMute':
-      return api.audio.toggleMute();
-    case 'audio.playNext':
-      return await api.audio.playNext();
-    case 'audio.playPrevious':
-      return await api.audio.playPrevious();
-    case 'audio.playTrackAtIndex':
-      return await api.audio.playTrackAtIndex(args[0] as number);
-    case 'audio.setPlayMode':
-      return api.audio.setPlayMode(args[0] as never);
-    case 'audio.getCover':
-      return await api.audio.getCover();
-    case 'navigation.navigateTo':
-      return api.navigation.navigateTo(args[0] as never, args[1] as never);
-    case 'navigation.goBack':
-      return api.navigation.goBack();
-    case 'config.set':
-      return api.config.set(args[0] as never);
-    case 'config.patch':
-      return api.config.patch(args[0] as never);
-    case 'config.reset':
-      return api.config.reset();
-    case 'window.open':
-      return await api.window.open(args[0] as never, args[1] as never);
-    case 'window.close':
-      return await api.window.close(args[0] as never);
-    default:
-      throw new Error(`Unsupported RPC method: ${request.method}`);
-  }
-}
-
 function buildPmpmSandboxCommandWorkerScript(frameId: string): string {
   const idLiteral = JSON.stringify(frameId);
 
   return `const FRAME_ID = ${idLiteral};
 const pending = new Map();
 let rpcSeq = 0;
+const CAPABILITY_PROTOCOL_VERSION = '1.0';
 let runtime = null;
 let permissions = new Set();
 let pluginId = '';
@@ -140,6 +94,7 @@ const configListeners = new Set();
 const spectrumListeners = new Set();
 const spectrumFrameListeners = new Set();
 const navigationListeners = new Set();
+const hostStreams = new Map();
 
 const post = (msg) => postMessage({ frameId: FRAME_ID, ...msg });
 const warnDenied = (capability, action) => {
@@ -221,11 +176,201 @@ try {
   }
 } catch {}
 
-const rpcCall = (method, args = []) => {
+const sendRpc = (method, args = []) => {
   const id = String(++rpcSeq);
   post({ type: 'pmpm:rpc', id, method, args });
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
+  });
+};
+
+const rpcCall = (method, args = []) => sendRpc(method, args);
+
+const capabilityCall = (capabilityId, method, payload, options) => {
+  return sendRpc('capability.invoke.request', [
+    {
+      protocolVersion: CAPABILITY_PROTOCOL_VERSION,
+      op: 'capability.invoke.request',
+      requestId: 'compat:' + String(rpcSeq + 1),
+      capabilityId,
+      method,
+      payload,
+    },
+  ]).then((response) => {
+    const envelope = response && typeof response === 'object' ? response : null;
+    if (!envelope || envelope.op !== 'capability.invoke.response') {
+      if (options && options.suppressErrors) {
+        return options.fallbackValue;
+      }
+      throw new Error('Invalid capability response');
+    }
+    if (envelope.ok) {
+      return envelope.data;
+    }
+    if (options && options.suppressErrors) {
+      return options.fallbackValue;
+    }
+    const error = envelope.error && typeof envelope.error === 'object' ? envelope.error : null;
+    throw new Error(error && typeof error.message === 'string' ? error.message : 'Capability call failed');
+  });
+};
+
+const openSessionCall = (capabilityId, method, payload) => {
+  return sendRpc('session.open.request', [
+    {
+      protocolVersion: CAPABILITY_PROTOCOL_VERSION,
+      op: 'session.open.request',
+      requestId: 'session-open:' + String(rpcSeq + 1),
+      capabilityId,
+      method,
+      payload,
+    },
+  ]).then((response) => {
+    const envelope = response && typeof response === 'object' ? response : null;
+    if (!envelope || envelope.op !== 'session.open.response') {
+      throw new Error('Invalid session.open response');
+    }
+    if (!envelope.ok) {
+      const error = envelope.error && typeof envelope.error === 'object' ? envelope.error : null;
+      throw new Error(error && typeof error.message === 'string' ? error.message : 'Session open failed');
+    }
+    return {
+      sessionId: envelope.sessionId,
+      providerSessionId: envelope.providerSessionId,
+      metadata: envelope.metadata,
+    };
+  });
+};
+
+const closeSessionCall = (capabilityId, sessionId, reason) => {
+  return sendRpc('session.close.request', [
+    {
+      protocolVersion: CAPABILITY_PROTOCOL_VERSION,
+      op: 'session.close.request',
+      requestId: 'session-close:' + String(rpcSeq + 1),
+      capabilityId,
+      sessionId,
+      reason,
+    },
+  ]).then((response) => {
+    const envelope = response && typeof response === 'object' ? response : null;
+    if (!envelope || envelope.op !== 'session.close.response') {
+      throw new Error('Invalid session.close response');
+    }
+    if (!envelope.ok) {
+      const error = envelope.error && typeof envelope.error === 'object' ? envelope.error : null;
+      throw new Error(error && typeof error.message === 'string' ? error.message : 'Session close failed');
+    }
+  });
+};
+
+const cancelCall = (request) => {
+  return sendRpc('cancel.request', [
+    {
+      protocolVersion: CAPABILITY_PROTOCOL_VERSION,
+      op: 'cancel.request',
+      requestId: 'cancel:' + String(rpcSeq + 1),
+      ...request,
+    },
+  ]).then(() => undefined);
+};
+
+const disposeCall = (request) => {
+  return sendRpc('dispose.request', [
+    {
+      protocolVersion: CAPABILITY_PROTOCOL_VERSION,
+      op: 'dispose.request',
+      requestId: 'dispose:' + String(rpcSeq + 1),
+      ...request,
+    },
+  ]).then(() => undefined);
+};
+
+const ensureHostStreamState = (streamId, defaults) => {
+  const id = typeof streamId === 'string' ? streamId : '';
+  if (!id) {
+    throw new Error('Invalid stream id');
+  }
+  let state = hostStreams.get(id);
+  if (!state) {
+    state = {
+      streamId: id,
+      mode: defaults && defaults.mode ? defaults.mode : 'push',
+      transport: defaults && defaults.transport ? defaults.transport : 'inline-json',
+      ended: false,
+      endEnvelope: null,
+      dataListeners: new Set(),
+      endListeners: new Set(),
+    };
+    hostStreams.set(id, state);
+  }
+  return state;
+};
+
+const finalizeHostStream = (streamId, reason, envelope) => {
+  const state = hostStreams.get(streamId);
+  if (!state || state.ended) return;
+  state.ended = true;
+  state.endEnvelope = envelope || { streamId, reason };
+  for (const cb of Array.from(state.endListeners)) {
+    try { cb(reason, state.endEnvelope); } catch {}
+  }
+  hostStreams.delete(streamId);
+};
+
+const openStreamCall = (capabilityId, method, payload) => {
+  return sendRpc('stream.open.request', [
+    {
+      protocolVersion: CAPABILITY_PROTOCOL_VERSION,
+      op: 'stream.open.request',
+      requestId: 'stream-open:' + String(rpcSeq + 1),
+      capabilityId,
+      method,
+      payload,
+    },
+  ]).then((response) => {
+    const envelope = response && typeof response === 'object' ? response : null;
+    if (!envelope || envelope.op !== 'stream.open.response') {
+      throw new Error('Invalid stream.open response');
+    }
+    if (!envelope.ok) {
+      const error = envelope.error && typeof envelope.error === 'object' ? envelope.error : null;
+      throw new Error(error && typeof error.message === 'string' ? error.message : 'Stream open failed');
+    }
+
+    const state = ensureHostStreamState(envelope.streamId, {
+      mode: envelope.mode,
+      transport: envelope.transport,
+    });
+
+    return {
+      streamId: state.streamId,
+      mode: state.mode,
+      transport: state.transport,
+      onData: (cb) => {
+        if (typeof cb !== 'function') return () => {};
+        if (state.ended) return () => {};
+        state.dataListeners.add(cb);
+        return () => state.dataListeners.delete(cb);
+      },
+      onEnd: (cb) => {
+        if (typeof cb !== 'function') return () => {};
+        if (state.ended) {
+          try { cb(state.endEnvelope && state.endEnvelope.reason, state.endEnvelope || undefined); } catch {}
+          return () => {};
+        }
+        state.endListeners.add(cb);
+        return () => state.endListeners.delete(cb);
+      },
+      cancel: (reason) => {
+        if (state.ended) return Promise.resolve();
+        return cancelCall({ streamId: state.streamId, reason });
+      },
+      dispose: (reason) => {
+        if (state.ended) return Promise.resolve();
+        return disposeCall({ streamId: state.streamId, reason });
+      },
+    };
   });
 };
 
@@ -306,7 +451,10 @@ const api = {
         warnDenied('api:host', 'host.listCapabilities()');
         return Promise.resolve([]);
       }
-      return rpcCall('host.listCapabilities');
+      return capabilityCall('core.capability-registry', 'list', undefined, {
+        suppressErrors: true,
+        fallbackValue: [],
+      });
     },
     invokeCapability: (capabilityId, method, payload) => {
       if (!permissions.has('api:host')) {
@@ -314,6 +462,27 @@ const api = {
         return Promise.resolve(null);
       }
       return rpcCall('host.invokeCapability', [capabilityId, method, payload]);
+    },
+    openSession: (capabilityId, method, payload) => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.openSession(capabilityId, method, payload)');
+        return Promise.resolve(null);
+      }
+      return openSessionCall(capabilityId, method, payload);
+    },
+    closeSession: (capabilityId, sessionId, reason) => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.closeSession(capabilityId, sessionId, reason)');
+        return Promise.resolve();
+      }
+      return closeSessionCall(capabilityId, sessionId, reason);
+    },
+    openStream: (capabilityId, method, payload) => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.openStream(capabilityId, method, payload)');
+        return Promise.resolve(null);
+      }
+      return openStreamCall(capabilityId, method, payload);
     },
   },
   audio: {
@@ -369,15 +538,42 @@ const api = {
       audioErrorListeners.add(cb);
       return () => audioErrorListeners.delete(cb);
     },
-    play: () => rpcCall('audio.play'),
-    pause: () => rpcCall('audio.pause'),
-    stop: () => void rpcCall('audio.stop'),
-    seek: (time) => void rpcCall('audio.seek', [time]),
-    setVolume: (volume) => void rpcCall('audio.setVolume', [volume]),
-    toggleMute: () => void rpcCall('audio.toggleMute'),
-    playNext: () => rpcCall('audio.playNext'),
-    playPrevious: () => rpcCall('audio.playPrevious'),
-    playTrackAtIndex: (index) => rpcCall('audio.playTrackAtIndex', [index]),
+    play: () =>
+      capabilityCall('host.pmp.audio-engine.playback', 'play', undefined, {
+        suppressErrors: true,
+      }),
+    pause: () =>
+      capabilityCall('host.pmp.audio-engine.playback', 'pause', undefined, {
+        suppressErrors: true,
+      }),
+    stop: () =>
+      void capabilityCall('host.pmp.audio-engine.playback', 'stop', undefined, {
+        suppressErrors: true,
+      }),
+    seek: (time) =>
+      void capabilityCall('host.pmp.audio-engine.playback', 'seek', { time }, {
+        suppressErrors: true,
+      }),
+    setVolume: (volume) =>
+      void capabilityCall('host.pmp.audio-engine.playback', 'setVolume', { volume }, {
+        suppressErrors: true,
+      }),
+    toggleMute: () =>
+      void capabilityCall('host.pmp.audio-engine.playback', 'toggleMute', undefined, {
+        suppressErrors: true,
+      }),
+    playNext: () =>
+      capabilityCall('host.pmp.audio-engine.playback', 'playNext', undefined, {
+        suppressErrors: true,
+      }),
+    playPrevious: () =>
+      capabilityCall('host.pmp.audio-engine.playback', 'playPrevious', undefined, {
+        suppressErrors: true,
+      }),
+    playTrackAtIndex: (index) =>
+      capabilityCall('host.pmp.audio-engine.playback', 'playTrackAtIndex', { index }, {
+        suppressErrors: true,
+      }),
     getPlayMode: () => {
       if (!permissions.has('api:audio-state')) {
         warnDenied('api:audio-state', 'audio.getPlayMode()');
@@ -390,8 +586,15 @@ const api = {
         return null;
       }
     },
-    setPlayMode: (mode) => void rpcCall('audio.setPlayMode', [mode]),
-    getCover: () => rpcCall('audio.getCover'),
+    setPlayMode: (mode) =>
+      void capabilityCall('host.pmp.audio-engine.playback', 'setPlayMode', { mode }, {
+        suppressErrors: true,
+      }),
+    getCover: () =>
+      capabilityCall('host.pmp.audio-engine.playback', 'getCover', undefined, {
+        suppressErrors: true,
+        fallbackValue: null,
+      }),
   },
   visualizer: {
     getSpectrum: () => {
@@ -437,8 +640,14 @@ const api = {
     },
   },
   navigation: {
-    navigateTo: (page, params) => void rpcCall('navigation.navigateTo', [page, params]),
-    goBack: () => void rpcCall('navigation.goBack'),
+    navigateTo: (page, params) =>
+      void capabilityCall('host.pmp.navigation', 'navigateTo', { page, params }, {
+        suppressErrors: true,
+      }),
+    goBack: () =>
+      void capabilityCall('host.pmp.navigation', 'goBack', undefined, {
+        suppressErrors: true,
+      }),
     getSnapshot: () => {
       if (!permissions.has('api:navigation')) {
         warnDenied('api:navigation', 'navigation.getSnapshot()');
@@ -488,13 +697,28 @@ const api = {
       configListeners.add(cb);
       return () => configListeners.delete(cb);
     },
-    set: (next) => void rpcCall('config.set', [next]),
-    patch: (next) => void rpcCall('config.patch', [next]),
-    reset: () => void rpcCall('config.reset'),
+    set: (next) =>
+      void capabilityCall('host.pmp.storage.config', 'set', { value: next }, {
+        suppressErrors: true,
+      }),
+    patch: (next) =>
+      void capabilityCall('host.pmp.storage.config', 'patch', { value: next }, {
+        suppressErrors: true,
+      }),
+    reset: () =>
+      void capabilityCall('host.pmp.storage.config', 'reset', undefined, {
+        suppressErrors: true,
+      }),
   },
   window: {
-    open: (windowId, options) => rpcCall('window.open', [windowId, options]),
-    close: (windowId) => rpcCall('window.close', [windowId]),
+    open: (windowId, options) =>
+      capabilityCall('host.pmp.shell.window', 'open', { windowId, options }, {
+        suppressErrors: true,
+      }),
+    close: (windowId) =>
+      capabilityCall('host.pmp.shell.window', 'close', { windowId }, {
+        suppressErrors: true,
+      }),
   },
 };
 
@@ -627,6 +851,27 @@ addEventListener('message', async (event) => {
   }
 
   if (data.type === 'pmpm:event') {
+    if (data.name === 'protocol.message') {
+      const envelope = data.payload && typeof data.payload === 'object' ? data.payload : null;
+      const streamId = envelope && typeof envelope.streamId === 'string' ? envelope.streamId : '';
+      if (!envelope || !streamId) return;
+
+      if (envelope.op === 'stream.data') {
+        const state = hostStreams.get(streamId);
+        if (!state || state.ended) return;
+        for (const cb of Array.from(state.dataListeners)) {
+          try { cb(envelope.payload, envelope); } catch {}
+        }
+        return;
+      }
+
+      if (envelope.op === 'stream.end') {
+        finalizeHostStream(streamId, envelope.reason, envelope);
+        return;
+      }
+
+      return;
+    }
     if (data.name === 'audio.state') {
       audioState = data.payload ?? null;
       for (const cb of Array.from(audioStateListeners)) {
@@ -753,6 +998,7 @@ async function runPmpmSandboxedCommandInWorker(options: {
     navigation: options.navigation,
     keybindings: options.keybindings,
   });
+  const runtimeResources = createPmpmCompatRuntimeResourceRegistry();
 
   const entryCode = await readVerifiedPmpmPluginEntryCode(options.pluginId);
   const initialConfig = readPmpmPluginConfig(options.pluginId);
@@ -786,7 +1032,7 @@ async function runPmpmSandboxedCommandInWorker(options: {
       }
     };
 
-    const cleanup = () => {
+    const cleanup = (reason: string) => {
       worker.removeEventListener('message', onMessage);
       worker.removeEventListener('error', onWorkerError);
       if (pingTimer !== null) window.clearInterval(pingTimer);
@@ -801,6 +1047,7 @@ async function runPmpmSandboxedCommandInWorker(options: {
         // ignore
       }
       unlistenConfig = null;
+      void runtimeResources.cleanup(reason);
       try {
         worker.terminate();
       } catch {
@@ -816,14 +1063,14 @@ async function runPmpmSandboxedCommandInWorker(options: {
     const finishOk = () => {
       if (settled) return;
       settled = true;
-      cleanup();
+      cleanup('runtime-command-finished');
       resolve();
     };
 
-    const finishError = (error: unknown) => {
+    const finishError = (error: unknown, reason = 'runtime-crash') => {
       if (settled) return;
       settled = true;
-      cleanup();
+      cleanup(reason);
       reject(error instanceof Error ? error : new Error(String(error)));
     };
 
@@ -839,14 +1086,14 @@ async function runPmpmSandboxedCommandInWorker(options: {
         // ignore
       }
       recordPmpmPluginCrash(options.pluginId, message, 'command');
-      finishError(new Error(message));
+      finishError(new Error(message), 'runtime-unresponsive');
     };
 
     const onWorkerError = (event: ErrorEvent) => {
       if (settled) return;
       const message = event?.error?.stack || event?.message || 'Plugin worker error';
       recordPmpmPluginCrash(options.pluginId, message, 'command');
-      finishError(new Error(message));
+      finishError(new Error(message), 'runtime-crash');
     };
 
     const onMessage = (event: MessageEvent) => {
@@ -1007,7 +1254,7 @@ async function runPmpmSandboxedCommandInWorker(options: {
 
       if (data.type === 'pmpm:error') {
         recordPmpmPluginCrash(options.pluginId, data.message, 'command');
-        finishError(new Error(data.message));
+        finishError(new Error(data.message), 'runtime-crash');
         return;
       }
 
@@ -1018,18 +1265,12 @@ async function runPmpmSandboxedCommandInWorker(options: {
 
       if (data.type === 'pmpm:rpc') {
         void (async () => {
-          const request = data as RpcRequest;
-          try {
-            const result = await runRpc(api, request);
-            postToWorker({ type: 'pmpm:rpc-result', id: request.id, ok: true, result });
-          } catch (rpcError) {
-            postToWorker({
-              type: 'pmpm:rpc-result',
-              id: request.id,
-              ok: false,
-              error: rpcError instanceof Error ? rpcError.message : String(rpcError),
-            });
-          }
+          const response = await dispatchPmpmCompatRpcRequest(api, permissions, data, {
+            runtimeResources,
+            emitProtocolMessage: (message) =>
+              postToWorker({ type: 'pmpm:event', name: 'protocol.message', payload: message }),
+          });
+          postToWorker(response);
         })();
       }
     };
@@ -1040,7 +1281,7 @@ async function runPmpmSandboxedCommandInWorker(options: {
     bootTimer = window.setTimeout(() => {
       if (settled) return;
       recordPmpmPluginCrash(options.pluginId, 'Plugin worker boot timeout', 'command');
-      finishError(new Error('Plugin worker boot timeout'));
+      finishError(new Error('Plugin worker boot timeout'), 'runtime-crash');
     }, PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS);
   });
 }
@@ -1104,6 +1345,7 @@ export async function runPmpmSandboxedCommand(options: {
     navigation: options.navigation,
     keybindings: options.keybindings,
   });
+  const runtimeResources = createPmpmCompatRuntimeResourceRegistry();
 
   const entryCode = await readVerifiedPmpmPluginEntryCode(options.pluginId);
   const initialConfig = readPmpmPluginConfig(options.pluginId);
@@ -1144,7 +1386,7 @@ export async function runPmpmSandboxedCommand(options: {
     let totalTimer: number | null = null;
     let bootTimer: number | null = null;
 
-    const cleanup = () => {
+    const cleanup = (reason: string) => {
       window.removeEventListener('message', onMessage);
       if (pingTimer !== null) window.clearInterval(pingTimer);
       if (totalTimer !== null) window.clearTimeout(totalTimer);
@@ -1158,6 +1400,7 @@ export async function runPmpmSandboxedCommand(options: {
         // ignore
       }
       unlistenConfig = null;
+      void runtimeResources.cleanup(reason);
       try {
         iframe.remove();
       } catch {
@@ -1168,14 +1411,14 @@ export async function runPmpmSandboxedCommand(options: {
     const finishOk = () => {
       if (settled) return;
       settled = true;
-      cleanup();
+      cleanup('runtime-command-finished');
       resolve();
     };
 
-    const finishError = (error: unknown) => {
+    const finishError = (error: unknown, reason = 'runtime-crash') => {
       if (settled) return;
       settled = true;
-      cleanup();
+      cleanup(reason);
       reject(error instanceof Error ? error : new Error(String(error)));
     };
 
@@ -1191,7 +1434,7 @@ export async function runPmpmSandboxedCommand(options: {
         // ignore
       }
       recordPmpmPluginCrash(options.pluginId, message, 'command');
-      finishError(new Error(message));
+      finishError(new Error(message), 'runtime-unresponsive');
     };
 
     const onMessage = (event: MessageEvent) => {
@@ -1352,7 +1595,7 @@ export async function runPmpmSandboxedCommand(options: {
 
       if (data.type === 'pmpm:error') {
         recordPmpmPluginCrash(options.pluginId, data.message, 'command');
-        finishError(new Error(data.message));
+        finishError(new Error(data.message), 'runtime-crash');
         return;
       }
 
@@ -1363,20 +1606,12 @@ export async function runPmpmSandboxedCommand(options: {
 
       if (data.type === 'pmpm:rpc') {
         void (async () => {
-          const request = data as RpcRequest;
-          const respond = (payload: { ok: boolean; result?: unknown; error?: string }) => {
-            postToFrame({ type: 'pmpm:rpc-result', id: request.id, ...payload });
-          };
-
-          try {
-            const result = await runRpc(api, request);
-            respond({ ok: true, result });
-          } catch (rpcError) {
-            respond({
-              ok: false,
-              error: rpcError instanceof Error ? rpcError.message : String(rpcError),
-            });
-          }
+          const response = await dispatchPmpmCompatRpcRequest(api, permissions, data, {
+            runtimeResources,
+            emitProtocolMessage: (message) =>
+              postToFrame({ type: 'pmpm:event', name: 'protocol.message', payload: message }),
+          });
+          postToFrame(response);
         })();
       }
     };
@@ -1386,7 +1621,7 @@ export async function runPmpmSandboxedCommand(options: {
     bootTimer = window.setTimeout(() => {
       if (settled) return;
       recordPmpmPluginCrash(options.pluginId, 'Plugin sandbox boot timeout', 'command');
-      finishError(new Error('Plugin sandbox boot timeout'));
+      finishError(new Error('Plugin sandbox boot timeout'), 'runtime-crash');
     }, PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS);
   });
 }

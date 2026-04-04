@@ -1,9 +1,11 @@
 import type {
+  DataPlaneKind,
   HostCapabilityError as SharedHostCapabilityError,
   HostCapabilityInfo as SharedHostCapabilityInfo,
   HostCapabilityInvokeContext as SharedHostCapabilityInvokeContext,
   HostCapabilityInvokeRequest as SharedHostCapabilityInvokeRequest,
   HostCapabilityResult as SharedHostCapabilityResult,
+  ResourceHandleDescriptor,
 } from '@pixel-matrix/plugin-platform-contracts';
 import type { NavigationPageData, NavigationPageType } from '../../../contracts/navigation';
 import type { PlayMode, Track } from '../../../services/audio';
@@ -235,12 +237,67 @@ export type PluginHostCapabilityRegistration = PluginHostCapabilityInfo & {
   handler?: PluginHostCapabilityHandler;
 };
 
+export type PluginHostSessionOpenResult = {
+  sessionId: string;
+  providerSessionId?: string;
+  metadata?: unknown;
+};
+
+export type PluginHostStreamDataEnvelope = {
+  protocolVersion?: string;
+  requestId?: string;
+  capabilityId?: string;
+  handleId?: string;
+  pluginId?: string;
+  runtimeId?: string;
+  sessionId?: string;
+  streamId: string;
+  traceId?: string;
+  sequence: number;
+  payload?: unknown;
+  handles?: ResourceHandleDescriptor[];
+};
+
+export type PluginHostStreamEndEnvelope = {
+  protocolVersion?: string;
+  requestId?: string;
+  capabilityId?: string;
+  handleId?: string;
+  pluginId?: string;
+  runtimeId?: string;
+  sessionId?: string;
+  streamId: string;
+  traceId?: string;
+  reason?: string;
+};
+
+export type PluginHostStreamHandle = {
+  streamId: string;
+  mode: 'push' | 'pull';
+  transport: DataPlaneKind;
+  onData: (cb: (payload: unknown, envelope: PluginHostStreamDataEnvelope) => void) => () => void;
+  onEnd: (cb: (reason?: string, envelope?: PluginHostStreamEndEnvelope) => void) => () => void;
+  cancel: (reason?: string) => Promise<void>;
+  dispose: (reason?: string) => Promise<void>;
+};
+
 export type PluginHostApi = {
   getInfo: () => PluginHostInfo | null;
   listPermissions: () => string[];
   hasPermission: (capability: string) => boolean;
   listCapabilities: () => Promise<PluginHostCapabilityInfo[]>;
   invokeCapability: (capabilityId: string, method: string, payload?: unknown) => Promise<unknown>;
+  openStream: (
+    capabilityId: string,
+    method: string,
+    payload?: unknown
+  ) => Promise<PluginHostStreamHandle | null>;
+  openSession: (
+    capabilityId: string,
+    method: string,
+    payload?: unknown
+  ) => Promise<PluginHostSessionOpenResult | null>;
+  closeSession: (capabilityId: string, sessionId: string, reason?: string) => Promise<void>;
 };
 
 export type PluginAudioApi = {

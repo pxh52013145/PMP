@@ -2,6 +2,7 @@ import { APP_VERSION, HOST_API_VERSION } from '../../../constants/versions';
 import type { NavigationPageType, NavigationParamsFor } from '../../../contracts/navigation';
 import { parseNavigationParams } from '../../../contracts/navigationParams';
 import type { PlayMode, Track } from '../../../services/audio';
+import type { AudioSpectrumTap } from '../../../services/audio/types';
 import { musicLibraryService } from '../../../services/audio/MusicLibraryService';
 import type { CommandsService } from '../../../services/commands';
 import { flushStorageWrites } from '../../../modules/storage';
@@ -32,6 +33,10 @@ import type {
   HostNavigation,
   PluginCoverSnapshot,
   PluginHostAudioInputAdapterBridge,
+  PluginHostSessionOpenResult,
+  PluginHostStreamDataEnvelope,
+  PluginHostStreamEndEnvelope,
+  PluginHostStreamHandle,
   PluginHostTrayApi,
   PluginMountApi,
   PluginNavigationSnapshot,
@@ -54,10 +59,22 @@ const PAGES_REQUIRING_PARAMS = new Set<NavigationPageType>([
 const PLAY_MODES = new Set<string>(['sequence', 'loop', 'single-loop', 'shuffle']);
 const HOST_CAPABILITY_INVOKE_TIMEOUT_MS = 6000;
 const HOST_CAPABILITY_PAYLOAD_MAX_BYTES = 256 * 1024;
+const HOST_STREAM_INTERVAL_MIN_MS = 16;
+const HOST_STREAM_INTERVAL_MAX_MS = 2_000;
 const telemetry = getTelemetryLogger('pmpm-host-api', 'createPluginMountApi');
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized.length > 0 ? normalized : null;
 }
 
 function asJsonSerializedSize(value: unknown): number {
@@ -87,6 +104,47 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
       globalThis.clearTimeout(timeoutHandle);
     }
   }
+}
+
+function normalizeHostSessionOpenResult(value: unknown): PluginHostSessionOpenResult {
+  const payload = asObject(value);
+  const sessionId = asNonEmptyString(payload?.sessionId);
+  if (!sessionId) {
+    throw new Error('Host session open result must include sessionId');
+  }
+
+  const providerSessionId = asNonEmptyString(payload?.providerSessionId) ?? undefined;
+
+  let metadata: unknown = undefined;
+  if (payload && Object.prototype.hasOwnProperty.call(payload, 'metadata')) {
+    metadata = payload.metadata;
+  } else if (payload) {
+    const rest = { ...payload };
+    delete rest.sessionId;
+    delete rest.providerSessionId;
+    metadata = Object.keys(rest).length > 0 ? rest : undefined;
+  }
+
+  return {
+    sessionId,
+    providerSessionId,
+    metadata,
+  };
+}
+
+function normalizeHostStreamIntervalMs(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 33;
+  }
+
+  return Math.max(
+    HOST_STREAM_INTERVAL_MIN_MS,
+    Math.min(HOST_STREAM_INTERVAL_MAX_MS, Math.floor(value))
+  );
+}
+
+function normalizeSpectrumTap(value: unknown): AudioSpectrumTap {
+  return value === 'pre-dsp' ? 'pre-dsp' : 'post-dsp';
 }
 
 function safeQueueLength(audioService: HostAudioService): number {
@@ -266,6 +324,7 @@ export function createPluginMountApi({
 
   let coverCache: { key: string; value: PluginCoverSnapshot | null } | null = null;
   let coverInflight: { key: string; promise: Promise<PluginCoverSnapshot | null> } | null = null;
+  let hostStreamCounter = 0;
 
   const getCover = async (): Promise<PluginCoverSnapshot | null> => {
     if (!allowAudioCover) {
@@ -483,6 +542,281 @@ export function createPluginMountApi({
     },
   };
 
+  const buildHostCapabilityContext = () => ({
+    pluginId,
+    hostLabel,
+    permissions,
+    aiControl: aiControlBridge,
+    audioInputAdapter: audioInputAdapterBridge,
+    audioService,
+    commands: commands ?? undefined,
+    getCover,
+    keybindings: keybindings ?? undefined,
+    navigation,
+    configApi,
+    trayApi,
+    windowApi,
+  });
+
+  const invokeHostCapabilityInternal = async (
+    capabilityId: string,
+    method: string,
+    payload?: unknown
+  ): Promise<unknown> => {
+    if (!allowHost) {
+      warnDenied('api:host', `host.invokeCapability(${String(capabilityId)}, ${String(method)})`);
+      return null;
+    }
+
+    const normalizedCapabilityId =
+      typeof capabilityId === 'string' ? capabilityId.trim() : '';
+    const normalizedMethod = typeof method === 'string' ? method.trim() : '';
+
+    if (!normalizedCapabilityId || !normalizedMethod) {
+      throw new Error('host.invokeCapability requires capabilityId and method');
+    }
+
+    if (!/^[a-z][a-z0-9_.-]{0,63}$/i.test(normalizedMethod)) {
+      throw new Error(`Invalid host capability method: ${normalizedMethod}`);
+    }
+
+    const payloadSize = asJsonSerializedSize(payload);
+    if (payloadSize > HOST_CAPABILITY_PAYLOAD_MAX_BYTES) {
+      throw new Error(
+        `Capability payload too large (${payloadSize} bytes > ${HOST_CAPABILITY_PAYLOAD_MAX_BYTES})`
+      );
+    }
+
+    const capability = getPluginHostCapability(normalizedCapabilityId);
+    if (!capability) {
+      throw new Error(`Unknown host capability: ${normalizedCapabilityId}`);
+    }
+
+    if (capability.permission && !hasPermission(permissions, capability.permission)) {
+      warnDenied(
+        capability.permission,
+        `host.invokeCapability(${normalizedCapabilityId}, ${normalizedMethod})`
+      );
+      throw new Error(`Permission denied: ${capability.permission}`);
+    }
+
+    if (!hasPermission(permissions, PLUGIN_PERMISSIONS.hostCapabilityInvoke)) {
+      warnDenied(
+        PLUGIN_PERMISSIONS.hostCapabilityInvoke,
+        `host.invokeCapability(${normalizedCapabilityId}, ${normalizedMethod})`
+      );
+      throw new Error(`Permission denied: ${PLUGIN_PERMISSIONS.hostCapabilityInvoke}`);
+    }
+
+    return await withTimeout(
+      invokePluginHostCapability(normalizedCapabilityId, {
+        method: normalizedMethod,
+        payload,
+        context: buildHostCapabilityContext(),
+      }),
+      HOST_CAPABILITY_INVOKE_TIMEOUT_MS,
+      `Host capability invocation timed out: ${normalizedCapabilityId}.${normalizedMethod}`
+    );
+  };
+
+  const openHostSessionInternal = async (
+    capabilityId: string,
+    method: string,
+    payload?: unknown
+  ): Promise<PluginHostSessionOpenResult | null> => {
+    const response = await invokeHostCapabilityInternal(capabilityId, method, payload);
+    if (response === null) return null;
+
+    const result = asObject(response);
+    if (!result || result.ok !== true) {
+      const errorPayload = asObject(result?.error);
+      const message = asNonEmptyString(errorPayload?.message) ?? 'Host session open failed';
+      throw new Error(message);
+    }
+
+    return normalizeHostSessionOpenResult(result.data);
+  };
+
+  const closeHostSessionInternal = async (
+    capabilityId: string,
+    sessionId: string,
+    reason?: string
+  ): Promise<void> => {
+    const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!normalizedSessionId) {
+      throw new Error('host.closeSession requires sessionId');
+    }
+
+    const payload =
+      typeof reason === 'string' && reason.trim().length > 0
+        ? { sessionId: normalizedSessionId, reason: reason.trim() }
+        : { sessionId: normalizedSessionId };
+
+    const response = await invokeHostCapabilityInternal(capabilityId, 'closeSession', payload);
+    if (response === null) return;
+
+    const result = asObject(response);
+    if (!result || result.ok !== true) {
+      const errorPayload = asObject(result?.error);
+      const message = asNonEmptyString(errorPayload?.message) ?? 'Host session close failed';
+      throw new Error(message);
+    }
+  };
+
+  const openHostStreamInternal = async (
+    capabilityId: string,
+    method: string,
+    payload?: unknown
+  ): Promise<PluginHostStreamHandle | null> => {
+    const normalizedCapabilityId = typeof capabilityId === 'string' ? capabilityId.trim() : '';
+    const normalizedMethod = typeof method === 'string' ? method.trim() : '';
+
+    if (!normalizedCapabilityId || !normalizedMethod) {
+      throw new Error('host.openStream requires capabilityId and method');
+    }
+
+    if (!/^[a-z][a-z0-9_.-]{0,63}$/i.test(normalizedMethod)) {
+      throw new Error(`Invalid host stream method: ${normalizedMethod}`);
+    }
+
+    const payloadSize = asJsonSerializedSize(payload);
+    if (payloadSize > HOST_CAPABILITY_PAYLOAD_MAX_BYTES) {
+      throw new Error(
+        `Capability payload too large (${payloadSize} bytes > ${HOST_CAPABILITY_PAYLOAD_MAX_BYTES})`
+      );
+    }
+
+    const capability = getPluginHostCapability(normalizedCapabilityId);
+    if (!capability) {
+      throw new Error(`Unknown host capability: ${normalizedCapabilityId}`);
+    }
+
+    if (capability.permission && !hasPermission(permissions, capability.permission)) {
+      warnDenied(
+        capability.permission,
+        `host.openStream(${normalizedCapabilityId}, ${normalizedMethod})`
+      );
+      throw new Error(`Permission denied: ${capability.permission}`);
+    }
+
+    if (!hasPermission(permissions, PLUGIN_PERMISSIONS.hostCapabilityInvoke)) {
+      warnDenied(
+        PLUGIN_PERMISSIONS.hostCapabilityInvoke,
+        `host.openStream(${normalizedCapabilityId}, ${normalizedMethod})`
+      );
+      throw new Error(`Permission denied: ${PLUGIN_PERMISSIONS.hostCapabilityInvoke}`);
+    }
+
+    if (normalizedCapabilityId !== 'host.pmp.audio-engine.analysis') {
+      throw new Error(`Host stream capability is not available: ${normalizedCapabilityId}`);
+    }
+
+    if (normalizedMethod !== 'openSpectrumFrameStream') {
+      throw new Error(
+        `Unsupported host stream method: ${normalizedCapabilityId}.${normalizedMethod}`
+      );
+    }
+
+    if (typeof audioService.getSpectrumFrame !== 'function') {
+      throw new Error('Audio spectrum frame stream is not available');
+    }
+
+    const payloadRecord = asObject(payload);
+    const tap = normalizeSpectrumTap(payloadRecord?.tap);
+    const intervalMs = normalizeHostStreamIntervalMs(payloadRecord?.intervalMs);
+    const streamId = `audio-analysis-stream-${++hostStreamCounter}`;
+
+    let sequence = 0;
+    let ended = false;
+    let timer: ReturnType<typeof globalThis.setInterval> | null = null;
+    let endEnvelope: PluginHostStreamEndEnvelope | undefined;
+
+    const dataListeners = new Set<
+      (payload: unknown, envelope: PluginHostStreamDataEnvelope) => void
+    >();
+    const endListeners = new Set<
+      (reason?: string, envelope?: PluginHostStreamEndEnvelope) => void
+    >();
+
+    const clearTimer = () => {
+      if (timer === null) return;
+      globalThis.clearInterval(timer);
+      timer = null;
+    };
+
+    const emitEnd = (reason?: string) => {
+      if (ended) return;
+      ended = true;
+      clearTimer();
+      endEnvelope = {
+        protocolVersion: '1.0',
+        capabilityId: normalizedCapabilityId,
+        streamId,
+        reason,
+      };
+
+      for (const listener of Array.from(endListeners)) {
+        try {
+          listener(reason, endEnvelope);
+        } catch {
+          // ignore listener failures
+        }
+      }
+    };
+
+    timer = globalThis.setInterval(() => {
+      if (ended) return;
+
+      const envelope: PluginHostStreamDataEnvelope = {
+        protocolVersion: '1.0',
+        capabilityId: normalizedCapabilityId,
+        streamId,
+        sequence,
+        payload: audioService.getSpectrumFrame?.(tap) ?? null,
+      };
+      sequence += 1;
+
+      for (const listener of Array.from(dataListeners)) {
+        try {
+          listener(envelope.payload, envelope);
+        } catch {
+          // ignore listener failures
+        }
+      }
+    }, intervalMs);
+
+    return {
+      streamId,
+      mode: 'push',
+      transport: 'inline-json',
+      onData: (cb) => {
+        if (typeof cb !== 'function') return () => {};
+        if (ended) return () => {};
+        dataListeners.add(cb);
+        return () => dataListeners.delete(cb);
+      },
+      onEnd: (cb) => {
+        if (typeof cb !== 'function') return () => {};
+        if (ended) {
+          try {
+            cb(endEnvelope?.reason, endEnvelope);
+          } catch {
+            // ignore listener failures
+          }
+          return () => {};
+        }
+        endListeners.add(cb);
+        return () => endListeners.delete(cb);
+      },
+      cancel: async (reason) => {
+        emitEnd(asNonEmptyString(reason) ?? 'cancelled');
+      },
+      dispose: async (reason) => {
+        emitEnd(asNonEmptyString(reason) ?? 'disposed');
+      },
+    };
+  };
+
   return {
     host: {
       getInfo: () => {
@@ -524,74 +858,31 @@ export function createPluginMountApi({
         );
       },
       invokeCapability: async (capabilityId, method, payload) => {
+        return await invokeHostCapabilityInternal(capabilityId, method, payload);
+      },
+      openStream: async (capabilityId, method, payload) => {
         if (!allowHost) {
-          warnDenied('api:host', `host.invokeCapability(${String(capabilityId)}, ${String(method)})`);
+          warnDenied('api:host', `host.openStream(${String(capabilityId)}, ${String(method)})`);
           return null;
         }
-
-        const normalizedCapabilityId =
-          typeof capabilityId === 'string' ? capabilityId.trim() : '';
-        const normalizedMethod = typeof method === 'string' ? method.trim() : '';
-
-        if (!normalizedCapabilityId || !normalizedMethod) {
-          throw new Error('host.invokeCapability requires capabilityId and method');
+        return await openHostStreamInternal(capabilityId, method, payload);
+      },
+      openSession: async (capabilityId, method, payload) => {
+        if (!allowHost) {
+          warnDenied('api:host', `host.openSession(${String(capabilityId)}, ${String(method)})`);
+          return null;
         }
-
-        if (!/^[a-z][a-z0-9_.-]{0,63}$/i.test(normalizedMethod)) {
-          throw new Error(`Invalid host capability method: ${normalizedMethod}`);
-        }
-
-        const payloadSize = asJsonSerializedSize(payload);
-        if (payloadSize > HOST_CAPABILITY_PAYLOAD_MAX_BYTES) {
-          throw new Error(
-            `Capability payload too large (${payloadSize} bytes > ${HOST_CAPABILITY_PAYLOAD_MAX_BYTES})`
-          );
-        }
-
-        const capability = getPluginHostCapability(normalizedCapabilityId);
-        if (!capability) {
-          throw new Error(`Unknown host capability: ${normalizedCapabilityId}`);
-        }
-
-        if (capability.permission && !hasPermission(permissions, capability.permission)) {
+        return await openHostSessionInternal(capabilityId, method, payload);
+      },
+      closeSession: async (capabilityId, sessionId, reason) => {
+        if (!allowHost) {
           warnDenied(
-            capability.permission,
-            `host.invokeCapability(${normalizedCapabilityId}, ${normalizedMethod})`
+            'api:host',
+            `host.closeSession(${String(capabilityId)}, ${String(sessionId)})`
           );
-          throw new Error(`Permission denied: ${capability.permission}`);
+          return;
         }
-
-        if (!hasPermission(permissions, PLUGIN_PERMISSIONS.hostCapabilityInvoke)) {
-          warnDenied(
-            PLUGIN_PERMISSIONS.hostCapabilityInvoke,
-            `host.invokeCapability(${normalizedCapabilityId}, ${normalizedMethod})`
-          );
-          throw new Error(`Permission denied: ${PLUGIN_PERMISSIONS.hostCapabilityInvoke}`);
-        }
-
-        return await withTimeout(
-          invokePluginHostCapability(normalizedCapabilityId, {
-            method: normalizedMethod,
-            payload,
-            context: {
-            pluginId,
-            hostLabel,
-            permissions,
-            aiControl: aiControlBridge,
-            audioInputAdapter: audioInputAdapterBridge,
-            audioService,
-            commands: commands ?? undefined,
-            getCover,
-            keybindings: keybindings ?? undefined,
-            navigation,
-            configApi,
-            trayApi,
-            windowApi,
-          },
-        }),
-        HOST_CAPABILITY_INVOKE_TIMEOUT_MS,
-        `Host capability invocation timed out: ${normalizedCapabilityId}.${normalizedMethod}`
-      );
+        await closeHostSessionInternal(capabilityId, sessionId, reason);
       },
     },
     audio: {

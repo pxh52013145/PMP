@@ -39,6 +39,7 @@ import {
   setPmpmSandboxRuntimeEnabled,
   subscribePmpmSandbox,
 } from '../../magnet-system/plugins/pmpmSandboxConfig';
+import { resolveInstalledPmpmPluginRuntime } from '../../magnet-system/plugins/runtime';
 import { useConfirmDialog } from '../core/ConfirmDialog';
 import { PmpButton, PmpCard, PmpCheckbox } from '../primitives';
 
@@ -157,6 +158,17 @@ export function PluginsSettingsPanel() {
     void sandboxRevision;
     return getPmpmSandboxRuntimeEnabled();
   }, [sandboxRevision]);
+
+  const runtimeResolutionByPluginId = useMemo(() => {
+    return new Map(
+      installedPlugins.map((plugin) => [
+        plugin.manifest.metadata.id,
+        resolveInstalledPmpmPluginRuntime(plugin.manifest.metadata.id, {
+          preferSandbox: sandboxEnabled,
+        }),
+      ] as const)
+    );
+  }, [installedPlugins, sandboxEnabled]);
 
   const restartPmpmRuntime = useCallback(
     (pluginId: string, reason: string) => {
@@ -393,6 +405,7 @@ export function PluginsSettingsPanel() {
             const meta = plugin.manifest.metadata;
             const permissions = plugin.manifest.permissions ?? [];
             const extensionRecord = installedExtensionRecordById.get(meta.id) ?? null;
+            const runtimeResolution = runtimeResolutionByPluginId.get(meta.id) ?? null;
             const permissionCapabilityBindings = listPmpmPermissionCapabilityBindings(plugin);
             const capabilityIdByPermission = new Map(
               permissionCapabilityBindings.map((binding) => [binding.permission, binding.capabilityId] as const)
@@ -410,6 +423,42 @@ export function PluginsSettingsPanel() {
                   ...(extensionRecord.manifest.compat?.map((entry) => entry.compatLayerId) ?? []),
                 ].join('\n')
               : undefined;
+            const runtimeProjectionTitle = (() => {
+              if (!runtimeResolution) {
+                return t('settings.plugins.tag.runtimeMissing');
+              }
+              if (runtimeResolution.status === 'resolved') {
+                return [
+                  t('settings.plugins.tag.runtimeResolved', {
+                    runtimeId: runtimeResolution.runtime.runtimeId,
+                  }),
+                  t('settings.plugins.tag.launcher', {
+                    launcherId: runtimeResolution.launcher.id,
+                  }),
+                  t('settings.plugins.tag.transport', {
+                    transport: runtimeResolution.launcher.transport,
+                  }),
+                  ...runtimeResolution.issues.map((issue) =>
+                    t('settings.plugins.runtime.issue', { issue })
+                  ),
+                ].join('\n');
+              }
+              return [
+                t('settings.plugins.tag.runtimeBlocked'),
+                runtimeResolution.candidateLaunchers.length > 0
+                  ? t('settings.plugins.runtime.candidates', {
+                      launchers: runtimeResolution.candidateLaunchers
+                        .map((launcher) => launcher.id)
+                        .join(', '),
+                    })
+                  : null,
+                ...runtimeResolution.issues.map((issue) =>
+                  t('settings.plugins.runtime.issue', { issue })
+                ),
+              ]
+                .filter((line): line is string => typeof line === 'string' && line.length > 0)
+                .join('\n');
+            })();
             const panels = plugin.manifest.contributions?.settingsPanels?.length ?? 0;
             const pages = plugin.manifest.contributions?.pages?.length ?? 0;
             const windows = plugin.manifest.contributions?.windows?.length ?? 0;
@@ -446,6 +495,31 @@ export function PluginsSettingsPanel() {
                           : t('settings.plugins.tag.signedUntrusted')
                         : t('settings.plugins.tag.unsigned')}
                     </span>
+                    {runtimeResolution?.status === 'resolved' ? (
+                      <>
+                        <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                          {t('settings.plugins.tag.runtimeResolved', {
+                            runtimeId: runtimeResolution.runtime.runtimeId,
+                          })}
+                        </span>
+                        <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                          {t('settings.plugins.tag.launcher', {
+                            launcherId: runtimeResolution.launcher.id,
+                          })}
+                        </span>
+                        <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                          {t('settings.plugins.tag.transport', {
+                            transport: runtimeResolution.launcher.transport,
+                          })}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                        {runtimeResolution
+                          ? t('settings.plugins.tag.runtimeBlocked')
+                          : t('settings.plugins.tag.runtimeMissing')}
+                      </span>
+                    )}
                     {panels > 0 && (
                       <span className="settings-plugin-tag">
                         {t('settings.plugins.tag.settingsPanelsCount', { count: panels })}
