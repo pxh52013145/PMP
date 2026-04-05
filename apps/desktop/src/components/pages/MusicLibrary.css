@@ -1937,7 +1937,7 @@
   margin: 0;
   cursor: grab;
   z-index: 3;
-  color: var(--music-library-state-accent);
+  color: var(--music-library-sort-accent, rgba(255, 255, 255, 0.62));
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1949,7 +1949,7 @@
   height: 24px;
   overflow: visible;
   display: block;
-  filter: drop-shadow(0 0 3px var(--music-library-state-glow));
+  filter: drop-shadow(0 0 3px var(--music-library-sort-accent-glow, rgba(255, 255, 255, 0.04)));
 }
 
 .music-library-column-drag-icon-ring,
@@ -1979,8 +1979,10 @@
 
 .music-library-column-drag-handle:hover,
 .music-library-column-drag-handle:focus-visible {
-  color: var(--music-library-state-accent);
-  filter: drop-shadow(0 0 6px var(--music-library-state-glow));
+  color: var(--music-library-sort-accent, rgba(255, 255, 255, 0.82));
+  filter: drop-shadow(
+    0 0 6px var(--music-library-sort-accent-glow, rgba(255, 255, 255, 0.12))
+  );
 }
 
 .music-library-column-drag-handle:hover .music-library-column-drag-icon-ring,
@@ -2039,7 +2041,7 @@
 }
 
 .music-library-list-header-sort-btn.is-active {
-  color: color-mix(in srgb, var(--music-library-state-accent) 70%, white);
+  color: color-mix(in srgb, var(--music-library-sort-accent, rgba(160, 190, 255, 0.94)) 70%, white);
 }
 
 .music-library-list-header-sort-btn .music-library-list-header-label {
@@ -2076,7 +2078,7 @@
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  color: var(--music-library-state-accent);
+  color: var(--music-library-sort-accent, rgba(160, 190, 255, 0.94));
 }
 
 .music-library-list-header-sort-chevron {
@@ -2085,7 +2087,9 @@
   display: block;
   flex: none;
   overflow: visible;
-  filter: drop-shadow(0 0 4px var(--music-library-state-glow));
+  filter: drop-shadow(
+    0 0 4px var(--music-library-sort-accent-glow, rgba(136, 182, 255, 0.12))
+  );
 }
 
 .music-library-list-header-sort-chevron path {
