@@ -18,9 +18,25 @@ export interface MagnetRendererDefinition {
 }
 
 type RendererMap = Map<string, MagnetRendererDefinition>;
+type RendererListener = () => void;
 
 const rendererRegistry: RendererMap = new Map();
+const rendererListeners = new Set<RendererListener>();
+let rendererRevision = 0;
 const telemetry = getTelemetryLogger('magnets', 'registry');
+
+function notifyRendererRegistryChanged(): void {
+  rendererRevision += 1;
+  for (const listener of Array.from(rendererListeners)) {
+    try {
+      listener();
+    } catch (error) {
+      telemetry.warn('magnet_renderer.listener.failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
 
 function normalizePreview(preview?: ReactNode | (() => ReactNode)): ReactNode | undefined {
   if (typeof preview === 'function') {
@@ -54,14 +70,20 @@ export function registerMagnetRenderer(
   }
 
   rendererRegistry.set(id, definition);
+  notifyRendererRegistryChanged();
 }
 
 export function unregisterMagnetRenderer(id: string): void {
-  rendererRegistry.delete(id);
+  const didDelete = rendererRegistry.delete(id);
+  if (didDelete) {
+    notifyRendererRegistryChanged();
+  }
 }
 
 export function clearMagnetRenderers(): void {
+  if (rendererRegistry.size === 0) return;
   rendererRegistry.clear();
+  notifyRendererRegistryChanged();
 }
 
 export function getMagnetRenderer(id: string): MagnetRendererDefinition | null {
@@ -77,5 +99,16 @@ export function getMagnetPreviewNode(magnet: Magnet): ReactNode | null {
 
 export function listRegisteredMagnetRenderers(): MagnetRendererDefinition[] {
   return Array.from(rendererRegistry.values());
+}
+
+export function getMagnetRenderersRevision(): number {
+  return rendererRevision;
+}
+
+export function subscribeMagnetRenderers(listener: RendererListener): () => void {
+  rendererListeners.add(listener);
+  return () => {
+    rendererListeners.delete(listener);
+  };
 }
 

@@ -1,0 +1,48 @@
+{
+  "formatVersion": "1.0",
+  "apiVersion": "1.0.0",
+  "type": "magnet-plugin",
+  "metadata": {
+    "id": "stream-protocol-demo",
+    "name": "Stream Protocol Demo",
+    "version": "0.1.1",
+    "author": "PMP Dev Runtime",
+    "description": "Runtime protocol demo plugin that exercises host.openStream, host.openSession, and runtime crash cleanup.",
+    "tags": [
+      "demo",
+      "protocol",
+      "stream",
+      "runtime"
+    ]
+  },
+  "entryPoint": "index.js",
+  "permissions": [
+    "api:host",
+    "api:host-capability",
+    "api:audio-visual",
+    "api:audio-input-adapter"
+  ],
+  "magnet": {
+    "defaultAnchor": {
+      "type": "range",
+      "coordinates": [
+        { "x": 0, "y": 0 },
+        { "x": 5, "y": 4 }
+      ]
+    }
+  },
+  "contributions": {
+    "visualizers": [
+      {
+        "kind": "visualizer",
+        "id": "stream-protocol-lab",
+        "title": "Stream Protocol Lab",
+        "description": "Open a real host stream, inspect frames, and test runtime cleanup.",
+        "inputs": [
+          "pre-dsp",
+          "post-dsp"
+        ]
+      }
+    ]
+  }
+}

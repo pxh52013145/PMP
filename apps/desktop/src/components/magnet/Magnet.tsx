@@ -1,6 +1,10 @@
-import { memo, useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
+import { memo, useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
 import type { Magnet } from '../../types/pixel';
-import { getMagnetRenderer } from '../../magnet-system/registry';
+import {
+  getMagnetRenderer,
+  getMagnetRenderersRevision,
+  subscribeMagnetRenderers,
+} from '../../magnet-system/registry';
 import type { MagnetChromeOverrideMode } from '../../modules/magnets';
 import {
   alignMagnetBounds,
@@ -76,6 +80,11 @@ function MagnetComponentImpl({
   const lastBoundsRef = useRef<MagnetBounds | null>(null);
   const isFirstRenderRef = useRef(true);
   const layoutCompensationFrameRef = useRef<number | null>(null);
+  const rendererRevision = useSyncExternalStore(
+    subscribeMagnetRenderers,
+    getMagnetRenderersRevision,
+    getMagnetRenderersRevision
+  );
 
   const clearDragFeedbackTimer = useCallback(() => {
     if (dragFeedbackTimerRef.current === null) return;
@@ -444,6 +453,7 @@ function MagnetComponentImpl({
   ]);
 
   const renderedContent = useMemo(() => {
+    void rendererRevision;
     const rendererId = magnet.renderer ?? magnet.id;
     const rendererEntry =
       getMagnetRenderer(rendererId) ??
@@ -455,7 +465,7 @@ function MagnetComponentImpl({
     }
 
     return magnet.content;
-  }, [magnet.renderer, magnet.id, magnet.content]);
+  }, [magnet.renderer, magnet.id, magnet.content, rendererRevision]);
 
   if (!layoutBounds || !shellStyle) return null;
 

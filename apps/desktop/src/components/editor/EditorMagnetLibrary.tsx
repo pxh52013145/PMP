@@ -6,6 +6,7 @@ import {
   useEffect,
   useDeferredValue,
   useRef,
+  useSyncExternalStore,
   isValidElement,
   type ReactNode,
 } from 'react';
@@ -19,7 +20,12 @@ import {
 } from '../../utils/windowCommunication';
 import { readJson, removeKey, writeJson, writeString } from '../../modules/storage';
 import { getMagnetDisplayName } from '../../modules/magnets/display';
-import { getMagnetPreviewNode, getMagnetRenderer } from '../../magnet-system/registry';
+import {
+  getMagnetPreviewNode,
+  getMagnetRenderer,
+  getMagnetRenderersRevision,
+  subscribeMagnetRenderers,
+} from '../../magnet-system/registry';
 import {
   createMagnetTemplateFromPlugin,
   installPmpmPluginFromFilePath,
@@ -172,6 +178,11 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const deferredSearchQuery = useDeferredValue(searchQuery);
+  const rendererRevision = useSyncExternalStore(
+    subscribeMagnetRenderers,
+    getMagnetRenderersRevision,
+    getMagnetRenderersRevision
+  );
   const [showImport, setShowImport] = useState(false);
   const [importData, setImportData] = useState('');
   const [importError, setImportError] = useState('');
@@ -245,6 +256,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
   // 当前显示的 Magnet（支持搜索）
   const displayMagnets = useMemo(() => {
+    void rendererRevision;
     const baseMagnets = categorizedMagnets[viewMode][filterMode];
     const normalizedQuery = deferredSearchQuery.trim().toLowerCase();
     if (!normalizedQuery) return baseMagnets;
@@ -272,7 +284,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
       return searchable.some((value) => value.includes(normalizedQuery));
     });
-  }, [categorizedMagnets, deferredSearchQuery, filterMode, t, viewMode]);
+  }, [categorizedMagnets, deferredSearchQuery, filterMode, rendererRevision, t, viewMode]);
 
   // 监听 creator 窗口状态
   useEffect(() => {
@@ -596,10 +608,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
       setPluginError('');
 
       try {
-        if (activeMagnetIds.has(id)) {
-          alert(t('editor.magnet-library.plugins.uninstall.mustDeactivate', { id }));
-          return;
-        }
+        const isActive = activeMagnetIds.has(id);
 
         const ok = await confirm({
           title: t('editor.magnet-library.plugins.uninstall.confirmTitle'),
@@ -609,6 +618,10 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
           danger: true,
         });
         if (!ok) return;
+
+        if (isActive) {
+          onMagnetDeactivate(id);
+        }
 
         uninstallPmpmPlugin(id);
         reloadPlugins();
@@ -622,7 +635,16 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
         setPluginBusy(false);
       }
     },
-    [activeMagnetIds, confirm, magnetLibrary, onMagnetDeleteFromLibrary, pluginBusy, reloadPlugins, t]
+    [
+      activeMagnetIds,
+      confirm,
+      magnetLibrary,
+      onMagnetDeactivate,
+      onMagnetDeleteFromLibrary,
+      pluginBusy,
+      reloadPlugins,
+      t,
+    ]
   );
 
   const handleRendererOpacityDraftChange = useCallback((magnetId: string, rawValue: string) => {
@@ -848,9 +870,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                         <button
                           className="import-submit-btn"
                           style={{
-                            background: isActive ? 'rgba(255, 69, 58, 0.35)' : 'rgba(255, 69, 58, 0.9)',
+                            background: isActive ? 'rgba(255, 69, 58, 0.72)' : 'rgba(255, 69, 58, 0.9)',
                           }}
-                          disabled={pluginBusy || isActive}
+                          disabled={pluginBusy}
                           onClick={() => void handleUninstallPmpmPlugin(id)}
                           title={
                             isActive

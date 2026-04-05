@@ -312,6 +312,7 @@ export function PmpmSandboxHost({
       if (frameReadyRef.current) return;
       if (crashReportedRef.current) return;
       crashReportedRef.current = true;
+      setError('Plugin sandbox boot timeout');
       void runtimeResources.cleanup('runtime-crash');
       recordPmpmPluginCrash(
         pluginId,
@@ -532,6 +533,7 @@ export function PmpmSandboxHost({
       if (elapsed < timeoutMs) return;
       if (crashReportedRef.current) return;
       crashReportedRef.current = true;
+      setError(`Plugin runtime unresponsive (${elapsed}ms)`);
 
       recordPmpmAuditEvent({
         type: 'runtime-unresponsive',
@@ -605,20 +607,53 @@ export function PmpmSandboxHost({
   }
 
   return (
-    <iframe
-      key={frameId}
-      ref={iframeRef}
-      title={`pmpm:${pluginId}`}
-      sandbox="allow-scripts"
+    <div
       style={{
         width: '100%',
         height: '100%',
-        border: 'none',
-        display: 'block',
-        background: 'transparent',
+        position: 'relative',
+        borderRadius: 'inherit',
+        overflow: 'hidden',
+        background: 'rgba(10, 14, 22, 0.28)',
       }}
-      srcDoc={buildPmpmSandboxSrcDoc(frameId)}
-      data-mounted={mounted ? '1' : '0'}
-    />
+    >
+      <iframe
+        key={frameId}
+        ref={iframeRef}
+        title={`pmpm:${pluginId}`}
+        sandbox="allow-scripts"
+        style={{
+          width: '100%',
+          height: '100%',
+          border: 'none',
+          display: 'block',
+          background: 'transparent',
+        }}
+        srcDoc={buildPmpmSandboxSrcDoc(frameId)}
+        data-mounted={mounted ? '1' : '0'}
+      />
+      {!mounted ? (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            alignItems: 'center',
+            gap: 6,
+            padding: 10,
+            color: 'rgba(255,255,255,0.72)',
+            fontSize: 11,
+            textAlign: 'center',
+            pointerEvents: 'none',
+            background: 'linear-gradient(180deg, rgba(8,12,18,0.18), rgba(8,12,18,0.3))',
+          }}
+        >
+          <div style={{ fontWeight: 600 }}>Loading Plugin</div>
+          <div style={{ opacity: 0.78 }}>{plugin.manifest.metadata.name ?? pluginId}</div>
+        </div>
+      ) : null}
+    </div>
   );
 }

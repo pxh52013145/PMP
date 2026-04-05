@@ -56,6 +56,10 @@ community/supabase/.temp/
 
 # Community (local-only, except shared resource packs)
 community/*
+!community/plugins/
+community/plugins/*
+!community/plugins/stream-protocol-demo/
+!community/plugins/stream-protocol-demo/**
 
 # New source-first phase: archive and local package experiments
 legacy/

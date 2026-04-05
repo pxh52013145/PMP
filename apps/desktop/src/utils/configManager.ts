@@ -338,6 +338,22 @@ function sanitizeCustomMagnet<TMagnet extends Magnet>(value: unknown): { magnet:
   );
   const anchors = sanitizeAnchors(value.anchors);
   const bounds = sanitizeBounds(value.bounds);
+  const gridFootprint = isPlainObject(value.gridFootprint)
+    ? (() => {
+        const width = value.gridFootprint.width;
+        const height = value.gridFootprint.height;
+        if (
+          typeof width === 'number' &&
+          Number.isFinite(width) &&
+          typeof height === 'number' &&
+          Number.isFinite(height)
+        ) {
+          return { width, height };
+        }
+        return undefined;
+      })()
+    : undefined;
+  const hasPlacementShape = anchors.length > 0 || Boolean(gridFootprint);
 
   if (
     typeof value.id !== 'string' ||
@@ -351,7 +367,7 @@ function sanitizeCustomMagnet<TMagnet extends Magnet>(value: unknown): { magnet:
     !isPlainObject(value.interactions) ||
     typeof value.interactions.draggable !== 'boolean' ||
     typeof value.interactions.clickable !== 'boolean' ||
-    anchors.length === 0 ||
+    !hasPlacementShape ||
     !bounds ||
     !Object.prototype.hasOwnProperty.call(value, 'content')
   ) {
@@ -382,18 +398,7 @@ function sanitizeCustomMagnet<TMagnet extends Magnet>(value: unknown): { magnet:
   }
   if (typeof value.variant === 'string') nextMagnet.variant = value.variant;
   if (isPlainObject(value.skinProps)) nextMagnet.skinProps = { ...value.skinProps };
-  if (isPlainObject(value.gridFootprint)) {
-    const width = value.gridFootprint.width;
-    const height = value.gridFootprint.height;
-    if (
-      typeof width === 'number' &&
-      Number.isFinite(width) &&
-      typeof height === 'number' &&
-      Number.isFinite(height)
-    ) {
-      nextMagnet.gridFootprint = { width, height };
-    }
-  }
+  if (gridFootprint) nextMagnet.gridFootprint = gridFootprint;
 
   const chrome = sanitizeChrome(value.chrome);
   if (chrome) nextMagnet.chrome = chrome;
@@ -752,12 +757,23 @@ function validateMagnet(magnet: Magnet): boolean {
     return false;
   }
 
-  if (!magnet.anchors || !Array.isArray(magnet.anchors) || magnet.anchors.length === 0) {
+  const hasAnchors = Array.isArray(magnet.anchors) && magnet.anchors.length > 0;
+  const hasGridFootprint =
+    magnet.gridFootprint &&
+    typeof magnet.gridFootprint.width === 'number' &&
+    Number.isFinite(magnet.gridFootprint.width) &&
+    magnet.gridFootprint.width > 0 &&
+    typeof magnet.gridFootprint.height === 'number' &&
+    Number.isFinite(magnet.gridFootprint.height) &&
+    magnet.gridFootprint.height > 0;
+
+  if (!hasAnchors && !hasGridFootprint) {
     telemetry.error('config.magnet.invalid_anchors', {
-      message: 'Invalid magnet: missing anchors.',
+      message: 'Invalid magnet: missing anchors or grid footprint.',
       fields: {
         magnetId: magnet.id,
         anchorCount: Array.isArray(magnet.anchors) ? magnet.anchors.length : 0,
+        hasGridFootprint: Boolean(hasGridFootprint),
       },
     });
     return false;
