@@ -26,6 +26,15 @@ import { readVerifiedPmpmPluginEntryCode } from './pmpmRuntime';
 import { buildPmpmSandboxSrcDoc } from './pmpmSandboxSrcDoc';
 import { usePmpmRuntimeRestartToken } from './usePmpmRuntimeRestartToken';
 import {
+  createPmpmCompatRuntimeSessionAdapter,
+  type PmpmCompatCapabilityRevokeAckMessage,
+  type PmpmCompatCapabilityRevokeDrillMessage,
+} from './runtime/pmpmCompatRuntimeSessionAdapter';
+import {
+  bindHostRuntimeEventChannel,
+  RUNTIME_EVENT_NAMES,
+} from './runtime/runtimeEventChannel';
+import {
   buildPmpmRuntimeActivateSnapshot,
   buildPmpmRuntimeCapabilityRevokeDrillSnapshot,
   buildPmpmRuntimeHealthSnapshot,
@@ -35,6 +44,7 @@ import {
 } from './pmpmRuntimeBridgeSnapshot';
 import { dispatchPmpmCompatRpcRequest } from './runtime/pmpmCompatCapabilityTransport';
 import { createPmpmCompatRuntimeResourceRegistry } from './runtime/pmpmCompatRuntimeResources';
+import { createRuntimeBridgeHostSession } from './runtime/runtimeBridgeHostSession';
 
 const PMPM_SANDBOX_STARTUP_TIMEOUT_MS = 5_000;
 const PMPM_SANDBOX_HEARTBEAT_INTERVAL_MS = 1_500;
@@ -47,27 +57,17 @@ export type PmpmSandboxSurface =
   | { kind: 'visualizer'; visualizerId: string }
   | { kind: 'window'; windowId: string };
 
-type PmpmCompatCapabilityRevokeDrillMessage = {
-  type: 'pmpm:capabilities-revoke';
-  requestId: string;
-  capabilityIds: string[];
-  reason: string;
-  dryRun?: boolean;
-};
-
-type PmpmCompatCapabilityRevokeAckMessage = {
-  frameId: string;
-  type: 'pmpm:capabilities-revoke-ack';
-  requestId: string;
-  ok: boolean;
-  ignored?: boolean;
-  reason?: string;
-};
-
 type FrameMessage = PmpmBridgeIncomingMessage | PmpmCompatCapabilityRevokeAckMessage;
 type FramePostMessage =
   | Omit<PmpmBridgeOutgoingMessage, 'frameId'>
   | PmpmCompatCapabilityRevokeDrillMessage;
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
 
 function resolveCrashSurface(surface: PmpmSandboxSurface['kind']): PmpmPluginCrashSurface {
   switch (surface) {
@@ -214,6 +214,9 @@ export function PmpmSandboxHost({
   const lastPongAtRef = useRef<number>(Date.now());
   const frameReadyRef = useRef(false);
   const crashReportedRef = useRef(false);
+  const compatRuntimeAdapterRef = useRef<ReturnType<
+    typeof createPmpmCompatRuntimeSessionAdapter
+  > | null>(null);
 
   useEffect(() => {
     setFrameReady(false);
@@ -254,15 +257,18 @@ export function PmpmSandboxHost({
         setFrameReady(true);
         frameReadyRef.current = true;
         lastPongAtRef.current = Date.now();
+        compatRuntimeAdapterRef.current?.handleCompatMessage(data);
         return;
       }
 
       if (data.type === 'pmpm:mounted') {
         setMounted(true);
+        compatRuntimeAdapterRef.current?.handleCompatMessage(data);
         return;
       }
 
       if (data.type === 'pmpm:error') {
+        compatRuntimeAdapterRef.current?.handleCompatMessage(data);
         if (crashReportedRef.current) return;
         crashReportedRef.current = true;
         const message = typeof data.message === 'string' ? data.message : 'Plugin error';
@@ -278,16 +284,12 @@ export function PmpmSandboxHost({
       }
 
       if (data.type === 'pmpm:capabilities-revoke-ack') {
+        compatRuntimeAdapterRef.current?.handleCompatMessage(data);
         return;
       }
 
       if (data.type === 'pmpm:permission-denied') {
-        recordPmpmPermissionDenied({
-          pluginId,
-          hostLabel,
-          capability: data.capability,
-          action: data.action,
-        });
+        compatRuntimeAdapterRef.current?.handleCompatMessage(data);
         return;
       }
 
@@ -342,14 +344,46 @@ export function PmpmSandboxHost({
     if (!frameReady) return;
 
     let disposed = false;
+    let pingInterval: number | null = null;
+    let disposeRuntimeEvents: (() => void) | null = null;
+    let runtimeSession: ReturnType<typeof createRuntimeBridgeHostSession> | null = null;
 
     const crashSurface = resolveCrashSurface(surface.kind);
+
+    const cleanupRuntime = (reason: string): void => {
+      compatRuntimeAdapterRef.current = null;
+      if (pingInterval !== null) {
+        window.clearInterval(pingInterval);
+        pingInterval = null;
+      }
+      try {
+        disposeRuntimeEvents?.();
+      } catch {
+        // ignore
+      }
+      disposeRuntimeEvents = null;
+
+      if (runtimeSession) {
+        void runtimeSession.dispose(reason);
+        runtimeSession = null;
+        return;
+      }
+
+      void runtimeResources.cleanup(reason);
+    };
 
     const boot = async () => {
       try {
         const entryCode = await readVerifiedPmpmPluginEntryCode(pluginId);
         if (disposed) return;
 
+        const runtimeHelloSnapshot = buildPmpmRuntimeHelloSnapshot({
+          pluginId,
+          runtimeInstanceId: frameId,
+          runtimeKind: 'webview',
+          carrier: 'webview-frame',
+          supportsViewMount: true,
+        });
         const runtimeInitSnapshot = buildPmpmRuntimeInitSnapshot({
           pluginId,
           runtimeInstanceId: frameId,
@@ -371,43 +405,43 @@ export function PmpmSandboxHost({
           capabilityIds: optionalCapabilityIds,
           reason: 'compat-drill:no-op',
         });
-
-        postToFrame({
-          type: 'pmpm:init',
+        const runtimeActivateSnapshot = buildPmpmRuntimeActivateSnapshot({
           pluginId,
-          hostLabel,
-          runtimeHello: buildPmpmRuntimeHelloSnapshot({
-            pluginId,
-            runtimeInstanceId: frameId,
-            runtimeKind: 'webview',
-            carrier: 'webview-frame',
-            supportsViewMount: true,
-          }),
-          runtimeInit: runtimeInitSnapshot,
-          runtimeActivate: buildPmpmRuntimeActivateSnapshot({
-            pluginId,
-            runtimeInstanceId: frameId,
-            kind: surface.kind,
-            surfaceId,
-            mountContext,
-          }),
-          runtimeHealth: buildPmpmRuntimeHealthSnapshot({
-            pluginId,
-            runtimeInstanceId: frameId,
-          }),
-          viewMountRequest: buildPmpmViewMountRequestSnapshot({
-            pluginId,
-            runtimeInstanceId: frameId,
-            kind: surface.kind,
-            surfaceId,
-            mountContext,
-          }),
-          hostInfo,
-          surface: surface.kind,
+          runtimeInstanceId: frameId,
+          kind: surface.kind,
           surfaceId,
           mountContext,
+        });
+        const runtimeHealthSnapshot = buildPmpmRuntimeHealthSnapshot({
+          pluginId,
+          runtimeInstanceId: frameId,
+        });
+        const viewMountRequestSnapshot = buildPmpmViewMountRequestSnapshot({
+          pluginId,
+          runtimeInstanceId: frameId,
+          kind: surface.kind,
+          surfaceId,
+          mountContext,
+        });
+
+        const compatRuntimeAdapter = createPmpmCompatRuntimeSessionAdapter({
+          runtimeHello: runtimeHelloSnapshot,
+          runtimeHealth: runtimeHealthSnapshot,
+          viewMountRequest: viewMountRequestSnapshot ?? undefined,
+          capabilityRevokeDrill: {
+            type: 'pmpm:capabilities-revoke',
+            requestId: runtimeRevokeDrillSnapshot.requestId,
+            capabilityIds: [...runtimeRevokeDrillSnapshot.capabilityIds],
+            reason: runtimeRevokeDrillSnapshot.reason,
+            dryRun: true,
+          },
+          hostLabel,
+          surface: surface.kind,
+          surfaceId,
           permissions: Array.from(permissions),
           entryCode,
+          mountContext,
+          hostInfo,
           initialAudioState: permissions.has('api:audio-state') ? audioService.getState() : null,
           initialAudioSpectrum: permissions.has('api:audio-visual')
             ? hostApi.visualizer.getSpectrum()
@@ -424,20 +458,92 @@ export function PmpmSandboxHost({
               : null,
           initialNavigation,
           initialConfig,
+          postCompatMessage: postToFrame,
         });
 
-        postToFrame({
-          type: 'pmpm:capabilities-revoke',
-          requestId: runtimeRevokeDrillSnapshot.requestId,
-          capabilityIds: [...runtimeRevokeDrillSnapshot.capabilityIds],
-          reason: runtimeRevokeDrillSnapshot.reason,
-          dryRun: true,
+        compatRuntimeAdapterRef.current = compatRuntimeAdapter;
+        compatRuntimeAdapter.primeRuntimeHello();
+
+        runtimeSession = createRuntimeBridgeHostSession({
+          pluginId,
+          runtimeId: runtimeHelloSnapshot.runtimeId,
+          runtimeInstanceId: frameId,
+          runtimeKind: runtimeHelloSnapshot.runtimeKind,
+          carrier: runtimeHelloSnapshot.carrier,
+          api: hostApi,
+          permissions,
+          port: compatRuntimeAdapter.port,
+          runtimeInit: runtimeInitSnapshot,
+          runtimeActivate: runtimeActivateSnapshot,
+          runtimeResources,
+          startupTimeoutMs: PMPM_SANDBOX_STARTUP_TIMEOUT_MS,
+          requestTimeoutMs: PMPM_SANDBOX_UNRESPONSIVE_TIMEOUT_MS,
+          onRuntimeEvent: (message) => {
+            if (message.eventName !== RUNTIME_EVENT_NAMES.permissionDenied) {
+              return;
+            }
+            const payload = asObject(message.payload) ?? {};
+            const capability = typeof payload.capability === 'string' ? payload.capability : '';
+            const action = typeof payload.action === 'string' ? payload.action : '';
+            if (!capability || !action) {
+              return;
+            }
+            recordPmpmPermissionDenied({
+              pluginId,
+              hostLabel,
+              capability,
+              action,
+            });
+          },
         });
+
+        disposeRuntimeEvents = bindHostRuntimeEventChannel({
+          permissions,
+          audioService,
+          navigation,
+          emitRuntimeEvent: (eventName, payload) =>
+            runtimeSession?.emitRuntimeEvent(eventName, payload) ?? Promise.resolve(),
+          subscribeConfig: permissions.has('storage:local')
+            ? (listener) => subscribePmpmPluginConfig(pluginId, listener)
+            : undefined,
+          getSpectrum: permissions.has('api:audio-visual')
+            ? () => hostApi.visualizer.getSpectrum()
+            : undefined,
+          getSpectrumFrame:
+            permissions.has('api:audio-visual') &&
+            typeof hostApi.visualizer.getSpectrumFrame === 'function'
+              ? (options) => hostApi.visualizer.getSpectrumFrame(options)
+              : undefined,
+        });
+
+        let pingSeq = 0;
+        pingInterval = window.setInterval(() => {
+          pingSeq += 1;
+          postToFrame({ type: 'pmpm:ping', pingId: pingSeq });
+
+          const elapsed = Date.now() - lastPongAtRef.current;
+          const timeoutMs = PMPM_SANDBOX_UNRESPONSIVE_TIMEOUT_MS;
+          if (elapsed < timeoutMs) return;
+          if (crashReportedRef.current) return;
+          crashReportedRef.current = true;
+          setError(`Plugin runtime unresponsive (${elapsed}ms)`);
+
+          recordPmpmAuditEvent({
+            type: 'runtime-unresponsive',
+            pluginId,
+            surface: crashSurface,
+            timeoutMs,
+          });
+          cleanupRuntime('runtime-unresponsive');
+          recordPmpmPluginCrash(pluginId, `Plugin runtime unresponsive (${elapsed}ms)`, crashSurface);
+        }, PMPM_SANDBOX_HEARTBEAT_INTERVAL_MS);
+
+        await runtimeSession.start();
       } catch (bootError) {
         if (disposed) return;
         if (crashReportedRef.current) return;
         crashReportedRef.current = true;
-        void runtimeResources.cleanup('runtime-crash');
+        cleanupRuntime('runtime-crash');
         recordPmpmPluginCrash(pluginId, bootError, crashSurface);
         setError(bootError instanceof Error ? bootError.message : String(bootError));
       }
@@ -445,122 +551,9 @@ export function PmpmSandboxHost({
 
     void boot();
 
-    const allowAudioState = permissions.has('api:audio-state');
-    const allowConfig = permissions.has('storage:local');
-    const allowNavigation = permissions.has('api:navigation');
-
-    const unlistenState = allowAudioState
-      ? audioService.onStateChange((state) => {
-          postToFrame({ type: 'pmpm:event', name: 'audio.state', payload: state });
-        })
-      : () => {};
-    const unlistenTime = allowAudioState
-      ? audioService.onTimeUpdate((time) => {
-          postToFrame({ type: 'pmpm:event', name: 'audio.time', payload: time });
-        })
-      : () => {};
-    const unlistenEnded = allowAudioState
-      ? audioService.onEnded(() => {
-          postToFrame({ type: 'pmpm:event', name: 'audio.ended', payload: null });
-        })
-      : () => {};
-
-    const unlistenLoadProgress = allowAudioState
-      ? audioService.onLoadProgress((progress) => {
-          postToFrame({ type: 'pmpm:event', name: 'audio.loadProgress', payload: progress });
-        })
-      : () => {};
-
-    const unlistenError = allowAudioState
-      ? audioService.onError((err) => {
-          const message = err instanceof Error ? err.message : String(err);
-          postToFrame({ type: 'pmpm:event', name: 'audio.error', payload: message });
-        })
-      : () => {};
-
-    const unlistenConfig = allowConfig
-      ? subscribePmpmPluginConfig(pluginId, (config) => {
-          postToFrame({ type: 'pmpm:event', name: 'config.changed', payload: config });
-        })
-      : () => {};
-
-    const unlistenNavigation = allowNavigation
-      ? kernel.events.on('navigation/changed', (snapshot) => {
-          postToFrame({ type: 'pmpm:event', name: 'navigation.changed', payload: snapshot });
-        })
-      : () => {};
-
-    let spectrumHandle: number | null = null;
-    if (permissions.has('api:audio-visual')) {
-      spectrumHandle = window.setInterval(() => {
-        try {
-          const spectrumFramePost =
-            typeof hostApi.visualizer.getSpectrumFrame === 'function'
-              ? hostApi.visualizer.getSpectrumFrame({ tap: 'post-dsp' })
-              : null;
-          const spectrumFramePre =
-            typeof hostApi.visualizer.getSpectrumFrame === 'function'
-              ? hostApi.visualizer.getSpectrumFrame({ tap: 'pre-dsp' })
-              : null;
-          postToFrame({
-            type: 'pmpm:event',
-            name: 'audio.spectrum',
-            payload: hostApi.visualizer.getSpectrum(),
-          });
-          postToFrame({
-            type: 'pmpm:event',
-            name: 'audio.spectrumFrame.post',
-            payload: spectrumFramePost,
-          });
-          postToFrame({
-            type: 'pmpm:event',
-            name: 'audio.spectrumFrame.pre',
-            payload: spectrumFramePre,
-          });
-        } catch {
-          // ignore
-        }
-      }, 33);
-    }
-
-    let pingSeq = 0;
-    const pingInterval = window.setInterval(() => {
-      pingSeq += 1;
-      postToFrame({ type: 'pmpm:ping', pingId: pingSeq });
-
-      const elapsed = Date.now() - lastPongAtRef.current;
-      const timeoutMs = PMPM_SANDBOX_UNRESPONSIVE_TIMEOUT_MS;
-      if (elapsed < timeoutMs) return;
-      if (crashReportedRef.current) return;
-      crashReportedRef.current = true;
-      setError(`Plugin runtime unresponsive (${elapsed}ms)`);
-
-      recordPmpmAuditEvent({
-        type: 'runtime-unresponsive',
-        pluginId,
-        surface: crashSurface,
-        timeoutMs,
-      });
-      void runtimeResources.cleanup('runtime-unresponsive');
-      recordPmpmPluginCrash(pluginId, `Plugin runtime unresponsive (${elapsed}ms)`, crashSurface);
-    }, PMPM_SANDBOX_HEARTBEAT_INTERVAL_MS);
-
     return () => {
       disposed = true;
-      try {
-        unlistenState();
-        unlistenTime();
-        unlistenEnded();
-        unlistenLoadProgress();
-        unlistenError();
-        unlistenConfig();
-        unlistenNavigation();
-      } catch {
-        // ignore
-      }
-      if (spectrumHandle !== null) window.clearInterval(spectrumHandle);
-      window.clearInterval(pingInterval);
-      void runtimeResources.cleanup('runtime-dispose');
+      cleanupRuntime('runtime-dispose');
       postToFrame({ type: 'pmpm:dispose' });
     };
   }, [
@@ -573,8 +566,8 @@ export function PmpmSandboxHost({
     hostLabel,
     initialConfig,
     initialNavigation,
-    kernel.events,
     mountContext,
+    navigation,
     permissions,
     plugin,
     pluginId,

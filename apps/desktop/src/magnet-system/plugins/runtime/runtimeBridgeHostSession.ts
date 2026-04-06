@@ -1,6 +1,7 @@
 import type {
   CapabilityProtocolMessage,
   RuntimeActivate,
+  RuntimeEvent,
   RuntimeBridgeMessage,
   RuntimeCarrier,
   RuntimeHealthRequest,
@@ -40,11 +41,24 @@ export interface RuntimeBridgeHostSessionOptions {
   runtimeResources?: PmpmCompatRuntimeResourceRegistry;
   startupTimeoutMs?: number;
   requestTimeoutMs?: number;
+  onRuntimeEvent?: (message: RuntimeEvent) => void | Promise<void>;
+}
+
+export interface RuntimeBridgeEventDispatchOptions {
+  requestId?: string;
+  traceId?: string;
+  sequence?: number;
+  emittedAt?: number;
 }
 
 export interface RuntimeBridgeHostSession {
   start: () => Promise<void>;
   requestHealth: () => Promise<RuntimeHealthResponse>;
+  emitRuntimeEvent: (
+    eventName: string,
+    payload?: unknown,
+    options?: RuntimeBridgeEventDispatchOptions
+  ) => Promise<void>;
   dispose: (reason?: string) => Promise<void>;
   getState: () => RuntimeState;
 }
@@ -53,6 +67,12 @@ type PendingResolver<T> = {
   resolve: (value: T) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+};
+
+type PendingRuntimeEvent = {
+  message: RuntimeEvent;
+  resolve: () => void;
+  reject: (error: Error) => void;
 };
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 3_000;
@@ -135,6 +155,7 @@ export function createRuntimeBridgeHostSession(
   let initAckPending: PendingResolver<void> | null = null;
   let activateAckPending: PendingResolver<void> | null = null;
   const healthPending = new Map<string, PendingResolver<RuntimeHealthResponse>>();
+  const pendingRuntimeEvents: PendingRuntimeEvent[] = [];
 
   const clearPending = <T>(pending: PendingResolver<T> | null): void => {
     if (!pending) return;
@@ -149,6 +170,31 @@ export function createRuntimeBridgeHostSession(
 
   const sendMessage = async (message: RuntimeBridgeTransportMessage): Promise<void> => {
     await Promise.resolve(options.port.postMessage(message));
+  };
+
+  const flushRuntimeEvents = async (): Promise<void> => {
+    if (pendingRuntimeEvents.length === 0) {
+      return;
+    }
+
+    const queued = pendingRuntimeEvents.splice(0, pendingRuntimeEvents.length);
+    for (const pendingEvent of queued) {
+      try {
+        await sendMessage(pendingEvent.message);
+        pendingEvent.resolve();
+      } catch (error) {
+        const runtimeError = asError(error);
+        pendingEvent.reject(runtimeError);
+        throw runtimeError;
+      }
+    }
+  };
+
+  const rejectQueuedRuntimeEvents = (error: Error): void => {
+    const queued = pendingRuntimeEvents.splice(0, pendingRuntimeEvents.length);
+    for (const pendingEvent of queued) {
+      pendingEvent.reject(error);
+    }
   };
 
   const createPending = <T>(
@@ -195,6 +241,7 @@ export function createRuntimeBridgeHostSession(
       failPending(pending, error);
     }
     healthPending.clear();
+    rejectQueuedRuntimeEvents(error);
   };
 
   const handleRuntimeMessage = async (message: RuntimeBridgeMessage): Promise<void> => {
@@ -239,6 +286,9 @@ export function createRuntimeBridgeHostSession(
         if (message.fatal) {
           throw new Error(message.message);
         }
+        return;
+      case 'runtime.event':
+        await Promise.resolve(options.onRuntimeEvent?.(message));
         return;
       default:
         return;
@@ -318,6 +368,7 @@ export function createRuntimeBridgeHostSession(
         await activateState.promise;
 
         state = 'active';
+        await flushRuntimeEvents();
       })();
 
       try {
@@ -360,6 +411,38 @@ export function createRuntimeBridgeHostSession(
           healthPending.delete(requestId);
         }
       }
+    },
+    emitRuntimeEvent: async (eventName, payload, dispatchOptions = {}) => {
+      if (disposed) {
+        throw new Error('Runtime bridge session is disposed');
+      }
+
+      const message: RuntimeEvent = {
+        bridgeVersion: options.runtimeInit.bridgeVersion,
+        op: 'runtime.event',
+        pluginId: options.pluginId,
+        runtimeId: options.runtimeId,
+        runtimeInstanceId: options.runtimeInstanceId,
+        eventName,
+        payload,
+        requestId: dispatchOptions.requestId,
+        traceId: dispatchOptions.traceId,
+        sequence: dispatchOptions.sequence,
+        emittedAt: dispatchOptions.emittedAt ?? Date.now(),
+      };
+
+      if (state === 'active') {
+        await sendMessage(message);
+        return;
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        pendingRuntimeEvents.push({
+          message,
+          resolve,
+          reject,
+        });
+      });
     },
     dispose: async (reason = 'runtime-dispose') => {
       if (disposed) return;

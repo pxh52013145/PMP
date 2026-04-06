@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   RuntimeActivate,
+  RuntimeEvent,
   RuntimeHealthRequest,
   RuntimeHealthResponse,
   RuntimeHello,
@@ -193,6 +194,23 @@ function createRuntimeActivate(overrides: Partial<RuntimeActivate> = {}): Runtim
   };
 }
 
+function createRuntimeEvent(
+  eventName: string,
+  payload?: unknown,
+  overrides: Partial<RuntimeEvent> = {}
+): RuntimeEvent {
+  return {
+    bridgeVersion: '1.0',
+    op: 'runtime.event',
+    pluginId: 'worker-plugin',
+    runtimeId: 'worker.main',
+    runtimeInstanceId: 'runtime-instance-1',
+    eventName,
+    payload,
+    ...overrides,
+  };
+}
+
 async function flushMessages(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -322,6 +340,75 @@ describe('runtime bridge host session', () => {
       data: { played: true },
     });
     expect(api.audio.play).toHaveBeenCalledTimes(1);
+  });
+
+  it('buffers outbound runtime events until activation and forwards inbound runtime events', async () => {
+    const api = createStubApi();
+    const harness = createPortHarness();
+    const onRuntimeEvent = vi.fn();
+    const session = createRuntimeBridgeHostSession({
+      pluginId: 'worker-plugin',
+      runtimeId: 'worker.main',
+      runtimeInstanceId: 'runtime-instance-1',
+      runtimeKind: 'extension-host',
+      carrier: 'dedicated-worker',
+      api,
+      permissions: new Set(['api:audio-state']),
+      port: harness.port,
+      runtimeInit: createRuntimeInit(),
+      runtimeActivate: createRuntimeActivate(),
+      onRuntimeEvent,
+    });
+
+    const queuedEvent = session.emitRuntimeEvent('audio.state', {
+      state: { playbackState: 'playing' },
+    });
+    await flushMessages();
+    expect(harness.sent).toHaveLength(0);
+
+    const startPromise = session.start();
+    harness.emit(createRuntimeHello());
+    await flushMessages();
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.init.ack',
+      pluginId: 'worker-plugin',
+      runtimeId: 'worker.main',
+      runtimeInstanceId: 'runtime-instance-1',
+    });
+    await flushMessages();
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.activate.ack',
+      pluginId: 'worker-plugin',
+      runtimeId: 'worker.main',
+      runtimeInstanceId: 'runtime-instance-1',
+    });
+
+    await startPromise;
+    await queuedEvent;
+    expect(harness.sent.at(-1)).toMatchObject({
+      op: 'runtime.event',
+      eventName: 'audio.state',
+      payload: {
+        state: { playbackState: 'playing' },
+      },
+    });
+
+    harness.emit(
+      createRuntimeEvent('command.result', {
+        ok: true,
+      })
+    );
+    await flushMessages();
+
+    expect(onRuntimeEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        op: 'runtime.event',
+        eventName: 'command.result',
+        payload: { ok: true },
+      })
+    );
   });
 
   it('forwards stream messages and disposes tracked resources on session shutdown', async () => {

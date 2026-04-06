@@ -36,6 +36,7 @@ export type {
   RuntimeBridgeMessage,
   RuntimeCarrier,
   RuntimeErrorEvent,
+  RuntimeEvent,
   RuntimeHealthRequest,
   RuntimeHealthResponse,
   RuntimeHello,

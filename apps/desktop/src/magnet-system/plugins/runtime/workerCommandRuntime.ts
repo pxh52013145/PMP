@@ -18,6 +18,7 @@ import { readPmpmPluginConfig, subscribePmpmPluginConfig } from '../pluginConfig
 import { readVerifiedPmpmPluginEntryCode } from '../pmpmRuntime';
 import { recordPmpmAuditEvent } from '../pmpmGovernance';
 import { createRuntimeBridgeHostSession, type RuntimeBridgePort } from './runtimeBridgeHostSession';
+import { bindHostRuntimeEventChannel, RUNTIME_EVENT_NAMES } from './runtimeEventChannel';
 
 import type { RuntimeActivate, RuntimeHello } from '@pixel-matrix/plugin-platform-contracts';
 
@@ -31,18 +32,6 @@ type WorkerLike = {
   terminate: () => void;
   addEventListener: (type: 'message' | 'error', listener: WorkerEventListener) => void;
   removeEventListener: (type: 'message' | 'error', listener: WorkerEventListener) => void;
-};
-
-type WorkerPermissionDeniedMessage = {
-  type: 'pmpm.runtime.permission-denied';
-  capability: string;
-  action: string;
-};
-
-type WorkerCommandResultMessage = {
-  type: 'pmpm.runtime.command.result';
-  ok: boolean;
-  message?: string;
 };
 
 export interface RunPmpmBridgeWorkerCommandOptions {
@@ -81,20 +70,6 @@ function readErrorMessage(error: unknown): string {
 function isTransportMessage(value: unknown): value is { op: string } {
   const record = asObject(value);
   return typeof record?.op === 'string';
-}
-
-function isPermissionDeniedMessage(value: unknown): value is WorkerPermissionDeniedMessage {
-  const record = asObject(value);
-  return (
-    record?.type === 'pmpm.runtime.permission-denied' &&
-    typeof record.capability === 'string' &&
-    typeof record.action === 'string'
-  );
-}
-
-function isCommandResultMessage(value: unknown): value is WorkerCommandResultMessage {
-  const record = asObject(value);
-  return record?.type === 'pmpm.runtime.command.result' && typeof record.ok === 'boolean';
 }
 
 function buildWorkerPort(worker: WorkerLike): { port: RuntimeBridgePort; dispose: () => void } {
@@ -141,10 +116,13 @@ function buildWorkerPort(worker: WorkerLike): { port: RuntimeBridgePort; dispose
 }
 
 function buildWorkerBootstrapSource(runtimeHello: RuntimeHello): string {
-  return `(${pmpmBridgeWorkerBootstrap.toString()})(${JSON.stringify(runtimeHello)})`;
+  return `(${pmpmBridgeWorkerBootstrap.toString()})(${JSON.stringify(runtimeHello)}, ${JSON.stringify(RUNTIME_EVENT_NAMES)})`;
 }
 
-function pmpmBridgeWorkerBootstrap(runtimeHello: RuntimeHello): void {
+function pmpmBridgeWorkerBootstrap(
+  runtimeHello: RuntimeHello,
+  runtimeEventNames: Record<string, string>
+): void {
   const CORE_CAPABILITY_REGISTRY_ID = 'core.capability-registry';
   const STORAGE_CONFIG_CAPABILITY_ID = 'host.pmp.storage.config';
   const AUDIO_PLAYBACK_CAPABILITY_ID = 'host.pmp.audio-engine.playback';
@@ -192,7 +170,7 @@ function pmpmBridgeWorkerBootstrap(runtimeHello: RuntimeHello): void {
   }
 
   function warnDenied(capability: string, action: string): void {
-    postMessage({ type: 'pmpm.runtime.permission-denied', capability, action });
+    emitRuntimeEvent(runtimeEventNames.permissionDenied, { capability, action });
   }
 
   function baseEnvelope() {
@@ -202,6 +180,16 @@ function pmpmBridgeWorkerBootstrap(runtimeHello: RuntimeHello): void {
       runtimeId: runtimeHello.runtimeId,
       runtimeInstanceId: runtimeHello.runtimeInstanceId,
     };
+  }
+
+  function emitRuntimeEvent(eventName: string, payload?: unknown): void {
+    postMessage({
+      ...baseEnvelope(),
+      op: 'runtime.event',
+      eventName,
+      payload,
+      emittedAt: Date.now(),
+    });
   }
 
   function nextRequestId(prefix: string): string {
@@ -325,8 +313,7 @@ function pmpmBridgeWorkerBootstrap(runtimeHello: RuntimeHello): void {
   }
 
   function emitCommandResult(ok: boolean, error?: unknown): void {
-    postMessage({
-      type: 'pmpm.runtime.command.result',
+    emitRuntimeEvent(runtimeEventNames.commandResult, {
       ok,
       message: ok ? undefined : error instanceof Error ? error.message : String(error),
     });
@@ -879,88 +866,101 @@ function pmpmBridgeWorkerBootstrap(runtimeHello: RuntimeHello): void {
     const record = asObject(event.data);
     if (!record) return;
 
-    if (record.type === 'pmpm.runtime.config.changed') {
-      configValue = cloneValue(asObject(record.config) ?? {});
-      for (const listener of Array.from(configListeners)) {
-        try {
-          listener(cloneValue(configValue));
-        } catch {
-          // ignore
-        }
+    if (record.op === 'runtime.event') {
+      const eventName = asNonEmptyString(record.eventName);
+      const payload = asObject(record.payload) ?? {};
+      if (!eventName) {
+        return;
       }
-      return;
-    }
 
-    if (record.type === 'pmpm.runtime.audio.state') {
-      emitAudioState(record.state ?? null);
-      return;
-    }
-
-    if (record.type === 'pmpm.runtime.audio.time') {
-      const time = typeof record.time === 'number' && Number.isFinite(record.time) ? record.time : 0;
-      for (const listener of Array.from(audioTimeListeners)) {
-        try {
-          listener(time);
-        } catch {
-          // ignore
+      if (eventName === runtimeEventNames.configChanged) {
+        configValue = cloneValue(asObject(payload.config) ?? {});
+        for (const listener of Array.from(configListeners)) {
+          try {
+            listener(cloneValue(configValue));
+          } catch {
+            // ignore
+          }
         }
+        return;
       }
-      return;
-    }
 
-    if (record.type === 'pmpm.runtime.audio.ended') {
-      for (const listener of Array.from(audioEndedListeners)) {
-        try {
-          listener();
-        } catch {
-          // ignore
+      if (eventName === runtimeEventNames.audioState) {
+        emitAudioState(payload.state ?? null);
+        return;
+      }
+
+      if (eventName === runtimeEventNames.audioTime) {
+        const time = typeof payload.time === 'number' && Number.isFinite(payload.time) ? payload.time : 0;
+        for (const listener of Array.from(audioTimeListeners)) {
+          try {
+            listener(time);
+          } catch {
+            // ignore
+          }
         }
+        return;
       }
-      return;
-    }
 
-    if (record.type === 'pmpm.runtime.audio.load-progress') {
-      const progress =
-        typeof record.progress === 'number' && Number.isFinite(record.progress) ? record.progress : 0;
-      for (const listener of Array.from(audioLoadProgressListeners)) {
-        try {
-          listener(progress);
-        } catch {
-          // ignore
+      if (eventName === runtimeEventNames.audioEnded) {
+        for (const listener of Array.from(audioEndedListeners)) {
+          try {
+            listener();
+          } catch {
+            // ignore
+          }
         }
+        return;
       }
-      return;
-    }
 
-    if (record.type === 'pmpm.runtime.audio.error') {
-      const message = typeof record.message === 'string' ? record.message : String(record.message ?? '');
-      for (const listener of Array.from(audioErrorListeners)) {
-        try {
-          listener(message);
-        } catch {
-          // ignore
+      if (eventName === runtimeEventNames.audioLoadProgress) {
+        const progress =
+          typeof payload.progress === 'number' && Number.isFinite(payload.progress)
+            ? payload.progress
+            : 0;
+        for (const listener of Array.from(audioLoadProgressListeners)) {
+          try {
+            listener(progress);
+          } catch {
+            // ignore
+          }
         }
+        return;
       }
-      return;
-    }
 
-    if (record.type === 'pmpm.runtime.navigation.changed') {
-      emitNavigationSnapshot(record.snapshot ?? null);
-      return;
-    }
+      if (eventName === runtimeEventNames.audioError) {
+        const message =
+          typeof payload.message === 'string' ? payload.message : String(payload.message ?? '');
+        for (const listener of Array.from(audioErrorListeners)) {
+          try {
+            listener(message);
+          } catch {
+            // ignore
+          }
+        }
+        return;
+      }
 
-    if (record.type === 'pmpm.runtime.visualizer.spectrum') {
-      audioSpectrum = cloneValue(record.spectrum ?? null);
-      return;
-    }
+      if (eventName === runtimeEventNames.navigationChanged) {
+        emitNavigationSnapshot(payload.snapshot ?? null);
+        return;
+      }
 
-    if (record.type === 'pmpm.runtime.visualizer.frame.pre') {
-      audioSpectrumFramePre = cloneValue(record.frame ?? null);
-      return;
-    }
+      if (eventName === runtimeEventNames.visualizerSpectrum) {
+        audioSpectrum = cloneValue(payload.spectrum ?? null);
+        return;
+      }
 
-    if (record.type === 'pmpm.runtime.visualizer.frame.post') {
-      audioSpectrumFramePost = cloneValue(record.frame ?? null);
+      if (eventName === runtimeEventNames.visualizerFramePre) {
+        audioSpectrumFramePre = cloneValue(payload.frame ?? null);
+        return;
+      }
+
+      if (eventName === runtimeEventNames.visualizerFramePost) {
+        audioSpectrumFramePost = cloneValue(payload.frame ?? null);
+        return;
+      }
+
       return;
     }
 
@@ -1125,6 +1125,12 @@ export async function runPmpmBridgeWorkerCommand(
   );
 
   const { port, dispose: disposePort } = buildWorkerPort(worker);
+  let settleCommand!: () => void;
+  let failCommand!: (error: Error) => void;
+  const commandResult = new Promise<void>((resolve, reject) => {
+    settleCommand = resolve;
+    failCommand = reject;
+  });
   const session = createRuntimeBridgeHostSession({
     pluginId: options.pluginId,
     runtimeId: options.runtimeId,
@@ -1138,134 +1144,58 @@ export async function runPmpmBridgeWorkerCommand(
     runtimeActivate,
     startupTimeoutMs: STARTUP_TIMEOUT_MS,
     requestTimeoutMs: timeoutMs,
-  });
+    onRuntimeEvent: (message) => {
+      const payload = asObject(message.payload) ?? {};
 
-  let settleCommand!: () => void;
-  let failCommand!: (error: Error) => void;
-  const commandResult = new Promise<void>((resolve, reject) => {
-    settleCommand = resolve;
-    failCommand = reject;
-  });
-
-  const onCustomMessage: WorkerEventListener = (event) => {
-    if (isPermissionDeniedMessage(event.data)) {
-      recordPmpmPermissionDenied({
-        pluginId: options.pluginId,
-        hostLabel,
-        capability: event.data.capability,
-        action: event.data.action,
-      });
-      return;
-    }
-    if (isCommandResultMessage(event.data)) {
-      if (event.data.ok) {
-        settleCommand();
-      } else {
-        failCommand(new Error(event.data.message ?? 'Plugin command failed'));
+      if (message.eventName === RUNTIME_EVENT_NAMES.permissionDenied) {
+        const capability = typeof payload.capability === 'string' ? payload.capability : '';
+        const action = typeof payload.action === 'string' ? payload.action : '';
+        if (capability && action) {
+          recordPmpmPermissionDenied({
+            pluginId: options.pluginId,
+            hostLabel,
+            capability,
+            action,
+          });
+        }
+        return;
       }
-    }
-  };
+
+      if (message.eventName === RUNTIME_EVENT_NAMES.commandResult) {
+        if (payload.ok === true) {
+          settleCommand();
+          return;
+        }
+        if (payload.ok === false) {
+          failCommand(new Error(typeof payload.message === 'string' ? payload.message : 'Plugin command failed'));
+        }
+      }
+    },
+  });
 
   const onWorkerError: WorkerEventListener = (event) => {
     failCommand(new Error(readErrorMessage(event.error ?? event.message ?? 'Plugin worker error')));
   };
 
-  worker.addEventListener('message', onCustomMessage);
   worker.addEventListener('error', onWorkerError);
 
-  const runtimeDisposers: Array<() => void> = [];
-  if (permissions.has('api:audio-state')) {
-    runtimeDisposers.push(
-      options.audioService.onStateChange((state) => {
-        worker.postMessage({
-          type: 'pmpm.runtime.audio.state',
-          state,
-        });
-      })
-    );
-    runtimeDisposers.push(
-      options.audioService.onTimeUpdate((time) => {
-        worker.postMessage({
-          type: 'pmpm.runtime.audio.time',
-          time,
-        });
-      })
-    );
-    runtimeDisposers.push(
-      options.audioService.onEnded(() => {
-        worker.postMessage({
-          type: 'pmpm.runtime.audio.ended',
-        });
-      })
-    );
-
-    if (typeof options.audioService.onLoadProgress === 'function') {
-      runtimeDisposers.push(
-        options.audioService.onLoadProgress((progress) => {
-          worker.postMessage({
-            type: 'pmpm.runtime.audio.load-progress',
-            progress,
-          });
-        })
-      );
-    }
-
-    if (typeof options.audioService.onError === 'function') {
-      runtimeDisposers.push(
-        options.audioService.onError((error) => {
-          worker.postMessage({
-            type: 'pmpm.runtime.audio.error',
-            message: error instanceof Error ? error.message : String(error ?? ''),
-          });
-        })
-      );
-    }
-  }
-
-  if (permissions.has('api:navigation') && typeof options.navigation.subscribe === 'function') {
-    runtimeDisposers.push(
-      options.navigation.subscribe((snapshot) => {
-        worker.postMessage({
-          type: 'pmpm.runtime.navigation.changed',
-          snapshot,
-        });
-      })
-    );
-  }
-
-  let visualizerInterval: ReturnType<typeof setInterval> | null = null;
-  if (permissions.has('api:audio-visual')) {
-    visualizerInterval = setInterval(() => {
-      worker.postMessage({
-        type: 'pmpm.runtime.visualizer.spectrum',
-        spectrum:
-          typeof api.visualizer.getSpectrum === 'function' ? api.visualizer.getSpectrum() : null,
-      });
-      worker.postMessage({
-        type: 'pmpm.runtime.visualizer.frame.pre',
-        frame:
-          typeof api.visualizer.getSpectrumFrame === 'function'
-            ? api.visualizer.getSpectrumFrame({ tap: 'pre-dsp' })
-            : null,
-      });
-      worker.postMessage({
-        type: 'pmpm.runtime.visualizer.frame.post',
-        frame:
-          typeof api.visualizer.getSpectrumFrame === 'function'
-            ? api.visualizer.getSpectrumFrame({ tap: 'post-dsp' })
-            : null,
-      });
-    }, 33);
-  }
-
-  const unlistenConfig = permissions.has('storage:local')
-    ? subscribePmpmPluginConfig(options.pluginId, (config) => {
-        worker.postMessage({
-          type: 'pmpm.runtime.config.changed',
-          config,
-        });
-      })
-    : null;
+  const disposeRuntimeEvents = bindHostRuntimeEventChannel({
+    permissions,
+    audioService: options.audioService,
+    navigation: options.navigation,
+    emitRuntimeEvent: (eventName, payload) => session.emitRuntimeEvent(eventName, payload),
+    subscribeConfig: permissions.has('storage:local')
+      ? (listener) => subscribePmpmPluginConfig(options.pluginId, listener)
+      : undefined,
+    getSpectrum:
+      permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrum === 'function'
+        ? () => api.visualizer.getSpectrum()
+        : undefined,
+    getSpectrumFrame:
+      permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrumFrame === 'function'
+        ? (eventOptions) => api.visualizer.getSpectrumFrame(eventOptions)
+        : undefined,
+  });
 
   let disposeReason = 'runtime-command-finished';
   let crashRecorded = false;
@@ -1309,22 +1239,7 @@ export async function runPmpmBridgeWorkerCommand(
     if (timeoutHandle !== null) {
       clearTimeout(timeoutHandle);
     }
-    if (visualizerInterval !== null) {
-      clearInterval(visualizerInterval);
-    }
-    for (const dispose of runtimeDisposers) {
-      try {
-        dispose();
-      } catch {
-        // ignore
-      }
-    }
-    try {
-      unlistenConfig?.();
-    } catch {
-      // ignore
-    }
-    worker.removeEventListener('message', onCustomMessage);
+    disposeRuntimeEvents();
     worker.removeEventListener('error', onWorkerError);
     await session.dispose(disposeReason);
     disposePort();

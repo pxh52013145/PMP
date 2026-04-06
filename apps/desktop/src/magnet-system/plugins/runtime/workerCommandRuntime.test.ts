@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeHello } from '@pixel-matrix/plugin-platform-contracts';
+import type { RuntimeEvent, RuntimeHello } from '@pixel-matrix/plugin-platform-contracts';
 import type { PluginMountApi } from '../host-api';
 import { runPmpmBridgeWorkerCommand } from './workerCommandRuntime';
 import * as pluginConfigModule from '../pluginConfig';
@@ -41,6 +41,24 @@ class ScriptedWorker {
       listener({ data });
     }
   }
+}
+
+function createRuntimeEvent(
+  runtimeHello: RuntimeHello,
+  eventName: string,
+  payload?: unknown,
+  overrides: Partial<RuntimeEvent> = {}
+): RuntimeEvent {
+  return {
+    bridgeVersion: runtimeHello.bridgeVersion,
+    op: 'runtime.event',
+    pluginId: runtimeHello.pluginId,
+    runtimeId: runtimeHello.runtimeId,
+    runtimeInstanceId: runtimeHello.runtimeInstanceId,
+    eventName,
+    payload,
+    ...overrides,
+  };
 }
 
 function createStubApi(configState: Record<string, unknown>): PluginMountApi {
@@ -267,10 +285,7 @@ describe('bridge worker command runtime', () => {
             }
 
             if (envelope.op === 'capability.invoke.response' && envelope.requestId === 'cfg-patch-1') {
-              worker.emitMessage({
-                type: 'pmpm.runtime.command.result',
-                ok: true,
-              });
+              worker.emitMessage(createRuntimeEvent(runtimeHello, 'command.result', { ok: true }));
             }
           }),
       }
@@ -381,10 +396,7 @@ describe('bridge worker command runtime', () => {
             }
 
             if (envelope.op === 'capability.invoke.response' && envelope.requestId === 'window-1') {
-              worker.emitMessage({
-                type: 'pmpm.runtime.command.result',
-                ok: true,
-              });
+              worker.emitMessage(createRuntimeEvent(runtimeHello, 'command.result', { ok: true }));
             }
           }),
       }
@@ -399,7 +411,7 @@ describe('bridge worker command runtime', () => {
     const api = createStubApi({ count: 0 });
     const audioHarness = createAudioServiceHarness();
     const navigationHarness = createNavigationHarness();
-    const seenCustomMessages = new Set<string>();
+    const seenRuntimeEvents = new Set<string>();
     const getSpectrumMock = vi.fn(() => Uint8Array.from([1, 2, 3]));
     const getSpectrumFrameMock = vi.fn(
       (options?: { tap?: 'pre-dsp' | 'post-dsp' }) => ({
@@ -442,23 +454,20 @@ describe('bridge worker command runtime', () => {
           new ScriptedWorker(runtimeHello, (message, worker) => {
             const envelope = message as Record<string, unknown>;
 
-            if (typeof envelope.type === 'string' && envelope.type.startsWith('pmpm.runtime.')) {
-              seenCustomMessages.add(envelope.type);
+            if (envelope.op === 'runtime.event' && typeof envelope.eventName === 'string') {
+              seenRuntimeEvents.add(envelope.eventName);
               if (
-                seenCustomMessages.has('pmpm.runtime.audio.state') &&
-                seenCustomMessages.has('pmpm.runtime.audio.time') &&
-                seenCustomMessages.has('pmpm.runtime.audio.load-progress') &&
-                seenCustomMessages.has('pmpm.runtime.audio.error') &&
-                seenCustomMessages.has('pmpm.runtime.audio.ended') &&
-                seenCustomMessages.has('pmpm.runtime.navigation.changed') &&
-                seenCustomMessages.has('pmpm.runtime.visualizer.spectrum') &&
-                seenCustomMessages.has('pmpm.runtime.visualizer.frame.pre') &&
-                seenCustomMessages.has('pmpm.runtime.visualizer.frame.post')
+                seenRuntimeEvents.has('audio.state') &&
+                seenRuntimeEvents.has('audio.time') &&
+                seenRuntimeEvents.has('audio.load-progress') &&
+                seenRuntimeEvents.has('audio.error') &&
+                seenRuntimeEvents.has('audio.ended') &&
+                seenRuntimeEvents.has('navigation.changed') &&
+                seenRuntimeEvents.has('visualizer.spectrum') &&
+                seenRuntimeEvents.has('visualizer.frame.pre') &&
+                seenRuntimeEvents.has('visualizer.frame.post')
               ) {
-                worker.emitMessage({
-                  type: 'pmpm.runtime.command.result',
-                  ok: true,
-                });
+                worker.emitMessage(createRuntimeEvent(runtimeHello, 'command.result', { ok: true }));
               }
               return;
             }
@@ -504,17 +513,17 @@ describe('bridge worker command runtime', () => {
       }
     );
 
-    expect(Array.from(seenCustomMessages)).toEqual(
+    expect(Array.from(seenRuntimeEvents)).toEqual(
       expect.arrayContaining([
-        'pmpm.runtime.audio.state',
-        'pmpm.runtime.audio.time',
-        'pmpm.runtime.audio.load-progress',
-        'pmpm.runtime.audio.error',
-        'pmpm.runtime.audio.ended',
-        'pmpm.runtime.navigation.changed',
-        'pmpm.runtime.visualizer.spectrum',
-        'pmpm.runtime.visualizer.frame.pre',
-        'pmpm.runtime.visualizer.frame.post',
+        'audio.state',
+        'audio.time',
+        'audio.load-progress',
+        'audio.error',
+        'audio.ended',
+        'navigation.changed',
+        'visualizer.spectrum',
+        'visualizer.frame.pre',
+        'visualizer.frame.post',
       ])
     );
   });
@@ -570,11 +579,12 @@ describe('bridge worker command runtime', () => {
                   runtimeId: runtimeHello.runtimeId,
                   runtimeInstanceId: runtimeHello.runtimeInstanceId,
                 });
-                worker.emitMessage({
-                  type: 'pmpm.runtime.command.result',
-                  ok: false,
-                  message: 'boom',
-                });
+                worker.emitMessage(
+                  createRuntimeEvent(runtimeHello, 'command.result', {
+                    ok: false,
+                    message: 'boom',
+                  })
+                );
               }
             }),
         }

@@ -13,7 +13,25 @@ export { runPmpmBridgeWorkerCommand } from './workerCommandRuntime';
 export { getPluginRuntimeLauncher, listLaunchersForRuntimeKind, listPluginRuntimeLaunchers } from './launcherRegistry';
 export { resolveInstalledExtensionRuntime } from './runtimeResolver';
 export { createRuntimeBridgeHostSession } from './runtimeBridgeHostSession';
+export {
+  createPmpmCompatRuntimeSessionAdapter,
+} from './pmpmCompatRuntimeSessionAdapter';
+export {
+  bindHostRuntimeEventChannel,
+  mapRuntimeEventNameToPmpmCompatEvent,
+  RUNTIME_EVENT_NAMES,
+} from './runtimeEventChannel';
 export { isResolvedPluginRuntime } from './types';
+export type {
+  PmpmCompatCapabilityRevokeAckMessage,
+  PmpmCompatCapabilityRevokeDrillMessage,
+  PmpmCompatRuntimeIncomingMessage,
+  PmpmCompatRuntimeOutgoingMessage,
+} from './pmpmCompatRuntimeSessionAdapter';
+export type {
+  BindHostRuntimeEventChannelOptions,
+  RuntimeEventName,
+} from './runtimeEventChannel';
 export type {
   BlockedPluginRuntime,
   PluginRuntimeArtifactResolution,
@@ -27,6 +45,7 @@ export type {
   ResolvedPluginRuntime,
 } from './types';
 export type {
+  RuntimeBridgeEventDispatchOptions,
   RuntimeBridgeHostSession,
   RuntimeBridgeHostSessionOptions,
   RuntimeBridgePort,

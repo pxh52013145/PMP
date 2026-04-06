@@ -146,6 +146,14 @@ export interface RuntimeErrorEvent extends RuntimeBridgeEnvelope {
   details?: unknown;
 }
 
+export interface RuntimeEvent<TPayload = unknown> extends RuntimeBridgeEnvelope {
+  op: 'runtime.event';
+  eventName: string;
+  payload?: TPayload;
+  sequence?: number;
+  emittedAt?: number;
+}
+
 export type RuntimeBridgeMessage =
   | RuntimeHello
   | RuntimeInit
@@ -162,4 +170,5 @@ export type RuntimeBridgeMessage =
   | RuntimeHealthResponse
   | RuntimePing
   | RuntimePong
-  | RuntimeErrorEvent;
+  | RuntimeErrorEvent
+  | RuntimeEvent;
