@@ -1,0 +1,35 @@
+{
+  "formatVersion": "1.0",
+  "apiVersion": "1.0.0",
+  "type": "magnet-plugin",
+  "metadata": {
+    "id": "settings-panel-demo",
+    "name": "Settings Panel Demo",
+    "version": "0.1.0",
+    "author": "Pixel Matrix Player Contributors",
+    "description": "Demo plugin for validating mountSettings(panel) and config editing in the plugin settings surface.",
+    "tags": ["demo", "settings", "config"]
+  },
+  "entryPoint": "index.js",
+  "permissions": ["storage:local"],
+  "magnet": {
+    "defaultAnchor": {
+      "type": "range",
+      "coordinates": [
+        { "x": 0, "y": 0 },
+        { "x": 4, "y": 2 }
+      ]
+    }
+  },
+  "contributions": {
+    "settingsPanels": [
+      {
+        "kind": "settings-panel",
+        "id": "demo",
+        "title": "Demo Settings Panel",
+        "description": "Edit plugin config through mountSettings(container, api, panelId?)"
+      }
+    ]
+  }
+}
+

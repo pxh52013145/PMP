@@ -40,12 +40,38 @@ const COMPAT_MANIFEST: PxpManifestV2 = {
 
 describe('plugin runtime resolver', () => {
   it('exposes the Phase 1 launcher registry skeleton', () => {
-    expect(listPluginRuntimeLaunchers().map((launcher) => launcher.id)).toEqual([
-      'compat.pmpm.inline-module',
-      'compat.pmpm.webview-sandbox',
-      'pxp.webview.host-frame',
-      'pxp.extension-host.worker',
-      'pxp.sidecar.native-process',
+    expect(
+      listPluginRuntimeLaunchers().map((launcher) => ({
+        id: launcher.id,
+        availability: launcher.availability,
+        surfaceKinds: launcher.surfaceKinds,
+      }))
+    ).toEqual([
+      {
+        id: 'compat.pmpm.inline-module',
+        availability: 'available',
+        surfaceKinds: ['magnet', 'settings', 'page', 'visualizer', 'window', 'command'],
+      },
+      {
+        id: 'compat.pmpm.webview-sandbox',
+        availability: 'available',
+        surfaceKinds: ['magnet', 'settings', 'page', 'visualizer', 'window', 'command'],
+      },
+      {
+        id: 'pxp.webview.host-frame',
+        availability: 'planned',
+        surfaceKinds: ['magnet', 'settings', 'page', 'visualizer', 'window'],
+      },
+      {
+        id: 'pxp.extension-host.worker',
+        availability: 'available',
+        surfaceKinds: ['command'],
+      },
+      {
+        id: 'pxp.sidecar.native-process',
+        availability: 'planned',
+        surfaceKinds: ['command'],
+      },
     ]);
   });
 
@@ -92,6 +118,34 @@ describe('plugin runtime resolver', () => {
     expect(sandboxAdapter?.launcherId).toBe('compat.pmpm.webview-sandbox');
   });
 
+  it('prefers the dedicated worker launcher for command surfaces when requested', () => {
+    const resolution = resolveInstalledExtensionRuntime(createRecord(COMPAT_MANIFEST), {
+      hostId: 'pmp',
+      surfaceKind: 'command',
+      preferCommandWorker: true,
+    });
+
+    expect(resolution.status).toBe('resolved');
+    if (resolution.status !== 'resolved') return;
+    expect(resolution.launcher.id).toBe('pxp.extension-host.worker');
+
+    const workerAdapter = getResolvedPmpmLauncherAdapter(resolution);
+    expect(workerAdapter?.mode).toBe('worker');
+    expect(workerAdapter?.launcherId).toBe('pxp.extension-host.worker');
+  });
+
+  it('keeps view surfaces on compat launchers even when command worker is preferred', () => {
+    const resolution = resolveInstalledExtensionRuntime(createRecord(COMPAT_MANIFEST), {
+      hostId: 'pmp',
+      surfaceKind: 'magnet',
+      preferCommandWorker: true,
+    });
+
+    expect(resolution.status).toBe('resolved');
+    if (resolution.status !== 'resolved') return;
+    expect(resolution.launcher.id).toBe('compat.pmpm.inline-module');
+  });
+
   it('falls back from an unavailable higher-priority runtime to a lower-priority compat runtime', () => {
     const resolution = resolveInstalledExtensionRuntime(
       createRecord({
@@ -116,6 +170,7 @@ describe('plugin runtime resolver', () => {
       }),
       {
         hostId: 'pmp',
+        surfaceKind: 'command',
       }
     );
 

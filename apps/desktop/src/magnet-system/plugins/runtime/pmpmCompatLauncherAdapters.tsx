@@ -10,6 +10,7 @@ import {
 } from '../pluginHostApi';
 import { runPmpmSandboxedCommand } from '../pmpmSandboxCommandRunner';
 import { ensurePmpmPluginRuntime, type PmpmPluginRuntime } from '../pmpmRuntime';
+import { runPmpmBridgeWorkerCommand } from './workerCommandRuntime';
 import type { PluginRuntimeResolution } from './types';
 import { isResolvedPluginRuntime } from './types';
 
@@ -52,9 +53,16 @@ type SandboxResolvedPmpmLauncherAdapter = {
   runCommand: (options: RunResolvedPmpmPluginCommandOptions) => Promise<void>;
 };
 
+type WorkerResolvedPmpmLauncherAdapter = {
+  mode: 'worker';
+  launcherId: 'pxp.extension-host.worker';
+  runCommand: (options: RunResolvedPmpmPluginCommandOptions) => Promise<void>;
+};
+
 export type ResolvedPmpmLauncherAdapter =
   | InlineResolvedPmpmLauncherAdapter
-  | SandboxResolvedPmpmLauncherAdapter;
+  | SandboxResolvedPmpmLauncherAdapter
+  | WorkerResolvedPmpmLauncherAdapter;
 
 function readUnsupportedLauncherError(
   resolution: PluginRuntimeResolution | null | undefined
@@ -158,6 +166,30 @@ const SANDBOX_RESOLVED_PMPM_LAUNCHER_ADAPTER: SandboxResolvedPmpmLauncherAdapter
   },
 };
 
+const WORKER_RESOLVED_PMPM_LAUNCHER_ADAPTER: WorkerResolvedPmpmLauncherAdapter = {
+  mode: 'worker',
+  launcherId: 'pxp.extension-host.worker',
+  runCommand: async (options) => {
+    const runtimeId =
+      options.resolution && options.resolution.status === 'resolved'
+        ? options.resolution.runtime.runtimeId
+        : 'compat.pmpm.main';
+
+    await runPmpmBridgeWorkerCommand({
+      pluginId: options.pluginId,
+      runtimeId,
+      commandId: options.commandId,
+      args: options.args,
+      hostLabel: options.hostLabel,
+      audioService: options.audioService,
+      commands: options.commands,
+      navigation: options.navigation,
+      keybindings: options.keybindings,
+      timeoutMs: options.timeoutMs,
+    });
+  },
+};
+
 export function getResolvedPmpmLauncherAdapter(
   resolution: PluginRuntimeResolution | null | undefined
 ): ResolvedPmpmLauncherAdapter | null {
@@ -168,6 +200,8 @@ export function getResolvedPmpmLauncherAdapter(
       return INLINE_RESOLVED_PMPM_LAUNCHER_ADAPTER;
     case 'compat.pmpm.webview-sandbox':
       return SANDBOX_RESOLVED_PMPM_LAUNCHER_ADAPTER;
+    case 'pxp.extension-host.worker':
+      return WORKER_RESOLVED_PMPM_LAUNCHER_ADAPTER;
     default:
       return null;
   }

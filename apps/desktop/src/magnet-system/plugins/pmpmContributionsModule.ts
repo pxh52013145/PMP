@@ -246,6 +246,8 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
                 try {
                   const runtimeResolution = resolveInstalledPmpmPluginRuntime(pluginId, {
                     preferSandbox: getPmpmSandboxRuntimeEnabled(),
+                    surfaceKind: 'command',
+                    preferCommandWorker: true,
                   });
                   const runtimeResolutionError =
                     getResolvedPmpmLauncherAdapterError(runtimeResolution);

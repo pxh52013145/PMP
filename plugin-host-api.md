@@ -1,6 +1,6 @@
 # PMPM Plugin Host API 合约（当前生效）
 
-> 更新时间：2026-03-05  
+> 更新时间：2026-04-06  
 > 适用范围：`apps/desktop/src/magnet-system/plugins` 下 PMPM 插件运行时（磁贴、页面、可视化、设置页、子窗口、命令）
 
 本文档描述 **插件侧可调用接口**（`api` 对象）与 Host Capability 合约，并给出可维护的变更流程。
@@ -19,6 +19,12 @@
 6. 版本号：`apps/desktop/src/constants/versions.ts`
 
 > 备注：`HOST_API_VERSION` 当前为 `1.8.0`。
+>
+> Capability ID 命名说明（避免文档与实现漂移）：
+>
+> - **新主线**：`core.*` + `host.pmp.*`（建议新插件/新能力优先使用）
+> - **兼容别名**：部分 `foundation.*` 仍保留，用于 compat 迁移/历史插件兼容（典型：`foundation.capability-registry` / `foundation.audio-input-adapter`）
+> - **以运行时可见为准**：优先用 `api.host.listCapabilities()` 或 `core.capability-registry.describe` 发现能力，而不是硬编码能力列表
 
 ---
 
@@ -163,20 +169,28 @@
 
 Capability 注册中心位于 `host-api/capabilities.ts`。
 
+> 说明：下表是“常见/关键能力”的索引，不保证覆盖全部。以 `api.host.listCapabilities()` 的结果为准。
+
 ### 5.1 内置 Capability 列表
 
 | Capability ID | 版本 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | `core.host-api` | `HOST_API_VERSION` | 无 | Host API 元信息 |
-| `foundation.capability-registry` | `1.1.0` | `api:host` | capability 发现与查询 |
+| `core.capability-registry` | `1.1.0` | `api:host` | capability 发现与查询（推荐） |
+| `foundation.capability-registry` | `1.1.0` | `api:host` | capability 发现与查询（legacy alias） |
+| `host.pmp.storage.config` | `1.0.0` | `storage:local` | 插件配置存储桥（config） |
+| `host.pmp.navigation` | `1.0.0` | `api:navigation` | PMP 导航桥 |
+| `host.pmp.audio-engine.analysis` | `1.0.0` | `api:audio-visual` | PMP 音频分析/频谱桥 |
+| `host.pmp.audio-engine.input` | `0.4.0` | `api:audio-input-adapter` | PMP 音频输入适配器桥（openSession/closeSession） |
 | `foundation.ai-adapter` | `0.4.0` | `api:ai-runtime` | AI Provider 注册与调用桥 |
-| `foundation.audio-input-adapter` | `0.4.0` | `api:audio-input-adapter` | 音频输入适配器桥（含第三方 provider） |
+| `foundation.audio-input-adapter` | `0.4.0` | `api:audio-input-adapter` | 音频输入适配器桥（legacy alias；建议改用 `host.pmp.audio-engine.input`） |
 | `foundation.desktop-pet-runtime` | `0.3.0` | `api:desktop-pet` | 桌宠运行时 provider 桥 |
 | `foundation.voice-training-runtime` | `0.3.0` | `api:voice-training` | 声训运行时 provider 桥 |
 
 ### 5.2 各 Capability 支持方法
 
-- `foundation.capability-registry`
+- `core.capability-registry` / `foundation.capability-registry`（同一合约）
+  - `describe`
   - `list`
   - `get`
   - `has`

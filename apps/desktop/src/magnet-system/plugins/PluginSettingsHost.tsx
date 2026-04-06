@@ -74,6 +74,7 @@ export function PluginSettingsHost({
     void pluginStoreRevision;
     return resolveInstalledPmpmPluginRuntime(pluginId, {
       preferSandbox: sandboxEnabled,
+      surfaceKind: 'settings',
     });
   }, [pluginId, pluginStoreRevision, sandboxEnabled]);
   const launcherAdapter = useMemo(

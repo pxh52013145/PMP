@@ -1,0 +1,41 @@
+{
+  "formatVersion": "1.0",
+  "apiVersion": "1.0.0",
+  "type": "magnet-plugin",
+  "metadata": {
+    "id": "command-surface-demo",
+    "name": "Command Surface Demo",
+    "version": "0.1.0",
+    "author": "Pixel Matrix Player Contributors",
+    "description": "Demo plugin for validating command contributions + runCommand execution + config persistence.",
+    "tags": ["demo", "command", "config"]
+  },
+  "entryPoint": "index.js",
+  "permissions": ["storage:local"],
+  "magnet": {
+    "defaultAnchor": {
+      "type": "range",
+      "coordinates": [
+        { "x": 0, "y": 0 },
+        { "x": 4, "y": 3 }
+      ]
+    }
+  },
+  "contributions": {
+    "commands": [
+      {
+        "kind": "command",
+        "id": "increment",
+        "title": "Increment Counter",
+        "description": "Increment the persisted counter via runCommand()"
+      },
+      {
+        "kind": "command",
+        "id": "reset",
+        "title": "Reset Counter",
+        "description": "Reset the persisted counter via runCommand()"
+      }
+    ]
+  }
+}
+

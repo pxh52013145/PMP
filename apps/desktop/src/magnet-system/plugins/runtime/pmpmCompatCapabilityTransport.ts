@@ -42,6 +42,14 @@ export type PmpmCompatRpcDispatchOptions = {
   emitProtocolMessage?: (message: CapabilityProtocolMessage) => void;
 };
 
+export type PmpmCapabilityProtocolRequestMessage =
+  | CapabilityInvokeRequest
+  | SessionOpenRequest
+  | SessionCloseRequest
+  | StreamOpenRequest
+  | CancelRequest
+  | DisposeRequest;
+
 type LegacyResultMode = 'void' | 'data';
 
 type DecodedCapabilityInvokeRequest =
@@ -1487,6 +1495,50 @@ export async function dispatchPmpmCompatCapabilityInvokeRequest(
   }
 }
 
+export async function dispatchPmpmCapabilityProtocolRequest(
+  api: PluginMountApi,
+  permissions: ReadonlySet<string>,
+  request: PmpmCapabilityProtocolRequestMessage,
+  options?: PmpmCompatRpcDispatchOptions
+): Promise<
+  CapabilityInvokeResponse | SessionOpenResponse | SessionCloseResponse | StreamOpenResponse | null
+> {
+  switch (request.op) {
+    case 'capability.invoke.request':
+      return await dispatchPmpmCompatCapabilityInvokeRequest(api, permissions, request);
+    case 'session.open.request': {
+      const response = await dispatchDirectHostSessionOpenRequest(api, permissions, request);
+
+      if (response.ok) {
+        options?.runtimeResources?.trackSession({
+          capabilityId: request.capabilityId,
+          sessionId: response.sessionId,
+          close: (reason) => api.host.closeSession(request.capabilityId, response.sessionId, reason),
+        });
+      }
+
+      return response;
+    }
+    case 'session.close.request': {
+      const response = await dispatchDirectHostSessionCloseRequest(api, permissions, request);
+
+      if (response.ok) {
+        options?.runtimeResources?.releaseSession(request.sessionId, request.capabilityId);
+      }
+
+      return response;
+    }
+    case 'stream.open.request':
+      return await dispatchDirectHostStreamOpenRequest(api, permissions, request, options);
+    case 'cancel.request':
+      await dispatchCancelRequest(request, options);
+      return null;
+    case 'dispose.request':
+      await dispatchDisposeRequest(request, options);
+      return null;
+  }
+}
+
 function encodeLegacyRpcResult(
   rpcRequest: RpcRequest,
   decoded: Extract<DecodedCapabilityInvokeRequest, { source: 'legacy' }>,
@@ -1555,15 +1607,7 @@ export async function dispatchPmpmCompatRpcRequest(
 
     if (rpcRequest.method === 'session.open.request') {
       const request = normalizeSessionOpenRequest(rpcRequest);
-      const response = await dispatchDirectHostSessionOpenRequest(api, permissions, request);
-
-      if (response.ok) {
-        options?.runtimeResources?.trackSession({
-          capabilityId: request.capabilityId,
-          sessionId: response.sessionId,
-          close: (reason) => api.host.closeSession(request.capabilityId, response.sessionId, reason),
-        });
-      }
+      const response = await dispatchPmpmCapabilityProtocolRequest(api, permissions, request, options);
 
       return {
         type: 'pmpm:rpc-result',
@@ -1575,11 +1619,7 @@ export async function dispatchPmpmCompatRpcRequest(
 
     if (rpcRequest.method === 'session.close.request') {
       const request = normalizeSessionCloseRequest(rpcRequest);
-      const response = await dispatchDirectHostSessionCloseRequest(api, permissions, request);
-
-      if (response.ok) {
-        options?.runtimeResources?.releaseSession(request.sessionId, request.capabilityId);
-      }
+      const response = await dispatchPmpmCapabilityProtocolRequest(api, permissions, request, options);
 
       return {
         type: 'pmpm:rpc-result',
@@ -1591,7 +1631,7 @@ export async function dispatchPmpmCompatRpcRequest(
 
     if (rpcRequest.method === 'stream.open.request') {
       const request = normalizeStreamOpenRequest(rpcRequest);
-      const response = await dispatchDirectHostStreamOpenRequest(api, permissions, request, options);
+      const response = await dispatchPmpmCapabilityProtocolRequest(api, permissions, request, options);
 
       return {
         type: 'pmpm:rpc-result',
@@ -1603,7 +1643,7 @@ export async function dispatchPmpmCompatRpcRequest(
 
     if (rpcRequest.method === 'cancel.request') {
       const request = normalizeCancelRequest(rpcRequest);
-      await dispatchCancelRequest(request, options);
+      await dispatchPmpmCapabilityProtocolRequest(api, permissions, request, options);
       return {
         type: 'pmpm:rpc-result',
         id: rpcRequest.id,
@@ -1614,7 +1654,7 @@ export async function dispatchPmpmCompatRpcRequest(
 
     if (rpcRequest.method === 'dispose.request') {
       const request = normalizeDisposeRequest(rpcRequest);
-      await dispatchDisposeRequest(request, options);
+      await dispatchPmpmCapabilityProtocolRequest(api, permissions, request, options);
 
       return {
         type: 'pmpm:rpc-result',
@@ -1629,7 +1669,11 @@ export async function dispatchPmpmCompatRpcRequest(
       throw new Error(`Unsupported RPC method: ${rpcRequest.method}`);
     }
 
-    const response = await dispatchPmpmCompatCapabilityInvokeRequest(api, permissions, decoded.request);
+    const response = await dispatchPmpmCompatCapabilityInvokeRequest(
+      api,
+      permissions,
+      decoded.request
+    );
 
     if (decoded.source === 'legacy') {
       return encodeLegacyRpcResult(rpcRequest, decoded, response);

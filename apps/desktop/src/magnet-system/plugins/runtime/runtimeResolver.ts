@@ -65,14 +65,16 @@ function listCandidateLaunchers(
   runtime: RuntimeEntryDescriptor,
   context: Required<PluginRuntimeResolverContext>
 ): PluginRuntimeLauncherDescriptor[] {
+  const requestedSurface = context.surfaceKind;
   const runtimeProvides = runtime.provides ?? [];
   const supportsPmpmCompat =
     runtimeProvides.includes(PMPM_COMPAT_LAYER_ID) || runtime.runtimeId.startsWith('compat.');
 
-  const genericLaunchers = listLaunchersForRuntimeKind(runtime.kind).filter(
-    (launcher) => !launcher.compatLayerId
+  const surfaceLaunchers = listLaunchersForRuntimeKind(runtime.kind).filter((launcher) =>
+    requestedSurface ? launcher.surfaceKinds.includes(requestedSurface) : true
   );
-  const compatLaunchers = listLaunchersForRuntimeKind(runtime.kind).filter(
+  const genericLaunchers = surfaceLaunchers.filter((launcher) => !launcher.compatLayerId);
+  const compatLaunchers = surfaceLaunchers.filter(
     (launcher) => launcher.compatLayerId === PMPM_COMPAT_LAYER_ID && supportsPmpmCompat
   );
 
@@ -96,6 +98,10 @@ function listCandidateLaunchers(
       return compatLaunchers.some((candidate) => candidate.id === launcher.id);
     }
   );
+
+  if (context.surfaceKind === 'command' && context.preferCommandWorker) {
+    return [...genericLaunchers, ...orderedCompat];
+  }
 
   return [...orderedCompat, ...genericLaunchers];
 }
@@ -151,6 +157,8 @@ export function resolveInstalledExtensionRuntime(
     platform: context.platform ?? null,
     arch: context.arch ?? null,
     preferCompatSandbox: context.preferCompatSandbox ?? false,
+    surfaceKind: context.surfaceKind ?? 'magnet',
+    preferCommandWorker: context.preferCommandWorker ?? false,
   };
 
   const issues: string[] = [];

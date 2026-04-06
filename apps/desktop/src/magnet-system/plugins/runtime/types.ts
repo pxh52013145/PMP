@@ -4,6 +4,14 @@ import type {
   RuntimeEntryDescriptor,
 } from '@pixel-matrix/plugin-platform-contracts';
 
+export type PluginRuntimeSurfaceKind =
+  | 'magnet'
+  | 'settings'
+  | 'page'
+  | 'visualizer'
+  | 'window'
+  | 'command';
+
 export type PluginRuntimeLauncherId =
   | 'compat.pmpm.inline-module'
   | 'compat.pmpm.webview-sandbox'
@@ -22,6 +30,7 @@ export type PluginRuntimeLauncherTransport =
 export interface PluginRuntimeLauncherDescriptor {
   id: PluginRuntimeLauncherId;
   runtimeKinds: RuntimeEntryDescriptor['kind'][];
+  surfaceKinds: PluginRuntimeSurfaceKind[];
   availability: PluginRuntimeLauncherAvailability;
   transport: PluginRuntimeLauncherTransport;
   description: string;
@@ -33,6 +42,8 @@ export interface PluginRuntimeResolverContext {
   platform?: string | null;
   arch?: string | null;
   preferCompatSandbox?: boolean;
+  surfaceKind?: PluginRuntimeSurfaceKind;
+  preferCommandWorker?: boolean;
 }
 
 export interface PluginRuntimeArtifactResolution {

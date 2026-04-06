@@ -5,6 +5,7 @@ const PLUGIN_RUNTIME_LAUNCHERS: readonly PluginRuntimeLauncherDescriptor[] = Obj
   {
     id: 'compat.pmpm.inline-module',
     runtimeKinds: ['extension-host'],
+    surfaceKinds: ['magnet', 'settings', 'page', 'visualizer', 'window', 'command'],
     availability: 'available',
     transport: 'inline-module',
     compatLayerId: 'compat.pmpm',
@@ -13,6 +14,7 @@ const PLUGIN_RUNTIME_LAUNCHERS: readonly PluginRuntimeLauncherDescriptor[] = Obj
   {
     id: 'compat.pmpm.webview-sandbox',
     runtimeKinds: ['extension-host', 'webview'],
+    surfaceKinds: ['magnet', 'settings', 'page', 'visualizer', 'window', 'command'],
     availability: 'available',
     transport: 'webview-frame',
     compatLayerId: 'compat.pmpm',
@@ -21,6 +23,7 @@ const PLUGIN_RUNTIME_LAUNCHERS: readonly PluginRuntimeLauncherDescriptor[] = Obj
   {
     id: 'pxp.webview.host-frame',
     runtimeKinds: ['webview'],
+    surfaceKinds: ['magnet', 'settings', 'page', 'visualizer', 'window'],
     availability: 'planned',
     transport: 'webview-frame',
     description: 'Future manifest-driven webview runtime host',
@@ -28,13 +31,15 @@ const PLUGIN_RUNTIME_LAUNCHERS: readonly PluginRuntimeLauncherDescriptor[] = Obj
   {
     id: 'pxp.extension-host.worker',
     runtimeKinds: ['extension-host'],
-    availability: 'planned',
+    surfaceKinds: ['command'],
+    availability: 'available',
     transport: 'worker',
-    description: 'Future manifest-driven extension-host launcher',
+    description: 'Dedicated worker launcher for command-oriented extension-host runtimes',
   },
   {
     id: 'pxp.sidecar.native-process',
     runtimeKinds: ['sidecar'],
+    surfaceKinds: ['command'],
     availability: 'planned',
     transport: 'sidecar-process',
     description: 'Future native sidecar launcher',

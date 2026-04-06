@@ -1,11 +1,15 @@
-import type { PluginRuntimeResolution } from './types';
+import type { PluginRuntimeResolution, PluginRuntimeSurfaceKind } from './types';
 import { resolveInstalledExtensionRuntime } from './runtimeResolver';
 import { isResolvedPluginRuntime } from './types';
 import { getInstalledPmpmExtensionRecord } from '../pmpm';
 
 export function resolveInstalledPmpmPluginRuntime(
   pluginId: string,
-  options: { preferSandbox?: boolean } = {}
+  options: {
+    preferSandbox?: boolean;
+    surfaceKind?: PluginRuntimeSurfaceKind;
+    preferCommandWorker?: boolean;
+  } = {}
 ): PluginRuntimeResolution | null {
   const record = getInstalledPmpmExtensionRecord(pluginId);
   if (!record) return null;
@@ -13,6 +17,8 @@ export function resolveInstalledPmpmPluginRuntime(
   return resolveInstalledExtensionRuntime(record, {
     hostId: 'pmp',
     preferCompatSandbox: options.preferSandbox ?? false,
+    surfaceKind: options.surfaceKind,
+    preferCommandWorker: options.preferCommandWorker ?? false,
   });
 }
 

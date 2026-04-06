@@ -81,6 +81,7 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
     void pluginStoreRevision;
     return resolveInstalledPmpmPluginRuntime(pluginId, {
       preferSandbox: sandboxEnabled,
+      surfaceKind: 'magnet',
     });
   }, [pluginId, pluginStoreRevision, sandboxEnabled]);
   const launcherAdapter = useMemo(

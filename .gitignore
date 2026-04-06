@@ -58,6 +58,17 @@ community/supabase/.temp/
 community/*
 !community/plugins/
 community/plugins/*
+!community/plugins/README.md
+!community/plugins/_tools/
+!community/plugins/_tools/**
+!community/plugins/hello-magnet-demo/
+!community/plugins/hello-magnet-demo/**
+!community/plugins/capability-registry-demo/
+!community/plugins/capability-registry-demo/**
+!community/plugins/command-surface-demo/
+!community/plugins/command-surface-demo/**
+!community/plugins/settings-panel-demo/
+!community/plugins/settings-panel-demo/**
 !community/plugins/stream-protocol-demo/
 !community/plugins/stream-protocol-demo/**
 

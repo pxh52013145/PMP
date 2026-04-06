@@ -1,0 +1,24 @@
+{
+  "formatVersion": "1.0",
+  "apiVersion": "1.0.0",
+  "type": "magnet-plugin",
+  "metadata": {
+    "id": "hello-magnet-demo",
+    "name": "Hello Magnet Demo",
+    "version": "0.1.0",
+    "author": "Pixel Matrix Player Contributors",
+    "description": "Minimal demo plugin (no permissions) for validating install + mount + unmount across inline/sandbox runtimes.",
+    "tags": ["demo", "smoke", "magnet"]
+  },
+  "entryPoint": "index.js",
+  "magnet": {
+    "defaultAnchor": {
+      "type": "range",
+      "coordinates": [
+        { "x": 0, "y": 0 },
+        { "x": 3, "y": 2 }
+      ]
+    }
+  }
+}
+
