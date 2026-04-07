@@ -69,7 +69,7 @@ describe('plugin runtime resolver', () => {
       },
       {
         id: 'pxp.sidecar.native-process',
-        availability: 'planned',
+        availability: 'available',
         surfaceKinds: ['command'],
       },
     ]);
@@ -146,7 +146,7 @@ describe('plugin runtime resolver', () => {
     expect(resolution.launcher.id).toBe('compat.pmpm.inline-module');
   });
 
-  it('falls back from an unavailable higher-priority runtime to a lower-priority compat runtime', () => {
+  it('prefers an available higher-priority sidecar runtime over a lower-priority compat runtime', () => {
     const resolution = resolveInstalledExtensionRuntime(
       createRecord({
         ...COMPAT_MANIFEST,
@@ -176,11 +176,74 @@ describe('plugin runtime resolver', () => {
 
     expect(resolution.status).toBe('resolved');
     if (resolution.status !== 'resolved') return;
-    expect(resolution.runtime.runtimeId).toBe('compat.pmpm.main');
-    expect(resolution.launcher.id).toBe('compat.pmpm.inline-module');
-    expect(resolution.issues).toContain(
-      'Runtime "future-sidecar" only matches planned launchers: pxp.sidecar.native-process'
+    expect(resolution.runtime.runtimeId).toBe('future-sidecar');
+    expect(resolution.launcher.id).toBe('pxp.sidecar.native-process');
+    expect(resolution.issues).toEqual([]);
+  });
+
+  it('resolves sidecar command runtimes to the native-process launcher', () => {
+    const resolution = resolveInstalledExtensionRuntime(
+      createRecord({
+        ...COMPAT_MANIFEST,
+        compat: undefined,
+        runtimes: [
+          {
+            runtimeId: 'demo-sidecar',
+            kind: 'sidecar',
+            entry: 'bin/demo-sidecar',
+            bridge: 'pxp.runtime.bridge.v1',
+            dataPlane: { kinds: ['pipe'] },
+            priority: 20,
+          },
+        ],
+      }),
+      {
+        hostId: 'pmp',
+        surfaceKind: 'command',
+      }
     );
+
+    expect(resolution.status).toBe('resolved');
+    if (resolution.status !== 'resolved') return;
+    expect(resolution.runtime.runtimeId).toBe('demo-sidecar');
+    expect(resolution.launcher.id).toBe('pxp.sidecar.native-process');
+    expect(resolution.source).toBe('manifest-runtime');
+  });
+
+  it('blocks runtimes that only match launchers unsupported by the current host path', () => {
+    const resolution = resolveInstalledExtensionRuntime(createRecord(COMPAT_MANIFEST), {
+      hostId: 'pmp',
+      surfaceKind: 'command',
+      preferCommandWorker: true,
+      supportedLauncherIds: ['pxp.sidecar.native-process'],
+    });
+
+    expect(resolution.status).toBe('blocked');
+    if (resolution.status !== 'blocked') return;
+    expect(resolution.issues).toContain(
+      'Runtime "compat.pmpm.main" only matches unsupported launchers: pxp.extension-host.worker, compat.pmpm.inline-module, compat.pmpm.webview-sandbox'
+    );
+  });
+
+  it('blocks runtimes when a required capability is denied by host policy', () => {
+    const resolution = resolveInstalledExtensionRuntime(
+      {
+        ...createRecord({
+          ...COMPAT_MANIFEST,
+          requiresCapabilities: [{ capabilityId: 'core.capability-registry' }],
+        }),
+        deniedCapabilities: ['core.capability-registry'],
+      },
+      {
+        hostId: 'pmp',
+      }
+    );
+
+    expect(resolution.status).toBe('blocked');
+    if (resolution.status !== 'blocked') return;
+    expect(resolution.issues).toEqual([
+      'Required capability "core.capability-registry" is currently denied by host policy',
+    ]);
   });
 
   it('returns a blocked resolution when only planned generic launchers are available', () => {

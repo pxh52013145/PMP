@@ -10,6 +10,8 @@ export {
   runResolvedPmpmPluginCommand,
 } from './pmpmCompatLauncherAdapters';
 export { runPmpmBridgeWorkerCommand } from './workerCommandRuntime';
+export { runPmpmBridgeSidecarCommand } from './sidecarCommandRuntime';
+export { runResolvedInstalledExtensionCommand } from './extensionCommandRuntime';
 export { getPluginRuntimeLauncher, listLaunchersForRuntimeKind, listPluginRuntimeLaunchers } from './launcherRegistry';
 export { resolveInstalledExtensionRuntime } from './runtimeResolver';
 export { createRuntimeBridgeHostSession } from './runtimeBridgeHostSession';

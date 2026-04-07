@@ -211,6 +211,37 @@ function createRuntimeEvent(
   };
 }
 
+function createSidecarRuntimeHello(overrides: Partial<RuntimeHello> = {}): RuntimeHello {
+  return createRuntimeHello({
+    pluginId: 'sidecar-plugin',
+    runtimeId: 'sidecar.main',
+    runtimeInstanceId: 'sidecar-instance-1',
+    runtimeKind: 'sidecar',
+    carrier: 'native-process',
+    supportsViewMount: false,
+    supportedDataPlanes: ['pipe'],
+    ...overrides,
+  });
+}
+
+function createSidecarRuntimeInit(overrides: Partial<RuntimeInit> = {}): RuntimeInit {
+  return createRuntimeInit({
+    pluginId: 'sidecar-plugin',
+    runtimeId: 'sidecar.main',
+    runtimeInstanceId: 'sidecar-instance-1',
+    ...overrides,
+  });
+}
+
+function createSidecarRuntimeActivate(overrides: Partial<RuntimeActivate> = {}): RuntimeActivate {
+  return createRuntimeActivate({
+    pluginId: 'sidecar-plugin',
+    runtimeId: 'sidecar.main',
+    runtimeInstanceId: 'sidecar-instance-1',
+    ...overrides,
+  });
+}
+
 async function flushMessages(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -411,75 +442,161 @@ describe('runtime bridge host session', () => {
     );
   });
 
-  it('forwards stream messages and disposes tracked resources on session shutdown', async () => {
+  it('handles sidecar handshake and capability invocation over the native-process carrier', async () => {
+    const api = createStubApi();
+    const harness = createPortHarness();
+    const session = createRuntimeBridgeHostSession({
+      pluginId: 'sidecar-plugin',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId: 'sidecar-instance-1',
+      runtimeKind: 'sidecar',
+      carrier: 'native-process',
+      api,
+      permissions: new Set(['api:host']),
+      port: harness.port,
+      runtimeInit: createSidecarRuntimeInit({
+        grantedCapabilities: [
+          {
+            capabilityId: 'core.capability-registry',
+            version: '1.1.0',
+            mode: 'required',
+          },
+        ],
+      }),
+      runtimeActivate: createSidecarRuntimeActivate({
+        cause: 'capability',
+        payload: { reason: 'smoke-test' },
+      }),
+    });
+
+    const startPromise = session.start();
+    harness.emit(createSidecarRuntimeHello());
+    await flushMessages();
+    expect(harness.sent[0]).toMatchObject({
+      op: 'runtime.init',
+      pluginId: 'sidecar-plugin',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId: 'sidecar-instance-1',
+      grantedCapabilities: [
+        {
+          capabilityId: 'core.capability-registry',
+          version: '1.1.0',
+          mode: 'required',
+        },
+      ],
+    });
+
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.init.ack',
+      pluginId: 'sidecar-plugin',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId: 'sidecar-instance-1',
+    });
+    await flushMessages();
+    expect(harness.sent[1]).toMatchObject({
+      op: 'runtime.activate',
+      pluginId: 'sidecar-plugin',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId: 'sidecar-instance-1',
+      cause: 'capability',
+    });
+
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.activate.ack',
+      pluginId: 'sidecar-plugin',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId: 'sidecar-instance-1',
+    });
+    await startPromise;
+
+    harness.emit({
+      protocolVersion: '1.0',
+      op: 'capability.invoke.request',
+      requestId: 'cap-sidecar-1',
+      capabilityId: 'core.capability-registry',
+      method: 'list',
+    });
+    await flushMessages();
+
+    expect(harness.sent.at(-1)).toMatchObject({
+      op: 'capability.invoke.response',
+      requestId: 'cap-sidecar-1',
+      ok: true,
+      data: [{ id: 'host.pmp.navigation', version: '1.0.0' }],
+    });
+    expect(api.host.listCapabilities).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans up tracked sidecar runtime resources after a fatal crash', async () => {
     const controller = createStreamController();
     const api = createStubApi({ streamHandle: controller.handle });
     const harness = createPortHarness();
     const runtimeResources = createPmpmCompatRuntimeResourceRegistry();
     const session = createRuntimeBridgeHostSession({
-      pluginId: 'worker-plugin',
-      runtimeId: 'worker.main',
-      runtimeInstanceId: 'runtime-instance-1',
-      runtimeKind: 'extension-host',
-      carrier: 'dedicated-worker',
+      pluginId: 'sidecar-plugin',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId: 'sidecar-instance-1',
+      runtimeKind: 'sidecar',
+      carrier: 'native-process',
       api,
       permissions: new Set(['api:host', 'api:host-capability', 'api:audio-visual']),
       port: harness.port,
-      runtimeInit: createRuntimeInit(),
-      runtimeActivate: createRuntimeActivate(),
+      runtimeInit: createSidecarRuntimeInit(),
+      runtimeActivate: createSidecarRuntimeActivate(),
       runtimeResources,
     });
 
     const startPromise = session.start();
-    harness.emit(createRuntimeHello());
+    harness.emit(createSidecarRuntimeHello());
     await flushMessages();
     harness.emit({
       bridgeVersion: '1.0',
       op: 'runtime.init.ack',
-      pluginId: 'worker-plugin',
-      runtimeId: 'worker.main',
-      runtimeInstanceId: 'runtime-instance-1',
+      pluginId: 'sidecar-plugin',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId: 'sidecar-instance-1',
     });
     await flushMessages();
     harness.emit({
       bridgeVersion: '1.0',
       op: 'runtime.activate.ack',
-      pluginId: 'worker-plugin',
-      runtimeId: 'worker.main',
-      runtimeInstanceId: 'runtime-instance-1',
+      pluginId: 'sidecar-plugin',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId: 'sidecar-instance-1',
     });
     await startPromise;
 
     harness.emit({
       protocolVersion: '1.0',
       op: 'stream.open.request',
-      requestId: 'stream-open-1',
+      requestId: 'sidecar-stream-1',
       capabilityId: 'host.pmp.audio-engine.analysis',
       method: 'openSpectrumFrameStream',
-      payload: { tap: 'pre-dsp', intervalMs: 32 },
+      payload: { tap: 'post-dsp', intervalMs: 32 },
     });
     await flushMessages();
 
     expect(harness.sent.at(-1)).toMatchObject({
       op: 'stream.open.response',
-      requestId: 'stream-open-1',
+      requestId: 'sidecar-stream-1',
       ok: true,
       streamId: 'analysis-stream-1',
     });
 
-    controller.emitData({ tap: 'pre-dsp', bins: [1, 2, 3] }, 0);
-    await flushMessages();
-    expect(harness.sent.at(-1)).toMatchObject({
-      op: 'stream.data',
-      requestId: 'stream-open-1',
-      streamId: 'analysis-stream-1',
-      sequence: 0,
-      payload: { tap: 'pre-dsp', bins: [1, 2, 3] },
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.error',
+      pluginId: 'sidecar-plugin',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId: 'sidecar-instance-1',
+      fatal: true,
+      message: 'sidecar crashed',
     });
+    await flushMessages();
 
-    await session.dispose('test-cleanup');
-
-    expect(controller.handle.dispose).toHaveBeenCalledWith('test-cleanup');
-    expect(session.getState()).toBe('terminated');
+    expect(session.getState()).toBe('crashed');
+    expect(controller.handle.dispose).toHaveBeenCalledWith('runtime-crash:sidecar crashed');
   });
 });

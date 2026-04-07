@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "2.0",
+  "kind": "extension",
+  "identity": {
+    "id": "command-surface-demo",
+    "publisher": "pixel-matrix.dev",
+    "version": "0.1.0",
+    "name": "command-surface-demo",
+    "displayName": "Command Surface Demo",
+    "description": "Minimal manifest-v2 extension-host demo for validating command contributions, worker execution, and config persistence."
+  },
+  "hostTargets": [
+    {
+      "hostId": "pmp",
+      "required": true
+    }
+  ],
+  "runtimes": [
+    {
+      "runtimeId": "worker.main",
+      "kind": "extension-host",
+      "entry": "index.js",
+      "priority": 20,
+      "bridge": "pxp.runtime.bridge.v1",
+      "dataPlane": {
+        "kinds": ["inline-json"]
+      }
+    }
+  ],
+  "activationEvents": [
+    "onCommand:increment",
+    "onCommand:reset"
+  ],
+  "requiresCapabilities": [
+    {
+      "capabilityId": "host.pmp.storage.config"
+    }
+  ],
+  "contributes": {
+    "core": {
+      "commands": [
+        {
+          "kind": "command",
+          "id": "increment",
+          "title": "Increment Counter",
+          "description": "Increment the persisted counter via runCommand()"
+        },
+        {
+          "kind": "command",
+          "id": "reset",
+          "title": "Reset Counter",
+          "description": "Reset the persisted counter via runCommand()"
+        }
+      ]
+    }
+  }
+}

@@ -25,9 +25,13 @@ import type { RuntimeActivate, RuntimeHello } from '@pixel-matrix/plugin-platfor
 const STARTUP_TIMEOUT_MS = 3_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 20_000;
 
-type WorkerEventListener = (event: { data?: unknown; message?: string; error?: unknown }) => void;
+export type WorkerEventListener = (event: {
+  data?: unknown;
+  message?: string;
+  error?: unknown;
+}) => void;
 
-type WorkerLike = {
+export type WorkerLike = {
   postMessage: (message: unknown) => void;
   terminate: () => void;
   addEventListener: (type: 'message' | 'error', listener: WorkerEventListener) => void;
@@ -72,7 +76,9 @@ function isTransportMessage(value: unknown): value is { op: string } {
   return typeof record?.op === 'string';
 }
 
-function buildWorkerPort(worker: WorkerLike): { port: RuntimeBridgePort; dispose: () => void } {
+export function buildWorkerPort(
+  worker: WorkerLike
+): { port: RuntimeBridgePort; dispose: () => void } {
   const listeners = new Set<(message: never) => void>();
   const buffered: unknown[] = [];
 
@@ -115,7 +121,7 @@ function buildWorkerPort(worker: WorkerLike): { port: RuntimeBridgePort; dispose
   };
 }
 
-function buildWorkerBootstrapSource(runtimeHello: RuntimeHello): string {
+export function buildWorkerBootstrapSource(runtimeHello: RuntimeHello): string {
   return `(${pmpmBridgeWorkerBootstrap.toString()})(${JSON.stringify(runtimeHello)}, ${JSON.stringify(RUNTIME_EVENT_NAMES)})`;
 }
 
@@ -823,9 +829,10 @@ function pmpmBridgeWorkerBootstrap(
   async function executeCommand(message: RuntimeActivate): Promise<void> {
     const payload = asObject(message.payload) ?? {};
     const entryCode = asNonEmptyString(payload.entryCode);
+    const entryUrl = asNonEmptyString(payload.entryUrl);
     const commandId = asNonEmptyString(payload.commandId) ?? asNonEmptyString(payload.surfaceId);
 
-    if (!entryCode || !commandId) {
+    if ((!entryCode && !entryUrl) || !commandId) {
       throw new Error('runtime.activate payload is incomplete');
     }
 
@@ -842,9 +849,11 @@ function pmpmBridgeWorkerBootstrap(
     configValue = cloneValue(asObject(payload.initialConfig) ?? {});
     active = true;
 
-    const entryUrl = URL.createObjectURL(new Blob([entryCode], { type: 'text/javascript' }));
+    const entryModuleUrl: string = entryCode
+      ? URL.createObjectURL(new Blob([entryCode], { type: 'text/javascript' }))
+      : (entryUrl ?? '');
     try {
-      const mod = (await import(/* @vite-ignore */ entryUrl)) as Record<string, unknown>;
+      const mod = (await import(/* @vite-ignore */ entryModuleUrl)) as Record<string, unknown>;
       const defaultExport = asObject(mod.default);
       const runCommand =
         (typeof mod.runCommand === 'function' ? mod.runCommand : null) ??
@@ -858,7 +867,9 @@ function pmpmBridgeWorkerBootstrap(
       await flushConfigMutations();
       emitCommandResult(true);
     } finally {
-      URL.revokeObjectURL(entryUrl);
+      if (entryCode && entryModuleUrl) {
+        URL.revokeObjectURL(entryModuleUrl);
+      }
     }
   }
 

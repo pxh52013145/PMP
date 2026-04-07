@@ -23,6 +23,7 @@ mod music_platform_netease;
 mod native_audio;
 mod ornament_media;
 mod perf_monitor;
+mod sidecar_bridge;
 mod telemetry;
 mod telemetry_contract;
 mod telemetry_policy;
@@ -97,6 +98,7 @@ fn main() {
         .manage(ExitFlag::new())
         .manage(EditorEffectsState::new(true))
         .manage(Arc::new(perf_monitor::PerfMonitor::new()))
+        .manage(sidecar_bridge::SidecarBridgeRegistry::new())
         .system_tray(app_builder::create_system_tray())
         .on_system_tray_event(|app, event| app_builder::handle_system_tray_event(app, event))
         .setup(app_builder::setup_app)

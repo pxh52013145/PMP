@@ -26,6 +26,12 @@ pub const DEBUG_COMMAND_NAMES: &[&str] = &[
 
 pub const MEDIA_COMMAND_NAMES: &[&str] = &["background_import_media", "ornament_import_media"];
 
+pub const PLUGIN_COMMAND_NAMES: &[&str] = &[
+    "plugin_sidecar_bridge_open",
+    "plugin_sidecar_bridge_send",
+    "plugin_sidecar_bridge_close",
+];
+
 pub const WINDOW_COMMAND_NAMES: &[&str] = &[
     "open_editor_window",
     "close_editor_window",
@@ -255,6 +261,10 @@ pub fn list_command_catalog() -> Vec<CommandDomainCatalogEntry> {
             commands: MEDIA_COMMAND_NAMES,
         },
         CommandDomainCatalogEntry {
+            domain: "plugins",
+            commands: PLUGIN_COMMAND_NAMES,
+        },
+        CommandDomainCatalogEntry {
             domain: "windows",
             commands: WINDOW_COMMAND_NAMES,
         },
@@ -327,6 +337,9 @@ macro_rules! pmp_generate_handler {
             crate::commands::debug::debug_telemetry_query,
             crate::commands::media::background_import_media,
             crate::commands::media::ornament_import_media,
+            crate::commands::plugins::plugin_sidecar_bridge_open,
+            crate::commands::plugins::plugin_sidecar_bridge_send,
+            crate::commands::plugins::plugin_sidecar_bridge_close,
             crate::commands::windows::open_editor_window,
             crate::commands::windows::close_editor_window,
             crate::commands::windows::close_all_editor_windows,

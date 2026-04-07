@@ -244,6 +244,19 @@ export function createRuntimeBridgeHostSession(
     rejectQueuedRuntimeEvents(error);
   };
 
+  const handleCrash = (error: Error): void => {
+    if (disposed) return;
+    state = error.message.includes('timeout') ? 'quarantined' : 'crashed';
+    rejectAllPending(error);
+    const currentUnsubscribe = unsubscribe;
+    unsubscribe = null;
+    try {
+      currentUnsubscribe?.();
+    } finally {
+      void runtimeResources.cleanup(`runtime-crash:${error.message}`);
+    }
+  };
+
   const handleRuntimeMessage = async (message: RuntimeBridgeMessage): Promise<void> => {
     assertMatchingRuntimeIdentity(message, options);
 
@@ -328,9 +341,7 @@ export function createRuntimeBridgeHostSession(
         await handleCapabilityRequest(message);
       }
     })().catch((error) => {
-      const runtimeError = asError(error);
-      state = runtimeError.message.includes('timeout') ? 'quarantined' : 'crashed';
-      rejectAllPending(runtimeError);
+      handleCrash(asError(error));
     });
   };
 

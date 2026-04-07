@@ -23,7 +23,7 @@ import {
   subscribePmpmPlugins,
 } from './pmpm';
 import { clearPmpmPluginRuntimeCache } from './pmpmRuntime';
-import { requestPmpmPluginRuntimeRestart } from './pmpmRuntimeSupervisor';
+import { requestHostExtensionRuntimeRestart } from './hostExtensionRuntimeSupervisor';
 import { getPmpmSandboxRuntimeEnabled } from './pmpmSandboxConfig';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import {
@@ -97,8 +97,16 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
       };
 
       const governance: GovernanceService = {
+        restartHostExtensionRuntime: (pluginId, options = {}) => {
+          requestHostExtensionRuntimeRestart(options.kind ?? 'pmpm', pluginId, {
+            reason: options.reason,
+          });
+        },
         restartPmpmPluginRuntime: (pluginId, options = {}) => {
-          requestPmpmPluginRuntimeRestart(pluginId, { reason: options.reason });
+          requestHostExtensionRuntimeRestart('pmpm', pluginId, { reason: options.reason });
+        },
+        restartInstalledExtensionRuntime: (pluginId, options = {}) => {
+          requestHostExtensionRuntimeRestart('extv2', pluginId, { reason: options.reason });
         },
       };
 

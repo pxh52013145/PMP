@@ -34,6 +34,7 @@
     "plugin:pack:capability-registry-demo": "pnpm --dir apps/desktop exec node ../../community/plugins/capability-registry-demo/package-plugin.mjs",
     "plugin:pack:command-surface-demo": "pnpm --dir apps/desktop exec node ../../community/plugins/command-surface-demo/package-plugin.mjs",
     "plugin:pack:settings-panel-demo": "pnpm --dir apps/desktop exec node ../../community/plugins/settings-panel-demo/package-plugin.mjs",
+    "plugin:pack:sidecar-echo-demo": "pnpm --dir apps/desktop exec node ../../community/plugins/sidecar-echo-demo/package-plugin.mjs",
     "test": "pnpm --filter @pixel-matrix/desktop test",
     "test:tauri:asio": "pnpm --filter @pixel-matrix/desktop test:tauri:asio",
     "hooks:install": "git config core.hooksPath .githooks",

@@ -44,6 +44,7 @@ export interface PluginRuntimeResolverContext {
   preferCompatSandbox?: boolean;
   surfaceKind?: PluginRuntimeSurfaceKind;
   preferCommandWorker?: boolean;
+  supportedLauncherIds?: PluginRuntimeLauncherId[];
 }
 
 export interface PluginRuntimeArtifactResolution {

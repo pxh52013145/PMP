@@ -4,6 +4,7 @@ pub mod debug;
 pub mod dsp;
 pub mod library;
 pub mod media;
+pub mod plugins;
 pub mod registry;
 pub mod vst;
 pub mod windows;

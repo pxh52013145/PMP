@@ -21,6 +21,8 @@
             "$APPDATA/background-media/**",
             "$APPDATA/music-covers/*",
             "$APPDATA/music-covers/**",
+            "$APPDATA/pmp-durable/extensions-v2/*",
+            "$APPDATA/pmp-durable/extensions-v2/**",
             "$APPLOCALDATA/music-covers/*",
             "$APPLOCALDATA/music-covers/**",
             "$APPCACHE/music-covers/*",

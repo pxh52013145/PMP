@@ -5,6 +5,7 @@ import {
   mapLegacyFoundationCapabilityId,
   mapPmpmBridgeEventToRuntimeOp,
   mapPmpmPermissionToCapabilityId,
+  normalizePmpmEntryPoint,
   validatePmpmManifest,
   type PmpmManifest,
 } from '@pixel-matrix/plugin-compat-pmpm';
@@ -75,6 +76,7 @@ const SAMPLE_PMPM_MANIFEST: PmpmManifest = {
 describe('plugin compat pmpm', () => {
   it('validates v1 manifests and rejects reserved ids', () => {
     expect(() => validatePmpmManifest(SAMPLE_PMPM_MANIFEST)).not.toThrow();
+    expect(() => normalizePmpmEntryPoint('../escape.js')).toThrow('path segments');
 
     expect(() =>
       validatePmpmManifest(SAMPLE_PMPM_MANIFEST, {
@@ -115,6 +117,36 @@ describe('plugin compat pmpm', () => {
     expect(converted.compat?.[0]).toMatchObject({
       compatLayerId: 'compat.pmpm',
     });
+  });
+
+  it('projects sidecar-oriented PMPM runtimes into manifest-v2 native-process metadata', () => {
+    const converted = convertPmpmManifestToPxpManifestV2({
+      ...SAMPLE_PMPM_MANIFEST,
+      entryPoint: 'sidecar/echo-runtime.js',
+      runtime: {
+        runtimeId: 'demo-sidecar',
+        kind: 'sidecar',
+        bridge: 'pxp.runtime.bridge.v1',
+        sandbox: 'native',
+        priority: 50,
+        dataPlane: {
+          kinds: ['pipe'],
+        },
+      },
+    });
+
+    expect(converted.runtimes).toEqual([
+      {
+        runtimeId: 'demo-sidecar',
+        kind: 'sidecar',
+        entry: 'sidecar/echo-runtime.js',
+        priority: 50,
+        sandbox: 'native',
+        bridge: 'pxp.runtime.bridge.v1',
+        provides: ['compat.pmpm'],
+        dataPlane: { kinds: ['pipe'] },
+      },
+    ]);
   });
 
   it('keeps install state out of the raw manifest and maps legacy ids', () => {

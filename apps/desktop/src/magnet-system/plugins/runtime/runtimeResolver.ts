@@ -11,6 +11,7 @@ import type {
   BlockedPluginRuntime,
   PluginRuntimeArtifactResolution,
   PluginRuntimeLauncherDescriptor,
+  PluginRuntimeLauncherId,
   PluginRuntimeResolution,
   PluginRuntimeResolverContext,
   ResolvedPluginRuntime,
@@ -59,6 +60,15 @@ function sortRuntimes(runtimes: RuntimeEntryDescriptor[]): RuntimeEntryDescripto
     if (priorityDiff !== 0) return priorityDiff;
     return left.runtimeId.localeCompare(right.runtimeId);
   });
+}
+
+function normalizeSupportedLauncherIds(
+  value: PluginRuntimeLauncherId[] | undefined
+): Set<PluginRuntimeLauncherId> | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  return new Set(
+    value.filter((launcherId): launcherId is PluginRuntimeLauncherId => typeof launcherId === 'string')
+  );
 }
 
 function listCandidateLaunchers(
@@ -159,10 +169,29 @@ export function resolveInstalledExtensionRuntime(
     preferCompatSandbox: context.preferCompatSandbox ?? false,
     surfaceKind: context.surfaceKind ?? 'magnet',
     preferCommandWorker: context.preferCommandWorker ?? false,
+    supportedLauncherIds: context.supportedLauncherIds ?? [],
   };
 
   const issues: string[] = [];
   const manifest = record.manifest;
+  const deniedCapabilities = new Set(record.deniedCapabilities ?? []);
+
+  const deniedRequiredCapabilities = (manifest.requiresCapabilities ?? [])
+    .map((requirement) => requirement.capabilityId)
+    .filter((capabilityId) => deniedCapabilities.has(capabilityId));
+
+  if (deniedRequiredCapabilities.length > 0) {
+    return buildBlockedResolution(
+      record,
+      resolvedContext.hostId,
+      deniedRequiredCapabilities.map(
+        (capabilityId) =>
+          `Required capability "${capabilityId}" is currently denied by host policy`
+      )
+    );
+  }
+
+  const supportedLauncherIds = normalizeSupportedLauncherIds(resolvedContext.supportedLauncherIds);
 
   const requiredHostTargets = manifest.hostTargets.filter((target) => target.required !== false);
   if (requiredHostTargets.length > 0) {
@@ -196,7 +225,18 @@ export function resolveInstalledExtensionRuntime(
       continue;
     }
 
-    const candidateLaunchers = listCandidateLaunchers(runtime, resolvedContext);
+    const runtimeLaunchers = listCandidateLaunchers(runtime, resolvedContext);
+    const candidateLaunchers = supportedLauncherIds
+      ? runtimeLaunchers.filter((launcher) => supportedLauncherIds.has(launcher.id))
+      : runtimeLaunchers;
+    if (runtimeLaunchers.length > 0 && candidateLaunchers.length === 0) {
+      issues.push(
+        `Runtime "${runtime.runtimeId}" only matches unsupported launchers: ${runtimeLaunchers
+          .map((launcher) => launcher.id)
+          .join(', ')}`
+      );
+      continue;
+    }
     if (candidateLaunchers.length === 0) {
       issues.push(`Runtime "${runtime.runtimeId}" has no compatible launcher`);
       continue;
@@ -224,7 +264,12 @@ export function resolveInstalledExtensionRuntime(
 
   const fallbackRuntime = sortedRuntimes[0];
   const fallbackLaunchers = fallbackRuntime
-    ? listCandidateLaunchers(fallbackRuntime, resolvedContext)
+    ? (() => {
+        const launchers = listCandidateLaunchers(fallbackRuntime, resolvedContext);
+        return supportedLauncherIds
+          ? launchers.filter((launcher) => supportedLauncherIds.has(launcher.id))
+          : launchers;
+      })()
     : [];
 
   return buildBlockedResolution(

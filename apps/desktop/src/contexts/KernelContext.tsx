@@ -87,6 +87,28 @@ export function hasEnabledPmpmPluginCandidates(raw: string | null | undefined): 
   return false;
 }
 
+export function hasEnabledInstalledExtensionCandidates(raw: string | null | undefined): boolean {
+  if (typeof raw !== 'string') return false;
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === '[]') return false;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return false;
+  }
+
+  if (!Array.isArray(parsed) || parsed.length === 0) return false;
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== 'object') continue;
+    const enabled = (entry as { enabled?: unknown }).enabled;
+    if (enabled === false) continue;
+    return true;
+  }
+  return false;
+}
+
 function hasLikelyInstalledPmpmPlugins(): boolean {
   if (typeof window === 'undefined') return false;
   let raw: string | null = null;
@@ -98,14 +120,27 @@ function hasLikelyInstalledPmpmPlugins(): boolean {
   return hasEnabledPmpmPluginCandidates(raw);
 }
 
-async function loadPmpmRuntimeModules(): Promise<KernelModule<AppEvents>[]> {
-  const [rendererModule, contributionModule] = await Promise.all([
+function hasLikelyInstalledExtensionsV2(): boolean {
+  if (typeof window === 'undefined') return false;
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(STORAGE_KEYS.EXTENSIONS_V2);
+  } catch {
+    return false;
+  }
+  return hasEnabledInstalledExtensionCandidates(raw);
+}
+
+async function loadPluginRuntimeModules(): Promise<KernelModule<AppEvents>[]> {
+  const [rendererModule, contributionModule, extensionContributionModule] = await Promise.all([
     import('../magnet-system/plugins/pmpmMagnetRenderersModule'),
     import('../magnet-system/plugins/pmpmContributionsModule'),
+    import('../magnet-system/plugins/extensionContributionsModule'),
   ]);
   return [
     rendererModule.createPmpmMagnetRenderersModule(),
     contributionModule.createPmpmContributionsModule(),
+    extensionContributionModule.createInstalledExtensionContributionsModule(),
   ];
 }
 
@@ -146,7 +181,7 @@ function createRuntime(): KernelRuntime {
     }
 
     pluginActivationPromise = (async () => {
-      const modules = await loadPmpmRuntimeModules();
+      const modules = await loadPluginRuntimeModules();
       if (runtimeDisposed || pluginModulesActivated) return;
       loader.activate(modules);
       pluginModulesActivated = true;
@@ -185,7 +220,7 @@ function createRuntime(): KernelRuntime {
   const shouldActivatePluginModules = (): boolean => {
     if (!canUsePluginModules) return false;
     if (runtimeDisposed || pluginModulesActivated || pluginActivationPromise) return false;
-    return hasLikelyInstalledPmpmPlugins();
+      return hasLikelyInstalledPmpmPlugins() || hasLikelyInstalledExtensionsV2();
   };
 
   const modules = [
@@ -269,13 +304,17 @@ export function KernelProvider({ children }: { children: ReactNode }) {
     };
 
     const onStorage = (event: StorageEvent) => {
-      if (event.key !== STORAGE_KEYS.PMPM_PLUGINS) return;
+      if (event.key !== STORAGE_KEYS.PMPM_PLUGINS && event.key !== STORAGE_KEYS.EXTENSIONS_V2) {
+        return;
+      }
       tryActivate();
     };
 
     const onPmpStorageChange = (event: Event) => {
       const detail = (event as CustomEvent<{ key?: string | null }>).detail;
-      if (detail?.key !== STORAGE_KEYS.PMPM_PLUGINS) return;
+      if (detail?.key !== STORAGE_KEYS.PMPM_PLUGINS && detail?.key !== STORAGE_KEYS.EXTENSIONS_V2) {
+        return;
+      }
       tryActivate();
     };
 

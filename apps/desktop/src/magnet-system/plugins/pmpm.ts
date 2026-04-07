@@ -3,6 +3,7 @@ import { unzip, strFromU8 } from 'fflate';
 import type { Unzipped } from 'fflate';
 import {
   type InstalledPmpmPluginRecord,
+  normalizePmpmEntryPoint,
   type PmpmPluginCrashSurface,
   validatePmpmManifest,
 } from '@pixel-matrix/plugin-compat-pmpm';
@@ -11,6 +12,7 @@ import { createDefaultBoundsForMagnet } from '../../modules/magnets/layoutPreset
 import type { MagnetRendererDefinition } from '../registry';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { PluginMagnetHost } from './PluginMagnetHost';
+import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { BUILTIN_MAGNET_IDS } from '../../constants/magnets';
 import {
   readDurableText,
@@ -72,6 +74,11 @@ async function unzipAsync(bytes: Uint8Array): Promise<Unzipped> {
 }
 
 export type InstalledPmpmPlugin = InstalledPmpmPluginRecord<PmpmVerifiedSignature>;
+type InstalledPmpmResolvedArtifact = NonNullable<InstalledPmpmPlugin['resolvedArtifacts']>[number];
+type ParsedPmpmPluginArchive = {
+  plugin: InstalledPmpmPlugin;
+  files: Unzipped;
+};
 
 type PluginStoreListener = () => void;
 
@@ -198,6 +205,189 @@ async function persistPmpmPluginEntryCode(pluginId: string, entryCode: string): 
 
 async function removePmpmPluginEntryCode(pluginId: string): Promise<void> {
   await removeDurableText('pmpm-entry', pluginId);
+}
+
+function normalizeArchiveFilePath(value: string): string {
+  const normalized = value
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.\/+/, '')
+    .replace(/\/+/g, '/');
+
+  if (!normalized) {
+    throw new Error('Package file path is empty');
+  }
+
+  if (normalized.startsWith('/') || /^[a-zA-Z]:\//.test(normalized)) {
+    throw new Error(`Package file path must be relative: ${value}`);
+  }
+
+  const segments = normalized.split('/');
+  if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
+    throw new Error(`Package file path contains invalid segments: ${value}`);
+  }
+
+  return normalized;
+}
+
+function buildPmpmSidecarArtifactRootRelativePath(
+  pluginId: string,
+  packageDigest: string | undefined
+): string {
+  const digest = typeof packageDigest === 'string' && packageDigest.trim().length > 0 ? packageDigest.trim() : 'current';
+  return `pmp-durable/pmpm-artifacts/${pluginId}/${digest}`;
+}
+
+function buildPmpmSidecarArtifactRelativePath(
+  pluginId: string,
+  entryPoint: string,
+  packageDigest: string | undefined
+): string {
+  const normalizedEntry = normalizePmpmEntryPoint(entryPoint);
+  return `${buildPmpmSidecarArtifactRootRelativePath(pluginId, packageDigest)}/${normalizedEntry}`;
+}
+
+function normalizeFsPath(value: string): string {
+  return value.replace(/\\/g, '/');
+}
+
+function trimPathSegments(value: string, count: number): string | null {
+  let next = normalizeFsPath(value);
+  for (let i = 0; i < count; i += 1) {
+    const lastSlash = next.lastIndexOf('/');
+    if (lastSlash < 0) return null;
+    next = next.slice(0, lastSlash);
+  }
+  return next.length > 0 ? next : null;
+}
+
+function collectResolvedArtifactCleanupTargets(
+  plugin: Pick<InstalledPmpmPlugin, 'manifest' | 'resolvedArtifacts'>
+): Array<{ kind: 'dir' | 'file'; path: string }> {
+  const projected = projectPmpmManifestToExtensionManifest(plugin.manifest);
+  const runtimeById = new Map(projected.runtimes.map((runtime) => [runtime.runtimeId, runtime] as const));
+  const seen = new Set<string>();
+  const targets: Array<{ kind: 'dir' | 'file'; path: string }> = [];
+
+  for (const artifact of plugin.resolvedArtifacts ?? []) {
+    if (typeof artifact?.path !== 'string' || artifact.path.length === 0) continue;
+    const runtime = runtimeById.get(artifact.runtimeId);
+    if (runtime?.kind === 'sidecar') {
+      const entrySegments = normalizePmpmEntryPoint(runtime.entry).split('/').filter((segment) => segment.length > 0);
+      const root = trimPathSegments(artifact.path, entrySegments.length);
+      if (!root) continue;
+      const key = `dir:${root}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      targets.push({ kind: 'dir', path: root });
+      continue;
+    }
+
+    const filePath = normalizeFsPath(artifact.path);
+    const key = `file:${filePath}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    targets.push({ kind: 'file', path: filePath });
+  }
+
+  return targets;
+}
+
+async function persistPmpmPluginResolvedArtifacts(
+  plugin: InstalledPmpmPlugin,
+  files: Unzipped
+): Promise<InstalledPmpmPlugin['resolvedArtifacts'] | undefined> {
+  const projected = projectPmpmManifestToExtensionManifest(plugin.manifest);
+  const runtime = projected.runtimes[0];
+  if (!runtime || runtime.kind !== 'sidecar') {
+    return undefined;
+  }
+
+  if (!isTauriRuntime()) {
+    throw new Error('Installing PMPM sidecar plugins requires the Tauri desktop runtime');
+  }
+
+  const relativeRoot = buildPmpmSidecarArtifactRootRelativePath(
+    plugin.manifest.metadata.id,
+    plugin.packageSha256 ?? plugin.entrySha256
+  );
+  const relativePath = buildPmpmSidecarArtifactRelativePath(
+    plugin.manifest.metadata.id,
+    runtime.entry,
+    plugin.packageSha256 ?? plugin.entrySha256
+  );
+
+  const [fs, pathApi] = await Promise.all([
+    import('@tauri-apps/api/fs'),
+    import('@tauri-apps/api/path'),
+  ]);
+
+  await fs.createDir(relativeRoot, {
+    dir: fs.BaseDirectory.AppData,
+    recursive: true,
+  });
+
+  for (const [archivePath, contents] of Object.entries(files)) {
+    const normalizedArchivePath = normalizeArchiveFilePath(archivePath);
+    const relativeFilePath = `${relativeRoot}/${normalizedArchivePath}`;
+    const relativeDir = relativeFilePath.slice(0, Math.max(0, relativeFilePath.lastIndexOf('/')));
+
+    if (relativeDir.length > 0) {
+      await fs.createDir(relativeDir, {
+        dir: fs.BaseDirectory.AppData,
+        recursive: true,
+      });
+    }
+
+    await fs.writeBinaryFile(
+      {
+        path: relativeFilePath,
+        contents,
+      },
+      { dir: fs.BaseDirectory.AppData }
+    );
+  }
+
+  const absolutePath = await pathApi.join(
+    await pathApi.appDataDir(),
+    ...relativePath.split('/').filter((segment) => segment.length > 0)
+  );
+
+  const artifact: InstalledPmpmResolvedArtifact = {
+    runtimeId: runtime.runtimeId,
+    path: absolutePath,
+    sha256: plugin.entrySha256,
+  };
+
+  return [artifact];
+}
+
+async function removePmpmPluginResolvedArtifacts(
+  plugin: Pick<InstalledPmpmPlugin, 'manifest' | 'resolvedArtifacts'> | null | undefined,
+  keepTargets: ReadonlySet<string> = new Set()
+): Promise<void> {
+  if (!plugin?.resolvedArtifacts || plugin.resolvedArtifacts.length === 0 || !isTauriRuntime()) {
+    return;
+  }
+
+  try {
+    const fs = await import('@tauri-apps/api/fs');
+    for (const target of collectResolvedArtifactCleanupTargets(plugin)) {
+      const normalizedTargetPath = normalizeFsPath(target.path);
+      if (keepTargets.has(normalizedTargetPath)) continue;
+      try {
+        if (target.kind === 'dir') {
+          await fs.removeDir(target.path, { recursive: true });
+        } else {
+          await fs.removeFile(target.path);
+        }
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  } catch {
+    // ignore cleanup errors
+  }
 }
 
 const PMPM_DURABLE_MIGRATION_V1_BACKUP_ID = 'pmpm-plugins-v1';
@@ -404,7 +594,7 @@ export function upsertInstalledPmpmPlugin(plugin: InstalledPmpmPlugin): void {
   saveInstalledPmpmPlugins(plugins);
 }
 
-export async function parsePmpmPluginFromZipBytes(packageBytes: Uint8Array): Promise<InstalledPmpmPlugin> {
+async function parsePmpmPluginArchive(packageBytes: Uint8Array): Promise<ParsedPmpmPluginArchive> {
   const files = await unzipAsync(packageBytes);
 
   const manifestBytes = files['manifest.json'];
@@ -416,7 +606,7 @@ export async function parsePmpmPluginFromZipBytes(packageBytes: Uint8Array): Pro
   const manifestUnknown = JSON.parse(manifestRaw) as unknown;
   validatePmpmManifest(manifestUnknown, { reservedIds: BUILTIN_MAGNET_IDS });
 
-  const entryKey = manifestUnknown.entryPoint.replace(/^\.?\//, '');
+  const entryKey = normalizePmpmEntryPoint(manifestUnknown.entryPoint);
   const entryBytes = files[entryKey] ?? files[manifestUnknown.entryPoint];
   if (!entryBytes) {
     throw new Error(`Invalid .pmpm: missing entryPoint "${manifestUnknown.entryPoint}"`);
@@ -443,14 +633,22 @@ export async function parsePmpmPluginFromZipBytes(packageBytes: Uint8Array): Pro
   }
 
   return {
-    manifest: manifestUnknown,
-    entryCode: strFromU8(entryBytes),
-    installedAt: Date.now(),
-    packageSha256,
-    manifestSha256,
-    entrySha256,
-    signature,
+    plugin: {
+      manifest: manifestUnknown,
+      entryCode: strFromU8(entryBytes),
+      installedAt: Date.now(),
+      packageSha256,
+      manifestSha256,
+      entrySha256,
+      signature,
+    },
+    files,
   };
+}
+
+export async function parsePmpmPluginFromZipBytes(packageBytes: Uint8Array): Promise<InstalledPmpmPlugin> {
+  const parsed = await parsePmpmPluginArchive(packageBytes);
+  return parsed.plugin;
 }
 
 export async function parsePmpmPluginFromFilePath(filePath: string): Promise<InstalledPmpmPlugin> {
@@ -463,7 +661,8 @@ export async function installPmpmPluginFromZipBytes(
   packageBytes: Uint8Array,
   options: { defaultEnabled?: boolean } = {}
 ): Promise<InstalledPmpmPlugin> {
-  const plugin = await parsePmpmPluginFromZipBytes(packageBytes);
+  const parsed = await parsePmpmPluginArchive(packageBytes);
+  const plugin = parsed.plugin;
   const existing = getInstalledPmpmPlugin(plugin.manifest.metadata.id);
 
   const merged: InstalledPmpmPlugin = existing
@@ -479,13 +678,28 @@ export async function installPmpmPluginFromZipBytes(
       ? { ...plugin, enabled: false, disabledReason: 'manual' }
       : plugin;
 
+  const projected = projectPmpmManifestToExtensionManifest(merged.manifest);
+  const primaryRuntime = projected.runtimes[0];
+  const shouldPersistEntryCode = primaryRuntime?.kind !== 'sidecar';
   const entryCode = merged.entryCode;
   const stored =
-    typeof entryCode === 'string' && entryCode.length > 0
+    shouldPersistEntryCode && typeof entryCode === 'string' && entryCode.length > 0
       ? await persistPmpmPluginEntryCode(plugin.manifest.metadata.id, entryCode)
       : false;
-  const persisted = stored ? { ...merged, entryCode: undefined } : merged;
+  const resolvedArtifacts = await persistPmpmPluginResolvedArtifacts(merged, parsed.files);
+  const persisted = {
+    ...merged,
+    resolvedArtifacts,
+    entryCode: shouldPersistEntryCode ? (stored ? undefined : merged.entryCode) : undefined,
+  };
   upsertInstalledPmpmPlugin(persisted);
+  if (!shouldPersistEntryCode) {
+    await removePmpmPluginEntryCode(plugin.manifest.metadata.id);
+  }
+  await removePmpmPluginResolvedArtifacts(
+    existing,
+    new Set(collectResolvedArtifactCleanupTargets(persisted).map((target) => normalizeFsPath(target.path)))
+  );
   return persisted;
 }
 
@@ -497,8 +711,19 @@ export async function installPmpmPluginFromFilePath(filePath: string): Promise<I
 
 export function uninstallPmpmPlugin(id: string): void {
   const plugins = loadInstalledPmpmPlugins();
+  const existing = plugins.find((plugin) => plugin.manifest.metadata.id === id) ?? null;
   saveInstalledPmpmPlugins(plugins.filter((plugin) => plugin.manifest.metadata.id !== id));
   void removePmpmPluginEntryCode(id);
+  void removePmpmPluginResolvedArtifacts(existing);
+}
+
+export function supportsPmpmPluginMagnetSurface(
+  plugin: Pick<InstalledPmpmPlugin, 'manifest'>
+): boolean {
+  const projected = projectPmpmManifestToExtensionManifest(plugin.manifest);
+  return projected.runtimes.some(
+    (runtime) => runtime.kind === 'extension-host' || runtime.kind === 'webview'
+  );
 }
 
 function isPluginList(value: unknown): value is InstalledPmpmPlugin[] {
@@ -784,7 +1009,7 @@ export function createMagnetTemplateFromPlugin(plugin: InstalledPmpmPlugin): Mag
 
 export function getPluginRendererDefinition(id: string): MagnetRendererDefinition | null {
   const plugin = getInstalledPmpmPlugin(id);
-  if (!plugin) return null;
+  if (!plugin || !supportsPmpmPluginMagnetSurface(plugin)) return null;
 
   const enabled = plugin.enabled ?? true;
 

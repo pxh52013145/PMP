@@ -78,6 +78,43 @@ describe('pmpm projection', () => {
     });
   });
 
+  it('preserves resolved sidecar artifact paths when install records materialize real files', () => {
+    const projected = projectInstalledPmpmPluginToExtensionRecord({
+      ...SAMPLE_PLUGIN,
+      manifest: {
+        ...SAMPLE_MANIFEST,
+        entryPoint: 'sidecar/echo-runtime.js',
+        runtime: {
+          runtimeId: 'sidecar.main',
+          kind: 'sidecar',
+          bridge: 'pxp.runtime.bridge.v1',
+          sandbox: 'native',
+          dataPlane: { kinds: ['pipe'] },
+        },
+      },
+      resolvedArtifacts: [
+        {
+          runtimeId: 'sidecar.main',
+          path: 'C:/Users/test/AppData/Roaming/PMP/pmp-durable/pmpm-artifacts/demo-plugin/sidecar/echo-runtime.js',
+          sha256: 'entry-digest',
+        },
+      ],
+    });
+
+    expect(projected.manifest.runtimes[0]).toMatchObject({
+      runtimeId: 'sidecar.main',
+      kind: 'sidecar',
+      entry: 'sidecar/echo-runtime.js',
+    });
+    expect(projected.resolvedArtifacts).toEqual([
+      {
+        runtimeId: 'sidecar.main',
+        path: 'C:/Users/test/AppData/Roaming/PMP/pmp-durable/pmpm-artifacts/demo-plugin/sidecar/echo-runtime.js',
+        sha256: 'entry-digest',
+      },
+    ]);
+  });
+
   it('lists permission-to-capability bindings and effective capability ids', () => {
     const bindings = listPmpmPermissionCapabilityBindings(SAMPLE_PLUGIN);
 

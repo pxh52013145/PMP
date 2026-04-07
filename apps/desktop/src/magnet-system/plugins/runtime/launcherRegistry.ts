@@ -40,9 +40,9 @@ const PLUGIN_RUNTIME_LAUNCHERS: readonly PluginRuntimeLauncherDescriptor[] = Obj
     id: 'pxp.sidecar.native-process',
     runtimeKinds: ['sidecar'],
     surfaceKinds: ['command'],
-    availability: 'planned',
+    availability: 'available',
     transport: 'sidecar-process',
-    description: 'Future native sidecar launcher',
+    description: 'Native sidecar launcher for command-oriented sidecar runtimes',
   },
 ]);
 

@@ -31,6 +31,7 @@ import {
   installPmpmPluginFromFilePath,
   loadInstalledPmpmPlugins,
   parsePmpmPluginFromFilePath,
+  supportsPmpmPluginMagnetSurface,
   uninstallPmpmPlugin,
   type InstalledPmpmPlugin,
 } from '../../magnet-system/plugins/pmpm';
@@ -588,7 +589,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
       await installPmpmPluginFromFilePath(filePath);
       reloadPlugins();
 
-      if (!magnetLibrary.some((m) => m.id === meta.id)) {
+      if (supportsPmpmPluginMagnetSurface(plugin) && !magnetLibrary.some((m) => m.id === meta.id)) {
         onMagnetAddToLibrary(createMagnetTemplateFromPlugin(plugin));
       }
 
