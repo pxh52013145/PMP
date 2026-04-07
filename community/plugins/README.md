@@ -15,6 +15,14 @@ This folder contains demo plugins used to validate the plugin runtime, protocol 
   - Command contribution + `runCommand` + config persistence (`storage:local`).
 - `settings-panel-demo`  
   - Settings panel contribution + `mountSettings` + config editing (`storage:local`).
+- `sidecar-echo-demo`  
+  - Installable PMPM sidecar demo for native-process command launch + capability round-trip.
+
+## Manifest-v2 fixtures
+- `sidecar-capability-demo`
+  - Manifest-v2 sidecar fixture for native-process handshake, capability invoke, and crash cleanup.
+- `sidecar-echo-demo`
+  - Shares the same sidecar script, but keeps `manifest.v2.json` as a resolver/runtime-bridge fixture.
 
 ## Packaging
 - `pnpm plugin:pack:stream-demo`
@@ -22,4 +30,4 @@ This folder contains demo plugins used to validate the plugin runtime, protocol 
 - `pnpm plugin:pack:capability-registry-demo`
 - `pnpm plugin:pack:command-surface-demo`
 - `pnpm plugin:pack:settings-panel-demo`
-
+- `pnpm plugin:pack:sidecar-echo-demo`
