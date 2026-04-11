@@ -1,10 +1,22 @@
 import type { NavigationPageType, NavigationParamsFor } from './navigation';
+import {
+  isPluginSurfaceSourceKind,
+  type PluginSurfaceSourceKind,
+} from './pluginSurfaceSource';
 
 export type TrackPageParams = { trackId: string };
 export type AlbumPageParams = { albumName: string; artist?: string };
 export type ArtistPageParams = { artist: string };
-export type PluginPageParams = { pluginId: string; pageId: string };
-export type PluginVisualizerParams = { pluginId: string; visualizerId: string };
+export type PluginPageParams = {
+  pluginId: string;
+  pageId: string;
+  sourceKind?: PluginSurfaceSourceKind;
+};
+export type PluginVisualizerParams = {
+  pluginId: string;
+  visualizerId: string;
+  sourceKind?: PluginSurfaceSourceKind;
+};
 export type DebugPageParams = { tab?: 'debug-center' | 'perf-monitor' | 'native-debug' };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -67,7 +79,10 @@ export function parseNavigationParams<K extends NavigationPageType>(
       const pageId = typeof params.pageId === 'string' ? params.pageId : undefined;
       if (!pluginId || !pageId) return undefined;
       if (!isSafeId(pluginId) || !isSafeId(pageId)) return undefined;
-      return { pluginId, pageId } as NavigationParamsFor<K>;
+      const sourceKind = isPluginSurfaceSourceKind(params.sourceKind)
+        ? params.sourceKind
+        : undefined;
+      return { pluginId, pageId, sourceKind } as NavigationParamsFor<K>;
     }
     case 'plugin-visualizer': {
       if (!isRecord(params)) return undefined;
@@ -76,7 +91,10 @@ export function parseNavigationParams<K extends NavigationPageType>(
         typeof params.visualizerId === 'string' ? params.visualizerId : undefined;
       if (!pluginId || !visualizerId) return undefined;
       if (!isSafeId(pluginId) || !isSafeId(visualizerId)) return undefined;
-      return { pluginId, visualizerId } as NavigationParamsFor<K>;
+      const sourceKind = isPluginSurfaceSourceKind(params.sourceKind)
+        ? params.sourceKind
+        : undefined;
+      return { pluginId, visualizerId, sourceKind } as NavigationParamsFor<K>;
     }
     default:
       return undefined;

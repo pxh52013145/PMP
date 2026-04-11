@@ -116,6 +116,14 @@ export interface CapabilityRevoke extends RuntimeBridgeEnvelope {
   reason: string;
 }
 
+export interface CapabilityRevokeAck extends RuntimeBridgeEnvelope {
+  op: 'runtime.capabilities.revoke.ack';
+  requestId: string;
+  ok: boolean;
+  ignored?: boolean;
+  reason?: string;
+}
+
 export interface RuntimeHealthRequest extends RuntimeBridgeEnvelope {
   op: 'runtime.health.request';
   requestId: string;
@@ -166,6 +174,7 @@ export type RuntimeBridgeMessage =
   | ViewUnmountRequest
   | ViewUnmountAck
   | CapabilityRevoke
+  | CapabilityRevokeAck
   | RuntimeHealthRequest
   | RuntimeHealthResponse
   | RuntimePing

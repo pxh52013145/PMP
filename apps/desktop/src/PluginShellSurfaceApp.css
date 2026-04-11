@@ -1,0 +1,11 @@
+.plugin-shell-surface-root {
+  width: 100vw;
+  height: 100vh;
+  background: transparent;
+}
+
+.plugin-shell-surface-error {
+  padding: 16px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+}

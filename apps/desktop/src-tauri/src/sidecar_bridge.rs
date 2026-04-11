@@ -88,6 +88,8 @@ impl SidecarBridgeRegistry {
         request: SidecarBridgeOpenRequest,
     ) -> Result<SidecarBridgeOpenResponse, String> {
         let session_id = request.runtime_instance_id.clone();
+        let command_id = request.command_id.clone();
+        let timeout_ms = request.timeout_ms;
 
         {
             let sessions = self
@@ -137,6 +139,22 @@ impl SidecarBridgeRegistry {
             sessions.insert(session_id.clone(), session.clone());
         }
 
+        crate::backend_telemetry::info(
+            app,
+            "plugin",
+            "plugin.sidecar.bridge.opened",
+            crate::backend_telemetry::BackendTelemetryOptions::new()
+                .component("SidecarBridgeRegistry")
+                .field("pluginId", json!(session.plugin_id.as_str()))
+                .field("runtimeId", json!(session.runtime_id.as_str()))
+                .field(
+                    "runtimeInstanceId",
+                    json!(session.runtime_instance_id.as_str()),
+                )
+                .field("sidecarSessionId", json!(session_id.clone()))
+                .field("commandId", json!(command_id))
+                .field("timeoutMs", json!(timeout_ms)),
+        );
         spawn_stdout_reader(app.clone(), session.clone(), stdout);
         spawn_stderr_reader(session.clone(), stderr);
         spawn_exit_watcher(app.clone(), self.clone(), session);
@@ -149,8 +167,8 @@ impl SidecarBridgeRegistry {
             .get_session(session_id)?
             .ok_or_else(|| format!("Sidecar runtime bridge session not found: {session_id}"))?;
 
-        let encoded =
-            serde_json::to_vec(&message).map_err(|error| format!("Encode sidecar message failed: {error}"))?;
+        let encoded = serde_json::to_vec(&message)
+            .map_err(|error| format!("Encode sidecar message failed: {error}"))?;
 
         let mut guard = session
             .stdin
@@ -172,11 +190,29 @@ impl SidecarBridgeRegistry {
         Ok(())
     }
 
-    pub fn close_session(&self, session_id: &str, _reason: Option<&str>) -> Result<(), String> {
+    pub fn close_session(&self, app: &tauri::AppHandle, session_id: &str, reason: Option<&str>) -> Result<(), String> {
         let session = self.remove_session(session_id)?;
         let Some(session) = session else {
             return Ok(());
         };
+
+        if should_emit_forced_teardown(reason) {
+            crate::backend_telemetry::warn(
+                app,
+                "plugin",
+                "plugin.sidecar.process.forced-teardown",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("SidecarBridgeRegistry")
+                    .field("pluginId", json!(session.plugin_id.as_str()))
+                    .field("runtimeId", json!(session.runtime_id.as_str()))
+                    .field(
+                        "runtimeInstanceId",
+                        json!(session.runtime_instance_id.as_str()),
+                    )
+                    .field("sidecarSessionId", json!(session.session_id.as_str()))
+                    .field("reason", json!(reason.unwrap_or("unknown"))),
+            );
+        }
 
         session.terminating.store(true, Ordering::Release);
 
@@ -196,7 +232,10 @@ impl SidecarBridgeRegistry {
         Ok(sessions.get(session_id).cloned())
     }
 
-    fn remove_session(&self, session_id: &str) -> Result<Option<Arc<SidecarBridgeSession>>, String> {
+    fn remove_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<Arc<SidecarBridgeSession>>, String> {
         let mut sessions = self
             .inner
             .sessions
@@ -322,7 +361,11 @@ fn spawn_exit_watcher(
     });
 }
 
-fn emit_sidecar_bridge_message(app: &tauri::AppHandle, session: &SidecarBridgeSession, message: Value) {
+fn emit_sidecar_bridge_message(
+    app: &tauri::AppHandle,
+    session: &SidecarBridgeSession,
+    message: Value,
+) {
     let payload = SidecarBridgeMessageEventPayload {
         session_id: session.session_id.clone(),
         plugin_id: session.plugin_id.clone(),
@@ -339,7 +382,30 @@ fn emit_sidecar_runtime_error(
     message: String,
     details: Option<Value>,
 ) {
-    emit_sidecar_bridge_message(app, session, build_runtime_error_message(session, message, details));
+    let mut telemetry = crate::backend_telemetry::BackendTelemetryOptions::new()
+        .component("SidecarBridgeRegistry")
+        .message(message.clone())
+        .field("pluginId", json!(session.plugin_id.as_str()))
+        .field("runtimeId", json!(session.runtime_id.as_str()))
+        .field(
+            "runtimeInstanceId",
+            json!(session.runtime_instance_id.as_str()),
+        )
+        .field("sidecarSessionId", json!(session.session_id.as_str()))
+        .field("fatal", json!(true));
+    if let Some(details_value) = details.clone() {
+        telemetry = telemetry.field("details", details_value);
+    }
+    crate::backend_telemetry::error(app, "plugin", "plugin.sidecar.bridge.failed", telemetry);
+    emit_sidecar_bridge_message(
+        app,
+        session,
+        build_runtime_error_message(session, message, details),
+    );
+}
+
+fn should_emit_forced_teardown(reason: Option<&str>) -> bool {
+    matches!(reason, Some("runtime-unresponsive" | "runtime-crash"))
 }
 
 fn build_runtime_error_message(
@@ -481,7 +547,10 @@ fn build_sidecar_launch_command(entry_path: &Path) -> Result<(PathBuf, Vec<Strin
     match extension.as_deref() {
         Some("js") | Some("mjs") | Some("cjs") => {
             let node = std::env::var("PXP_SIDECAR_NODE_EXE").unwrap_or_else(|_| "node".to_string());
-            Ok((PathBuf::from(node), vec![entry_path.to_string_lossy().to_string()]))
+            Ok((
+                PathBuf::from(node),
+                vec![entry_path.to_string_lossy().to_string()],
+            ))
         }
         #[cfg(target_os = "windows")]
         Some("cmd") | Some("bat") => {
@@ -553,7 +622,8 @@ mod tests {
     #[test]
     fn resolves_absolute_sidecar_entry_path() {
         let path = std::env::current_exe().expect("current exe");
-        let resolved = resolve_sidecar_entry_path(path.to_str().expect("utf8 path")).expect("resolve");
+        let resolved =
+            resolve_sidecar_entry_path(path.to_str().expect("utf8 path")).expect("resolve");
         assert_eq!(resolved, path.canonicalize().expect("canonical path"));
     }
 
@@ -633,7 +703,10 @@ mod tests {
 
         let capability_request = read_json_line(&mut reader);
         assert_eq!(capability_request["op"], "capability.invoke.request");
-        assert_eq!(capability_request["capabilityId"], "core.capability-registry");
+        assert_eq!(
+            capability_request["capabilityId"],
+            "core.capability-registry"
+        );
         assert_eq!(capability_request["method"], "list");
 
         write_json_line(
@@ -669,7 +742,9 @@ mod tests {
 
     fn write_json_line(stdin: &mut std::process::ChildStdin, value: Value) {
         let encoded = serde_json::to_string(&value).expect("encode json line");
-        stdin.write_all(encoded.as_bytes()).expect("write json line");
+        stdin
+            .write_all(encoded.as_bytes())
+            .expect("write json line");
         stdin.write_all(b"\n").expect("write newline");
         stdin.flush().expect("flush stdin");
     }

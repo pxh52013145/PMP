@@ -13,7 +13,11 @@ import {
   recordPmpmPermissionDenied,
   recordPmpmPluginCrash,
 } from '../pmpm';
-import { createPluginMountApi, type HostAudioService, type HostNavigation } from '../pluginHostApi';
+import {
+  createPluginMountApi,
+  type HostAudioService,
+  type HostNavigation,
+} from '../pluginHostApi';
 import { readPmpmPluginConfig, subscribePmpmPluginConfig } from '../pluginConfig';
 import { readVerifiedPmpmPluginEntryCode } from '../pmpmRuntime';
 import { recordPmpmAuditEvent } from '../pmpmGovernance';
@@ -348,6 +352,9 @@ function pmpmBridgeWorkerBootstrap(
   const audioErrorListeners = new Set<(message: string) => void>();
   const navigationListeners = new Set<(snapshot: unknown) => void>();
   const configListeners = new Set<(config: Record<string, unknown>) => void>();
+  let activationDispose:
+    | (() => Promise<void> | void)
+    | null = null;
   let permissions = new Set<string>();
   let permissionList: string[] = [];
   let runtimeInit: Record<string, unknown> | null = null;
@@ -826,13 +833,30 @@ function pmpmBridgeWorkerBootstrap(
     },
   };
 
-  async function executeCommand(message: RuntimeActivate): Promise<void> {
+  function readActivationHandler(
+    mod: Record<string, unknown>,
+    defaultExport: Record<string, unknown> | null
+  ): ((api: unknown, activation: RuntimeActivate) => unknown) | null {
+    const activationHandler =
+      (typeof mod.activateRuntime === 'function' ? mod.activateRuntime : null) ??
+      (typeof mod.activate === 'function' ? mod.activate : null) ??
+      (typeof defaultExport?.activateRuntime === 'function'
+        ? defaultExport.activateRuntime
+        : null) ??
+      (typeof defaultExport?.activate === 'function' ? defaultExport.activate : null);
+
+    return activationHandler as
+      | ((api: unknown, activation: RuntimeActivate) => unknown)
+      | null;
+  }
+
+  async function executeActivation(message: RuntimeActivate): Promise<void> {
     const payload = asObject(message.payload) ?? {};
     const entryCode = asNonEmptyString(payload.entryCode);
     const entryUrl = asNonEmptyString(payload.entryUrl);
     const commandId = asNonEmptyString(payload.commandId) ?? asNonEmptyString(payload.surfaceId);
 
-    if ((!entryCode && !entryUrl) || !commandId) {
+    if (!entryCode && !entryUrl) {
       throw new Error('runtime.activate payload is incomplete');
     }
 
@@ -849,23 +873,51 @@ function pmpmBridgeWorkerBootstrap(
     configValue = cloneValue(asObject(payload.initialConfig) ?? {});
     active = true;
 
+    if (activationDispose) {
+      try {
+        await Promise.resolve(activationDispose());
+      } catch {
+        // ignore best-effort activation cleanup
+      }
+      activationDispose = null;
+    }
+
     const entryModuleUrl: string = entryCode
       ? URL.createObjectURL(new Blob([entryCode], { type: 'text/javascript' }))
       : (entryUrl ?? '');
     try {
       const mod = (await import(/* @vite-ignore */ entryModuleUrl)) as Record<string, unknown>;
       const defaultExport = asObject(mod.default);
-      const runCommand =
-        (typeof mod.runCommand === 'function' ? mod.runCommand : null) ??
-        (typeof defaultExport?.runCommand === 'function' ? defaultExport.runCommand : null);
+      if (message.cause === 'command') {
+        const runCommand =
+          (typeof mod.runCommand === 'function' ? mod.runCommand : null) ??
+          (typeof defaultExport?.runCommand === 'function' ? defaultExport.runCommand : null);
 
-      if (typeof runCommand !== 'function') {
-        throw new Error('Plugin entry must export `runCommand(api, commandId, args?)`');
+        if (typeof runCommand !== 'function' || !commandId) {
+          throw new Error('Plugin entry must export `runCommand(api, commandId, args?)`');
+        }
+
+        await Promise.resolve(runCommand(api, commandId, cloneValue(payload.args)));
+        await flushConfigMutations();
+        emitCommandResult(true);
+        return;
       }
 
-      await Promise.resolve(runCommand(api, commandId, cloneValue(payload.args)));
+      const activateRuntime = readActivationHandler(mod, defaultExport);
+      if (typeof activateRuntime !== 'function') {
+        throw new Error(
+          'Plugin entry must export `activateRuntime(api, activation)` for non-command activations'
+        );
+      }
+
+      const nextDispose = await Promise.resolve(
+        activateRuntime(api, cloneValue(message) as RuntimeActivate)
+      );
+      activationDispose =
+        typeof nextDispose === 'function'
+          ? (nextDispose as () => Promise<void> | void)
+          : null;
       await flushConfigMutations();
-      emitCommandResult(true);
     } finally {
       if (entryCode && entryModuleUrl) {
         URL.revokeObjectURL(entryModuleUrl);
@@ -999,16 +1051,19 @@ function pmpmBridgeWorkerBootstrap(
     }
 
     if (op === 'runtime.activate') {
+      const runtimeActivateMessage = record as unknown as RuntimeActivate;
       runtimeActivate = cloneValue(record);
       postMessage({ ...baseEnvelope(), op: 'runtime.activate.ack' });
-      void executeCommand(record as unknown as RuntimeActivate).catch((error) => {
+      void executeActivation(runtimeActivateMessage).catch((error) => {
         postMessage({
           ...baseEnvelope(),
           op: 'runtime.error',
           fatal: true,
           message: error instanceof Error ? error.message : String(error),
         });
-        emitCommandResult(false, error);
+        if (runtimeActivateMessage.cause === 'command') {
+          emitCommandResult(false, error);
+        }
       });
       return;
     }
@@ -1018,8 +1073,22 @@ function pmpmBridgeWorkerBootstrap(
         ...baseEnvelope(),
         op: 'runtime.health.response',
         requestId: record.requestId,
+        traceId: asNonEmptyString(record.traceId) ?? undefined,
         ready: active,
         status: active ? 'healthy' : 'degraded',
+      });
+      return;
+    }
+
+    if (op === 'runtime.capabilities.revoke') {
+      postMessage({
+        ...baseEnvelope(),
+        op: 'runtime.capabilities.revoke.ack',
+        requestId: asNonEmptyString(record.requestId) ?? 'runtime-capability-revoke:unknown',
+        traceId: asNonEmptyString(record.traceId) ?? undefined,
+        ok: true,
+        ignored: true,
+        reason: asNonEmptyString(record.reason) ?? 'runtime-cleanup',
       });
     }
   });
@@ -1155,6 +1224,11 @@ export async function runPmpmBridgeWorkerCommand(
     runtimeActivate,
     startupTimeoutMs: STARTUP_TIMEOUT_MS,
     requestTimeoutMs: timeoutMs,
+    telemetry: {
+      sourceKind: 'pmpm',
+      launcherId: 'pxp.extension-host.worker',
+      hostLabel,
+    },
     onRuntimeEvent: (message) => {
       const payload = asObject(message.payload) ?? {};
 

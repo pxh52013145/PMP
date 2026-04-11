@@ -3,6 +3,7 @@ import type {
   CommandContributionDescriptor,
   KeybindingContributionDescriptor,
   PageContributionDescriptor,
+  ShellSurfaceContributionDescriptor,
   SettingsPanelContributionDescriptor,
   VisualizerContributionDescriptor,
   WindowContributionDescriptor,
@@ -39,6 +40,7 @@ export interface ExtensionDisplayDescriptor {
 export interface ExtensionContributionBuckets {
   pages?: PageContributionDescriptor[];
   windows?: WindowContributionDescriptor[];
+  shellSurfaces?: ShellSurfaceContributionDescriptor[];
   commands?: CommandContributionDescriptor[];
   settingsPanels?: SettingsPanelContributionDescriptor[];
   visualizers?: VisualizerContributionDescriptor[];

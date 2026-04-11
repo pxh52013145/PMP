@@ -2,6 +2,12 @@ import type { KernelModule } from '../../kernel';
 import type { AppEvents } from '../../contracts/events';
 import { setupDualListener, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { AUDIO_ENGINE_SERVICE_TOKEN } from '../audio';
+import { TELEMETRY_SERVICE_TOKEN, type TelemetryService } from '../telemetry';
+import {
+  DefaultProcessPerfService,
+  PROCESS_PERF_SERVICE_TOKEN,
+  setGlobalProcessPerfService,
+} from './ProcessPerfService';
 import {
   DefaultPerformanceControlService,
   PERFORMANCE_CONTROL_SERVICE_TOKEN,
@@ -29,7 +35,15 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
   return {
     id: 'performance-control',
     activate: ({ services, events }) => {
-      const service = new DefaultPerformanceControlService(events);
+      const telemetryService = services.get(TELEMETRY_SERVICE_TOKEN) as TelemetryService;
+      const processPerfService = new DefaultProcessPerfService(telemetryService);
+      setGlobalProcessPerfService(processPerfService);
+      const unregisterProcessPerf = services.register(
+        PROCESS_PERF_SERVICE_TOKEN,
+        processPerfService
+      );
+
+      const service = new DefaultPerformanceControlService(events, processPerfService);
       const audioEngine = services.getOptional(AUDIO_ENGINE_SERVICE_TOKEN);
       const unregister = services.register(PERFORMANCE_CONTROL_SERVICE_TOKEN, service);
 
@@ -156,6 +170,9 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
         unsubscribeAudioState?.();
         unsubscribeGovernance();
         unsubscribeQuality();
+        setGlobalProcessPerfService(null);
+        processPerfService.destroy();
+        unregisterProcessPerf();
         unregister();
       };
     },

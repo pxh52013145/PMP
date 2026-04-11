@@ -200,6 +200,8 @@ pub struct TelemetryQueryInput {
     #[serde(default)]
     pub module_ids: Vec<String>,
     #[serde(default)]
+    pub event_prefixes: Vec<String>,
+    #[serde(default)]
     pub levels: Vec<TelemetryLevel>,
     #[serde(default)]
     pub kinds: Vec<TelemetryKind>,

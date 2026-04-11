@@ -49,6 +49,7 @@ pub async fn close_all_editor_windows(app: tauri::AppHandle) -> Result<(), Strin
 #[tauri::command(rename_all = "camelCase")]
 pub async fn open_plugin_window(
     app: tauri::AppHandle,
+    source_kind: Option<String>,
     plugin_id: String,
     window_id: String,
     x: f64,
@@ -60,6 +61,7 @@ pub async fn open_plugin_window(
 ) -> Result<(), String> {
     windows::plugin::open_plugin_window(
         &app,
+        source_kind,
         plugin_id,
         window_id,
         windows::plugin::PluginWindowGeometry {
@@ -76,10 +78,84 @@ pub async fn open_plugin_window(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn close_plugin_window(
     app: tauri::AppHandle,
+    source_kind: Option<String>,
     plugin_id: String,
     window_id: String,
 ) -> Result<(), String> {
-    windows::plugin::close_plugin_window(&app, plugin_id, window_id)
+    windows::plugin::close_plugin_window(&app, source_kind, plugin_id, window_id)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn open_plugin_shell_surface(
+    app: tauri::AppHandle,
+    source_kind: Option<String>,
+    plugin_id: String,
+    surface_id: String,
+    surface_type: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    title: Option<String>,
+    always_on_top: bool,
+    focusable: bool,
+    pointer_policy: String,
+    exit: tauri::State<'_, app_runtime::ExitFlag>,
+) -> Result<(), String> {
+    windows::plugin_shell_surface::open_plugin_shell_surface(
+        &app,
+        windows::plugin_shell_surface::PluginShellSurfaceConfig {
+            source_kind,
+            plugin_id,
+            surface_id,
+            surface_type,
+            geometry: windows::plugin_shell_surface::PluginShellSurfaceGeometry {
+                x,
+                y,
+                width,
+                height,
+            },
+            title,
+            always_on_top,
+            focusable,
+            pointer_policy,
+        },
+        exit.0.clone(),
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn dismiss_plugin_shell_surface(
+    app: tauri::AppHandle,
+    source_kind: Option<String>,
+    plugin_id: String,
+    surface_id: String,
+    surface_type: String,
+) -> Result<(), String> {
+    windows::plugin_shell_surface::dismiss_plugin_shell_surface(
+        &app,
+        source_kind,
+        plugin_id,
+        surface_id,
+        surface_type,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn destroy_plugin_shell_surface(
+    app: tauri::AppHandle,
+    source_kind: Option<String>,
+    plugin_id: String,
+    surface_id: String,
+    surface_type: String,
+) -> Result<(), String> {
+    windows::plugin_shell_surface::destroy_plugin_shell_surface(
+        &app,
+        source_kind,
+        plugin_id,
+        surface_id,
+        surface_type,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]

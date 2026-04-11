@@ -10,6 +10,8 @@ export type PluginRuntimeSurfaceKind =
   | 'page'
   | 'visualizer'
   | 'window'
+  | 'overlay'
+  | 'desktop-widget'
   | 'command';
 
 export type PluginRuntimeLauncherId =

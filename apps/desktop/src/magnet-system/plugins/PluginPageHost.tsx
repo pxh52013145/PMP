@@ -24,6 +24,15 @@ import {
   subscribePmpmSandbox,
 } from './pmpmSandboxConfig';
 import { usePmpmRuntimeRestartToken } from './usePmpmRuntimeRestartToken';
+import {
+  completePluginSurfaceMount,
+  createPluginRuntimeResolveTelemetryContext,
+  createPluginSurfaceTelemetryContext,
+  failPluginSurfaceMount,
+  reportPluginRuntimeResolve,
+  startPluginSurfaceMount,
+  type PluginLifecycleTelemetryHandle,
+} from './pluginLifecycleTelemetry';
 
 export function PluginPageHost({
   pluginId,
@@ -39,6 +48,9 @@ export function PluginPageHost({
   const navigationService = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
+  const surfaceMountTelemetryRef = useRef<PluginLifecycleTelemetryHandle | null>(null);
+  const reportedRuntimeResolveKeyRef = useRef<string | null>(null);
+  const reportedMountFailureKeyRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const restartToken = usePmpmRuntimeRestartToken(pluginId);
 
@@ -85,6 +97,51 @@ export function PluginPageHost({
     plugin && enabled
       ? getResolvedPmpmLauncherAdapterError(runtimeResolution)
       : null;
+  const surfaceTelemetryContext = useMemo(
+    () =>
+      createPluginSurfaceTelemetryContext({
+        pluginId,
+        sourceKind: 'pmpm',
+        hostLabel: 'PluginPageHost',
+        launcherId:
+          runtimeResolution?.status === 'resolved' ? runtimeResolution.launcher.id : null,
+        surfaceKind: 'page',
+        surfaceId: pageId,
+      }),
+    [pageId, pluginId, runtimeResolution]
+  );
+  const runtimeResolveTelemetryContext = useMemo(
+    () =>
+      createPluginRuntimeResolveTelemetryContext({
+        pluginId,
+        sourceKind: 'pmpm',
+        hostLabel: 'PluginPageHost',
+        surfaceKind: 'page',
+        surfaceId: pageId,
+        cause: 'view',
+      }),
+    [pageId, pluginId]
+  );
+  const runtimeResolveTelemetryKey = useMemo(() => {
+    if (!enabled) return null;
+    const resolutionStatus = runtimeResolution?.status ?? 'missing-record';
+    const runtimeId =
+      runtimeResolution?.status === 'resolved'
+        ? runtimeResolution.runtime.runtimeId
+        : runtimeResolution?.runtime?.runtimeId ?? '';
+    const launcherId =
+      runtimeResolution?.status === 'resolved' ? runtimeResolution.launcher.id : '';
+
+    return [
+      pluginId,
+      'page',
+      pageId,
+      resolutionStatus,
+      runtimeId,
+      launcherId,
+      runtimeResolution?.issues.join('|') ?? '',
+    ].join('::');
+  }, [enabled, pageId, pluginId, runtimeResolution]);
 
   const navigation = useMemo(() => {
     return {
@@ -110,6 +167,53 @@ export function PluginPageHost({
   }, [audioService, commands, keybindings, navigation, permissions, pluginId]);
 
   useEffect(() => {
+    if (!enabled || !runtimeResolveTelemetryKey) {
+      reportedRuntimeResolveKeyRef.current = null;
+      return;
+    }
+
+    if (reportedRuntimeResolveKeyRef.current === runtimeResolveTelemetryKey) {
+      return;
+    }
+
+    reportedRuntimeResolveKeyRef.current = runtimeResolveTelemetryKey;
+    reportPluginRuntimeResolve({
+      context: runtimeResolveTelemetryContext,
+      resolution: runtimeResolution,
+      extraFields: {
+        hostId: 'pmp',
+        preferCompatSandbox: sandboxEnabled,
+      },
+    });
+  }, [
+    enabled,
+    runtimeResolveTelemetryContext,
+    runtimeResolveTelemetryKey,
+    runtimeResolution,
+    sandboxEnabled,
+  ]);
+
+  useEffect(() => {
+    if (!enabled || !runtimeResolutionError) {
+      reportedMountFailureKeyRef.current = null;
+      return;
+    }
+
+    const failureKey = `${pluginId}:${pageId}:${runtimeResolutionError}`;
+    if (reportedMountFailureKeyRef.current === failureKey) {
+      return;
+    }
+
+    reportedMountFailureKeyRef.current = failureKey;
+    failPluginSurfaceMount(surfaceTelemetryContext, runtimeResolutionError, {
+      extraFields: {
+        failureStage: 'resolve',
+        mountMode: launcherAdapter?.mode ?? null,
+      },
+    });
+  }, [enabled, launcherAdapter?.mode, pageId, pluginId, runtimeResolutionError, surfaceTelemetryContext]);
+
+  useEffect(() => {
     if (!enabled) return;
     if (!launcherAdapter || launcherAdapter.mode !== 'inline') return;
     const container = containerRef.current;
@@ -117,6 +221,11 @@ export function PluginPageHost({
 
     let cancelled = false;
     setError(null);
+    surfaceMountTelemetryRef.current = startPluginSurfaceMount(surfaceTelemetryContext, {
+      extraFields: {
+        mountMode: 'inline',
+      },
+    });
 
     void launcherAdapter
       .mountSurface({
@@ -129,9 +238,26 @@ export function PluginPageHost({
       .then((cleanup) => {
         if (cancelled) return;
         cleanupRef.current = typeof cleanup === 'function' ? cleanup : null;
+        if (surfaceMountTelemetryRef.current) {
+          completePluginSurfaceMount(surfaceMountTelemetryRef.current, {
+            extraFields: {
+              mountMode: 'inline',
+            },
+          });
+          surfaceMountTelemetryRef.current = null;
+        }
       })
       .catch((err) => {
         if (cancelled) return;
+        if (surfaceMountTelemetryRef.current) {
+          failPluginSurfaceMount(surfaceMountTelemetryRef.current, err, {
+            extraFields: {
+              failureStage: 'mount',
+              mountMode: 'inline',
+            },
+          });
+          surfaceMountTelemetryRef.current = null;
+        }
         recordPmpmPluginCrash(pluginId, err, 'page');
         clearPmpmPluginRuntimeCache(pluginId);
         setError(err instanceof Error ? err.message : String(err));
@@ -139,6 +265,7 @@ export function PluginPageHost({
 
     return () => {
       cancelled = true;
+      surfaceMountTelemetryRef.current = null;
       try {
         cleanupRef.current?.();
       } finally {
@@ -146,7 +273,7 @@ export function PluginPageHost({
         container.innerHTML = '';
       }
     };
-  }, [api, enabled, launcherAdapter, pageId, pluginId, restartToken]);
+  }, [api, enabled, launcherAdapter, pageId, pluginId, restartToken, surfaceTelemetryContext]);
 
   if (!plugin) {
     return (

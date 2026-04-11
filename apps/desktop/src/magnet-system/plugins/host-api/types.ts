@@ -12,6 +12,7 @@ import type { PlayMode, Track } from '../../../services/audio';
 import type { AudioSpectrumFrame, AudioSpectrumTap } from '../../../services/audio/types';
 import type { CommandsService } from '../../../services/commands';
 import type { KeybindingsService } from '../../../services/keybindings';
+import type { PluginSurfaceSourceKind } from '../../../contracts/pluginSurfaceSource';
 import type { DynamicColors } from '../../../utils/dynamicColors';
 
 export type PluginCoverSnapshot = {
@@ -38,6 +39,7 @@ export type PluginHostCapabilityInvokeContext = SharedHostCapabilityInvokeContex
   keybindings?: KeybindingsService;
   navigation?: HostNavigation;
   configApi?: PluginConfigApi;
+  sourceKind?: PluginSurfaceSourceKind;
   trayApi?: PluginHostTrayApi;
   windowApi?: PluginWindowApi;
 };

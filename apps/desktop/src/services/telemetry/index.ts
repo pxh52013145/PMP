@@ -22,3 +22,11 @@ export { attachTauriInvokeTelemetry, invokeWithTelemetry } from './tauriInvokeTe
 export { createTelemetryModule } from './telemetryModule';
 export { buildTelemetryScenarioReport } from './scenarioReport';
 export { captureTelemetryScenarioSnapshot } from './scenarioSnapshots';
+export {
+  buildTelemetryAiContextReport,
+  getDefaultTelemetryAiQuery,
+  getPerformanceTelemetryAiQuery,
+  getPluginTelemetryAiQuery,
+  getTelemetryAiContextPreset,
+} from './aiContextReport';
+export type { TelemetryAiContextPreset, TelemetryAiContextPresetId } from './aiContextReport';

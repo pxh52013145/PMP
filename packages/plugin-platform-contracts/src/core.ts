@@ -1,3 +1,5 @@
+import type { PmpHostManifestContributionDescriptor } from './host';
+
 export type LocalizedTextValue = string | number | boolean | null;
 
 export interface LocalizedTextReference {
@@ -394,7 +396,10 @@ export interface LocaleBundleDescriptor {
 
 export interface ManifestContributionDescriptor {
   core?: CoreContributionBuckets;
-  host?: Record<string, unknown>;
+  host?: {
+    pmp?: PmpHostManifestContributionDescriptor;
+    [hostId: string]: unknown;
+  };
 }
 
 export interface IntegrityDescriptor {

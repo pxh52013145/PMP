@@ -16,10 +16,10 @@ import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readJson, writeJson } from '../../modules/storage';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { MEMORY_GOVERNANCE_AUDIT_MAX_ENTRIES } from '../../contracts/memoryGovernance';
-import { getProcessPerfTotalsSnapshot } from '../../modules/debug';
 import { getTelemetryLogger } from '../telemetry/TelemetryService';
 import { invokeWithTelemetry } from '../telemetry/tauriInvokeTelemetry';
 import { scheduleProcessWorkingSetTrim } from '../../utils/processWorkingSetTrim';
+import type { ProcessPerfService } from '../performance-control';
 
 export type MemoryGovernanceAuditEntry = {
   atMs: number;
@@ -100,7 +100,8 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
 
   constructor(
     private readonly navigation: NavigationService,
-    private readonly events: ScopedEventBus<AppEvents>
+    private readonly events: ScopedEventBus<AppEvents>,
+    private readonly processPerfService: ProcessPerfService
   ) {}
 
   getLastResult(): MemoryGovernanceRunResult | null {
@@ -216,7 +217,7 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       }
     }
 
-    const result: MemoryGovernanceRunResult = { snapshot, plan, executed };
+    const result: MemoryGovernanceRunResult = { reason, snapshot, plan, executed };
     this.lastResult = result;
 
     this.appendAuditEntry({
@@ -280,27 +281,20 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
   ): Promise<MemoryGovernanceWebview2Snapshot | undefined> {
     if (!isTauri) return undefined;
 
-    try {
-      const totals = await getProcessPerfTotalsSnapshot();
-      if (!totals) return undefined;
+    const totals = await this.processPerfService.refreshTotalsSnapshot();
+    if (!totals) return undefined;
 
-      return {
-        processSampleAtMs: totals.timestampMs,
-        sampleIntervalMs: totals.sampleIntervalMs,
-        cpuCount: totals.cpuCount,
-        webview2WorkingSetBytes: totals.totals.webview2WorkingSetBytes,
-        webview2PrivateBytes: totals.totals.webview2PrivateBytes,
-        webview2CpuPercent: totals.totals.webview2CpuPercent,
-        treeWorkingSetBytes: totals.totals.workingSetBytes,
-        treePrivateBytes: totals.totals.privateBytes,
-        treeCpuPercent: totals.totals.cpuPercent,
-      };
-    } catch (error) {
-      this.telemetry.warn('memory-governance.webview2-snapshot.failed', {
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return undefined;
-    }
+    return {
+      processSampleAtMs: totals.timestampMs,
+      sampleIntervalMs: totals.sampleIntervalMs,
+      cpuCount: totals.cpuCount,
+      webview2WorkingSetBytes: totals.totals.webview2WorkingSetBytes,
+      webview2PrivateBytes: totals.totals.webview2PrivateBytes,
+      webview2CpuPercent: totals.totals.webview2CpuPercent,
+      treeWorkingSetBytes: totals.totals.workingSetBytes,
+      treePrivateBytes: totals.totals.privateBytes,
+      treeCpuPercent: totals.totals.cpuPercent,
+    };
   }
 
   private appendAuditEntry(entry: MemoryGovernanceAuditEntry): void {

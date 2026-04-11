@@ -23,6 +23,15 @@ import {
 } from './MemoryGovernanceService';
 import { getTelemetryLogger } from '../telemetry/TelemetryService';
 import { AUDIO_ENGINE_SERVICE_TOKEN } from '../audio';
+import {
+  attachPerformanceObservabilityBridge,
+  PERFORMANCE_CONTROL_SERVICE_TOKEN,
+  PROCESS_PERF_SERVICE_TOKEN,
+  type PerformanceControlService,
+  type ProcessPerfService,
+} from '../performance-control';
+import { QUALITY_SERVICE_TOKEN, type QualityService } from '../quality';
+import { TELEMETRY_SERVICE_TOKEN, type TelemetryService } from '../telemetry';
 
 function readEnabledSetting(): boolean {
   try {
@@ -53,9 +62,26 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
       const navigation = services.get(NAVIGATION_SERVICE_TOKEN);
       const lifecycle = services.get(APP_LIFECYCLE_SERVICE_TOKEN) as AppLifecycleService;
       const audioEngine = services.getOptional(AUDIO_ENGINE_SERVICE_TOKEN);
+      const processPerfService = services.get(PROCESS_PERF_SERVICE_TOKEN) as ProcessPerfService;
+      const performanceControlService = services.get(
+        PERFORMANCE_CONTROL_SERVICE_TOKEN
+      ) as PerformanceControlService;
+      const qualityService = services.get(QUALITY_SERVICE_TOKEN) as QualityService;
+      const telemetryService = services.get(TELEMETRY_SERVICE_TOKEN) as TelemetryService;
 
-      const service: MemoryGovernanceService = new DefaultMemoryGovernanceService(navigation, events);
+      const service: MemoryGovernanceService = new DefaultMemoryGovernanceService(
+        navigation,
+        events,
+        processPerfService
+      );
       const unregister = services.register(MEMORY_GOVERNANCE_SERVICE_TOKEN, service);
+      const detachPerformanceObservability = attachPerformanceObservabilityBridge({
+        events,
+        telemetryService,
+        processPerfService,
+        performanceControlSnapshot: performanceControlService.getSnapshot(),
+        qualitySnapshot: qualityService.getSnapshot(),
+      });
 
       if (typeof window === 'undefined') {
         return () => unregister();
@@ -168,6 +194,7 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
         } catch {
           // ignore
         }
+        detachPerformanceObservability();
         window.removeEventListener(PMP_STORAGE_CHANGE_EVENT, onStorageChange as EventListener);
         unregister();
       };

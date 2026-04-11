@@ -5,6 +5,7 @@ const {
   clearPmpmPluginRuntimeCacheMock,
   recordInstalledExtensionAuditEventMock,
   recordPmpmAuditEventMock,
+  telemetryLoggerMock,
 } = vi.hoisted(() => ({
   broadcastDataUpdateMock: vi.fn(async (storageKey: string, data: unknown) => {
     localStorage.setItem(storageKey, JSON.stringify(data));
@@ -12,15 +13,16 @@ const {
   clearPmpmPluginRuntimeCacheMock: vi.fn(),
   recordInstalledExtensionAuditEventMock: vi.fn(),
   recordPmpmAuditEventMock: vi.fn(),
-}));
-
-vi.mock('../../services/telemetry/TelemetryService', () => ({
-  getTelemetryLogger: () => ({
+  telemetryLoggerMock: {
     warn: vi.fn(),
     error: vi.fn(),
     info: vi.fn(),
     debug: vi.fn(),
-  }),
+  },
+}));
+
+vi.mock('../../services/telemetry/TelemetryService', () => ({
+  getTelemetryLogger: () => telemetryLoggerMock,
 }));
 
 vi.mock('../../utils/windowCommunication', () => ({
@@ -63,6 +65,16 @@ describe('host extension runtime supervisor', () => {
       reason: 'manual',
     });
     expect(recordInstalledExtensionAuditEventMock).not.toHaveBeenCalled();
+    expect(telemetryLoggerMock.info).toHaveBeenCalledWith(
+      'plugin.governance.runtime-restart.requested',
+      expect.objectContaining({
+        fields: expect.objectContaining({
+          kind: 'pmpm',
+          pluginId: 'demo.plugin',
+          reason: 'manual',
+        }),
+      })
+    );
     expect(readHostExtensionRuntimeRestartRequest('pmpm')).toMatchObject({
       kind: 'pmpm',
       pluginId: 'demo.plugin',
@@ -82,6 +94,16 @@ describe('host extension runtime supervisor', () => {
       pluginId: 'native.demo',
       reason: 'capabilities-updated',
     });
+    expect(telemetryLoggerMock.info).toHaveBeenCalledWith(
+      'plugin.governance.runtime-restart.requested',
+      expect.objectContaining({
+        fields: expect.objectContaining({
+          kind: 'extv2',
+          pluginId: 'native.demo',
+          reason: 'capabilities-updated',
+        }),
+      })
+    );
     expect(recordPmpmAuditEventMock).not.toHaveBeenCalled();
     expect(readHostExtensionRuntimeRestartRequest('extv2')).toMatchObject({
       kind: 'extv2',

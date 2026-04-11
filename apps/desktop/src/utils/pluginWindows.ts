@@ -2,10 +2,12 @@ import { isTauriRuntime } from './tauriRuntime';
 import { getMainWindowBounds } from './editorWindows';
 import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { invokeWithTelemetry } from '../services/telemetry/tauriInvokeTelemetry';
+import type { PluginSurfaceSourceKind } from '../contracts/pluginSurfaceSource';
 
 export type PluginWindowId = string;
 
 export interface PluginWindowConfig {
+  sourceKind?: PluginSurfaceSourceKind;
   pluginId: string;
   windowId: PluginWindowId;
   title?: string;
@@ -63,6 +65,7 @@ export async function openPluginWindow(
   if (!isSafeId(config.windowId)) {
     throw new Error(`Invalid windowId "${config.windowId}"`);
   }
+  const sourceKind = config.sourceKind ?? 'pmpm';
 
   const width = config.width ?? 720;
   const height = config.height ?? 520;
@@ -77,6 +80,7 @@ export async function openPluginWindow(
 
   try {
     await invokeWithTelemetry('open_plugin_window', {
+      sourceKind,
       pluginId: config.pluginId,
       windowId: config.windowId,
       x: position.x,
@@ -94,6 +98,7 @@ export async function openPluginWindow(
     telemetry.error('window.plugin.open.failed', {
       message: getErrorMessage(error),
       fields: {
+        sourceKind,
         pluginId: config.pluginId,
         windowId: config.windowId,
       },
@@ -102,12 +107,17 @@ export async function openPluginWindow(
   }
 }
 
-export async function closePluginWindow(pluginId: string, windowId: string): Promise<void> {
+export async function closePluginWindow(
+  pluginId: string,
+  windowId: string,
+  sourceKind: PluginSurfaceSourceKind = 'pmpm'
+): Promise<void> {
   if (!isTauriRuntime()) return;
   if (!isSafeId(pluginId) || !isSafeId(windowId)) return;
 
   try {
     await invokeWithTelemetry('close_plugin_window', {
+      sourceKind,
       pluginId,
       windowId,
     }, {
@@ -120,6 +130,7 @@ export async function closePluginWindow(pluginId: string, windowId: string): Pro
     telemetry.error('window.plugin.close.failed', {
       message: getErrorMessage(error),
       fields: {
+        sourceKind,
         pluginId,
         windowId,
       },

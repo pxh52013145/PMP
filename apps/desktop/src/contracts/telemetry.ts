@@ -101,6 +101,7 @@ export type TelemetryReadSessionResult = {
 
 export type TelemetryQueryInput = {
   moduleIds?: string[] | null;
+  eventPrefixes?: string[] | null;
   levels?: TelemetryLevel[] | null;
   kinds?: TelemetryKind[] | null;
   searchText?: string | null;

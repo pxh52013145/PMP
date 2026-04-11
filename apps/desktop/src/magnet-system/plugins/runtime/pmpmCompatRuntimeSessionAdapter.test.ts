@@ -149,4 +149,71 @@ describe('pmpm compat runtime session adapter', () => {
 
     unsubscribe();
   });
+
+  it('forwards capability revoke requests and maps compat revoke acks back onto runtime bridge acks', async () => {
+    const sentCompatMessages: unknown[] = [];
+    const adapter = createPmpmCompatRuntimeSessionAdapter({
+      runtimeHello: createRuntimeHello(),
+      runtimeHealth: createRuntimeHealth(),
+      hostLabel: 'PluginSandbox',
+      surface: 'page',
+      surfaceId: 'demo-page',
+      permissions: ['api:navigation'],
+      entryCode: 'export function mount() {}',
+      postCompatMessage: (message) => {
+        sentCompatMessages.push(message);
+      },
+    });
+
+    const receivedMessages: unknown[] = [];
+    adapter.port.onMessage((message) => {
+      receivedMessages.push(message);
+    });
+
+    adapter.handleCompatMessage({
+      frameId: 'frame-1',
+      type: 'pmpm:iframe-ready',
+    });
+
+    await adapter.port.postMessage(createRuntimeInit());
+    await adapter.port.postMessage(createRuntimeActivate());
+    await adapter.port.postMessage({
+      bridgeVersion: 'compat.pmpm.bridge.v1',
+      op: 'runtime.capabilities.revoke',
+      pluginId: 'view-plugin',
+      runtimeId: 'compat.pmpm.main',
+      runtimeInstanceId: 'frame-1',
+      requestId: 'revoke-1',
+      traceId: 'trace-1',
+      capabilityIds: ['host.pmp.navigation'],
+      reason: 'runtime-dispose',
+    });
+
+    expect(sentCompatMessages.at(-1)).toMatchObject({
+      type: 'pmpm:capabilities-revoke',
+      requestId: 'revoke-1',
+      traceId: 'trace-1',
+      capabilityIds: ['host.pmp.navigation'],
+      reason: 'runtime-dispose',
+    });
+
+    adapter.handleCompatMessage({
+      frameId: 'frame-1',
+      type: 'pmpm:capabilities-revoke-ack',
+      requestId: 'revoke-1',
+      traceId: 'trace-1',
+      ok: true,
+      ignored: true,
+      reason: 'runtime-dispose',
+    });
+
+    expect(receivedMessages.at(-1)).toMatchObject({
+      op: 'runtime.capabilities.revoke.ack',
+      requestId: 'revoke-1',
+      traceId: 'trace-1',
+      ok: true,
+      ignored: true,
+      reason: 'runtime-dispose',
+    });
+  });
 });

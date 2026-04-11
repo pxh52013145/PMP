@@ -1,5 +1,6 @@
 import type { TelemetryFields, TelemetryLevel } from '../../contracts/telemetry';
 import { getProcessPerfTotalsSnapshot } from '../../modules/debug/processPerf';
+import { getGlobalProcessPerfService } from '../performance-control';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { getTelemetryLogger } from './TelemetryService';
 
@@ -39,7 +40,10 @@ export function captureTelemetryScenarioSnapshot(
   void (async () => {
     const nextFields: TelemetryFields = options.fields ? { ...options.fields } : {};
     if (options.includeProcessPerf !== false && isTauriRuntime()) {
-      const perfTotals = await getProcessPerfTotalsSnapshot().catch(() => null);
+      const perfTotals = await (
+        getGlobalProcessPerfService()?.refreshTotalsSnapshot() ??
+        getProcessPerfTotalsSnapshot()
+      ).catch(() => null);
       if (perfTotals) {
         nextFields.processPerfCapturedAtMs = perfTotals.timestampMs;
         nextFields.webview2PrivateBytes = perfTotals.totals.webview2PrivateBytes ?? null;

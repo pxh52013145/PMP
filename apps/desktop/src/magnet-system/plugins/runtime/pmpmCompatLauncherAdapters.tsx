@@ -117,6 +117,22 @@ function mountInlineSurfaceWithRuntime(
       }
       return mount(options.container, options.api, options.surface.windowId);
     }
+    case 'overlay': {
+      const mount = runtime.mountOverlay;
+      if (typeof mount !== 'function') {
+        throw new Error('Plugin entry must export `mountOverlay(container, api, surfaceId)`');
+      }
+      return mount(options.container, options.api, options.surface.surfaceId);
+    }
+    case 'desktop-widget': {
+      const mount = runtime.mountDesktopWidget;
+      if (typeof mount !== 'function') {
+        throw new Error(
+          'Plugin entry must export `mountDesktopWidget(container, api, surfaceId)`'
+        );
+      }
+      return mount(options.container, options.api, options.surface.surfaceId);
+    }
   }
 }
 

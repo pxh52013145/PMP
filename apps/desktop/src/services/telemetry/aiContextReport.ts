@@ -11,6 +11,10 @@ const DEFAULT_AI_MODULE_IDS = [
   'audio',
   'music-library',
   'playlists',
+  'plugins',
+  'pmpm',
+  'extensions',
+  'performance',
   'memory-governance',
   'windowing',
   'settings',
@@ -18,8 +22,30 @@ const DEFAULT_AI_MODULE_IDS = [
 ] as const;
 
 const DEFAULT_AI_LEVELS = ['info', 'warn', 'error', 'fatal'] as const;
+const PERFORMANCE_AI_LEVELS = ['debug', 'info', 'warn', 'error', 'fatal'] as const;
 const DEFAULT_AI_LIMIT = 180;
 const MAX_RECENT_RECORDS = 80;
+
+export type TelemetryAiContextPresetId = 'general' | 'plugins' | 'performance';
+
+export type TelemetryAiContextPreset = {
+  id: TelemetryAiContextPresetId;
+  fileStem: string;
+  query: TelemetryQueryInput;
+};
+
+function cloneQuery(query: TelemetryQueryInput): TelemetryQueryInput {
+  return {
+    moduleIds: query.moduleIds ? [...query.moduleIds] : undefined,
+    eventPrefixes: query.eventPrefixes ? [...query.eventPrefixes] : undefined,
+    levels: query.levels ? [...query.levels] : undefined,
+    kinds: query.kinds ? [...query.kinds] : undefined,
+    searchText: query.searchText ?? undefined,
+    fromTs: query.fromTs ?? undefined,
+    toTs: query.toTs ?? undefined,
+    limit: query.limit ?? undefined,
+  };
+}
 
 function formatTimestamp(ts: number | null | undefined): string {
   if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0) return 'n/a';
@@ -88,6 +114,48 @@ export function getDefaultTelemetryAiQuery(): TelemetryQueryInput {
   };
 }
 
+export function getPluginTelemetryAiQuery(): TelemetryQueryInput {
+  return {
+    eventPrefixes: ['plugin.'],
+    levels: [...DEFAULT_AI_LEVELS],
+    limit: DEFAULT_AI_LIMIT,
+  };
+}
+
+export function getPerformanceTelemetryAiQuery(): TelemetryQueryInput {
+  return {
+    eventPrefixes: ['performance.'],
+    levels: [...PERFORMANCE_AI_LEVELS],
+    limit: DEFAULT_AI_LIMIT,
+  };
+}
+
+export function getTelemetryAiContextPreset(
+  presetId: TelemetryAiContextPresetId = 'general'
+): TelemetryAiContextPreset {
+  switch (presetId) {
+    case 'plugins':
+      return {
+        id: 'plugins',
+        fileStem: 'plugin-context',
+        query: cloneQuery(getPluginTelemetryAiQuery()),
+      };
+    case 'performance':
+      return {
+        id: 'performance',
+        fileStem: 'performance-context',
+        query: cloneQuery(getPerformanceTelemetryAiQuery()),
+      };
+    case 'general':
+    default:
+      return {
+        id: 'general',
+        fileStem: 'ai-context',
+        query: cloneQuery(getDefaultTelemetryAiQuery()),
+      };
+  }
+}
+
 export function buildTelemetryAiContextReport(input: {
   query: TelemetryQueryInput;
   result: TelemetryQueryResult;
@@ -114,6 +182,7 @@ export function buildTelemetryAiContextReport(input: {
     '## Query',
     '',
     `- modules: ${formatQueryList(input.query.moduleIds ?? null)}`,
+    `- event_prefixes: ${formatQueryList(input.query.eventPrefixes ?? null)}`,
     `- levels: ${formatQueryList(input.query.levels ?? null)}`,
     `- kinds: ${formatQueryList(input.query.kinds ?? null)}`,
     `- search_text: ${input.query.searchText?.trim() || 'none'}`,

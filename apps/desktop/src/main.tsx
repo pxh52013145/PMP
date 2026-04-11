@@ -110,7 +110,13 @@ function StartupReadyGate({ children }: { children: React.ReactNode }) {
 
 type RootAppResolveResult = {
   component: React.ComponentType;
-  kind: 'main' | 'editor' | 'plugin' | 'vst-manager' | 'desktop-lyrics-overlay';
+  kind:
+    | 'main'
+    | 'editor'
+    | 'plugin'
+    | 'plugin-shell-surface'
+    | 'vst-manager'
+    | 'desktop-lyrics-overlay';
 };
 
 async function resolveRootAppByHash(hash: string): Promise<RootAppResolveResult> {
@@ -122,6 +128,11 @@ async function resolveRootAppByHash(hash: string): Promise<RootAppResolveResult>
   if (hash.startsWith('#/plugin-window/')) {
     const mod = await import('./PluginWindowApp');
     return { component: mod.PluginWindowApp, kind: 'plugin' };
+  }
+
+  if (hash.startsWith('#/plugin-shell-surface/')) {
+    const mod = await import('./PluginShellSurfaceApp');
+    return { component: mod.PluginShellSurfaceApp, kind: 'plugin-shell-surface' };
   }
 
   if (hash.startsWith('#/vst-manager')) {

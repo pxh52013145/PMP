@@ -75,6 +75,8 @@ type PmpmRuntimeCompatSurfaceKind =
   | 'page'
   | 'visualizer'
   | 'window'
+  | 'overlay'
+  | 'desktop-widget'
   | 'command';
 
 type PmpmRuntimeBridgeSurfaceOptions = {
@@ -93,6 +95,8 @@ const VIEW_TYPE_BY_SURFACE: Record<Exclude<PmpmRuntimeCompatSurfaceKind, 'comman
   page: 'page',
   visualizer: 'visualizer',
   window: 'window',
+  overlay: 'overlay',
+  'desktop-widget': 'desktop-widget',
 };
 
 const SURFACE_SLOT_BY_SURFACE: Record<Exclude<PmpmRuntimeCompatSurfaceKind, 'command'>, string> = {
@@ -101,6 +105,8 @@ const SURFACE_SLOT_BY_SURFACE: Record<Exclude<PmpmRuntimeCompatSurfaceKind, 'com
   page: 'host.pmp.surface.page',
   visualizer: 'host.pmp.surface.visualizer',
   window: 'host.pmp.surface.window',
+  overlay: 'host.pmp.surface.overlay',
+  'desktop-widget': 'host.pmp.surface.desktop-widget',
 };
 
 const PMPM_COMPAT_DATA_PLANES: NonNullable<RuntimeHello['supportedDataPlanes']> = ['inline-json'];

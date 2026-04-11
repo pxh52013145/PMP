@@ -6,6 +6,10 @@ import { AUDIO_ENGINE_SERVICE_TOKEN } from '../services/audio';
 import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { openVstManagerWindow } from '../utils/vstManagerWindows';
 import { subscribeLocale, t } from '../i18n/core';
+import {
+  goBackBuiltinViaHostCapability,
+  navigateBuiltinViaHostCapability,
+} from './builtinNavigationCapabilityBridge';
 
 const telemetry = getTelemetryLogger('commands', 'builtinCommandsModule');
 
@@ -139,7 +143,12 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
           group: 'navigation',
           order: 10,
           run: async () => {
-            services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('home');
+            await navigateBuiltinViaHostCapability(
+              services.get(NAVIGATION_SERVICE_TOKEN),
+              'home',
+              undefined,
+              'app:navigate-home'
+            );
           },
         });
 
@@ -152,7 +161,12 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
           group: 'navigation',
           order: 20,
           run: async () => {
-            services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('settings');
+            await navigateBuiltinViaHostCapability(
+              services.get(NAVIGATION_SERVICE_TOKEN),
+              'settings',
+              undefined,
+              'app:navigate-settings'
+            );
           },
         });
 
@@ -165,7 +179,12 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
           group: 'navigation',
           order: 30,
           run: async () => {
-            services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('music-library');
+            await navigateBuiltinViaHostCapability(
+              services.get(NAVIGATION_SERVICE_TOKEN),
+              'music-library',
+              undefined,
+              'app:navigate-music-library'
+            );
           },
         });
 
@@ -178,7 +197,12 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
           group: 'audio',
           order: 50,
           run: async () => {
-            services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('dsp-rack');
+            await navigateBuiltinViaHostCapability(
+              services.get(NAVIGATION_SERVICE_TOKEN),
+              'dsp-rack',
+              undefined,
+              'app:navigate-dsp-rack'
+            );
           },
         });
 
@@ -191,7 +215,12 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
           group: 'debug',
           order: 90,
           run: async () => {
-            services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('debug', { tab: 'native-debug' });
+            await navigateBuiltinViaHostCapability(
+              services.get(NAVIGATION_SERVICE_TOKEN),
+              'debug',
+              { tab: 'native-debug' },
+              'app:navigate-native-debug'
+            );
           },
         });
 
@@ -204,7 +233,12 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
           group: 'debug',
           order: 80,
           run: async () => {
-            services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('debug', { tab: 'debug-center' });
+            await navigateBuiltinViaHostCapability(
+              services.get(NAVIGATION_SERVICE_TOKEN),
+              'debug',
+              { tab: 'debug-center' },
+              'app:navigate-debug-center'
+            );
           },
         });
 
@@ -230,7 +264,10 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
           group: 'navigation',
           order: 40,
           run: async () => {
-            services.get(NAVIGATION_SERVICE_TOKEN).goBack();
+            await goBackBuiltinViaHostCapability(
+              services.get(NAVIGATION_SERVICE_TOKEN),
+              'app:go-back'
+            );
           },
         });
       };

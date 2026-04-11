@@ -1,0 +1,1 @@
+export { createInstalledExtensionRuntimeManagerModule as createInstalledExtensionActivationEventsModule } from './installedExtensionRuntimeManagerModule';

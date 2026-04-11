@@ -30,6 +30,7 @@ export interface ExtensionSidecarEntrypointDescriptor extends ExtensionEntrypoin
 
 export type {
   CapabilityRevoke,
+  CapabilityRevokeAck,
   RuntimeActivate,
   RuntimeActivateAck,
   RuntimeBridgeEnvelope,

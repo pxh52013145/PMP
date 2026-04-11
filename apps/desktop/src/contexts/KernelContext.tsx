@@ -131,16 +131,33 @@ function hasLikelyInstalledExtensionsV2(): boolean {
   return hasEnabledInstalledExtensionCandidates(raw);
 }
 
-async function loadPluginRuntimeModules(): Promise<KernelModule<AppEvents>[]> {
-  const [rendererModule, contributionModule, extensionContributionModule] = await Promise.all([
+async function loadPluginRuntimeModules(options: {
+  enableShellSurfaceBackgroundSync: boolean;
+}): Promise<KernelModule<AppEvents>[]> {
+  const [
+    rendererModule,
+    contributionModule,
+    shellSurfaceManagerModule,
+    runtimeManagerModule,
+    extensionContributionModule,
+    extensionRendererModule,
+  ] = await Promise.all([
     import('../magnet-system/plugins/pmpmMagnetRenderersModule'),
     import('../magnet-system/plugins/pmpmContributionsModule'),
+    import('../magnet-system/plugins/shellSurfaceManagerModule'),
+    import('../magnet-system/plugins/installedExtensionRuntimeManagerModule'),
     import('../magnet-system/plugins/extensionContributionsModule'),
+    import('../magnet-system/plugins/installedExtensionMagnetRenderersModule'),
   ]);
   return [
     rendererModule.createPmpmMagnetRenderersModule(),
+    shellSurfaceManagerModule.createShellSurfaceManagerModule({
+      enableBackgroundSync: options.enableShellSurfaceBackgroundSync,
+    }),
     contributionModule.createPmpmContributionsModule(),
+    runtimeManagerModule.createInstalledExtensionRuntimeManagerModule(),
     extensionContributionModule.createInstalledExtensionContributionsModule(),
+    extensionRendererModule.createInstalledExtensionMagnetRenderersModule(),
   ];
 }
 
@@ -162,8 +179,10 @@ function createRuntime(): KernelRuntime {
   const hash = typeof window === 'undefined' ? '' : window.location.hash;
   const isEditorWindow = hash.startsWith('#/editor/');
   const isPluginWindow = hash.startsWith('#/plugin-window/');
+  const isPluginShellSurfaceWindow = hash.startsWith('#/plugin-shell-surface/');
   const isVstManagerWindow = hash.startsWith('#/vst-manager');
-  const isAuxWindow = isEditorWindow || isPluginWindow || isVstManagerWindow;
+  const isAuxWindow =
+    isEditorWindow || isPluginWindow || isPluginShellSurfaceWindow || isVstManagerWindow;
   const canUsePluginModules = !isEditorWindow;
 
   let runtimeDisposed = false;
@@ -181,7 +200,9 @@ function createRuntime(): KernelRuntime {
     }
 
     pluginActivationPromise = (async () => {
-      const modules = await loadPluginRuntimeModules();
+      const modules = await loadPluginRuntimeModules({
+        enableShellSurfaceBackgroundSync: !isAuxWindow,
+      });
       if (runtimeDisposed || pluginModulesActivated) return;
       loader.activate(modules);
       pluginModulesActivated = true;

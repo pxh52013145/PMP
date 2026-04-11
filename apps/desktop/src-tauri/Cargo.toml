@@ -14,7 +14,7 @@ tauri-build = { version = "1.5", features = [] }
 zerovec = { version = "0.11.4", features = ["alloc"] }
 
 [dependencies]
-tauri = { version = "1.5", features = [ "protocol-asset", "system-tray", "dialog-confirm", "dialog-message", "dialog-ask", "fs-all", "dialog-open", "window-all", "shell-open"] }
+tauri = { version = "1.5", features = [ "path-all", "protocol-asset", "system-tray", "dialog-confirm", "dialog-message", "dialog-ask", "fs-all", "dialog-open", "window-all", "shell-open"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 window-shadows = "0.2"

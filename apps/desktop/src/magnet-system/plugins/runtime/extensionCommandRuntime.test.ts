@@ -7,6 +7,7 @@ import * as pluginConfigModule from '../pluginConfig';
 import * as pluginHostApiModule from '../pluginHostApi';
 import * as extensionsModule from '../extensions';
 import * as extensionsGovernanceModule from '../extensionsGovernance';
+import type { RuntimeBridgeTransportMessage } from './runtimeBridgeHostSession';
 
 class ScriptedWorker {
   private readonly listeners = {
@@ -51,17 +52,20 @@ class ScriptedWorker {
 }
 
 function createRuntimeEvent(
-  runtimeHello: RuntimeHello,
+  runtimeContext: Pick<
+    RuntimeEvent,
+    'bridgeVersion' | 'pluginId' | 'runtimeId' | 'runtimeInstanceId'
+  >,
   eventName: string,
   payload?: unknown,
   overrides: Partial<RuntimeEvent> = {}
 ): RuntimeEvent {
   return {
-    bridgeVersion: runtimeHello.bridgeVersion,
+    bridgeVersion: runtimeContext.bridgeVersion,
     op: 'runtime.event',
-    pluginId: runtimeHello.pluginId,
-    runtimeId: runtimeHello.runtimeId,
-    runtimeInstanceId: runtimeHello.runtimeInstanceId,
+    pluginId: runtimeContext.pluginId,
+    runtimeId: runtimeContext.runtimeId,
+    runtimeInstanceId: runtimeContext.runtimeInstanceId,
     eventName,
     payload,
     ...overrides,
@@ -137,6 +141,50 @@ function createStubApi(configState: Record<string, unknown>): PluginMountApi {
 
 function flushAsyncWork(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function createSidecarControllerHarness() {
+  const listeners = new Set<(message: RuntimeBridgeTransportMessage) => void>();
+  const sent: unknown[] = [];
+  const dispose = vi.fn(async () => undefined);
+
+  return {
+    controller: {
+      port: {
+        postMessage: (message: RuntimeBridgeTransportMessage) => {
+          sent.push(message);
+        },
+        onMessage: (listener: (message: RuntimeBridgeTransportMessage) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+      dispose,
+    },
+    sent,
+    emitRuntimeHello: (runtimeInstanceId: string) => {
+      for (const listener of Array.from(listeners)) {
+        listener({
+          bridgeVersion: '1.0',
+          op: 'runtime.hello',
+          pluginId: 'native-sidecar-demo',
+          runtimeId: 'sidecar.main',
+          runtimeInstanceId,
+          supportedBridgeVersions: ['1.0'],
+          runtimeKind: 'sidecar',
+          carrier: 'native-process',
+          supportsViewMount: false,
+          supportedDataPlanes: ['inline-json', 'pipe'],
+        });
+      }
+    },
+    emit: (message: RuntimeBridgeTransportMessage) => {
+      for (const listener of Array.from(listeners)) {
+        listener(message);
+      }
+    },
+    dispose,
+  };
 }
 
 afterEach(() => {
@@ -306,5 +354,163 @@ describe('installed extension command runtime', () => {
     expect(
       extensionsGovernanceModule.readInstalledExtensionAuditLog().map((event) => event.type)
     ).toContain('permission-denied');
+  });
+
+  it('runs sidecar-backed manifest-v2 commands through the native-process bridge controller', async () => {
+    const configState: Record<string, unknown> = { count: 0 };
+    const api = createStubApi(configState);
+    const harness = createSidecarControllerHarness();
+    const record: extensionsModule.InstalledHostExtensionRecord = {
+      manifest: {
+        schemaVersion: '2.0',
+        kind: 'extension',
+        identity: {
+          id: 'native-sidecar-demo',
+          publisher: 'pixel-matrix.dev',
+          version: '0.1.0',
+          name: 'native-sidecar-demo',
+        },
+        hostTargets: [{ hostId: 'pmp', required: true }],
+        runtimes: [
+          {
+            runtimeId: 'sidecar.main',
+            kind: 'sidecar',
+            entry: 'bin/demo-sidecar.js',
+            bridge: 'pxp.runtime.bridge.v1',
+            dataPlane: { kinds: ['pipe'] },
+          },
+        ],
+        requiresCapabilities: [{ capabilityId: 'host.pmp.storage.config' }],
+      },
+      installedAt: 1_710_000_000_000,
+      enabled: true,
+      resolvedArtifacts: [
+        {
+          runtimeId: 'sidecar.main',
+          path: 'C:/Users/test/AppData/Roaming/PMP/pmp-durable/extensions-v2/native-sidecar-demo/current/bin/demo-sidecar.js',
+        },
+      ],
+    };
+    const artifact = record.resolvedArtifacts?.[0];
+    expect(artifact).toBeTruthy();
+
+    const resolution: ResolvedPluginRuntime = {
+      status: 'resolved',
+      pluginId: 'native-sidecar-demo',
+      manifest: record.manifest,
+      installedRecord: record,
+      hostId: 'pmp',
+      compatLayerIds: [],
+      issues: [],
+      runtime: record.manifest.runtimes[0],
+      launcher: {
+        id: 'pxp.sidecar.native-process',
+        runtimeKinds: ['sidecar'],
+        surfaceKinds: ['command'],
+        availability: 'available',
+        transport: 'sidecar-process',
+        description: 'Native sidecar launcher for command-oriented sidecar runtimes',
+      },
+      artifact: artifact!,
+      source: 'manifest-runtime',
+    };
+
+    vi.spyOn(pluginHostApiModule, 'createPluginMountApi').mockReturnValue(api);
+    vi.spyOn(pluginConfigModule, 'readPmpmPluginConfig').mockReturnValue({ ...configState });
+    vi.spyOn(pluginConfigModule, 'subscribePmpmPluginConfig').mockReturnValue(() => {});
+    const crashSpy = vi
+      .spyOn(extensionsModule, 'recordInstalledExtensionCrash')
+      .mockImplementation(() => {});
+
+    let runtimeInstanceId = '';
+
+    const runtimePromise = runResolvedInstalledExtensionCommand(
+      {
+        record,
+        resolution,
+        commandId: 'increment',
+        audioService: api.audio as never,
+        navigation: api.navigation as never,
+      },
+      {
+        now: () => 4321,
+        createPortController: (options) => {
+          runtimeInstanceId = options.runtimeInstanceId;
+          expect(options.entryPath).toBe(
+            'C:/Users/test/AppData/Roaming/PMP/pmp-durable/extensions-v2/native-sidecar-demo/current/bin/demo-sidecar.js'
+          );
+          return harness.controller;
+        },
+      }
+    );
+
+    await flushAsyncWork();
+    harness.emitRuntimeHello(runtimeInstanceId);
+    await flushAsyncWork();
+
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.init.ack',
+      pluginId: 'native-sidecar-demo',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId,
+    });
+    await flushAsyncWork();
+
+    const runtimeActivate = harness.sent.find(
+      (message) => (message as Record<string, unknown>).op === 'runtime.activate'
+    ) as Record<string, unknown> | undefined;
+    expect(runtimeActivate?.payload).toMatchObject({
+      commandId: 'increment',
+      entryPath:
+        'C:/Users/test/AppData/Roaming/PMP/pmp-durable/extensions-v2/native-sidecar-demo/current/bin/demo-sidecar.js',
+      permissions: ['storage:local'],
+      initialConfig: { count: 0 },
+    });
+
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.activate.ack',
+      pluginId: 'native-sidecar-demo',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId,
+    });
+    await flushAsyncWork();
+
+    harness.emit({
+      protocolVersion: '1.0',
+      op: 'capability.invoke.request',
+      requestId: 'cfg-patch-1',
+      capabilityId: 'host.pmp.storage.config',
+      method: 'patch',
+      payload: {
+        value: {
+          count: 1,
+          lastCommand: 'increment',
+        },
+      },
+    });
+    await flushAsyncWork();
+
+    harness.emit(
+      createRuntimeEvent(
+        {
+          bridgeVersion: '1.0',
+          pluginId: 'native-sidecar-demo',
+          runtimeId: 'sidecar.main',
+          runtimeInstanceId,
+        },
+        'command.result',
+        { ok: true }
+      )
+    );
+
+    await expect(runtimePromise).resolves.toBeUndefined();
+    expect(configState).toEqual({
+      count: 1,
+      lastCommand: 'increment',
+    });
+    expect(harness.dispose).toHaveBeenCalledWith('runtime-command-finished');
+    expect(crashSpy).not.toHaveBeenCalled();
   });
 });

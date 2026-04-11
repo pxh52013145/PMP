@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '../../i18n';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { getGlobalProcessPerfService } from '../../services/performance-control';
 import {
   getProcessPerfSnapshot,
   type ProcessPerfSnapshot,
@@ -40,7 +41,10 @@ export function PerfMonitorPage() {
     setBusy(true);
     setError(null);
     try {
-      const next = await getProcessPerfSnapshot();
+      const next = await (
+        getGlobalProcessPerfService()?.refreshSnapshot({ force: true }) ??
+        getProcessPerfSnapshot()
+      );
       if (!next) {
         setSnapshot(null);
         setError(t('pages.perf-monitor.error.unavailable'));

@@ -95,6 +95,9 @@ describe('pmpm runtime bridge snapshot', () => {
     expect(srcdoc).toContain("data.viewMountRequest && typeof data.viewMountRequest === 'object'");
     expect(srcdoc).toContain("if (data.type === 'pmpm:capabilities-revoke')");
     expect(srcdoc).toContain("type: 'pmpm:capabilities-revoke-ack'");
+    expect(srcdoc).toContain("type: 'pmpm:content-size'");
+    expect(srcdoc).toContain('new ResizeObserver');
+    expect(srcdoc).toContain('ROOT.scrollHeight');
   });
 
   it('builds runtime.hello snapshots for view and command compat carriers', () => {
@@ -200,6 +203,55 @@ describe('pmpm runtime bridge snapshot', () => {
       props: {
         surface: 'page',
         surfaceId: 'demo-page',
+      },
+    });
+  });
+
+  it('builds overlay and desktop-widget mount requests on the same queryable contract', () => {
+    const overlayMountRequest = buildPmpmViewMountRequestSnapshot({
+      pluginId: 'demo-plugin',
+      runtimeInstanceId: 'frame-1',
+      kind: 'overlay',
+      surfaceId: 'demo-overlay',
+    });
+    const desktopWidgetMountRequest = buildPmpmViewMountRequestSnapshot({
+      pluginId: 'demo-plugin',
+      runtimeInstanceId: 'frame-1',
+      kind: 'desktop-widget',
+      surfaceId: 'demo-widget',
+    });
+
+    expect(overlayMountRequest).toEqual({
+      bridgeVersion: 'compat.pmpm.bridge.v1',
+      op: 'view.mount.request',
+      pluginId: 'demo-plugin',
+      runtimeId: 'compat.pmpm.main',
+      runtimeInstanceId: 'frame-1',
+      requestId: 'view-mount:frame-1:overlay:demo-overlay',
+      viewInstanceId: 'frame-1:overlay:demo-overlay',
+      viewId: 'demo-overlay',
+      viewType: 'overlay',
+      surfaceSlot: 'host.pmp.surface.overlay',
+      props: {
+        surface: 'overlay',
+        surfaceId: 'demo-overlay',
+      },
+    });
+
+    expect(desktopWidgetMountRequest).toEqual({
+      bridgeVersion: 'compat.pmpm.bridge.v1',
+      op: 'view.mount.request',
+      pluginId: 'demo-plugin',
+      runtimeId: 'compat.pmpm.main',
+      runtimeInstanceId: 'frame-1',
+      requestId: 'view-mount:frame-1:desktop-widget:demo-widget',
+      viewInstanceId: 'frame-1:desktop-widget:demo-widget',
+      viewId: 'demo-widget',
+      viewType: 'desktop-widget',
+      surfaceSlot: 'host.pmp.surface.desktop-widget',
+      props: {
+        surface: 'desktop-widget',
+        surfaceId: 'demo-widget',
       },
     });
   });

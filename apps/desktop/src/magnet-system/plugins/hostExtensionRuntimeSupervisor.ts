@@ -41,7 +41,7 @@ function notifyListeners(): void {
     try {
       listener();
     } catch (error) {
-      telemetry.warn('runtime_restart.listener.failed', {
+      telemetry.warn('plugin.governance.restart-listener.failed', {
         message: readErrorMessage(error),
       });
     }
@@ -109,6 +109,15 @@ export function requestHostExtensionRuntimeRestart(
   if (kind === 'pmpm') {
     clearPmpmPluginRuntimeCache(pluginId);
   }
+
+  telemetry.info('plugin.governance.runtime-restart.requested', {
+    fields: {
+      kind,
+      pluginId,
+      reason: options.reason ?? null,
+      requestedAtMs: now,
+    },
+  });
 
   void broadcastDataUpdate(STORAGE_KEY_BY_KIND[kind], {
     pluginId,

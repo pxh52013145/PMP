@@ -39,6 +39,27 @@ const SAMPLE_PMPM_MANIFEST: PmpmManifest = {
         height: 360,
       },
     ],
+    shellSurfaces: [
+      {
+        kind: 'shell-surface',
+        id: 'demo-overlay',
+        title: 'Demo Overlay',
+        surfaceType: 'overlay',
+        width: 480,
+        height: 320,
+        pointerPolicy: 'capture-input',
+        dismissOnEscape: true,
+      },
+      {
+        kind: 'shell-surface',
+        id: 'demo-widget',
+        title: 'Demo Widget',
+        surfaceType: 'desktop-widget',
+        width: 320,
+        height: 240,
+        pointerPolicy: 'passthrough',
+      },
+    ],
     commands: [
       {
         kind: 'command',
@@ -112,11 +133,37 @@ describe('plugin compat pmpm', () => {
     });
     expect((converted.contributes?.host as { pmp?: unknown })?.pmp).toMatchObject({
       pages: [{ id: 'demo-page' }],
+      shellSurfaces: [
+        { id: 'demo-overlay', surfaceType: 'overlay' },
+        { id: 'demo-widget', surfaceType: 'desktop-widget' },
+      ],
       magnets: { defaultVariant: 'compact' },
     });
     expect(converted.compat?.[0]).toMatchObject({
       compatLayerId: 'compat.pmpm',
     });
+  });
+
+  it('rejects invalid shell surface descriptors in compat manifests', () => {
+    expect(() =>
+      validatePmpmManifest({
+        ...SAMPLE_PMPM_MANIFEST,
+        contributions: {
+          ...SAMPLE_PMPM_MANIFEST.contributions,
+          shellSurfaces: [
+            {
+              kind: 'shell-surface',
+              id: 'bad-shell',
+              title: 'Bad Shell',
+              surfaceType: 'overlay',
+              pointerPolicy: 'hover-only',
+            },
+          ],
+        },
+      })
+    ).toThrow(
+      'manifest.contributions.shellSurfaces["bad-shell"].pointerPolicy must be "capture-input" or "passthrough"'
+    );
   });
 
   it('projects sidecar-oriented PMPM runtimes into manifest-v2 native-process metadata', () => {

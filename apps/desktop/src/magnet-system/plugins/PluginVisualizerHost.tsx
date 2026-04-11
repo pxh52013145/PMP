@@ -24,6 +24,15 @@ import {
   subscribePmpmSandbox,
 } from './pmpmSandboxConfig';
 import { usePmpmRuntimeRestartToken } from './usePmpmRuntimeRestartToken';
+import {
+  completePluginSurfaceMount,
+  createPluginRuntimeResolveTelemetryContext,
+  createPluginSurfaceTelemetryContext,
+  failPluginSurfaceMount,
+  reportPluginRuntimeResolve,
+  startPluginSurfaceMount,
+  type PluginLifecycleTelemetryHandle,
+} from './pluginLifecycleTelemetry';
 
 export function PluginVisualizerHost({
   pluginId,
@@ -39,6 +48,9 @@ export function PluginVisualizerHost({
   const navigationService = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
+  const surfaceMountTelemetryRef = useRef<PluginLifecycleTelemetryHandle | null>(null);
+  const reportedRuntimeResolveKeyRef = useRef<string | null>(null);
+  const reportedMountFailureKeyRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const restartToken = usePmpmRuntimeRestartToken(pluginId);
 
@@ -85,6 +97,51 @@ export function PluginVisualizerHost({
     plugin && enabled
       ? getResolvedPmpmLauncherAdapterError(runtimeResolution)
       : null;
+  const surfaceTelemetryContext = useMemo(
+    () =>
+      createPluginSurfaceTelemetryContext({
+        pluginId,
+        sourceKind: 'pmpm',
+        hostLabel: 'PluginVisualizerHost',
+        launcherId:
+          runtimeResolution?.status === 'resolved' ? runtimeResolution.launcher.id : null,
+        surfaceKind: 'visualizer',
+        surfaceId: visualizerId,
+      }),
+    [pluginId, runtimeResolution, visualizerId]
+  );
+  const runtimeResolveTelemetryContext = useMemo(
+    () =>
+      createPluginRuntimeResolveTelemetryContext({
+        pluginId,
+        sourceKind: 'pmpm',
+        hostLabel: 'PluginVisualizerHost',
+        surfaceKind: 'visualizer',
+        surfaceId: visualizerId,
+        cause: 'view',
+      }),
+    [pluginId, visualizerId]
+  );
+  const runtimeResolveTelemetryKey = useMemo(() => {
+    if (!enabled) return null;
+    const resolutionStatus = runtimeResolution?.status ?? 'missing-record';
+    const runtimeId =
+      runtimeResolution?.status === 'resolved'
+        ? runtimeResolution.runtime.runtimeId
+        : runtimeResolution?.runtime?.runtimeId ?? '';
+    const launcherId =
+      runtimeResolution?.status === 'resolved' ? runtimeResolution.launcher.id : '';
+
+    return [
+      pluginId,
+      'visualizer',
+      visualizerId,
+      resolutionStatus,
+      runtimeId,
+      launcherId,
+      runtimeResolution?.issues.join('|') ?? '',
+    ].join('::');
+  }, [enabled, pluginId, runtimeResolution, visualizerId]);
 
   const navigation = useMemo(() => {
     return {
@@ -110,6 +167,60 @@ export function PluginVisualizerHost({
   }, [audioService, commands, keybindings, navigation, permissions, pluginId]);
 
   useEffect(() => {
+    if (!enabled || !runtimeResolveTelemetryKey) {
+      reportedRuntimeResolveKeyRef.current = null;
+      return;
+    }
+
+    if (reportedRuntimeResolveKeyRef.current === runtimeResolveTelemetryKey) {
+      return;
+    }
+
+    reportedRuntimeResolveKeyRef.current = runtimeResolveTelemetryKey;
+    reportPluginRuntimeResolve({
+      context: runtimeResolveTelemetryContext,
+      resolution: runtimeResolution,
+      extraFields: {
+        hostId: 'pmp',
+        preferCompatSandbox: sandboxEnabled,
+      },
+    });
+  }, [
+    enabled,
+    runtimeResolveTelemetryContext,
+    runtimeResolveTelemetryKey,
+    runtimeResolution,
+    sandboxEnabled,
+  ]);
+
+  useEffect(() => {
+    if (!enabled || !runtimeResolutionError) {
+      reportedMountFailureKeyRef.current = null;
+      return;
+    }
+
+    const failureKey = `${pluginId}:${visualizerId}:${runtimeResolutionError}`;
+    if (reportedMountFailureKeyRef.current === failureKey) {
+      return;
+    }
+
+    reportedMountFailureKeyRef.current = failureKey;
+    failPluginSurfaceMount(surfaceTelemetryContext, runtimeResolutionError, {
+      extraFields: {
+        failureStage: 'resolve',
+        mountMode: launcherAdapter?.mode ?? null,
+      },
+    });
+  }, [
+    enabled,
+    launcherAdapter?.mode,
+    pluginId,
+    runtimeResolutionError,
+    surfaceTelemetryContext,
+    visualizerId,
+  ]);
+
+  useEffect(() => {
     if (!enabled) return;
     if (!launcherAdapter || launcherAdapter.mode !== 'inline') return;
     const container = containerRef.current;
@@ -117,6 +228,11 @@ export function PluginVisualizerHost({
 
     let cancelled = false;
     setError(null);
+    surfaceMountTelemetryRef.current = startPluginSurfaceMount(surfaceTelemetryContext, {
+      extraFields: {
+        mountMode: 'inline',
+      },
+    });
 
     void launcherAdapter
       .mountSurface({
@@ -129,9 +245,26 @@ export function PluginVisualizerHost({
       .then((cleanup) => {
         if (cancelled) return;
         cleanupRef.current = typeof cleanup === 'function' ? cleanup : null;
+        if (surfaceMountTelemetryRef.current) {
+          completePluginSurfaceMount(surfaceMountTelemetryRef.current, {
+            extraFields: {
+              mountMode: 'inline',
+            },
+          });
+          surfaceMountTelemetryRef.current = null;
+        }
       })
       .catch((err) => {
         if (cancelled) return;
+        if (surfaceMountTelemetryRef.current) {
+          failPluginSurfaceMount(surfaceMountTelemetryRef.current, err, {
+            extraFields: {
+              failureStage: 'mount',
+              mountMode: 'inline',
+            },
+          });
+          surfaceMountTelemetryRef.current = null;
+        }
         recordPmpmPluginCrash(pluginId, err, 'visualizer');
         clearPmpmPluginRuntimeCache(pluginId);
         setError(err instanceof Error ? err.message : String(err));
@@ -139,6 +272,7 @@ export function PluginVisualizerHost({
 
     return () => {
       cancelled = true;
+      surfaceMountTelemetryRef.current = null;
       try {
         cleanupRef.current?.();
       } finally {
@@ -146,7 +280,7 @@ export function PluginVisualizerHost({
         container.innerHTML = '';
       }
     };
-  }, [api, enabled, launcherAdapter, pluginId, restartToken, visualizerId]);
+  }, [api, enabled, launcherAdapter, pluginId, restartToken, surfaceTelemetryContext, visualizerId]);
 
   if (!plugin) {
     return (

@@ -23,6 +23,8 @@ This folder contains demo plugins used to validate the plugin runtime, protocol 
   - Manifest-v2 sidecar fixture for native-process handshake, capability invoke, and crash cleanup.
 - `sidecar-echo-demo`
   - Shares the same sidecar script, but keeps `manifest.v2.json` as a resolver/runtime-bridge fixture.
+- `plugin-starter`
+  - Reusable manifest-v2 starter scaffold for new page/settings/magnet plugins.
 
 ## Packaging
 - `pnpm plugin:pack:stream-demo`

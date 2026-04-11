@@ -27,6 +27,7 @@ pub const DEBUG_COMMAND_NAMES: &[&str] = &[
 pub const MEDIA_COMMAND_NAMES: &[&str] = &["background_import_media", "ornament_import_media"];
 
 pub const PLUGIN_COMMAND_NAMES: &[&str] = &[
+    "plugin_read_install_source",
     "plugin_sidecar_bridge_open",
     "plugin_sidecar_bridge_send",
     "plugin_sidecar_bridge_close",
@@ -38,6 +39,9 @@ pub const WINDOW_COMMAND_NAMES: &[&str] = &[
     "close_all_editor_windows",
     "open_plugin_window",
     "close_plugin_window",
+    "open_plugin_shell_surface",
+    "dismiss_plugin_shell_surface",
+    "destroy_plugin_shell_surface",
     "open_vst_manager_window",
     "close_vst_manager_window",
     "set_editor_blur_enabled",
@@ -337,6 +341,7 @@ macro_rules! pmp_generate_handler {
             crate::commands::debug::debug_telemetry_query,
             crate::commands::media::background_import_media,
             crate::commands::media::ornament_import_media,
+            crate::commands::plugins::plugin_read_install_source,
             crate::commands::plugins::plugin_sidecar_bridge_open,
             crate::commands::plugins::plugin_sidecar_bridge_send,
             crate::commands::plugins::plugin_sidecar_bridge_close,
@@ -345,6 +350,9 @@ macro_rules! pmp_generate_handler {
             crate::commands::windows::close_all_editor_windows,
             crate::commands::windows::open_plugin_window,
             crate::commands::windows::close_plugin_window,
+            crate::commands::windows::open_plugin_shell_surface,
+            crate::commands::windows::dismiss_plugin_shell_surface,
+            crate::commands::windows::destroy_plugin_shell_surface,
             crate::commands::windows::open_vst_manager_window,
             crate::commands::windows::close_vst_manager_window,
             crate::commands::windows::set_editor_blur_enabled,

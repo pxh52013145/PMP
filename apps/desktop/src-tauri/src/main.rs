@@ -8,6 +8,7 @@ mod app_runtime;
 mod asio_diag;
 mod audio;
 mod audio_smoke;
+mod backend_telemetry;
 mod background_media;
 mod commands;
 mod debug_config;

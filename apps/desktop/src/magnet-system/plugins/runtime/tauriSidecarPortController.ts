@@ -76,7 +76,7 @@ export async function createTauriPmpmBridgeSidecarPortController(
       {
         moduleId: 'plugins',
         component: 'sidecar.bridge.open',
-        event: 'plugin.sidecar.bridge.open',
+        event: 'plugin.sidecar.invoke.open',
       }
     );
     sessionId = response.sessionId;
@@ -99,7 +99,7 @@ export async function createTauriPmpmBridgeSidecarPortController(
           await invokeWithTelemetry('plugin_sidecar_bridge_close', { sessionId, reason }, {
             moduleId: 'plugins',
             component: 'sidecar.bridge.close',
-            event: 'plugin.sidecar.bridge.close',
+            event: 'plugin.sidecar.invoke.close',
             failureLevel: 'warn',
           }).catch(() => undefined);
         }
@@ -130,7 +130,7 @@ export async function createTauriPmpmBridgeSidecarPortController(
           {
             moduleId: 'plugins',
             component: 'sidecar.bridge.send',
-            event: 'plugin.sidecar.bridge.send',
+            event: 'plugin.sidecar.invoke.send',
           }
         );
       },

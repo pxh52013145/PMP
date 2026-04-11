@@ -1,23 +1,32 @@
+import React from 'react';
 import type { KernelModule } from '../../kernel';
 import type { AppEvents } from '../../contracts/events';
 import type {
   CommandContribution,
   KeybindingContribution,
+  PageContribution,
+  SettingsPanelContribution,
+  VisualizerContribution,
+  WindowContribution,
 } from '../../contracts/contributions';
-import { AUDIO_ENGINE_SERVICE_TOKEN } from '../../services/audio';
-import { COMMANDS_SERVICE_TOKEN } from '../../services/commands';
-import { KEYBINDINGS_SERVICE_TOKEN } from '../../services/keybindings';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import {
   loadInstalledExtensions,
-  recordInstalledExtensionCrash,
   subscribeInstalledExtensions,
 } from './extensions';
-import { resolveInstalledExtensionRuntime } from './runtime';
-import { runResolvedInstalledExtensionCommand } from './runtime/extensionCommandRuntime';
-import { INSTALLED_EXTENSION_COMMAND_LAUNCHERS } from './runtime/installedExtensionHostLaunchers';
 import type { LocalizedTextDescriptor } from '@pixel-matrix/plugin-platform-contracts';
+import {
+  closePluginWindow,
+  openPluginWindow,
+} from '../../utils/pluginWindows';
+import {
+  InstalledExtensionPageHost,
+  InstalledExtensionSettingsHost,
+} from './InstalledExtensionSurfaceHost';
+import { readInstalledExtensionPmpHostContributions } from './installedExtensionHostPmp';
+import { INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN } from './installedExtensionRuntimeManager';
+import { SHELL_SURFACE_MANAGER_TOKEN } from './shellSurfaceManager';
 
 const telemetry = getTelemetryLogger('extensions', 'extensionContributionsModule');
 
@@ -31,6 +40,40 @@ function buildExtensionCommandContributionId(pluginId: string, commandId: string
 
 function buildExtensionKeybindingContributionId(pluginId: string, keybindingId: string): string {
   return `extv2:${pluginId}:keybinding:${keybindingId}`;
+}
+
+function buildExtensionPageContributionId(
+  pluginId: string,
+  pageId: string
+): PageContribution['id'] {
+  return `extv2:${pluginId}:page:${pageId}` as PageContribution['id'];
+}
+
+function buildExtensionSettingsPanelContributionId(pluginId: string, panelId: string): string {
+  return `extv2:${pluginId}:settings:${panelId}`;
+}
+
+function buildExtensionWindowContributionId(
+  pluginId: string,
+  windowId: string
+): WindowContribution['id'] {
+  return `extv2:${pluginId}:window:${windowId}`;
+}
+
+function buildExtensionWindowLabel(pluginId: string, windowId: string): string {
+  return `plugin-extv2-${pluginId}-${windowId}`;
+}
+
+function buildExtensionWindowRoute(pluginId: string, windowId: string): string {
+  return `/#/plugin-window/extv2/${pluginId}/${windowId}`;
+}
+
+function buildExtensionVisualizerContributionId(pluginId: string, visualizerId: string): string {
+  return `extv2:${pluginId}:visualizer:${visualizerId}`;
+}
+
+function buildExtensionShellSurfaceCommandId(pluginId: string, surfaceId: string): string {
+  return `extv2:${pluginId}:shell-surface:${surfaceId}:summon`;
 }
 
 function readLocalizedText(value: LocalizedTextDescriptor | undefined, fallback: string): string {
@@ -52,6 +95,8 @@ export function createInstalledExtensionContributionsModule(): KernelModule<AppE
   return {
     id: 'installed-extension-contributions',
     activate: ({ contributions, services }) => {
+      const runtimeManager = services.get(INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN);
+      const shellSurfaceManager = services.get(SHELL_SURFACE_MANAGER_TOKEN);
       const unregisters = new Map<string, () => void>();
 
       const tryUnregister = (contributionId: string, unregister: () => void) => {
@@ -71,6 +116,8 @@ export function createInstalledExtensionContributionsModule(): KernelModule<AppE
 
         for (const record of installed) {
           const pluginId = record.manifest.identity.id;
+          const pluginName =
+            record.manifest.identity.displayName ?? record.manifest.identity.name;
           if (record.enabled === false) continue;
 
           const declaredCommands = record.manifest.contributes?.core?.commands ?? [];
@@ -92,42 +139,18 @@ export function createInstalledExtensionContributionsModule(): KernelModule<AppE
               source: 'plugin',
               metadata: {
                 pluginId,
-                pluginName:
-                  record.manifest.identity.displayName ?? record.manifest.identity.name,
+                pluginName,
                 commandId: command.id,
                 manifestSchemaVersion: record.manifest.schemaVersion,
                 ...(command.metadata ?? {}),
               },
               run: async (args?: unknown) => {
-                const audioEngine = services.get(AUDIO_ENGINE_SERVICE_TOKEN);
-                const audioService = audioEngine.getSnapshot().audioService;
-                const commands = services.getOptional(COMMANDS_SERVICE_TOKEN);
-                const navigation = services.get(NAVIGATION_SERVICE_TOKEN);
-                const keybindings = services.getOptional(KEYBINDINGS_SERVICE_TOKEN);
-
-                try {
-                  const runtimeResolution = resolveInstalledExtensionRuntime(record, {
-                    hostId: 'pmp',
-                    surfaceKind: 'command',
-                    preferCommandWorker: true,
-                    supportedLauncherIds: [...INSTALLED_EXTENSION_COMMAND_LAUNCHERS],
-                  });
-
-                  await runResolvedInstalledExtensionCommand({
-                    record,
-                    resolution: runtimeResolution,
-                    commandId: command.id,
-                    args,
-                    hostLabel: 'ExtensionCommand',
-                    audioService,
-                    commands,
-                    navigation,
-                    keybindings,
-                  });
-                } catch (error) {
-                  recordInstalledExtensionCrash(pluginId, error);
-                  throw error;
-                }
+                await runtimeManager.runCommand({
+                  record,
+                  commandId: command.id,
+                  args,
+                  hostLabel: 'ExtensionCommand',
+                });
               },
             };
 
@@ -164,6 +187,227 @@ export function createInstalledExtensionContributionsModule(): KernelModule<AppE
 
             const unregister = contributions.register(contribution, { replace: true });
             unregisters.set(keybindingKey, unregister);
+          }
+
+          const hostContributions = readInstalledExtensionPmpHostContributions(record);
+
+          for (const page of hostContributions?.pages ?? []) {
+            const pageKey = buildExtensionPageContributionId(pluginId, page.id);
+            nextIds.add(pageKey);
+
+            const existingUnregister = unregisters.get(pageKey);
+            if (existingUnregister) {
+              tryUnregister(pageKey, existingUnregister);
+              unregisters.delete(pageKey);
+            }
+
+            const contribution: PageContribution = {
+              kind: 'page',
+              id: pageKey,
+              title: `${pluginName}: ${page.title}`,
+              render: () =>
+                React.createElement(InstalledExtensionPageHost, {
+                  pluginId,
+                  pageId: page.id,
+                }),
+              source: 'plugin',
+              order: page.order,
+              group: page.group ?? pluginId,
+              tags: page.tags,
+              metadata: {
+                pluginId,
+                pluginName,
+                pageId: page.id,
+                ...(page.metadata ?? {}),
+              },
+            };
+
+            const unregister = contributions.register(contribution, { replace: true });
+            unregisters.set(pageKey, unregister);
+          }
+
+          for (const panel of hostContributions?.settingsPanels ?? []) {
+            const panelKey = buildExtensionSettingsPanelContributionId(pluginId, panel.id);
+            nextIds.add(panelKey);
+
+            const existingUnregister = unregisters.get(panelKey);
+            if (existingUnregister) {
+              tryUnregister(panelKey, existingUnregister);
+              unregisters.delete(panelKey);
+            }
+
+            const contribution: SettingsPanelContribution = {
+              kind: 'settings-panel',
+              id: panelKey,
+              title: `${pluginName}: ${panel.title}`,
+              description: panel.description,
+              source: 'plugin',
+              order: panel.order,
+              group: panel.group ?? pluginId,
+              tags: panel.tags,
+              metadata: {
+                pluginId,
+                pluginName,
+                panelId: panel.id,
+                ...(panel.metadata ?? {}),
+                settingsSection: 'plugins',
+              },
+              render: () =>
+                React.createElement(InstalledExtensionSettingsHost, {
+                  pluginId,
+                  panelId: panel.id,
+                }),
+            };
+
+            const unregister = contributions.register(contribution, { replace: true });
+            unregisters.set(panelKey, unregister);
+          }
+
+          for (const window of hostContributions?.windows ?? []) {
+            const windowKey = buildExtensionWindowContributionId(pluginId, window.id);
+            nextIds.add(windowKey);
+
+            const existingUnregister = unregisters.get(windowKey);
+            if (existingUnregister) {
+              tryUnregister(windowKey, existingUnregister);
+              unregisters.delete(windowKey);
+            }
+
+            const title = `${pluginName}: ${window.title}`;
+            const contribution: WindowContribution = {
+              kind: 'window',
+              id: windowKey,
+              title,
+              label: buildExtensionWindowLabel(pluginId, window.id),
+              route: buildExtensionWindowRoute(pluginId, window.id),
+              source: 'plugin',
+              metadata: {
+                pluginId,
+                pluginName,
+                windowId: window.id,
+                ...(window.metadata ?? {}),
+              },
+              open: async (options) => {
+                const safeOptions =
+                  options && typeof options === 'object' && !Array.isArray(options)
+                    ? (options as Record<string, unknown>)
+                    : undefined;
+
+                await openPluginWindow({
+                  sourceKind: 'extv2',
+                  pluginId,
+                  windowId: window.id,
+                  title:
+                    typeof safeOptions?.title === 'string' && safeOptions.title.length > 0
+                      ? safeOptions.title
+                      : title,
+                  width:
+                    typeof safeOptions?.width === 'number' && Number.isFinite(safeOptions.width)
+                      ? safeOptions.width
+                      : window.width,
+                  height:
+                    typeof safeOptions?.height === 'number' && Number.isFinite(safeOptions.height)
+                      ? safeOptions.height
+                      : window.height,
+                  x:
+                    typeof safeOptions?.x === 'number' && Number.isFinite(safeOptions.x)
+                      ? safeOptions.x
+                      : undefined,
+                  y:
+                    typeof safeOptions?.y === 'number' && Number.isFinite(safeOptions.y)
+                      ? safeOptions.y
+                      : undefined,
+                });
+              },
+              close: async () => {
+                await closePluginWindow(pluginId, window.id, 'extv2');
+              },
+            };
+
+            const unregister = contributions.register(contribution, { replace: true });
+            unregisters.set(windowKey, unregister);
+          }
+
+          for (const shellSurface of hostContributions?.shellSurfaces ?? []) {
+            const surfaceCommandKey = buildExtensionShellSurfaceCommandId(pluginId, shellSurface.id);
+            nextIds.add(surfaceCommandKey);
+
+            const existingUnregister = unregisters.get(surfaceCommandKey);
+            if (existingUnregister) {
+              tryUnregister(surfaceCommandKey, existingUnregister);
+              unregisters.delete(surfaceCommandKey);
+            }
+
+            const contribution: CommandContribution = {
+              kind: 'command',
+              id: surfaceCommandKey,
+              title: `${pluginName}: ${shellSurface.title}`,
+              description: shellSurface.description,
+              source: 'plugin',
+              order: shellSurface.order,
+              group: shellSurface.group ?? pluginId,
+              tags: shellSurface.tags,
+              metadata: {
+                pluginId,
+                pluginName,
+                surfaceId: shellSurface.id,
+                surfaceType: shellSurface.surfaceType,
+                ...(shellSurface.metadata ?? {}),
+              },
+              run: async () => {
+                await shellSurfaceManager.summonSurface({
+                  sourceKind: 'extv2',
+                  pluginId,
+                  pluginName,
+                  enabled: true,
+                  descriptor: shellSurface,
+                });
+              },
+            };
+
+            const unregister = contributions.register(contribution, { replace: true });
+            unregisters.set(surfaceCommandKey, unregister);
+          }
+
+          for (const visualizer of hostContributions?.visualizers ?? []) {
+            const visualizerKey = buildExtensionVisualizerContributionId(pluginId, visualizer.id);
+            nextIds.add(visualizerKey);
+
+            const existingUnregister = unregisters.get(visualizerKey);
+            if (existingUnregister) {
+              tryUnregister(visualizerKey, existingUnregister);
+              unregisters.delete(visualizerKey);
+            }
+
+            const contribution: VisualizerContribution = {
+              kind: 'visualizer',
+              id: visualizerKey,
+              title: `${pluginName}: ${visualizer.title}`,
+              description: visualizer.description,
+              source: 'plugin',
+              order: visualizer.order,
+              group: visualizer.group ?? pluginId,
+              tags: visualizer.tags,
+              inputs: visualizer.inputs,
+              metadata: {
+                pluginId,
+                pluginName,
+                visualizerId: visualizer.id,
+                ...(visualizer.metadata ?? {}),
+              },
+              open: async () => {
+                services
+                  .get(NAVIGATION_SERVICE_TOKEN)
+                  .navigateTo('plugin-visualizer', {
+                    pluginId,
+                    visualizerId: visualizer.id,
+                    sourceKind: 'extv2',
+                  });
+              },
+            };
+
+            const unregister = contributions.register(contribution, { replace: true });
+            unregisters.set(visualizerKey, unregister);
           }
         }
 

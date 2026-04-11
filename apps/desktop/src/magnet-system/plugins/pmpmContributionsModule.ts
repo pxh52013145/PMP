@@ -27,10 +27,15 @@ import { requestHostExtensionRuntimeRestart } from './hostExtensionRuntimeSuperv
 import { getPmpmSandboxRuntimeEnabled } from './pmpmSandboxConfig';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import {
+  createPluginRuntimeResolveTelemetryContext,
+  reportPluginRuntimeResolve,
+} from './pluginLifecycleTelemetry';
+import {
   getResolvedPmpmLauncherAdapterError,
   resolveInstalledPmpmPluginRuntime,
   runResolvedPmpmPluginCommand,
 } from './runtime';
+import { SHELL_SURFACE_MANAGER_TOKEN } from './shellSurfaceManager';
 
 const telemetry = getTelemetryLogger('pmpm', 'pmpmContributionsModule');
 
@@ -55,21 +60,26 @@ function buildPluginWindowId(pluginId: string, windowId: string): WindowContribu
 }
 
 function buildPluginWindowLabel(pluginId: string, windowId: string): string {
-  return `plugin-${pluginId}-${windowId}`;
+  return `plugin-pmpm-${pluginId}-${windowId}`;
 }
 
 function buildPluginWindowRoute(pluginId: string, windowId: string): string {
-  return `/#/plugin-window/${pluginId}/${windowId}`;
+  return `/#/plugin-window/pmpm/${pluginId}/${windowId}`;
 }
 
 function buildPluginVisualizerId(pluginId: string, visualizerId: string): string {
   return `pmpm:${pluginId}:visualizer:${visualizerId}`;
 }
 
+function buildPluginShellSurfaceCommandId(pluginId: string, surfaceId: string): string {
+  return `pmpm:${pluginId}:shell-surface:${surfaceId}:summon`;
+}
+
 export function createPmpmContributionsModule(): KernelModule<AppEvents> {
   return {
     id: 'pmpm-contributions',
     activate: ({ contributions, services }) => {
+      const shellSurfaceManager = services.get(SHELL_SURFACE_MANAGER_TOKEN);
       const unregisters = new Map<string, () => void>();
       const warnCleanupFailure = (
         event: string,
@@ -197,6 +207,7 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
                 const overrideY = safeOptions?.y;
 
                 await openPluginWindow({
+                  sourceKind: 'pmpm',
                   pluginId,
                   windowId: window.id,
                   title: typeof overrideTitle === 'string' && overrideTitle.length > 0 ? overrideTitle : title,
@@ -211,12 +222,54 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
                 });
               },
               close: async () => {
-                await closePluginWindow(pluginId, window.id);
+                await closePluginWindow(pluginId, window.id, 'pmpm');
               },
             };
 
             const unregister = contributions.register(contribution, { replace: true });
             unregisters.set(windowKey, unregister);
+          }
+
+          const declaredShellSurfaces = plugin.manifest.contributions?.shellSurfaces ?? [];
+          for (const shellSurface of declaredShellSurfaces) {
+            const surfaceCommandKey = buildPluginShellSurfaceCommandId(pluginId, shellSurface.id);
+            nextIds.add(surfaceCommandKey);
+
+            const existingUnregister = unregisters.get(surfaceCommandKey);
+            if (existingUnregister) {
+              tryUnregister(surfaceCommandKey, 'command', existingUnregister);
+              unregisters.delete(surfaceCommandKey);
+            }
+
+            const contribution: CommandContribution = {
+              kind: 'command',
+              id: surfaceCommandKey,
+              title: `${plugin.manifest.metadata.name}: ${shellSurface.title}`,
+              description: shellSurface.description,
+              source: 'plugin',
+              order: shellSurface.order,
+              group: shellSurface.group ?? plugin.manifest.metadata.id,
+              tags: shellSurface.tags,
+              metadata: {
+                pluginId,
+                pluginName: plugin.manifest.metadata.name,
+                surfaceId: shellSurface.id,
+                surfaceType: shellSurface.surfaceType,
+                ...(shellSurface.metadata ?? {}),
+              },
+              run: async () => {
+                await shellSurfaceManager.summonSurface({
+                  sourceKind: 'pmpm',
+                  pluginId,
+                  pluginName: plugin.manifest.metadata.name,
+                  enabled: true,
+                  descriptor: shellSurface,
+                });
+              },
+            };
+
+            const unregister = contributions.register(contribution, { replace: true });
+            unregisters.set(surfaceCommandKey, unregister);
           }
 
           const declared = plugin.manifest.contributions?.commands ?? [];
@@ -252,10 +305,27 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
                 const keybindings = services.getOptional(KEYBINDINGS_SERVICE_TOKEN);
 
                 try {
+                  const preferSandbox = getPmpmSandboxRuntimeEnabled();
                   const runtimeResolution = resolveInstalledPmpmPluginRuntime(pluginId, {
-                    preferSandbox: getPmpmSandboxRuntimeEnabled(),
+                    preferSandbox,
                     surfaceKind: 'command',
                     preferCommandWorker: true,
+                  });
+                  reportPluginRuntimeResolve({
+                    context: createPluginRuntimeResolveTelemetryContext({
+                      pluginId,
+                      sourceKind: 'pmpm',
+                      hostLabel: 'PluginCommand',
+                      surfaceKind: 'command',
+                      surfaceId: command.id,
+                      cause: 'command',
+                    }),
+                    resolution: runtimeResolution,
+                    extraFields: {
+                      hostId: 'pmp',
+                      preferCompatSandbox: preferSandbox,
+                      preferCommandWorker: true,
+                    },
                   });
                   const runtimeResolutionError =
                     getResolvedPmpmLauncherAdapterError(runtimeResolution);
@@ -354,7 +424,11 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
               open: async () => {
                 services
                   .get(NAVIGATION_SERVICE_TOKEN)
-                  .navigateTo('plugin-visualizer', { pluginId, visualizerId: visualizer.id });
+                  .navigateTo('plugin-visualizer', {
+                    pluginId,
+                    visualizerId: visualizer.id,
+                    sourceKind: 'pmpm',
+                  });
               },
             };
 

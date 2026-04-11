@@ -22,6 +22,21 @@ export interface WindowContributionDescriptor extends OrderedContributionDescrip
   height?: number;
 }
 
+export type ShellSurfaceType = 'overlay' | 'desktop-widget';
+
+export type ShellSurfacePointerPolicy = 'capture-input' | 'passthrough';
+
+export interface ShellSurfaceContributionDescriptor extends OrderedContributionDescriptor {
+  kind: 'shell-surface';
+  surfaceType: ShellSurfaceType;
+  width?: number;
+  height?: number;
+  alwaysOnTop?: boolean;
+  focusable?: boolean;
+  dismissOnEscape?: boolean;
+  pointerPolicy?: ShellSurfacePointerPolicy;
+}
+
 export interface SettingsPanelContributionDescriptor extends OrderedContributionDescriptor {
   kind: 'settings-panel';
 }
@@ -49,6 +64,7 @@ export interface KeybindingContributionDescriptor {
 export type ExtensionContributionDescriptor =
   | PageContributionDescriptor
   | WindowContributionDescriptor
+  | ShellSurfaceContributionDescriptor
   | SettingsPanelContributionDescriptor
   | VisualizerContributionDescriptor
   | CommandContributionDescriptor

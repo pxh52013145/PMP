@@ -54,6 +54,7 @@ export type MemoryGovernancePlan = {
 };
 
 export type MemoryGovernanceRunResult = {
+  reason: MemoryGovernanceReason;
   snapshot: MemoryGovernanceSnapshot;
   plan: MemoryGovernancePlan;
   executed: MemoryGovernanceAction[];

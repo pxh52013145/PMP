@@ -67,7 +67,7 @@ impl TelemetryCore {
     }
 
     #[cfg(test)]
-    fn new_for_tests(root_dir: std::path::PathBuf, policy: TelemetryPolicy) -> Self {
+    pub(crate) fn new_for_tests(root_dir: std::path::PathBuf, policy: TelemetryPolicy) -> Self {
         let (store, last_error) = match TelemetryStore::new_for_root_dir(root_dir) {
             Ok(store) => (Some(store), None),
             Err(error) => (None, Some(error)),
@@ -262,6 +262,7 @@ fn normalize_path(path: &Path) -> String {
 #[derive(Debug)]
 struct NormalizedTelemetryQuery {
     module_ids: BTreeSet<String>,
+    event_prefixes: Vec<String>,
     levels: Vec<crate::telemetry_contract::TelemetryLevel>,
     kinds: Vec<crate::telemetry_contract::TelemetryKind>,
     search_text: Option<String>,
@@ -284,6 +285,19 @@ fn normalize_query_input(input: TelemetryQueryInput) -> NormalizedTelemetryQuery
         })
         .collect::<BTreeSet<_>>();
 
+    let event_prefixes = input
+        .event_prefixes
+        .into_iter()
+        .filter_map(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_lowercase())
+            }
+        })
+        .collect::<Vec<_>>();
+
     let search_text = input.search_text.and_then(|value| {
         let trimmed = value.trim();
         if trimmed.is_empty() {
@@ -301,6 +315,7 @@ fn normalize_query_input(input: TelemetryQueryInput) -> NormalizedTelemetryQuery
 
     NormalizedTelemetryQuery {
         module_ids,
+        event_prefixes,
         levels: input.levels,
         kinds: input.kinds,
         search_text,
@@ -323,6 +338,16 @@ fn record_matches_query(record: &TelemetryRecord, query: &NormalizedTelemetryQue
     }
     if !query.module_ids.is_empty() && !query.module_ids.contains(&record.module_id) {
         return false;
+    }
+    if !query.event_prefixes.is_empty() {
+        let record_event = record.event.to_lowercase();
+        if !query
+            .event_prefixes
+            .iter()
+            .any(|prefix| record_event.starts_with(prefix))
+        {
+            return false;
+        }
     }
     if !query.levels.is_empty() && !query.levels.iter().any(|level| *level == record.level) {
         return false;
@@ -552,6 +577,7 @@ mod tests {
 
         let result = core.query_current_session(TelemetryQueryInput {
             module_ids: vec!["audio".to_string()],
+            event_prefixes: Vec::new(),
             levels: vec![TelemetryLevel::Info, TelemetryLevel::Error],
             kinds: Vec::new(),
             search_text: None,
@@ -613,6 +639,56 @@ mod tests {
         });
         assert_eq!(field_result.matched_record_count, 1);
         assert_eq!(field_result.records[0].module_id, "audio");
+
+        let _ = std::fs::remove_dir_all(root_dir);
+    }
+
+    #[test]
+    fn query_current_session_filters_by_event_prefixes() {
+        let root_dir = test_root_dir();
+        let mut policy = TelemetryPolicy::default();
+        policy.persist_min_level = TelemetryLevel::Info;
+        let core = TelemetryCore::new_for_tests(root_dir.clone(), policy);
+
+        let mut first = record(TelemetryLevel::Info);
+        first.ts = 10;
+        first.module_id = "plugins".to_string();
+        first.event = "plugin.runtime.activate.completed".to_string();
+
+        let mut second = record(TelemetryLevel::Warn);
+        second.ts = 20;
+        second.module_id = "performance".to_string();
+        second.event = "performance.process-snapshot.unavailable".to_string();
+
+        let mut third = record(TelemetryLevel::Info);
+        third.ts = 30;
+        third.module_id = "audio".to_string();
+        third.event = "audio.queue.add".to_string();
+
+        let _ = core.ingest_batch(vec![first, second, third]);
+
+        let plugin_result = core.query_current_session(TelemetryQueryInput {
+            event_prefixes: vec!["plugin.".to_string()],
+            ..TelemetryQueryInput::default()
+        });
+        assert_eq!(plugin_result.matched_record_count, 1);
+        assert_eq!(plugin_result.records[0].event, "plugin.runtime.activate.completed");
+
+        let performance_result = core.query_current_session(TelemetryQueryInput {
+            event_prefixes: vec!["performance.".to_string()],
+            ..TelemetryQueryInput::default()
+        });
+        assert_eq!(performance_result.matched_record_count, 1);
+        assert_eq!(
+            performance_result.records[0].event,
+            "performance.process-snapshot.unavailable"
+        );
+
+        let combined_result = core.query_current_session(TelemetryQueryInput {
+            event_prefixes: vec!["plugin.".to_string(), "performance.".to_string()],
+            ..TelemetryQueryInput::default()
+        });
+        assert_eq!(combined_result.matched_record_count, 2);
 
         let _ = std::fs::remove_dir_all(root_dir);
     }

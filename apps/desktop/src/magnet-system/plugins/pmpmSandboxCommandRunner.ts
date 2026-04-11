@@ -39,6 +39,7 @@ type PmpmCompatCapabilityRevokeDrillMessage = {
   capabilityIds: string[];
   reason: string;
   dryRun?: boolean;
+  traceId?: string;
 };
 
 type PmpmCompatCapabilityRevokeAckMessage = {
@@ -48,6 +49,7 @@ type PmpmCompatCapabilityRevokeAckMessage = {
   ok: boolean;
   ignored?: boolean;
   reason?: string;
+  traceId?: string;
 };
 
 type FrameMessage = PmpmBridgeIncomingMessage | PmpmCompatCapabilityRevokeAckMessage;
@@ -827,6 +829,7 @@ addEventListener('message', async (event) => {
           ? runtimeInitSnapshot.runtimeInstanceId
           : FRAME_ID,
       requestId,
+      traceId: typeof data.traceId === 'string' ? data.traceId : undefined,
       capabilityIds,
       reason,
       dryRun: Boolean(data.dryRun),
@@ -835,6 +838,7 @@ addEventListener('message', async (event) => {
     runtimeRevokeAckSnapshot = {
       op: 'runtime.capabilities.revoke.ack',
       requestId,
+      traceId: runtimeRevokeSnapshot.traceId,
       ok: true,
       ignored: true,
       reason,
@@ -843,6 +847,7 @@ addEventListener('message', async (event) => {
     post({
       type: 'pmpm:capabilities-revoke-ack',
       requestId,
+      traceId: runtimeRevokeSnapshot.traceId,
       ok: true,
       ignored: true,
       reason,

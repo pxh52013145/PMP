@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RuntimeEvent, RuntimeHello } from '@pixel-matrix/plugin-platform-contracts';
 import type { PluginMountApi } from '../host-api';
+import { DEFAULT_TELEMETRY_POLICY, type TelemetryRecord } from '../../../contracts/telemetry';
+import {
+  setGlobalTelemetryService,
+  type TelemetryService,
+  type TelemetrySnapshot,
+} from '../../../services/telemetry';
 import { runPmpmBridgeSidecarCommand } from './sidecarCommandRuntime';
 import type { RuntimeBridgeTransportMessage } from './runtimeBridgeHostSession';
 import * as pluginConfigModule from '../pluginConfig';
@@ -138,7 +144,89 @@ function createSidecarControllerHarness() {
   };
 }
 
+type TelemetryCall = {
+  moduleId: string;
+  component: string | null | undefined;
+  level: string;
+  event: string;
+  message?: string | null;
+  fields?: Record<string, unknown>;
+};
+
+function createTelemetryServiceSpy(): {
+  calls: TelemetryCall[];
+  service: TelemetryService;
+} {
+  const calls: TelemetryCall[] = [];
+  const snapshot: TelemetrySnapshot = {
+    policy: { ...DEFAULT_TELEMETRY_POLICY },
+    status: {
+      enabled: true,
+      currentSessionId: 'session-1',
+      queuedRecords: 0,
+      flushedRecords: 0,
+      droppedRecords: 0,
+      currentFileBytes: 0,
+      currentFilePath: null,
+      frontendMinLevel: 'info',
+      backendMinLevel: 'info',
+      persistMinLevel: 'warn',
+      lastError: null,
+    },
+    tail: [] as TelemetryRecord[],
+    bufferedRecords: 0,
+    queueDroppedRecords: 0,
+    tailDroppedRecords: 0,
+    transportAvailable: true,
+    bootstrapState: 'ready',
+    lastFlushAtMs: null,
+    lastBootstrapAtMs: null,
+  };
+
+  const service: TelemetryService = {
+    getSnapshot: () => snapshot,
+    subscribe: () => () => {},
+    refreshRuntime: async () => snapshot,
+    clearSession: async () => {},
+    flushNow: async () => {},
+    getLogger: (moduleId, component) => ({
+      log: (level, event, options) => {
+        calls.push({
+          moduleId,
+          component,
+          level,
+          event,
+          message: options?.message ?? null,
+          fields: (options?.fields as Record<string, unknown> | undefined) ?? undefined,
+        });
+      },
+      trace: (event, options) =>
+        calls.push({ moduleId, component, level: 'trace', event, message: options?.message ?? null, fields: (options?.fields as Record<string, unknown> | undefined) ?? undefined }),
+      debug: (event, options) =>
+        calls.push({ moduleId, component, level: 'debug', event, message: options?.message ?? null, fields: (options?.fields as Record<string, unknown> | undefined) ?? undefined }),
+      info: (event, options) =>
+        calls.push({ moduleId, component, level: 'info', event, message: options?.message ?? null, fields: (options?.fields as Record<string, unknown> | undefined) ?? undefined }),
+      warn: (event, options) =>
+        calls.push({ moduleId, component, level: 'warn', event, message: options?.message ?? null, fields: (options?.fields as Record<string, unknown> | undefined) ?? undefined }),
+      error: (event, options) =>
+        calls.push({ moduleId, component, level: 'error', event, message: options?.message ?? null, fields: (options?.fields as Record<string, unknown> | undefined) ?? undefined }),
+      fatal: (event, options) =>
+        calls.push({ moduleId, component, level: 'fatal', event, message: options?.message ?? null, fields: (options?.fields as Record<string, unknown> | undefined) ?? undefined }),
+      metric: (event, fields, options) =>
+        calls.push({ moduleId, component, level: options?.level ?? 'info', event, message: options?.message ?? null, fields: fields as Record<string, unknown> }),
+      startSpan: () => ({
+        end: () => {},
+      }),
+    }),
+    ingest: () => {},
+    destroy: () => {},
+  };
+
+  return { calls, service };
+}
+
 afterEach(() => {
+  setGlobalTelemetryService(null);
   vi.restoreAllMocks();
 });
 
@@ -350,5 +438,57 @@ describe('sidecar command runtime', () => {
 
     expect(crashSpy).toHaveBeenCalledWith('sidecar-plugin', expect.any(Error), 'command');
     expect(harness.dispose).toHaveBeenCalledWith('runtime-crash');
+  });
+
+  it('emits plugin.sidecar.bridge.failed when opening the native-process bridge fails', async () => {
+    const telemetry = createTelemetryServiceSpy();
+    setGlobalTelemetryService(telemetry.service);
+
+    const api = createStubApi({ count: 0 });
+    vi.spyOn(pluginHostApiModule, 'createPluginMountApi').mockReturnValue(api);
+    vi.spyOn(pluginConfigModule, 'readPmpmPluginConfig').mockReturnValue({ count: 0 });
+    vi.spyOn(pluginConfigModule, 'subscribePmpmPluginConfig').mockReturnValue(() => {});
+    vi.spyOn(pmpmModule, 'getPmpmPluginEffectivePermissions').mockReturnValue(new Set());
+    vi.spyOn(pmpmModule, 'getInstalledPmpmPlugin').mockReturnValue({
+      manifest: { permissions: [] },
+      deniedPermissions: [],
+    } as never);
+    vi.spyOn(pmpmModule, 'recordPmpmPluginCrash').mockImplementation(() => {});
+
+    await expect(
+      runPmpmBridgeSidecarCommand(
+        {
+          pluginId: 'sidecar-plugin',
+          runtimeId: 'sidecar.main',
+          entryPath: 'bin/sidecar-plugin',
+          commandId: 'explode',
+          audioService: api.audio as never,
+          navigation: api.navigation as never,
+          timeoutMs: 2_000,
+        },
+        {
+          now: () => 1234,
+          createPortController: async () => {
+            throw new Error('open bridge failed');
+          },
+        }
+      )
+    ).rejects.toThrow('open bridge failed');
+
+    expect(telemetry.calls.filter((entry) => entry.event === 'plugin.sidecar.bridge.failed')).toHaveLength(1);
+    expect(telemetry.calls.at(-1)).toMatchObject({
+      level: 'error',
+      event: 'plugin.sidecar.bridge.failed',
+      message: 'open bridge failed',
+      fields: expect.objectContaining({
+        pluginId: 'sidecar-plugin',
+        sourceKind: 'pmpm',
+        runtimeId: 'sidecar.main',
+        surfaceKind: 'command',
+        surfaceId: 'explode',
+        cause: 'command',
+        stage: 'open',
+      }),
+    });
   });
 });

@@ -7,8 +7,9 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { TelemetryQueryInput, TelemetryRecord } from '../../contracts/telemetry';
+import type { TelemetryQueryInput, TelemetryQueryResult, TelemetryRecord } from '../../contracts/telemetry';
 import { useKernel } from '../../contexts/KernelContext';
+import { getGlobalProcessPerfService } from '../../services/performance-control';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import { readJson, usePersistentSetting, writeJson } from '../../modules/storage';
@@ -51,7 +52,9 @@ import {
 import type { TelemetryService, TelemetrySnapshot } from '../../services/telemetry/telemetryTypes';
 import {
   buildTelemetryAiContextReport,
-  getDefaultTelemetryAiQuery,
+  getTelemetryAiContextPreset,
+  type TelemetryAiContextPreset,
+  type TelemetryAiContextPresetId,
 } from '../../services/telemetry/aiContextReport';
 import { buildTelemetryScenarioReport } from '../../services/telemetry/scenarioReport';
 import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
@@ -211,6 +214,31 @@ function formatTelemetryRecordLine(record: TelemetryRecord): string {
     parts.push(message);
   }
   return parts.join(' | ');
+}
+
+function formatTelemetryQueryFilterList(value: readonly string[] | null | undefined): string {
+  if (!Array.isArray(value) || value.length === 0) return 'all';
+  return value.join(', ');
+}
+
+function formatTelemetryQueryWindow(result: Pick<TelemetryQueryResult, 'firstMatchedTs' | 'lastMatchedTs'>): string {
+  if (typeof result.firstMatchedTs !== 'number' || typeof result.lastMatchedTs !== 'number') {
+    return 'n/a';
+  }
+  return `${formatTelemetryTimestamp(result.firstMatchedTs)} -> ${formatTelemetryTimestamp(
+    result.lastMatchedTs
+  )}`;
+}
+
+function formatTelemetryCountList(
+  items: ReadonlyArray<{ key: string; count: number }>,
+  limit = 6
+): string {
+  if (items.length === 0) return '-';
+  return items
+    .slice(0, limit)
+    .map((item) => `${item.key} x ${item.count}`)
+    .join('\n');
 }
 
 function getLatestMusicLibraryRuntimeSnapshot(): MusicLibraryRuntimeMemorySnapshot | null {
@@ -585,6 +613,23 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [telemetrySnapshot, setTelemetrySnapshot] = useState<TelemetrySnapshot>(() =>
     telemetryService.getSnapshot()
   );
+  const [telemetryQueryPresetId, setTelemetryQueryPresetId] = useState<TelemetryAiContextPresetId>('plugins');
+  const [telemetryQueryResult, setTelemetryQueryResult] = useState<TelemetryQueryResult | null>(null);
+  const [telemetryQueryBusy, setTelemetryQueryBusy] = useState(false);
+  const [telemetryQueryError, setTelemetryQueryError] = useState<string | null>(null);
+  const telemetryQueryPreset = useMemo(
+    () => getTelemetryAiContextPreset(telemetryQueryPresetId),
+    [telemetryQueryPresetId]
+  );
+  const telemetryQueryPresetOptions = useMemo(
+    () =>
+      [
+        { id: 'plugins' as const, label: t('debug.center.telemetry.query.preset.plugins') },
+        { id: 'performance' as const, label: t('debug.center.telemetry.query.preset.performance') },
+        { id: 'general' as const, label: t('debug.center.telemetry.query.preset.general') },
+      ] satisfies Array<{ id: TelemetryAiContextPresetId; label: string }>,
+    [t]
+  );
 
   useEffect(() => {
     setTelemetrySnapshot(telemetryService.getSnapshot());
@@ -662,11 +707,52 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     setError(null);
     try {
       await telemetryService.clearSession();
+      setTelemetryQueryResult(null);
+      setTelemetryQueryError(null);
       setStatusMessage('Telemetry session cleared.');
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
     }
   }, [telemetryService]);
+
+  const runTelemetryPresetQuery = useCallback(
+    async (presetId: TelemetryAiContextPresetId) => {
+      setTelemetryQueryPresetId(presetId);
+      if (!isTauri) {
+        setTelemetryQueryResult(null);
+        setTelemetryQueryError(t('debug.center.telemetry.query.unavailable'));
+        return;
+      }
+
+      setTelemetryQueryBusy(true);
+      setTelemetryQueryError(null);
+      try {
+        const preset = getTelemetryAiContextPreset(presetId);
+        const result = await queryTelemetryCurrentSession(preset.query);
+        if (!result) {
+          throw new Error(t('debug.center.telemetry.query.failed'));
+        }
+        setTelemetryQueryResult(result);
+      } catch (queryError) {
+        setTelemetryQueryResult(null);
+        setTelemetryQueryError(
+          queryError instanceof Error ? queryError.message : t('debug.center.telemetry.query.failed')
+        );
+      } finally {
+        setTelemetryQueryBusy(false);
+      }
+    },
+    [isTauri, t]
+  );
+
+  const refreshTelemetryPresetQuery = useCallback(async () => {
+    await runTelemetryPresetQuery(telemetryQueryPresetId);
+  }, [runTelemetryPresetQuery, telemetryQueryPresetId]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    void runTelemetryPresetQuery('plugins');
+  }, [isTauri, runTelemetryPresetQuery]);
 
   const refreshSyncOrchestrator = useCallback(async () => {
     if (!isTauri) {
@@ -992,7 +1078,10 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     const coverStats = MusicLibraryService.getInstance().getCoverRuntimeCacheStats();
     let processTotals: ProcessPerfTotalsSnapshot | null = null;
     if (isTauri) {
-      processTotals = await getProcessPerfTotalsSnapshot();
+      processTotals = await (
+        getGlobalProcessPerfService()?.refreshTotalsSnapshot() ??
+        getProcessPerfTotalsSnapshot()
+      );
     }
 
     const jsHeapUsedBytes = (() => {
@@ -1406,7 +1495,12 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
         return;
       }
 
-      const perfTotals = isTauri ? await getProcessPerfTotalsSnapshot() : null;
+      const perfTotals = isTauri
+        ? await (
+            getGlobalProcessPerfService()?.refreshTotalsSnapshot() ??
+            getProcessPerfTotalsSnapshot()
+          )
+        : null;
       const report = buildTelemetryScenarioReport({ session, perfTotals });
       const safeTs = new Date().toISOString().replace(/[:.]/g, '-');
       const safeSessionId = sanitizeFileSegment(session.status.currentSessionId, 'session');
@@ -1424,18 +1518,27 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     }
   }, [isTauri, saveDebugArtifact]);
 
-  const loadTelemetryAiContextArtifact = useCallback(async (): Promise<{
+  const loadTelemetryAiContextArtifact = useCallback(async (
+    presetId: TelemetryAiContextPresetId = 'general'
+  ): Promise<{
+    preset: TelemetryAiContextPreset;
     query: TelemetryQueryInput;
     report: string;
     sessionId: string;
   }> => {
-    const query = getDefaultTelemetryAiQuery();
+    const preset = getTelemetryAiContextPreset(presetId);
+    const query = preset.query;
     const result = await queryTelemetryCurrentSession(query);
     if (!result || result.matchedRecordCount === 0) {
       throw new Error('Telemetry AI context is empty.');
     }
 
-    const perfTotals = isTauri ? await getProcessPerfTotalsSnapshot() : null;
+    const perfTotals = isTauri
+      ? await (
+          getGlobalProcessPerfService()?.refreshTotalsSnapshot() ??
+          getProcessPerfTotalsSnapshot()
+        )
+      : null;
     const report = buildTelemetryAiContextReport({
       query,
       result,
@@ -1443,16 +1546,19 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     });
 
     return {
+      preset,
       query,
       report,
       sessionId: result.status.currentSessionId,
     };
   }, [isTauri]);
 
-  const handleCopyTelemetryAiContext = useCallback(async () => {
+  const handleCopyTelemetryAiContext = useCallback(async (
+    presetId: TelemetryAiContextPresetId = 'general'
+  ) => {
     setError(null);
     try {
-      const artifact = await loadTelemetryAiContextArtifact();
+      const artifact = await loadTelemetryAiContextArtifact(presetId);
       await navigator.clipboard.writeText(artifact.report);
       setStatusMessage(`Telemetry AI context copied from session ${artifact.sessionId}.`);
     } catch (err) {
@@ -1461,13 +1567,15 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     }
   }, [loadTelemetryAiContextArtifact]);
 
-  const handleExportTelemetryAiContext = useCallback(async () => {
+  const handleExportTelemetryAiContext = useCallback(async (
+    presetId: TelemetryAiContextPresetId = 'general'
+  ) => {
     setError(null);
     try {
-      const artifact = await loadTelemetryAiContextArtifact();
+      const artifact = await loadTelemetryAiContextArtifact(presetId);
       const safeTs = new Date().toISOString().replace(/[:.]/g, '-');
       const safeSessionId = sanitizeFileSegment(artifact.sessionId, 'session');
-      const fileName = `telemetry-ai-context-${safeTs}-${safeSessionId}.md`;
+      const fileName = `telemetry-${artifact.preset.fileStem}-${safeTs}-${safeSessionId}.md`;
       const result = await saveDebugArtifact(fileName, artifact.report, 'text/markdown;charset=utf-8');
 
       setStatusMessage(
@@ -2544,6 +2652,178 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               </pre>
             )}
           </div>
+          <div
+            style={{
+              marginTop: 14,
+              padding: 12,
+              borderRadius: 12,
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid rgba(255,255,255,0.08)',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                gap: 12,
+                justifyContent: 'space-between',
+                alignItems: 'flex-start',
+                flexWrap: 'wrap',
+              }}
+            >
+              <div>
+                <p className="settings-card-label">{t('debug.center.telemetry.query.title')}</p>
+                <p className="settings-card-desc">{t('debug.center.telemetry.query.desc')}</p>
+              </div>
+              <SettingsActionButton
+                type="button"
+                onClick={() => {
+                  void refreshTelemetryPresetQuery();
+                }}
+                disabled={!isTauri || telemetryQueryBusy}
+              >
+                {telemetryQueryBusy ? t('common.state.loading') : t('common.action.refresh')}
+              </SettingsActionButton>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <SettingsToggleGroup>
+                {telemetryQueryPresetOptions.map((option) => (
+                  <SettingsToggleButton
+                    key={option.id}
+                    type="button"
+                    active={telemetryQueryPresetId === option.id}
+                    onClick={() => {
+                      void runTelemetryPresetQuery(option.id);
+                    }}
+                  >
+                    {option.label}
+                  </SettingsToggleButton>
+                ))}
+              </SettingsToggleGroup>
+            </div>
+
+            <p className="settings-card-note" style={{ marginTop: 12 }}>
+              {t('debug.center.telemetry.query.filters', {
+                events: formatTelemetryQueryFilterList(telemetryQueryPreset.query.eventPrefixes),
+                modules: formatTelemetryQueryFilterList(telemetryQueryPreset.query.moduleIds),
+                levels: formatTelemetryQueryFilterList(telemetryQueryPreset.query.levels),
+                limit:
+                  typeof telemetryQueryPreset.query.limit === 'number'
+                    ? telemetryQueryPreset.query.limit
+                    : 'all',
+              })}
+            </p>
+
+            {telemetryQueryError ? (
+              <p className="settings-card-note" style={{ marginTop: 10, color: 'rgba(255,120,120,0.9)' }}>
+                {telemetryQueryError}
+              </p>
+            ) : null}
+
+            {telemetryQueryResult ? (
+              <>
+                <p className="settings-card-desc" style={{ marginTop: 12 }}>
+                  {t('debug.center.telemetry.query.results', {
+                    matched: telemetryQueryResult.matchedRecordCount,
+                    scanned: telemetryQueryResult.scannedRecordCount,
+                    sessionId: telemetryQueryResult.status.currentSessionId,
+                    window: formatTelemetryQueryWindow(telemetryQueryResult),
+                  })}
+                </p>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                    gap: 12,
+                    marginTop: 12,
+                  }}
+                >
+                  <div>
+                    <p className="settings-card-note">{t('debug.center.telemetry.query.topEvents')}</p>
+                    <pre
+                      style={{
+                        marginTop: 8,
+                        padding: 10,
+                        borderRadius: 10,
+                        background: 'rgba(0,0,0,0.2)',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                        minHeight: 92,
+                        whiteSpace: 'pre-wrap',
+                        overflowX: 'auto',
+                      }}
+                    >
+                      {formatTelemetryCountList(telemetryQueryResult.eventCounts)}
+                    </pre>
+                  </div>
+                  <div>
+                    <p className="settings-card-note">{t('debug.center.telemetry.query.topModules')}</p>
+                    <pre
+                      style={{
+                        marginTop: 8,
+                        padding: 10,
+                        borderRadius: 10,
+                        background: 'rgba(0,0,0,0.2)',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                        minHeight: 92,
+                        whiteSpace: 'pre-wrap',
+                        overflowX: 'auto',
+                      }}
+                    >
+                      {formatTelemetryCountList(telemetryQueryResult.moduleCounts)}
+                    </pre>
+                  </div>
+                  <div>
+                    <p className="settings-card-note">{t('debug.center.telemetry.query.topLevels')}</p>
+                    <pre
+                      style={{
+                        marginTop: 8,
+                        padding: 10,
+                        borderRadius: 10,
+                        background: 'rgba(0,0,0,0.2)',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                        minHeight: 92,
+                        whiteSpace: 'pre-wrap',
+                        overflowX: 'auto',
+                      }}
+                    >
+                      {formatTelemetryCountList(telemetryQueryResult.levelCounts)}
+                    </pre>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 12 }}>
+                  <p className="settings-card-note">{t('debug.center.telemetry.query.recentRecords')}</p>
+                  {telemetryQueryResult.records.length === 0 ? (
+                    <p className="settings-card-note" style={{ marginTop: 8 }}>
+                      {t('debug.center.telemetry.query.empty')}
+                    </p>
+                  ) : (
+                    <pre
+                      style={{
+                        marginTop: 8,
+                        padding: 12,
+                        borderRadius: 10,
+                        background: 'rgba(0,0,0,0.25)',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                        overflowX: 'auto',
+                        maxHeight: 220,
+                        fontSize: 12,
+                        color: 'rgba(255,255,255,0.88)',
+                        whiteSpace: 'pre-wrap',
+                      }}
+                    >
+                      {telemetryQueryResult.records
+                        .slice(-10)
+                        .reverse()
+                        .map((record) => formatTelemetryRecordLine(record))
+                        .join('\n')}
+                    </pre>
+                  )}
+                </div>
+              </>
+            ) : null}
+          </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
             <SettingsActionButton
               type="button"
@@ -2564,7 +2844,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
             <SettingsActionButton
               type="button"
               onClick={() => {
-                void handleCopyTelemetryAiContext();
+                void handleCopyTelemetryAiContext(telemetryQueryPresetId);
               }}
             >
               Copy AI Context
@@ -2572,7 +2852,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
             <SettingsActionButton
               type="button"
               onClick={() => {
-                void handleExportTelemetryAiContext();
+                void handleExportTelemetryAiContext(telemetryQueryPresetId);
               }}
             >
               Export AI Context

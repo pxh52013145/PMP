@@ -5,6 +5,7 @@ import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { useKernel } from '../../contexts/KernelContext';
 import { GOVERNANCE_SERVICE_TOKEN } from '../../services/governance';
+import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import { useT } from '../../i18n';
 import {
   createMagnetTemplateFromPlugin,
@@ -58,7 +59,10 @@ import {
   type InstalledHostExtensionRecord,
 } from '../../magnet-system/plugins/extensions';
 import { resolveInstalledExtensionRuntime } from '../../magnet-system/plugins/runtime';
-import { INSTALLED_EXTENSION_COMMAND_LAUNCHERS } from '../../magnet-system/plugins/runtime/installedExtensionHostLaunchers';
+import {
+  INSTALLED_EXTENSION_COMMAND_LAUNCHERS,
+  INSTALLED_EXTENSION_VIEW_LAUNCHERS,
+} from '../../magnet-system/plugins/runtime/installedExtensionHostLaunchers';
 import {
   clearInstalledExtensionAuditLog,
   getInstalledExtensionAuditRevision,
@@ -66,6 +70,13 @@ import {
   subscribeInstalledExtensionAudit,
   type InstalledExtensionAuditEvent,
 } from '../../magnet-system/plugins/extensionsGovernance';
+import {
+  createMagnetTemplateFromInstalledExtension,
+  readInstalledExtensionPmpHostContributions,
+  supportsInstalledExtensionMagnetSurface,
+} from '../../magnet-system/plugins/installedExtensionHostPmp';
+import type { PluginRuntimeSurfaceKind } from '../../magnet-system/plugins/runtime';
+import { openPluginWindow } from '../../utils/pluginWindows';
 
 function formatAuditEvent(event: PmpmAuditEvent): string {
   if (event.type === 'permission-denied') {
@@ -111,6 +122,35 @@ function readInstalledExtensionDisplayName(record: InstalledHostExtensionRecord)
   return record.manifest.identity.displayName ?? record.manifest.identity.name;
 }
 
+function getInstalledExtensionPrimarySurfaceKind(
+  record: InstalledHostExtensionRecord
+): PluginRuntimeSurfaceKind {
+  const hostContributions = readInstalledExtensionPmpHostContributions(record);
+
+  if ((hostContributions?.settingsPanels?.length ?? 0) > 0) {
+    return 'settings';
+  }
+  if ((hostContributions?.pages?.length ?? 0) > 0) {
+    return 'page';
+  }
+  if ((hostContributions?.windows?.length ?? 0) > 0) {
+    return 'window';
+  }
+  if ((hostContributions?.visualizers?.length ?? 0) > 0) {
+    return 'visualizer';
+  }
+  if (hostContributions?.magnets) {
+    return 'magnet';
+  }
+  if ((record.manifest.contributes?.core?.commands?.length ?? 0) > 0) {
+    return 'command';
+  }
+  if ((record.manifest.contributes?.core?.keybindings?.length ?? 0) > 0) {
+    return 'command';
+  }
+  return 'command';
+}
+
 function formatInstalledExtensionAuditEvent(event: InstalledExtensionAuditEvent): string {
   if (event.type === 'permission-denied') {
     return `[denied] ${event.hostLabel} ${event.capability} ${event.action}`;
@@ -149,7 +189,9 @@ export function PluginsSettingsPanel() {
   const kernel = useKernel();
   const t = useT();
   const governance = kernel.services.getOptional(GOVERNANCE_SERVICE_TOKEN);
-  const { activeMagnetIds, deactivateMagnet, magnetLibrary, setMagnetLibrary } = useMagnetConfig();
+  const navigationService = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
+  const { activeMagnetIds, activateMagnet, deactivateMagnet, magnetLibrary, setMagnetLibrary } =
+    useMagnetConfig();
   const isTauri = isTauriRuntime();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
 
@@ -254,15 +296,23 @@ export function PluginsSettingsPanel() {
 
   const runtimeResolutionByExtensionId = useMemo(() => {
     return new Map(
-      installedExtensionsV2.map((record) => [
-        record.manifest.identity.id,
-        resolveInstalledExtensionRuntime(record, {
-          hostId: 'pmp',
-          surfaceKind: 'command',
-          preferCommandWorker: true,
-          supportedLauncherIds: [...INSTALLED_EXTENSION_COMMAND_LAUNCHERS],
-        }),
-      ] as const)
+      installedExtensionsV2.map((record) => {
+        const surfaceKind = getInstalledExtensionPrimarySurfaceKind(record);
+        const supportedLauncherIds =
+          surfaceKind === 'command'
+            ? [...INSTALLED_EXTENSION_COMMAND_LAUNCHERS]
+            : [...INSTALLED_EXTENSION_VIEW_LAUNCHERS];
+
+        return [
+          record.manifest.identity.id,
+          resolveInstalledExtensionRuntime(record, {
+            hostId: 'pmp',
+            surfaceKind,
+            preferCommandWorker: surfaceKind === 'command',
+            supportedLauncherIds,
+          }),
+        ] as const;
+      })
     );
   }, [installedExtensionsV2]);
 
@@ -278,6 +328,75 @@ export function PluginsSettingsPanel() {
       governance?.restartInstalledExtensionRuntime(pluginId, { reason });
     },
     [governance]
+  );
+
+  const openInstalledExtensionPage = useCallback(
+    (pluginId: string, pageId: string) => {
+      setError(null);
+      navigationService.navigateTo('plugin-page', {
+        pluginId,
+        pageId,
+        sourceKind: 'extv2',
+      });
+    },
+    [navigationService]
+  );
+
+  const openInstalledExtensionVisualizer = useCallback(
+    (pluginId: string, visualizerId: string) => {
+      setError(null);
+      navigationService.navigateTo('plugin-visualizer', {
+        pluginId,
+        visualizerId,
+        sourceKind: 'extv2',
+      });
+    },
+    [navigationService]
+  );
+
+  const openInstalledExtensionWindow = useCallback(
+    async (options: {
+      pluginId: string;
+      windowId: string;
+      title: string;
+      width?: number;
+      height?: number;
+    }) => {
+      setError(null);
+      try {
+        await openPluginWindow({
+          sourceKind: 'extv2',
+          pluginId: options.pluginId,
+          windowId: options.windowId,
+          title: options.title,
+          width: options.width,
+          height: options.height,
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    []
+  );
+
+  const addInstalledExtensionMagnetToCurrentSpace = useCallback(
+    (record: InstalledHostExtensionRecord) => {
+      if (!supportsInstalledExtensionMagnetSurface(record)) {
+        return;
+      }
+
+      setError(null);
+      const magnet = createMagnetTemplateFromInstalledExtension(record);
+      upsertMagnetCatalogMagnet(magnet);
+      setMagnetLibrary((prev) => {
+        if (prev.some((item) => item.id === magnet.id)) {
+          return prev;
+        }
+        return [...prev, magnet];
+      });
+      activateMagnet(magnet.id);
+    },
+    [activateMagnet, setMagnetLibrary]
   );
 
   const handleInstall = useCallback(async () => {
@@ -488,12 +607,21 @@ export function PluginsSettingsPanel() {
       if (typeof filePath !== 'string') {
         throw new Error(t('settings.plugins.v2.install.error.invalidFilePath'));
       }
-      if (!filePath.replace(/\\/g, '/').toLowerCase().endsWith('/manifest.v2.json')) {
-        throw new Error(t('settings.plugins.v2.install.error.invalidFilePath'));
-      }
 
       const parsed = await parseInstalledExtensionFromFilePath(filePath);
       const isUpdate = Boolean(getInstalledExtensionRecord(parsed.manifest.identity.id));
+      const contributesMagnet = supportsInstalledExtensionMagnetSurface(parsed);
+      if (
+        contributesMagnet &&
+        !isUpdate &&
+        magnetLibrary.some((magnet) => magnet.id === parsed.manifest.identity.id)
+      ) {
+        throw new Error(
+          t('settings.plugins.install.error.magnetIdExists', {
+            id: parsed.manifest.identity.id,
+          })
+        );
+      }
       const capabilities = listInstalledExtensionCapabilityBindings(parsed);
       const confirmText = [
         t('settings.plugins.v2.install.confirm.extension', {
@@ -539,13 +667,21 @@ export function PluginsSettingsPanel() {
       });
       if (!ok) return;
 
-      await installInstalledExtensionFromFilePath(filePath);
+      const installed = await installInstalledExtensionFromFilePath(filePath);
+      if (supportsInstalledExtensionMagnetSurface(installed)) {
+        const template = createMagnetTemplateFromInstalledExtension(installed);
+        upsertMagnetCatalogMagnet(template);
+
+        if (!magnetLibrary.some((magnet) => magnet.id === installed.manifest.identity.id)) {
+          setMagnetLibrary((prev) => [...prev, template]);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
-  }, [busy, confirm, isTauri, t]);
+  }, [busy, confirm, isTauri, magnetLibrary, setMagnetLibrary, t]);
 
   const handleUninstallManifestV2 = useCallback(
     async (pluginId: string) => {
@@ -554,6 +690,7 @@ export function PluginsSettingsPanel() {
       setError(null);
 
       try {
+        const isActive = activeMagnetIds.has(pluginId);
         const ok = await confirm({
           title: t('settings.plugins.v2.uninstall.confirm.title'),
           message: t('settings.plugins.v2.uninstall.confirm.message', { id: pluginId }),
@@ -563,15 +700,33 @@ export function PluginsSettingsPanel() {
         });
         if (!ok) return;
 
+        if (isActive) {
+          deactivateMagnet(pluginId);
+        }
+
         uninstallInstalledExtension(pluginId);
         restartInstalledExtensionRuntime(pluginId, 'uninstall');
+        clearInstalledExtensionAuditLog(pluginId);
+        removeMagnetCatalogMagnet(pluginId);
+        if (magnetLibrary.some((magnet) => magnet.id === pluginId)) {
+          setMagnetLibrary((prev) => prev.filter((magnet) => magnet.id !== pluginId));
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
       }
     },
-    [busy, confirm, restartInstalledExtensionRuntime, t]
+    [
+      activeMagnetIds,
+      busy,
+      confirm,
+      deactivateMagnet,
+      magnetLibrary,
+      restartInstalledExtensionRuntime,
+      setMagnetLibrary,
+      t,
+    ]
   );
 
   const handleToggleManifestV2Enabled = useCallback(
@@ -581,6 +736,17 @@ export function PluginsSettingsPanel() {
       setError(null);
 
       try {
+        if (!enabled && activeMagnetIds.has(pluginId)) {
+          const ok = await confirm({
+            title: t('settings.plugins.disable.confirm.title'),
+            message: t('settings.plugins.disable.confirm.message', { id: pluginId }),
+            confirmText: t('common.action.disable'),
+            cancelText: t('common.action.cancel'),
+            danger: true,
+          });
+          if (!ok) return;
+        }
+
         setInstalledExtensionEnabled(pluginId, enabled);
         restartInstalledExtensionRuntime(pluginId, enabled ? 'enabled' : 'disabled');
       } catch (err) {
@@ -589,7 +755,7 @@ export function PluginsSettingsPanel() {
         setBusy(false);
       }
     },
-    [busy, restartInstalledExtensionRuntime]
+    [activeMagnetIds, busy, confirm, restartInstalledExtensionRuntime, t]
   );
 
   return (
@@ -968,11 +1134,18 @@ export function PluginsSettingsPanel() {
           installedExtensionsV2.map((record) => {
             const identity = record.manifest.identity;
             const runtimeResolution = runtimeResolutionByExtensionId.get(identity.id) ?? null;
+            const hostContributions = readInstalledExtensionPmpHostContributions(record);
             const capabilityBindings = listInstalledExtensionCapabilityBindings(record);
             const deniedCapabilities = record.deniedCapabilities ?? [];
             const deniedCapabilitySet = new Set(deniedCapabilities);
             const enabled = record.enabled ?? true;
+            const isActive = activeMagnetIds.has(identity.id);
             const displayName = readInstalledExtensionDisplayName(record);
+            const panels = hostContributions?.settingsPanels?.length ?? 0;
+            const pages = hostContributions?.pages?.length ?? 0;
+            const windows = hostContributions?.windows?.length ?? 0;
+            const visualizers = hostContributions?.visualizers?.length ?? 0;
+            const magnets = hostContributions?.magnets ? 1 : 0;
             const runtimeProjectionTitle = (() => {
               if (!runtimeResolution) {
                 return t('settings.plugins.tag.runtimeMissing');
@@ -1015,6 +1188,11 @@ export function PluginsSettingsPanel() {
               .filter((event) => event.pluginId === identity.id)
               .slice(-8)
               .reverse();
+            const primaryPage = pages === 1 ? hostContributions?.pages?.[0] ?? null : null;
+            const primaryWindow = windows === 1 ? hostContributions?.windows?.[0] ?? null : null;
+            const primaryVisualizer =
+              visualizers === 1 ? hostContributions?.visualizers?.[0] ?? null : null;
+            const canAddMagnet = magnets > 0 && !isActive;
 
             return (
               <div key={identity.id} className="settings-plugin-item">
@@ -1065,6 +1243,31 @@ export function PluginsSettingsPanel() {
                     {keybindings > 0 && (
                       <span className="settings-plugin-tag">
                         {t('settings.plugins.v2.tag.keybindingsCount', { count: keybindings })}
+                      </span>
+                    )}
+                    {panels > 0 && (
+                      <span className="settings-plugin-tag">
+                        {t('settings.plugins.tag.settingsPanelsCount', { count: panels })}
+                      </span>
+                    )}
+                    {pages > 0 && (
+                      <span className="settings-plugin-tag">
+                        {t('settings.plugins.tag.pagesCount', { count: pages })}
+                      </span>
+                    )}
+                    {windows > 0 && (
+                      <span className="settings-plugin-tag">
+                        {t('settings.plugins.tag.windowsCount', { count: windows })}
+                      </span>
+                    )}
+                    {visualizers > 0 && (
+                      <span className="settings-plugin-tag">
+                        {t('settings.plugins.tag.visualizersCount', { count: visualizers })}
+                      </span>
+                    )}
+                    {magnets > 0 && (
+                      <span className="settings-plugin-tag">
+                        {t('settings.plugins.tag.magnetsCount', { count: magnets })}
                       </span>
                     )}
                   </div>
@@ -1140,6 +1343,68 @@ export function PluginsSettingsPanel() {
                 </div>
 
                 <div className="settings-plugin-actions">
+                  {primaryPage && (
+                    <PmpButton
+                      type="button"
+                      className="settings-action-btn"
+                      variant="default"
+                      disabled={busy}
+                      onClick={() => openInstalledExtensionPage(identity.id, primaryPage.id)}
+                      title={primaryPage.description ?? undefined}
+                    >
+                      {t('common.action.open')} {primaryPage.title}
+                    </PmpButton>
+                  )}
+
+                  {primaryVisualizer && (
+                    <PmpButton
+                      type="button"
+                      className="settings-action-btn"
+                      variant="default"
+                      disabled={busy}
+                      onClick={() =>
+                        openInstalledExtensionVisualizer(identity.id, primaryVisualizer.id)
+                      }
+                      title={primaryVisualizer.description ?? undefined}
+                    >
+                      {t('common.action.open')} {primaryVisualizer.title}
+                    </PmpButton>
+                  )}
+
+                  {primaryWindow && (
+                    <PmpButton
+                      type="button"
+                      className="settings-action-btn"
+                      variant="default"
+                      disabled={busy}
+                      onClick={() =>
+                        void openInstalledExtensionWindow({
+                          pluginId: identity.id,
+                          windowId: primaryWindow.id,
+                          title: `${displayName}: ${primaryWindow.title}`,
+                          width: primaryWindow.width,
+                          height: primaryWindow.height,
+                        })
+                      }
+                      title={primaryWindow.description ?? undefined}
+                    >
+                      {t('common.action.open')} {primaryWindow.title}
+                    </PmpButton>
+                  )}
+
+                  {canAddMagnet && (
+                    <PmpButton
+                      type="button"
+                      className="settings-action-btn"
+                      variant="default"
+                      disabled={busy}
+                      onClick={() => addInstalledExtensionMagnetToCurrentSpace(record)}
+                      title={t('settings.plugins.v2.action.addMagnet.title')}
+                    >
+                      {t('settings.plugins.v2.action.addMagnet')}
+                    </PmpButton>
+                  )}
+
                   <PmpButton
                     type="button"
                     className="settings-action-btn"
@@ -1185,7 +1450,11 @@ export function PluginsSettingsPanel() {
                     variant="danger"
                     disabled={busy}
                     onClick={() => void handleUninstallManifestV2(identity.id)}
-                    title={t('settings.plugins.v2.action.uninstall.title')}
+                    title={
+                      isActive
+                        ? t('settings.plugins.action.uninstall.title.magnetActive')
+                        : t('settings.plugins.v2.action.uninstall.title')
+                    }
                   >
                     {t('common.action.uninstall')}
                   </PmpButton>

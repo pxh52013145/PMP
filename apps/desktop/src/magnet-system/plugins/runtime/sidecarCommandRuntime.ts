@@ -13,6 +13,12 @@ import {
   recordPmpmPluginCrash,
 } from '../pmpm';
 import { createPluginMountApi, type HostAudioService, type HostNavigation } from '../pluginHostApi';
+import {
+  createPluginSidecarTelemetryContext,
+  reportPluginSidecarBridgeFailed,
+  reportPluginSidecarProcessUnresponsive,
+  type PluginLifecycleSourceKind,
+} from '../pluginLifecycleTelemetry';
 import { readPmpmPluginConfig, subscribePmpmPluginConfig } from '../pluginConfig';
 import { recordPmpmAuditEvent } from '../pmpmGovernance';
 import { createRuntimeBridgeHostSession, type RuntimeBridgePort } from './runtimeBridgeHostSession';
@@ -49,6 +55,13 @@ export interface CreatePmpmBridgeSidecarPortControllerOptions {
   commandId: string;
   args?: unknown;
   timeoutMs: number;
+  telemetry?: {
+    sourceKind: PluginLifecycleSourceKind;
+    hostLabel?: string | null;
+    surfaceKind?: string | null;
+    surfaceId?: string | null;
+    cause?: string | null;
+  };
 }
 
 export interface PmpmBridgeSidecarCommandRuntimeDeps {
@@ -86,6 +99,16 @@ export async function runPmpmBridgeSidecarCommand(
   const createPortController = deps.createPortController ?? createDefaultBridgeController;
 
   const runtimeInstanceId = `${options.pluginId}:command:${now()}:${Math.random().toString(16).slice(2)}`;
+  const sidecarTelemetryContext = createPluginSidecarTelemetryContext({
+    pluginId: options.pluginId,
+    sourceKind: 'pmpm',
+    hostLabel,
+    runtimeId: options.runtimeId,
+    runtimeInstanceId,
+    surfaceKind: 'command',
+    surfaceId: options.commandId,
+    cause: 'command',
+  });
   const permissions = getPmpmPluginEffectivePermissions(options.pluginId);
   const plugin = getInstalledPmpmPlugin(options.pluginId);
   const initialConfig = readPmpmPluginConfig(options.pluginId);
@@ -166,8 +189,23 @@ export async function runPmpmBridgeSidecarCommand(
       commandId: options.commandId,
       args: options.args,
       timeoutMs,
+      telemetry: {
+        sourceKind: 'pmpm',
+        hostLabel,
+        surfaceKind: 'command',
+        surfaceId: options.commandId,
+        cause: 'command',
+      },
     })
-  );
+  ).catch((error) => {
+    reportPluginSidecarBridgeFailed(sidecarTelemetryContext, error, {
+      extraFields: {
+        stage: 'open',
+        timeoutMs,
+      },
+    });
+    throw error;
+  });
 
   let settleCommand!: () => void;
   let failCommand!: (error: Error) => void;
@@ -189,6 +227,11 @@ export async function runPmpmBridgeSidecarCommand(
     runtimeActivate,
     startupTimeoutMs: STARTUP_TIMEOUT_MS,
     requestTimeoutMs: timeoutMs,
+    telemetry: {
+      sourceKind: 'pmpm',
+      launcherId: 'pxp.sidecar.native-process',
+      hostLabel,
+    },
     onRuntimeEvent: (message) => {
       const payload = asObject(message.payload) ?? {};
 
@@ -251,6 +294,11 @@ export async function runPmpmBridgeSidecarCommand(
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(() => {
         disposeReason = 'runtime-unresponsive';
+        reportPluginSidecarProcessUnresponsive(sidecarTelemetryContext, {
+          extraFields: {
+            timeoutMs,
+          },
+        });
         try {
           recordPmpmAuditEvent({
             type: 'runtime-unresponsive',

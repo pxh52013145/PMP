@@ -24,6 +24,7 @@ export type PmpmCompatCapabilityRevokeDrillMessage = {
   capabilityIds: string[];
   reason: string;
   dryRun?: boolean;
+  traceId?: string;
 };
 
 export type PmpmCompatCapabilityRevokeAckMessage = {
@@ -33,6 +34,7 @@ export type PmpmCompatCapabilityRevokeAckMessage = {
   ok: boolean;
   ignored?: boolean;
   reason?: string;
+  traceId?: string;
 };
 
 export type PmpmCompatRuntimeIncomingMessage =
@@ -53,6 +55,7 @@ export interface CreatePmpmCompatRuntimeSessionAdapterOptions {
   surfaceId?: string | null;
   permissions: string[];
   entryCode: string;
+  entryUrl?: string;
   mountContext?: unknown;
   commandArgs?: unknown;
   hostInfo?: unknown;
@@ -152,6 +155,7 @@ export function createPmpmCompatRuntimeSessionAdapter(
               surfaceId: options.surfaceId,
               permissions: [...options.permissions],
               entryCode: options.entryCode,
+              entryUrl: options.entryUrl,
               mountContext: options.mountContext,
               commandArgs: options.commandArgs,
               initialAudioState: options.initialAudioState,
@@ -190,6 +194,7 @@ export function createPmpmCompatRuntimeSessionAdapter(
               runtimeId: options.runtimeHello.runtimeId,
               runtimeInstanceId: options.runtimeHello.runtimeInstanceId,
               requestId: healthRequest.requestId,
+              traceId: healthRequest.traceId,
               ready: baseHealth?.ready ?? activateAckSent,
               status: baseHealth?.status ?? (activateAckSent ? 'healthy' : 'degraded'),
               message: baseHealth?.message,
@@ -197,9 +202,17 @@ export function createPmpmCompatRuntimeSessionAdapter(
             emitRuntimeMessage(response);
             return;
           }
+          case 'runtime.capabilities.revoke':
+            options.postCompatMessage({
+              type: 'pmpm:capabilities-revoke',
+              requestId: message.requestId,
+              capabilityIds: [...message.capabilityIds],
+              reason: message.reason,
+              traceId: message.traceId,
+            });
+            return;
           case 'runtime.ping':
           case 'runtime.pong':
-          case 'runtime.capabilities.revoke':
           case 'runtime.error':
           case 'view.mount.request':
           case 'view.mount.ack':
@@ -276,7 +289,20 @@ export function createPmpmCompatRuntimeSessionAdapter(
         case 'pmpm:pong':
         case 'pmpm:disposed':
         case 'pmpm:rpc':
+          return false;
         case 'pmpm:capabilities-revoke-ack':
+          emitRuntimeMessage({
+            bridgeVersion: options.runtimeHello.bridgeVersion,
+            op: 'runtime.capabilities.revoke.ack',
+            pluginId: options.runtimeHello.pluginId,
+            runtimeId: options.runtimeHello.runtimeId,
+            runtimeInstanceId: options.runtimeHello.runtimeInstanceId,
+            requestId: message.requestId,
+            traceId: message.traceId,
+            ok: message.ok,
+            ignored: message.ignored,
+            reason: message.reason,
+          });
           return false;
       }
     },

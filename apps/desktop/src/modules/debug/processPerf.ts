@@ -65,6 +65,21 @@ export type ProcessWorkingSetTrimResult = {
   failedPids: number[];
 };
 
+export type ProcessPerfRequestErrorCode =
+  | 'runtime-unavailable'
+  | 'unsupported'
+  | 'invoke-failed';
+
+export class ProcessPerfRequestError extends Error {
+  readonly code: ProcessPerfRequestErrorCode;
+
+  constructor(code: ProcessPerfRequestErrorCode, message: string) {
+    super(message);
+    this.name = 'ProcessPerfRequestError';
+    this.code = code;
+  }
+}
+
 const EMPTY_TOTALS: ProcessPerfTotals = {
   workingSetBytes: 0,
   privateBytes: 0,
@@ -230,26 +245,67 @@ export function ensureProcessWorkingSetTrimResult(value: unknown): ProcessWorkin
   };
 }
 
-export async function getProcessPerfSnapshot(): Promise<ProcessPerfSnapshot | null> {
-  if (!isTauriRuntime()) return null;
-  const raw = await invokeWithTelemetry<unknown>('debug_get_process_perf_snapshot', undefined, {
-    moduleId: 'debug',
-    component: 'processPerf',
-    event: 'debug.process-perf.snapshot',
-  }).catch(() => null);
-  if (!raw) return null;
+function normalizeProcessPerfError(error: unknown): ProcessPerfRequestError {
+  if (error instanceof ProcessPerfRequestError) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  if (/only supported on windows/i.test(message)) {
+    return new ProcessPerfRequestError('unsupported', message);
+  }
+  return new ProcessPerfRequestError('invoke-failed', message);
+}
+
+async function invokeProcessPerfCommand(
+  command: 'debug_get_process_perf_snapshot' | 'debug_get_process_perf_totals',
+  event: 'debug.process-perf.snapshot' | 'debug.process-perf.totals'
+): Promise<unknown> {
+  if (!isTauriRuntime()) {
+    throw new ProcessPerfRequestError(
+      'runtime-unavailable',
+      'Process performance snapshot is only available in Tauri runtime.'
+    );
+  }
+
+  try {
+    return await invokeWithTelemetry<unknown>(command, undefined, {
+      moduleId: 'debug',
+      component: 'processPerf',
+      event,
+    });
+  } catch (error) {
+    throw normalizeProcessPerfError(error);
+  }
+}
+
+export async function requestProcessPerfSnapshot(): Promise<ProcessPerfSnapshot> {
+  const raw = await invokeProcessPerfCommand(
+    'debug_get_process_perf_snapshot',
+    'debug.process-perf.snapshot'
+  );
   return ensureProcessPerfSnapshot(raw);
 }
 
-export async function getProcessPerfTotalsSnapshot(): Promise<ProcessPerfTotalsSnapshot | null> {
-  if (!isTauriRuntime()) return null;
-  const raw = await invokeWithTelemetry<unknown>('debug_get_process_perf_totals', undefined, {
-    moduleId: 'debug',
-    component: 'processPerf',
-    event: 'debug.process-perf.totals',
-  }).catch(() => null);
-  if (!raw) return null;
+export async function requestProcessPerfTotalsSnapshot(): Promise<ProcessPerfTotalsSnapshot> {
+  const raw = await invokeProcessPerfCommand(
+    'debug_get_process_perf_totals',
+    'debug.process-perf.totals'
+  );
   return ensureProcessPerfTotalsSnapshot(raw);
+}
+
+export async function getProcessPerfSnapshot(): Promise<ProcessPerfSnapshot | null> {
+  try {
+    return await requestProcessPerfSnapshot();
+  } catch {
+    return null;
+  }
+}
+
+export async function getProcessPerfTotalsSnapshot(): Promise<ProcessPerfTotalsSnapshot | null> {
+  try {
+    return await requestProcessPerfTotalsSnapshot();
+  } catch {
+    return null;
+  }
 }
 
 export async function trimProcessWorkingSet(

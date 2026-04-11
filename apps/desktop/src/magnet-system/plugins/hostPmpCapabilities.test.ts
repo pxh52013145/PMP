@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const durableTextState = new Map<string, string>();
+const pluginWindowMocks = vi.hoisted(() => ({
+  openPluginWindow: vi.fn(async () => {}),
+  closePluginWindow: vi.fn(async () => {}),
+}));
+
+vi.mock('../../utils/pluginWindows', () => ({
+  openPluginWindow: pluginWindowMocks.openPluginWindow,
+  closePluginWindow: pluginWindowMocks.closePluginWindow,
+}));
 
 vi.mock('../../modules/music-platform', async () => {
   const actual = await vi.importActual<typeof import('../../modules/music-platform')>(
@@ -235,7 +244,7 @@ import {
   registerAudioInputAdapterProvider,
 } from './pluginHostApi';
 import type { HostAudioService, HostNavigation, PluginHostTrayApi } from './pluginHostApi';
-import { clearPmpmPluginConfig } from './pluginConfig';
+import { clearPmpmPluginConfig, getPmpmPluginConfigKey } from './pluginConfig';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 
 const TEST_PLUGIN_ID = 'host-pmp-capability-test';
@@ -453,11 +462,13 @@ function createMountApi(options: {
   commands?: CommandsService | null;
   keybindings?: KeybindingsService | null;
   pluginId?: string;
+  sourceKind?: 'pmpm' | 'extv2';
   trayApi?: PluginHostTrayApi | null;
 }) {
   return createPluginMountApi({
     pluginId: options.pluginId ?? TEST_PLUGIN_ID,
     hostLabel: 'HostPmpCapabilityTest',
+    sourceKind: options.sourceKind,
     permissions: new Set(options.permissions),
     audioService: options.audioService ?? createAudioServiceStub(),
     commands: options.commands,
@@ -602,6 +613,107 @@ describe('host.pmp capabilities', () => {
 
     expect(navigateTo).toHaveBeenCalledWith('library', undefined);
     expect(goBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('injects sourceKind into plugin navigation routes for extv2 mounts', async () => {
+    const navigateTo = vi.fn();
+    const navigation = createNavigationStub({
+      navigateTo,
+    });
+    const api = createMountApi({
+      permissions: ['api:host', 'api:host-capability', 'api:navigation'],
+      navigation,
+      sourceKind: 'extv2',
+      pluginId: 'shared-plugin',
+    });
+
+    await api.host.invokeCapability('host.pmp.navigation', 'navigateTo', {
+      page: 'plugin-page',
+      params: {
+        pluginId: 'shared-plugin',
+        pageId: 'demo-page',
+      },
+    });
+    await api.host.invokeCapability('host.pmp.navigation', 'navigateTo', {
+      page: 'plugin-visualizer',
+      params: {
+        pluginId: 'shared-plugin',
+        visualizerId: 'demo-visualizer',
+      },
+    });
+
+    expect(navigateTo).toHaveBeenNthCalledWith(1, 'plugin-page', {
+      pluginId: 'shared-plugin',
+      pageId: 'demo-page',
+      sourceKind: 'extv2',
+    });
+    expect(navigateTo).toHaveBeenNthCalledWith(2, 'plugin-visualizer', {
+      pluginId: 'shared-plugin',
+      visualizerId: 'demo-visualizer',
+      sourceKind: 'extv2',
+    });
+  });
+
+  it('routes host.pmp.shell.window open/close through the source-aware window bridge', async () => {
+    const api = createMountApi({
+      permissions: ['api:host', 'api:host-capability', 'api:window'],
+      sourceKind: 'extv2',
+      pluginId: 'shared-plugin',
+    });
+
+    const describeResult = await api.host.invokeCapability('host.pmp.shell.window', 'describe');
+    const openResult = await api.host.invokeCapability('host.pmp.shell.window', 'open', {
+      windowId: 'demo-window',
+      options: {
+        title: 'Demo Window',
+        width: 920,
+        height: 620,
+      },
+    });
+    const closeResult = await api.host.invokeCapability('host.pmp.shell.window', 'close', {
+      windowId: 'demo-window',
+    });
+
+    expect(describeResult).toEqual({
+      ok: true,
+      data: {
+        capabilityId: 'host.pmp.shell.window',
+        stage: 'host-pack',
+        implementation: 'pmp-legacy-window-shell',
+        methods: ['describe', 'open', 'close'],
+      },
+    });
+    expect(openResult).toEqual({
+      ok: true,
+      data: {
+        capabilityId: 'host.pmp.shell.window',
+        opened: true,
+        windowId: 'demo-window',
+      },
+    });
+    expect(closeResult).toEqual({
+      ok: true,
+      data: {
+        capabilityId: 'host.pmp.shell.window',
+        closed: true,
+        windowId: 'demo-window',
+      },
+    });
+    expect(pluginWindowMocks.openPluginWindow).toHaveBeenCalledWith({
+      sourceKind: 'extv2',
+      pluginId: 'shared-plugin',
+      windowId: 'demo-window',
+      title: 'Demo Window',
+      width: 920,
+      height: 620,
+      x: undefined,
+      y: undefined,
+    });
+    expect(pluginWindowMocks.closePluginWindow).toHaveBeenCalledWith(
+      'shared-plugin',
+      'demo-window',
+      'extv2'
+    );
   });
 
   it('exposes host.pmp.shell.menu as a permission-gated builtin command catalog', async () => {
@@ -1036,6 +1148,35 @@ describe('host.pmp capabilities', () => {
 
     await api.host.invokeCapability('host.pmp.storage.config', 'reset');
     expect(api.config.get()).toEqual({});
+  });
+
+  it('separates PMPM and extv2 config namespaces for the same pluginId', async () => {
+    const pmpmApi = createMountApi({
+      permissions: ['api:host', 'api:host-capability', 'storage:local'],
+      pluginId: 'shared-plugin',
+      sourceKind: 'pmpm',
+    });
+    const extv2Api = createMountApi({
+      permissions: ['api:host', 'api:host-capability', 'storage:local'],
+      pluginId: 'shared-plugin',
+      sourceKind: 'extv2',
+    });
+
+    await pmpmApi.host.invokeCapability('host.pmp.storage.config', 'set', {
+      profile: 'pmpm',
+    });
+    await extv2Api.host.invokeCapability('host.pmp.storage.config', 'set', {
+      profile: 'extv2',
+    });
+
+    expect(pmpmApi.config.get()).toEqual({ profile: 'pmpm' });
+    expect(extv2Api.config.get()).toEqual({ profile: 'extv2' });
+    expect(localStorage.getItem(getPmpmPluginConfigKey('shared-plugin', 'pmpm'))).toBe(
+      JSON.stringify({ profile: 'pmpm' })
+    );
+    expect(localStorage.getItem(getPmpmPluginConfigKey('shared-plugin', 'extv2'))).toBe(
+      JSON.stringify({ profile: 'extv2' })
+    );
   });
 
   it('exposes host.pmp.storage.sync as a revisioned config snapshot bridge', async () => {

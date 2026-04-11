@@ -7,6 +7,7 @@ import type {
 } from './navigationParams';
 
 export type PmpmPluginPageType = `pmpm:${string}:page:${string}`;
+export type InstalledExtensionPageType = `extv2:${string}:page:${string}`;
 
 export type NavigationPageType =
   | 'home'
@@ -25,7 +26,8 @@ export type NavigationPageType =
   | 'plugin-page'
   | 'plugin-visualizer'
   | 'native-debug'
-  | PmpmPluginPageType;
+  | PmpmPluginPageType
+  | InstalledExtensionPageType;
 
 export type NavigationParamsMap = {
   home: undefined;

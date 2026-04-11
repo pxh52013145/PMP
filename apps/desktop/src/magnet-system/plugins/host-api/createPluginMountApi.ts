@@ -1,6 +1,7 @@
 import { APP_VERSION, HOST_API_VERSION } from '../../../constants/versions';
 import type { NavigationPageType, NavigationParamsFor } from '../../../contracts/navigation';
 import { parseNavigationParams } from '../../../contracts/navigationParams';
+import type { PluginSurfaceSourceKind } from '../../../contracts/pluginSurfaceSource';
 import type { PlayMode, Track } from '../../../services/audio';
 import type { AudioSpectrumTap } from '../../../services/audio/types';
 import { musicLibraryService } from '../../../services/audio/MusicLibraryService';
@@ -188,6 +189,7 @@ async function readMainWindowVisibleState(): Promise<boolean | null> {
 export function createPluginMountApi({
   pluginId,
   hostLabel,
+  sourceKind = 'pmpm',
   permissions,
   audioService,
   navigation,
@@ -197,6 +199,7 @@ export function createPluginMountApi({
 }: {
   pluginId: string;
   hostLabel: string;
+  sourceKind?: PluginSurfaceSourceKind;
   permissions: Set<string>;
   audioService: HostAudioService;
   navigation: HostNavigation;
@@ -382,6 +385,7 @@ export function createPluginMountApi({
       }
 
       await openPluginWindow({
+        sourceKind,
         pluginId,
         windowId,
         title: options?.title,
@@ -404,7 +408,7 @@ export function createPluginMountApi({
         );
         return;
       }
-      await closePluginWindow(pluginId, windowId);
+      await closePluginWindow(pluginId, windowId, sourceKind);
     },
   };
 
@@ -503,28 +507,28 @@ export function createPluginMountApi({
         warnDenied('storage:local', 'config.get()');
         return {};
       }
-      return readPmpmPluginConfig(pluginId);
+      return readPmpmPluginConfig(pluginId, sourceKind);
     },
     set: (next: Record<string, unknown>) => {
       if (!allowPluginConfig) {
         warnDenied('storage:local', 'config.set(next)');
         return;
       }
-      writePmpmPluginConfig(pluginId, next as PmpmPluginConfig);
+      writePmpmPluginConfig(pluginId, next as PmpmPluginConfig, sourceKind);
     },
     patch: (next: Record<string, unknown>) => {
       if (!allowPluginConfig) {
         warnDenied('storage:local', 'config.patch(next)');
         return;
       }
-      patchPmpmPluginConfig(pluginId, next);
+      patchPmpmPluginConfig(pluginId, next, sourceKind);
     },
     reset: () => {
       if (!allowPluginConfig) {
         warnDenied('storage:local', 'config.reset()');
         return;
       }
-      clearPmpmPluginConfig(pluginId);
+      clearPmpmPluginConfig(pluginId, sourceKind);
     },
     onChange: (cb: (config: Record<string, unknown>) => void) => {
       if (!allowPluginConfig) {
@@ -538,7 +542,7 @@ export function createPluginMountApi({
         );
         return () => {};
       }
-      return subscribePmpmPluginConfig(pluginId, cb);
+      return subscribePmpmPluginConfig(pluginId, cb, sourceKind);
     },
   };
 
@@ -554,6 +558,7 @@ export function createPluginMountApi({
     keybindings: keybindings ?? undefined,
     navigation,
     configApi,
+    sourceKind,
     trayApi,
     windowApi,
   });
@@ -1236,7 +1241,12 @@ export function createPluginMountApi({
           return;
         }
 
-        navigation.navigateTo(page as PageWithParams, validated as Record<string, unknown>);
+        const nextParams =
+          page === 'plugin-page' || page === 'plugin-visualizer'
+            ? ({ ...validated, sourceKind } as Record<string, unknown>)
+            : (validated as Record<string, unknown>);
+
+        navigation.navigateTo(page as PageWithParams, nextParams);
       },
       goBack: () => {
         if (!allowNavigation) {

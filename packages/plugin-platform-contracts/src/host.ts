@@ -1,6 +1,7 @@
 import type { ExtensionDefaultAnchorDescriptor, ExtensionVariantDescriptor } from './manifest';
 import type {
   PageContributionDescriptor,
+  ShellSurfaceContributionDescriptor,
   SettingsPanelContributionDescriptor,
   VisualizerContributionDescriptor,
   WindowContributionDescriptor,
@@ -109,6 +110,7 @@ export interface PmpHostMagnetContributionDescriptor {
 export interface PmpHostManifestContributionDescriptor {
   pages?: PageContributionDescriptor[];
   windows?: WindowContributionDescriptor[];
+  shellSurfaces?: ShellSurfaceContributionDescriptor[];
   settingsPanels?: SettingsPanelContributionDescriptor[];
   visualizers?: VisualizerContributionDescriptor[];
   magnets?: PmpHostMagnetContributionDescriptor;

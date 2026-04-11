@@ -5,6 +5,7 @@ import type {
 } from '@pixel-matrix/plugin-platform-contracts';
 import { tryWriteJson, readJson } from '../../modules/storage';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import {
   STORAGE_KEYS,
@@ -33,6 +34,16 @@ type ParsedExtensionInstallSource = {
   }>;
   rootDir: string;
   manifestPath: string;
+};
+
+type NativeInstalledExtensionInstallSource = {
+  manifestPath: string;
+  rootDir: string;
+  manifestRaw: string;
+  files: Array<{
+    relativePath: string;
+    bytes: number[];
+  }>;
 };
 
 const CAPABILITY_COMPAT_PERMISSION_MAP: Record<string, string[]> = {
@@ -175,6 +186,33 @@ function normalizeFsPath(value: string): string {
   return value.replace(/\\/g, '/');
 }
 
+function normalizeInstalledExtensionInstallPath(filePath: string): string {
+  const trimmed = filePath.trim();
+  if (!trimmed) {
+    throw new Error('Extension manifest path is required');
+  }
+
+  if (trimmed.startsWith('file://')) {
+    try {
+      const url = new URL(trimmed);
+      if (url.protocol === 'file:') {
+        const decoded = decodeURIComponent(url.pathname);
+        const windowsDrivePath =
+          /^\/[a-zA-Z]:/.test(decoded) || /^\/\//.test(decoded) ? decoded.slice(1) : decoded;
+        return normalizeFsPath(windowsDrivePath);
+      }
+    } catch {
+      // Fall back to the raw path when URL parsing fails.
+    }
+  }
+
+  if (trimmed.startsWith('\\\\?\\')) {
+    return normalizeFsPath(trimmed.slice(4));
+  }
+
+  return normalizeFsPath(trimmed);
+}
+
 function trimPathSegments(value: string, count: number): string | null {
   let next = normalizeFsPath(value);
   for (let i = 0; i < count; i += 1) {
@@ -212,6 +250,230 @@ function validateCapabilityRequirements(
         : undefined,
     };
   });
+}
+
+function validateInstalledContributionArray(
+  value: unknown,
+  label: string,
+  options: {
+    validateDimensions?: boolean;
+    validateInputs?: boolean;
+    validateShellSurface?: boolean;
+  } = {}
+): void {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+
+  const ids = new Set<string>();
+  for (const item of value) {
+    const record = expectObject(item, `${label} entries`);
+    const id = normalizeNonEmptyString(record.id, `${label}[].id`);
+    if (!/^[a-z0-9-]{1,48}$/.test(id)) {
+      throw new Error(`${label}[].id must match /^[a-z0-9-]{1,48}$/`);
+    }
+    if (ids.has(id)) {
+      throw new Error(`${label}[].id duplicated: "${id}"`);
+    }
+    ids.add(id);
+
+    normalizeNonEmptyString(record.title, `${label}["${id}"].title`);
+    if (typeof record.description !== 'undefined') {
+      normalizeNonEmptyString(record.description, `${label}["${id}"].description`);
+    }
+    if (typeof record.group !== 'undefined') {
+      normalizeNonEmptyString(record.group, `${label}["${id}"].group`);
+    }
+    if (
+      typeof record.order !== 'undefined' &&
+      (typeof record.order !== 'number' || !Number.isFinite(record.order))
+    ) {
+      throw new Error(`${label}["${id}"].order must be a number`);
+    }
+    if (typeof record.tags !== 'undefined') {
+      expectStringArray(record.tags, `${label}["${id}"].tags`);
+    }
+    if (typeof record.metadata !== 'undefined') {
+      expectObject(record.metadata, `${label}["${id}"].metadata`);
+    }
+
+    if (options.validateDimensions) {
+      if (
+        typeof record.width !== 'undefined' &&
+        (typeof record.width !== 'number' || !Number.isFinite(record.width) || record.width <= 0)
+      ) {
+        throw new Error(`${label}["${id}"].width must be a positive number`);
+      }
+      if (
+        typeof record.height !== 'undefined' &&
+        (typeof record.height !== 'number' || !Number.isFinite(record.height) || record.height <= 0)
+      ) {
+        throw new Error(`${label}["${id}"].height must be a positive number`);
+      }
+    }
+
+    if (options.validateShellSurface) {
+      if (record.surfaceType !== 'overlay' && record.surfaceType !== 'desktop-widget') {
+        throw new Error(
+          `${label}["${id}"].surfaceType must be "overlay" or "desktop-widget"`
+        );
+      }
+      if (
+        typeof record.pointerPolicy !== 'undefined' &&
+        record.pointerPolicy !== 'capture-input' &&
+        record.pointerPolicy !== 'passthrough'
+      ) {
+        throw new Error(
+          `${label}["${id}"].pointerPolicy must be "capture-input" or "passthrough"`
+        );
+      }
+      if (
+        typeof record.alwaysOnTop !== 'undefined' &&
+        typeof record.alwaysOnTop !== 'boolean'
+      ) {
+        throw new Error(`${label}["${id}"].alwaysOnTop must be a boolean`);
+      }
+      if (
+        typeof record.focusable !== 'undefined' &&
+        typeof record.focusable !== 'boolean'
+      ) {
+        throw new Error(`${label}["${id}"].focusable must be a boolean`);
+      }
+      if (
+        typeof record.dismissOnEscape !== 'undefined' &&
+        typeof record.dismissOnEscape !== 'boolean'
+      ) {
+        throw new Error(`${label}["${id}"].dismissOnEscape must be a boolean`);
+      }
+    }
+
+    if (options.validateInputs && typeof record.inputs !== 'undefined') {
+      expectStringArray(record.inputs, `${label}["${id}"].inputs`);
+    }
+  }
+}
+
+function validateInstalledExtensionPmpHostMagnetDescriptor(
+  value: unknown,
+  label: string
+): void {
+  if (typeof value === 'undefined') return;
+
+  const magnet = expectObject(value, label);
+  if (typeof magnet.defaultAnchor !== 'undefined') {
+    const anchor = expectObject(magnet.defaultAnchor, `${label}.defaultAnchor`);
+    if (
+      typeof anchor.type !== 'undefined' &&
+      anchor.type !== 'single' &&
+      anchor.type !== 'range'
+    ) {
+      throw new Error(`${label}.defaultAnchor.type must be "single" or "range"`);
+    }
+
+    if (typeof anchor.coordinates !== 'undefined') {
+      if (!Array.isArray(anchor.coordinates)) {
+        throw new Error(`${label}.defaultAnchor.coordinates must be an array`);
+      }
+
+      for (const item of anchor.coordinates) {
+        const coordinate = expectObject(item, `${label}.defaultAnchor.coordinates`);
+        if (
+          typeof coordinate.x !== 'number' ||
+          !Number.isFinite(coordinate.x) ||
+          typeof coordinate.y !== 'number' ||
+          !Number.isFinite(coordinate.y)
+        ) {
+          throw new Error(
+            `${label}.defaultAnchor.coordinates must be an array of {x:number,y:number}`
+          );
+        }
+      }
+    }
+  }
+
+  if (typeof magnet.defaultStyle !== 'undefined') {
+    expectObject(magnet.defaultStyle, `${label}.defaultStyle`);
+  }
+
+  const variantIds = new Set<string>();
+  if (typeof magnet.defaultVariant !== 'undefined') {
+    const defaultVariant = normalizeNonEmptyString(
+      magnet.defaultVariant,
+      `${label}.defaultVariant`
+    );
+    if (!/^[a-z0-9-]{1,48}$/.test(defaultVariant)) {
+      throw new Error(`${label}.defaultVariant must match /^[a-z0-9-]{1,48}$/`);
+    }
+  }
+
+  if (typeof magnet.variants !== 'undefined') {
+    if (!Array.isArray(magnet.variants)) {
+      throw new Error(`${label}.variants must be an array`);
+    }
+
+    for (const item of magnet.variants) {
+      const variant = expectObject(item, `${label}.variants`);
+      const variantId = normalizeNonEmptyString(variant.id, `${label}.variants[].id`);
+      if (!/^[a-z0-9-]{1,48}$/.test(variantId)) {
+        throw new Error(`${label}.variants[].id must match /^[a-z0-9-]{1,48}$/`);
+      }
+      if (variantIds.has(variantId)) {
+        throw new Error(`${label}.variants[].id duplicated: "${variantId}"`);
+      }
+      variantIds.add(variantId);
+
+      normalizeNonEmptyString(variant.label, `${label}.variants["${variantId}"].label`);
+      if (typeof variant.description !== 'undefined') {
+        normalizeNonEmptyString(
+          variant.description,
+          `${label}.variants["${variantId}"].description`
+        );
+      }
+      if (typeof variant.metadata !== 'undefined') {
+        expectObject(variant.metadata, `${label}.variants["${variantId}"].metadata`);
+      }
+    }
+
+    if (
+      typeof magnet.defaultVariant === 'string' &&
+      magnet.defaultVariant.trim().length > 0 &&
+      !variantIds.has(magnet.defaultVariant.trim())
+    ) {
+      throw new Error(`${label}.defaultVariant must exist in ${label}.variants`);
+    }
+  }
+}
+
+function validateInstalledExtensionHostContributions(value: unknown, label: string): void {
+  if (typeof value === 'undefined') return;
+
+  const host = expectObject(value, label);
+  if (typeof host.pmp === 'undefined') return;
+
+  const pmp = expectObject(host.pmp, `${label}.pmp`);
+  if (typeof pmp.pages !== 'undefined') {
+    validateInstalledContributionArray(pmp.pages, `${label}.pmp.pages`);
+  }
+  if (typeof pmp.windows !== 'undefined') {
+    validateInstalledContributionArray(pmp.windows, `${label}.pmp.windows`, {
+      validateDimensions: true,
+    });
+  }
+  if (typeof pmp.shellSurfaces !== 'undefined') {
+    validateInstalledContributionArray(pmp.shellSurfaces, `${label}.pmp.shellSurfaces`, {
+      validateDimensions: true,
+      validateShellSurface: true,
+    });
+  }
+  if (typeof pmp.settingsPanels !== 'undefined') {
+    validateInstalledContributionArray(pmp.settingsPanels, `${label}.pmp.settingsPanels`);
+  }
+  if (typeof pmp.visualizers !== 'undefined') {
+    validateInstalledContributionArray(pmp.visualizers, `${label}.pmp.visualizers`, {
+      validateInputs: true,
+    });
+  }
+  validateInstalledExtensionPmpHostMagnetDescriptor(pmp.magnets, `${label}.pmp.magnets`);
 }
 
 export function validateInstalledExtensionManifest(manifest: unknown): asserts manifest is PxpManifestV2 {
@@ -259,6 +521,10 @@ export function validateInstalledExtensionManifest(manifest: unknown): asserts m
 
   validateCapabilityRequirements(object.requiresCapabilities, 'manifest.requiresCapabilities');
   validateCapabilityRequirements(object.optionalCapabilities, 'manifest.optionalCapabilities');
+  if (typeof object.contributes !== 'undefined') {
+    const contributes = expectObject(object.contributes, 'manifest.contributes');
+    validateInstalledExtensionHostContributions(contributes.host, 'manifest.contributes.host');
+  }
 }
 
 function listDeclaredCapabilityIds(record: InstalledHostExtensionRecord): string[] {
@@ -393,43 +659,40 @@ async function computeTreeDigest(
   return await sha256Hex(merged);
 }
 
-async function collectDirectoryFiles(rootDir: string): Promise<
-  Array<{ relativePath: string; bytes: Uint8Array }>
-> {
-  const fs = await import('@tauri-apps/api/fs');
-  const entries = await fs.readDir(rootDir, { recursive: true });
-  const normalizedRoot = normalizeFsPath(rootDir).replace(/\/+$/, '');
-  const files: Array<{ relativePath: string; bytes: Uint8Array }> = [];
-
-  const visit = async (entry: import('@tauri-apps/api/fs').FileEntry): Promise<void> => {
-    if (Array.isArray(entry.children)) {
-      for (const child of entry.children) {
-        await visit(child);
-      }
-      return;
-    }
-
-    const absolutePath = normalizeFsPath(entry.path);
-    if (!absolutePath.startsWith(`${normalizedRoot}/`)) {
-      throw new Error(`Extension file is outside manifest root: ${entry.path}`);
-    }
-
+function normalizeNativeInstallSourceFiles(
+  files: NativeInstalledExtensionInstallSource['files']
+): Array<{ relativePath: string; bytes: Uint8Array }> {
+  return files.map((file, index) => {
     const relativePath = normalizeManifestRelativePath(
-      absolutePath.slice(normalizedRoot.length + 1),
-      'extension file path'
+      typeof file?.relativePath === 'string' ? file.relativePath : '',
+      `extension files[${index}].relativePath`
     );
-    const bytes = await fs.readBinaryFile(entry.path);
-    files.push({
+
+    if (!Array.isArray(file?.bytes)) {
+      throw new Error(`extension files[${index}].bytes must be an array`);
+    }
+
+    return {
       relativePath,
-      bytes: new Uint8Array(bytes),
-    });
-  };
+      bytes: Uint8Array.from(file.bytes),
+    };
+  });
+}
 
-  for (const entry of entries) {
-    await visit(entry);
-  }
-
-  return files;
+async function readInstalledExtensionInstallSourceFromNative(
+  filePath: string
+): Promise<NativeInstalledExtensionInstallSource> {
+  return await invokeWithTelemetry<NativeInstalledExtensionInstallSource>(
+    'plugin_read_install_source',
+    {
+      filePath,
+    },
+    {
+      moduleId: 'extensions',
+      component: 'installSource',
+      event: 'plugin.install_source.read',
+    }
+  );
 }
 
 async function parseInstalledExtensionInstallSourceFromFilePath(
@@ -439,34 +702,15 @@ async function parseInstalledExtensionInstallSourceFromFilePath(
     throw new Error('Installing manifest-v2 extensions requires the Tauri desktop runtime');
   }
 
-  const [fs, pathApi] = await Promise.all([
-    import('@tauri-apps/api/fs'),
-    import('@tauri-apps/api/path'),
-  ]);
-
-  const normalizedPath = normalizeFsPath(filePath.trim());
-  const isDirectory = await fs.exists(normalizedPath).then(async (exists) => {
-    if (!exists) {
-      throw new Error(`Extension manifest path does not exist: ${filePath}`);
-    }
-    const basename = await pathApi.basename(normalizedPath);
-    return basename !== 'manifest.v2.json';
-  });
-
-  const manifestPath = isDirectory
-    ? await pathApi.join(normalizedPath, 'manifest.v2.json')
-    : normalizedPath;
-  const manifestExists = await fs.exists(manifestPath);
-  if (!manifestExists) {
-    throw new Error(`manifest.v2.json not found: ${manifestPath}`);
-  }
-
-  const rootDir = await pathApi.dirname(manifestPath);
-  const manifestRaw = await fs.readTextFile(manifestPath);
+  const normalizedPath = normalizeInstalledExtensionInstallPath(filePath);
+  const installSource = await readInstalledExtensionInstallSourceFromNative(normalizedPath);
+  const manifestPath = normalizeFsPath(installSource.manifestPath);
+  const rootDir = normalizeFsPath(installSource.rootDir);
+  const manifestRaw = installSource.manifestRaw;
   const manifestUnknown = JSON.parse(manifestRaw) as unknown;
   validateInstalledExtensionManifest(manifestUnknown);
 
-  const files = await collectDirectoryFiles(rootDir);
+  const files = normalizeNativeInstallSourceFiles(installSource.files);
   const fileMap = new Map(files.map((file) => [file.relativePath, file.bytes] as const));
 
   for (const runtime of manifestUnknown.runtimes) {
@@ -636,8 +880,6 @@ export async function installInstalledExtensionFromFilePath(
         enabled: existing.enabled,
         disabledReason: existing.disabledReason,
         deniedCapabilities: existing.deniedCapabilities,
-        lastError: existing.lastError,
-        lastErrorAt: existing.lastErrorAt,
       }
     : options.defaultEnabled === false
       ? { ...parsed.record, enabled: false, disabledReason: 'manual' }
@@ -650,6 +892,14 @@ export async function installInstalledExtensionFromFilePath(
   };
 
   upsertInstalledExtensionRecord(persisted);
+  if (existing) {
+    const { requestInstalledExtensionRuntimeRestart } = await import(
+      './hostExtensionRuntimeSupervisor'
+    );
+    requestInstalledExtensionRuntimeRestart(persisted.manifest.identity.id, {
+      reason: 'install-update',
+    });
+  }
   try {
     recordInstalledExtensionAuditEvent({
       type: 'installed',
@@ -791,7 +1041,11 @@ export function clearInstalledExtensionLastError(id: string): void {
   }
 }
 
-export function recordInstalledExtensionCrash(id: string, error: unknown): void {
+export function recordInstalledExtensionCrash(
+  id: string,
+  error: unknown,
+  surface = 'command'
+): void {
   const records = loadInstalledExtensions();
   const index = records.findIndex((record) => record.manifest.identity.id === id);
   if (index < 0) return;
@@ -815,7 +1069,7 @@ export function recordInstalledExtensionCrash(id: string, error: unknown): void 
     recordInstalledExtensionAuditEvent({
       type: 'crash',
       pluginId: id,
-      surface: 'command',
+      surface,
       message,
     });
   } catch {

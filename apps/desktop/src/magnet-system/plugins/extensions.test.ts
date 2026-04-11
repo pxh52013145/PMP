@@ -11,6 +11,7 @@ const {
   existsMock,
   fileState,
   fsState,
+  invokeWithTelemetryMock,
   joinMock,
   readBinaryFileMock,
   readDirMock,
@@ -49,9 +50,43 @@ const {
     ];
   });
 
+  const invokeWithTelemetry = vi.fn(
+    async (command: string, args?: { filePath?: string }) => {
+      if (command !== 'plugin_read_install_source') {
+        throw new Error(`unexpected command: ${command}`);
+      }
+
+      const normalizedPath = normalize(args?.filePath ?? '');
+      const manifestPath = normalizedPath.endsWith('/manifest.v2.json')
+        ? normalizedPath
+        : `${normalizedPath}/manifest.v2.json`;
+      const rootDir = manifestPath.slice(0, manifestPath.lastIndexOf('/'));
+      const manifestBytes = sourceState.get(manifestPath);
+      if (!manifestBytes) {
+        throw new Error(`missing manifest: ${manifestPath}`);
+      }
+
+      const files = Array.from(sourceState.entries())
+        .filter(([path]) => path === manifestPath || path.startsWith(`${rootDir}/`))
+        .map(([path, bytes]) => ({
+          relativePath: path.slice(rootDir.length + 1),
+          bytes: Array.from(bytes),
+        }))
+        .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+
+      return {
+        manifestPath,
+        rootDir,
+        manifestRaw: Buffer.from(manifestBytes).toString('utf8'),
+        files,
+      };
+    }
+  );
+
   return {
     fileState: sourceState,
     fsState: durableState,
+    invokeWithTelemetryMock: invokeWithTelemetry,
     createDirMock: vi.fn(async () => undefined),
     readDirMock: readDir,
     readTextFileMock: vi.fn(async (path: string) => {
@@ -139,6 +174,10 @@ vi.mock('../../services/telemetry/TelemetryService', () => ({
   }),
 }));
 
+vi.mock('../../services/telemetry/tauriInvokeTelemetry', () => ({
+  invokeWithTelemetry: invokeWithTelemetryMock,
+}));
+
 vi.mock('../../utils/tauriRuntime', () => ({
   isTauriRuntime: () => true,
 }));
@@ -177,6 +216,191 @@ vi.mock('@tauri-apps/api/path', () => ({
   appDataDir: appDataDirMock,
 }));
 
+describe('manifest-v2 host contribution validation', () => {
+  it('accepts host.pmp view surfaces and magnet descriptors', async () => {
+    const { validateInstalledExtensionManifest } = await import('./extensions');
+
+    expect(() =>
+      validateInstalledExtensionManifest({
+        schemaVersion: '2.0',
+        kind: 'extension',
+        identity: {
+          id: 'view-surface-demo',
+          publisher: 'pixel-matrix.dev',
+          version: '0.1.0',
+          name: 'view-surface-demo',
+        },
+        hostTargets: [{ hostId: 'pmp', required: true }],
+        runtimes: [
+          {
+            runtimeId: 'webview.main',
+            kind: 'webview',
+            entry: 'index.js',
+          },
+        ],
+        contributes: {
+          host: {
+            pmp: {
+              settingsPanels: [
+                {
+                  id: 'demo-settings',
+                  kind: 'settings-panel',
+                  title: 'Demo Settings',
+                },
+              ],
+              pages: [
+                {
+                  id: 'demo-page',
+                  kind: 'page',
+                  title: 'Demo Page',
+                },
+              ],
+              windows: [
+                {
+                  id: 'demo-window',
+                  kind: 'window',
+                  title: 'Demo Window',
+                  width: 900,
+                  height: 560,
+                },
+              ],
+              shellSurfaces: [
+                {
+                  id: 'demo-overlay',
+                  kind: 'shell-surface',
+                  title: 'Demo Overlay',
+                  surfaceType: 'overlay',
+                  width: 480,
+                  height: 320,
+                  pointerPolicy: 'capture-input',
+                },
+                {
+                  id: 'demo-widget',
+                  kind: 'shell-surface',
+                  title: 'Demo Widget',
+                  surfaceType: 'desktop-widget',
+                  width: 320,
+                  height: 240,
+                  pointerPolicy: 'passthrough',
+                  dismissOnEscape: false,
+                },
+              ],
+              visualizers: [
+                {
+                  id: 'demo-visualizer',
+                  kind: 'visualizer',
+                  title: 'Demo Visualizer',
+                  inputs: ['spectrum'],
+                },
+              ],
+              magnets: {
+                defaultAnchor: {
+                  type: 'range',
+                  coordinates: [
+                    { x: 0, y: 0 },
+                    { x: 1, y: 0 },
+                  ],
+                },
+                defaultVariant: 'compact',
+                variants: [
+                  {
+                    id: 'compact',
+                    label: 'Compact',
+                  },
+                ],
+              },
+            },
+          },
+        },
+      })
+    ).not.toThrow();
+  });
+
+  it('rejects invalid host.pmp shell surface pointer policies', async () => {
+    const { validateInstalledExtensionManifest } = await import('./extensions');
+
+    expect(() =>
+      validateInstalledExtensionManifest({
+        schemaVersion: '2.0',
+        kind: 'extension',
+        identity: {
+          id: 'invalid-shell-surface-demo',
+          publisher: 'pixel-matrix.dev',
+          version: '0.1.0',
+          name: 'invalid-shell-surface-demo',
+        },
+        hostTargets: [{ hostId: 'pmp', required: true }],
+        runtimes: [
+          {
+            runtimeId: 'webview.main',
+            kind: 'webview',
+            entry: 'index.js',
+          },
+        ],
+        contributes: {
+          host: {
+            pmp: {
+              shellSurfaces: [
+                {
+                  id: 'bad-overlay',
+                  kind: 'shell-surface',
+                  title: 'Bad Overlay',
+                  surfaceType: 'overlay',
+                  pointerPolicy: 'hover-only',
+                },
+              ],
+            },
+          },
+        },
+      })
+    ).toThrow(
+      'contributes.host.pmp.shellSurfaces["bad-overlay"].pointerPolicy must be "capture-input" or "passthrough"'
+    );
+  });
+
+  it('rejects host.pmp magnet defaultVariant values that are not declared', async () => {
+    const { validateInstalledExtensionManifest } = await import('./extensions');
+
+    expect(() =>
+      validateInstalledExtensionManifest({
+        schemaVersion: '2.0',
+        kind: 'extension',
+        identity: {
+          id: 'invalid-view-surface-demo',
+          publisher: 'pixel-matrix.dev',
+          version: '0.1.0',
+          name: 'invalid-view-surface-demo',
+        },
+        hostTargets: [{ hostId: 'pmp', required: true }],
+        runtimes: [
+          {
+            runtimeId: 'webview.main',
+            kind: 'webview',
+            entry: 'index.js',
+          },
+        ],
+        contributes: {
+          host: {
+            pmp: {
+              magnets: {
+                defaultVariant: 'expanded',
+                variants: [
+                  {
+                    id: 'compact',
+                    label: 'Compact',
+                  },
+                ],
+              },
+            },
+          },
+        },
+      })
+    ).toThrowError(
+      'manifest.contributes.host.pmp.magnets.defaultVariant must exist in manifest.contributes.host.pmp.magnets.variants'
+    );
+  });
+});
+
 describe('manifest-v2 extension install artifacts', () => {
   const manifestPath = 'D:/fixtures/sidecar-capability-demo/manifest.v2.json';
 
@@ -192,6 +416,7 @@ describe('manifest-v2 extension install artifacts', () => {
     writeBinaryFileMock.mockClear();
     removeDirMock.mockClear();
     existsMock.mockClear();
+    invokeWithTelemetryMock.mockClear();
     joinMock.mockClear();
     dirnameMock.mockClear();
     basenameMock.mockClear();
@@ -297,6 +522,16 @@ describe('manifest-v2 extension install artifacts', () => {
     expect(fsState.has(`22:${artifactRelative}`)).toBe(true);
   }, 10_000);
 
+  it('accepts file:// manifest paths from the native picker', async () => {
+    const { parseInstalledExtensionFromFilePath } = await import('./extensions');
+
+    const parsed = await parseInstalledExtensionFromFilePath(
+      'file:///D:/fixtures/sidecar-capability-demo/manifest.v2.json'
+    );
+
+    expect(parsed.manifest.identity.id).toBe('sidecar-capability-demo');
+  }, 10_000);
+
   it('removes persisted manifest-v2 artifacts on uninstall', async () => {
     const { installInstalledExtensionFromFilePath, uninstallInstalledExtension } = await import(
       './extensions'
@@ -393,5 +628,45 @@ describe('manifest-v2 extension install artifacts', () => {
       pluginId: 'sidecar-capability-demo',
       reason: 'manual',
     });
+  }, 10_000);
+
+  it('requests a runtime restart when reinstalling an existing manifest-v2 extension', async () => {
+    const { installInstalledExtensionFromFilePath } = await import('./extensions');
+
+    await installInstalledExtensionFromFilePath(manifestPath);
+    localStorage.removeItem('test:extensions-v2-runtime-restart-v1');
+
+    await installInstalledExtensionFromFilePath(manifestPath);
+
+    expect(
+      JSON.parse(localStorage.getItem('test:extensions-v2-runtime-restart-v1') ?? 'null')
+    ).toMatchObject({
+      pluginId: 'sidecar-capability-demo',
+      reason: 'install-update',
+    });
+  }, 10_000);
+
+  it('clears stale lastError metadata when reinstalling an existing manifest-v2 extension', async () => {
+    const {
+      getInstalledExtensionRecord,
+      installInstalledExtensionFromFilePath,
+      recordInstalledExtensionCrash,
+    } = await import('./extensions');
+
+    await installInstalledExtensionFromFilePath(manifestPath);
+    recordInstalledExtensionCrash('sidecar-capability-demo', new Error('stale error'));
+
+    await installInstalledExtensionFromFilePath(manifestPath);
+
+    const record = getInstalledExtensionRecord('sidecar-capability-demo');
+    expect(record).toMatchObject({
+      manifest: {
+        identity: {
+          id: 'sidecar-capability-demo',
+        },
+      },
+    });
+    expect(record).not.toHaveProperty('lastError');
+    expect(record).not.toHaveProperty('lastErrorAt');
   }, 10_000);
 });

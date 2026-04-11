@@ -314,6 +314,8 @@ export const TAURI_EVENTS = {
   // Plugin windows / VST manager window
   PLUGIN_WINDOW_HIDDEN: 'plugin-window-hidden',
   PLUGIN_WINDOW_SHOWN: 'plugin-window-shown',
+  PLUGIN_SHELL_SURFACE_HIDDEN: 'plugin-shell-surface-hidden',
+  PLUGIN_SHELL_SURFACE_SHOWN: 'plugin-shell-surface-shown',
   VST_MANAGER_WINDOW_HIDDEN: 'vst-manager-window-hidden',
   VST_MANAGER_WINDOW_SHOWN: 'vst-manager-window-shown',
 

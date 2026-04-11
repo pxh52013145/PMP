@@ -14,6 +14,14 @@ export type PmpmPluginRuntime = {
   unmountVisualizer?: (container: HTMLElement, visualizerId: string) => void;
   mountWindow?: (container: HTMLElement, api: unknown, windowId: string) => void | (() => void);
   unmountWindow?: (container: HTMLElement, windowId: string) => void;
+  mountOverlay?: (container: HTMLElement, api: unknown, surfaceId: string) => void | (() => void);
+  unmountOverlay?: (container: HTMLElement, surfaceId: string) => void;
+  mountDesktopWidget?: (
+    container: HTMLElement,
+    api: unknown,
+    surfaceId: string
+  ) => void | (() => void);
+  unmountDesktopWidget?: (container: HTMLElement, surfaceId: string) => void;
   runCommand?: (api: unknown, commandId: string, args?: unknown) => void | Promise<void>;
 };
 
@@ -153,6 +161,18 @@ async function loadPluginRuntime(pluginId: string): Promise<PmpmPluginRuntime> {
     const unmountWindow =
       (mod.unmountWindow as PmpmPluginRuntime['unmountWindow'] | undefined) ??
       (defaultExport?.unmountWindow as PmpmPluginRuntime['unmountWindow'] | undefined);
+    const mountOverlay =
+      (mod.mountOverlay as PmpmPluginRuntime['mountOverlay'] | undefined) ??
+      (defaultExport?.mountOverlay as PmpmPluginRuntime['mountOverlay'] | undefined);
+    const unmountOverlay =
+      (mod.unmountOverlay as PmpmPluginRuntime['unmountOverlay'] | undefined) ??
+      (defaultExport?.unmountOverlay as PmpmPluginRuntime['unmountOverlay'] | undefined);
+    const mountDesktopWidget =
+      (mod.mountDesktopWidget as PmpmPluginRuntime['mountDesktopWidget'] | undefined) ??
+      (defaultExport?.mountDesktopWidget as PmpmPluginRuntime['mountDesktopWidget'] | undefined);
+    const unmountDesktopWidget =
+      (mod.unmountDesktopWidget as PmpmPluginRuntime['unmountDesktopWidget'] | undefined) ??
+      (defaultExport?.unmountDesktopWidget as PmpmPluginRuntime['unmountDesktopWidget'] | undefined);
     const mountVisualizer =
       (mod.mountVisualizer as PmpmPluginRuntime['mountVisualizer'] | undefined) ??
       (defaultExport?.mountVisualizer as PmpmPluginRuntime['mountVisualizer'] | undefined);
@@ -178,6 +198,10 @@ async function loadPluginRuntime(pluginId: string): Promise<PmpmPluginRuntime> {
       unmountVisualizer,
       mountWindow,
       unmountWindow,
+      mountOverlay,
+      unmountOverlay,
+      mountDesktopWidget,
+      unmountDesktopWidget,
       runCommand,
     };
   } finally {

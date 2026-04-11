@@ -50,17 +50,43 @@ describe('plugin runtime resolver', () => {
       {
         id: 'compat.pmpm.inline-module',
         availability: 'available',
-        surfaceKinds: ['magnet', 'settings', 'page', 'visualizer', 'window', 'command'],
+        surfaceKinds: [
+          'magnet',
+          'settings',
+          'page',
+          'visualizer',
+          'window',
+          'overlay',
+          'desktop-widget',
+          'command',
+        ],
       },
       {
         id: 'compat.pmpm.webview-sandbox',
         availability: 'available',
-        surfaceKinds: ['magnet', 'settings', 'page', 'visualizer', 'window', 'command'],
+        surfaceKinds: [
+          'magnet',
+          'settings',
+          'page',
+          'visualizer',
+          'window',
+          'overlay',
+          'desktop-widget',
+          'command',
+        ],
       },
       {
         id: 'pxp.webview.host-frame',
-        availability: 'planned',
-        surfaceKinds: ['magnet', 'settings', 'page', 'visualizer', 'window'],
+        availability: 'available',
+        surfaceKinds: [
+          'magnet',
+          'settings',
+          'page',
+          'visualizer',
+          'window',
+          'overlay',
+          'desktop-widget',
+        ],
       },
       {
         id: 'pxp.extension-host.worker',
@@ -246,7 +272,7 @@ describe('plugin runtime resolver', () => {
     ]);
   });
 
-  it('returns a blocked resolution when only planned generic launchers are available', () => {
+  it('resolves webview view runtimes onto the host-frame launcher', () => {
     const resolution = resolveInstalledExtensionRuntime(
       createRecord({
         ...COMPAT_MANIFEST,
@@ -265,14 +291,41 @@ describe('plugin runtime resolver', () => {
       }
     );
 
-    expect(resolution.status).toBe('blocked');
-    if (resolution.status !== 'blocked') return;
-    expect(resolution.candidateLaunchers.map((launcher) => launcher.id)).toEqual([
-      'pxp.webview.host-frame',
-    ]);
+    expect(resolution.status).toBe('resolved');
+    if (resolution.status !== 'resolved') return;
+    expect(resolution.runtime.runtimeId).toBe('future-webview');
+    expect(resolution.launcher.id).toBe('pxp.webview.host-frame');
+    expect(resolution.source).toBe('manifest-runtime');
     expect(getResolvedPmpmLauncherAdapter(resolution)).toBeNull();
     expect(getResolvedPmpmLauncherAdapterError(resolution)).toContain(
-      'Runtime "future-webview" only matches planned launchers: pxp.webview.host-frame'
+      'Resolved runtime launcher is not wired: pxp.webview.host-frame'
     );
+  });
+
+  it('resolves overlay shell surfaces onto the same long-lived view launcher path', () => {
+    const resolution = resolveInstalledExtensionRuntime(
+      createRecord({
+        ...COMPAT_MANIFEST,
+        compat: undefined,
+        runtimes: [
+          {
+            runtimeId: 'future-overlay-webview',
+            kind: 'webview',
+            entry: 'dist/overlay.html',
+            priority: 10,
+          },
+        ],
+      }),
+      {
+        hostId: 'pmp',
+        surfaceKind: 'overlay',
+      }
+    );
+
+    expect(resolution.status).toBe('resolved');
+    if (resolution.status !== 'resolved') return;
+    expect(resolution.runtime.runtimeId).toBe('future-overlay-webview');
+    expect(resolution.launcher.id).toBe('pxp.webview.host-frame');
+    expect(resolution.source).toBe('manifest-runtime');
   });
 });

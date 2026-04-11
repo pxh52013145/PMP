@@ -32,18 +32,34 @@ fn is_safe_id(value: &str) -> bool {
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-pub fn plugin_window_label(plugin_id: &str, window_id: &str) -> Result<String, String> {
+fn normalize_source_kind(source_kind: Option<&str>) -> Result<&str, String> {
+    match source_kind.unwrap_or("pmpm") {
+        "pmpm" => Ok("pmpm"),
+        "extv2" => Ok("extv2"),
+        other => Err(format!("Invalid sourceKind: {}", other)),
+    }
+}
+
+pub fn plugin_window_label(
+    source_kind: Option<&str>,
+    plugin_id: &str,
+    window_id: &str,
+) -> Result<String, String> {
+    let source_kind = normalize_source_kind(source_kind)?;
     if !is_safe_id(plugin_id) {
         return Err(format!("Invalid pluginId: {}", plugin_id));
     }
     if !is_safe_id(window_id) {
         return Err(format!("Invalid windowId: {}", window_id));
     }
-    Ok(format!("plugin-{}-{}", plugin_id, window_id))
+    Ok(format!(
+        "plugin-{}-{}-{}",
+        source_kind, plugin_id, window_id
+    ))
 }
 
-fn payload(plugin_id: &str, window_id: &str) -> String {
-    format!("{}/{}", plugin_id, window_id)
+fn payload(source_kind: &str, plugin_id: &str, window_id: &str) -> String {
+    format!("{}/{}/{}", source_kind, plugin_id, window_id)
 }
 
 fn apply_geometry(window: &tauri::Window, geometry: &PluginWindowGeometry) {
@@ -114,13 +130,19 @@ fn unregister_open_label(label: &str) {
 
 pub fn open_plugin_window(
     app: &AppHandle,
+    source_kind: Option<String>,
     plugin_id: String,
     window_id: String,
     geometry: PluginWindowGeometry,
     exit_flag: Arc<AtomicBool>,
     title: Option<String>,
 ) -> Result<(), String> {
-    let window_label = plugin_window_label(plugin_id.as_str(), window_id.as_str())?;
+    let normalized_source_kind = normalize_source_kind(source_kind.as_deref())?;
+    let window_label = plugin_window_label(
+        Some(normalized_source_kind),
+        plugin_id.as_str(),
+        window_id.as_str(),
+    )?;
 
     if let Some(existing_window) = app.get_window(window_label.as_str()) {
         apply_geometry(&existing_window, &geometry);
@@ -131,13 +153,18 @@ pub fn open_plugin_window(
         }
         let _ = app.emit_all(
             EVENT_PLUGIN_WINDOW_SHOWN,
-            payload(plugin_id.as_str(), window_id.as_str()),
+            payload(
+                normalized_source_kind,
+                plugin_id.as_str(),
+                window_id.as_str(),
+            ),
         );
         return Ok(());
     }
 
     let url = format!(
-        "/#/plugin-window/{}/{}",
+        "/#/plugin-window/{}/{}/{}",
+        normalized_source_kind,
         plugin_id.as_str(),
         window_id.as_str()
     );
@@ -159,10 +186,15 @@ pub fn open_plugin_window(
     register_open_label(window_label.as_str());
     let _ = app.emit_all(
         EVENT_PLUGIN_WINDOW_SHOWN,
-        payload(plugin_id.as_str(), window_id.as_str()),
+        payload(
+            normalized_source_kind,
+            plugin_id.as_str(),
+            window_id.as_str(),
+        ),
     );
 
     let app_handle = app.clone();
+    let source_kind_for_events = normalized_source_kind.to_string();
     let plugin_id_for_events = plugin_id.clone();
     let window_id_for_events = window_id.clone();
     let label_for_events = window_label.clone();
@@ -178,7 +210,11 @@ pub fn open_plugin_window(
             api.prevent_close();
             let _ = app_handle.emit_all(
                 EVENT_PLUGIN_WINDOW_HIDDEN,
-                payload(plugin_id_for_events.as_str(), window_id_for_events.as_str()),
+                payload(
+                    source_kind_for_events.as_str(),
+                    plugin_id_for_events.as_str(),
+                    window_id_for_events.as_str(),
+                ),
             );
             let Some(win) = app_handle.get_window(label_for_events.as_str()) else {
                 return;
@@ -200,14 +236,24 @@ pub fn open_plugin_window(
 
 pub fn close_plugin_window(
     app: &AppHandle,
+    source_kind: Option<String>,
     plugin_id: String,
     window_id: String,
 ) -> Result<(), String> {
-    let window_label = plugin_window_label(plugin_id.as_str(), window_id.as_str())?;
+    let normalized_source_kind = normalize_source_kind(source_kind.as_deref())?;
+    let window_label = plugin_window_label(
+        Some(normalized_source_kind),
+        plugin_id.as_str(),
+        window_id.as_str(),
+    )?;
     if let Some(window) = app.get_window(window_label.as_str()) {
         let _ = app.emit_all(
             EVENT_PLUGIN_WINDOW_HIDDEN,
-            payload(plugin_id.as_str(), window_id.as_str()),
+            payload(
+                normalized_source_kind,
+                plugin_id.as_str(),
+                window_id.as_str(),
+            ),
         );
         window.hide().map_err(|e| e.to_string())?;
     }
@@ -256,4 +302,33 @@ pub fn governance_destroy_hidden_plugin_windows(app: &AppHandle) -> usize {
     }
 
     destroyed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_window_label_defaults_to_pmpm_source_kind() {
+        assert_eq!(
+            plugin_window_label(None, "demo-plugin", "main-window").unwrap(),
+            "plugin-pmpm-demo-plugin-main-window"
+        );
+    }
+
+    #[test]
+    fn plugin_window_label_supports_extv2_source_kind() {
+        assert_eq!(
+            plugin_window_label(Some("extv2"), "demo-plugin", "main-window").unwrap(),
+            "plugin-extv2-demo-plugin-main-window"
+        );
+    }
+
+    #[test]
+    fn plugin_window_label_rejects_unknown_source_kind() {
+        assert_eq!(
+            plugin_window_label(Some("unknown"), "demo-plugin", "main-window").unwrap_err(),
+            "Invalid sourceKind: unknown"
+        );
+    }
 }

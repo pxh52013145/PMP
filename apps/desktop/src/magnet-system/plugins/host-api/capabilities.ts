@@ -3040,7 +3040,15 @@ function createPmpNavigationHandler(): PluginHostCapabilityHandler {
           return resultError('INVALID_PAYLOAD', 'payload.params must be an object when provided');
         }
 
-        navigation.navigateTo(page as never, (asObject(payload?.params) ?? undefined) as never);
+        const params = asObject(payload?.params) ?? undefined;
+        const nextParams =
+          (page === 'plugin-page' || page === 'plugin-visualizer') &&
+          request.context.sourceKind &&
+          params
+            ? ({ ...params, sourceKind: request.context.sourceKind } as Record<string, unknown>)
+            : params;
+
+        navigation.navigateTo(page as never, nextParams as never);
         return resultOk({
           capabilityId: HOST_PMP_NAVIGATION_CAPABILITY_ID,
           page,

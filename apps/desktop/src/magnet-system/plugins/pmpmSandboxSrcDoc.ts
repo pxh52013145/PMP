@@ -31,6 +31,12 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
       let mountedId = null;
       let mountContext = null;
       let commandArgs = undefined;
+      let contentSizeObserver = null;
+      let contentMutationObserver = null;
+      let contentMeasureFrame = 0;
+      let contentMeasureTimeoutA = 0;
+      let contentMeasureTimeoutB = 0;
+      let lastReportedContentHeight = 0;
 
       let permissions = new Set();
       let pluginId = '';
@@ -62,10 +68,95 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
       const hostStreams = new Map();
 
       const post = (msg) => parent.postMessage({ frameId: FRAME_ID, ...msg }, '*');
+      const handleWindowResize = () => {
+        queueContentSizeReport();
+      };
       const warnDenied = (capability, action) => {
         try {
           post({ type: 'pmpm:permission-denied', pluginId, hostLabel, capability, action });
         } catch {}
+      };
+      const stopContentSizeObservers = () => {
+        if (contentMeasureFrame) {
+          cancelAnimationFrame(contentMeasureFrame);
+          contentMeasureFrame = 0;
+        }
+        if (contentMeasureTimeoutA) {
+          clearTimeout(contentMeasureTimeoutA);
+          contentMeasureTimeoutA = 0;
+        }
+        if (contentMeasureTimeoutB) {
+          clearTimeout(contentMeasureTimeoutB);
+          contentMeasureTimeoutB = 0;
+        }
+        if (contentSizeObserver) {
+          try {
+            contentSizeObserver.disconnect();
+          } catch {}
+          contentSizeObserver = null;
+        }
+        if (contentMutationObserver) {
+          try {
+            contentMutationObserver.disconnect();
+          } catch {}
+          contentMutationObserver = null;
+        }
+        window.removeEventListener('resize', handleWindowResize);
+      };
+      const reportContentSize = () => {
+        contentMeasureFrame = 0;
+        if (mountedKind !== 'settings' || !ROOT) return;
+        const rootRect = ROOT.getBoundingClientRect();
+        const nextHeight = Math.max(
+          Math.ceil(rootRect.height),
+          Math.ceil(ROOT.scrollHeight || 0),
+          Math.ceil(document.body ? document.body.scrollHeight || 0 : 0),
+          Math.ceil(document.documentElement ? document.documentElement.scrollHeight || 0 : 0)
+        );
+        if (nextHeight <= 0 || nextHeight === lastReportedContentHeight) return;
+        lastReportedContentHeight = nextHeight;
+        post({ type: 'pmpm:content-size', height: nextHeight });
+      };
+      const queueContentSizeReport = () => {
+        if (mountedKind !== 'settings') return;
+        if (contentMeasureFrame) return;
+        contentMeasureFrame = requestAnimationFrame(reportContentSize);
+      };
+      const startContentSizeObservers = () => {
+        stopContentSizeObservers();
+        if (mountedKind !== 'settings' || !ROOT) return;
+        lastReportedContentHeight = 0;
+        queueContentSizeReport();
+        if (typeof ResizeObserver === 'function') {
+          contentSizeObserver = new ResizeObserver(() => {
+            queueContentSizeReport();
+          });
+          try {
+            contentSizeObserver.observe(ROOT);
+            if (document.body) contentSizeObserver.observe(document.body);
+            if (document.documentElement) contentSizeObserver.observe(document.documentElement);
+          } catch {}
+        }
+        if (typeof MutationObserver === 'function') {
+          contentMutationObserver = new MutationObserver(() => {
+            queueContentSizeReport();
+          });
+          try {
+            contentMutationObserver.observe(ROOT, {
+              childList: true,
+              subtree: true,
+              characterData: true,
+              attributes: true,
+            });
+          } catch {}
+        }
+        window.addEventListener('resize', handleWindowResize);
+        contentMeasureTimeoutA = setTimeout(() => {
+          queueContentSizeReport();
+        }, 32);
+        contentMeasureTimeoutB = setTimeout(() => {
+          queueContentSizeReport();
+        }, 180);
       };
 
       const hasPermission = (capability) => {
@@ -783,10 +874,25 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
           return;
         }
 
+        if (surface === 'overlay') {
+          mount = runtime.mountOverlay;
+          if (typeof mount !== 'function') throw new Error('Plugin entry must export "mountOverlay(container, api, surfaceId)"');
+          cleanup = mount(ROOT, api, surfaceId);
+          return;
+        }
+
+        if (surface === 'desktop-widget') {
+          mount = runtime.mountDesktopWidget;
+          if (typeof mount !== 'function') throw new Error('Plugin entry must export "mountDesktopWidget(container, api, surfaceId)"');
+          cleanup = mount(ROOT, api, surfaceId);
+          return;
+        }
+
         throw new Error('Unsupported surface');
       };
 
       const dispose = () => {
+        stopContentSizeObservers();
         try {
           if (typeof cleanup === 'function') {
             cleanup();
@@ -835,9 +941,12 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
           navigationSnapshot = data.initialNavigation && typeof data.initialNavigation === 'object' ? data.initialNavigation : null;
 
           try {
-            const entryCode = String(data.entryCode || '');
-            if (!entryCode) throw new Error('entryCode missing');
-            const url = URL.createObjectURL(new Blob([entryCode], { type: 'text/javascript' }));
+            const entryCode = typeof data.entryCode === 'string' ? data.entryCode : '';
+            const entryUrl = typeof data.entryUrl === 'string' ? data.entryUrl : '';
+            if (!entryCode && !entryUrl) throw new Error('entryCode/entryUrl missing');
+            const url = entryCode
+              ? URL.createObjectURL(new Blob([entryCode], { type: 'text/javascript' }))
+              : entryUrl;
             try {
               const mod = await import(url);
               runtime = {
@@ -851,13 +960,20 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
                 unmountVisualizer: pickExport(mod, 'unmountVisualizer'),
                 mountWindow: pickExport(mod, 'mountWindow'),
                 unmountWindow: pickExport(mod, 'unmountWindow'),
+                mountOverlay: pickExport(mod, 'mountOverlay'),
+                unmountOverlay: pickExport(mod, 'unmountOverlay'),
+                mountDesktopWidget: pickExport(mod, 'mountDesktopWidget'),
+                unmountDesktopWidget: pickExport(mod, 'unmountDesktopWidget'),
                 runCommand: pickExport(mod, 'runCommand'),
               };
             } finally {
-              URL.revokeObjectURL(url);
+              if (entryCode) {
+                URL.revokeObjectURL(url);
+              }
             }
 
             await runSurface(mountedKind, mountedId, commandArgs);
+            startContentSizeObservers();
             if (mountedKind === 'command') {
               post({ type: 'pmpm:command-finished', ok: true });
               dispose();
@@ -910,6 +1026,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
                 ? runtimeInitSnapshot.runtimeInstanceId
                 : FRAME_ID,
             requestId,
+            traceId: typeof data.traceId === 'string' ? data.traceId : undefined,
             capabilityIds,
             reason,
             dryRun: Boolean(data.dryRun),
@@ -918,6 +1035,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
           runtimeRevokeAckSnapshot = {
             op: 'runtime.capabilities.revoke.ack',
             requestId,
+            traceId: runtimeRevokeSnapshot.traceId,
             ok: true,
             ignored: true,
             reason,
@@ -926,6 +1044,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
           post({
             type: 'pmpm:capabilities-revoke-ack',
             requestId,
+            traceId: runtimeRevokeSnapshot.traceId,
             ok: true,
             ignored: true,
             reason,

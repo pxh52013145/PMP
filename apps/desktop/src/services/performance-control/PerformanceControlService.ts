@@ -22,9 +22,9 @@ import {
   type QualitySettingsV1,
 } from '../../contracts/quality';
 import { readJson, readString } from '../../modules/storage';
-import { getProcessPerfTotalsSnapshot } from '../../modules/debug';
 import { applyEditorLowPerformanceMode } from '../../utils/editorWindowEffects';
 import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
+import type { ProcessPerfService } from './ProcessPerfService';
 
 function parseBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
@@ -134,7 +134,10 @@ export const PERFORMANCE_CONTROL_SERVICE_TOKEN = createServiceToken<PerformanceC
 export class DefaultPerformanceControlService implements PerformanceControlService {
   private snapshot: PerformanceControlSnapshot = DEFAULT_PERFORMANCE_CONTROL_SNAPSHOT;
 
-  constructor(private readonly events: ScopedEventBus<AppEvents>) {
+  constructor(
+    private readonly events: ScopedEventBus<AppEvents>,
+    private readonly processPerfService: ProcessPerfService
+  ) {
     this.refreshSettingsFromStorage();
   }
 
@@ -305,24 +308,22 @@ export class DefaultPerformanceControlService implements PerformanceControlServi
     const previous = this.snapshot;
 
     let webview2 = previous.webview2;
-    try {
-      const totals = await getProcessPerfTotalsSnapshot();
-      if (totals) {
-        webview2 = {
-          sampledAtMs: totals.timestampMs,
-          webview2PrivateBytes: totals.totals.webview2PrivateBytes,
-          webview2WorkingSetBytes: totals.totals.webview2WorkingSetBytes,
-          webview2CpuPercent: totals.totals.webview2CpuPercent,
-          treePrivateBytes: totals.totals.privateBytes,
-          treeWorkingSetBytes: totals.totals.workingSetBytes,
-          treeCpuPercent: totals.totals.cpuPercent,
-          systemMemoryLoadPercent: totals.systemMemory?.memoryLoadPercent ?? null,
-          systemMemoryTotalBytes: totals.systemMemory?.totalPhysicalBytes ?? null,
-          systemMemoryAvailableBytes: totals.systemMemory?.availablePhysicalBytes ?? null,
-        };
-      }
-    } catch {
-      // ignore best-effort snapshot collection failures
+    const totals = await this.processPerfService.refreshTotalsSnapshot();
+    if (totals) {
+      webview2 = {
+        sampledAtMs: totals.timestampMs,
+        webview2PrivateBytes: totals.totals.webview2PrivateBytes,
+        webview2WorkingSetBytes: totals.totals.webview2WorkingSetBytes,
+        webview2CpuPercent: totals.totals.webview2CpuPercent,
+        treePrivateBytes: totals.totals.privateBytes,
+        treeWorkingSetBytes: totals.totals.workingSetBytes,
+        treeCpuPercent: totals.totals.cpuPercent,
+        systemMemoryLoadPercent: totals.systemMemory?.memoryLoadPercent ?? null,
+        systemMemoryTotalBytes: totals.systemMemory?.totalPhysicalBytes ?? null,
+        systemMemoryAvailableBytes: totals.systemMemory?.availablePhysicalBytes ?? null,
+      };
+    } else if (this.processPerfService.getSnapshot().availability !== 'ready') {
+      webview2 = null;
     }
 
     this.snapshot = {

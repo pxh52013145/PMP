@@ -17,6 +17,11 @@ import {
   recordInstalledExtensionAuditEvent,
   recordInstalledExtensionPermissionDenied,
 } from '../extensionsGovernance';
+import {
+  createPluginSidecarTelemetryContext,
+  reportPluginSidecarBridgeFailed,
+  reportPluginSidecarProcessUnresponsive,
+} from '../pluginLifecycleTelemetry';
 import { createPluginMountApi, type HostAudioService, type HostNavigation } from '../pluginHostApi';
 import { readPmpmPluginConfig, subscribePmpmPluginConfig } from '../pluginConfig';
 import type {
@@ -26,6 +31,7 @@ import type {
 import { createRuntimeBridgeHostSession } from './runtimeBridgeHostSession';
 import { bindHostRuntimeEventChannel, RUNTIME_EVENT_NAMES } from './runtimeEventChannel';
 import { createTauriPmpmBridgeSidecarPortController } from './tauriSidecarPortController';
+import { createInstalledExtensionEntryUrl } from './installedExtensionRuntimeAssets';
 import {
   buildWorkerBootstrapSource,
   buildWorkerPort,
@@ -93,25 +99,6 @@ function createDefaultBridgeController(
   return createMissingBridgeController();
 }
 
-async function createInstalledExtensionEntryUrl(entryPath: string): Promise<string> {
-  const normalizedPath = entryPath.replace(/\\/g, '/');
-  const isWindowsAbsolutePath = /^[a-zA-Z]:\//.test(normalizedPath);
-  const isUrlLike = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(normalizedPath);
-
-  if (isUrlLike && !isWindowsAbsolutePath) {
-    return normalizedPath;
-  }
-
-  if (isTauriRuntime()) {
-    const tauriApi = await import('@tauri-apps/api/tauri');
-    if (typeof tauriApi.convertFileSrc === 'function') {
-      return tauriApi.convertFileSrc(entryPath);
-    }
-  }
-
-  throw new Error('Installed extension worker entry URL is not configured');
-}
-
 async function runInstalledExtensionWorkerCommand(
   options: RunResolvedInstalledExtensionCommandOptions,
   deps: InstalledExtensionCommandRuntimeDeps
@@ -133,11 +120,12 @@ async function runInstalledExtensionWorkerCommand(
 
   const runtimeInstanceId = `${pluginId}:command:${now()}:${Math.random().toString(16).slice(2)}`;
   const permissions = new Set(listInstalledExtensionCompatPermissions(record));
-  const initialConfig = readPmpmPluginConfig(pluginId);
+  const initialConfig = readPmpmPluginConfig(pluginId, 'extv2');
 
   const api = createPluginMountApi({
     pluginId,
     hostLabel,
+    sourceKind: 'extv2',
     permissions,
     audioService: options.audioService,
     commands: options.commands,
@@ -243,6 +231,11 @@ async function runInstalledExtensionWorkerCommand(
     runtimeActivate,
     startupTimeoutMs: STARTUP_TIMEOUT_MS,
     requestTimeoutMs: timeoutMs,
+    telemetry: {
+      sourceKind: 'extv2',
+      launcherId: 'pxp.extension-host.worker',
+      hostLabel,
+    },
     onRuntimeEvent: (message) => {
       const payload = asObject(message.payload) ?? {};
       if (message.eventName === RUNTIME_EVENT_NAMES.permissionDenied) {
@@ -292,7 +285,7 @@ async function runInstalledExtensionWorkerCommand(
     navigation: options.navigation,
     emitRuntimeEvent: (eventName, payload) => session.emitRuntimeEvent(eventName, payload),
     subscribeConfig: permissions.has('storage:local')
-      ? (listener) => subscribePmpmPluginConfig(pluginId, listener)
+      ? (listener) => subscribePmpmPluginConfig(pluginId, listener, 'extv2')
       : undefined,
     getSpectrum:
       permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrum === 'function'
@@ -367,12 +360,23 @@ async function runInstalledExtensionSidecarCommand(
   const createPortController = deps.createPortController ?? createDefaultBridgeController;
 
   const runtimeInstanceId = `${pluginId}:command:${now()}:${Math.random().toString(16).slice(2)}`;
+  const sidecarTelemetryContext = createPluginSidecarTelemetryContext({
+    pluginId,
+    sourceKind: 'extv2',
+    hostLabel,
+    runtimeId,
+    runtimeInstanceId,
+    surfaceKind: 'command',
+    surfaceId: options.commandId,
+    cause: 'command',
+  });
   const permissions = new Set(listInstalledExtensionCompatPermissions(record));
-  const initialConfig = readPmpmPluginConfig(pluginId);
+  const initialConfig = readPmpmPluginConfig(pluginId, 'extv2');
 
   const api = createPluginMountApi({
     pluginId,
     hostLabel,
+    sourceKind: 'extv2',
     permissions,
     audioService: options.audioService,
     commands: options.commands,
@@ -445,8 +449,23 @@ async function runInstalledExtensionSidecarCommand(
       commandId: options.commandId,
       args: options.args,
       timeoutMs,
+      telemetry: {
+        sourceKind: 'extv2',
+        hostLabel,
+        surfaceKind: 'command',
+        surfaceId: options.commandId,
+        cause: 'command',
+      },
     })
-  );
+  ).catch((error) => {
+    reportPluginSidecarBridgeFailed(sidecarTelemetryContext, error, {
+      extraFields: {
+        stage: 'open',
+        timeoutMs,
+      },
+    });
+    throw error;
+  });
 
   let settleCommand!: () => void;
   let failCommand!: (error: Error) => void;
@@ -468,6 +487,11 @@ async function runInstalledExtensionSidecarCommand(
     runtimeActivate,
     startupTimeoutMs: STARTUP_TIMEOUT_MS,
     requestTimeoutMs: timeoutMs,
+    telemetry: {
+      sourceKind: 'extv2',
+      launcherId: 'pxp.sidecar.native-process',
+      hostLabel,
+    },
     onRuntimeEvent: (message) => {
       const payload = asObject(message.payload) ?? {};
       if (message.eventName === RUNTIME_EVENT_NAMES.permissionDenied) {
@@ -508,7 +532,7 @@ async function runInstalledExtensionSidecarCommand(
     navigation: options.navigation,
     emitRuntimeEvent: (eventName, payload) => session.emitRuntimeEvent(eventName, payload),
     subscribeConfig: permissions.has('storage:local')
-      ? (listener) => subscribePmpmPluginConfig(pluginId, listener)
+      ? (listener) => subscribePmpmPluginConfig(pluginId, listener, 'extv2')
       : undefined,
     getSpectrum:
       permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrum === 'function'
@@ -527,6 +551,11 @@ async function runInstalledExtensionSidecarCommand(
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(() => {
         disposeReason = 'runtime-unresponsive';
+        reportPluginSidecarProcessUnresponsive(sidecarTelemetryContext, {
+          extraFields: {
+            timeoutMs,
+          },
+        });
         try {
           recordInstalledExtensionAuditEvent({
             type: 'runtime-unresponsive',

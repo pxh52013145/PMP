@@ -74,10 +74,10 @@ const VisualizersSettingsPanelLazy = React.lazy(async () => ({
   default: (await import('../components/settings-panels/VisualizersSettingsPanel')).VisualizersSettingsPanel,
 }));
 const PluginPageHostLazy = React.lazy(async () => ({
-  default: (await import('../magnet-system/plugins/PluginPageHost')).PluginPageHost,
+  default: (await import('../magnet-system/plugins/ResolvedPluginHosts')).ResolvedPluginPageHost,
 }));
 const PluginVisualizerHostLazy = React.lazy(async () => ({
-  default: (await import('../magnet-system/plugins/PluginVisualizerHost')).PluginVisualizerHost,
+  default: (await import('../magnet-system/plugins/ResolvedPluginHosts')).ResolvedPluginVisualizerHost,
 }));
 
 function LazyLoadingFallback() {
@@ -452,7 +452,11 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
               );
             }
             return renderWithLazyBoundary(
-              <PluginPageHostLazy pluginId={params.pluginId} pageId={params.pageId} />
+              <PluginPageHostLazy
+                pluginId={params.pluginId}
+                pageId={params.pageId}
+                preferredKind={params.sourceKind}
+              />
             );
           },
           source: 'builtin',
@@ -476,7 +480,11 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
               );
             }
             return renderWithLazyBoundary(
-              <PluginVisualizerHostLazy pluginId={params.pluginId} visualizerId={params.visualizerId} />
+              <PluginVisualizerHostLazy
+                pluginId={params.pluginId}
+                visualizerId={params.visualizerId}
+                preferredKind={params.sourceKind}
+              />
             );
           },
           source: 'builtin',

@@ -45,19 +45,37 @@ import {
 import { dispatchPmpmCompatRpcRequest } from './runtime/pmpmCompatCapabilityTransport';
 import { createPmpmCompatRuntimeResourceRegistry } from './runtime/pmpmCompatRuntimeResources';
 import { createRuntimeBridgeHostSession } from './runtime/runtimeBridgeHostSession';
+import {
+  completePluginSurfaceMount,
+  createPluginSurfaceTelemetryContext,
+  failPluginSurfaceMount,
+  startPluginSurfaceMount,
+  type PluginLifecycleTelemetryHandle,
+} from './pluginLifecycleTelemetry';
 
 const PMPM_SANDBOX_STARTUP_TIMEOUT_MS = 5_000;
 const PMPM_SANDBOX_HEARTBEAT_INTERVAL_MS = 1_500;
 const PMPM_SANDBOX_UNRESPONSIVE_TIMEOUT_MS = 8_000;
+const DEFAULT_SETTINGS_SURFACE_HEIGHT_PX = 320;
 
 export type PmpmSandboxSurface =
   | { kind: 'magnet' }
   | { kind: 'settings'; panelId?: string }
   | { kind: 'page'; pageId: string }
   | { kind: 'visualizer'; visualizerId: string }
-  | { kind: 'window'; windowId: string };
+  | { kind: 'window'; windowId: string }
+  | { kind: 'overlay'; surfaceId: string }
+  | { kind: 'desktop-widget'; surfaceId: string };
 
-type FrameMessage = PmpmBridgeIncomingMessage | PmpmCompatCapabilityRevokeAckMessage;
+type PmpmCompatContentSizeMessage = {
+  frameId: string;
+  type: 'pmpm:content-size';
+  height: number;
+};
+type FrameMessage =
+  | PmpmBridgeIncomingMessage
+  | PmpmCompatCapabilityRevokeAckMessage
+  | PmpmCompatContentSizeMessage;
 type FramePostMessage =
   | Omit<PmpmBridgeOutgoingMessage, 'frameId'>
   | PmpmCompatCapabilityRevokeDrillMessage;
@@ -81,6 +99,10 @@ function resolveCrashSurface(surface: PmpmSandboxSurface['kind']): PmpmPluginCra
       return 'visualizer';
     case 'window':
       return 'window';
+    case 'overlay':
+      return 'overlay';
+    case 'desktop-widget':
+      return 'desktop-widget';
   }
 }
 
@@ -121,10 +143,14 @@ export function PmpmSandboxHost({
   const frameId = useMemo(() => {
     return `${pluginId}-${restartToken}-${Math.random().toString(16).slice(2)}`;
   }, [pluginId, restartToken]);
+  const surfaceMountTelemetryRef = useRef<PluginLifecycleTelemetryHandle | null>(null);
 
   const [frameReady, setFrameReady] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [settingsSurfaceHeight, setSettingsSurfaceHeight] = useState<number>(
+    DEFAULT_SETTINGS_SURFACE_HEIGHT_PX
+  );
 
   const pluginStoreRevision = useSyncExternalStore(
     subscribePmpmPlugins,
@@ -182,9 +208,23 @@ export function PmpmSandboxHost({
         ? surface.visualizerId
         : surface.kind === 'window'
           ? surface.windowId
+          : surface.kind === 'overlay' || surface.kind === 'desktop-widget'
+            ? surface.surfaceId
           : surface.kind === 'settings'
             ? (surface.panelId ?? null)
             : null;
+  const surfaceTelemetryContext = useMemo(
+    () =>
+      createPluginSurfaceTelemetryContext({
+        pluginId,
+        sourceKind: 'pmpm',
+        hostLabel,
+        launcherId: 'compat.pmpm.webview-sandbox',
+        surfaceKind: surface.kind,
+        surfaceId,
+      }),
+    [hostLabel, pluginId, surface.kind, surfaceId]
+  );
 
   const initialConfig = useMemo(() => {
     if (!permissions.has('storage:local')) return {};
@@ -222,6 +262,7 @@ export function PmpmSandboxHost({
     setFrameReady(false);
     setMounted(false);
     setError(null);
+    setSettingsSurfaceHeight(DEFAULT_SETTINGS_SURFACE_HEIGHT_PX);
     lastPongAtRef.current = Date.now();
     frameReadyRef.current = false;
     crashReportedRef.current = false;
@@ -245,6 +286,12 @@ export function PmpmSandboxHost({
     let disposed = false;
     setMounted(false);
     setError(null);
+    surfaceMountTelemetryRef.current = startPluginSurfaceMount(surfaceTelemetryContext, {
+      extraFields: {
+        mountMode: 'sandbox',
+        frameId,
+      },
+    });
 
     const handler = (event: MessageEvent) => {
       if (disposed) return;
@@ -267,11 +314,33 @@ export function PmpmSandboxHost({
         return;
       }
 
+      if (data.type === 'pmpm:content-size') {
+        if (surface.kind !== 'settings') return;
+        const nextHeight = Math.max(
+          DEFAULT_SETTINGS_SURFACE_HEIGHT_PX,
+          Math.ceil(Number.isFinite(data.height) ? data.height : 0)
+        );
+        setSettingsSurfaceHeight((current) =>
+          Math.abs(current - nextHeight) > 1 ? nextHeight : current
+        );
+        return;
+      }
+
       if (data.type === 'pmpm:error') {
         compatRuntimeAdapterRef.current?.handleCompatMessage(data);
         if (crashReportedRef.current) return;
         crashReportedRef.current = true;
         const message = typeof data.message === 'string' ? data.message : 'Plugin error';
+        if (surfaceMountTelemetryRef.current) {
+          failPluginSurfaceMount(surfaceMountTelemetryRef.current, message, {
+            extraFields: {
+              failureStage: 'runtime-event',
+              mountMode: 'sandbox',
+              frameId,
+            },
+          });
+          surfaceMountTelemetryRef.current = null;
+        }
         void runtimeResources.cleanup('runtime-crash');
         recordPmpmPluginCrash(pluginId, message, resolveCrashSurface(surface.kind));
         setError(message);
@@ -314,6 +383,16 @@ export function PmpmSandboxHost({
       if (frameReadyRef.current) return;
       if (crashReportedRef.current) return;
       crashReportedRef.current = true;
+      if (surfaceMountTelemetryRef.current) {
+        failPluginSurfaceMount(surfaceMountTelemetryRef.current, 'Plugin sandbox boot timeout', {
+          extraFields: {
+            failureStage: 'boot-timeout',
+            mountMode: 'sandbox',
+            frameId,
+          },
+        });
+        surfaceMountTelemetryRef.current = null;
+      }
       setError('Plugin sandbox boot timeout');
       void runtimeResources.cleanup('runtime-crash');
       recordPmpmPluginCrash(
@@ -324,6 +403,7 @@ export function PmpmSandboxHost({
     }, bootTimeoutMs);
     return () => {
       disposed = true;
+      surfaceMountTelemetryRef.current = null;
       window.removeEventListener('message', handler);
       window.clearTimeout(bootTimer);
     };
@@ -336,8 +416,23 @@ export function PmpmSandboxHost({
     pluginId,
     postToFrame,
     runtimeResources,
+    surfaceTelemetryContext,
     surface.kind,
   ]);
+
+  useEffect(() => {
+    if (!mounted || !surfaceMountTelemetryRef.current) {
+      return;
+    }
+
+    completePluginSurfaceMount(surfaceMountTelemetryRef.current, {
+      extraFields: {
+        mountMode: 'sandbox',
+        frameId,
+      },
+    });
+    surfaceMountTelemetryRef.current = null;
+  }, [frameId, mounted]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -350,7 +445,7 @@ export function PmpmSandboxHost({
 
     const crashSurface = resolveCrashSurface(surface.kind);
 
-    const cleanupRuntime = (reason: string): void => {
+    const cleanupRuntime = async (reason: string): Promise<void> => {
       compatRuntimeAdapterRef.current = null;
       if (pingInterval !== null) {
         window.clearInterval(pingInterval);
@@ -363,13 +458,23 @@ export function PmpmSandboxHost({
       }
       disposeRuntimeEvents = null;
 
-      if (runtimeSession) {
-        void runtimeSession.dispose(reason);
-        runtimeSession = null;
+      const currentRuntimeSession = runtimeSession;
+      runtimeSession = null;
+      if (currentRuntimeSession) {
+        if (reason !== 'runtime-crash') {
+          try {
+            await currentRuntimeSession.revokeCapabilities(undefined, reason, {
+              timeoutMs: Math.min(1_500, PMPM_SANDBOX_UNRESPONSIVE_TIMEOUT_MS),
+            });
+          } catch {
+            // Governance telemetry is emitted by the shared runtime bridge session.
+          }
+        }
+        await currentRuntimeSession.dispose(reason);
         return;
       }
 
-      void runtimeResources.cleanup(reason);
+      await runtimeResources.cleanup(reason);
     };
 
     const boot = async () => {
@@ -478,6 +583,11 @@ export function PmpmSandboxHost({
           runtimeResources,
           startupTimeoutMs: PMPM_SANDBOX_STARTUP_TIMEOUT_MS,
           requestTimeoutMs: PMPM_SANDBOX_UNRESPONSIVE_TIMEOUT_MS,
+          telemetry: {
+            sourceKind: 'pmpm',
+            launcherId: 'compat.pmpm.webview-sandbox',
+            hostLabel,
+          },
           onRuntimeEvent: (message) => {
             if (message.eventName !== RUNTIME_EVENT_NAMES.permissionDenied) {
               return;
@@ -534,7 +644,7 @@ export function PmpmSandboxHost({
             surface: crashSurface,
             timeoutMs,
           });
-          cleanupRuntime('runtime-unresponsive');
+          void cleanupRuntime('runtime-unresponsive');
           recordPmpmPluginCrash(pluginId, `Plugin runtime unresponsive (${elapsed}ms)`, crashSurface);
         }, PMPM_SANDBOX_HEARTBEAT_INTERVAL_MS);
 
@@ -543,7 +653,17 @@ export function PmpmSandboxHost({
         if (disposed) return;
         if (crashReportedRef.current) return;
         crashReportedRef.current = true;
-        cleanupRuntime('runtime-crash');
+        if (surfaceMountTelemetryRef.current) {
+          failPluginSurfaceMount(surfaceMountTelemetryRef.current, bootError, {
+            extraFields: {
+              failureStage: 'runtime-boot',
+              mountMode: 'sandbox',
+              frameId,
+            },
+          });
+          surfaceMountTelemetryRef.current = null;
+        }
+        void cleanupRuntime('runtime-crash');
         recordPmpmPluginCrash(pluginId, bootError, crashSurface);
         setError(bootError instanceof Error ? bootError.message : String(bootError));
       }
@@ -553,7 +673,7 @@ export function PmpmSandboxHost({
 
     return () => {
       disposed = true;
-      cleanupRuntime('runtime-dispose');
+      void cleanupRuntime('runtime-dispose');
       postToFrame({ type: 'pmpm:dispose' });
     };
   }, [
@@ -599,11 +719,22 @@ export function PmpmSandboxHost({
     );
   }
 
+  const isSettingsSurface = surface.kind === 'settings';
+  const frameShellStyle = isSettingsSurface
+    ? {
+        width: '100%',
+        height: settingsSurfaceHeight,
+        minHeight: settingsSurfaceHeight,
+      }
+    : {
+        width: '100%',
+        height: '100%',
+      };
+
   return (
     <div
       style={{
-        width: '100%',
-        height: '100%',
+        ...frameShellStyle,
         position: 'relative',
         borderRadius: 'inherit',
         overflow: 'hidden',
