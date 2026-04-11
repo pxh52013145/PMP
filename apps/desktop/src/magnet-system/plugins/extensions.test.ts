@@ -630,6 +630,54 @@ describe('manifest-v2 extension install artifacts', () => {
     });
   }, 10_000);
 
+  it('requires clearing quarantine before manifest-v2 recovery can be re-enabled', async () => {
+    const {
+      clearInstalledExtensionQuarantine,
+      getInstalledExtensionRecord,
+      installInstalledExtensionFromFilePath,
+      quarantineInstalledExtension,
+      setInstalledExtensionEnabled,
+    } = await import('./extensions');
+    const { readInstalledExtensionAuditLog } = await import('./extensionsGovernance');
+
+    await installInstalledExtensionFromFilePath(manifestPath);
+    quarantineInstalledExtension('sidecar-capability-demo', {
+      surface: 'command',
+      message: 'Installed extension command timeout (25ms)',
+      timeoutMs: 25,
+    });
+
+    expect(getInstalledExtensionRecord('sidecar-capability-demo')).toMatchObject({
+      enabled: false,
+      disabledReason: 'quarantine',
+    });
+
+    setInstalledExtensionEnabled('sidecar-capability-demo', true);
+    expect(getInstalledExtensionRecord('sidecar-capability-demo')).toMatchObject({
+      enabled: false,
+      disabledReason: 'quarantine',
+    });
+
+    clearInstalledExtensionQuarantine('sidecar-capability-demo');
+    expect(getInstalledExtensionRecord('sidecar-capability-demo')).toMatchObject({
+      enabled: false,
+      disabledReason: 'manual',
+    });
+
+    setInstalledExtensionEnabled('sidecar-capability-demo', true);
+    expect(getInstalledExtensionRecord('sidecar-capability-demo')).toMatchObject({
+      enabled: true,
+    });
+
+    expect(readInstalledExtensionAuditLog().map((event) => event.type)).toEqual([
+      'installed',
+      'runtime-unresponsive',
+      'quarantined',
+      'quarantine-cleared',
+      'enabled',
+    ]);
+  }, 10_000);
+
   it('requests a runtime restart when reinstalling an existing manifest-v2 extension', async () => {
     const { installInstalledExtensionFromFilePath } = await import('./extensions');
 

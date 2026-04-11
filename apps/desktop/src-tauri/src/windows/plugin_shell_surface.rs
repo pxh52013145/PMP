@@ -33,6 +33,22 @@ pub struct PluginShellSurfaceConfig {
     pub pointer_policy: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PluginShellSurfaceTarget {
+    source_kind: String,
+    surface_type: String,
+    label: String,
+    payload: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PluginShellSurfaceWindowContract {
+    target: PluginShellSurfaceTarget,
+    route: String,
+    title: String,
+    pointer_policy: String,
+}
+
 static OPEN_PLUGIN_SHELL_SURFACE_LABELS: Lazy<Mutex<HashSet<String>>> =
     Lazy::new(|| Mutex::new(HashSet::new()));
 
@@ -98,6 +114,73 @@ fn payload(source_kind: &str, surface_type: &str, plugin_id: &str, surface_id: &
         "{}/{}/{}/{}",
         source_kind, surface_type, plugin_id, surface_id
     )
+}
+
+fn validate_shell_surface_geometry(geometry: &PluginShellSurfaceGeometry) -> Result<(), String> {
+    if !geometry.width.is_finite()
+        || !geometry.height.is_finite()
+        || geometry.width <= 0.0
+        || geometry.height <= 0.0
+    {
+        return Err("Invalid shell surface geometry".to_string());
+    }
+
+    Ok(())
+}
+
+fn resolve_plugin_shell_surface_target(
+    source_kind: Option<&str>,
+    surface_type: &str,
+    plugin_id: &str,
+    surface_id: &str,
+) -> Result<PluginShellSurfaceTarget, String> {
+    let normalized_source_kind = normalize_source_kind(source_kind)?;
+    let normalized_surface_type = normalize_surface_type(surface_type)?;
+    let label = plugin_shell_surface_label(
+        Some(normalized_source_kind),
+        normalized_surface_type,
+        plugin_id,
+        surface_id,
+    )?;
+    Ok(PluginShellSurfaceTarget {
+        source_kind: normalized_source_kind.to_string(),
+        surface_type: normalized_surface_type.to_string(),
+        label,
+        payload: payload(
+            normalized_source_kind,
+            normalized_surface_type,
+            plugin_id,
+            surface_id,
+        ),
+    })
+}
+
+fn resolve_plugin_shell_surface_window_contract(
+    config: &PluginShellSurfaceConfig,
+) -> Result<PluginShellSurfaceWindowContract, String> {
+    validate_shell_surface_geometry(&config.geometry)?;
+    let target = resolve_plugin_shell_surface_target(
+        config.source_kind.as_deref(),
+        config.surface_type.as_str(),
+        config.plugin_id.as_str(),
+        config.surface_id.as_str(),
+    )?;
+    let pointer_policy = normalize_pointer_policy(config.pointer_policy.as_str())?;
+    let route = format!(
+        "/#/plugin-shell-surface/{}/{}/{}/{}",
+        target.source_kind, target.surface_type, config.plugin_id, config.surface_id
+    );
+    let title = config
+        .title
+        .clone()
+        .unwrap_or_else(|| format!("Plugin {} {}", config.plugin_id, target.surface_type));
+
+    Ok(PluginShellSurfaceWindowContract {
+        target,
+        route,
+        title,
+        pointer_policy: pointer_policy.to_string(),
+    })
 }
 
 fn apply_geometry(window: &tauri::Window, geometry: &PluginShellSurfaceGeometry) {
@@ -185,80 +268,53 @@ pub fn open_plugin_shell_surface(
     config: PluginShellSurfaceConfig,
     exit_flag: Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let normalized_source_kind = normalize_source_kind(config.source_kind.as_deref())?;
-    let normalized_surface_type = normalize_surface_type(config.surface_type.as_str())?;
-    let normalized_pointer_policy = normalize_pointer_policy(config.pointer_policy.as_str())?;
+    let contract = resolve_plugin_shell_surface_window_contract(&config)?;
 
-    if !config.geometry.width.is_finite()
-        || !config.geometry.height.is_finite()
-        || config.geometry.width <= 0.0
-        || config.geometry.height <= 0.0
-    {
-        return Err("Invalid shell surface geometry".to_string());
-    }
-
-    let label = plugin_shell_surface_label(
-        Some(normalized_source_kind),
-        normalized_surface_type,
-        config.plugin_id.as_str(),
-        config.surface_id.as_str(),
-    )?;
-
-    if let Some(existing_window) = app.get_window(label.as_str()) {
+    if let Some(existing_window) = app.get_window(contract.target.label.as_str()) {
         apply_geometry(&existing_window, &config.geometry);
         apply_window_behavior(
             &existing_window,
             config.always_on_top,
-            normalized_pointer_policy,
+            contract.pointer_policy.as_str(),
         )?;
         let _ = existing_window.show();
         let _ = existing_window.unminimize();
         if config.focusable && !existing_window.is_focused().ok().unwrap_or(false) {
-            existing_window.set_focus().map_err(|error| error.to_string())?;
+            existing_window
+                .set_focus()
+                .map_err(|error| error.to_string())?;
         }
         let _ = app.emit_all(
             EVENT_PLUGIN_SHELL_SURFACE_SHOWN,
-            payload(
-                normalized_source_kind,
-                normalized_surface_type,
-                config.plugin_id.as_str(),
-                config.surface_id.as_str(),
-            ),
+            contract.target.payload.clone(),
         );
         return Ok(());
     }
 
-    let url = format!(
-        "/#/plugin-shell-surface/{}/{}/{}/{}",
-        normalized_source_kind,
-        normalized_surface_type,
-        config.plugin_id.as_str(),
-        config.surface_id.as_str()
-    );
-    let title_text = config.title.unwrap_or_else(|| {
-        format!(
-            "Plugin {} {}",
-            config.plugin_id,
-            normalized_surface_type
-        )
-    });
+    let window = WindowBuilder::new(
+        app,
+        contract.target.label.clone(),
+        WindowUrl::App(contract.route.clone().into()),
+    )
+    .title(contract.title.clone())
+    .inner_size(config.geometry.width, config.geometry.height)
+    .position(config.geometry.x, config.geometry.y)
+    .resizable(false)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(config.always_on_top)
+    .skip_taskbar(true)
+    .focused(false)
+    .visible(false)
+    .build()
+    .map_err(|error| error.to_string())?;
 
-    let window = WindowBuilder::new(app, label.clone(), WindowUrl::App(url.into()))
-        .title(title_text)
-        .inner_size(config.geometry.width, config.geometry.height)
-        .position(config.geometry.x, config.geometry.y)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(config.always_on_top)
-        .skip_taskbar(true)
-        .focused(false)
-        .visible(false)
-        .build()
-        .map_err(|error| error.to_string())?;
-
-    apply_window_behavior(&window, config.always_on_top, normalized_pointer_policy)?;
-    register_open_label(label.as_str());
+    apply_window_behavior(
+        &window,
+        config.always_on_top,
+        contract.pointer_policy.as_str(),
+    )?;
+    register_open_label(contract.target.label.as_str());
 
     let _ = window.show();
     let _ = window.unminimize();
@@ -268,26 +324,16 @@ pub fn open_plugin_shell_surface(
 
     let _ = app.emit_all(
         EVENT_PLUGIN_SHELL_SURFACE_SHOWN,
-        payload(
-            normalized_source_kind,
-            normalized_surface_type,
-            config.plugin_id.as_str(),
-            config.surface_id.as_str(),
-        ),
+        contract.target.payload.clone(),
     );
 
     let app_handle = app.clone();
-    let source_kind_for_events = normalized_source_kind.to_string();
-    let surface_type_for_events = normalized_surface_type.to_string();
-    let plugin_id_for_events = config.plugin_id.clone();
-    let surface_id_for_events = config.surface_id.clone();
-    let label_for_events = label.clone();
+    let payload_for_events = contract.target.payload.clone();
+    let label_for_events = contract.target.label.clone();
 
     window.on_window_event(move |event| match event {
         tauri::WindowEvent::CloseRequested { api, .. } => {
-            if exit_flag.load(Ordering::SeqCst)
-                || take_force_close(label_for_events.as_str())
-            {
+            if exit_flag.load(Ordering::SeqCst) || take_force_close(label_for_events.as_str()) {
                 unregister_open_label(label_for_events.as_str());
                 return;
             }
@@ -295,12 +341,7 @@ pub fn open_plugin_shell_surface(
             api.prevent_close();
             let _ = app_handle.emit_all(
                 EVENT_PLUGIN_SHELL_SURFACE_HIDDEN,
-                payload(
-                    source_kind_for_events.as_str(),
-                    surface_type_for_events.as_str(),
-                    plugin_id_for_events.as_str(),
-                    surface_id_for_events.as_str(),
-                ),
+                payload_for_events.clone(),
             );
 
             let Some(window) = app_handle.get_window(label_for_events.as_str()) else {
@@ -325,25 +366,15 @@ pub fn dismiss_plugin_shell_surface(
     surface_id: String,
     surface_type: String,
 ) -> Result<(), String> {
-    let normalized_source_kind = normalize_source_kind(source_kind.as_deref())?;
-    let normalized_surface_type = normalize_surface_type(surface_type.as_str())?;
-    let label = plugin_shell_surface_label(
-        Some(normalized_source_kind),
-        normalized_surface_type,
+    let target = resolve_plugin_shell_surface_target(
+        source_kind.as_deref(),
+        surface_type.as_str(),
         plugin_id.as_str(),
         surface_id.as_str(),
     )?;
 
-    if let Some(window) = app.get_window(label.as_str()) {
-        let _ = app.emit_all(
-            EVENT_PLUGIN_SHELL_SURFACE_HIDDEN,
-            payload(
-                normalized_source_kind,
-                normalized_surface_type,
-                plugin_id.as_str(),
-                surface_id.as_str(),
-            ),
-        );
+    if let Some(window) = app.get_window(target.label.as_str()) {
+        let _ = app.emit_all(EVENT_PLUGIN_SHELL_SURFACE_HIDDEN, target.payload);
         window.hide().map_err(|error| error.to_string())?;
     }
 
@@ -357,26 +388,16 @@ pub fn destroy_plugin_shell_surface(
     surface_id: String,
     surface_type: String,
 ) -> Result<(), String> {
-    let normalized_source_kind = normalize_source_kind(source_kind.as_deref())?;
-    let normalized_surface_type = normalize_surface_type(surface_type.as_str())?;
-    let label = plugin_shell_surface_label(
-        Some(normalized_source_kind),
-        normalized_surface_type,
+    let target = resolve_plugin_shell_surface_target(
+        source_kind.as_deref(),
+        surface_type.as_str(),
         plugin_id.as_str(),
         surface_id.as_str(),
     )?;
 
-    if app.get_window(label.as_str()).is_some() {
-        let _ = app.emit_all(
-            EVENT_PLUGIN_SHELL_SURFACE_HIDDEN,
-            payload(
-                normalized_source_kind,
-                normalized_surface_type,
-                plugin_id.as_str(),
-                surface_id.as_str(),
-            ),
-        );
-        request_force_close(app, label.as_str());
+    if app.get_window(target.label.as_str()).is_some() {
+        let _ = app.emit_all(EVENT_PLUGIN_SHELL_SURFACE_HIDDEN, target.payload);
+        request_force_close(app, target.label.as_str());
     }
 
     Ok(())
@@ -425,24 +446,140 @@ mod tests {
     #[test]
     fn plugin_shell_surface_label_rejects_invalid_kinds() {
         assert_eq!(
-            plugin_shell_surface_label(
-                Some("unknown"),
-                "overlay",
-                "demo-plugin",
-                "shell-main"
-            )
-            .unwrap_err(),
+            plugin_shell_surface_label(Some("unknown"), "overlay", "demo-plugin", "shell-main")
+                .unwrap_err(),
             "Invalid sourceKind: unknown"
         );
         assert_eq!(
-            plugin_shell_surface_label(
+            plugin_shell_surface_label(Some("pmpm"), "floating-panel", "demo-plugin", "shell-main")
+                .unwrap_err(),
+            "Invalid surfaceType: floating-panel"
+        );
+    }
+
+    #[test]
+    fn resolve_plugin_shell_surface_target_builds_label_and_payload() {
+        let target = resolve_plugin_shell_surface_target(
+            Some("extv2"),
+            "desktop-widget",
+            "demo-plugin",
+            "widget-main",
+        )
+        .unwrap();
+
+        assert_eq!(target.source_kind, "extv2");
+        assert_eq!(target.surface_type, "desktop-widget");
+        assert_eq!(
+            target.label,
+            "plugin-shell-surface-extv2-desktop-widget-demo-plugin-widget-main"
+        );
+        assert_eq!(
+            target.payload,
+            "extv2/desktop-widget/demo-plugin/widget-main"
+        );
+    }
+
+    #[test]
+    fn resolve_plugin_shell_surface_target_rejects_invalid_ids() {
+        assert_eq!(
+            resolve_plugin_shell_surface_target(
                 Some("pmpm"),
-                "floating-panel",
-                "demo-plugin",
+                "overlay",
+                "demo.plugin",
                 "shell-main"
             )
             .unwrap_err(),
-            "Invalid surfaceType: floating-panel"
+            "Invalid pluginId: demo.plugin"
+        );
+        assert_eq!(
+            resolve_plugin_shell_surface_target(
+                Some("pmpm"),
+                "overlay",
+                "demo-plugin",
+                "shell.main"
+            )
+            .unwrap_err(),
+            "Invalid surfaceId: shell.main"
+        );
+    }
+
+    #[test]
+    fn validate_shell_surface_geometry_rejects_non_finite_or_non_positive_sizes() {
+        assert_eq!(
+            validate_shell_surface_geometry(&PluginShellSurfaceGeometry {
+                x: 10.0,
+                y: 20.0,
+                width: 0.0,
+                height: 180.0,
+            })
+            .unwrap_err(),
+            "Invalid shell surface geometry"
+        );
+        assert_eq!(
+            validate_shell_surface_geometry(&PluginShellSurfaceGeometry {
+                x: 10.0,
+                y: 20.0,
+                width: f64::NAN,
+                height: 180.0,
+            })
+            .unwrap_err(),
+            "Invalid shell surface geometry"
+        );
+    }
+
+    #[test]
+    fn resolve_plugin_shell_surface_window_contract_builds_route_title_and_pointer_policy() {
+        let contract = resolve_plugin_shell_surface_window_contract(&PluginShellSurfaceConfig {
+            source_kind: Some("extv2".to_string()),
+            plugin_id: "demo-plugin".to_string(),
+            surface_id: "widget-main".to_string(),
+            surface_type: "desktop-widget".to_string(),
+            geometry: PluginShellSurfaceGeometry {
+                x: 100.0,
+                y: 120.0,
+                width: 320.0,
+                height: 220.0,
+            },
+            title: None,
+            always_on_top: false,
+            focusable: false,
+            pointer_policy: "passthrough".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            contract.route,
+            "/#/plugin-shell-surface/extv2/desktop-widget/demo-plugin/widget-main"
+        );
+        assert_eq!(contract.title, "Plugin demo-plugin desktop-widget");
+        assert_eq!(contract.pointer_policy, "passthrough");
+        assert_eq!(
+            contract.target.payload,
+            "extv2/desktop-widget/demo-plugin/widget-main"
+        );
+    }
+
+    #[test]
+    fn resolve_plugin_shell_surface_window_contract_rejects_invalid_pointer_policy() {
+        assert_eq!(
+            resolve_plugin_shell_surface_window_contract(&PluginShellSurfaceConfig {
+                source_kind: None,
+                plugin_id: "demo-plugin".to_string(),
+                surface_id: "shell-main".to_string(),
+                surface_type: "overlay".to_string(),
+                geometry: PluginShellSurfaceGeometry {
+                    x: 10.0,
+                    y: 20.0,
+                    width: 320.0,
+                    height: 220.0,
+                },
+                title: Some("Demo".to_string()),
+                always_on_top: true,
+                focusable: true,
+                pointer_policy: "invalid".to_string(),
+            })
+            .unwrap_err(),
+            "Invalid pointerPolicy: invalid"
         );
     }
 }

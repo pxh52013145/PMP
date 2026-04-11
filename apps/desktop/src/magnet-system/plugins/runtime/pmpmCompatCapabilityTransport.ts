@@ -19,6 +19,11 @@ import type {
 } from '@pixel-matrix/plugin-compat-pmpm';
 import { PLUGIN_PERMISSIONS, hasPermission, type PluginMountApi } from '../host-api';
 import type { PmpmCompatRuntimeResourceRegistry } from './pmpmCompatRuntimeResources';
+import {
+  createRuntimeProtocolChildTraceContext,
+  traceRuntimeProtocolStep,
+  type RuntimeProtocolTraceContext,
+} from './runtimeProtocolTracer';
 
 const CAPABILITY_ID_PATTERN = /^[a-z][a-z0-9_.-]{0,127}$/i;
 const METHOD_PATTERN = /^[a-z][a-z0-9_.-]{0,63}$/i;
@@ -40,6 +45,7 @@ type RpcResultMessage = Extract<PmpmBridgeOutgoingMessage, { type: 'pmpm:rpc-res
 export type PmpmCompatRpcDispatchOptions = {
   runtimeResources?: PmpmCompatRuntimeResourceRegistry;
   emitProtocolMessage?: (message: CapabilityProtocolMessage) => void;
+  protocolTraceContext?: RuntimeProtocolTraceContext | null;
 };
 
 export type PmpmCapabilityProtocolRequestMessage =
@@ -209,6 +215,48 @@ function asWindowId(value: unknown): string | null {
   const normalized = asNonEmptyString(value);
   if (!normalized) return null;
   return WINDOW_ID_PATTERN.test(normalized) ? normalized : null;
+}
+
+function getDataPlaneTraceContext(
+  options?: PmpmCompatRpcDispatchOptions
+): RuntimeProtocolTraceContext | null {
+  if (!options?.protocolTraceContext) {
+    return null;
+  }
+  return options.protocolTraceContext.channel === 'data'
+    ? options.protocolTraceContext
+    : createRuntimeProtocolChildTraceContext(options.protocolTraceContext, 'data');
+}
+
+function traceDataPlaneProtocolMessage(
+  options: PmpmCompatRpcDispatchOptions | undefined,
+  event: string,
+  message: {
+    op: string;
+    requestId?: string;
+    traceId?: string;
+    streamId?: string;
+    sessionId?: string;
+  },
+  extraFields: Record<string, unknown> = {}
+): void {
+  const context = getDataPlaneTraceContext(options);
+  if (!context) {
+    return;
+  }
+
+  traceRuntimeProtocolStep(context, event, {
+    traceId: message.traceId ?? context.sessionTraceId,
+    requestId: message.requestId ?? null,
+    direction: 'host',
+    protocolOp: message.op,
+    status: 'observed',
+    extraFields: {
+      streamId: message.streamId ?? null,
+      sessionId: message.sessionId ?? null,
+      ...extraFields,
+    },
+  });
 }
 
 function buildResponseBase(
@@ -916,6 +964,12 @@ async function dispatchDirectHostStreamOpenRequest(
         payload,
         handles: envelope.handles,
       };
+      traceDataPlaneProtocolMessage(options, 'plugin.capability.data.stream-data.sent', message, {
+        capabilityId: request.capabilityId,
+        method: request.method,
+        sequence: envelope.sequence,
+        handleCount: Array.isArray(envelope.handles) ? envelope.handles.length : 0,
+      });
       options.emitProtocolMessage?.(message);
     });
 
@@ -926,6 +980,11 @@ async function dispatchDirectHostStreamOpenRequest(
         op: 'stream.end',
         reason,
       };
+      traceDataPlaneProtocolMessage(options, 'plugin.capability.data.stream-end.sent', message, {
+        capabilityId: request.capabilityId,
+        method: request.method,
+        reason: reason ?? null,
+      });
       options.emitProtocolMessage?.(message);
       release();
     });
@@ -938,11 +997,23 @@ async function dispatchDirectHostStreamOpenRequest(
       release,
     });
 
-    return streamOpenResponseOk(request, {
+    const response = streamOpenResponseOk(request, {
       streamId: opened.streamId,
       mode: opened.mode,
       transport: opened.transport,
     });
+    traceDataPlaneProtocolMessage(
+      options,
+      'plugin.capability.data.stream-open.responded',
+      response,
+      {
+        capabilityId: request.capabilityId,
+        method: request.method,
+        transport: opened.transport,
+        mode: opened.mode,
+      }
+    );
+    return response;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return streamOpenResponseError(
@@ -957,6 +1028,9 @@ async function dispatchCancelRequest(
   request: CancelRequest,
   options?: PmpmCompatRpcDispatchOptions
 ): Promise<void> {
+  traceDataPlaneProtocolMessage(options, 'plugin.capability.data.cancel.requested', request, {
+    reason: request.reason ?? null,
+  });
   if (request.streamId) {
     const cancelled = await options?.runtimeResources?.cancelStream(
       request.streamId,
@@ -983,6 +1057,9 @@ async function dispatchDisposeRequest(
   request: DisposeRequest,
   options?: PmpmCompatRpcDispatchOptions
 ): Promise<void> {
+  traceDataPlaneProtocolMessage(options, 'plugin.capability.data.dispose.requested', request, {
+    reason: request.reason ?? null,
+  });
   if (request.streamId) {
     const disposed = await options?.runtimeResources?.disposeStream(
       request.streamId,

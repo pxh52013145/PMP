@@ -14,7 +14,11 @@ import { COMMANDS_SERVICE_TOKEN } from '../../services/commands';
 import { KEYBINDINGS_SERVICE_TOKEN } from '../../services/keybindings';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import { AUDIO_ENGINE_SERVICE_TOKEN } from '../../services/audio';
-import { closePluginWindow, openPluginWindow } from '../../utils/pluginWindows';
+import { closePluginWindow } from '../../utils/pluginWindows';
+import {
+  openBuiltinPluginVisualizerViaHostCapability,
+  openBuiltinPluginWindowViaHostCapability,
+} from '../../builtin-modules/builtinNavigationCapabilityBridge';
 import { PluginSettingsHost } from './PluginSettingsHost';
 import { PluginPageHost } from './PluginPageHost';
 import {
@@ -206,20 +210,35 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
                 const overrideX = safeOptions?.x;
                 const overrideY = safeOptions?.y;
 
-                await openPluginWindow({
-                  sourceKind: 'pmpm',
-                  pluginId,
-                  windowId: window.id,
-                  title: typeof overrideTitle === 'string' && overrideTitle.length > 0 ? overrideTitle : title,
-                  width:
-                    typeof overrideWidth === 'number' && Number.isFinite(overrideWidth) ? overrideWidth : window.width,
-                  height:
-                    typeof overrideHeight === 'number' && Number.isFinite(overrideHeight)
-                      ? overrideHeight
-                      : window.height,
-                  x: typeof overrideX === 'number' && Number.isFinite(overrideX) ? overrideX : undefined,
-                  y: typeof overrideY === 'number' && Number.isFinite(overrideY) ? overrideY : undefined,
-                });
+                await openBuiltinPluginWindowViaHostCapability(
+                  services.get(NAVIGATION_SERVICE_TOKEN),
+                  {
+                    sourceKind: 'pmpm',
+                    pluginId,
+                    windowId: window.id,
+                    title:
+                      typeof overrideTitle === 'string' && overrideTitle.length > 0
+                        ? overrideTitle
+                        : title,
+                    width:
+                      typeof overrideWidth === 'number' && Number.isFinite(overrideWidth)
+                        ? overrideWidth
+                        : window.width,
+                    height:
+                      typeof overrideHeight === 'number' && Number.isFinite(overrideHeight)
+                        ? overrideHeight
+                        : window.height,
+                    x:
+                      typeof overrideX === 'number' && Number.isFinite(overrideX)
+                        ? overrideX
+                        : undefined,
+                    y:
+                      typeof overrideY === 'number' && Number.isFinite(overrideY)
+                        ? overrideY
+                        : undefined,
+                  },
+                  `window:pmpm:${pluginId}:${window.id}`
+                );
               },
               close: async () => {
                 await closePluginWindow(pluginId, window.id, 'pmpm');
@@ -323,7 +342,7 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
                     resolution: runtimeResolution,
                     extraFields: {
                       hostId: 'pmp',
-                      preferCompatSandbox: preferSandbox,
+                      preferSandboxLauncher: preferSandbox,
                       preferCommandWorker: true,
                     },
                   });
@@ -422,13 +441,15 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
                 ...(visualizer.metadata ?? {}),
               },
               open: async () => {
-                services
-                  .get(NAVIGATION_SERVICE_TOKEN)
-                  .navigateTo('plugin-visualizer', {
+                await openBuiltinPluginVisualizerViaHostCapability(
+                  services.get(NAVIGATION_SERVICE_TOKEN),
+                  {
                     pluginId,
                     visualizerId: visualizer.id,
                     sourceKind: 'pmpm',
-                  });
+                  },
+                  `visualizer:pmpm:${pluginId}:${visualizer.id}`
+                );
               },
             };
 

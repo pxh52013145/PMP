@@ -5,16 +5,39 @@ import type { PageContribution, SettingsPanelContribution, WindowContribution } 
 import { parseNavigationParams } from '../contracts/navigationParams';
 import type { Track } from '../services/audio';
 import { useAudioService } from '../contexts/AudioEngineContext';
-import { calculateWindowPosition, openEditorWindow, type EditorWindowType } from '../utils/editorWindows';
-import { closeVstManagerWindow, openVstManagerWindow } from '../utils/vstManagerWindows';
+import type { EditorWindowType } from '../utils/editorWindows';
+import { closeVstManagerWindow } from '../utils/vstManagerWindows';
 import { subscribeLocale, t } from '../i18n/core';
-import { NAVIGATION_SERVICE_TOKEN } from '../services/navigation';
+import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../services/commands';
 import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 
 const telemetry = getTelemetryLogger('navigation', 'builtinContributionsModule');
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+const BUILTIN_EDITOR_WINDOW_OPEN_COMMAND_BY_TYPE: Record<EditorWindowType, string> = {
+  control: 'app:open-control-editor-window',
+  statistics: 'app:open-statistics-editor-window',
+  library: 'app:open-library-editor-window',
+  style: 'app:open-style-editor-window',
+  'style-pixel': 'app:open-style-pixel-editor-window',
+  'style-cover-color': 'app:open-style-cover-color-editor-window',
+  'style-background-effect': 'app:open-style-background-effect-editor-window',
+  'style-border-effect': 'app:open-style-border-effect-editor-window',
+  creator: 'app:open-creator-editor-window',
+  background: 'app:open-background-editor-window',
+  'custom-background': 'app:open-custom-background-editor-window',
+  theme: 'app:open-theme-editor-window',
+  debug: 'app:open-debug-editor-window',
+};
+
+function readWindowOpenArgs(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
 }
 
 const HomePageLazy = React.lazy(async () => ({ default: (await import('../components/pages/HomePage')).HomePage }));
@@ -94,6 +117,19 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
     activate: ({ contributions, services }) => {
       const unregisters = new Map<string, () => void>();
 
+      const dispatchBuiltinWindowOpenCommand = async (
+        commandId: string,
+        unavailableMessage: string,
+        options?: unknown
+      ) => {
+        await dispatchRequiredCommand(
+          services.getOptional(COMMANDS_SERVICE_TOKEN),
+          commandId,
+          unavailableMessage,
+          readWindowOpenArgs(options)
+        );
+      };
+
       const register = <T extends { kind: string; id: string }>(contribution: T) => {
         const key = `${contribution.kind}/${contribution.id}`;
         const unregister = contributions.register(contribution, { replace: true });
@@ -108,9 +144,12 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           label: `editor-${type}`,
           route: `/#/editor/${type}`,
           source: 'builtin',
-          open: async () => {
-            const position = await calculateWindowPosition(type);
-            await openEditorWindow({ type, ...position });
+          open: async (options) => {
+            await dispatchBuiltinWindowOpenCommand(
+              BUILTIN_EDITOR_WINDOW_OPEN_COMMAND_BY_TYPE[type],
+              `Command service is not available for builtin editor window "${type}".`,
+              options
+            );
           },
         });
       };
@@ -420,8 +459,12 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           label: 'vst-manager',
           route: '/#/vst-manager',
           source: 'builtin',
-          open: async () => {
-            await openVstManagerWindow({ title: t('windows.vst-manager.title') });
+          open: async (options) => {
+            await dispatchBuiltinWindowOpenCommand(
+              'app:open-vst3-plugin-manager',
+              'Command service is not available for builtin window "vst-manager".',
+              options
+            );
           },
           close: async () => {
             await closeVstManagerWindow();
@@ -435,8 +478,12 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           label: 'keyboard-shortcuts',
           route: '/#/keyboard-shortcuts',
           source: 'builtin',
-          open: async () => {
-            services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('keyboard-shortcuts');
+          open: async (options) => {
+            await dispatchBuiltinWindowOpenCommand(
+              'app:open-keyboard-shortcuts-window',
+              'Command service is not available for builtin window "keyboard-shortcuts".',
+              options
+            );
           },
         });
 
@@ -497,6 +544,10 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
         registerEditorWindow('statistics', t('windows.editor.statistics.title'));
         registerEditorWindow('library', t('windows.editor.library.title'));
         registerEditorWindow('style', t('windows.editor.style.title'));
+        registerEditorWindow('style-pixel', t('windows.editor.style-pixel.title'));
+        registerEditorWindow('style-cover-color', t('windows.editor.style-cover-color.title'));
+        registerEditorWindow('style-background-effect', t('windows.editor.style-background-effect.title'));
+        registerEditorWindow('style-border-effect', t('windows.editor.style-border-effect.title'));
         registerEditorWindow('creator', t('windows.editor.creator.title'));
         registerEditorWindow('background', t('windows.editor.background.title'));
         registerEditorWindow('custom-background', t('windows.editor.custom-background.title'));

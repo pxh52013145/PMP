@@ -12,6 +12,7 @@ import {
   type PlaylistTrackSortField,
 } from '../../modules/playlists/runtimeProjection';
 import { getProcessPerfTotalsSnapshot } from '../../modules/debug/processPerf';
+import { getGlobalProcessPerfService } from '../../services/performance-control';
 import {
   recordPlaylistsOverlayResidencySample,
   type PlaylistCoverUrlKind,
@@ -1572,7 +1573,10 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
         .map((delayMs) =>
           setTimeout(() => {
             const metrics = playlistsResidencyMetricsRef.current;
-            void getProcessPerfTotalsSnapshot()
+            void (
+              getGlobalProcessPerfService()?.refreshTotalsSnapshot() ??
+              getProcessPerfTotalsSnapshot()
+            )
               .catch(() => null)
               .then((processSnapshot) => {
                 const totals = processSnapshot?.totals;

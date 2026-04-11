@@ -1,5 +1,7 @@
 import React from 'react';
 import { useAudioEngine } from '../../contexts/AudioEngineContext';
+import { useKernel } from '../../contexts/KernelContext';
+import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import {
   invokeWithTelemetry,
@@ -7,7 +9,6 @@ import {
 } from '../../services/telemetry/tauriInvokeTelemetry';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readData, STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate, setupDualListener } from '../../utils/windowCommunication';
-import { openVstManagerWindow } from '../../utils/vstManagerWindows';
 import { VstNodeParamsPanel } from '../vst/VstNodeParamsPanel';
 import './DspRackPage.css';
 
@@ -197,6 +198,8 @@ function uniqueNodeId(type: string) {
 }
 
 export const DspRackPage: React.FC = () => {
+  const kernel = useKernel();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const { isNativeAvailable } = useAudioEngine();
   const isTauri = React.useMemo(() => isTauriRuntime(), []);
   const [graph, setGraph] = React.useState<DspGraphConfig | null>(null);
@@ -336,6 +339,18 @@ export const DspRackPage: React.FC = () => {
     };
   }, [isTauri]);
 
+  const handleOpenVstManager = React.useCallback(async () => {
+    try {
+      await dispatchRequiredCommand(
+        commands,
+        'app:open-vst3-plugin-manager',
+        'VST3 Plugin Manager command service is not available.'
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [commands]);
+
   const applyGraph = React.useCallback(
     async (next: DspGraphConfig) => {
       setGraph(next);
@@ -439,7 +454,7 @@ export const DspRackPage: React.FC = () => {
           </div>
 
           <div className="dsp-rack-actions">
-            <button type="button" onClick={() => void openVstManagerWindow()}>
+            <button type="button" onClick={() => void handleOpenVstManager()}>
               VST3 插件管理器
             </button>
           </div>
@@ -466,7 +481,7 @@ export const DspRackPage: React.FC = () => {
           <button type="button" onClick={() => addNode('limiter')} disabled={!graph || busy}>
             + Limiter
           </button>
-          <button type="button" onClick={() => void openVstManagerWindow()} disabled={busy}>
+          <button type="button" onClick={() => void handleOpenVstManager()} disabled={busy}>
             VST3 插件管理器
           </button>
           <button

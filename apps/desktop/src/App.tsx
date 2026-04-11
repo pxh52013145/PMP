@@ -21,8 +21,14 @@ import { hasFocusedVisibleEditorWindow } from './utils/editorWindowFocus';
 import { APP_LIFECYCLE_SERVICE_TOKEN } from './services/lifecycle';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import { WindowCloseProvider } from './contexts/WindowCloseContext';
+import { COMMANDS_SERVICE_TOKEN, dispatchCommandOrFallback } from './services/commands';
 import { KEYBINDINGS_SERVICE_TOKEN } from './services/keybindings';
 import { getDebugConfig, setDebugConfig } from './modules/debug';
+import { INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN } from './magnet-system/plugins/installedExtensionRuntimeManager';
+import {
+  activateInstalledExtensionsForHostFiles,
+} from './magnet-system/plugins/installedExtensionHostFileActivation';
+import { consumePendingHostFileOpens } from './modules/startup/hostFileOpen';
 import {
   shouldRunDurableStorageMigrations,
   shouldRunPmpmDurableMigration,
@@ -65,7 +71,11 @@ function reportCoverDecoded(src: string, width: number, height: number): void {
 function AppContent() {
   const kernel = useKernel();
   const telemetry = useMemo(() => getTelemetryLogger('startup', 'AppContent'), []);
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const keybindings = kernel.services.get(KEYBINDINGS_SERVICE_TOKEN);
+  const installedExtensionRuntimeManager = kernel.services.getOptional(
+    INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN
+  );
   const { navigateTo } = useNavigation();
   const { editorState } = useEditor();
 
@@ -111,11 +121,15 @@ function AppContent() {
 
     let cancelled = false;
     void getDebugConfig()
-      .then((config) => {
+      .then(async (config) => {
         if (cancelled) return;
         if (!config.openDebugCenterOnNextStart) return;
 
-        navigateTo('debug', { tab: 'debug-center' });
+        await dispatchCommandOrFallback(
+          commands,
+          'app:navigate-debug-center',
+          () => navigateTo('debug', { tab: 'debug-center' })
+        );
         void setDebugConfig({ ...config, openDebugCenterOnNextStart: false }).catch((error) => {
           telemetry.warn('startup.debug-center.flag-clear.failed', {
             message: error instanceof Error ? error.message : String(error),
@@ -129,7 +143,7 @@ function AppContent() {
     return () => {
       cancelled = true;
     };
-  }, [isTauri, navigateTo, telemetry]);
+  }, [commands, isTauri, navigateTo, telemetry]);
 
   useEffect(() => {
     if (!shouldRunDurableStorageMigrations()) {
@@ -305,6 +319,92 @@ function AppContent() {
       if (pollTimer !== null) window.clearInterval(pollTimer);
     };
   }, [isTauri]);
+
+  useEffect(() => {
+    if (!isTauri || !installedExtensionRuntimeManager) return;
+
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    const attach = async () => {
+      try {
+        const cleanup = await appWindow.onFileDropEvent((event) => {
+          if (event.payload.type !== 'drop') {
+            return;
+          }
+
+          void activateInstalledExtensionsForHostFiles(installedExtensionRuntimeManager, {
+            filePaths: event.payload.paths,
+            action: 'window-dropped',
+            hostLabel: 'AppWindowFileDrop',
+          }).catch((error) => {
+            telemetry.warn('startup.file-drop-activation.failed', {
+              message: error instanceof Error ? error.message : String(error),
+            });
+          });
+        });
+
+        if (disposed) {
+          cleanup();
+          return;
+        }
+
+        unlisten = cleanup;
+      } catch (error) {
+        telemetry.warn('startup.file-drop-listener.attach.failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+
+    void attach();
+
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [installedExtensionRuntimeManager, isTauri, telemetry]);
+
+  useEffect(() => {
+    if (!isTauri || !installedExtensionRuntimeManager) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void consumePendingHostFileOpens()
+      .then(async (payloads) => {
+        if (cancelled || payloads.length === 0) {
+          return;
+        }
+
+        for (const payload of payloads) {
+          if (cancelled) {
+            return;
+          }
+
+          await activateInstalledExtensionsForHostFiles(installedExtensionRuntimeManager, {
+            filePaths: payload.paths,
+            action: payload.action ?? payload.source,
+            hostLabel:
+              payload.source === 'cli-startup'
+                ? 'AppStartupFileOpen'
+                : 'AppHostFileOpen',
+          });
+        }
+      })
+      .catch((error) => {
+        telemetry.warn('startup.host-file-open.consume.failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [installedExtensionRuntimeManager, isTauri, telemetry]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {

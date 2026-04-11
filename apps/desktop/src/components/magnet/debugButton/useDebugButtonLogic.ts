@@ -1,5 +1,7 @@
+import { useKernel } from '../../../contexts/KernelContext';
 import { useNavigation } from '../../../contexts/NavigationContext';
 import { useT } from '../../../i18n';
+import { COMMANDS_SERVICE_TOKEN, dispatchCommandOrFallback } from '../../../services/commands';
 import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 
 export interface DebugButtonLogic {
@@ -14,6 +16,8 @@ function readErrorMessage(error: unknown): string {
 }
 
 export function useDebugButtonLogic(): DebugButtonLogic {
+  const kernel = useKernel();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const navigation = useNavigation();
   const t = useT();
 
@@ -25,7 +29,9 @@ export function useDebugButtonLogic(): DebugButtonLogic {
         return;
       }
 
-      navigation.navigateTo('settings');
+      await dispatchCommandOrFallback(commands, 'app:navigate-settings', () =>
+        navigation.navigateTo('settings')
+      );
       setIsOpen(true);
     } catch (error) {
       telemetry.error('debug_button.toggle_settings.failed', {

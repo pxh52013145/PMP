@@ -8,13 +8,17 @@ export type InstalledExtensionActivationTrigger =
   | { cause: 'startup' }
   | { cause: 'command'; commandId: string }
   | { cause: 'view'; viewId: string }
-  | { cause: 'capability'; capabilityId: string };
+  | { cause: 'capability'; capabilityId: string }
+  | { cause: 'host'; hostEventId: string }
+  | { cause: 'file'; fileType: string };
 
 type ActivationEventMatch =
   | { kind: 'startup' }
   | { kind: 'command'; value: string }
   | { kind: 'view'; value: string }
   | { kind: 'capability'; value: string }
+  | { kind: 'host'; value: string }
+  | { kind: 'file'; value: string }
   | { kind: 'unknown'; value: string };
 
 function readManifest(input: InstalledHostExtensionRecord | PxpManifestV2): PxpManifestV2 {
@@ -55,6 +59,20 @@ function normalizeActivationEvent(
       return {
         kind: 'capability',
         value: normalized.slice('onCapability:'.length),
+      };
+    }
+
+    if (normalized.startsWith('onHost:')) {
+      return {
+        kind: 'host',
+        value: normalized.slice('onHost:'.length),
+      };
+    }
+
+    if (normalized.startsWith('onFile:')) {
+      return {
+        kind: 'file',
+        value: normalized.slice('onFile:'.length),
       };
     }
 
@@ -143,6 +161,17 @@ export function isInstalledExtensionActivationAllowed(
           event.kind === 'capability' &&
           matchesScopedActivation(event.value, trigger.capabilityId)
       );
+    case 'host':
+      return events.some(
+        (event) =>
+          event.kind === 'host' &&
+          matchesScopedActivation(event.value, trigger.hostEventId)
+      );
+    case 'file':
+      return events.some(
+        (event) =>
+          event.kind === 'file' && matchesScopedActivation(event.value, trigger.fileType)
+      );
     default: {
       const exhaustive: never = trigger;
       return exhaustive;
@@ -170,6 +199,10 @@ export function readInstalledExtensionActivationError(
       return `Extension "${pluginId}" does not declare activation event "onView:${trigger.viewId}"`;
     case 'capability':
       return `Extension "${pluginId}" does not declare activation event "onCapability:${trigger.capabilityId}"`;
+    case 'host':
+      return `Extension "${pluginId}" does not declare activation event "onHost:${trigger.hostEventId}"`;
+    case 'file':
+      return `Extension "${pluginId}" does not declare activation event "onFile:${trigger.fileType}"`;
     default: {
       const exhaustive: never = trigger;
       return String(exhaustive);

@@ -1,9 +1,10 @@
 import './SettingsPage.css';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PageContribution } from '../../contracts/contributions';
 import { useKernel } from '../../contexts/KernelContext';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
+import { COMMANDS_SERVICE_TOKEN, dispatchCommandOrFallback } from '../../services/commands';
 import { PmpButton, PmpChoiceButton } from '../primitives';
 
 function sortPages(a: PageContribution, b: PageContribution): number {
@@ -15,12 +16,36 @@ function sortPages(a: PageContribution, b: PageContribution): number {
 
 export const DebugPage: React.FC = () => {
   const kernel = useKernel();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const { navigateTo, currentPage } = useNavigation();
   const t = useT();
   const [revision, setRevision] = useState(0);
   const [activePageId, setActivePageId] = useState<string | null>(null);
   const subTabsRef = React.useRef<HTMLDivElement | null>(null);
   const lastRequestedTabRef = useRef<string | null>(null);
+
+  const openDebugTab = useCallback(
+    (pageId: string) => {
+      const builtinCommandId =
+        pageId === 'debug-center'
+          ? 'app:navigate-debug-center'
+          : pageId === 'native-debug'
+            ? 'app:navigate-native-debug'
+            : pageId === 'perf-monitor'
+              ? 'app:navigate-perf-monitor'
+              : null;
+
+      if (!builtinCommandId) {
+        navigateTo('debug', { tab: pageId });
+        return;
+      }
+
+      void dispatchCommandOrFallback(commands, builtinCommandId, () =>
+        navigateTo('debug', { tab: pageId })
+      );
+    },
+    [commands, navigateTo]
+  );
 
   useEffect(() => {
     return kernel.contributions.subscribe(() => setRevision((v) => v + 1));
@@ -88,7 +113,11 @@ export const DebugPage: React.FC = () => {
                 type="button"
                 className="settings-action-btn settings-action-btn--topbar"
                 variant="default"
-                onClick={() => navigateTo('settings')}
+                onClick={() =>
+                  void dispatchCommandOrFallback(commands, 'app:navigate-settings', () =>
+                    navigateTo('settings')
+                  )
+                }
               >
                 {t('pages.settings.title')}
               </PmpButton>
@@ -124,7 +153,7 @@ export const DebugPage: React.FC = () => {
                   tabIndex={page.id === activePageId ? 0 : -1}
                   data-has-separator={index < pages.length - 1}
                   onClick={() => {
-                    navigateTo('debug', { tab: page.id });
+                    openDebugTab(page.id);
                     setActivePageId(page.id);
                   }}
                   title={page.title}

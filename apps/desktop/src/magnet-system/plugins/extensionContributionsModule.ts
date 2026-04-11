@@ -18,8 +18,11 @@ import {
 import type { LocalizedTextDescriptor } from '@pixel-matrix/plugin-platform-contracts';
 import {
   closePluginWindow,
-  openPluginWindow,
 } from '../../utils/pluginWindows';
+import {
+  openBuiltinPluginVisualizerViaHostCapability,
+  openBuiltinPluginWindowViaHostCapability,
+} from '../../builtin-modules/builtinNavigationCapabilityBridge';
 import {
   InstalledExtensionPageHost,
   InstalledExtensionSettingsHost,
@@ -293,31 +296,35 @@ export function createInstalledExtensionContributionsModule(): KernelModule<AppE
                     ? (options as Record<string, unknown>)
                     : undefined;
 
-                await openPluginWindow({
-                  sourceKind: 'extv2',
-                  pluginId,
-                  windowId: window.id,
-                  title:
-                    typeof safeOptions?.title === 'string' && safeOptions.title.length > 0
-                      ? safeOptions.title
-                      : title,
-                  width:
-                    typeof safeOptions?.width === 'number' && Number.isFinite(safeOptions.width)
-                      ? safeOptions.width
-                      : window.width,
-                  height:
-                    typeof safeOptions?.height === 'number' && Number.isFinite(safeOptions.height)
-                      ? safeOptions.height
-                      : window.height,
-                  x:
-                    typeof safeOptions?.x === 'number' && Number.isFinite(safeOptions.x)
-                      ? safeOptions.x
-                      : undefined,
-                  y:
-                    typeof safeOptions?.y === 'number' && Number.isFinite(safeOptions.y)
-                      ? safeOptions.y
-                      : undefined,
-                });
+                await openBuiltinPluginWindowViaHostCapability(
+                  services.get(NAVIGATION_SERVICE_TOKEN),
+                  {
+                    sourceKind: 'extv2',
+                    pluginId,
+                    windowId: window.id,
+                    title:
+                      typeof safeOptions?.title === 'string' && safeOptions.title.length > 0
+                        ? safeOptions.title
+                        : title,
+                    width:
+                      typeof safeOptions?.width === 'number' && Number.isFinite(safeOptions.width)
+                        ? safeOptions.width
+                        : window.width,
+                    height:
+                      typeof safeOptions?.height === 'number' && Number.isFinite(safeOptions.height)
+                        ? safeOptions.height
+                        : window.height,
+                    x:
+                      typeof safeOptions?.x === 'number' && Number.isFinite(safeOptions.x)
+                        ? safeOptions.x
+                        : undefined,
+                    y:
+                      typeof safeOptions?.y === 'number' && Number.isFinite(safeOptions.y)
+                        ? safeOptions.y
+                        : undefined,
+                  },
+                  `window:extv2:${pluginId}:${window.id}`
+                );
               },
               close: async () => {
                 await closePluginWindow(pluginId, window.id, 'extv2');
@@ -396,13 +403,15 @@ export function createInstalledExtensionContributionsModule(): KernelModule<AppE
                 ...(visualizer.metadata ?? {}),
               },
               open: async () => {
-                services
-                  .get(NAVIGATION_SERVICE_TOKEN)
-                  .navigateTo('plugin-visualizer', {
+                await openBuiltinPluginVisualizerViaHostCapability(
+                  services.get(NAVIGATION_SERVICE_TOKEN),
+                  {
                     pluginId,
                     visualizerId: visualizer.id,
                     sourceKind: 'extv2',
-                  });
+                  },
+                  `visualizer:extv2:${pluginId}:${visualizer.id}`
+                );
               },
             };
 

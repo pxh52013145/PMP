@@ -7,6 +7,7 @@ import {
   type TelemetryService,
   type TelemetrySnapshot,
 } from '../../../services/telemetry';
+import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 import { runPmpmBridgeSidecarCommand } from './sidecarCommandRuntime';
 import type { RuntimeBridgeTransportMessage } from './runtimeBridgeHostSession';
 import * as pluginConfigModule from '../pluginConfig';
@@ -226,8 +227,10 @@ function createTelemetryServiceSpy(): {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   setGlobalTelemetryService(null);
   vi.restoreAllMocks();
+  localStorage.clear();
 });
 
 async function flushMessages(): Promise<void> {
@@ -368,8 +371,20 @@ describe('sidecar command runtime', () => {
     vi.spyOn(pluginConfigModule, 'readPmpmPluginConfig').mockReturnValue({ count: 0 });
     vi.spyOn(pluginConfigModule, 'subscribePmpmPluginConfig').mockReturnValue(() => {});
     vi.spyOn(pmpmModule, 'getPmpmPluginEffectivePermissions').mockReturnValue(new Set());
-    vi.spyOn(pmpmModule, 'getInstalledPmpmPlugin').mockReturnValue({
-      manifest: { permissions: [] },
+    pmpmModule.upsertInstalledPmpmPlugin({
+      manifest: {
+        formatVersion: '1.0',
+        type: 'magnet-plugin',
+        metadata: {
+          id: 'sidecar-plugin',
+          name: 'Sidecar Plugin',
+          version: '1.0.0',
+        },
+        entryPoint: 'sidecar/echo-runtime.js',
+        permissions: [],
+      },
+      installedAt: 1,
+      enabled: true,
       deniedPermissions: [],
     } as never);
     const crashSpy = vi.spyOn(pmpmModule, 'recordPmpmPluginCrash').mockImplementation(() => {});
@@ -438,6 +453,213 @@ describe('sidecar command runtime', () => {
 
     expect(crashSpy).toHaveBeenCalledWith('sidecar-plugin', expect.any(Error), 'command');
     expect(harness.dispose).toHaveBeenCalledWith('runtime-crash');
+  });
+
+  it('preserves runtime-unresponsive teardown when activate hangs after hello/init', async () => {
+    vi.useFakeTimers();
+
+    const api = createStubApi({ count: 0 });
+    const harness = createSidecarControllerHarness();
+    let runtimeInstanceId = '';
+
+    vi.spyOn(pluginHostApiModule, 'createPluginMountApi').mockReturnValue(api);
+    vi.spyOn(pluginConfigModule, 'readPmpmPluginConfig').mockReturnValue({ count: 0 });
+    vi.spyOn(pluginConfigModule, 'subscribePmpmPluginConfig').mockReturnValue(() => {});
+    vi.spyOn(pmpmModule, 'getPmpmPluginEffectivePermissions').mockReturnValue(new Set());
+    vi.spyOn(pmpmModule, 'getInstalledPmpmPlugin').mockReturnValue({
+      manifest: { permissions: [] },
+      deniedPermissions: [],
+    } as never);
+    const quarantineSpy = vi.spyOn(pmpmModule, 'quarantinePmpmPlugin').mockImplementation(() => {});
+    const crashSpy = vi.spyOn(pmpmModule, 'recordPmpmPluginCrash').mockImplementation(() => {});
+
+    const runtimePromise = runPmpmBridgeSidecarCommand(
+      {
+        pluginId: 'sidecar-plugin',
+        runtimeId: 'sidecar.main',
+        entryPath: 'bin/sidecar-plugin',
+        commandId: 'hang-on-activate',
+        audioService: api.audio as never,
+        navigation: api.navigation as never,
+        timeoutMs: 25,
+      },
+      {
+        now: () => 1234,
+        createPortController: (options) => {
+          runtimeInstanceId = options.runtimeInstanceId;
+          return harness.controller;
+        },
+      }
+    );
+    const runtimeExpectation = expect(runtimePromise).rejects.toThrow('Plugin command timeout (25ms)');
+
+    await vi.advanceTimersByTimeAsync(0);
+    harness.emitRuntimeHello(runtimeInstanceId);
+    await vi.advanceTimersByTimeAsync(0);
+
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.init.ack',
+      pluginId: 'sidecar-plugin',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    await runtimeExpectation;
+    expect(harness.dispose).toHaveBeenCalledWith('runtime-unresponsive');
+    expect(crashSpy).not.toHaveBeenCalled();
+    expect(quarantineSpy).toHaveBeenCalledWith('sidecar-plugin', {
+      surface: 'command',
+      message: 'Plugin command timeout (25ms)',
+      timeoutMs: 25,
+    });
+  });
+
+  it('blocks native-process launch when PMPM signature policy rejects the plugin before bridge open', async () => {
+    const telemetry = createTelemetryServiceSpy();
+    setGlobalTelemetryService(telemetry.service);
+
+    const api = createStubApi({ count: 0 });
+    vi.spyOn(pluginHostApiModule, 'createPluginMountApi').mockReturnValue(api);
+    vi.spyOn(pluginConfigModule, 'readPmpmPluginConfig').mockReturnValue({ count: 0 });
+    vi.spyOn(pluginConfigModule, 'subscribePmpmPluginConfig').mockReturnValue(() => {});
+    vi.spyOn(pmpmModule, 'getPmpmPluginEffectivePermissions').mockReturnValue(new Set());
+
+    pmpmModule.upsertInstalledPmpmPlugin({
+      manifest: {
+        formatVersion: '1.0',
+        type: 'magnet-plugin',
+        metadata: {
+          id: 'sidecar-plugin',
+          name: 'Sidecar Plugin',
+          version: '1.0.0',
+        },
+        entryPoint: 'sidecar/echo-runtime.js',
+        permissions: [],
+      },
+      installedAt: 1,
+      enabled: true,
+      resolvedArtifacts: [
+        {
+          runtimeId: 'sidecar.main',
+          path: 'bin/sidecar-plugin',
+          sha256: '0'.repeat(64),
+        },
+      ],
+    } as never);
+
+    localStorage.setItem(STORAGE_KEYS.PMPM_REQUIRE_TRUSTED_SIGNATURES, 'true');
+    localStorage.setItem(STORAGE_KEYS.PMPM_ALLOW_UNSIGNED_PLUGINS, 'false');
+
+    const createPortController = vi.fn();
+
+    await expect(
+      runPmpmBridgeSidecarCommand(
+        {
+          pluginId: 'sidecar-plugin',
+          runtimeId: 'sidecar.main',
+          entryPath: 'bin/sidecar-plugin',
+          commandId: 'blocked-before-open',
+          audioService: api.audio as never,
+          navigation: api.navigation as never,
+          timeoutMs: 2_000,
+        },
+        {
+          createPortController,
+          readArtifactBytes: async () => new Uint8Array([1, 2, 3]),
+          now: () => 1234,
+        }
+      )
+    ).rejects.toThrow('Plugin signature is required (trusted signatures required): sidecar-plugin');
+
+    expect(createPortController).not.toHaveBeenCalled();
+    expect(pmpmModule.getInstalledPmpmPlugin('sidecar-plugin')).toMatchObject({
+      enabled: false,
+      disabledReason: 'policy',
+    });
+    expect(pmpmGovernanceModule.readPmpmAuditLog().at(-1)).toMatchObject({
+      type: 'disabled',
+      pluginId: 'sidecar-plugin',
+      reason: 'Plugin signature is required (trusted signatures required): sidecar-plugin',
+    });
+    expect(telemetry.calls.at(-1)).toMatchObject({
+      level: 'error',
+      event: 'plugin.sidecar.bridge.failed',
+      message: 'Plugin signature is required (trusted signatures required): sidecar-plugin',
+      fields: expect.objectContaining({
+        pluginId: 'sidecar-plugin',
+        stage: 'verify',
+      }),
+    });
+  });
+
+  it('blocks native-process launch when the persisted PMPM sidecar artifact digest mismatches', async () => {
+    const api = createStubApi({ count: 0 });
+    vi.spyOn(pluginHostApiModule, 'createPluginMountApi').mockReturnValue(api);
+    vi.spyOn(pluginConfigModule, 'readPmpmPluginConfig').mockReturnValue({ count: 0 });
+    vi.spyOn(pluginConfigModule, 'subscribePmpmPluginConfig').mockReturnValue(() => {});
+    vi.spyOn(pmpmModule, 'getPmpmPluginEffectivePermissions').mockReturnValue(new Set());
+
+    pmpmModule.upsertInstalledPmpmPlugin({
+      manifest: {
+        formatVersion: '1.0',
+        type: 'magnet-plugin',
+        metadata: {
+          id: 'sidecar-plugin',
+          name: 'Sidecar Plugin',
+          version: '1.0.0',
+        },
+        entryPoint: 'sidecar/echo-runtime.js',
+        permissions: [],
+      },
+      installedAt: 1,
+      enabled: true,
+      signature: {
+        keyId: 'a'.repeat(64),
+      },
+      resolvedArtifacts: [
+        {
+          runtimeId: 'sidecar.main',
+          path: 'bin/sidecar-plugin',
+          sha256: 'f'.repeat(64),
+        },
+      ],
+    } as never);
+
+    const createPortController = vi.fn();
+
+    await expect(
+      runPmpmBridgeSidecarCommand(
+        {
+          pluginId: 'sidecar-plugin',
+          runtimeId: 'sidecar.main',
+          entryPath: 'bin/sidecar-plugin',
+          commandId: 'blocked-digest-mismatch',
+          audioService: api.audio as never,
+          navigation: api.navigation as never,
+          timeoutMs: 2_000,
+        },
+        {
+          createPortController,
+          readArtifactBytes: async () => new Uint8Array([1, 2, 3]),
+          now: () => 1234,
+        }
+      )
+    ).rejects.toThrow('Runtime artifact integrity check failed (sha256 mismatch): bin/sidecar-plugin');
+
+    expect(createPortController).not.toHaveBeenCalled();
+    expect(pmpmModule.getInstalledPmpmPlugin('sidecar-plugin')).toMatchObject({
+      enabled: false,
+      disabledReason: 'policy',
+    });
+    expect(pmpmGovernanceModule.readPmpmAuditLog().at(-1)).toMatchObject({
+      type: 'disabled',
+      pluginId: 'sidecar-plugin',
+      reason: 'Runtime artifact integrity check failed (sha256 mismatch): bin/sidecar-plugin',
+    });
   });
 
   it('emits plugin.sidecar.bridge.failed when opening the native-process bridge fails', async () => {

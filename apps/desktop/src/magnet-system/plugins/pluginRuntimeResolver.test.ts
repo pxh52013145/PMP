@@ -104,7 +104,7 @@ describe('plugin runtime resolver', () => {
   it('resolves compat runtimes to the inline launcher by default', () => {
     const resolution = resolveInstalledExtensionRuntime(createRecord(COMPAT_MANIFEST), {
       hostId: 'pmp',
-      preferCompatSandbox: false,
+      preferSandboxLauncher: false,
     });
 
     expect(resolution.status).toBe('resolved');
@@ -117,7 +117,7 @@ describe('plugin runtime resolver', () => {
   it('resolves compat runtimes to the sandbox launcher when sandbox is preferred', () => {
     const resolution = resolveInstalledExtensionRuntime(createRecord(COMPAT_MANIFEST), {
       hostId: 'pmp',
-      preferCompatSandbox: true,
+      preferSandboxLauncher: true,
     });
 
     expect(resolution.status).toBe('resolved');
@@ -128,11 +128,11 @@ describe('plugin runtime resolver', () => {
   it('maps resolved runtimes onto Phase 1 launcher adapters', () => {
     const inlineResolution = resolveInstalledExtensionRuntime(createRecord(COMPAT_MANIFEST), {
       hostId: 'pmp',
-      preferCompatSandbox: false,
+      preferSandboxLauncher: false,
     });
     const sandboxResolution = resolveInstalledExtensionRuntime(createRecord(COMPAT_MANIFEST), {
       hostId: 'pmp',
-      preferCompatSandbox: true,
+      preferSandboxLauncher: true,
     });
 
     const inlineAdapter = getResolvedPmpmLauncherAdapter(inlineResolution);
@@ -170,6 +170,35 @@ describe('plugin runtime resolver', () => {
     expect(resolution.status).toBe('resolved');
     if (resolution.status !== 'resolved') return;
     expect(resolution.launcher.id).toBe('compat.pmpm.inline-module');
+  });
+
+  it('prefers manifest-native webview launchers over compat webview launchers when both are available', () => {
+    const resolution = resolveInstalledExtensionRuntime(
+      createRecord({
+        ...COMPAT_MANIFEST,
+        runtimes: [
+          {
+            runtimeId: 'hybrid-webview',
+            kind: 'webview',
+            entry: 'dist/hybrid.html',
+            bridge: 'pxp.runtime.bridge.v1',
+            provides: ['compat.pmpm'],
+            priority: 20,
+          },
+        ],
+      }),
+      {
+        hostId: 'pmp',
+        surfaceKind: 'page',
+        preferSandboxLauncher: true,
+      }
+    );
+
+    expect(resolution.status).toBe('resolved');
+    if (resolution.status !== 'resolved') return;
+    expect(resolution.runtime.runtimeId).toBe('hybrid-webview');
+    expect(resolution.launcher.id).toBe('pxp.webview.host-frame');
+    expect(resolution.source).toBe('manifest-runtime');
   });
 
   it('prefers an available higher-priority sidecar runtime over a lower-priority compat runtime', () => {
@@ -218,6 +247,14 @@ describe('plugin runtime resolver', () => {
             kind: 'sidecar',
             entry: 'bin/demo-sidecar',
             bridge: 'pxp.runtime.bridge.v1',
+            adapter: {
+              kind: 'native-sidecar.process',
+              protocol: 'pxp.runtime.bridge.v1',
+              implementation: {
+                language: 'rust',
+                runtime: 'cargo',
+              },
+            },
             dataPlane: { kinds: ['pipe'] },
             priority: 20,
           },
@@ -234,6 +271,14 @@ describe('plugin runtime resolver', () => {
     expect(resolution.runtime.runtimeId).toBe('demo-sidecar');
     expect(resolution.launcher.id).toBe('pxp.sidecar.native-process');
     expect(resolution.source).toBe('manifest-runtime');
+    expect(resolution.runtime.adapter).toMatchObject({
+      kind: 'native-sidecar.process',
+      protocol: 'pxp.runtime.bridge.v1',
+      implementation: {
+        language: 'rust',
+        runtime: 'cargo',
+      },
+    });
   });
 
   it('blocks runtimes that only match launchers unsupported by the current host path', () => {

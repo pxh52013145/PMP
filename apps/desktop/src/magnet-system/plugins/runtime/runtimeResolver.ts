@@ -92,7 +92,7 @@ function listCandidateLaunchers(
     return genericLaunchers;
   }
 
-  const preferredCompatOrder = context.preferCompatSandbox
+  const preferredCompatOrder = context.preferSandboxLauncher
     ? ([
         getPluginRuntimeLauncher('compat.pmpm.webview-sandbox'),
         getPluginRuntimeLauncher('compat.pmpm.inline-module'),
@@ -109,11 +109,10 @@ function listCandidateLaunchers(
     }
   );
 
-  if (context.surfaceKind === 'command' && context.preferCommandWorker) {
-    return [...genericLaunchers, ...orderedCompat];
-  }
-
-  return [...orderedCompat, ...genericLaunchers];
+  // Phase 4: compat is a downgrade/fallback path, not the default platform path.
+  // Prefer manifest-native launchers whenever the runtime can use them, and only
+  // fall back to compat launchers when generic launchers are unavailable.
+  return [...genericLaunchers, ...orderedCompat];
 }
 
 function buildBlockedResolution(
@@ -166,6 +165,7 @@ export function resolveInstalledExtensionRuntime(
     hostId: context.hostId ?? DEFAULT_HOST_ID,
     platform: context.platform ?? null,
     arch: context.arch ?? null,
+    preferSandboxLauncher: context.preferSandboxLauncher ?? context.preferCompatSandbox ?? false,
     preferCompatSandbox: context.preferCompatSandbox ?? false,
     surfaceKind: context.surfaceKind ?? 'magnet',
     preferCommandWorker: context.preferCommandWorker ?? false,

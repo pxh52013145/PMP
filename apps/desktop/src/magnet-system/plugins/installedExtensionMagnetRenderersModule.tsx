@@ -71,7 +71,11 @@ function DisabledInstalledExtensionMagnet({ pluginId }: { pluginId: string }) {
     React.createElement(
       'div',
       { style: { fontSize: 12, opacity: 0.75 } },
-      reason === 'crash' ? 'Extension disabled (crashed)' : 'Extension disabled'
+      reason === 'crash'
+        ? 'Extension disabled (crashed)'
+        : reason === 'quarantine'
+          ? 'Extension disabled (quarantined)'
+          : 'Extension disabled'
     ),
     lastError
       ? React.createElement(

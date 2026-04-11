@@ -208,7 +208,7 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
       resolution: runtimeResolution,
       extraFields: {
         hostId: 'pmp',
-        preferCompatSandbox: sandboxEnabled,
+        preferSandboxLauncher: sandboxEnabled,
       },
     });
   }, [

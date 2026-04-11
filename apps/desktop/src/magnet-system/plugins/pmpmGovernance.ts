@@ -46,6 +46,22 @@ export type PmpmRuntimeUnresponsiveAuditEvent = {
   timeoutMs: number;
 };
 
+export type PmpmQuarantinedAuditEvent = {
+  type: 'quarantined';
+  at: number;
+  pluginId: string;
+  surface: string;
+  message: string;
+  timeoutMs?: number;
+};
+
+export type PmpmQuarantineClearedAuditEvent = {
+  type: 'quarantine-cleared';
+  at: number;
+  pluginId: string;
+  reason?: string;
+};
+
 export type PmpmRuntimeRestartAuditEvent = {
   type: 'runtime-restart';
   at: number;
@@ -125,6 +141,8 @@ export type PmpmAuditEvent =
   | PmpmEnabledAuditEvent
   | PmpmDisabledAuditEvent
   | PmpmRuntimeUnresponsiveAuditEvent
+  | PmpmQuarantinedAuditEvent
+  | PmpmQuarantineClearedAuditEvent
   | PmpmRuntimeRestartAuditEvent
   | PmpmPermissionsUpdatedAuditEvent
   | PmpmAudioInputAdapterSelectedAuditEvent
@@ -139,6 +157,8 @@ export type PmpmAuditEventInput =
   | Omit<PmpmEnabledAuditEvent, 'at'>
   | Omit<PmpmDisabledAuditEvent, 'at'>
   | Omit<PmpmRuntimeUnresponsiveAuditEvent, 'at'>
+  | Omit<PmpmQuarantinedAuditEvent, 'at'>
+  | Omit<PmpmQuarantineClearedAuditEvent, 'at'>
   | Omit<PmpmRuntimeRestartAuditEvent, 'at'>
   | Omit<PmpmPermissionsUpdatedAuditEvent, 'at'>
   | Omit<PmpmAudioInputAdapterSelectedAuditEvent, 'at'>

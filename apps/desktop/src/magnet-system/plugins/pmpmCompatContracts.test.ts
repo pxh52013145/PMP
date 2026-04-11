@@ -174,6 +174,18 @@ describe('plugin compat pmpm', () => {
         runtimeId: 'demo-sidecar',
         kind: 'sidecar',
         bridge: 'pxp.runtime.bridge.v1',
+        adapter: {
+          kind: 'native-sidecar.process',
+          protocol: 'pxp.runtime.bridge.v1',
+          implementation: {
+            language: 'rust',
+            runtime: 'cargo',
+          },
+          trust: {
+            minimumLevel: 'verified',
+            requiresSignature: true,
+          },
+        },
         sandbox: 'native',
         priority: 50,
         dataPlane: {
@@ -182,18 +194,71 @@ describe('plugin compat pmpm', () => {
       },
     });
 
-    expect(converted.runtimes).toEqual([
-      {
-        runtimeId: 'demo-sidecar',
-        kind: 'sidecar',
-        entry: 'sidecar/echo-runtime.js',
-        priority: 50,
-        sandbox: 'native',
-        bridge: 'pxp.runtime.bridge.v1',
-        provides: ['compat.pmpm'],
-        dataPlane: { kinds: ['pipe'] },
+    expect(converted.runtimes).toHaveLength(1);
+    expect(converted.runtimes[0]).toMatchObject({
+      runtimeId: 'demo-sidecar',
+      kind: 'sidecar',
+      entry: 'sidecar/echo-runtime.js',
+      priority: 50,
+      sandbox: 'native',
+      bridge: 'pxp.runtime.bridge.v1',
+      adapter: {
+        kind: 'native-sidecar.process',
+        protocol: 'pxp.runtime.bridge.v1',
+        implementation: {
+          language: 'rust',
+          runtime: 'cargo',
+        },
+        trust: {
+          minimumLevel: 'verified',
+          requiresSignature: true,
+        },
       },
-    ]);
+      provides: ['compat.pmpm'],
+      dataPlane: { kinds: ['pipe'] },
+    });
+  });
+
+  it('defaults sidecar adapter metadata when compat manifests omit the explicit adapter block', () => {
+    const converted = convertPmpmManifestToPxpManifestV2({
+      ...SAMPLE_PMPM_MANIFEST,
+      entryPoint: 'sidecar/default-runtime',
+      runtime: {
+        runtimeId: 'default-sidecar',
+        kind: 'sidecar',
+      },
+    });
+
+    expect(converted.runtimes[0]?.adapter).toEqual({
+      kind: 'native-sidecar.process',
+      protocol: 'pxp.runtime.bridge.v1',
+      trust: {
+        minimumLevel: 'trusted',
+        requiresDigest: true,
+        requiresSignature: false,
+      },
+      lifecycle: {
+        phases: ['hello', 'init', 'activate', 'health', 'invoke', 'revoke', 'dispose'],
+        quarantineOnTimeout: true,
+        supportsGracefulShutdown: true,
+      },
+    });
+  });
+
+  it('rejects adapter metadata on non-sidecar compat runtimes', () => {
+    expect(() =>
+      validatePmpmManifest({
+        ...SAMPLE_PMPM_MANIFEST,
+        runtime: {
+          runtimeId: 'bad-webview',
+          kind: 'webview',
+          adapter: {
+            kind: 'native-sidecar.process',
+            protocol: 'pxp.runtime.bridge.v1',
+          },
+        },
+      })
+    ).toThrow('manifest.runtime.adapter is only supported for sidecar runtimes');
   });
 
   it('keeps install state out of the raw manifest and maps legacy ids', () => {

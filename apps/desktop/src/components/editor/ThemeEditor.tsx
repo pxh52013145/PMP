@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useKernel } from '../../contexts/KernelContext';
 import { useT } from '../../i18n';
 import { useConfirmDialog } from '../core/ConfirmDialog';
+import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { listRegisteredMagnetRenderers, type MagnetRendererDefinition } from '../../magnet-system/registry';
 import { listMagnetVariants } from '../../magnet-system/variantRegistry';
@@ -768,6 +770,8 @@ export type ThemeEditorProps = {
 };
 
 export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEditorProps) {
+  const kernel = useKernel();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const t = useT();
   const { theme, applyTheme } = useTheme();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
@@ -1018,21 +1022,22 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
   const toggleDebug = useCallback(async () => {
     try {
-      const { openEditorWindow, closeEditorWindow, calculateWindowPosition } = await import(
-        '../../utils/editorWindows'
-      );
+      const { closeEditorWindow } = await import('../../utils/editorWindows');
       if (debugOpen) {
         await closeEditorWindow('debug');
         return;
       }
-      const position = await calculateWindowPosition('debug');
-      await openEditorWindow({ type: 'debug', ...position });
+      await dispatchRequiredCommand(
+        commands,
+        'app:open-debug-editor-window',
+        'Debug editor command service is not available.'
+      );
     } catch (error) {
       telemetry.error('editor.debug-window.toggle.failed', {
         message: getErrorMessage(error),
       });
     }
-  }, [debugOpen]);
+  }, [commands, debugOpen]);
 
   const closeThemeWindow = useCallback(async () => {
     try {

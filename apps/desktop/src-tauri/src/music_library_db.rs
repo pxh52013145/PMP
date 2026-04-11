@@ -6558,13 +6558,17 @@ fn execute_track_query(
 }
 
 fn count_track_query(conn: &Connection, sql_parts: &TrackQuerySqlParts) -> Result<u64, String> {
-    let cache_key =
-        hash_track_query_count_key(sql_parts.from_where_sql.as_str(), sql_parts.bind_values.as_slice());
+    let cache_key = hash_track_query_count_key(
+        sql_parts.from_where_sql.as_str(),
+        sql_parts.bind_values.as_slice(),
+    );
     let now = now_ms();
 
     if let Ok(mut cache) = TRACK_QUERY_COUNT_CACHE.lock() {
         let maybe_total = match cache.entries.get(&cache_key) {
-            Some(entry) if now.saturating_sub(entry.captured_at_ms) <= TRACK_QUERY_COUNT_CACHE_TTL_MS => {
+            Some(entry)
+                if now.saturating_sub(entry.captured_at_ms) <= TRACK_QUERY_COUNT_CACHE_TTL_MS =>
+            {
                 Some(entry.total)
             }
             _ => None,
@@ -6584,14 +6588,11 @@ fn count_track_query(conn: &Connection, sql_parts: &TrackQuerySqlParts) -> Resul
         .prepare_cached(count_sql.as_str())
         .map_err(|error| format!("Failed to prepare track count statement: {error}"))?;
     let total = stmt
-        .query_row(
-        params_from_iter(sql_parts.bind_values.iter()),
-        |row| {
+        .query_row(params_from_iter(sql_parts.bind_values.iter()), |row| {
             let value = row.get::<_, i64>(0)?;
             Ok(value.max(0) as u64)
-        },
-    )
-    .map_err(|error| format!("Failed to count queried tracks: {error}"))?;
+        })
+        .map_err(|error| format!("Failed to count queried tracks: {error}"))?;
 
     if let Ok(mut cache) = TRACK_QUERY_COUNT_CACHE.lock() {
         if let Some(position) = cache.order.iter().position(|item| item == &cache_key) {

@@ -4,13 +4,15 @@ import type { PluginLifecycleSourceKind } from '../pluginLifecycleTelemetry';
 
 const telemetry = getTelemetryLogger('plugins', 'runtimeProtocolTracer');
 
+export type RuntimeProtocolChannel = 'control' | 'data' | 'trace';
+
 export type RuntimeProtocolTraceContext = {
   pluginId: string;
   runtimeId: string;
   runtimeInstanceId: string;
   runtimeKind: RuntimeKind;
   carrier: RuntimeCarrier;
-  channel: 'control';
+  channel: RuntimeProtocolChannel;
   sourceKind?: PluginLifecycleSourceKind | null;
   hostLabel?: string | null;
   launcherId?: string | null;
@@ -82,12 +84,13 @@ export function createRuntimeProtocolTraceContext(input: {
   runtimeInstanceId: string;
   runtimeKind: RuntimeKind;
   carrier: RuntimeCarrier;
+  channel?: RuntimeProtocolChannel;
   sourceKind?: PluginLifecycleSourceKind | null;
   hostLabel?: string | null;
   launcherId?: string | null;
 }): RuntimeProtocolTraceContext {
   return {
-    channel: 'control',
+    channel: input.channel ?? 'control',
     pluginId: input.pluginId,
     runtimeId: input.runtimeId,
     runtimeInstanceId: input.runtimeInstanceId,
@@ -97,6 +100,16 @@ export function createRuntimeProtocolTraceContext(input: {
     hostLabel: normalizeString(input.hostLabel),
     launcherId: normalizeString(input.launcherId),
     sessionTraceId: createTraceId(input.runtimeInstanceId),
+  };
+}
+
+export function createRuntimeProtocolChildTraceContext(
+  parent: RuntimeProtocolTraceContext,
+  channel: RuntimeProtocolChannel
+): RuntimeProtocolTraceContext {
+  return {
+    ...parent,
+    channel,
   };
 }
 

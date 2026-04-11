@@ -945,6 +945,7 @@ export function setInstalledExtensionEnabled(id: string, enabled: boolean): void
   const previous = records[index];
   const nextEnabled = Boolean(enabled);
   const previousEnabled = previous.enabled ?? true;
+  if (nextEnabled && previous.disabledReason === 'quarantine') return;
   if (nextEnabled === previousEnabled) return;
 
   records[index] = nextEnabled
@@ -957,6 +958,109 @@ export function setInstalledExtensionEnabled(id: string, enabled: boolean): void
       type: nextEnabled ? 'enabled' : 'disabled',
       pluginId: id,
       reason: nextEnabled ? undefined : 'manual',
+    });
+  } catch {
+    // ignore
+  }
+}
+
+export function disableInstalledExtensionByPolicy(id: string, message: string): void {
+  const records = loadInstalledExtensions();
+  const index = records.findIndex((record) => record.manifest.identity.id === id);
+  if (index < 0) return;
+
+  const now = Date.now();
+  const details = String(message).slice(0, 2000);
+  records[index] = {
+    ...records[index],
+    enabled: false,
+    disabledReason: 'policy',
+    lastError: `[policy] ${details}`,
+    lastErrorAt: now,
+  };
+
+  saveInstalledExtensions(records);
+  try {
+    recordInstalledExtensionAuditEvent({
+      type: 'disabled',
+      pluginId: id,
+      reason: details,
+    });
+  } catch {
+    // ignore
+  }
+}
+
+export function quarantineInstalledExtension(
+  id: string,
+  options: {
+    message: string;
+    surface?: string;
+    timeoutMs?: number;
+  }
+): void {
+  const records = loadInstalledExtensions();
+  const index = records.findIndex((record) => record.manifest.identity.id === id);
+  if (index < 0) return;
+
+  const existing = records[index];
+  if (existing.enabled === false && existing.disabledReason === 'policy') {
+    return;
+  }
+
+  const now = Date.now();
+  const message = readErrorMessage(options.message).slice(0, 2000);
+
+  records[index] = {
+    ...existing,
+    enabled: false,
+    disabledReason: 'quarantine',
+    lastError: `[quarantine] ${message}`,
+    lastErrorAt: now,
+  };
+
+  saveInstalledExtensions(records);
+  try {
+    if (typeof options.timeoutMs === 'number') {
+      recordInstalledExtensionAuditEvent({
+        type: 'runtime-unresponsive',
+        pluginId: id,
+        surface: options.surface ?? 'command',
+        timeoutMs: options.timeoutMs,
+      });
+    }
+    recordInstalledExtensionAuditEvent({
+      type: 'quarantined',
+      pluginId: id,
+      surface: options.surface ?? 'command',
+      message,
+      timeoutMs: options.timeoutMs,
+    });
+  } catch {
+    // ignore
+  }
+}
+
+export function clearInstalledExtensionQuarantine(id: string, reason = 'manual'): void {
+  const records = loadInstalledExtensions();
+  const index = records.findIndex((record) => record.manifest.identity.id === id);
+  if (index < 0) return;
+
+  const existing = records[index];
+  if (existing.disabledReason !== 'quarantine') return;
+
+  records[index] = {
+    ...existing,
+    enabled: false,
+    disabledReason: 'manual',
+  };
+
+  saveInstalledExtensions(records);
+  try {
+    recordInstalledExtensionAuditEvent({
+      type: 'quarantine-cleared',
+      pluginId: id,
+      reason,
     });
   } catch {
     // ignore
@@ -1051,7 +1155,10 @@ export function recordInstalledExtensionCrash(
   if (index < 0) return;
 
   const existing = records[index];
-  if (existing.enabled === false && existing.disabledReason === 'policy') {
+  if (
+    existing.enabled === false &&
+    (existing.disabledReason === 'policy' || existing.disabledReason === 'quarantine')
+  ) {
     return;
   }
 

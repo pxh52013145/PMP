@@ -43,7 +43,7 @@ mod vst_settings;
 mod vst_shm;
 mod windows;
 
-use crate::app_runtime::{EditorEffectsState, ExitFlag};
+use crate::app_runtime::{EditorEffectsState, ExitFlag, HostFileOpenState};
 
 #[cfg(test)]
 mod tests {
@@ -98,6 +98,7 @@ fn main() {
         })
         .manage(ExitFlag::new())
         .manage(EditorEffectsState::new(true))
+        .manage(HostFileOpenState::new())
         .manage(Arc::new(perf_monitor::PerfMonitor::new()))
         .manage(sidecar_bridge::SidecarBridgeRegistry::new())
         .system_tray(app_builder::create_system_tray())

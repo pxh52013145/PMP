@@ -5,7 +5,38 @@ import { createPluginMountApi } from '../magnet-system/plugins/pluginHostApi';
 import {
   goBackBuiltinViaHostCapability,
   navigateBuiltinViaHostCapability,
+  openBuiltinPluginPageViaHostCapability,
+  openBuiltinPluginVisualizerViaHostCapability,
+  openBuiltinPluginWindowViaHostCapability,
+  openBuiltinWindowViaHostCapability,
 } from './builtinNavigationCapabilityBridge';
+
+const mocks = vi.hoisted(() => ({
+  calculateWindowPositionMock: vi.fn(async () => ({
+    x: 120,
+    y: 240,
+    width: 720,
+    height: 480,
+  })),
+  openEditorWindowMock: vi.fn(async () => {}),
+  openVstManagerWindowMock: vi.fn(async () => {}),
+  openPluginWindowMock: vi.fn(async () => {}),
+}));
+
+vi.mock('../utils/editorWindows', () => ({
+  calculateWindowPosition: mocks.calculateWindowPositionMock,
+  openEditorWindow: mocks.openEditorWindowMock,
+  closeEditorWindow: vi.fn(async () => {}),
+}));
+
+vi.mock('../utils/vstManagerWindows', () => ({
+  openVstManagerWindow: mocks.openVstManagerWindowMock,
+  closeVstManagerWindow: vi.fn(async () => {}),
+}));
+
+vi.mock('../utils/pluginWindows', () => ({
+  openPluginWindow: mocks.openPluginWindowMock,
+}));
 
 function createNavigationServiceStub(): NavigationService {
   return {
@@ -108,5 +139,111 @@ describe('builtin navigation capability bridge', () => {
       sourceKind: 'extv2',
     });
     expect(builtinNavigation.navigateTo).toHaveBeenCalledWith('settings', undefined);
+  });
+
+  it('supports builtin plugin surface routes through the shared host capability', async () => {
+    const navigation = createNavigationServiceStub();
+
+    await openBuiltinPluginPageViaHostCapability(
+      navigation,
+      {
+        pluginId: 'demo-plugin',
+        pageId: 'demo-page',
+        sourceKind: 'extv2',
+      },
+      'settings.plugins:open-installed-extension-page'
+    );
+    await openBuiltinPluginVisualizerViaHostCapability(
+      navigation,
+      {
+        pluginId: 'demo-plugin',
+        visualizerId: 'demo-visualizer',
+        sourceKind: 'pmpm',
+      },
+      'visualizer:pmpm:demo-plugin:demo-visualizer'
+    );
+
+    expect(navigation.navigateTo).toHaveBeenNthCalledWith(1, 'plugin-page', {
+      pluginId: 'demo-plugin',
+      pageId: 'demo-page',
+      sourceKind: 'extv2',
+    });
+    expect(navigation.navigateTo).toHaveBeenNthCalledWith(2, 'plugin-visualizer', {
+      pluginId: 'demo-plugin',
+      visualizerId: 'demo-visualizer',
+      sourceKind: 'pmpm',
+    });
+  });
+
+  it('routes builtin and plugin window opens through host.pmp.shell.window', async () => {
+    const navigation = createNavigationServiceStub();
+
+    await openBuiltinWindowViaHostCapability(
+      navigation,
+      {
+        windowId: 'keyboard-shortcuts',
+      },
+      'app:open-keyboard-shortcuts-window'
+    );
+    await openBuiltinWindowViaHostCapability(
+      navigation,
+      {
+        windowId: 'editor:theme',
+        x: 320,
+        y: 180,
+        width: 960,
+        height: 640,
+      },
+      'app:open-theme-editor-window'
+    );
+    await openBuiltinWindowViaHostCapability(
+      navigation,
+      {
+        windowId: 'vst-manager',
+        title: 'Builtin VST Manager',
+      },
+      'app:open-vst3-plugin-manager'
+    );
+    await openBuiltinPluginWindowViaHostCapability(
+      navigation,
+      {
+        sourceKind: 'extv2',
+        pluginId: 'demo-plugin',
+        windowId: 'demo-window',
+        title: 'Demo Window',
+        width: 720,
+        height: 420,
+        x: 12,
+        y: 34,
+      },
+      'window:extv2:demo-plugin:demo-window'
+    );
+
+    expect(navigation.navigateTo).toHaveBeenCalledWith('keyboard-shortcuts', undefined);
+    expect(mocks.openEditorWindowMock).toHaveBeenCalledWith({
+      type: 'theme',
+      x: 320,
+      y: 180,
+      width: 960,
+      height: 640,
+    });
+    expect(mocks.openVstManagerWindowMock).toHaveBeenCalledWith({
+      title: 'Builtin VST Manager',
+      width: undefined,
+      height: undefined,
+      x: undefined,
+      y: undefined,
+    });
+    expect(mocks.openPluginWindowMock).toHaveBeenCalledWith({
+      sourceKind: 'extv2',
+      pluginId: 'demo-plugin',
+      windowId: 'demo-window',
+      title: 'Demo Window',
+      width: 720,
+      height: 420,
+      x: 12,
+      y: 34,
+    });
+    expect(mocks.calculateWindowPositionMock).not.toHaveBeenCalled();
   });
 });

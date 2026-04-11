@@ -196,6 +196,7 @@ export function createPluginMountApi({
   keybindings,
   commands,
   trayApi: trayApiOverride,
+  onHostCapabilityActivity,
 }: {
   pluginId: string;
   hostLabel: string;
@@ -206,6 +207,15 @@ export function createPluginMountApi({
   keybindings?: KeybindingsService | null;
   commands?: CommandsService | null;
   trayApi?: PluginHostTrayApi | null;
+  onHostCapabilityActivity?: (activity: {
+    capabilityId: string;
+    method: string;
+    payload?: unknown;
+    requestKind: 'invoke' | 'open-session' | 'open-stream' | 'close-session';
+    sourcePluginId: string;
+    sourceKind: PluginSurfaceSourceKind;
+    hostLabel: string;
+  }) => void;
 }): PluginMountApi {
   const allowHost = hasPermission(permissions, PLUGIN_PERMISSIONS.host);
   const allowAudioState = hasPermission(permissions, PLUGIN_PERMISSIONS.audioState);
@@ -563,10 +573,29 @@ export function createPluginMountApi({
     windowApi,
   });
 
+  const notifyHostCapabilityActivity = (activity: {
+    capabilityId: string;
+    method: string;
+    payload?: unknown;
+    requestKind: 'invoke' | 'open-session' | 'open-stream' | 'close-session';
+  }) => {
+    try {
+      onHostCapabilityActivity?.({
+        ...activity,
+        sourcePluginId: pluginId,
+        sourceKind,
+        hostLabel,
+      });
+    } catch {
+      // Best-effort activation hooks must not break host capability execution.
+    }
+  };
+
   const invokeHostCapabilityInternal = async (
     capabilityId: string,
     method: string,
-    payload?: unknown
+    payload?: unknown,
+    requestKind: 'invoke' | 'open-session' | 'open-stream' | 'close-session' = 'invoke'
   ): Promise<unknown> => {
     if (!allowHost) {
       warnDenied('api:host', `host.invokeCapability(${String(capabilityId)}, ${String(method)})`);
@@ -613,6 +642,13 @@ export function createPluginMountApi({
       throw new Error(`Permission denied: ${PLUGIN_PERMISSIONS.hostCapabilityInvoke}`);
     }
 
+    notifyHostCapabilityActivity({
+      capabilityId: normalizedCapabilityId,
+      method: normalizedMethod,
+      payload,
+      requestKind,
+    });
+
     return await withTimeout(
       invokePluginHostCapability(normalizedCapabilityId, {
         method: normalizedMethod,
@@ -629,7 +665,12 @@ export function createPluginMountApi({
     method: string,
     payload?: unknown
   ): Promise<PluginHostSessionOpenResult | null> => {
-    const response = await invokeHostCapabilityInternal(capabilityId, method, payload);
+    const response = await invokeHostCapabilityInternal(
+      capabilityId,
+      method,
+      payload,
+      'open-session'
+    );
     if (response === null) return null;
 
     const result = asObject(response);
@@ -657,7 +698,12 @@ export function createPluginMountApi({
         ? { sessionId: normalizedSessionId, reason: reason.trim() }
         : { sessionId: normalizedSessionId };
 
-    const response = await invokeHostCapabilityInternal(capabilityId, 'closeSession', payload);
+    const response = await invokeHostCapabilityInternal(
+      capabilityId,
+      'closeSession',
+      payload,
+      'close-session'
+    );
     if (response === null) return;
 
     const result = asObject(response);
@@ -725,6 +771,13 @@ export function createPluginMountApi({
     if (typeof audioService.getSpectrumFrame !== 'function') {
       throw new Error('Audio spectrum frame stream is not available');
     }
+
+    notifyHostCapabilityActivity({
+      capabilityId: normalizedCapabilityId,
+      method: normalizedMethod,
+      payload,
+      requestKind: 'open-stream',
+    });
 
     const payloadRecord = asObject(payload);
     const tap = normalizeSpectrumTap(payloadRecord?.tap);

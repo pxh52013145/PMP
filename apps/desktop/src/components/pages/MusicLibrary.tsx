@@ -40,6 +40,7 @@ import {
   getProcessPerfTotalsSnapshot,
   type ProcessPerfTotalsSnapshot,
 } from '../../modules/debug';
+import { getGlobalProcessPerfService } from '../../services/performance-control';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { captureTelemetryScenarioSnapshot } from '../../services/telemetry/scenarioSnapshots';
 
@@ -3524,7 +3525,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     const sync = () => {
 
-      void getProcessPerfTotalsSnapshot()
+      void (
+        getGlobalProcessPerfService()?.refreshTotalsSnapshot() ??
+        getProcessPerfTotalsSnapshot()
+      )
         .then((snapshot) => {
 
           if (cancelled) return;

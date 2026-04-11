@@ -142,8 +142,11 @@ docs/examples/**/*.pmpm
 # Root docs and local architecture notes
 /docs/
 
-# Local blueprint drafts and docs (do not commit)
-/documents/
+# Local blueprint drafts and docs (do not commit by default)
+/documents/*
+!/documents/plugin-platform.md
+!/documents/plugin-platform-phases.md
+!/documents/plugin-platform-preflight.md
 
 # Manuals (work-in-progress)
 Mannuals/

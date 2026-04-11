@@ -43,6 +43,7 @@ export interface PluginRuntimeResolverContext {
   hostId?: string;
   platform?: string | null;
   arch?: string | null;
+  preferSandboxLauncher?: boolean;
   preferCompatSandbox?: boolean;
   surfaceKind?: PluginRuntimeSurfaceKind;
   preferCommandWorker?: boolean;

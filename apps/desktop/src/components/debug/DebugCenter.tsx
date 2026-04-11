@@ -10,6 +10,7 @@ import {
 import type { TelemetryQueryInput, TelemetryQueryResult, TelemetryRecord } from '../../contracts/telemetry';
 import { useKernel } from '../../contexts/KernelContext';
 import { getGlobalProcessPerfService } from '../../services/performance-control';
+import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import { readJson, usePersistentSetting, writeJson } from '../../modules/storage';
@@ -29,8 +30,6 @@ import {
   type VstSidechainModeOverride,
 } from '../../modules/debug';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
-import { calculateWindowPosition, openEditorWindow } from '../../utils/editorWindows';
-import { openVstManagerWindow } from '../../utils/vstManagerWindows';
 import {
   type BilibiliAuthStatus,
   type BilibiliQrCodeSession,
@@ -556,8 +555,9 @@ function buildMemoryBaselineCsv(payload: MemoryBaselineExportPayload): string {
 
 export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings' }) {
   const kernel = useKernel();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const t = useT();
-  const { navigateTo, history } = useNavigation();
+  const { history } = useNavigation();
   const isTauri = useMemo(() => isTauriRuntime(), []);
   const telemetryService = useMemo(
     () => kernel.services.get(TELEMETRY_SERVICE_TOKEN) as TelemetryService,
@@ -1831,20 +1831,63 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
 
   const handleOpenThemeDebugWindow = useCallback(async () => {
     try {
-      const position = await calculateWindowPosition('debug');
-      await openEditorWindow({ type: 'debug', ...position });
+      await dispatchRequiredCommand(
+        commands,
+        'app:open-debug-editor-window',
+        'Debug editor command service is not available.'
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, []);
+  }, [commands]);
 
   const handleOpenVstManager = useCallback(async () => {
     try {
-      await openVstManagerWindow({ title: t('windows.vst-manager.title') });
+      await dispatchRequiredCommand(
+        commands,
+        'app:open-vst3-plugin-manager',
+        'VST3 Plugin Manager command service is not available.'
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [t]);
+  }, [commands]);
+
+  const handleOpenPerfMonitor = useCallback(async () => {
+    try {
+      await dispatchRequiredCommand(
+        commands,
+        'app:navigate-perf-monitor',
+        'Performance Monitor command service is not available.'
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [commands]);
+
+  const handleOpenNativeDebug = useCallback(async () => {
+    try {
+      await dispatchRequiredCommand(
+        commands,
+        'app:navigate-native-debug',
+        'Native Debug command service is not available.'
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [commands]);
+
+  const handleOpenDspRack = useCallback(async () => {
+    try {
+      await dispatchRequiredCommand(
+        commands,
+        'app:navigate-dsp-rack',
+        'DSP Rack command service is not available.'
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [commands]);
 
   const requestRestart = useCallback(
     async (mode: 'normal' | 'debug-center') => {
@@ -3138,17 +3181,17 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <SettingsActionButton
               type="button"
-              onClick={() => navigateTo('debug', { tab: 'perf-monitor' })}
+              onClick={() => void handleOpenPerfMonitor()}
             >
               {t('debug.center.shortcuts.perfMonitor')}
             </SettingsActionButton>
             <SettingsActionButton
               type="button"
-              onClick={() => navigateTo('debug', { tab: 'native-debug' })}
+              onClick={() => void handleOpenNativeDebug()}
             >
               {t('debug.center.shortcuts.nativeDebug')}
             </SettingsActionButton>
-            <SettingsActionButton type="button" onClick={() => navigateTo('dsp-rack')}>
+            <SettingsActionButton type="button" onClick={() => void handleOpenDspRack()}>
               {t('debug.center.shortcuts.dspRack')}
             </SettingsActionButton>
             <SettingsActionButton

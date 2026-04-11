@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RuntimeHello } from '@pixel-matrix/plugin-platform-contracts';
 import type { PluginMountApi } from '../pluginHostApi';
-import { startInstalledExtensionStartupRuntime } from './extensionStartupRuntime';
+import {
+  startInstalledExtensionBackgroundRuntime,
+  startInstalledExtensionStartupRuntime,
+} from './extensionStartupRuntime';
 import type { ResolvedPluginRuntime } from './types';
 import * as pluginConfigModule from '../pluginConfig';
 import * as pluginHostApiModule from '../pluginHostApi';
@@ -306,5 +309,136 @@ describe('installed extension startup runtime', () => {
     expect(
       extensionsGovernanceModule.readInstalledExtensionAuditLog().map((event) => event.type)
     ).not.toContain('crash');
+  });
+
+  it('supports generic host-event background activations for extv2 workers', async () => {
+    const api = createStubApi({});
+    const record: extensionsModule.InstalledHostExtensionRecord = {
+      manifest: {
+        schemaVersion: '2.0',
+        kind: 'extension',
+        identity: {
+          id: 'background-host-demo',
+          publisher: 'pixel-matrix.dev',
+          version: '0.1.0',
+          name: 'background-host-demo',
+        },
+        hostTargets: [{ hostId: 'pmp', required: true }],
+        runtimes: [
+          {
+            runtimeId: 'worker.main',
+            kind: 'extension-host',
+            entry: 'index.js',
+            bridge: 'pxp.runtime.bridge.v1',
+          },
+        ],
+        activationEvents: ['onHost:navigation.changed'],
+        requiresCapabilities: [{ capabilityId: 'core.capability-registry' }],
+      },
+      installedAt: 1_710_000_000_000,
+      enabled: true,
+      resolvedArtifacts: [
+        {
+          runtimeId: 'worker.main',
+          path: 'C:/Users/test/AppData/Roaming/PMP/pmp-durable/extensions-v2/background-host-demo/current/index.js',
+        },
+      ],
+    };
+    const artifact = record.resolvedArtifacts?.[0];
+    expect(artifact).toBeTruthy();
+
+    const resolution: ResolvedPluginRuntime = {
+      status: 'resolved',
+      pluginId: 'background-host-demo',
+      manifest: record.manifest,
+      installedRecord: record,
+      hostId: 'pmp',
+      compatLayerIds: [],
+      issues: [],
+      runtime: record.manifest.runtimes[0],
+      launcher: {
+        id: 'pxp.extension-host.worker',
+        runtimeKinds: ['extension-host'],
+        surfaceKinds: ['command'],
+        availability: 'available',
+        transport: 'worker',
+        description: 'Dedicated worker launcher for command-oriented extension-host runtimes',
+      },
+      artifact: artifact!,
+      source: 'manifest-runtime',
+    };
+
+    vi.spyOn(pluginHostApiModule, 'createPluginMountApi').mockReturnValue(api);
+    vi.spyOn(pluginConfigModule, 'readPmpmPluginConfig').mockReturnValue({});
+    vi.spyOn(pluginConfigModule, 'subscribePmpmPluginConfig').mockReturnValue(() => {});
+
+    let activateMessage: Record<string, unknown> | null = null;
+
+    const handle = await startInstalledExtensionBackgroundRuntime(
+      {
+        record,
+        resolution,
+        audioService: api.audio as never,
+        navigation: api.navigation as never,
+        activation: {
+          cause: 'host-event',
+          activationEvent: 'onHost:navigation.changed',
+          surface: 'host',
+          payload: {
+            hostEventId: 'navigation.changed',
+            eventPayload: {
+              currentPage: { type: 'home' },
+              currentIndex: 0,
+            },
+          },
+        },
+      },
+      {
+        createEntryUrl: async (entryPath: string) =>
+          `asset://localhost/${entryPath.replace(/:/g, '%3A')}`,
+        createObjectUrl: () => 'blob:test-installed-extension-background-worker',
+        revokeObjectUrl: () => {},
+        createWorker: (_scriptUrl, _options, runtimeHello) =>
+          new ScriptedWorker(runtimeHello, (message, worker) => {
+            const envelope = message as Record<string, unknown>;
+
+            if (envelope.op === 'runtime.init') {
+              worker.emitMessage({
+                bridgeVersion: runtimeHello.bridgeVersion,
+                op: 'runtime.init.ack',
+                pluginId: runtimeHello.pluginId,
+                runtimeId: runtimeHello.runtimeId,
+                runtimeInstanceId: runtimeHello.runtimeInstanceId,
+              });
+              return;
+            }
+
+            if (envelope.op === 'runtime.activate') {
+              activateMessage = envelope;
+              worker.emitMessage({
+                bridgeVersion: runtimeHello.bridgeVersion,
+                op: 'runtime.activate.ack',
+                pluginId: runtimeHello.pluginId,
+                runtimeId: runtimeHello.runtimeId,
+                runtimeInstanceId: runtimeHello.runtimeInstanceId,
+              });
+            }
+          }),
+      }
+    );
+
+    expect(activateMessage).toMatchObject({
+      cause: 'host-event',
+      payload: {
+        activationEvent: 'onHost:navigation.changed',
+        hostEventId: 'navigation.changed',
+        eventPayload: {
+          currentPage: { type: 'home' },
+          currentIndex: 0,
+        },
+      },
+    });
+
+    await handle.dispose('test-dispose');
   });
 });

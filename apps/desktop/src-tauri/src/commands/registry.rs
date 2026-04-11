@@ -1,7 +1,12 @@
 use serde::Serialize;
 use std::collections::HashSet;
 
-pub const APP_COMMAND_NAMES: &[&str] = &["greet", "app_request_exit", "app_restart"];
+pub const APP_COMMAND_NAMES: &[&str] = &[
+    "greet",
+    "app_request_exit",
+    "app_restart",
+    "app_consume_pending_host_file_opens",
+];
 
 pub const DEBUG_COMMAND_NAMES: &[&str] = &[
     "debug_get_config",
@@ -321,6 +326,7 @@ macro_rules! pmp_generate_handler {
             crate::commands::app::greet,
             crate::commands::app::app_request_exit,
             crate::commands::app::app_restart,
+            crate::commands::app::app_consume_pending_host_file_opens,
             crate::commands::debug::debug_get_config,
             crate::commands::debug::debug_set_config,
             crate::commands::debug::debug_get_env_snapshot,

@@ -1,4 +1,5 @@
 import type { PmpHostManifestContributionDescriptor } from './host';
+import type { NativeAdapterDescriptor } from './nativeAdapter';
 
 export type LocalizedTextValue = string | number | boolean | null;
 
@@ -340,6 +341,7 @@ export interface RuntimeEntryDescriptor {
   priority?: number;
   sandbox?: 'strict' | 'host-supervised' | 'native';
   bridge?: string;
+  adapter?: NativeAdapterDescriptor;
   provides?: string[];
   dataPlane?: {
     kinds: DataPlaneKind[];
@@ -475,7 +477,7 @@ export interface InstalledExtensionRecord<TManifest = PxpManifestV2> {
     summary?: string;
   };
   enabled: boolean;
-  disabledReason?: 'manual' | 'crash' | 'policy';
+  disabledReason?: 'manual' | 'crash' | 'policy' | 'quarantine';
   deniedCapabilities?: string[];
   lastError?: string;
   lastErrorAt?: number;

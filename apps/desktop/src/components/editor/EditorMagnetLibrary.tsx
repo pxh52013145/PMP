@@ -12,6 +12,7 @@ import {
 } from 'react';
 import { Magnet } from '../../types/pixel';
 import { useEditor } from '../../contexts/EditorContext';
+import { useKernel } from '../../contexts/KernelContext';
 import {
   STORAGE_KEYS,
   TAURI_EVENTS,
@@ -19,6 +20,7 @@ import {
   broadcastDataUpdate,
 } from '../../utils/windowCommunication';
 import { readJson, removeKey, writeJson, writeString } from '../../modules/storage';
+import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import { getMagnetDisplayName } from '../../modules/magnets/display';
 import {
   getMagnetPreviewNode,
@@ -164,6 +166,8 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   onMagnetDeactivate,
   onMagnetDeleteFromLibrary,
 }: EditorMagnetLibraryProps) {
+  const kernel = useKernel();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const { importMagnet: validateAndImportMagnet } = useEditor();
   const t = useT();
 
@@ -452,14 +456,11 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
         setCreatorWindowOpen(true);
 
         // 打开 creator 窗口
-        const { openEditorWindow, calculateWindowPosition } = await import(
-          '../../utils/editorWindows'
+        await dispatchRequiredCommand(
+          commands,
+          'app:open-creator-editor-window',
+          'Creator editor command service is not available.'
         );
-        const position = await calculateWindowPosition('creator');
-        await openEditorWindow({
-          type: 'creator',
-          ...position,
-        });
       } catch (error) {
         telemetry.error('editor.creator-window.open.failed', {
           message: getErrorMessage(error),
@@ -474,7 +475,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
         setCreatorWindowOpen(false);
       }
     },
-    [creatorWindowOpen]
+    [commands, creatorWindowOpen]
   );
 
   // 处理导入
@@ -1137,14 +1138,11 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                 // 立即同步更新本地状态
                 setCreatorWindowOpen(true);
 
-                const { openEditorWindow, calculateWindowPosition } = await import(
-                  '../../utils/editorWindows'
+                await dispatchRequiredCommand(
+                  commands,
+                  'app:open-creator-editor-window',
+                  'Creator editor command service is not available.'
                 );
-                const position = await calculateWindowPosition('creator');
-                await openEditorWindow({
-                  type: 'creator',
-                  ...position,
-                });
               } catch (error) {
                 telemetry.error('editor.creator-window.open.failed', {
                   message: getErrorMessage(error),

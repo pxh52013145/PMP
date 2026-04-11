@@ -76,3 +76,13 @@ export type {
   RuntimeEntryDescriptor,
   TrustHintsDescriptor,
 } from './core';
+export type {
+  NativeAdapterDescriptor,
+  NativeAdapterImplementationDescriptor,
+  NativeAdapterImplementationLanguage,
+  NativeAdapterKind,
+  NativeAdapterLifecycleDescriptor,
+  NativeAdapterLifecyclePhase,
+  NativeAdapterProtocol,
+  NativeAdapterTrustDescriptor,
+} from './nativeAdapter';

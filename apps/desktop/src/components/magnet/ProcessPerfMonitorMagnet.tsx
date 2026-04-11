@@ -1,8 +1,10 @@
 import { memo, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useKernel } from '../../contexts/KernelContext';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { usePerformanceControlSettings } from '../../contexts/usePerformanceControlSettings';
+import { COMMANDS_SERVICE_TOKEN, dispatchCommandOrFallback } from '../../services/commands';
 import { buildMagnetVariantRenderers } from './shared/magnetVariantCatalog';
 import { useResolvedMagnetSkinRenderer } from './shared/useResolvedMagnetSkinRenderer';
 import {
@@ -55,6 +57,8 @@ const ProcessPerfMonitorDefaultRenderer = memo(function ProcessPerfMonitorDefaul
   skinProps: rawSkinProps,
 }: ProcessPerfMonitorRendererProps) {
   const skinProps = useMemo(() => parseProcessPerfMonitorSkinProps(rawSkinProps), [rawSkinProps]);
+  const kernel = useKernel();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const t = useT();
   const navigation = useNavigation();
   const { renderMode, isVisible } = useWindowActivity();
@@ -152,15 +156,23 @@ const ProcessPerfMonitorDefaultRenderer = memo(function ProcessPerfMonitorDefaul
     return rows;
   }, [skinProps.metricSet, snapshot, t]);
 
+  const openPerfMonitor = useMemo(() => {
+    return () => {
+      void dispatchCommandOrFallback(commands, 'app:navigate-perf-monitor', () =>
+        navigation.navigateTo('debug', { tab: 'perf-monitor' })
+      );
+    };
+  }, [commands, navigation]);
+
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={() => navigation.navigateTo('debug', { tab: 'perf-monitor' })}
+      onClick={openPerfMonitor}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          navigation.navigateTo('debug', { tab: 'perf-monitor' });
+          openPerfMonitor();
         }
       }}
       className="process-perf-monitor"

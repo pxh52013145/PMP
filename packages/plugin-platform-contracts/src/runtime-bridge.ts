@@ -66,7 +66,15 @@ export interface RuntimeInitAck extends RuntimeBridgeEnvelope {
 
 export interface RuntimeActivate extends RuntimeBridgeEnvelope {
   op: 'runtime.activate';
-  cause: 'startup' | 'command' | 'view' | 'capability' | 'host-event' | 'manual' | 'recovery';
+  cause:
+    | 'startup'
+    | 'command'
+    | 'view'
+    | 'capability'
+    | 'host-event'
+    | 'file'
+    | 'manual'
+    | 'recovery';
   payload?: unknown;
 }
 

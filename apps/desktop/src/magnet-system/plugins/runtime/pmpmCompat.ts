@@ -16,7 +16,7 @@ export function resolveInstalledPmpmPluginRuntime(
 
   return resolveInstalledExtensionRuntime(record, {
     hostId: 'pmp',
-    preferCompatSandbox: options.preferSandbox ?? false,
+    preferSandboxLauncher: options.preferSandbox ?? false,
     surfaceKind: options.surfaceKind,
     preferCommandWorker: options.preferCommandWorker ?? false,
   });

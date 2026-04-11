@@ -15,13 +15,13 @@ import {
   getInstalledPmpmPlugin,
   getPmpmPluginEffectivePermissions,
   getPmpmPluginsRevision,
+  quarantinePmpmPlugin,
   recordPmpmPermissionDenied,
   recordPmpmPluginCrash,
   subscribePmpmPlugins,
 } from './pmpm';
 import { createPluginMountApi, type PluginNavigationSnapshot } from './pluginHostApi';
 import { readPmpmPluginConfig, subscribePmpmPluginConfig } from './pluginConfig';
-import { recordPmpmAuditEvent } from './pmpmGovernance';
 import { readVerifiedPmpmPluginEntryCode } from './pmpmRuntime';
 import { buildPmpmSandboxSrcDoc } from './pmpmSandboxSrcDoc';
 import { usePmpmRuntimeRestartToken } from './usePmpmRuntimeRestartToken';
@@ -118,6 +118,8 @@ function DisabledPluginNotice({ pluginId }: { pluginId: string }) {
       <div style={{ fontSize: 12, marginTop: 6, opacity: 0.8 }}>
         {reason === 'crash'
           ? 'Plugin disabled (crashed)'
+          : reason === 'quarantine'
+            ? 'Plugin disabled (quarantined)'
           : reason === 'policy'
             ? 'Plugin disabled (policy)'
             : 'Plugin disabled'}
@@ -637,15 +639,12 @@ export function PmpmSandboxHost({
           if (crashReportedRef.current) return;
           crashReportedRef.current = true;
           setError(`Plugin runtime unresponsive (${elapsed}ms)`);
-
-          recordPmpmAuditEvent({
-            type: 'runtime-unresponsive',
-            pluginId,
+          quarantinePmpmPlugin(pluginId, {
             surface: crashSurface,
+            message: `Plugin runtime unresponsive (${elapsed}ms)`,
             timeoutMs,
           });
           void cleanupRuntime('runtime-unresponsive');
-          recordPmpmPluginCrash(pluginId, `Plugin runtime unresponsive (${elapsed}ms)`, crashSurface);
         }, PMPM_SANDBOX_HEARTBEAT_INTERVAL_MS);
 
         await runtimeSession.start();

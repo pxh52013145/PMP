@@ -46,6 +46,22 @@ export type InstalledExtensionRuntimeUnresponsiveAuditEvent = {
   timeoutMs: number;
 };
 
+export type InstalledExtensionQuarantinedAuditEvent = {
+  type: 'quarantined';
+  at: number;
+  pluginId: string;
+  surface: string;
+  message: string;
+  timeoutMs?: number;
+};
+
+export type InstalledExtensionQuarantineClearedAuditEvent = {
+  type: 'quarantine-cleared';
+  at: number;
+  pluginId: string;
+  reason?: string;
+};
+
 export type InstalledExtensionRuntimeRestartAuditEvent = {
   type: 'runtime-restart';
   at: number;
@@ -87,6 +103,8 @@ export type InstalledExtensionAuditEvent =
   | InstalledExtensionEnabledAuditEvent
   | InstalledExtensionDisabledAuditEvent
   | InstalledExtensionRuntimeUnresponsiveAuditEvent
+  | InstalledExtensionQuarantinedAuditEvent
+  | InstalledExtensionQuarantineClearedAuditEvent
   | InstalledExtensionRuntimeRestartAuditEvent
   | InstalledExtensionCapabilitiesUpdatedAuditEvent
   | InstalledExtensionInstalledAuditEvent
@@ -99,6 +117,8 @@ export type InstalledExtensionAuditEventInput =
   | Omit<InstalledExtensionEnabledAuditEvent, 'at'>
   | Omit<InstalledExtensionDisabledAuditEvent, 'at'>
   | Omit<InstalledExtensionRuntimeUnresponsiveAuditEvent, 'at'>
+  | Omit<InstalledExtensionQuarantinedAuditEvent, 'at'>
+  | Omit<InstalledExtensionQuarantineClearedAuditEvent, 'at'>
   | Omit<InstalledExtensionRuntimeRestartAuditEvent, 'at'>
   | Omit<InstalledExtensionCapabilitiesUpdatedAuditEvent, 'at'>
   | Omit<InstalledExtensionInstalledAuditEvent, 'at'>

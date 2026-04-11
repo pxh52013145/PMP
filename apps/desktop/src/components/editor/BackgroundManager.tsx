@@ -1,8 +1,10 @@
 import { useState, useCallback, memo, useEffect, useMemo, useRef } from 'react';
+import { useKernel } from '../../contexts/KernelContext';
 import { BackgroundConfig, BackgroundSettings, PRESET_BACKGROUNDS } from '../../types/background';
 import { setupStorageListener, STORAGE_KEYS } from '../../utils/windowCommunication';
 import { readJson, tryWriteJson } from '../../modules/storage';
 import { useT } from '../../i18n';
+import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import './BackgroundManager.css';
 
@@ -46,6 +48,8 @@ export const BackgroundManager = memo(function BackgroundManager({
   onSettingsChange,
   currentWindowMode,
 }: BackgroundManagerProps) {
+  const kernel = useKernel();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const t = useT();
 
   const [mode, setMode] = useState<BackgroundMode>(currentWindowMode);
@@ -395,14 +399,11 @@ export const BackgroundManager = memo(function BackgroundManager({
   // 打开自定义背景编辑窗口
   const handleOpenCustomEditor = useCallback(async () => {
     try {
-      const { openEditorWindow, calculateWindowPosition } = await import(
-        '../../utils/editorWindows'
+      await dispatchRequiredCommand(
+        commands,
+        'app:open-custom-background-editor-window',
+        'Custom background editor command service is not available.'
       );
-      const position = await calculateWindowPosition('custom-background');
-      telemetry.debug('editor.background.custom-window.open.requested', {
-        fields: position,
-      });
-      await openEditorWindow({ type: 'custom-background', ...position });
       telemetry.info('editor.background.custom-window.open.completed');
     } catch (error) {
       telemetry.error('editor.background.custom-window.open.failed', {
@@ -410,7 +411,7 @@ export const BackgroundManager = memo(function BackgroundManager({
       });
       alert(t('editor.background-manager.error.openCustomEditorFailed', { message: String(error) }));
     }
-  }, [t]);
+  }, [commands, t]);
 
   // 处理禁用模式按钮点击（触发故障效果）
   const handleDisabledModeClick = useCallback(() => {

@@ -200,10 +200,17 @@ function buildPluginRuntimeResolveFields(
       issues: [],
       compatLayerIds: [],
       candidateLauncherIds: [],
+      compatMode: 'none',
     };
   }
 
   if (resolution.status === 'resolved') {
+    const compatMode =
+      resolution.source === 'compat-runtime'
+        ? 'active'
+        : resolution.compatLayerIds.length > 0
+          ? 'fallback-available'
+          : 'none';
     return {
       resolutionStatus: 'resolved',
       hostId: resolution.hostId,
@@ -215,6 +222,7 @@ function buildPluginRuntimeResolveFields(
       issues: [...resolution.issues],
       compatLayerIds: [...resolution.compatLayerIds],
       candidateLauncherIds: [resolution.launcher.id],
+      compatMode,
     };
   }
 
@@ -229,6 +237,7 @@ function buildPluginRuntimeResolveFields(
     issues: [...resolution.issues],
     compatLayerIds: [...resolution.compatLayerIds],
     candidateLauncherIds: resolution.candidateLaunchers.map((launcher) => launcher.id),
+    compatMode: resolution.compatLayerIds.length > 0 ? 'declared' : 'none',
   };
 }
 

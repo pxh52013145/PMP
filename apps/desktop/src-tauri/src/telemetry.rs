@@ -672,7 +672,10 @@ mod tests {
             ..TelemetryQueryInput::default()
         });
         assert_eq!(plugin_result.matched_record_count, 1);
-        assert_eq!(plugin_result.records[0].event, "plugin.runtime.activate.completed");
+        assert_eq!(
+            plugin_result.records[0].event,
+            "plugin.runtime.activate.completed"
+        );
 
         let performance_result = core.query_current_session(TelemetryQueryInput {
             event_prefixes: vec!["performance.".to_string()],

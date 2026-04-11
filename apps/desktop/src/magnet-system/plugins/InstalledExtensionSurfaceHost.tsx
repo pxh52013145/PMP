@@ -44,16 +44,14 @@ import {
   type PluginNavigationSnapshot,
 } from './pluginHostApi';
 import {
+  quarantineInstalledExtension,
   getInstalledExtensionRecord,
   getInstalledExtensionsRevision,
   listInstalledExtensionCompatPermissions,
   recordInstalledExtensionCrash,
   subscribeInstalledExtensions,
 } from './extensions';
-import {
-  recordInstalledExtensionAuditEvent,
-  recordInstalledExtensionPermissionDenied,
-} from './extensionsGovernance';
+import { recordInstalledExtensionPermissionDenied } from './extensionsGovernance';
 import {
   buildInstalledExtensionActivationViewId,
 } from './activationEvents';
@@ -213,8 +211,27 @@ function InstalledExtensionSurfaceHost({
       commands,
       navigation,
       keybindings,
+      onHostCapabilityActivity: (activity) => {
+        void runtimeManager.activateForCapability({
+          capabilityId: activity.capabilityId,
+          method: activity.method,
+          requestKind: activity.requestKind,
+          sourcePluginId: activity.sourcePluginId,
+          sourceKind: activity.sourceKind === 'extv2' ? 'extv2' : 'pmpm',
+          hostLabel: activity.hostLabel,
+        });
+      },
     });
-  }, [audioService, commands, hostLabel, keybindings, navigation, permissions, pluginId]);
+  }, [
+    audioService,
+    commands,
+    hostLabel,
+    keybindings,
+    navigation,
+    permissions,
+    pluginId,
+    runtimeManager,
+  ]);
 
   const runtimeResolution = useMemo(() => {
     if (!record) return null;
@@ -516,7 +533,11 @@ function InstalledExtensionSurfaceHost({
       }
       setError('Extension webview boot timeout');
       void runtimeResources.cleanup('runtime-crash');
-      recordInstalledExtensionCrash(pluginId, 'Extension webview boot timeout', surface.kind);
+      quarantineInstalledExtension(pluginId, {
+        surface: surface.kind,
+        message: 'Extension webview boot timeout',
+        timeoutMs: STARTUP_TIMEOUT_MS,
+      });
     }, STARTUP_TIMEOUT_MS);
 
     return () => {
@@ -737,19 +758,12 @@ function InstalledExtensionSurfaceHost({
           if (elapsed < UNRESPONSIVE_TIMEOUT_MS || crashReportedRef.current) return;
           crashReportedRef.current = true;
           setError(`Extension runtime unresponsive (${elapsed}ms)`);
-
-          recordInstalledExtensionAuditEvent({
-            type: 'runtime-unresponsive',
-            pluginId,
+          quarantineInstalledExtension(pluginId, {
             surface: surface.kind,
+            message: `Extension runtime unresponsive (${elapsed}ms)`,
             timeoutMs: UNRESPONSIVE_TIMEOUT_MS,
           });
           void cleanupRuntime('runtime-unresponsive');
-          recordInstalledExtensionCrash(
-            pluginId,
-            `Extension runtime unresponsive (${elapsed}ms)`,
-            surface.kind
-          );
         }, HEARTBEAT_INTERVAL_MS);
 
         await runtimeSession.start();
@@ -766,9 +780,17 @@ function InstalledExtensionSurfaceHost({
           });
           surfaceMountTelemetryRef.current = null;
         }
+        const message = bootError instanceof Error ? bootError.message : String(bootError);
         void cleanupRuntime('runtime-crash');
-        recordInstalledExtensionCrash(pluginId, bootError, surface.kind);
-        setError(bootError instanceof Error ? bootError.message : String(bootError));
+        if (message.toLowerCase().includes('timeout') || message.toLowerCase().includes('unresponsive')) {
+          quarantineInstalledExtension(pluginId, {
+            surface: surface.kind,
+            message,
+          });
+        } else {
+          recordInstalledExtensionCrash(pluginId, bootError, surface.kind);
+        }
+        setError(message);
       }
     };
 

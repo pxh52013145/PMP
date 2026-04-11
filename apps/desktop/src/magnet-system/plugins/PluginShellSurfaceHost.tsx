@@ -200,7 +200,7 @@ function PluginShellSurfaceHost({
       resolution: runtimeResolution,
       extraFields: {
         hostId: 'pmp',
-        preferCompatSandbox: sandboxEnabled,
+        preferSandboxLauncher: sandboxEnabled,
       },
     });
   }, [

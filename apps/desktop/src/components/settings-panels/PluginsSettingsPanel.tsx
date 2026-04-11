@@ -8,6 +8,12 @@ import { GOVERNANCE_SERVICE_TOKEN } from '../../services/governance';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import { useT } from '../../i18n';
 import {
+  openBuiltinPluginPageViaHostCapability,
+  openBuiltinPluginWindowViaHostCapability,
+  openBuiltinPluginVisualizerViaHostCapability,
+} from '../../builtin-modules/builtinNavigationCapabilityBridge';
+import {
+  clearPmpmPluginQuarantine,
   createMagnetTemplateFromPlugin,
   getPmpmPluginsRevision,
   installPmpmPluginFromFilePath,
@@ -45,6 +51,7 @@ import { resolveInstalledPmpmPluginRuntime } from '../../magnet-system/plugins/r
 import { useConfirmDialog } from '../core/ConfirmDialog';
 import { PmpButton, PmpCard, PmpCheckbox } from '../primitives';
 import {
+  clearInstalledExtensionQuarantine,
   getInstalledExtensionRecord,
   getInstalledExtensionsRevision,
   installInstalledExtensionFromFilePath,
@@ -58,6 +65,8 @@ import {
   uninstallInstalledExtension,
   type InstalledHostExtensionRecord,
 } from '../../magnet-system/plugins/extensions';
+import { INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN } from '../../magnet-system/plugins/installedExtensionRuntimeManager';
+import { activateInstalledExtensionsForHostFile } from '../../magnet-system/plugins/installedExtensionHostFileActivation';
 import { resolveInstalledExtensionRuntime } from '../../magnet-system/plugins/runtime';
 import {
   INSTALLED_EXTENSION_COMMAND_LAUNCHERS,
@@ -75,8 +84,7 @@ import {
   readInstalledExtensionPmpHostContributions,
   supportsInstalledExtensionMagnetSurface,
 } from '../../magnet-system/plugins/installedExtensionHostPmp';
-import type { PluginRuntimeSurfaceKind } from '../../magnet-system/plugins/runtime';
-import { openPluginWindow } from '../../utils/pluginWindows';
+import type { PluginRuntimeResolution, PluginRuntimeSurfaceKind } from '../../magnet-system/plugins/runtime';
 
 function formatAuditEvent(event: PmpmAuditEvent): string {
   if (event.type === 'permission-denied') {
@@ -87,6 +95,12 @@ function formatAuditEvent(event: PmpmAuditEvent): string {
   }
   if (event.type === 'runtime-unresponsive') {
     return `[hang:${event.surface}] timeout=${event.timeoutMs}ms`;
+  }
+  if (event.type === 'quarantined') {
+    return `[quarantined:${event.surface}] ${event.message}`;
+  }
+  if (event.type === 'quarantine-cleared') {
+    return `[quarantine-cleared] ${event.reason ?? ''}`.trim();
   }
   if (event.type === 'runtime-restart') {
     return `[restart] ${event.reason ?? ''}`.trim();
@@ -161,6 +175,12 @@ function formatInstalledExtensionAuditEvent(event: InstalledExtensionAuditEvent)
   if (event.type === 'runtime-unresponsive') {
     return `[hang:${event.surface}] timeout=${event.timeoutMs}ms`;
   }
+  if (event.type === 'quarantined') {
+    return `[quarantined:${event.surface}] ${event.message}`;
+  }
+  if (event.type === 'quarantine-cleared') {
+    return `[quarantine-cleared] ${event.reason ?? ''}`.trim();
+  }
   if (event.type === 'runtime-restart') {
     return `[restart] ${event.reason ?? ''}`.trim();
   }
@@ -185,11 +205,85 @@ function formatInstalledExtensionAuditEvent(event: InstalledExtensionAuditEvent)
   return '[event]';
 }
 
+function buildRuntimePresentation(
+  t: (key: string, params?: Record<string, unknown>) => string,
+  runtimeResolution: PluginRuntimeResolution | null
+): {
+  runtimeSourceLabel: string | null;
+  compatModeLabel: string | null;
+  runtimeProjectionTitle: string;
+} {
+  const runtimeSourceLabel =
+    runtimeResolution?.status === 'resolved'
+      ? runtimeResolution.source === 'compat-runtime'
+        ? t('settings.plugins.tag.runtimeSourceCompat')
+        : t('settings.plugins.tag.runtimeSourceManifest')
+      : null;
+  const compatModeLabel = runtimeResolution?.compatLayerIds.length
+    ? runtimeResolution?.status === 'resolved' && runtimeResolution.source === 'manifest-runtime'
+      ? t('settings.plugins.tag.compatFallbackAvailable')
+      : t('settings.plugins.tag.compatDeclared')
+    : null;
+
+  if (!runtimeResolution) {
+    return {
+      runtimeSourceLabel,
+      compatModeLabel,
+      runtimeProjectionTitle: t('settings.plugins.tag.runtimeMissing'),
+    };
+  }
+
+  if (runtimeResolution.status === 'resolved') {
+    return {
+      runtimeSourceLabel,
+      compatModeLabel,
+      runtimeProjectionTitle: [
+        t('settings.plugins.tag.runtimeResolved', {
+          runtimeId: runtimeResolution.runtime.runtimeId,
+        }),
+        runtimeSourceLabel,
+        compatModeLabel,
+        t('settings.plugins.tag.launcher', {
+          launcherId: runtimeResolution.launcher.id,
+        }),
+        t('settings.plugins.tag.transport', {
+          transport: runtimeResolution.launcher.transport,
+        }),
+        ...runtimeResolution.issues.map((issue) => t('settings.plugins.runtime.issue', { issue })),
+      ]
+        .filter((line): line is string => typeof line === 'string' && line.length > 0)
+        .join('\n'),
+    };
+  }
+
+  return {
+    runtimeSourceLabel,
+    compatModeLabel,
+    runtimeProjectionTitle: [
+      t('settings.plugins.tag.runtimeBlocked'),
+      runtimeResolution.candidateLaunchers.length > 0
+        ? t('settings.plugins.runtime.candidates', {
+            launchers: runtimeResolution.candidateLaunchers
+              .map((launcher) => launcher.id)
+              .join(', '),
+          })
+        : null,
+      compatModeLabel,
+      ...runtimeResolution.issues.map((issue) => t('settings.plugins.runtime.issue', { issue })),
+    ]
+      .filter((line): line is string => typeof line === 'string' && line.length > 0)
+      .join('\n'),
+  };
+}
+
 export function PluginsSettingsPanel() {
   const kernel = useKernel();
   const t = useT();
   const governance = kernel.services.getOptional(GOVERNANCE_SERVICE_TOKEN);
   const navigationService = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
+  const installedExtensionRuntimeManager = kernel.services.get(
+    INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN
+  );
   const { activeMagnetIds, activateMagnet, deactivateMagnet, magnetLibrary, setMagnetLibrary } =
     useMagnetConfig();
   const isTauri = isTauriRuntime();
@@ -331,25 +425,41 @@ export function PluginsSettingsPanel() {
   );
 
   const openInstalledExtensionPage = useCallback(
-    (pluginId: string, pageId: string) => {
+    async (pluginId: string, pageId: string) => {
       setError(null);
-      navigationService.navigateTo('plugin-page', {
-        pluginId,
-        pageId,
-        sourceKind: 'extv2',
-      });
+      try {
+        await openBuiltinPluginPageViaHostCapability(
+          navigationService,
+          {
+            pluginId,
+            pageId,
+            sourceKind: 'extv2',
+          },
+          'settings.plugins:open-installed-extension-page'
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     },
     [navigationService]
   );
 
   const openInstalledExtensionVisualizer = useCallback(
-    (pluginId: string, visualizerId: string) => {
+    async (pluginId: string, visualizerId: string) => {
       setError(null);
-      navigationService.navigateTo('plugin-visualizer', {
-        pluginId,
-        visualizerId,
-        sourceKind: 'extv2',
-      });
+      try {
+        await openBuiltinPluginVisualizerViaHostCapability(
+          navigationService,
+          {
+            pluginId,
+            visualizerId,
+            sourceKind: 'extv2',
+          },
+          'settings.plugins:open-installed-extension-visualizer'
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     },
     [navigationService]
   );
@@ -364,19 +474,23 @@ export function PluginsSettingsPanel() {
     }) => {
       setError(null);
       try {
-        await openPluginWindow({
-          sourceKind: 'extv2',
-          pluginId: options.pluginId,
-          windowId: options.windowId,
-          title: options.title,
-          width: options.width,
-          height: options.height,
-        });
+        await openBuiltinPluginWindowViaHostCapability(
+          navigationService,
+          {
+            sourceKind: 'extv2',
+            pluginId: options.pluginId,
+            windowId: options.windowId,
+            title: options.title,
+            width: options.width,
+            height: options.height,
+          },
+          'settings.plugins:open-installed-extension-window'
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    []
+    [navigationService]
   );
 
   const addInstalledExtensionMagnetToCurrentSpace = useCallback(
@@ -608,6 +722,12 @@ export function PluginsSettingsPanel() {
         throw new Error(t('settings.plugins.v2.install.error.invalidFilePath'));
       }
 
+      void activateInstalledExtensionsForHostFile(installedExtensionRuntimeManager, {
+        filePath,
+        action: 'selected',
+        hostLabel: 'PluginsSettingsPanel',
+      });
+
       const parsed = await parseInstalledExtensionFromFilePath(filePath);
       const isUpdate = Boolean(getInstalledExtensionRecord(parsed.manifest.identity.id));
       const contributesMagnet = supportsInstalledExtensionMagnetSurface(parsed);
@@ -681,7 +801,15 @@ export function PluginsSettingsPanel() {
     } finally {
       setBusy(false);
     }
-  }, [busy, confirm, isTauri, magnetLibrary, setMagnetLibrary, t]);
+  }, [
+    busy,
+    confirm,
+    installedExtensionRuntimeManager,
+    isTauri,
+    magnetLibrary,
+    setMagnetLibrary,
+    t,
+  ]);
 
   const handleUninstallManifestV2 = useCallback(
     async (pluginId: string) => {
@@ -837,42 +965,8 @@ export function PluginsSettingsPanel() {
                   ...(extensionRecord.manifest.compat?.map((entry) => entry.compatLayerId) ?? []),
                 ].join('\n')
               : undefined;
-            const runtimeProjectionTitle = (() => {
-              if (!runtimeResolution) {
-                return t('settings.plugins.tag.runtimeMissing');
-              }
-              if (runtimeResolution.status === 'resolved') {
-                return [
-                  t('settings.plugins.tag.runtimeResolved', {
-                    runtimeId: runtimeResolution.runtime.runtimeId,
-                  }),
-                  t('settings.plugins.tag.launcher', {
-                    launcherId: runtimeResolution.launcher.id,
-                  }),
-                  t('settings.plugins.tag.transport', {
-                    transport: runtimeResolution.launcher.transport,
-                  }),
-                  ...runtimeResolution.issues.map((issue) =>
-                    t('settings.plugins.runtime.issue', { issue })
-                  ),
-                ].join('\n');
-              }
-              return [
-                t('settings.plugins.tag.runtimeBlocked'),
-                runtimeResolution.candidateLaunchers.length > 0
-                  ? t('settings.plugins.runtime.candidates', {
-                      launchers: runtimeResolution.candidateLaunchers
-                        .map((launcher) => launcher.id)
-                        .join(', '),
-                    })
-                  : null,
-                ...runtimeResolution.issues.map((issue) =>
-                  t('settings.plugins.runtime.issue', { issue })
-                ),
-              ]
-                .filter((line): line is string => typeof line === 'string' && line.length > 0)
-                .join('\n');
-            })();
+            const { runtimeSourceLabel, compatModeLabel, runtimeProjectionTitle } =
+              buildRuntimePresentation(t, runtimeResolution);
             const panels = plugin.manifest.contributions?.settingsPanels?.length ?? 0;
             const pages = plugin.manifest.contributions?.pages?.length ?? 0;
             const windows = plugin.manifest.contributions?.windows?.length ?? 0;
@@ -921,6 +1015,16 @@ export function PluginsSettingsPanel() {
                             launcherId: runtimeResolution.launcher.id,
                           })}
                         </span>
+                        {runtimeSourceLabel ? (
+                          <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                            {runtimeSourceLabel}
+                          </span>
+                        ) : null}
+                        {compatModeLabel ? (
+                          <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                            {compatModeLabel}
+                          </span>
+                        ) : null}
                         <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
                           {t('settings.plugins.tag.transport', {
                             transport: runtimeResolution.launcher.transport,
@@ -928,11 +1032,18 @@ export function PluginsSettingsPanel() {
                         </span>
                       </>
                     ) : (
-                      <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                        {runtimeResolution
-                          ? t('settings.plugins.tag.runtimeBlocked')
-                          : t('settings.plugins.tag.runtimeMissing')}
-                      </span>
+                      <>
+                        <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                          {runtimeResolution
+                            ? t('settings.plugins.tag.runtimeBlocked')
+                            : t('settings.plugins.tag.runtimeMissing')}
+                        </span>
+                        {compatModeLabel ? (
+                          <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                            {compatModeLabel}
+                          </span>
+                        ) : null}
+                      </>
                     )}
                     {panels > 0 && (
                       <span className="settings-plugin-tag">
@@ -1026,11 +1137,23 @@ export function PluginsSettingsPanel() {
                 </div>
 
                 <div className="settings-plugin-actions">
+                  {plugin.disabledReason === 'quarantine' && (
+                    <PmpButton
+                      type="button"
+                      className="settings-action-btn"
+                      variant="default"
+                      disabled={busy}
+                      onClick={() => clearPmpmPluginQuarantine(meta.id)}
+                      title={t('settings.plugins.action.clearQuarantine.title')}
+                    >
+                      {t('settings.plugins.action.clearQuarantine')}
+                    </PmpButton>
+                  )}
                   <PmpButton
                     type="button"
                     className="settings-action-btn"
                     variant="default"
-                    disabled={busy}
+                    disabled={busy || (!enabled && plugin.disabledReason === 'quarantine')}
                     onClick={() => void handleToggleEnabled(meta.id, !enabled)}
                     title={
                       enabled
@@ -1045,7 +1168,7 @@ export function PluginsSettingsPanel() {
                     type="button"
                     className="settings-action-btn"
                     variant="default"
-                    disabled={busy}
+                    disabled={busy || plugin.disabledReason === 'quarantine'}
                     onClick={() => restartPmpmRuntime(meta.id, 'manual')}
                     title={t('settings.plugins.action.restart.title')}
                   >
@@ -1064,7 +1187,10 @@ export function PluginsSettingsPanel() {
                             untrustPmpmSigningKeyId(signatureKeyId);
                           } else {
                             trustPmpmSigningKeyId(signatureKeyId);
-                            if (plugin.disabledReason === 'policy') {
+                            if (
+                              plugin.disabledReason === 'policy' ||
+                              plugin.disabledReason === 'quarantine'
+                            ) {
                               setPmpmPluginEnabled(meta.id, true);
                             }
                           }
@@ -1146,42 +1272,8 @@ export function PluginsSettingsPanel() {
             const windows = hostContributions?.windows?.length ?? 0;
             const visualizers = hostContributions?.visualizers?.length ?? 0;
             const magnets = hostContributions?.magnets ? 1 : 0;
-            const runtimeProjectionTitle = (() => {
-              if (!runtimeResolution) {
-                return t('settings.plugins.tag.runtimeMissing');
-              }
-              if (runtimeResolution.status === 'resolved') {
-                return [
-                  t('settings.plugins.tag.runtimeResolved', {
-                    runtimeId: runtimeResolution.runtime.runtimeId,
-                  }),
-                  t('settings.plugins.tag.launcher', {
-                    launcherId: runtimeResolution.launcher.id,
-                  }),
-                  t('settings.plugins.tag.transport', {
-                    transport: runtimeResolution.launcher.transport,
-                  }),
-                  ...runtimeResolution.issues.map((issue) =>
-                    t('settings.plugins.runtime.issue', { issue })
-                  ),
-                ].join('\n');
-              }
-              return [
-                t('settings.plugins.tag.runtimeBlocked'),
-                runtimeResolution.candidateLaunchers.length > 0
-                  ? t('settings.plugins.runtime.candidates', {
-                      launchers: runtimeResolution.candidateLaunchers
-                        .map((launcher) => launcher.id)
-                        .join(', '),
-                    })
-                  : null,
-                ...runtimeResolution.issues.map((issue) =>
-                  t('settings.plugins.runtime.issue', { issue })
-                ),
-              ]
-                .filter((line): line is string => typeof line === 'string' && line.length > 0)
-                .join('\n');
-            })();
+            const { runtimeSourceLabel, compatModeLabel, runtimeProjectionTitle } =
+              buildRuntimePresentation(t, runtimeResolution);
             const commands = record.manifest.contributes?.core?.commands?.length ?? 0;
             const keybindings = record.manifest.contributes?.core?.keybindings?.length ?? 0;
             const extensionAudit = installedExtensionAuditLog
@@ -1227,13 +1319,30 @@ export function PluginsSettingsPanel() {
                             launcherId: runtimeResolution.launcher.id,
                           })}
                         </span>
+                        {runtimeSourceLabel ? (
+                          <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                            {runtimeSourceLabel}
+                          </span>
+                        ) : null}
+                        {compatModeLabel ? (
+                          <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                            {compatModeLabel}
+                          </span>
+                        ) : null}
                       </>
                     ) : (
-                      <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                        {runtimeResolution
-                          ? t('settings.plugins.tag.runtimeBlocked')
-                          : t('settings.plugins.tag.runtimeMissing')}
-                      </span>
+                      <>
+                        <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                          {runtimeResolution
+                            ? t('settings.plugins.tag.runtimeBlocked')
+                            : t('settings.plugins.tag.runtimeMissing')}
+                        </span>
+                        {compatModeLabel ? (
+                          <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                            {compatModeLabel}
+                          </span>
+                        ) : null}
+                      </>
                     )}
                     {commands > 0 && (
                       <span className="settings-plugin-tag">
@@ -1405,11 +1514,24 @@ export function PluginsSettingsPanel() {
                     </PmpButton>
                   )}
 
+                  {record.disabledReason === 'quarantine' && (
+                    <PmpButton
+                      type="button"
+                      className="settings-action-btn"
+                      variant="default"
+                      disabled={busy}
+                      onClick={() => clearInstalledExtensionQuarantine(identity.id)}
+                      title={t('settings.plugins.v2.action.clearQuarantine.title')}
+                    >
+                      {t('settings.plugins.v2.action.clearQuarantine')}
+                    </PmpButton>
+                  )}
+
                   <PmpButton
                     type="button"
                     className="settings-action-btn"
                     variant="default"
-                    disabled={busy}
+                    disabled={busy || (!enabled && record.disabledReason === 'quarantine')}
                     onClick={() => void handleToggleManifestV2Enabled(identity.id, !enabled)}
                     title={
                       enabled
@@ -1437,7 +1559,7 @@ export function PluginsSettingsPanel() {
                     type="button"
                     className="settings-action-btn"
                     variant="default"
-                    disabled={busy}
+                    disabled={busy || record.disabledReason === 'quarantine'}
                     onClick={() => restartInstalledExtensionRuntime(identity.id, 'manual')}
                     title={t('settings.plugins.v2.action.restart.title')}
                   >

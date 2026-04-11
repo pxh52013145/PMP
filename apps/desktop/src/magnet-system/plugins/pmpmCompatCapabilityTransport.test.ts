@@ -5,6 +5,109 @@ import {
   dispatchPmpmCompatRpcRequest,
 } from './runtime/pmpmCompatCapabilityTransport';
 import { createPmpmCompatRuntimeResourceRegistry } from './runtime/pmpmCompatRuntimeResources';
+import {
+  setGlobalTelemetryService,
+  type TelemetryService,
+  type TelemetrySnapshot,
+} from '../../services/telemetry';
+import {
+  DEFAULT_TELEMETRY_POLICY,
+  type TelemetryRecord,
+} from '../../contracts/telemetry';
+import { createRuntimeProtocolTraceContext } from './runtime/runtimeProtocolTracer';
+
+type TelemetryCall = {
+  level: string;
+  event: string;
+  traceId?: string | null;
+  spanId?: string | null;
+  fields?: Record<string, unknown>;
+};
+
+function createTelemetryServiceSpy(): {
+  calls: TelemetryCall[];
+  service: TelemetryService;
+} {
+  const calls: TelemetryCall[] = [];
+  const snapshot: TelemetrySnapshot = {
+    policy: {
+      ...DEFAULT_TELEMETRY_POLICY,
+      frontendMinLevel: 'debug',
+      backendMinLevel: 'warn',
+      retention: {
+        ...DEFAULT_TELEMETRY_POLICY.retention,
+      },
+      modules: {},
+    },
+    status: {
+      enabled: true,
+      currentSessionId: 'session-1',
+      queuedRecords: 0,
+      flushedRecords: 0,
+      droppedRecords: 0,
+      currentFileBytes: 0,
+      currentFilePath: null,
+      frontendMinLevel: 'debug',
+      backendMinLevel: 'warn',
+      persistMinLevel: 'warn',
+      lastError: null,
+    },
+    tail: [] as TelemetryRecord[],
+    bufferedRecords: 0,
+    queueDroppedRecords: 0,
+    tailDroppedRecords: 0,
+    transportAvailable: true,
+    bootstrapState: 'ready',
+    lastFlushAtMs: null,
+    lastBootstrapAtMs: null,
+  };
+
+  return {
+    calls,
+    service: {
+      getSnapshot: () => snapshot,
+      subscribe: () => () => {},
+      refreshRuntime: async () => snapshot,
+      clearSession: async () => {},
+      flushNow: async () => {},
+      getLogger: () => ({
+        log: (level, event, options) => {
+          calls.push({
+            level,
+            event,
+            traceId: options?.traceId ?? null,
+            spanId: options?.spanId ?? null,
+            fields: (options?.fields as Record<string, unknown> | undefined) ?? undefined,
+          });
+        },
+        trace: (event, options) =>
+          calls.push({
+            level: 'trace',
+            event,
+            traceId: options?.traceId ?? null,
+            spanId: options?.spanId ?? null,
+            fields: (options?.fields as Record<string, unknown> | undefined) ?? undefined,
+          }),
+        debug: (event, options) =>
+          calls.push({
+            level: 'debug',
+            event,
+            traceId: options?.traceId ?? null,
+            spanId: options?.spanId ?? null,
+            fields: (options?.fields as Record<string, unknown> | undefined) ?? undefined,
+          }),
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        fatal: () => {},
+        metric: () => {},
+        startSpan: () => ({ end: () => {} }),
+      }),
+      ingest: () => {},
+      destroy: () => {},
+    },
+  };
+}
 
 function createStreamController() {
   const dataListeners = new Set<(payload: unknown, envelope: Record<string, unknown>) => void>();
@@ -116,6 +219,7 @@ function createStubApi(options: { streamHandle?: Awaited<ReturnType<typeof creat
 }
 
 afterEach(() => {
+  setGlobalTelemetryService(null);
   vi.clearAllMocks();
 });
 
@@ -458,6 +562,126 @@ describe('pmpm compat capability transport', () => {
       traceId: undefined,
       reason: 'done',
     });
+  });
+
+  it('records data-plane protocol telemetry for stream/open data and cancel cleanup', async () => {
+    const telemetry = createTelemetryServiceSpy();
+    setGlobalTelemetryService(telemetry.service);
+    const controller = createStreamController();
+    const api = createStubApi({ streamHandle: controller.handle });
+    const runtimeResources = createPmpmCompatRuntimeResourceRegistry();
+
+    const protocolTraceContext = createRuntimeProtocolTraceContext({
+      pluginId: 'demo-plugin',
+      runtimeId: 'compat.pmpm.main',
+      runtimeInstanceId: 'runtime-instance-1',
+      runtimeKind: 'extension-host',
+      carrier: 'webview-frame',
+      sourceKind: 'pmpm',
+      hostLabel: 'CompatTransportTest',
+      launcherId: 'compat.pmpm.webview-sandbox',
+    });
+
+    await dispatchPmpmCompatRpcRequest(
+      api,
+      new Set(['api:host', 'api:host-capability', 'api:audio-visual']),
+      {
+        frameId: 'frame-1',
+        type: 'pmpm:rpc',
+        id: 'rpc-trace-open',
+        method: 'stream.open.request',
+        args: [
+          {
+            protocolVersion: '1.0',
+            op: 'stream.open.request',
+            requestId: 'stream-open-trace',
+            capabilityId: 'host.pmp.audio-engine.analysis',
+            method: 'openSpectrumFrameStream',
+          },
+        ],
+      },
+      {
+        runtimeResources,
+        emitProtocolMessage: () => {},
+        protocolTraceContext,
+      }
+    );
+
+    controller.emitData({ bins: [1, 2, 3] }, 7);
+
+    await dispatchPmpmCompatRpcRequest(
+      api,
+      new Set(['api:host', 'api:host-capability', 'api:audio-visual']),
+      {
+        frameId: 'frame-1',
+        type: 'pmpm:rpc',
+        id: 'rpc-trace-cancel',
+        method: 'cancel.request',
+        args: [
+          {
+            protocolVersion: '1.0',
+            op: 'cancel.request',
+            requestId: 'stream-cancel-trace',
+            streamId: 'analysis-stream-1',
+            reason: 'done',
+          },
+        ],
+      },
+      {
+        runtimeResources,
+        emitProtocolMessage: () => {},
+        protocolTraceContext,
+      }
+    );
+
+    expect(telemetry.calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: 'plugin.capability.data.stream-open.responded',
+          traceId: protocolTraceContext.sessionTraceId,
+          fields: expect.objectContaining({
+            channel: 'data',
+            protocolOp: 'stream.open.response',
+            requestId: 'stream-open-trace',
+            streamId: 'analysis-stream-1',
+            transport: 'inline-json',
+          }),
+        }),
+        expect.objectContaining({
+          event: 'plugin.capability.data.stream-data.sent',
+          traceId: protocolTraceContext.sessionTraceId,
+          fields: expect.objectContaining({
+            channel: 'data',
+            protocolOp: 'stream.data',
+            requestId: 'stream-open-trace',
+            streamId: 'analysis-stream-1',
+            sequence: 7,
+          }),
+        }),
+        expect.objectContaining({
+          event: 'plugin.capability.data.cancel.requested',
+          traceId: protocolTraceContext.sessionTraceId,
+          fields: expect.objectContaining({
+            channel: 'data',
+            protocolOp: 'cancel.request',
+            requestId: 'stream-cancel-trace',
+            streamId: 'analysis-stream-1',
+            reason: 'done',
+          }),
+        }),
+        expect.objectContaining({
+          event: 'plugin.capability.data.stream-end.sent',
+          traceId: protocolTraceContext.sessionTraceId,
+          fields: expect.objectContaining({
+            channel: 'data',
+            protocolOp: 'stream.end',
+            requestId: 'stream-open-trace',
+            streamId: 'analysis-stream-1',
+            reason: 'done',
+          }),
+        }),
+      ])
+    );
   });
 
   it('supports dispose.request for tracked streams', async () => {

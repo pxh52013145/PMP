@@ -188,6 +188,7 @@ function createSidecarControllerHarness() {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   localStorage.clear();
 });
@@ -512,5 +513,221 @@ describe('installed extension command runtime', () => {
     });
     expect(harness.dispose).toHaveBeenCalledWith('runtime-command-finished');
     expect(crashSpy).not.toHaveBeenCalled();
+  });
+
+  it('preserves runtime-unresponsive teardown for sidecar-backed manifest-v2 activate hangs', async () => {
+    vi.useFakeTimers();
+
+    const api = createStubApi({ count: 0 });
+    const harness = createSidecarControllerHarness();
+    const record: extensionsModule.InstalledHostExtensionRecord = {
+      manifest: {
+        schemaVersion: '2.0',
+        kind: 'extension',
+        identity: {
+          id: 'native-sidecar-demo',
+          publisher: 'pixel-matrix.dev',
+          version: '0.1.0',
+          name: 'native-sidecar-demo',
+        },
+        hostTargets: [{ hostId: 'pmp', required: true }],
+        runtimes: [
+          {
+            runtimeId: 'sidecar.main',
+            kind: 'sidecar',
+            entry: 'bin/demo-sidecar.js',
+            bridge: 'pxp.runtime.bridge.v1',
+            dataPlane: { kinds: ['pipe'] },
+          },
+        ],
+        requiresCapabilities: [{ capabilityId: 'host.pmp.storage.config' }],
+      },
+      installedAt: 1_710_000_000_000,
+      enabled: true,
+      resolvedArtifacts: [
+        {
+          runtimeId: 'sidecar.main',
+          path: 'C:/Users/test/AppData/Roaming/PMP/pmp-durable/extensions-v2/native-sidecar-demo/current/bin/demo-sidecar.js',
+        },
+      ],
+    };
+    const artifact = record.resolvedArtifacts?.[0];
+    expect(artifact).toBeTruthy();
+
+    const resolution: ResolvedPluginRuntime = {
+      status: 'resolved',
+      pluginId: 'native-sidecar-demo',
+      manifest: record.manifest,
+      installedRecord: record,
+      hostId: 'pmp',
+      compatLayerIds: [],
+      issues: [],
+      runtime: record.manifest.runtimes[0],
+      launcher: {
+        id: 'pxp.sidecar.native-process',
+        runtimeKinds: ['sidecar'],
+        surfaceKinds: ['command'],
+        availability: 'available',
+        transport: 'sidecar-process',
+        description: 'Native sidecar launcher for command-oriented sidecar runtimes',
+      },
+      artifact: artifact!,
+      source: 'manifest-runtime',
+    };
+
+    vi.spyOn(pluginHostApiModule, 'createPluginMountApi').mockReturnValue(api);
+    vi.spyOn(pluginConfigModule, 'readPmpmPluginConfig').mockReturnValue({ count: 0 });
+    vi.spyOn(pluginConfigModule, 'subscribePmpmPluginConfig').mockReturnValue(() => {});
+    extensionsModule.upsertInstalledExtensionRecord(record);
+    const crashSpy = vi
+      .spyOn(extensionsModule, 'recordInstalledExtensionCrash')
+      .mockImplementation(() => {});
+
+    let runtimeInstanceId = '';
+
+    const runtimePromise = runResolvedInstalledExtensionCommand(
+      {
+        record,
+        resolution,
+        commandId: 'hang-on-activate',
+        audioService: api.audio as never,
+        navigation: api.navigation as never,
+        timeoutMs: 25,
+      },
+      {
+        now: () => 4321,
+        createPortController: (options) => {
+          runtimeInstanceId = options.runtimeInstanceId;
+          return harness.controller;
+        },
+      }
+    );
+    const runtimeExpectation = expect(runtimePromise).rejects.toThrow(
+      'Installed extension command timeout (25ms)'
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+    harness.emitRuntimeHello(runtimeInstanceId);
+    await vi.advanceTimersByTimeAsync(0);
+
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.init.ack',
+      pluginId: 'native-sidecar-demo',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    await runtimeExpectation;
+    expect(harness.dispose).toHaveBeenCalledWith('runtime-unresponsive');
+    expect(crashSpy).not.toHaveBeenCalled();
+    expect(
+      extensionsGovernanceModule.readInstalledExtensionAuditLog().map((event) => event.type)
+    ).toEqual(['runtime-unresponsive', 'quarantined']);
+    expect(extensionsModule.getInstalledExtensionRecord('native-sidecar-demo')).toMatchObject({
+      enabled: false,
+      disabledReason: 'quarantine',
+    });
+  });
+
+  it('blocks sidecar-backed manifest-v2 launch when the persisted artifact digest mismatches', async () => {
+    const api = createStubApi({ count: 0 });
+    const record: extensionsModule.InstalledHostExtensionRecord = {
+      manifest: {
+        schemaVersion: '2.0',
+        kind: 'extension',
+        identity: {
+          id: 'native-sidecar-demo',
+          publisher: 'pixel-matrix.dev',
+          version: '0.1.0',
+          name: 'native-sidecar-demo',
+        },
+        hostTargets: [{ hostId: 'pmp', required: true }],
+        runtimes: [
+          {
+            runtimeId: 'sidecar.main',
+            kind: 'sidecar',
+            entry: 'bin/demo-sidecar.js',
+            bridge: 'pxp.runtime.bridge.v1',
+            dataPlane: { kinds: ['pipe'] },
+          },
+        ],
+        requiresCapabilities: [{ capabilityId: 'host.pmp.storage.config' }],
+      },
+      installedAt: 1_710_000_000_000,
+      enabled: true,
+      resolvedArtifacts: [
+        {
+          runtimeId: 'sidecar.main',
+          path: 'C:/Users/test/AppData/Roaming/PMP/pmp-durable/extensions-v2/native-sidecar-demo/current/bin/demo-sidecar.js',
+          sha256: 'f'.repeat(64),
+        },
+      ],
+    };
+    const artifact = record.resolvedArtifacts?.[0];
+    expect(artifact).toBeTruthy();
+
+    const resolution: ResolvedPluginRuntime = {
+      status: 'resolved',
+      pluginId: 'native-sidecar-demo',
+      manifest: record.manifest,
+      installedRecord: record,
+      hostId: 'pmp',
+      compatLayerIds: [],
+      issues: [],
+      runtime: record.manifest.runtimes[0],
+      launcher: {
+        id: 'pxp.sidecar.native-process',
+        runtimeKinds: ['sidecar'],
+        surfaceKinds: ['command'],
+        availability: 'available',
+        transport: 'sidecar-process',
+        description: 'Native sidecar launcher for command-oriented sidecar runtimes',
+      },
+      artifact: artifact!,
+      source: 'manifest-runtime',
+    };
+
+    vi.spyOn(pluginHostApiModule, 'createPluginMountApi').mockReturnValue(api);
+    vi.spyOn(pluginConfigModule, 'readPmpmPluginConfig').mockReturnValue({ count: 0 });
+    vi.spyOn(pluginConfigModule, 'subscribePmpmPluginConfig').mockReturnValue(() => {});
+    extensionsModule.upsertInstalledExtensionRecord(record);
+
+    const createPortController = vi.fn();
+
+    await expect(
+      runResolvedInstalledExtensionCommand(
+        {
+          record,
+          resolution,
+          commandId: 'blocked-digest-mismatch',
+          audioService: api.audio as never,
+          navigation: api.navigation as never,
+          timeoutMs: 2_000,
+        },
+        {
+          createPortController,
+          readArtifactBytes: async () => new Uint8Array([1, 2, 3]),
+          now: () => 4321,
+        }
+      )
+    ).rejects.toThrow(
+      'Runtime artifact integrity check failed (sha256 mismatch): C:/Users/test/AppData/Roaming/PMP/pmp-durable/extensions-v2/native-sidecar-demo/current/bin/demo-sidecar.js'
+    );
+
+    expect(createPortController).not.toHaveBeenCalled();
+    expect(extensionsModule.getInstalledExtensionRecord('native-sidecar-demo')).toMatchObject({
+      enabled: false,
+      disabledReason: 'policy',
+    });
+    expect(extensionsGovernanceModule.readInstalledExtensionAuditLog().at(-1)).toMatchObject({
+      type: 'disabled',
+      pluginId: 'native-sidecar-demo',
+      reason:
+        'Runtime artifact integrity check failed (sha256 mismatch): C:/Users/test/AppData/Roaming/PMP/pmp-durable/extensions-v2/native-sidecar-demo/current/bin/demo-sidecar.js',
+    });
   });
 });

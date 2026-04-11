@@ -4,10 +4,10 @@ import { readPmpmPluginConfig, subscribePmpmPluginConfig } from './pluginConfig'
 import {
   getInstalledPmpmPlugin,
   getPmpmPluginEffectivePermissions,
+  quarantinePmpmPlugin,
   recordPmpmPermissionDenied,
   recordPmpmPluginCrash,
 } from './pmpm';
-import { recordPmpmAuditEvent } from './pmpmGovernance';
 import { readVerifiedPmpmPluginEntryCode } from './pmpmRuntime';
 import { buildPmpmSandboxSrcDoc } from './pmpmSandboxSrcDoc';
 import { APP_VERSION, HOST_API_VERSION } from '../../constants/versions';
@@ -1080,17 +1080,11 @@ async function runPmpmSandboxedCommandInWorker(options: {
     };
 
     const crashAsUnresponsive = (message: string, timeoutMsForAudit: number) => {
-      try {
-        recordPmpmAuditEvent({
-          type: 'runtime-unresponsive',
-          pluginId: options.pluginId,
-          surface: 'command',
-          timeoutMs: timeoutMsForAudit,
-        });
-      } catch {
-        // ignore
-      }
-      recordPmpmPluginCrash(options.pluginId, message, 'command');
+      quarantinePmpmPlugin(options.pluginId, {
+        surface: 'command',
+        message,
+        timeoutMs: timeoutMsForAudit,
+      });
       finishError(new Error(message), 'runtime-unresponsive');
     };
 
@@ -1285,7 +1279,11 @@ async function runPmpmSandboxedCommandInWorker(options: {
 
     bootTimer = window.setTimeout(() => {
       if (settled) return;
-      recordPmpmPluginCrash(options.pluginId, 'Plugin worker boot timeout', 'command');
+      quarantinePmpmPlugin(options.pluginId, {
+        surface: 'command',
+        message: 'Plugin worker boot timeout',
+        timeoutMs: PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS,
+      });
       finishError(new Error('Plugin worker boot timeout'), 'runtime-crash');
     }, PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS);
   });
@@ -1428,17 +1426,11 @@ export async function runPmpmSandboxedCommand(options: {
     };
 
     const crashAsUnresponsive = (message: string, timeoutMsForAudit: number) => {
-      try {
-        recordPmpmAuditEvent({
-          type: 'runtime-unresponsive',
-          pluginId: options.pluginId,
-          surface: 'command',
-          timeoutMs: timeoutMsForAudit,
-        });
-      } catch {
-        // ignore
-      }
-      recordPmpmPluginCrash(options.pluginId, message, 'command');
+      quarantinePmpmPlugin(options.pluginId, {
+        surface: 'command',
+        message,
+        timeoutMs: timeoutMsForAudit,
+      });
       finishError(new Error(message), 'runtime-unresponsive');
     };
 
@@ -1625,7 +1617,11 @@ export async function runPmpmSandboxedCommand(options: {
 
     bootTimer = window.setTimeout(() => {
       if (settled) return;
-      recordPmpmPluginCrash(options.pluginId, 'Plugin sandbox boot timeout', 'command');
+      quarantinePmpmPlugin(options.pluginId, {
+        surface: 'command',
+        message: 'Plugin sandbox boot timeout',
+        timeoutMs: PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS,
+      });
       finishError(new Error('Plugin sandbox boot timeout'), 'runtime-crash');
     }, PMPM_SANDBOX_COMMAND_STARTUP_TIMEOUT_MS);
   });

@@ -63,6 +63,7 @@ import {
   shouldPauseEditorSkinMotion,
 } from './contracts/editorQualitySkin';
 import { QUALITY_SERVICE_TOKEN, type QualityService } from './services/quality';
+import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from './services/commands';
 import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
 import { getTelemetryLogger } from './services/telemetry/TelemetryService';
 import './index.css';
@@ -86,9 +87,18 @@ interface EditorControlPanelProps {
 }
 
 type ControlPanelToggleType = 'statistics' | 'library' | 'style' | 'theme' | 'background';
+const CONTROL_PANEL_OPEN_COMMAND_BY_TYPE: Record<ControlPanelToggleType, string> = {
+  statistics: 'app:open-statistics-editor-window',
+  library: 'app:open-library-editor-window',
+  style: 'app:open-style-editor-window',
+  theme: 'app:open-theme-editor-window',
+  background: 'app:open-background-editor-window',
+};
 
 function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
   const t = useT();
+  const kernel = useKernel();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const [statisticsOpen, setStatisticsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
@@ -143,11 +153,14 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
       setOpen(nextOpen);
 
       try {
-        const { openEditorWindow, calculateWindowPosition, closeEditorWindow } = await import('./utils/editorWindows');
+        const { closeEditorWindow } = await import('./utils/editorWindows');
 
         if (nextOpen) {
-          const position = await calculateWindowPosition(type);
-          await openEditorWindow({ type, ...position });
+          await dispatchRequiredCommand(
+            commands,
+            CONTROL_PANEL_OPEN_COMMAND_BY_TYPE[type],
+            `Editor window command service is not available for ${type}.`
+          );
         } else {
           await closeEditorWindow(type);
         }
@@ -164,7 +177,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         toggleInFlightRef.current[type] = false;
       }
     },
-    []
+    [commands]
   );
 
   const setOpenStateForType = useCallback((type: string, open: boolean) => {

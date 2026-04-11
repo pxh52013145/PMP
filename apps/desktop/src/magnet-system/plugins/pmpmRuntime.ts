@@ -2,6 +2,10 @@ import { readJson } from '../../modules/storage';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { disablePmpmPluginByPolicy, getInstalledPmpmPlugin, readPmpmPluginEntryCode } from './pmpm';
 import { isPmpmSigningKeyTrusted } from './pmpmTrust';
+import {
+  assertRuntimeArtifactIntegrity,
+  type RuntimeArtifactIntegrityDeps,
+} from './runtime/runtimeArtifactIntegrity';
 
 export type PmpmPluginRuntime = {
   mount: (container: HTMLElement, api: unknown, context?: unknown) => void | (() => void);
@@ -32,6 +36,50 @@ type CachedRuntime = {
 
 const runtimeCache = new Map<string, CachedRuntime>();
 const UTF8_BOM = String.fromCharCode(0xfeff);
+
+function normalizeFsPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/\/+/g, '/');
+}
+
+function failPmpmPolicy(pluginId: string, message: string): never {
+  disablePmpmPluginByPolicy(pluginId, message);
+  throw new Error(message);
+}
+
+function assertPmpmPluginTrustPolicy(
+  pluginId: string
+): NonNullable<ReturnType<typeof getInstalledPmpmPlugin>> {
+  const installed = getInstalledPmpmPlugin(pluginId);
+  if (!installed) {
+    throw new Error(`Plugin not installed: ${pluginId}`);
+  }
+
+  const requireTrustedSignatures = Boolean(
+    readJson(STORAGE_KEYS.PMPM_REQUIRE_TRUSTED_SIGNATURES, false)
+  );
+  const allowUnsigned = Boolean(readJson(STORAGE_KEYS.PMPM_ALLOW_UNSIGNED_PLUGINS, true));
+
+  if (requireTrustedSignatures) {
+    if (!installed.signature) {
+      failPmpmPolicy(
+        pluginId,
+        `Plugin signature is required (trusted signatures required): ${pluginId}`
+      );
+    }
+
+    const keyId = installed.signature.keyId;
+    if (!isPmpmSigningKeyTrusted(keyId)) {
+      failPmpmPolicy(
+        pluginId,
+        `Plugin signature key is not trusted: ${pluginId} (keyId=${keyId})`
+      );
+    }
+  } else if (!allowUnsigned && !installed.signature) {
+    failPmpmPolicy(pluginId, `Plugin signature is required (unsigned): ${pluginId}`);
+  }
+
+  return installed;
+}
 
 async function sha256Hex(data: Uint8Array): Promise<string> {
   const normalized = new Uint8Array(data);
@@ -76,32 +124,7 @@ function buildEntryIntegrityCandidates(entryCode: string): string[] {
 }
 
 export async function readVerifiedPmpmPluginEntryCode(pluginId: string): Promise<string> {
-  const installed = getInstalledPmpmPlugin(pluginId);
-  if (!installed) {
-    throw new Error(`Plugin not installed: ${pluginId}`);
-  }
-
-  const requireTrustedSignatures = Boolean(readJson(STORAGE_KEYS.PMPM_REQUIRE_TRUSTED_SIGNATURES, false));
-  const allowUnsigned = Boolean(readJson(STORAGE_KEYS.PMPM_ALLOW_UNSIGNED_PLUGINS, true));
-
-  if (requireTrustedSignatures) {
-    if (!installed.signature) {
-      const message = `Plugin signature is required (trusted signatures required): ${pluginId}`;
-      disablePmpmPluginByPolicy(pluginId, message);
-      throw new Error(message);
-    }
-
-    const keyId = installed.signature.keyId;
-    if (!isPmpmSigningKeyTrusted(keyId)) {
-      const message = `Plugin signature key is not trusted: ${pluginId} (keyId=${keyId})`;
-      disablePmpmPluginByPolicy(pluginId, message);
-      throw new Error(message);
-    }
-  } else if (!allowUnsigned && !installed.signature) {
-    const message = `Plugin signature is required (unsigned): ${pluginId}`;
-    disablePmpmPluginByPolicy(pluginId, message);
-    throw new Error(message);
-  }
+  const installed = assertPmpmPluginTrustPolicy(pluginId);
 
   const entryCode = (await readPmpmPluginEntryCode(pluginId)) ?? installed.entryCode ?? null;
   if (!entryCode) {
@@ -117,13 +140,49 @@ export async function readVerifiedPmpmPluginEntryCode(pluginId: string): Promise
     }
 
     if (!candidateHashes.has(expected)) {
-      throw new Error(
+      failPmpmPolicy(
+        pluginId,
         `Plugin integrity check failed (entrySha256 mismatch). Please reinstall: ${pluginId}`
       );
     }
   }
 
   return entryCode;
+}
+
+export interface AssertPmpmSidecarRuntimeLaunchAllowedOptions {
+  pluginId: string;
+  runtimeId: string;
+  entryPath: string;
+}
+
+export async function assertPmpmSidecarRuntimeLaunchAllowed(
+  options: AssertPmpmSidecarRuntimeLaunchAllowedOptions,
+  deps: RuntimeArtifactIntegrityDeps = {}
+): Promise<void> {
+  const installed = assertPmpmPluginTrustPolicy(options.pluginId);
+  const artifact =
+    installed.resolvedArtifacts?.find((item) => item.runtimeId === options.runtimeId) ?? null;
+  if (!artifact) return;
+
+  if (normalizeFsPath(artifact.path) !== normalizeFsPath(options.entryPath)) {
+    failPmpmPolicy(
+      options.pluginId,
+      `Plugin runtime artifact mismatch: expected ${artifact.path}, got ${options.entryPath}`
+    );
+  }
+
+  try {
+    await assertRuntimeArtifactIntegrity(
+      {
+        artifactPath: options.entryPath,
+        expectedSha256: artifact.sha256,
+      },
+      deps
+    );
+  } catch (error) {
+    failPmpmPolicy(options.pluginId, error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function loadPluginRuntime(pluginId: string): Promise<PmpmPluginRuntime> {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useKernel } from '../../contexts/KernelContext';
-import type { WindowContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n';
+import { COMMANDS_SERVICE_TOKEN, canDispatchCommand, dispatchRequiredCommand } from '../../services/commands';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { PmpButton, PmpCard } from '../primitives';
@@ -79,6 +79,7 @@ function ToolCard({
 export function ThemeToolsSettingsPanel() {
   const kernel = useKernel();
   const t = useT();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const isTauri = useMemo(() => isTauriRuntime(), []);
   const isMac = useMemo(() => isMacPlatform(), []);
   const [revision, setRevision] = useState(0);
@@ -92,37 +93,37 @@ export function ThemeToolsSettingsPanel() {
     return kernel.contributions.subscribe(() => setRevision((value) => value + 1));
   }, [kernel.contributions]);
 
-  const themeWindow = useMemo(() => {
+  const themeEditorCommand = useMemo(() => {
     void revision;
-    return kernel.contributions.get<WindowContribution>('window', 'editor:theme');
-  }, [kernel.contributions, revision]);
-  const keyboardShortcutsWindow = useMemo(() => {
+    return canDispatchCommand(commands, 'app:open-theme-editor-window');
+  }, [commands, revision]);
+  const keyboardShortcutsCommand = useMemo(() => {
     void revision;
-    return kernel.contributions.get<WindowContribution>('window', 'keyboard-shortcuts');
-  }, [kernel.contributions, revision]);
+    return canDispatchCommand(commands, 'app:open-keyboard-shortcuts-window');
+  }, [commands, revision]);
 
   const unavailableReason = !isTauri
     ? t('settings.themeTools.desktopOnly')
-    : !themeWindow
+    : !themeEditorCommand
       ? t('settings.themeTools.error.windowMissing')
       : null;
-  const keyboardShortcutsUnavailableReason = !keyboardShortcutsWindow
+  const keyboardShortcutsUnavailableReason = !keyboardShortcutsCommand
     ? t('settings.tools.keyboardShortcuts.error.windowMissing')
     : null;
   const keyboardShortcutsBadge = isMac ? 'Cmd+K Cmd+S' : 'Ctrl+K Ctrl+S';
 
-  const openWindow = useCallback(
+  const openTool = useCallback(
     async ({
       entry,
-      contribution,
+      open,
       missingMessage,
       openFailedMessage,
       requireDesktopRuntime = false,
     }: {
-      contribution: WindowContribution | null;
       entry: ToolEntry;
       missingMessage: string;
       openFailedMessage: (message: string) => string;
+      open: (() => Promise<void>) | null;
       requireDesktopRuntime?: boolean;
     }) => {
       if (busyEntry) return;
@@ -140,7 +141,7 @@ export function ThemeToolsSettingsPanel() {
         return;
       }
 
-      if (!contribution) {
+      if (!open) {
         telemetry.warn('settings.tools.window.missing', {
           fields: {
             entry,
@@ -161,7 +162,7 @@ export function ThemeToolsSettingsPanel() {
       });
 
       try {
-        await contribution.open();
+        await open();
         telemetry.info('settings.tools.open.completed', {
           fields: {
             entry,
@@ -187,23 +188,37 @@ export function ThemeToolsSettingsPanel() {
   );
 
   const handleOpenThemeEditor = useCallback(() => {
-    void openWindow({
+    void openTool({
       entry: 'themeEditor',
-      contribution: themeWindow,
+      open: themeEditorCommand
+        ? () =>
+            dispatchRequiredCommand(
+              commands,
+              'app:open-theme-editor-window',
+              t('settings.themeTools.error.windowMissing')
+            )
+        : null,
       missingMessage: t('settings.themeTools.error.windowMissing'),
       openFailedMessage: (message) => t('settings.themeTools.error.openFailed', { message }),
       requireDesktopRuntime: true,
     });
-  }, [openWindow, t, themeWindow]);
+  }, [commands, openTool, t, themeEditorCommand]);
 
   const handleOpenKeyboardShortcuts = useCallback(() => {
-    void openWindow({
+    void openTool({
       entry: 'keyboardShortcuts',
-      contribution: keyboardShortcutsWindow,
+      open: keyboardShortcutsCommand
+        ? () =>
+            dispatchRequiredCommand(
+              commands,
+              'app:open-keyboard-shortcuts-window',
+              t('settings.tools.keyboardShortcuts.error.windowMissing')
+            )
+        : null,
       missingMessage: t('settings.tools.keyboardShortcuts.error.windowMissing'),
       openFailedMessage: (message) => t('settings.tools.keyboardShortcuts.error.openFailed', { message }),
     });
-  }, [keyboardShortcutsWindow, openWindow, t]);
+  }, [commands, keyboardShortcutsCommand, openTool, t]);
 
   return (
     <>

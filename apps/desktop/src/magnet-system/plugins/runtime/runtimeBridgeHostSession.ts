@@ -554,6 +554,7 @@ export function createRuntimeBridgeHostSession(
         emitProtocolMessage: (nextMessage) => {
           void sendMessage(nextMessage);
         },
+        protocolTraceContext: traceContext,
       }
     );
 

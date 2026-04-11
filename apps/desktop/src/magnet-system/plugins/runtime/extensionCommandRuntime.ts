@@ -1,5 +1,6 @@
 import type { RuntimeHello } from '@pixel-matrix/plugin-platform-contracts';
 import { APP_VERSION, HOST_API_VERSION } from '../../../constants/versions';
+import type { PluginSurfaceSourceKind } from '../../../contracts/pluginSurfaceSource';
 import type { CommandsService } from '../../../services/commands';
 import type { KeybindingsService } from '../../../services/keybindings';
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
@@ -9,14 +10,13 @@ import {
   buildPmpmRuntimeInitSnapshot,
 } from '../pmpmRuntimeBridgeSnapshot';
 import {
+  disableInstalledExtensionByPolicy,
   listInstalledExtensionCompatPermissions,
+  quarantineInstalledExtension,
   recordInstalledExtensionCrash,
   type InstalledHostExtensionRecord,
 } from '../extensions';
-import {
-  recordInstalledExtensionAuditEvent,
-  recordInstalledExtensionPermissionDenied,
-} from '../extensionsGovernance';
+import { recordInstalledExtensionPermissionDenied } from '../extensionsGovernance';
 import {
   createPluginSidecarTelemetryContext,
   reportPluginSidecarBridgeFailed,
@@ -32,6 +32,10 @@ import { createRuntimeBridgeHostSession } from './runtimeBridgeHostSession';
 import { bindHostRuntimeEventChannel, RUNTIME_EVENT_NAMES } from './runtimeEventChannel';
 import { createTauriPmpmBridgeSidecarPortController } from './tauriSidecarPortController';
 import { createInstalledExtensionEntryUrl } from './installedExtensionRuntimeAssets';
+import {
+  assertRuntimeArtifactIntegrity,
+  type RuntimeArtifactIntegrityDeps,
+} from './runtimeArtifactIntegrity';
 import {
   buildWorkerBootstrapSource,
   buildWorkerPort,
@@ -54,12 +58,22 @@ export interface RunResolvedInstalledExtensionCommandOptions {
   navigation: HostNavigation;
   keybindings?: KeybindingsService | null;
   timeoutMs?: number;
+  onHostCapabilityActivity?: (activity: {
+    capabilityId: string;
+    method: string;
+    payload?: unknown;
+    requestKind: 'invoke' | 'open-session' | 'open-stream' | 'close-session';
+    sourcePluginId: string;
+    sourceKind: PluginSurfaceSourceKind;
+    hostLabel: string;
+  }) => void;
 }
 
 export interface InstalledExtensionCommandRuntimeDeps {
   createPortController?: (
     options: CreatePmpmBridgeSidecarPortControllerOptions
   ) => Promise<PmpmBridgeSidecarPortController> | PmpmBridgeSidecarPortController;
+  readArtifactBytes?: RuntimeArtifactIntegrityDeps['readArtifactBytes'];
   createWorker?: (
     scriptUrl: string,
     options: { type: 'module'; name?: string },
@@ -74,6 +88,14 @@ export interface InstalledExtensionCommandRuntimeDeps {
 function asObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
+}
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function normalizeFsPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/\/+/g, '/');
 }
 
 function readUnsupportedLauncherError(
@@ -97,6 +119,37 @@ function createDefaultBridgeController(
     return createTauriPmpmBridgeSidecarPortController(options);
   }
   return createMissingBridgeController();
+}
+
+async function assertInstalledExtensionSidecarLaunchAllowed(
+  record: InstalledHostExtensionRecord,
+  runtimeId: string,
+  entryPath: string,
+  deps: RuntimeArtifactIntegrityDeps = {}
+): Promise<void> {
+  const pluginId = record.manifest.identity.id;
+  const artifact = record.resolvedArtifacts?.find((item) => item.runtimeId === runtimeId) ?? null;
+  if (!artifact) return;
+
+  if (normalizeFsPath(artifact.path) !== normalizeFsPath(entryPath)) {
+    const message = `Installed extension runtime artifact mismatch: expected ${artifact.path}, got ${entryPath}`;
+    disableInstalledExtensionByPolicy(pluginId, message);
+    throw new Error(message);
+  }
+
+  try {
+    await assertRuntimeArtifactIntegrity(
+      {
+        artifactPath: entryPath,
+        expectedSha256: artifact.sha256,
+      },
+      deps
+    );
+  } catch (error) {
+    const message = readErrorMessage(error);
+    disableInstalledExtensionByPolicy(pluginId, message);
+    throw new Error(message);
+  }
 }
 
 async function runInstalledExtensionWorkerCommand(
@@ -131,6 +184,7 @@ async function runInstalledExtensionWorkerCommand(
     commands: options.commands,
     navigation: options.navigation,
     keybindings: options.keybindings,
+    onHostCapabilityActivity: options.onHostCapabilityActivity,
   });
 
   const runtimeHello = buildPmpmRuntimeHelloSnapshot({
@@ -304,16 +358,11 @@ async function runInstalledExtensionWorkerCommand(
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(() => {
         disposeReason = 'runtime-unresponsive';
-        try {
-          recordInstalledExtensionAuditEvent({
-            type: 'runtime-unresponsive',
-            pluginId,
-            surface: 'command',
-            timeoutMs,
-          });
-        } catch {
-          // ignore
-        }
+        quarantineInstalledExtension(pluginId, {
+          surface: 'command',
+          message: `Installed extension command timeout (${timeoutMs}ms)`,
+          timeoutMs,
+        });
         reject(new Error(`Installed extension command timeout (${timeoutMs}ms)`));
       }, timeoutMs);
     });
@@ -326,8 +375,10 @@ async function runInstalledExtensionWorkerCommand(
       timeoutPromise,
     ]);
   } catch (error) {
-    disposeReason = 'runtime-crash';
-    recordInstalledExtensionCrash(pluginId, error);
+    if (disposeReason !== 'runtime-unresponsive') {
+      disposeReason = 'runtime-crash';
+      recordInstalledExtensionCrash(pluginId, error);
+    }
     throw error;
   } finally {
     if (timeoutHandle !== null) {
@@ -373,6 +424,18 @@ async function runInstalledExtensionSidecarCommand(
   const permissions = new Set(listInstalledExtensionCompatPermissions(record));
   const initialConfig = readPmpmPluginConfig(pluginId, 'extv2');
 
+  await assertInstalledExtensionSidecarLaunchAllowed(record, runtimeId, entryPath, {
+    readArtifactBytes: deps.readArtifactBytes,
+  }).catch((error) => {
+    reportPluginSidecarBridgeFailed(sidecarTelemetryContext, error, {
+      extraFields: {
+        stage: 'verify',
+        timeoutMs,
+      },
+    });
+    throw error;
+  });
+
   const api = createPluginMountApi({
     pluginId,
     hostLabel,
@@ -382,6 +445,7 @@ async function runInstalledExtensionSidecarCommand(
     commands: options.commands,
     navigation: options.navigation,
     keybindings: options.keybindings,
+    onHostCapabilityActivity: options.onHostCapabilityActivity,
   });
 
   const runtimeInit = buildPmpmRuntimeInitSnapshot({
@@ -556,16 +620,11 @@ async function runInstalledExtensionSidecarCommand(
             timeoutMs,
           },
         });
-        try {
-          recordInstalledExtensionAuditEvent({
-            type: 'runtime-unresponsive',
-            pluginId,
-            surface: 'command',
-            timeoutMs,
-          });
-        } catch {
-          // ignore
-        }
+        quarantineInstalledExtension(pluginId, {
+          surface: 'command',
+          message: `Installed extension command timeout (${timeoutMs}ms)`,
+          timeoutMs,
+        });
         reject(new Error(`Installed extension command timeout (${timeoutMs}ms)`));
       }, timeoutMs);
     });
@@ -578,8 +637,10 @@ async function runInstalledExtensionSidecarCommand(
       timeoutPromise,
     ]);
   } catch (error) {
-    disposeReason = 'runtime-crash';
-    recordInstalledExtensionCrash(pluginId, error);
+    if (disposeReason !== 'runtime-unresponsive') {
+      disposeReason = 'runtime-crash';
+      recordInstalledExtensionCrash(pluginId, error);
+    }
     throw error;
   } finally {
     if (timeoutHandle !== null) {

@@ -182,7 +182,7 @@ export function PluginVisualizerHost({
       resolution: runtimeResolution,
       extraFields: {
         hostId: 'pmp',
-        preferCompatSandbox: sandboxEnabled,
+        preferSandboxLauncher: sandboxEnabled,
       },
     });
   }, [

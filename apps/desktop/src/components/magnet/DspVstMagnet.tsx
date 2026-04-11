@@ -9,6 +9,8 @@ import {
   invokeWithTelemetry,
   type TauriInvokeTelemetryOptions,
 } from '../../services/telemetry/tauriInvokeTelemetry';
+import { useKernel } from '../../contexts/KernelContext';
+import { COMMANDS_SERVICE_TOKEN, dispatchCommandOrFallback } from '../../services/commands';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { ConfirmDialog } from './ConfirmDialog';
 import { buildMagnetVariantRenderers } from './shared/magnetVariantCatalog';
@@ -185,6 +187,8 @@ type DspVstRendererProps = {
 const DspVstDefaultRenderer: React.FC<DspVstRendererProps> = ({ skinProps: rawSkinProps }) => {
   const skinProps = useMemo(() => parseDspVstSkinProps(rawSkinProps), [rawSkinProps]);
   const t = useT();
+  const kernel = useKernel();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const navigation = useNavigation();
   const [graph, setGraph] = useState<DspGraphConfig | null>(() => readData<DspGraphConfig>(STORAGE_KEYS.NATIVE_AUDIO_DSP_GRAPH));
   const [vstStatuses, setVstStatuses] = useState<Record<string, VstSessionStatus>>({});
@@ -308,8 +312,10 @@ const DspVstDefaultRenderer: React.FC<DspVstRendererProps> = ({ skinProps: rawSk
   }, [firstEnabled, skinProps.labelMode, t, vstNodes.length, warmupStateLabel]);
 
   const handleOpenRack = useCallback(() => {
-    navigation.navigateTo('dsp-rack');
-  }, [navigation]);
+    void dispatchCommandOrFallback(commands, 'app:navigate-dsp-rack', () =>
+      navigation.navigateTo('dsp-rack')
+    );
+  }, [commands, navigation]);
 
   const refreshVstStatuses = useCallback(async () => {
     if (!isTauri) return;

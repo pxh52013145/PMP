@@ -2987,15 +2987,6 @@ impl NativeAudioEngine {
 
         let robust_recovery_active = underrun_recovery_active || shared_stress_active;
 
-        match self.maybe_follow_system_default_output_route() {
-            Ok(true) => return true,
-            Ok(false) => {}
-            Err(err) => {
-                self.set_error("NATIVE_AUDIO_OUTPUT_ROUTE_SYNC_FAILED", err);
-                return true;
-            }
-        }
-
         if let Some(err) = self.output_backend.take_error() {
             if let Some(sink) = &self.sink {
                 sink.pause();
@@ -3031,6 +3022,15 @@ impl NativeAudioEngine {
                 }
             }
             return true;
+        }
+
+        match self.maybe_follow_system_default_output_route() {
+            Ok(true) => return true,
+            Ok(false) => {}
+            Err(err) => {
+                self.set_error("NATIVE_AUDIO_OUTPUT_ROUTE_SYNC_FAILED", err);
+                return true;
+            }
         }
 
         let streaming_error = if let Some(streaming) = self.streaming.as_ref() {

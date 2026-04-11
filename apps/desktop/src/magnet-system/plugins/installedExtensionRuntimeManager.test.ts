@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InstalledHostExtensionRecord } from './extensions';
 import { DefaultInstalledExtensionRuntimeManager } from './installedExtensionRuntimeManager';
+import { EventBus } from '../../kernel';
+import type { AppEvents } from '../../contracts/events';
 import { DEFAULT_TELEMETRY_POLICY, type TelemetryRecord } from '../../contracts/telemetry';
 import {
   setGlobalTelemetryService,
@@ -10,12 +12,26 @@ import {
 
 const {
   runResolvedInstalledExtensionCommandMock,
+  startInstalledExtensionStartupRuntimeMock,
+  startInstalledExtensionBackgroundRuntimeMock,
   recordInstalledExtensionCrashMock,
+  loadInstalledExtensionsMock,
+  subscribeInstalledExtensionsMock,
   readHostExtensionRuntimeRestartRequestMock,
+  subscribeHostExtensionRuntimeRestartMock,
 } = vi.hoisted(() => ({
   runResolvedInstalledExtensionCommandMock: vi.fn(),
+  startInstalledExtensionStartupRuntimeMock: vi.fn(),
+  startInstalledExtensionBackgroundRuntimeMock: vi.fn(),
   recordInstalledExtensionCrashMock: vi.fn(),
+  loadInstalledExtensionsMock: vi.fn<[], InstalledHostExtensionRecord[]>(() => []),
+  subscribeInstalledExtensionsMock: vi.fn<[() => void], () => void>(
+    () => () => {}
+  ),
   readHostExtensionRuntimeRestartRequestMock: vi.fn(),
+  subscribeHostExtensionRuntimeRestartMock: vi.fn<[() => void], () => void>(
+    () => () => {}
+  ),
 }));
 
 vi.mock('./runtime/extensionCommandRuntime', () => ({
@@ -23,15 +39,16 @@ vi.mock('./runtime/extensionCommandRuntime', () => ({
 }));
 
 vi.mock('./runtime/extensionStartupRuntime', () => ({
-  startInstalledExtensionStartupRuntime: vi.fn(),
+  startInstalledExtensionStartupRuntime: startInstalledExtensionStartupRuntimeMock,
+  startInstalledExtensionBackgroundRuntime: startInstalledExtensionBackgroundRuntimeMock,
 }));
 
 vi.mock('./extensions', async () => {
   const actual = await vi.importActual<typeof import('./extensions')>('./extensions');
   return {
     ...actual,
-    loadInstalledExtensions: vi.fn(() => []),
-    subscribeInstalledExtensions: vi.fn(() => () => {}),
+    loadInstalledExtensions: loadInstalledExtensionsMock,
+    subscribeInstalledExtensions: subscribeInstalledExtensionsMock,
     recordInstalledExtensionCrash: recordInstalledExtensionCrashMock,
   };
 });
@@ -44,12 +61,13 @@ vi.mock('./hostExtensionRuntimeSupervisor', async () => {
   return {
     ...actual,
     readHostExtensionRuntimeRestartRequest: readHostExtensionRuntimeRestartRequestMock,
-    subscribeHostExtensionRuntimeRestart: vi.fn(() => () => {}),
+    subscribeHostExtensionRuntimeRestart: subscribeHostExtensionRuntimeRestartMock,
   };
 });
 
-function createManager() {
-  return new DefaultInstalledExtensionRuntimeManager({
+function createManagerHarness() {
+  const events = new EventBus<AppEvents>();
+  const manager = new DefaultInstalledExtensionRuntimeManager({
     audioEngine: {
       getSnapshot: () => ({
         audioService: {
@@ -64,7 +82,14 @@ function createManager() {
       getSnapshot: vi.fn(() => ({ currentIndex: 0 })),
     } as never,
     keybindings: null,
+    events: events.withSource('installed-extension-runtime-manager-test'),
   });
+
+  return { manager, events };
+}
+
+function createManager() {
+  return createManagerHarness().manager;
 }
 
 type TelemetryCall = {
@@ -214,11 +239,169 @@ function createViewRecord(): InstalledHostExtensionRecord {
   };
 }
 
+function createStartupRecord(
+  overrides: Partial<InstalledHostExtensionRecord> = {}
+): InstalledHostExtensionRecord {
+  return {
+    installedAt: 1,
+    enabled: true,
+    manifest: {
+      schemaVersion: '2.0',
+      kind: 'extension',
+      identity: {
+        id: 'demo-startup-extension',
+        publisher: 'pixel',
+        version: '1.0.0',
+        name: 'Demo Startup Extension',
+      },
+      hostTargets: [{ hostId: 'pmp' }],
+      activationEvents: ['onStartup'],
+      requiresCapabilities: [
+        {
+          capabilityId: 'core.capability-registry',
+        },
+      ],
+      runtimes: [
+        {
+          runtimeId: 'worker.main',
+          kind: 'extension-host',
+          entry: 'dist/index.js',
+          priority: 10,
+        },
+      ],
+    },
+    resolvedArtifacts: [
+      {
+        runtimeId: 'worker.main',
+        path: 'C:/plugins/demo-startup-extension/dist/index.js',
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function createOptionalCapabilityStartupRecord(
+  overrides: Partial<InstalledHostExtensionRecord> = {}
+): InstalledHostExtensionRecord {
+  const base = createStartupRecord();
+  return {
+    ...base,
+    manifest: {
+      ...base.manifest,
+      requiresCapabilities: undefined,
+      optionalCapabilities: [
+        {
+          capabilityId: 'host.pmp.audio-engine.analysis',
+        },
+      ],
+    },
+    ...overrides,
+  };
+}
+
+function createCapabilityActivationRecord(
+  overrides: Partial<InstalledHostExtensionRecord> = {}
+): InstalledHostExtensionRecord {
+  const base = createStartupRecord({
+    manifest: {
+      ...createStartupRecord().manifest,
+      identity: {
+        ...createStartupRecord().manifest.identity,
+        id: 'demo-capability-extension',
+        name: 'Demo Capability Extension',
+      },
+      activationEvents: ['onCapability:host.pmp.navigation'],
+    },
+    resolvedArtifacts: [
+      {
+        runtimeId: 'worker.main',
+        path: 'C:/plugins/demo-capability-extension/dist/index.js',
+      },
+    ],
+  });
+
+  return {
+    ...base,
+    ...overrides,
+  };
+}
+
+function createHostEventActivationRecord(
+  overrides: Partial<InstalledHostExtensionRecord> = {}
+): InstalledHostExtensionRecord {
+  const base = createStartupRecord({
+    manifest: {
+      ...createStartupRecord().manifest,
+      identity: {
+        ...createStartupRecord().manifest.identity,
+        id: 'demo-host-event-extension',
+        name: 'Demo Host Event Extension',
+      },
+      activationEvents: ['onHost:navigation.changed'],
+    },
+    resolvedArtifacts: [
+      {
+        runtimeId: 'worker.main',
+        path: 'C:/plugins/demo-host-event-extension/dist/index.js',
+      },
+    ],
+  });
+
+  return {
+    ...base,
+    ...overrides,
+  };
+}
+
+function createFileActivationRecord(
+  overrides: Partial<InstalledHostExtensionRecord> = {}
+): InstalledHostExtensionRecord {
+  const base = createStartupRecord({
+    manifest: {
+      ...createStartupRecord().manifest,
+      identity: {
+        ...createStartupRecord().manifest.identity,
+        id: 'demo-file-extension',
+        name: 'Demo File Extension',
+      },
+      activationEvents: ['onFile:json'],
+    },
+    resolvedArtifacts: [
+      {
+        runtimeId: 'worker.main',
+        path: 'C:/plugins/demo-file-extension/dist/index.js',
+      },
+    ],
+  });
+
+  return {
+    ...base,
+    ...overrides,
+  };
+}
+
+async function flushAsyncWork(iterations = 3): Promise<void> {
+  for (let index = 0; index < iterations; index += 1) {
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 describe('DefaultInstalledExtensionRuntimeManager', () => {
   beforeEach(() => {
     runResolvedInstalledExtensionCommandMock.mockReset();
+    startInstalledExtensionStartupRuntimeMock.mockReset();
+    startInstalledExtensionBackgroundRuntimeMock.mockReset();
     recordInstalledExtensionCrashMock.mockReset();
+    loadInstalledExtensionsMock.mockReset();
+    subscribeInstalledExtensionsMock.mockReset();
     readHostExtensionRuntimeRestartRequestMock.mockReset();
+    subscribeHostExtensionRuntimeRestartMock.mockReset();
+    readHostExtensionRuntimeRestartRequestMock.mockReturnValue(null);
+    loadInstalledExtensionsMock.mockReturnValue([]);
+    subscribeInstalledExtensionsMock.mockImplementation(() => () => {});
+    subscribeHostExtensionRuntimeRestartMock.mockImplementation(() => () => {});
   });
 
   afterEach(() => {
@@ -310,5 +493,226 @@ describe('DefaultInstalledExtensionRuntimeManager', () => {
 
     expect(manager.getRestartToken('demo-command-extension')).toBe(1234);
     expect(manager.getRestartToken('other-extension')).toBe(0);
+  });
+
+  it('restarts managed startup runtimes when optional capability grants change', async () => {
+    let records = [createOptionalCapabilityStartupRecord()];
+    let installedListener: (() => void) | null = null;
+    const firstDispose = vi.fn().mockResolvedValue(undefined);
+    const secondDispose = vi.fn().mockResolvedValue(undefined);
+
+    loadInstalledExtensionsMock.mockImplementation(() => records);
+    subscribeInstalledExtensionsMock.mockImplementation((listener: () => void) => {
+      installedListener = listener;
+      return () => {
+        if (installedListener === listener) {
+          installedListener = null;
+        }
+      };
+    });
+    startInstalledExtensionStartupRuntimeMock
+      .mockResolvedValueOnce({
+        runtimeInstanceId: 'startup-runtime-1',
+        dispose: firstDispose,
+      })
+      .mockResolvedValueOnce({
+        runtimeInstanceId: 'startup-runtime-2',
+        dispose: secondDispose,
+      });
+
+    const manager = createManager();
+    const restartListener = vi.fn();
+    manager.subscribeRestart(restartListener);
+    const notifyInstalledChange = () => {
+      if (installedListener) {
+        installedListener();
+      }
+    };
+
+    manager.start();
+    await flushAsyncWork();
+
+    expect(startInstalledExtensionStartupRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(manager.getRestartToken('demo-startup-extension')).toBe(0);
+
+    records = [
+      createOptionalCapabilityStartupRecord({
+        deniedCapabilities: ['host.pmp.audio-engine.analysis'],
+      }),
+    ];
+    notifyInstalledChange();
+    await flushAsyncWork();
+
+    expect(firstDispose).toHaveBeenCalledWith('capabilities-updated');
+    expect(startInstalledExtensionStartupRuntimeMock).toHaveBeenCalledTimes(2);
+    expect(
+      manager.getRestartToken('demo-startup-extension')
+    ).toEqual(expect.any(Number));
+    expect(manager.getRestartToken('demo-startup-extension')).toBeGreaterThan(0);
+    expect(restartListener).toHaveBeenCalledTimes(1);
+
+    manager.dispose();
+    await flushAsyncWork();
+    expect(secondDispose).toHaveBeenCalledWith('module-dispose');
+  });
+
+  it('stops managed startup runtimes and bumps lifecycle restart tokens when extensions are quarantined', async () => {
+    let records = [createStartupRecord()];
+    let installedListener: (() => void) | null = null;
+    const firstDispose = vi.fn().mockResolvedValue(undefined);
+
+    loadInstalledExtensionsMock.mockImplementation(() => records);
+    subscribeInstalledExtensionsMock.mockImplementation((listener: () => void) => {
+      installedListener = listener;
+      return () => {
+        if (installedListener === listener) {
+          installedListener = null;
+        }
+      };
+    });
+    startInstalledExtensionStartupRuntimeMock.mockResolvedValue({
+      runtimeInstanceId: 'startup-runtime-1',
+      dispose: firstDispose,
+    });
+
+    const manager = createManager();
+    const restartListener = vi.fn();
+    manager.subscribeRestart(restartListener);
+    const notifyInstalledChange = () => {
+      if (installedListener) {
+        installedListener();
+      }
+    };
+
+    manager.start();
+    await flushAsyncWork();
+
+    records = [
+      createStartupRecord({
+        enabled: false,
+        disabledReason: 'quarantine',
+      }),
+    ];
+    notifyInstalledChange();
+    await flushAsyncWork();
+
+    expect(firstDispose).toHaveBeenCalledWith('extension-quarantined');
+    expect(startInstalledExtensionStartupRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(
+      manager.getRestartToken('demo-startup-extension')
+    ).toEqual(expect.any(Number));
+    expect(manager.getRestartToken('demo-startup-extension')).toBeGreaterThan(0);
+    expect(restartListener).toHaveBeenCalledTimes(1);
+
+    manager.dispose();
+    await flushAsyncWork();
+  });
+
+  it('starts background runtimes for matching capability activations', async () => {
+    const record = createCapabilityActivationRecord();
+    loadInstalledExtensionsMock.mockReturnValue([record]);
+    startInstalledExtensionBackgroundRuntimeMock.mockResolvedValue({
+      runtimeInstanceId: 'capability-runtime-1',
+      dispose: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const manager = createManager();
+    await manager.activateForCapability({
+      capabilityId: 'host.pmp.navigation',
+      method: 'navigateTo',
+      requestKind: 'invoke',
+      sourcePluginId: 'other-plugin',
+      hostLabel: 'CapabilityActivationTest',
+    });
+
+    expect(startInstalledExtensionBackgroundRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(startInstalledExtensionBackgroundRuntimeMock.mock.calls[0]?.[0]).toMatchObject({
+      record,
+      hostLabel: 'CapabilityActivationTest',
+      activation: {
+        cause: 'capability',
+        activationEvent: 'onCapability:host.pmp.navigation',
+        surface: 'capability',
+        payload: {
+          capabilityId: 'host.pmp.navigation',
+          method: 'navigateTo',
+          requestKind: 'invoke',
+          sourcePluginId: 'other-plugin',
+        },
+      },
+    });
+  });
+
+  it('wires kernel host events onto the runtime manager activation path', async () => {
+    const record = createHostEventActivationRecord();
+    loadInstalledExtensionsMock.mockReturnValue([record]);
+    startInstalledExtensionBackgroundRuntimeMock.mockResolvedValue({
+      runtimeInstanceId: 'host-event-runtime-1',
+      dispose: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const { manager, events } = createManagerHarness();
+    manager.start();
+    events.emit('navigation/changed', {
+      currentPage: { type: 'home' },
+      history: [{ type: 'home' }],
+      currentIndex: 0,
+    });
+    await flushAsyncWork();
+
+    expect(startInstalledExtensionBackgroundRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(startInstalledExtensionBackgroundRuntimeMock.mock.calls[0]?.[0]).toMatchObject({
+      record,
+      hostLabel: 'ExtensionHostEventActivation',
+      activation: {
+        cause: 'host-event',
+        activationEvent: 'onHost:navigation.changed',
+        surface: 'host',
+        payload: {
+          hostEventId: 'navigation.changed',
+          eventPayload: {
+            currentPage: { type: 'home' },
+            history: [{ type: 'home' }],
+            currentIndex: 0,
+          },
+        },
+      },
+    });
+
+    manager.dispose();
+    await flushAsyncWork();
+  });
+
+  it('starts background runtimes for matching file activations', async () => {
+    const record = createFileActivationRecord();
+    loadInstalledExtensionsMock.mockReturnValue([record]);
+    startInstalledExtensionBackgroundRuntimeMock.mockResolvedValue({
+      runtimeInstanceId: 'file-runtime-1',
+      dispose: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const manager = createManager();
+    await manager.activateForFile({
+      fileType: 'JSON',
+      filePath: 'C:/plugins/demo.json',
+      action: 'selected',
+      hostLabel: 'FileActivationTest',
+    });
+
+    expect(startInstalledExtensionBackgroundRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(startInstalledExtensionBackgroundRuntimeMock.mock.calls[0]?.[0]).toMatchObject({
+      record,
+      hostLabel: 'FileActivationTest',
+      activation: {
+        cause: 'file',
+        activationEvent: 'onFile:json',
+        surface: 'file',
+        payload: {
+          fileType: 'json',
+          filePath: 'C:/plugins/demo.json',
+          action: 'selected',
+        },
+      },
+    });
   });
 });

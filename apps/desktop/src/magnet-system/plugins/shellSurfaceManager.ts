@@ -55,6 +55,13 @@ export interface ShellSurfaceManager {
 export const SHELL_SURFACE_MANAGER_TOKEN =
   createServiceToken<ShellSurfaceManager>('service.plugin-shell-surface-manager');
 
+export type ShellSurfaceEnvironmentSignal =
+  | 'window-focus'
+  | 'document-visible'
+  | 'page-resume'
+  | 'page-show'
+  | 'display-metrics-changed';
+
 type ShellSurfaceManagerDeps = {
   openSurface: typeof openPluginShellSurface;
   dismissSurface: typeof dismissPluginShellSurface;
@@ -64,6 +71,9 @@ type ShellSurfaceManagerDeps = {
   subscribeExtensions: typeof subscribeInstalledExtensions;
   subscribeRuntimeRestart: typeof subscribeHostExtensionRuntimeRestart;
   readRuntimeRestart: typeof readHostExtensionRuntimeRestartRequest;
+  subscribeEnvironmentSignals: (
+    listener: (signal: ShellSurfaceEnvironmentSignal) => void
+  ) => () => void;
 };
 
 const telemetry = getTelemetryLogger('plugins', 'shellSurfaceManager');
@@ -100,6 +110,42 @@ function buildCleanupReasonFromLookupStatus(status: 'missing-plugin' | 'disabled
   }
 }
 
+function subscribeShellSurfaceEnvironmentSignals(
+  listener: (signal: ShellSurfaceEnvironmentSignal) => void
+): () => void {
+  if (
+    typeof window === 'undefined' ||
+    typeof document === 'undefined' ||
+    typeof window.addEventListener !== 'function'
+  ) {
+    return () => {};
+  }
+
+  const onWindowFocus = () => listener('window-focus');
+  const onPageShow = () => listener('page-show');
+  const onResize = () => listener('display-metrics-changed');
+  const onResume = () => listener('page-resume');
+  const onVisibilityChange = () => {
+    if (!document.hidden) {
+      listener('document-visible');
+    }
+  };
+
+  window.addEventListener('focus', onWindowFocus);
+  window.addEventListener('pageshow', onPageShow);
+  window.addEventListener('resize', onResize);
+  document.addEventListener('resume', onResume);
+  document.addEventListener('visibilitychange', onVisibilityChange);
+
+  return () => {
+    window.removeEventListener('focus', onWindowFocus);
+    window.removeEventListener('pageshow', onPageShow);
+    window.removeEventListener('resize', onResize);
+    document.removeEventListener('resume', onResume);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+  };
+}
+
 export class DefaultShellSurfaceManager implements ShellSurfaceManager {
   private readonly tracked = new Map<string, ManagedPluginShellSurfaceSpec>();
   private readonly lastHandledRestartAt: Record<HostExtensionRuntimeKind, number> = {
@@ -112,6 +158,7 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
   private unsubscribePmpm: (() => void) | null = null;
   private unsubscribeExtensions: (() => void) | null = null;
   private unsubscribeRuntimeRestart: (() => void) | null = null;
+  private unsubscribeEnvironmentSignals: (() => void) | null = null;
 
   constructor(
     private readonly options: {
@@ -128,25 +175,13 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
       subscribeExtensions: subscribeInstalledExtensions,
       subscribeRuntimeRestart: subscribeHostExtensionRuntimeRestart,
       readRuntimeRestart: readHostExtensionRuntimeRestartRequest,
+      subscribeEnvironmentSignals: subscribeShellSurfaceEnvironmentSignals,
       ...(options.deps ?? {}),
     };
   }
 
   summonSurface = async (spec: ManagedPluginShellSurfaceSpec): Promise<void> => {
-    const config: PluginShellSurfaceConfig = {
-      sourceKind: spec.sourceKind,
-      pluginId: spec.pluginId,
-      surfaceId: spec.descriptor.id,
-      surfaceType: spec.descriptor.surfaceType,
-      title: buildSummonTitle(spec),
-      width: spec.descriptor.width,
-      height: spec.descriptor.height,
-      alwaysOnTop: spec.descriptor.alwaysOnTop,
-      focusable: spec.descriptor.focusable,
-      pointerPolicy: spec.descriptor.pointerPolicy,
-    };
-
-    await this.deps.openSurface(config);
+    await this.deps.openSurface(this.buildSurfaceConfig(spec));
     this.tracked.set(
       buildTrackedShellSurfaceKey({
         sourceKind: spec.sourceKind,
@@ -275,6 +310,9 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
     this.unsubscribeRuntimeRestart = this.deps.subscribeRuntimeRestart(
       this.handleRuntimeRestartSignal
     );
+    this.unsubscribeEnvironmentSignals = this.deps.subscribeEnvironmentSignals(
+      this.handleEnvironmentSignal
+    );
     sync();
   };
 
@@ -304,10 +342,18 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
         message: readErrorMessage(error),
       });
     }
+    try {
+      this.unsubscribeEnvironmentSignals?.();
+    } catch (error) {
+      telemetry.warn('shell-surface.unsubscribe.environment.failed', {
+        message: readErrorMessage(error),
+      });
+    }
 
     this.unsubscribePmpm = null;
     this.unsubscribeExtensions = null;
     this.unsubscribeRuntimeRestart = null;
+    this.unsubscribeEnvironmentSignals = null;
   };
 
   private syncTrackedSurfaces(): void {
@@ -358,4 +404,72 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
       });
     }
   };
+
+  private handleEnvironmentSignal = (signal: ShellSurfaceEnvironmentSignal): void => {
+    void this.refreshTrackedSurfaces(signal);
+  };
+
+  private buildSurfaceConfig(spec: ManagedPluginShellSurfaceSpec): PluginShellSurfaceConfig {
+    return {
+      sourceKind: spec.sourceKind,
+      pluginId: spec.pluginId,
+      surfaceId: spec.descriptor.id,
+      surfaceType: spec.descriptor.surfaceType,
+      title: buildSummonTitle(spec),
+      width: spec.descriptor.width,
+      height: spec.descriptor.height,
+      alwaysOnTop: spec.descriptor.alwaysOnTop,
+      focusable: spec.descriptor.focusable,
+      pointerPolicy: spec.descriptor.pointerPolicy,
+    };
+  }
+
+  private async refreshTrackedSurfaces(signal: ShellSurfaceEnvironmentSignal): Promise<void> {
+    for (const spec of Array.from(this.tracked.values())) {
+      const lookup = this.deps.inspectSurface({
+        sourceKind: spec.sourceKind,
+        pluginId: spec.pluginId,
+        surfaceId: spec.descriptor.id,
+        surfaceType: spec.descriptor.surfaceType,
+      });
+
+      if (lookup.status !== 'present') {
+        void this.cleanupSurface({
+          sourceKind: spec.sourceKind,
+          pluginId: spec.pluginId,
+          surfaceId: spec.descriptor.id,
+          surfaceType: spec.descriptor.surfaceType,
+          reason: buildCleanupReasonFromLookupStatus(lookup.status),
+        }).catch((error) => {
+          telemetry.warn('shell-surface.environment.cleanup.failed', {
+            message: readErrorMessage(error),
+            fields: {
+              sourceKind: spec.sourceKind,
+              pluginId: spec.pluginId,
+              surfaceId: spec.descriptor.id,
+              surfaceType: spec.descriptor.surfaceType,
+              signal,
+              syncStatus: lookup.status,
+            },
+          });
+        });
+        continue;
+      }
+
+      try {
+        await this.deps.openSurface(this.buildSurfaceConfig(spec));
+      } catch (error) {
+        telemetry.warn('shell-surface.environment.refresh.failed', {
+          message: readErrorMessage(error),
+          fields: {
+            sourceKind: spec.sourceKind,
+            pluginId: spec.pluginId,
+            surfaceId: spec.descriptor.id,
+            surfaceType: spec.descriptor.surfaceType,
+            signal,
+          },
+        });
+      }
+    }
+  }
 }

@@ -10,6 +10,7 @@ import {
 } from '../../../services/telemetry';
 import {
   completeRuntimeProtocolSpan,
+  createRuntimeProtocolChildTraceContext,
   createRuntimeProtocolTraceContext,
   failRuntimeProtocolSpan,
   startRuntimeProtocolSpan,
@@ -430,6 +431,45 @@ describe('runtimeProtocolTracer', () => {
         failureKind: 'crash',
         state: 'crashed',
         durationMs: 8,
+      }),
+    });
+  });
+
+  it('supports child trace contexts for data and trace channels while sharing session identity', () => {
+    const telemetry = createTelemetryServiceSpy();
+    setGlobalTelemetryService(telemetry.service);
+    const controlContext = createTraceContext();
+    const dataContext = createRuntimeProtocolChildTraceContext(controlContext, 'data');
+    const traceContext = createRuntimeProtocolChildTraceContext(controlContext, 'trace');
+
+    traceRuntimeProtocolStep(dataContext, 'plugin.capability.data.stream-data.sent', {
+      protocolOp: 'stream.data',
+      requestId: 'stream-1',
+      extraFields: {
+        sequence: 3,
+      },
+    });
+    traceRuntimeProtocolStep(traceContext, 'plugin.runtime.trace.snapshot.recorded', {
+      protocolOp: 'runtime.trace.snapshot',
+      status: 'captured',
+    });
+
+    expect(telemetry.calls).toHaveLength(2);
+    expect(telemetry.calls[0]).toMatchObject({
+      traceId: controlContext.sessionTraceId,
+      fields: expect.objectContaining({
+        channel: 'data',
+        protocolOp: 'stream.data',
+        requestId: 'stream-1',
+        sequence: 3,
+      }),
+    });
+    expect(telemetry.calls[1]).toMatchObject({
+      traceId: controlContext.sessionTraceId,
+      fields: expect.objectContaining({
+        channel: 'trace',
+        protocolOp: 'runtime.trace.snapshot',
+        status: 'captured',
       }),
     });
   });

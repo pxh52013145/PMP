@@ -50,7 +50,11 @@ function DisabledPluginMagnet({ pluginId }: { pluginId: string }) {
     >
       <div style={{ fontWeight: 700 }}>{name || pluginId}</div>
       <div style={{ fontSize: 12, opacity: 0.75 }}>
-        {reason === 'crash' ? 'Plugin disabled (crashed)' : 'Plugin disabled'}
+        {reason === 'crash'
+          ? 'Plugin disabled (crashed)'
+          : reason === 'quarantine'
+            ? 'Plugin disabled (quarantined)'
+            : 'Plugin disabled'}
       </div>
       {lastError && (
         <div style={{ fontSize: 11, opacity: 0.7, whiteSpace: 'pre-wrap' }}>{lastError}</div>

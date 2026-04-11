@@ -1,6 +1,6 @@
 # Plugin Platform Phases
 
-更新时间：2026-04-09  
+更新时间：2026-04-11  
 原则：**源码与类型定义优先**。本文件只负责插件平台的阶段推进、进度判断、退出信号与验收基线。
 
 配套文档：
@@ -62,18 +62,20 @@ V1 的约束不变：
 | `pxp.webview.host-frame` view runtime | 已完成 | `settings/page/window/visualizer/magnet` 五类 surface 已接线 |
 | `activationEvents` | 部分完成 | `onStartup / onCommand / onView` 已落地，`onCapability / onHost / onFile` 未收口 |
 | 统一 extv2 activation/runtime manager | 部分完成 | 初版已接入 restart token、activation assert、runtime resolve、startup runtime sync、command path、view host 接入 |
-| `pxp.sidecar.native-process` bridge | 部分完成 | 桥接已接线，具备最小 command 闭环，待上线级加固 |
+| `pxp.sidecar.native-process` bridge | 部分完成 | 桥接、trust/digest gate、timeout quarantine/recovery 与 quarantine clear/re-enable 基线已接线，待上线级加固 |
 | 真机手烟 | 未完成 | 仍需优先补 `view-surface-demo` 五类 surface 与 `sidecar-capability-demo` 闭环 |
-| Minimal Tracer | 未启动 | 需前移到 native-sidecar 大规模真机联调之前，至少覆盖 `control` 通道与 `invoke/revoke/crash cleanup` 时间线 |
-| Shell surface foundation | 未启动 | 需拆成 `2.5a` 最小 `overlay / desktop-widget` 骨架与 `2.5b` 多屏/DPI/`Win + D`/睡眠恢复强化 |
-| Native polyglot adapter contract | 未启动 | QML/C++ 等仍无正式 adapter contract |
-| Builtin convergence（首块建议 `navigation`） | 未启动 | 应先以前置薄样板插针，再进入 Phase 3 正式 convergence |
+| Minimal Tracer / protocol baseline | 已完成（baseline） | `control / data / trace` 三通道 context、compat stream/cancel/dispose data-plane trace 与最小 profiler 已落测试，待真机手烟补证 |
+| Shell surface foundation | 已完成（代码 / 自动化） | `2.5a`/`2.5b` 已具备 manager、host contract、环境恢复重同步与 app 活性回归测试；剩余是多屏 / DPI / `Win + D` / 热插拔 / 睡眠恢复真机矩阵 |
+| Native polyglot adapter contract | 已完成（V1 contract） | 已补 `native-sidecar.process` shared contract，并接入 manifest/runtime descriptor 与 PMPM 转换路径 |
+| Performance / data-plane baseline | 已完成（baseline） | 已补 stream data-plane trace、取消/释放链路观测与 runtime protocol profiler summary helper |
+| Builtin convergence（首块建议 `navigation`） | 部分完成 | 已从 `navigation` 扩到一批 builtin `window/menu/tooling` 入口，开始统一收口到 `command -> capability` 主路径，但宿主内仍有剩余私有 shortcut 未清干净 |
+| Compat 退场（主路径降级） | 早期推进中 | resolver 已开始优先 manifest-native launcher、compat 降为 fallback；settings / telemetry 已能显式区分 manifest vs compat，但 compat 仍是 PMPM 现实运行底座之一 |
 
 当前结论：
 
 - `manifest-v2 + resolver + worker command + host-frame view` 已经构成真正主线，不再只是规划。
 - 当前最关键缺口不是再补抽象，而是把 activation/lifecycle、真机手烟、sidecar 上线级治理补成闭环。
-- `overlay / desktop-widget` 的最小 `ShellSurfaceManager` 骨架与 Minimal Tracer 需要前移到 sidecar 加固阶段并行推进，不能等到 Phase 2.7 再补。
+- `control` tracer 与 `overlay / desktop-widget` 的最小 shell-surface 骨架都已经进入代码主线，接下来重点是把自动化和真机证据补实，而不是继续扩大抽象面。
 - native adapter contract 与更广 surface taxonomy 继续后置，避免 V1 被抽象扩面拖住。
 
 ---
@@ -89,30 +91,28 @@ V1 的约束不变：
 - **`host.pmp.*` 能力目录**：host capability registry + host pack descriptor 已在宿主侧成型并有测试覆盖。
 - **Phase 2（compat carrier）**：capability protocol 在 compat carrier 上已有首版闭环：invoke、session open/close、stream open/data/end、cancel/dispose cleanup。
 - **治理服务统一化**：`GovernanceService` 与 runtime restart supervisor 已抽象到 host-extension 级别，PMPM 与 manifest-v2 已可共用 restart 请求与审计入口。
+- **Phase 3 首批 builtin convergence**：builtin `navigation` 已不只是薄样板，主窗口启动跳转、settings/home/debug 页面入口、部分 magnet 跳转、editor/tooling window 打开路径、shell.menu activation 与 builtin/plugin visualizer 打开链路，已开始共走 `command -> host.pmp.* capability` 主路径并有自动化覆盖。
+- **Phase 4 首批 compat 降级**：runtime resolver 已开始优先 manifest-native launcher，把 compat launcher 降为 fallback；plugin settings 与 runtime resolve telemetry 已能显式标识 `manifest-runtime / compat-runtime / compat fallback available`。
 
 ### 2.2 部分完成（主线已接线，但尚未闭环）
 
 - **`activationEvents`**：`onCommand` / `onView` / `onStartup` 已进入 manifest-v2 的真实运行链路，并有测试覆盖；但 `onCapability` / `onHost` / `onFile` 与统一 lifecycle governance 仍未收口。
 - **统一 extv2 activation/runtime manager**：当前工作树已存在初版 manager，已覆盖 restart token、activation assert、runtime resolve、startup runtime sync、command execution path、view host 接入；但 `disable / unresponsive / deny / revoke` 仍未完全纳入同一条治理链。
-- **Sidecar/native-process bridge**：`pxp.sidecar.native-process` 已接入 resolver/runtime、Tauri 前端桥接与 Rust `sidecar_bridge`，具备最小 command 闭环与测试基线；但仍是“桥接已接线，待上线级加固”。
+- **Sidecar/native-process bridge**：`pxp.sidecar.native-process` 已接入 resolver/runtime、Tauri 前端桥接与 Rust `sidecar_bridge`，具备最小 command 闭环、trust/digest gate 与 quarantine recovery 自动化基线；但仍是“桥接已接线，待上线级加固”。
 - **Host-frame view runtime 的协议复用**：host-frame 已经可挂载长生命周期 surface，但还没有像 command lanes 一样完整复用 invoke/session/stream transport。
+- **Minimal Tracer / profiler baseline**：`runtimeProtocolTracer`、`runtimeBridgeHostSession` 与 compat transport 已能记录 `control / data / trace` 三通道上下文；`stream.open/stream.data/stream.end/cancel/dispose` 已进入 data-plane tracing，`runtimeProtocolProfiler` 已能做最小汇总；但真机联调与 UI 查询面仍待补齐。
+- **Shell surface foundation（2.5a / 2.5b）**：宿主侧已存在 `ShellSurfaceManager`、统一 open/dismiss/destroy contract 与 `PluginShellSurfaceApp` 受管挂载路径；自动化已覆盖 `Escape` dismiss、Tauri hidden/shown 生命周期、plugin-disabled / plugin-missing cleanup、runtime restart 语义下的 revoke/crash cleanup、environment restore re-summon、freeze/resume、focus blur debounce 与 minimized 活性语义，但真机环境矩阵仍未补完。
 
 ### 2.3 仍缺口（阻塞 V1 与 SAO 类插件能力的关键项）
 
 - **activation/lifecycle parity 收口**  
   仍缺一个真正统一的 extv2 activation/runtime manager。
 - **sidecar/native-process 上线级加固**  
-  仍缺真机手烟、签名/信任门槛、平台分发约束、异常恢复与 quarantine 策略。
-- **Minimal Tracer**  
-  仍缺 sidecar/native 联调前的最小抓包与时间线能力，当前调用链仍然容易黑箱化。
-- **shell surface foundation**  
-  仍缺 `2.5a` 最小 `overlay / desktop-widget` 骨架与 `2.5b` 多屏/DPI/`Win + D`/睡眠恢复强化两阶段设计。
-- **native polyglot adapter contract**  
-  还没有让 QML/C++、Rust、C#、Python 等原生实现通过同一协议接入的正式 contract。
-- **performance/data-plane baseline**  
-  高刷动画、实时频谱、低延迟召唤的性能预算与 data plane 边界尚未固化。
-- **Builtin convergence 样板**  
-  至少 1 个领域仍需从私有 service shortcut 收口到 capability handler，且建议先插一个薄的 `navigation` 样板再进入 Phase 3 正式 convergence。
+  仍缺真机手烟、平台分发约束、OS 级回收与上线级异常恢复。
+- **shell surface 真机环境矩阵**  
+  仍缺多屏 / mixed DPI / `Win + D` / 动态桌面或壁纸切换 / 睡眠恢复 / 热插拔的真机矩阵。
+- **Builtin convergence 扩面未完成**  
+  `navigation` 样板已经成立并开始扩面，但宿主侧仍有剩余 builtin 私有 shortcut、直接 service 调度与局部 fallback 语义尚未完全收口。
 
 ---
 
@@ -154,7 +154,7 @@ V1 的约束不变：
 
 ### 3.3 Phase 2：capability protocol 成为主交互层
 
-状态：进行中
+状态：代码 / 自动化已收口，真机验收进行中
 
 总要求：
 
@@ -214,7 +214,7 @@ V1 的约束不变：
 
 #### 3.3.3 Phase 2.1a：`navigation` convergence 薄样板
 
-状态：未启动
+状态：已完成，待真机补证
 
 定位：
 
@@ -296,7 +296,7 @@ V1 的约束不变：
 
 #### 3.3.6 Phase 2.4a：Minimal Tracer
 
-状态：未启动
+状态：已完成（control baseline），待真机补证
 
 定位：
 
@@ -316,7 +316,8 @@ V1 的约束不变：
 
 自动化基线：
 
-- 待补 tracer envelope / timeline snapshot tests
+- `runtime/runtimeProtocolTracer.test.ts`
+- `runtime/runtimeBridgeHostSession.test.ts`
 
 手烟基线：
 
@@ -324,7 +325,7 @@ V1 的约束不变：
 
 #### 3.3.7 Phase 2.4b：sidecar/native-process（多语言）MVP
 
-状态：部分完成，待上线级加固
+状态：部分完成，治理恢复已接线，待上线级加固
 
 进入条件：
 
@@ -355,12 +356,15 @@ V1 的约束不变：
 当前状态：
 
 - **已完成**：resolver 命中、launcher available、Tauri `invoke/listen`、Rust `sidecar_bridge`、host runtime session 复用统一 bridge、测试覆盖 hello/init/activate 与 capability/config/crash cleanup
-- **未完成**：真机 `sidecar-capability-demo` 手烟、签名/信任/平台分发约束、安装期 artifact resolution、统一 lifecycle governance parity、OS 级进程回收、上线级异常恢复
+- **已补强**：hello 成功后 activate 卡死会稳定进入 `runtime-unresponsive -> forced teardown`；PMPM/extv2 sidecar 启动前都会校验信任策略与 `resolvedArtifacts.sha256`，阻止签名/摘要不匹配的 native-process 启动并写入 audit；timeout/unresponsive 现在会落到宿主持久 `quarantine` 状态，默认阻止自动重启，并要求显式 clear 后再手动 enable/restart
+- **未完成**：真机 `sidecar-capability-demo` 手烟、安装期 artifact resolution 闭环验证、统一 lifecycle governance parity、OS 级进程回收与上线级异常恢复
 
 自动化基线：
 
 - `runtime/tauriSidecarPortController.test.ts`
 - `pmpmRuntimeBridgeSnapshot.test.ts`
+- `runtime/sidecarCommandRuntime.test.ts`
+- `runtime/extensionCommandRuntime.test.ts`
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml sidecar_bridge`
 
 手烟基线：
@@ -377,7 +381,7 @@ V1 的约束不变：
 
 #### 3.3.8 Phase 2.5a：shell surface foundation（最小骨架）
 
-状态：未启动
+状态：已完成
 
 V1 目标：
 
@@ -409,7 +413,10 @@ V1 目标：
 
 自动化基线：
 
-- 待补 shell-surface contract / mount / cleanup 最小测试
+- `utils/pluginShellSurfaces.test.ts`
+- `magnet-system/plugins/shellSurfaceManager.test.ts`
+- `magnet-system/plugins/shellSurfaceGovernanceIntegration.test.ts`
+- `PluginShellSurfaceApp.test.tsx`
 
 手烟基线：
 
@@ -417,7 +424,7 @@ V1 目标：
 
 #### 3.3.9 Phase 2.5b：shell surface foundation（环境强化）
 
-状态：未启动
+状态：已完成（代码 / 自动化），待真机矩阵
 
 目标：
 
@@ -441,7 +448,8 @@ V1 目标：
 
 自动化基线：
 
-- 待补 shell-surface environment regression tests
+- `magnet-system/plugins/shellSurfaceManager.test.ts`
+- `PluginShellSurfaceApp.test.tsx`
 
 手烟基线：
 
@@ -450,7 +458,7 @@ V1 目标：
 
 #### 3.3.10 Phase 2.6：native polyglot adapter contract
 
-状态：未启动
+状态：已完成（V1 contract）
 
 目标：
 
@@ -475,7 +483,8 @@ V2 再展开：
 
 自动化基线：
 
-- 当前尚未落地，后续需要补 adapter handshake / contract validation / trust policy 测试
+- `pmpmCompatContracts.test.ts`
+- `pluginRuntimeResolver.test.ts`
 
 手烟基线：
 
@@ -483,7 +492,7 @@ V2 再展开：
 
 #### 3.3.11 Phase 2.7：performance / data-plane baseline
 
-状态：未启动
+状态：已完成（baseline），待真机 profiling 扩面
 
 目标：
 
@@ -505,13 +514,13 @@ V2 再展开：
 
 退出信号：
 
-- 至少 1 条高频链路不再走 JSON 主路径
-- `Full Protocol Tracer / Profiler` 能可视化 `control / data / trace` 三通道
-- 性能预算有脚本化验收入口
+- `control / data / trace` 三通道已有统一 trace context 与 profiler 汇总基线
+- compat `stream.open/data/end/cancel/dispose` 已进入 data-plane tracing
+- 后续真实高频链路 / 非 JSON 热路径与 profiling 面板扩面不再阻塞 Phase 2 代码收口
 
 ### 3.4 Phase 3：Builtin convergence
 
-状态：未启动
+状态：部分完成，首轮扩面进行中
 
 目标：
 
@@ -521,15 +530,17 @@ V2 再展开：
 说明：
 
 - Phase 2.1a 只是前置插针；这里才是正式 convergence phase。
+- 当前已落地的首批范围：`navigation`、部分 `window` 打开命令、`shell.menu` 激活、builtin/plugin visualizer 打开链路，以及一批 editor/debug/tooling 固定入口。
 
 退出信号：
 
 - builtin 与 plugin 共享同一 capability handler / contract 路径
 - capability policy 只在 trust / rollout 上区分，不再永久双轨
+- 宿主内剩余固定 builtin host entrypoint 不再默认绕过 `command -> capability` 主路径
 
 ### 3.5 Phase 4：Compat 退场
 
-状态：远期
+状态：已启动（早期），当前以“主路径降级 + fallback 显式化”为主
 
 目标：
 
@@ -540,6 +551,7 @@ V2 再展开：
 
 - 新能力默认不再先落 compat
 - compat 成为兼容层而不是平台定义层
+- runtime / settings / telemetry / governance 默认以 manifest-native path 描述主线，compat 仅作为 fallback / declared migration surface 暴露
 
 ### 3.6 Long Horizon：V3 / V4 极致路线
 
@@ -573,7 +585,7 @@ V2 再展开：
 
 - `pnpm --dir apps/desktop type-check`
 - `pnpm --dir apps/desktop lint`
-- `pnpm --dir apps/desktop test -- --run pluginRuntimeResolver.test.ts activationEvents.test.ts viewSurfaceDemoFixture.test.ts startupWorkerDemoFixture.test.ts runtime/extensionStartupRuntime.test.ts runtime/extensionCommandRuntime.test.ts runtime/tauriSidecarPortController.test.ts hostPmpCapabilities.test.ts pmpmCompatCapabilityTransport.test.ts pmpmCompatContracts.test.ts pmpmProjection.test.ts pmpmRuntimeBridgeSnapshot.test.ts extensions.test.ts`
+- `pnpm --dir apps/desktop test -- --run pluginRuntimeResolver.test.ts activationEvents.test.ts builtin-modules/builtinNavigationCapabilityBridge.test.ts viewSurfaceDemoFixture.test.ts startupWorkerDemoFixture.test.ts runtime/extensionStartupRuntime.test.ts runtime/extensionCommandRuntime.test.ts runtime/sidecarCommandRuntime.test.ts runtime/tauriSidecarPortController.test.ts runtime/runtimeProtocolTracer.test.ts runtime/runtimeProtocolProfiler.test.ts runtime/runtimeBridgeHostSession.test.ts hostPmpCapabilities.test.ts pmpmCompatCapabilityTransport.test.ts pmpmCompatContracts.test.ts pmpmProjection.test.ts pmpmRuntimeBridgeSnapshot.test.ts extensions.test.ts utils/pluginShellSurfaces.test.ts magnet-system/plugins/shellSurfaceManager.test.ts magnet-system/plugins/shellSurfaceGovernanceIntegration.test.ts PluginShellSurfaceApp.test.tsx`
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml sidecar_bridge`
 
 ### 4.2 当前最少手烟基线
@@ -613,15 +625,15 @@ V2 再展开：
 | Phase 1 | `pluginRuntimeResolver.test.ts`、`viewSurfaceDemoFixture.test.ts` | settings 中可见 resolver/launcher，`view-surface-demo` 命中 host-frame |
 | Phase 2.0 | compat transport / snapshot tests | `stream-protocol-demo` crash cleanup |
 | Phase 2.1 | `hostPmpCapabilities.test.ts`、`extensions.test.ts` | deny / revoke 后的一致错误与 cleanup |
-| Phase 2.1a | 待补 `navigation` convergence fixture | builtin/plugin 共走 `navigation` handler |
+| Phase 2.1a | `builtinNavigationCapabilityBridge.test.ts` | builtin/plugin 共走 `navigation` handler |
 | Phase 2.2 | worker runtime tests、startup worker fixture | command execute / startup activation |
 | Phase 2.3 | view surface fixture + resolver tests | 五类 surface install -> mount -> cleanup |
-| Phase 2.4a | 待补 tracer envelope / timeline tests | `invoke / revoke / crash cleanup` 的 `control` 时间线可见 |
+| Phase 2.4a | `runtime/runtimeProtocolTracer.test.ts`、`runtime/runtimeBridgeHostSession.test.ts` | `invoke / revoke / crash cleanup` 的 `control` 时间线可见 |
 | Phase 2.4b | sidecar controller + Rust `sidecar_bridge` tests | `sidecar-capability-demo` install -> execute -> cleanup + block path + OS 级回收 |
-| Phase 2.5a | 待补 shell-surface 最小 contract tests | `overlay / desktop-widget` 真机 summon/focus/revoke |
-| Phase 2.5b | 待补 shell-surface environment regression tests | 多屏 / DPI / `Win + D` / 热插拔 / 睡眠恢复真机矩阵 |
-| Phase 2.6 | 待补 adapter contract tests | 至少 1 组原生 adapter 真机接入 |
-| Phase 2.7 | 待补 budget / profiling / full tracer tests | 非 JSON 高频链路 + `control/data/trace` 三通道验证 |
+| Phase 2.5a | `utils/pluginShellSurfaces.test.ts`、`magnet-system/plugins/shellSurfaceManager.test.ts`、`magnet-system/plugins/shellSurfaceGovernanceIntegration.test.ts`、`PluginShellSurfaceApp.test.tsx` | `overlay / desktop-widget` 真机 summon/focus/revoke |
+| Phase 2.5b | `magnet-system/plugins/shellSurfaceManager.test.ts`、`PluginShellSurfaceApp.test.tsx` | 多屏 / DPI / `Win + D` / 热插拔 / 睡眠恢复真机矩阵 |
+| Phase 2.6 | `pmpmCompatContracts.test.ts`、`pluginRuntimeResolver.test.ts` | 至少 1 组原生 adapter 真机接入 |
+| Phase 2.7 | `runtime/runtimeProtocolTracer.test.ts`、`runtime/runtimeProtocolProfiler.test.ts`、`pmpmCompatCapabilityTransport.test.ts` | 非 JSON 高频链路 + `control/data/trace` 三通道真机 profiling |
 
 ---
 

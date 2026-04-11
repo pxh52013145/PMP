@@ -3,7 +3,9 @@
  * 负责导航逻辑
  */
 
+import { useKernel } from '../../../contexts/KernelContext';
 import { useNavigation } from '../../../contexts/NavigationContext';
+import { COMMANDS_SERVICE_TOKEN, dispatchCommandOrFallback } from '../../../services/commands';
 
 export interface MusicLibraryLogic {
   navigateToMusicLibrary: () => void;
@@ -13,10 +15,14 @@ export interface MusicLibraryLogic {
  * MusicLibraryButton的逻辑层
  */
 export function useMusicLibraryLogic(): MusicLibraryLogic {
+  const kernel = useKernel();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const { navigateTo } = useNavigation();
 
   const navigateToMusicLibrary = () => {
-    navigateTo('music-library');
+    void dispatchCommandOrFallback(commands, 'app:navigate-music-library', () =>
+      navigateTo('music-library')
+    );
   };
 
   return {

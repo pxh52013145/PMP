@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useEditor } from '../../contexts/EditorContext';
+import { useKernel } from '../../contexts/KernelContext';
+import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 
 const telemetry = getTelemetryLogger('editor', 'EditorPanel');
@@ -9,6 +11,8 @@ function readErrorMessage(error: unknown): string {
 }
 
 export function EditorPanel() {
+  const kernel = useKernel();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const { editorState } = useEditor();
   const didOpenControlWindowRef = useRef(false);
 
@@ -19,9 +23,11 @@ export function EditorPanel() {
 
       void (async () => {
         try {
-          const { calculateWindowPosition, openEditorWindow } = await import('../../utils/editorWindows');
-          const position = await calculateWindowPosition('control');
-          await openEditorWindow({ type: 'control', ...position });
+          await dispatchRequiredCommand(
+            commands,
+            'app:open-control-editor-window',
+            'Control editor command service is not available.'
+          );
         } catch (error) {
           didOpenControlWindowRef.current = false;
           telemetry.error('editor.control_window.open.failed', {
@@ -50,7 +56,7 @@ export function EditorPanel() {
       }
     };
     void close();
-  }, [editorState.isEditing]);
+  }, [commands, editorState.isEditing]);
 
   return null;
 }

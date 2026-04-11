@@ -190,7 +190,12 @@ impl SidecarBridgeRegistry {
         Ok(())
     }
 
-    pub fn close_session(&self, app: &tauri::AppHandle, session_id: &str, reason: Option<&str>) -> Result<(), String> {
+    pub fn close_session(
+        &self,
+        app: &tauri::AppHandle,
+        session_id: &str,
+        reason: Option<&str>,
+    ) -> Result<(), String> {
         let session = self.remove_session(session_id)?;
         let Some(session) = session else {
             return Ok(());

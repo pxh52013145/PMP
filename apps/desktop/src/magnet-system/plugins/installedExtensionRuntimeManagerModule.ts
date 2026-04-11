@@ -12,12 +12,13 @@ import {
 export function createInstalledExtensionRuntimeManagerModule(): KernelModule<AppEvents> {
   return {
     id: 'installed-extension-runtime-manager',
-    activate: ({ services }) => {
+    activate: ({ services, events }) => {
       const service = new DefaultInstalledExtensionRuntimeManager({
         audioEngine: services.get(AUDIO_ENGINE_SERVICE_TOKEN),
         commands: services.getOptional(COMMANDS_SERVICE_TOKEN),
         navigation: services.get(NAVIGATION_SERVICE_TOKEN),
         keybindings: services.getOptional(KEYBINDINGS_SERVICE_TOKEN),
+        events,
       });
 
       service.start();

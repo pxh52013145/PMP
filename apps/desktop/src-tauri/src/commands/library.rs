@@ -385,11 +385,9 @@ pub async fn music_library_netease_qr_poll(
     app: tauri::AppHandle,
     session_id: String,
 ) -> Result<music_platform_netease::NeteaseQrPollResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_netease::qr_poll(&app, &session_id)
-    })
-    .await
-    .map_err(|e| format!("Netease QR poll task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || music_platform_netease::qr_poll(&app, &session_id))
+        .await
+        .map_err(|e| format!("Netease QR poll task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -436,11 +434,9 @@ pub async fn music_library_netease_list_recommended_songs(
 pub async fn music_library_netease_list_user_playlists(
     app: tauri::AppHandle,
 ) -> Result<Vec<music_platform_netease::NeteaseUserPlaylist>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_netease::list_user_playlists(&app)
-    })
-    .await
-    .map_err(|e| format!("Netease user playlists task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || music_platform_netease::list_user_playlists(&app))
+        .await
+        .map_err(|e| format!("Netease user playlists task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]

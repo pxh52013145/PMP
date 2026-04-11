@@ -9,6 +9,7 @@ import {
 import {
   getInstalledPmpmPlugin,
   getPmpmPluginEffectivePermissions,
+  quarantinePmpmPlugin,
   recordPmpmPermissionDenied,
   recordPmpmPluginCrash,
 } from '../pmpm';
@@ -20,10 +21,11 @@ import {
   type PluginLifecycleSourceKind,
 } from '../pluginLifecycleTelemetry';
 import { readPmpmPluginConfig, subscribePmpmPluginConfig } from '../pluginConfig';
-import { recordPmpmAuditEvent } from '../pmpmGovernance';
+import { assertPmpmSidecarRuntimeLaunchAllowed } from '../pmpmRuntime';
 import { createRuntimeBridgeHostSession, type RuntimeBridgePort } from './runtimeBridgeHostSession';
 import { bindHostRuntimeEventChannel, RUNTIME_EVENT_NAMES } from './runtimeEventChannel';
 import { createTauriPmpmBridgeSidecarPortController } from './tauriSidecarPortController';
+import type { RuntimeArtifactIntegrityDeps } from './runtimeArtifactIntegrity';
 
 const STARTUP_TIMEOUT_MS = 3_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 20_000;
@@ -68,6 +70,7 @@ export interface PmpmBridgeSidecarCommandRuntimeDeps {
   createPortController?: (
     options: CreatePmpmBridgeSidecarPortControllerOptions
   ) => Promise<PmpmBridgeSidecarPortController> | PmpmBridgeSidecarPortController;
+  readArtifactBytes?: RuntimeArtifactIntegrityDeps['readArtifactBytes'];
   now?: () => number;
 }
 
@@ -112,6 +115,25 @@ export async function runPmpmBridgeSidecarCommand(
   const permissions = getPmpmPluginEffectivePermissions(options.pluginId);
   const plugin = getInstalledPmpmPlugin(options.pluginId);
   const initialConfig = readPmpmPluginConfig(options.pluginId);
+
+  await assertPmpmSidecarRuntimeLaunchAllowed(
+    {
+      pluginId: options.pluginId,
+      runtimeId: options.runtimeId,
+      entryPath: options.entryPath,
+    },
+    {
+      readArtifactBytes: deps.readArtifactBytes,
+    }
+  ).catch((error) => {
+    reportPluginSidecarBridgeFailed(sidecarTelemetryContext, error, {
+      extraFields: {
+        stage: 'verify',
+        timeoutMs,
+      },
+    });
+    throw error;
+  });
 
   const api = createPluginMountApi({
     pluginId: options.pluginId,
@@ -299,16 +321,11 @@ export async function runPmpmBridgeSidecarCommand(
             timeoutMs,
           },
         });
-        try {
-          recordPmpmAuditEvent({
-            type: 'runtime-unresponsive',
-            pluginId: options.pluginId,
-            surface: 'command',
-            timeoutMs,
-          });
-        } catch {
-          // ignore
-        }
+        quarantinePmpmPlugin(options.pluginId, {
+          surface: 'command',
+          message: `Plugin command timeout (${timeoutMs}ms)`,
+          timeoutMs,
+        });
         reject(new Error(`Plugin command timeout (${timeoutMs}ms)`));
       }, timeoutMs);
     });
@@ -321,8 +338,10 @@ export async function runPmpmBridgeSidecarCommand(
       timeoutPromise,
     ]);
   } catch (error) {
-    disposeReason = 'runtime-crash';
-    markCrash(error);
+    if (disposeReason !== 'runtime-unresponsive') {
+      disposeReason = 'runtime-crash';
+      markCrash(error);
+    }
     throw error;
   } finally {
     if (timeoutHandle !== null) {

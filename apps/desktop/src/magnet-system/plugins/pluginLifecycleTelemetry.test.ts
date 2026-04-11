@@ -356,6 +356,7 @@ describe('pluginLifecycleTelemetry', () => {
         runtimeKind: 'extension-host',
         launcherId: 'pxp.extension-host.worker',
         runtimeSource: 'manifest-runtime',
+        compatMode: 'fallback-available',
         status: 'completed',
       }),
     });
@@ -380,7 +381,7 @@ describe('pluginLifecycleTelemetry', () => {
       resolution: createBlockedRuntimeResolution(),
       extraFields: {
         hostId: 'pmp',
-        preferCompatSandbox: true,
+        preferSandboxLauncher: true,
       },
     });
 
@@ -399,8 +400,9 @@ describe('pluginLifecycleTelemetry', () => {
         runtimeId: 'webview.main',
         runtimeKind: 'webview',
         issueCount: 1,
+        compatMode: 'none',
         status: 'failed',
-        preferCompatSandbox: true,
+        preferSandboxLauncher: true,
       }),
     });
   });

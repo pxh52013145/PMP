@@ -232,4 +232,51 @@ describe('pmpm install artifacts', () => {
     ).toBe(true);
     expect(fsState.has(`22:${artifactEntryRelative}`)).toBe(false);
   });
+
+  it('requires clearing quarantine before PMPM recovery can be re-enabled', async () => {
+    const {
+      clearPmpmPluginQuarantine,
+      getInstalledPmpmPlugin,
+      installPmpmPluginFromZipBytes,
+      quarantinePmpmPlugin,
+      setPmpmPluginEnabled,
+    } = await import('./pmpm');
+    const { readPmpmAuditLog } = await import('./pmpmGovernance');
+
+    await installPmpmPluginFromZipBytes(createSidecarPackageBytes());
+    quarantinePmpmPlugin('sidecar-plugin', {
+      surface: 'command',
+      message: 'Plugin command timeout (25ms)',
+      timeoutMs: 25,
+    });
+
+    expect(getInstalledPmpmPlugin('sidecar-plugin')).toMatchObject({
+      enabled: false,
+      disabledReason: 'quarantine',
+    });
+
+    setPmpmPluginEnabled('sidecar-plugin', true);
+    expect(getInstalledPmpmPlugin('sidecar-plugin')).toMatchObject({
+      enabled: false,
+      disabledReason: 'quarantine',
+    });
+
+    clearPmpmPluginQuarantine('sidecar-plugin');
+    expect(getInstalledPmpmPlugin('sidecar-plugin')).toMatchObject({
+      enabled: false,
+      disabledReason: 'manual',
+    });
+
+    setPmpmPluginEnabled('sidecar-plugin', true);
+    expect(getInstalledPmpmPlugin('sidecar-plugin')).toMatchObject({
+      enabled: true,
+    });
+
+    expect(readPmpmAuditLog().map((event) => event.type)).toEqual([
+      'runtime-unresponsive',
+      'quarantined',
+      'quarantine-cleared',
+      'enabled',
+    ]);
+  });
 });

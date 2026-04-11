@@ -1,5 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { useKernel } from '../../contexts/KernelContext';
 import { useT } from '../../i18n';
+import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { TAURI_EVENTS, setupTauriListenerWithPayload } from '../../utils/windowCommunication';
@@ -7,6 +9,12 @@ import { setMagnetChromeOverrideMode, useMagnetChromeOverrideMode, type MagnetCh
 import './StyleBar.css';
 
 const telemetry = getTelemetryLogger('editor', 'StyleBar');
+const STYLE_POPUP_OPEN_COMMAND_BY_TYPE = {
+  'style-pixel': 'app:open-style-pixel-editor-window',
+  'style-cover-color': 'app:open-style-cover-color-editor-window',
+  'style-background-effect': 'app:open-style-background-effect-editor-window',
+  'style-border-effect': 'app:open-style-border-effect-editor-window',
+} as const;
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -14,6 +22,8 @@ function getErrorMessage(error: unknown): string {
 
 export const StyleBar = memo(function StyleBar() {
   const t = useT();
+  const kernel = useKernel();
+  const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const isTauriMemo = useMemo(() => isTauriRuntime(), []);
 
   type StylePopupType =
@@ -89,14 +99,17 @@ export const StyleBar = memo(function StyleBar() {
     async (type: StylePopupType) => {
       if (!isTauriRuntime()) return;
       try {
-        const { calculateWindowPosition, closeEditorWindow, openEditorWindow } = await import('../../utils/editorWindows');
+        const { closeEditorWindow } = await import('../../utils/editorWindows');
         const isOpen = openPopups.has(type);
         if (isOpen) {
           await closeEditorWindow(type);
           return;
         }
-        const position = await calculateWindowPosition(type);
-        await openEditorWindow({ type, ...position });
+        await dispatchRequiredCommand(
+          commands,
+          STYLE_POPUP_OPEN_COMMAND_BY_TYPE[type],
+          `Style popup command service is not available for ${type}.`
+        );
       } catch (error) {
         telemetry.error('editor.style-popup.toggle.failed', {
           message: getErrorMessage(error),
@@ -106,7 +119,7 @@ export const StyleBar = memo(function StyleBar() {
         });
       }
     },
-    [openPopups]
+    [commands, openPopups]
   );
 
   return (

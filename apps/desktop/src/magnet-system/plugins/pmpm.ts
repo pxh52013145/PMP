@@ -831,7 +831,83 @@ export function disablePmpmPluginByPolicy(pluginId: string, message: string): vo
 
   saveInstalledPmpmPlugins(plugins);
   try {
-    recordPmpmAuditEvent({ type: 'disabled', pluginId, reason: 'policy' });
+    recordPmpmAuditEvent({ type: 'disabled', pluginId, reason: details });
+  } catch {
+    // ignore
+  }
+}
+
+export function quarantinePmpmPlugin(
+  pluginId: string,
+  options: {
+    message: string;
+    surface?: PmpmPluginCrashSurface;
+    timeoutMs?: number;
+  }
+): void {
+  const plugins = loadInstalledPmpmPlugins();
+  const index = plugins.findIndex((plugin) => plugin.manifest.metadata.id === pluginId);
+  if (index < 0) return;
+
+  const existing = plugins[index];
+  if (existing.enabled === false && existing.disabledReason === 'policy') {
+    return;
+  }
+
+  const now = Date.now();
+  const message = formatErrorMessage(options.message).slice(0, 2000);
+
+  plugins[index] = {
+    ...existing,
+    enabled: false,
+    disabledReason: 'quarantine',
+    lastError: `[quarantine] ${message}`,
+    lastErrorAt: now,
+  };
+
+  saveInstalledPmpmPlugins(plugins);
+  try {
+    if (typeof options.timeoutMs === 'number') {
+      recordPmpmAuditEvent({
+        type: 'runtime-unresponsive',
+        pluginId,
+        surface: options.surface ?? 'command',
+        timeoutMs: options.timeoutMs,
+      });
+    }
+    recordPmpmAuditEvent({
+      type: 'quarantined',
+      pluginId,
+      surface: options.surface ?? 'command',
+      message,
+      timeoutMs: options.timeoutMs,
+    });
+  } catch {
+    // ignore
+  }
+}
+
+export function clearPmpmPluginQuarantine(pluginId: string, reason = 'manual'): void {
+  const plugins = loadInstalledPmpmPlugins();
+  const index = plugins.findIndex((plugin) => plugin.manifest.metadata.id === pluginId);
+  if (index < 0) return;
+
+  const existing = plugins[index];
+  if (existing.disabledReason !== 'quarantine') return;
+
+  plugins[index] = {
+    ...existing,
+    enabled: false,
+    disabledReason: 'manual',
+  };
+
+  saveInstalledPmpmPlugins(plugins);
+  try {
+    recordPmpmAuditEvent({
+      type: 'quarantine-cleared',
+      pluginId,
+      reason,
+    });
   } catch {
     // ignore
   }
@@ -847,7 +923,10 @@ export function recordPmpmPluginCrash(
   if (index < 0) return;
 
   const existing = plugins[index];
-  if (existing.enabled === false && existing.disabledReason === 'policy') {
+  if (
+    existing.enabled === false &&
+    (existing.disabledReason === 'policy' || existing.disabledReason === 'quarantine')
+  ) {
     return;
   }
 
@@ -879,6 +958,7 @@ export function setPmpmPluginEnabled(pluginId: string, enabled: boolean): void {
   const prev = plugins[index];
   const nextEnabled = Boolean(enabled);
   const prevEnabled = prev.enabled ?? true;
+  if (nextEnabled && prev.disabledReason === 'quarantine') return;
 
   if (prevEnabled === nextEnabled) return;
 

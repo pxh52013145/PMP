@@ -2,6 +2,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde_json::json;
 use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu};
 
 const TRAY_MENU_SHOW_ID: &str = "show";
@@ -88,6 +89,27 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
         &app.handle(),
         telemetry_policy,
     )));
+
+    if let Some(payload) = crate::app_runtime::capture_startup_host_file_open_payload() {
+        let source = payload.source.clone();
+        let action = payload.action.clone();
+        let path_count = payload.paths.len();
+        let queued_batch_count = app
+            .state::<crate::app_runtime::HostFileOpenState>()
+            .enqueue(payload);
+
+        crate::backend_telemetry::info(
+            &app.handle(),
+            "startup",
+            "startup.host-file-open.pending.enqueued",
+            crate::backend_telemetry::BackendTelemetryOptions::new()
+                .component("HostFileOpenState")
+                .field("source", json!(source))
+                .field("action", json!(action))
+                .field("pathCount", json!(path_count))
+                .field("queuedBatchCount", json!(queued_batch_count)),
+        );
+    }
 
     let magnet_layout_store = crate::magnet_layout_store::MagnetLayoutStore::new(&app.handle())
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;

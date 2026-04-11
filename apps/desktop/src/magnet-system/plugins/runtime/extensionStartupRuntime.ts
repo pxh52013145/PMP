@@ -1,5 +1,6 @@
 import type { RuntimeActivate, RuntimeHello } from '@pixel-matrix/plugin-platform-contracts';
 import { APP_VERSION, HOST_API_VERSION } from '../../../constants/versions';
+import type { PluginSurfaceSourceKind } from '../../../contracts/pluginSurfaceSource';
 import type { CommandsService } from '../../../services/commands';
 import type { KeybindingsService } from '../../../services/keybindings';
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
@@ -9,6 +10,7 @@ import {
 } from '../pmpmRuntimeBridgeSnapshot';
 import {
   listInstalledExtensionCompatPermissions,
+  quarantineInstalledExtension,
   recordInstalledExtensionCrash,
   type InstalledHostExtensionRecord,
 } from '../extensions';
@@ -29,6 +31,32 @@ import { isResolvedPluginRuntime, type PluginRuntimeResolution } from './types';
 const STARTUP_TIMEOUT_MS = 3_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 
+export type InstalledExtensionBackgroundActivation =
+  | {
+      cause: 'startup';
+      activationEvent: 'onStartup';
+      surface: 'startup';
+      payload?: Record<string, unknown>;
+    }
+  | {
+      cause: 'capability';
+      activationEvent: `onCapability:${string}`;
+      surface: 'capability';
+      payload?: Record<string, unknown>;
+    }
+  | {
+      cause: 'host-event';
+      activationEvent: `onHost:${string}`;
+      surface: 'host';
+      payload?: Record<string, unknown>;
+    }
+  | {
+      cause: 'file';
+      activationEvent: `onFile:${string}`;
+      surface: 'file';
+      payload?: Record<string, unknown>;
+    };
+
 export interface StartInstalledExtensionStartupRuntimeOptions {
   record: InstalledHostExtensionRecord;
   resolution: PluginRuntimeResolution | null | undefined;
@@ -38,12 +66,28 @@ export interface StartInstalledExtensionStartupRuntimeOptions {
   navigation: HostNavigation;
   keybindings?: KeybindingsService | null;
   requestTimeoutMs?: number;
+  onHostCapabilityActivity?: (activity: {
+    capabilityId: string;
+    method: string;
+    payload?: unknown;
+    requestKind: 'invoke' | 'open-session' | 'open-stream' | 'close-session';
+    sourcePluginId: string;
+    sourceKind: PluginSurfaceSourceKind;
+    hostLabel: string;
+  }) => void;
+}
+
+export interface StartInstalledExtensionBackgroundRuntimeOptions
+  extends StartInstalledExtensionStartupRuntimeOptions {
+  activation: InstalledExtensionBackgroundActivation;
 }
 
 export interface InstalledExtensionStartupRuntimeHandle {
   runtimeInstanceId: string;
   dispose: (reason?: string) => Promise<void>;
 }
+
+export type InstalledExtensionBackgroundRuntimeHandle = InstalledExtensionStartupRuntimeHandle;
 
 export interface InstalledExtensionStartupRuntimeDeps {
   createWorker?: (
@@ -57,6 +101,8 @@ export interface InstalledExtensionStartupRuntimeDeps {
   now?: () => number;
 }
 
+export type InstalledExtensionBackgroundRuntimeDeps = InstalledExtensionStartupRuntimeDeps;
+
 function asObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -69,17 +115,17 @@ function readUnsupportedLauncherError(
   if (resolution.status !== 'resolved') {
     return resolution.issues[0] ?? 'No compatible runtime launcher is available';
   }
-  return `Resolved runtime launcher is not wired for manifest-v2 startup activation: ${resolution.launcher.id}`;
+  return `Resolved runtime launcher is not wired for manifest-v2 background activation: ${resolution.launcher.id}`;
 }
 
 function readWorkerErrorMessage(error: unknown): string {
   return error instanceof Error ? error.stack || error.message : String(error);
 }
 
-export async function startInstalledExtensionStartupRuntime(
-  options: StartInstalledExtensionStartupRuntimeOptions,
-  deps: InstalledExtensionStartupRuntimeDeps = {}
-): Promise<InstalledExtensionStartupRuntimeHandle> {
+export async function startInstalledExtensionBackgroundRuntime(
+  options: StartInstalledExtensionBackgroundRuntimeOptions,
+  deps: InstalledExtensionBackgroundRuntimeDeps = {}
+): Promise<InstalledExtensionBackgroundRuntimeHandle> {
   if (!isResolvedPluginRuntime(options.resolution)) {
     throw new Error(readUnsupportedLauncherError(options.resolution));
   }
@@ -101,8 +147,9 @@ export async function startInstalledExtensionStartupRuntime(
   const createObjectUrl = deps.createObjectUrl ?? ((blob: Blob) => URL.createObjectURL(blob));
   const revokeObjectUrl = deps.revokeObjectUrl ?? ((url: string) => URL.revokeObjectURL(url));
   const createEntryUrl = deps.createEntryUrl ?? createInstalledExtensionEntryUrl;
+  const activation = options.activation;
 
-  const runtimeInstanceId = `${pluginId}:startup:${now()}:${Math.random()
+  const runtimeInstanceId = `${pluginId}:${activation.cause}:${now()}:${Math.random()
     .toString(16)
     .slice(2)}`;
   const permissions = new Set(listInstalledExtensionCompatPermissions(record));
@@ -117,6 +164,7 @@ export async function startInstalledExtensionStartupRuntime(
     commands: options.commands,
     navigation: options.navigation,
     keybindings: options.keybindings,
+    onHostCapabilityActivity: options.onHostCapabilityActivity,
   });
 
   const runtimeHello = buildPmpmRuntimeHelloSnapshot({
@@ -143,9 +191,10 @@ export async function startInstalledExtensionStartupRuntime(
     pluginId,
     runtimeId,
     runtimeInstanceId,
-    cause: 'startup',
+    cause: activation.cause,
     payload: {
-      activationEvent: 'onStartup',
+      activationEvent: activation.activationEvent,
+      ...(activation.payload ?? {}),
       entryUrl: await Promise.resolve(createEntryUrl(entryPath)),
       permissions: Array.from(permissions),
       initialConfig,
@@ -188,7 +237,7 @@ export async function startInstalledExtensionStartupRuntime(
       new Worker(scriptUrl, workerOptions) as unknown as WorkerLike);
   const worker = createWorker(
     workerUrl,
-    { type: 'module', name: `extv2-startup:${pluginId}` },
+    { type: 'module', name: `extv2-background:${pluginId}:${activation.cause}` },
     runtimeHello
   );
 
@@ -280,7 +329,7 @@ export async function startInstalledExtensionStartupRuntime(
   const onWorkerError: WorkerEventListener = (event) => {
     if (disposed) return;
     const message = readWorkerErrorMessage(event.error ?? event.message ?? 'Installed extension worker error');
-    recordInstalledExtensionCrash(pluginId, new Error(message), 'startup');
+    recordInstalledExtensionCrash(pluginId, new Error(message), activation.surface);
     void cleanup('runtime-crash');
   };
 
@@ -293,8 +342,33 @@ export async function startInstalledExtensionStartupRuntime(
       dispose: cleanup,
     };
   } catch (error) {
-    recordInstalledExtensionCrash(pluginId, error, 'startup');
+    const message = readWorkerErrorMessage(error);
+    if (message.toLowerCase().includes('timeout') || message.toLowerCase().includes('unresponsive')) {
+      quarantineInstalledExtension(pluginId, {
+        surface: activation.surface,
+        message,
+      });
+    } else {
+      recordInstalledExtensionCrash(pluginId, error, activation.surface);
+    }
     await cleanup('runtime-crash');
     throw error;
   }
+}
+
+export async function startInstalledExtensionStartupRuntime(
+  options: StartInstalledExtensionStartupRuntimeOptions,
+  deps: InstalledExtensionStartupRuntimeDeps = {}
+): Promise<InstalledExtensionStartupRuntimeHandle> {
+  return await startInstalledExtensionBackgroundRuntime(
+    {
+      ...options,
+      activation: {
+        cause: 'startup',
+        activationEvent: 'onStartup',
+        surface: 'startup',
+      },
+    },
+    deps
+  );
 }
