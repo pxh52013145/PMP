@@ -148,6 +148,7 @@ pub async fn destroy_plugin_shell_surface(
     plugin_id: String,
     surface_id: String,
     surface_type: String,
+    reason: Option<String>,
 ) -> Result<(), String> {
     windows::plugin_shell_surface::destroy_plugin_shell_surface(
         &app,
@@ -155,6 +156,7 @@ pub async fn destroy_plugin_shell_surface(
         plugin_id,
         surface_id,
         surface_type,
+        reason,
     )
 }
 

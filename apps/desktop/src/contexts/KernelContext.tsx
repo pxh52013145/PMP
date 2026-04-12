@@ -133,32 +133,31 @@ function hasLikelyInstalledExtensionsV2(): boolean {
 
 async function loadPluginRuntimeModules(options: {
   enableShellSurfaceBackgroundSync: boolean;
+  enablePmpmCompat: boolean;
 }): Promise<KernelModule<AppEvents>[]> {
-  const [
-    rendererModule,
-    contributionModule,
-    shellSurfaceManagerModule,
-    runtimeManagerModule,
-    extensionContributionModule,
-    extensionRendererModule,
-  ] = await Promise.all([
-    import('../magnet-system/plugins/pmpmMagnetRenderersModule'),
-    import('../magnet-system/plugins/pmpmContributionsModule'),
-    import('../magnet-system/plugins/shellSurfaceManagerModule'),
-    import('../magnet-system/plugins/installedExtensionRuntimeManagerModule'),
-    import('../magnet-system/plugins/extensionContributionsModule'),
-    import('../magnet-system/plugins/installedExtensionMagnetRenderersModule'),
-  ]);
-  return [
-    rendererModule.createPmpmMagnetRenderersModule(),
+  const [shellSurfaceManagerModule, runtimeManagerModule, extensionContributionModule, extensionRendererModule] =
+    await Promise.all([
+      import('../magnet-system/plugins/shellSurfaceManagerModule'),
+      import('../magnet-system/plugins/installedExtensionRuntimeManagerModule'),
+      import('../magnet-system/plugins/extensionContributionsModule'),
+      import('../magnet-system/plugins/installedExtensionMagnetRenderersModule'),
+    ]);
+
+  const modules: KernelModule<AppEvents>[] = [
     shellSurfaceManagerModule.createShellSurfaceManagerModule({
       enableBackgroundSync: options.enableShellSurfaceBackgroundSync,
     }),
-    contributionModule.createPmpmContributionsModule(),
     runtimeManagerModule.createInstalledExtensionRuntimeManagerModule(),
     extensionContributionModule.createInstalledExtensionContributionsModule(),
     extensionRendererModule.createInstalledExtensionMagnetRenderersModule(),
   ];
+
+  if (options.enablePmpmCompat) {
+    const rendererModule = await import('../magnet-system/plugins/pmpmMagnetRenderersModule');
+    modules.unshift(rendererModule.createPmpmMagnetRenderersModule());
+  }
+
+  return modules;
 }
 
 async function loadBuiltinContributionsModule(): Promise<KernelModule<AppEvents>> {
@@ -200,14 +199,17 @@ function createRuntime(): KernelRuntime {
     }
 
     pluginActivationPromise = (async () => {
+      const enablePmpmCompat = hasLikelyInstalledPmpmPlugins();
       const modules = await loadPluginRuntimeModules({
         enableShellSurfaceBackgroundSync: !isAuxWindow,
+        enablePmpmCompat,
       });
       if (runtimeDisposed || pluginModulesActivated) return;
       loader.activate(modules);
       pluginModulesActivated = true;
       telemetry.info('kernel.plugin-modules.activated', {
         fields: {
+          enablePmpmCompat,
           moduleCount: modules.length,
         },
       });

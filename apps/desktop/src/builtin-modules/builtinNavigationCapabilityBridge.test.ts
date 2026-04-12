@@ -246,4 +246,36 @@ describe('builtin navigation capability bridge', () => {
     });
     expect(mocks.calculateWindowPositionMock).not.toHaveBeenCalled();
   });
+
+  it('defaults shared plugin window bridge opens to extv2 when sourceKind is omitted', async () => {
+    const navigation = createNavigationServiceStub();
+    mocks.openPluginWindowMock.mockReset();
+    const api = createPluginMountApi({
+      pluginId: 'window-fixture',
+      hostLabel: 'BuiltinNavigationCapabilityBridgeTest',
+      permissions: new Set(['api:host', 'api:host-capability', 'api:window']),
+      audioService: createAudioServiceStub(),
+      navigation: createHostNavigationStub(),
+    });
+
+    await api.host.invokeCapability('host.pmp.shell.window', 'open', {
+      windowId: 'demo-window',
+      options: {
+        pluginId: 'demo-plugin',
+        title: 'Default Kind Window',
+      },
+    });
+
+    expect(mocks.openPluginWindowMock).toHaveBeenCalledWith({
+      sourceKind: 'extv2',
+      pluginId: 'window-fixture',
+      windowId: 'demo-window',
+      title: 'Default Kind Window',
+      width: undefined,
+      height: undefined,
+      x: undefined,
+      y: undefined,
+    });
+    expect(navigation.navigateTo).not.toHaveBeenCalled();
+  });
 });

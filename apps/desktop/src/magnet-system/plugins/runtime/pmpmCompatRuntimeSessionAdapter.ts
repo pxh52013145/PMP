@@ -2,7 +2,7 @@ import type {
   PmpmBridgeIncomingMessage,
   PmpmBridgeOutgoingMessage,
   PmpmSandboxSurface,
-} from '@pixel-matrix/plugin-compat-pmpm';
+} from '@pixel-matrix/plugin-platform-contracts';
 import type {
   RuntimeActivate,
   RuntimeBridgeMessage,

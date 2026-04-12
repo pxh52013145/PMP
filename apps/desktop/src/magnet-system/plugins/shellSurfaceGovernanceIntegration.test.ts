@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ContributionRegistry, ServiceRegistry } from '../../kernel';
 import type { CommandContribution } from '../../contracts/contributions';
 import { SHELL_SURFACE_MANAGER_TOKEN, DefaultShellSurfaceManager } from './shellSurfaceManager';
-import { createPmpmContributionsModule } from './pmpmContributionsModule';
 import { createInstalledExtensionContributionsModule } from './extensionContributionsModule';
 import { INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN } from './installedExtensionRuntimeManager';
 
@@ -97,9 +96,7 @@ const harness = vi.hoisted(() => {
       pmpm: null as { kind: RestartKind; pluginId: string; at: number; reason?: string } | null,
       extv2: null as { kind: RestartKind; pluginId: string; at: number; reason?: string } | null,
     },
-    clearPmpmPluginRuntimeCacheMock: vi.fn(),
     requestHostExtensionRuntimeRestartMock: vi.fn(),
-    recordPmpmPluginCrashMock: vi.fn(),
     invokeWithTelemetryMock: vi.fn(async () => undefined),
     getMainWindowBoundsMock: vi.fn(async () => ({
       x: 100,
@@ -140,9 +137,7 @@ const harness = vi.hoisted(() => {
       this.restartListeners.clear();
       this.restartRequests.pmpm = null;
       this.restartRequests.extv2 = null;
-      this.clearPmpmPluginRuntimeCacheMock.mockReset();
       this.requestHostExtensionRuntimeRestartMock.mockReset();
-      this.recordPmpmPluginCrashMock.mockReset();
       this.invokeWithTelemetryMock.mockReset();
       this.invokeWithTelemetryMock.mockResolvedValue(undefined);
       this.getMainWindowBoundsMock.mockReset();
@@ -182,7 +177,6 @@ vi.mock('./pmpm', () => ({
     harness.pmpmListeners.add(listener);
     return () => harness.pmpmListeners.delete(listener);
   },
-  recordPmpmPluginCrash: harness.recordPmpmPluginCrashMock,
 }));
 
 vi.mock('./extensions', () => ({
@@ -204,38 +198,6 @@ vi.mock('./hostExtensionRuntimeSupervisor', () => ({
     harness.restartRequests[kind],
   requestHostExtensionRuntimeRestart: harness.requestHostExtensionRuntimeRestartMock,
 }));
-
-vi.mock('./pmpmRuntime', () => ({
-  clearPmpmPluginRuntimeCache: harness.clearPmpmPluginRuntimeCacheMock,
-}));
-
-function createPmpmShellSurfacePlugin(): MockPmpmPlugin {
-  return {
-    manifest: {
-      metadata: {
-        id: 'demo-plugin',
-        name: 'Demo Plugin',
-        version: '1.0.0',
-      },
-      permissions: [],
-      contributions: {
-        shellSurfaces: [
-          {
-            kind: 'shell-surface',
-            id: 'demo-overlay',
-            title: 'Demo Overlay',
-            surfaceType: 'overlay',
-            width: 420,
-            height: 260,
-            pointerPolicy: 'capture-input',
-          },
-        ],
-      },
-    },
-    installedAt: 1,
-    enabled: true,
-  };
-}
 
 function createInstalledExtensionShellSurfaceRecord(): MockInstalledExtensionRecord {
   return {
@@ -295,8 +257,8 @@ afterEach(() => {
 });
 
 describe('shell-surface governance integration', () => {
-  it('routes a registered PMPM shell-surface summon command into manager tracking and cleans up on runtime revoke signal', async () => {
-    harness.pmpmPlugins = [createPmpmShellSurfacePlugin()];
+  it('routes a registered extv2 shell-surface summon command into manager tracking and cleans up on runtime revoke signal', async () => {
+    harness.installedExtensions = [createInstalledExtensionShellSurfaceRecord()];
     const contributions = new ContributionRegistry();
     const services = new ServiceRegistry();
     const openSurface = vi.fn(async () => undefined);
@@ -310,10 +272,13 @@ describe('shell-surface governance integration', () => {
     });
 
     services.register(SHELL_SURFACE_MANAGER_TOKEN, manager);
+    services.register(INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN, {
+      runCommand: vi.fn(),
+    } as never);
     const disposeManager = () => manager.dispose();
     manager.start();
 
-    const module = createPmpmContributionsModule();
+    const module = createInstalledExtensionContributionsModule();
     const deactivate = module.activate({
       contributions,
       services,
@@ -322,7 +287,7 @@ describe('shell-surface governance integration', () => {
 
     const command = contributions.get<CommandContribution>(
       'command',
-      'pmpm:demo-plugin:shell-surface:demo-overlay:summon'
+      'extv2:demo-extension:shell-surface:demo-widget:summon'
     );
     expect(command).not.toBeNull();
 
@@ -330,17 +295,17 @@ describe('shell-surface governance integration', () => {
 
     expect(openSurface).toHaveBeenCalledWith(
       expect.objectContaining({
-        sourceKind: 'pmpm',
-        pluginId: 'demo-plugin',
-        surfaceId: 'demo-overlay',
-        surfaceType: 'overlay',
+        sourceKind: 'extv2',
+        pluginId: 'demo-extension',
+        surfaceId: 'demo-widget',
+        surfaceType: 'desktop-widget',
       })
     );
     expect(manager.listTrackedSurfaces()).toHaveLength(1);
 
-    harness.restartRequests.pmpm = {
-      kind: 'pmpm',
-      pluginId: 'demo-plugin',
+    harness.restartRequests.extv2 = {
+      kind: 'extv2',
+      pluginId: 'demo-extension',
       at: Date.now(),
       reason: 'capability-revoke',
     };
@@ -348,14 +313,15 @@ describe('shell-surface governance integration', () => {
     await flushAsyncWork();
 
     expect(destroySurface).toHaveBeenCalledWith(
-      'demo-plugin',
-      'demo-overlay',
-      'overlay',
-      'pmpm'
+      'demo-extension',
+      'demo-widget',
+      'desktop-widget',
+      'extv2',
+      'capability-revoke'
     );
     expect(manager.listTrackedSurfaces()).toEqual([]);
     expect(
-      contributions.get('command', 'pmpm:demo-plugin:shell-surface:demo-overlay:summon')
+      contributions.get('command', 'extv2:demo-extension:shell-surface:demo-widget:summon')
     ).not.toBeNull();
 
     if (typeof deactivate === 'function') {
@@ -426,7 +392,8 @@ describe('shell-surface governance integration', () => {
       'demo-extension',
       'demo-widget',
       'desktop-widget',
-      'extv2'
+      'extv2',
+      'plugin-disabled'
     );
     expect(manager.listTrackedSurfaces()).toEqual([]);
 
@@ -436,8 +403,8 @@ describe('shell-surface governance integration', () => {
     manager.dispose();
   });
 
-  it('routes PMPM shell-surface summon and revoke cleanup through the tauri window contract', async () => {
-    harness.pmpmPlugins = [createPmpmShellSurfacePlugin()];
+  it('routes extv2 shell-surface summon and runtime-unresponsive cleanup through the tauri window contract', async () => {
+    harness.installedExtensions = [createInstalledExtensionShellSurfaceRecord()];
     const contributions = new ContributionRegistry();
     const services = new ServiceRegistry();
     const manager = new DefaultShellSurfaceManager({
@@ -445,9 +412,12 @@ describe('shell-surface governance integration', () => {
     });
 
     services.register(SHELL_SURFACE_MANAGER_TOKEN, manager);
+    services.register(INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN, {
+      runCommand: vi.fn(),
+    } as never);
     manager.start();
 
-    const module = createPmpmContributionsModule();
+    const module = createInstalledExtensionContributionsModule();
     const deactivate = module.activate({
       contributions,
       services,
@@ -456,7 +426,7 @@ describe('shell-surface governance integration', () => {
 
     const command = contributions.get<CommandContribution>(
       'command',
-      'pmpm:demo-plugin:shell-surface:demo-overlay:summon'
+      'extv2:demo-extension:shell-surface:demo-widget:summon'
     );
     expect(command).not.toBeNull();
 
@@ -466,19 +436,19 @@ describe('shell-surface governance integration', () => {
       1,
       'open_plugin_shell_surface',
       expect.objectContaining({
-        sourceKind: 'pmpm',
-        pluginId: 'demo-plugin',
-        surfaceId: 'demo-overlay',
-        surfaceType: 'overlay',
+        sourceKind: 'extv2',
+        pluginId: 'demo-extension',
+        surfaceId: 'demo-widget',
+        surfaceType: 'desktop-widget',
       }),
       expect.objectContaining({
         event: 'window.plugin-shell-surface.open',
       })
     );
 
-    harness.restartRequests.pmpm = {
-      kind: 'pmpm',
-      pluginId: 'demo-plugin',
+    harness.restartRequests.extv2 = {
+      kind: 'extv2',
+      pluginId: 'demo-extension',
       at: Date.now(),
       reason: 'runtime-unresponsive',
     };
@@ -489,10 +459,11 @@ describe('shell-surface governance integration', () => {
       2,
       'destroy_plugin_shell_surface',
       {
-        sourceKind: 'pmpm',
-        pluginId: 'demo-plugin',
-        surfaceId: 'demo-overlay',
-        surfaceType: 'overlay',
+        sourceKind: 'extv2',
+        pluginId: 'demo-extension',
+        surfaceId: 'demo-widget',
+        surfaceType: 'desktop-widget',
+        reason: 'runtime-unresponsive',
       },
       expect.objectContaining({
         event: 'window.plugin-shell-surface.destroy',
@@ -566,6 +537,7 @@ describe('shell-surface governance integration', () => {
         pluginId: 'demo-extension',
         surfaceId: 'demo-widget',
         surfaceType: 'desktop-widget',
+        reason: 'plugin-disabled',
       },
       expect.objectContaining({
         event: 'window.plugin-shell-surface.destroy',

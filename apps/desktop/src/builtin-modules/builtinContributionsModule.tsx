@@ -502,7 +502,6 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
               <PluginPageHostLazy
                 pluginId={params.pluginId}
                 pageId={params.pageId}
-                preferredKind={params.sourceKind}
               />
             );
           },
@@ -530,7 +529,6 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
               <PluginVisualizerHostLazy
                 pluginId={params.pluginId}
                 visualizerId={params.visualizerId}
-                preferredKind={params.sourceKind}
               />
             );
           },

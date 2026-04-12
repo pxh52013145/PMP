@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  activateInstalledExtensionsForNativeHostFileOpen,
+  activateInstalledExtensionsForNativeHostFileOpens,
   activateInstalledExtensionsForHostFile,
   activateInstalledExtensionsForHostFiles,
+  INSTALLED_EXTENSION_HOST_FILE_OPEN_HOST_EVENT_ID,
   listInstalledExtensionHostFileTypes,
   normalizeInstalledExtensionHostFilePath,
 } from './installedExtensionHostFileActivation';
@@ -92,6 +95,91 @@ describe('installedExtensionHostFileActivation', () => {
       filePath: 'C:/plugins/sample.json',
       action: 'startup-opened',
       hostLabel: 'AppStartupFileOpen',
+    });
+  });
+
+  it('activates installed extensions for native host file open payloads via host event and file types', async () => {
+    const activateForHostEvent = vi.fn(async () => {});
+    const activateForFile = vi.fn(async () => {});
+
+    await activateInstalledExtensionsForNativeHostFileOpen(
+      { activateForHostEvent, activateForFile },
+      {
+        paths: ['  C:\\plugins\\manifest.v2.json  ', 'C:/plugins/manifest.v2.json'],
+        source: 'cli-startup',
+        action: 'startup-opened',
+        receivedAtMs: 42,
+      }
+    );
+
+    expect(activateForHostEvent).toHaveBeenCalledTimes(1);
+    expect(activateForHostEvent).toHaveBeenCalledWith({
+      hostEventId: INSTALLED_EXTENSION_HOST_FILE_OPEN_HOST_EVENT_ID,
+      payload: {
+        paths: ['C:/plugins/manifest.v2.json'],
+        source: 'cli-startup',
+        action: 'startup-opened',
+        receivedAtMs: 42,
+      },
+      hostLabel: 'AppStartupFileOpen',
+    });
+
+    expect(activateForFile).toHaveBeenCalledTimes(2);
+    expect(activateForFile).toHaveBeenNthCalledWith(1, {
+      fileType: 'manifest.v2.json',
+      filePath: 'C:/plugins/manifest.v2.json',
+      action: 'startup-opened',
+      hostLabel: 'AppStartupFileOpen',
+    });
+    expect(activateForFile).toHaveBeenNthCalledWith(2, {
+      fileType: 'json',
+      filePath: 'C:/plugins/manifest.v2.json',
+      action: 'startup-opened',
+      hostLabel: 'AppStartupFileOpen',
+    });
+  });
+
+  it('processes native host file open batches in order', async () => {
+    const activateForHostEvent = vi.fn(async () => {});
+    const activateForFile = vi.fn(async () => {});
+
+    await activateInstalledExtensionsForNativeHostFileOpens(
+      { activateForHostEvent, activateForFile },
+      [
+        {
+          paths: ['C:\\plugins\\manifest.v2.json'],
+          source: 'cli-startup',
+          action: 'startup-opened',
+          receivedAtMs: 1,
+        },
+        {
+          paths: ['C:\\plugins\\demo.pmpm'],
+          source: 'os-reopen',
+          action: 'reopened',
+          receivedAtMs: 2,
+        },
+      ]
+    );
+
+    expect(activateForHostEvent).toHaveBeenNthCalledWith(1, {
+      hostEventId: INSTALLED_EXTENSION_HOST_FILE_OPEN_HOST_EVENT_ID,
+      payload: {
+        paths: ['C:/plugins/manifest.v2.json'],
+        source: 'cli-startup',
+        action: 'startup-opened',
+        receivedAtMs: 1,
+      },
+      hostLabel: 'AppStartupFileOpen',
+    });
+    expect(activateForHostEvent).toHaveBeenNthCalledWith(2, {
+      hostEventId: INSTALLED_EXTENSION_HOST_FILE_OPEN_HOST_EVENT_ID,
+      payload: {
+        paths: ['C:/plugins/demo.pmpm'],
+        source: 'os-reopen',
+        action: 'reopened',
+        receivedAtMs: 2,
+      },
+      hostLabel: 'AppHostFileOpen',
     });
   });
 });

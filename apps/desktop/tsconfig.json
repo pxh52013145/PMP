@@ -29,12 +29,6 @@
       ],
       "@pixel-matrix/plugin-platform-contracts/*": [
         "../../packages/plugin-platform-contracts/src/*"
-      ],
-      "@pixel-matrix/plugin-compat-pmpm": [
-        "../../packages/plugin-compat-pmpm/src/index.ts"
-      ],
-      "@pixel-matrix/plugin-compat-pmpm/*": [
-        "../../packages/plugin-compat-pmpm/src/*"
       ]
     }
   },

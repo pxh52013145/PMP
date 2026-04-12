@@ -1119,6 +1119,7 @@ export async function runPmpmBridgeWorkerCommand(
   const api = createPluginMountApi({
     pluginId: options.pluginId,
     hostLabel,
+    sourceKind: 'pmpm',
     permissions,
     audioService: options.audioService,
     commands: options.commands,
@@ -1255,6 +1256,9 @@ export async function runPmpmBridgeWorkerCommand(
           failCommand(new Error(typeof payload.message === 'string' ? payload.message : 'Plugin command failed'));
         }
       }
+    },
+    onRuntimeCrash: (error) => {
+      failCommand(error);
     },
   });
 

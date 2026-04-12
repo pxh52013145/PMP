@@ -189,7 +189,7 @@ async function readMainWindowVisibleState(): Promise<boolean | null> {
 export function createPluginMountApi({
   pluginId,
   hostLabel,
-  sourceKind = 'pmpm',
+  sourceKind = 'extv2',
   permissions,
   audioService,
   navigation,

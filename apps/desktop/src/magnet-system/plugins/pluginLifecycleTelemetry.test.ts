@@ -225,20 +225,20 @@ describe('pluginLifecycleTelemetry', () => {
     const context = createPluginSurfaceTelemetryContext({
       pluginId: 'demo.plugin',
       sourceKind: 'pmpm',
-      hostLabel: 'PluginPageHost',
-      launcherId: 'compat.pmpm.inline-module',
+      hostLabel: 'PmpmSandboxHost',
+      launcherId: 'compat.pmpm.webview-sandbox',
       surfaceKind: 'page',
       surfaceId: 'demo-page',
     });
 
     const handle = startPluginSurfaceMount(context, {
       extraFields: {
-        mountMode: 'inline',
+        mountMode: 'sandbox',
       },
     });
     completePluginSurfaceMount(handle, {
       extraFields: {
-        mountMode: 'inline',
+        mountMode: 'sandbox',
       },
     });
 
@@ -251,11 +251,11 @@ describe('pluginLifecycleTelemetry', () => {
       fields: expect.objectContaining({
         pluginId: 'demo.plugin',
         sourceKind: 'pmpm',
-        launcherId: 'compat.pmpm.inline-module',
+        launcherId: 'compat.pmpm.webview-sandbox',
         surfaceKind: 'page',
         surfaceId: 'demo-page',
         status: 'start',
-        mountMode: 'inline',
+        mountMode: 'sandbox',
       }),
     });
     expect(telemetry.calls[1]).toMatchObject({
@@ -265,7 +265,7 @@ describe('pluginLifecycleTelemetry', () => {
         pluginId: 'demo.plugin',
         surfaceKind: 'page',
         status: 'completed',
-        mountMode: 'inline',
+        mountMode: 'sandbox',
       }),
     });
     expect(telemetry.calls[1]?.fields?.durationMs).toEqual(expect.any(Number));
@@ -370,7 +370,7 @@ describe('pluginLifecycleTelemetry', () => {
     const context = createPluginRuntimeResolveTelemetryContext({
       pluginId: 'demo.plugin',
       sourceKind: 'pmpm',
-      hostLabel: 'PluginPageHost',
+      hostLabel: 'PmpmSandboxHost',
       surfaceKind: 'page',
       surfaceId: 'demo-page',
       cause: 'view',

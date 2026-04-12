@@ -2,12 +2,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::Manager;
 
 pub const EVENT_PLUGIN_SIDECAR_BRIDGE_MESSAGE: &str = "plugin-sidecar-bridge-message";
@@ -15,6 +17,9 @@ pub const EVENT_PLUGIN_SIDECAR_BRIDGE_MESSAGE: &str = "plugin-sidecar-bridge-mes
 const BRIDGE_VERSION: &str = "1.0";
 const CHILD_EXIT_POLL_INTERVAL_MS: u64 = 50;
 const MAX_STDERR_TAIL_BYTES: usize = 8 * 1024;
+#[cfg(unix)]
+const SIDECAR_TERM_GRACE_PERIOD_MS: u64 = 250;
+const SIDECAR_FORCE_KILL_WAIT_MS: u64 = 750;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,10 +55,175 @@ struct SidecarBridgeSession {
     plugin_id: String,
     runtime_id: String,
     runtime_instance_id: String,
-    child: Arc<Mutex<Child>>,
+    process: Arc<Mutex<ManagedSidecarProcess>>,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     terminating: Arc<AtomicBool>,
+    cleanup_strategy: &'static str,
     stderr_tail: Arc<Mutex<Vec<u8>>>,
+}
+
+#[derive(Debug)]
+struct SpawnedSidecarProcess {
+    process: ManagedSidecarProcess,
+    cleanup_setup_error: Option<String>,
+}
+
+#[derive(Debug)]
+struct ManagedSidecarProcess {
+    child: Child,
+    cleanup: SidecarProcessCleanup,
+}
+
+#[derive(Debug)]
+enum SidecarProcessCleanup {
+    Direct,
+    #[cfg(target_os = "windows")]
+    WindowsJobObject(WindowsJobObjectCleanup),
+    #[cfg(unix)]
+    UnixProcessGroup(UnixProcessGroupCleanup),
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug)]
+struct WindowsJobObjectCleanup {
+    job: WindowsJobHandle,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug)]
+struct WindowsJobHandle(windows::Win32::Foundation::HANDLE);
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct UnixProcessGroupCleanup {
+    pgid: i32,
+}
+
+impl ManagedSidecarProcess {
+    fn cleanup_strategy(&self) -> &'static str {
+        self.cleanup.strategy_name()
+    }
+
+    fn terminate(&mut self) -> Result<(), String> {
+        match self.child.try_wait() {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => self.cleanup.terminate(&mut self.child),
+            Err(error) => Err(format!("Poll sidecar process failed: {error}")),
+        }
+    }
+}
+
+impl SidecarProcessCleanup {
+    fn strategy_name(&self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            #[cfg(target_os = "windows")]
+            Self::WindowsJobObject(_) => "windows-job-object",
+            #[cfg(unix)]
+            Self::UnixProcessGroup(_) => "unix-process-group",
+        }
+    }
+
+    fn terminate(&mut self, child: &mut Child) -> Result<(), String> {
+        match self {
+            Self::Direct => terminate_direct_child_process(child),
+            #[cfg(target_os = "windows")]
+            Self::WindowsJobObject(cleanup) => cleanup.terminate(child),
+            #[cfg(unix)]
+            Self::UnixProcessGroup(cleanup) => cleanup.terminate(child),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsJobObjectCleanup {
+    fn new(child: &Child) -> Result<Self, String> {
+        use std::mem::size_of;
+        use std::os::windows::io::AsRawHandle as _;
+        use windows::core::PCWSTR;
+        use windows::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+
+        let job = unsafe { CreateJobObjectW(None, PCWSTR::null()) }
+            .map_err(|error| format!("Create sidecar job object failed: {error}"))?;
+        let job = WindowsJobHandle(job);
+
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        unsafe {
+            SetInformationJobObject(
+                job.handle(),
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        }
+        .map_err(|error| format!("Configure sidecar job object failed: {error}"))?;
+
+        let process_handle = windows::Win32::Foundation::HANDLE(child.as_raw_handle() as isize);
+        unsafe { AssignProcessToJobObject(job.handle(), process_handle) }
+            .map_err(|error| format!("Assign sidecar process to job object failed: {error}"))?;
+
+        Ok(Self { job })
+    }
+
+    fn terminate(&mut self, child: &mut Child) -> Result<(), String> {
+        use windows::Win32::System::JobObjects::TerminateJobObject;
+
+        if let Err(error) = unsafe { TerminateJobObject(self.job.handle(), 1) } {
+            if let Ok(Some(_)) = child.try_wait() {
+                return Ok(());
+            }
+            return terminate_direct_child_process(child).map_err(|direct_error| {
+                format!(
+                    "Terminate sidecar job object failed: {error}; fallback direct kill failed: {direct_error}"
+                )
+            });
+        }
+
+        if wait_for_child_exit(child, Duration::from_millis(SIDECAR_FORCE_KILL_WAIT_MS))? {
+            return Ok(());
+        }
+
+        terminate_direct_child_process(child)
+            .map_err(|error| format!("Timed out waiting for sidecar job teardown: {error}"))
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsJobHandle {
+    fn handle(&self) -> windows::Win32::Foundation::HANDLE {
+        self.0
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsJobHandle {
+    fn drop(&mut self) {
+        let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+#[cfg(unix)]
+impl UnixProcessGroupCleanup {
+    fn terminate(&mut self, child: &mut Child) -> Result<(), String> {
+        send_process_group_signal(self.pgid, libc::SIGTERM)?;
+        if wait_for_child_exit(child, Duration::from_millis(SIDECAR_TERM_GRACE_PERIOD_MS))? {
+            return Ok(());
+        }
+
+        send_process_group_signal(self.pgid, libc::SIGKILL)?;
+        if wait_for_child_exit(child, Duration::from_millis(SIDECAR_FORCE_KILL_WAIT_MS))? {
+            return Ok(());
+        }
+
+        terminate_direct_child_process(child).map_err(|error| {
+            format!("Timed out waiting for sidecar process group teardown: {error}")
+        })
+    }
 }
 
 #[derive(Default)]
@@ -66,7 +236,7 @@ impl Drop for SidecarBridgeRegistryInner {
         if let Ok(mut sessions) = self.sessions.write() {
             for (_, session) in sessions.drain() {
                 session.terminating.store(true, Ordering::Release);
-                let _ = terminate_child_process(&session.child);
+                let _ = terminate_managed_process(&session.process);
             }
         }
     }
@@ -105,16 +275,24 @@ impl SidecarBridgeRegistry {
             }
         }
 
-        let mut child = spawn_sidecar_process(&request)?;
-        let stdin = child
+        let mut spawned = spawn_sidecar_process(&request)?;
+        let cleanup_strategy = spawned.process.cleanup_strategy();
+        let cleanup_setup_error = spawned.cleanup_setup_error.take();
+        let stdin = spawned
+            .process
+            .child
             .stdin
             .take()
             .ok_or_else(|| "Failed to open sidecar stdin".to_string())?;
-        let stdout = child
+        let stdout = spawned
+            .process
+            .child
             .stdout
             .take()
             .ok_or_else(|| "Failed to open sidecar stdout".to_string())?;
-        let stderr = child
+        let stderr = spawned
+            .process
+            .child
             .stderr
             .take()
             .ok_or_else(|| "Failed to open sidecar stderr".to_string())?;
@@ -124,9 +302,10 @@ impl SidecarBridgeRegistry {
             plugin_id: request.plugin_id,
             runtime_id: request.runtime_id,
             runtime_instance_id: request.runtime_instance_id,
-            child: Arc::new(Mutex::new(child)),
+            process: Arc::new(Mutex::new(spawned.process)),
             stdin: Arc::new(Mutex::new(Some(stdin))),
             terminating: Arc::new(AtomicBool::new(false)),
+            cleanup_strategy,
             stderr_tail: Arc::new(Mutex::new(Vec::new())),
         });
 
@@ -153,8 +332,28 @@ impl SidecarBridgeRegistry {
                 )
                 .field("sidecarSessionId", json!(session_id.clone()))
                 .field("commandId", json!(command_id))
-                .field("timeoutMs", json!(timeout_ms)),
+                .field("timeoutMs", json!(timeout_ms))
+                .field("cleanupStrategy", json!(session.cleanup_strategy)),
         );
+        if let Some(error) = cleanup_setup_error {
+            crate::backend_telemetry::warn(
+                app,
+                "plugin",
+                "plugin.sidecar.bridge.cleanup.degraded",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("SidecarBridgeRegistry")
+                    .message("Fell back to direct sidecar cleanup")
+                    .field("pluginId", json!(session.plugin_id.as_str()))
+                    .field("runtimeId", json!(session.runtime_id.as_str()))
+                    .field(
+                        "runtimeInstanceId",
+                        json!(session.runtime_instance_id.as_str()),
+                    )
+                    .field("sidecarSessionId", json!(session.session_id.as_str()))
+                    .field("cleanupStrategy", json!(session.cleanup_strategy))
+                    .field("cleanupSetupError", json!(error)),
+            );
+        }
         spawn_stdout_reader(app.clone(), session.clone(), stdout);
         spawn_stderr_reader(session.clone(), stderr);
         spawn_exit_watcher(app.clone(), self.clone(), session);
@@ -215,6 +414,7 @@ impl SidecarBridgeRegistry {
                         json!(session.runtime_instance_id.as_str()),
                     )
                     .field("sidecarSessionId", json!(session.session_id.as_str()))
+                    .field("cleanupStrategy", json!(session.cleanup_strategy))
                     .field("reason", json!(reason.unwrap_or("unknown"))),
             );
         }
@@ -225,7 +425,7 @@ impl SidecarBridgeRegistry {
             stdin.take();
         }
 
-        terminate_child_process(&session.child)
+        terminate_managed_process(&session.process)
     }
 
     fn get_session(&self, session_id: &str) -> Result<Option<Arc<SidecarBridgeSession>>, String> {
@@ -317,13 +517,13 @@ fn spawn_exit_watcher(
 ) {
     thread::spawn(move || loop {
         let exit = {
-            let mut child = match session.child.lock() {
-                Ok(child) => child,
+            let mut process = match session.process.lock() {
+                Ok(process) => process,
                 Err(_) => {
                     emit_sidecar_runtime_error(
                         &app,
                         &session,
-                        "Sidecar child lock poisoned while waiting for exit".to_string(),
+                        "Sidecar process lock poisoned while waiting for exit".to_string(),
                         None,
                     );
                     let _ = registry.remove_session(&session.session_id);
@@ -331,7 +531,7 @@ fn spawn_exit_watcher(
                 }
             };
 
-            match child.try_wait() {
+            match process.child.try_wait() {
                 Ok(Some(status)) => Some(Ok(status.to_string())),
                 Ok(None) => None,
                 Err(error) => Some(Err(format!("Poll sidecar process failed: {error}"))),
@@ -397,6 +597,7 @@ fn emit_sidecar_runtime_error(
             json!(session.runtime_instance_id.as_str()),
         )
         .field("sidecarSessionId", json!(session.session_id.as_str()))
+        .field("cleanupStrategy", json!(session.cleanup_strategy))
         .field("fatal", json!(true));
     if let Some(details_value) = details.clone() {
         telemetry = telemetry.field("details", details_value);
@@ -463,7 +664,9 @@ fn read_stderr_tail(session: &SidecarBridgeSession) -> Option<String> {
     Some(String::from_utf8_lossy(&guard).trim().to_string())
 }
 
-fn spawn_sidecar_process(request: &SidecarBridgeOpenRequest) -> Result<Child, String> {
+fn spawn_sidecar_process(
+    request: &SidecarBridgeOpenRequest,
+) -> Result<SpawnedSidecarProcess, String> {
     let entry_path = resolve_sidecar_entry_path(&request.entry_path)?;
     let (program, launch_args) = build_sidecar_launch_command(&entry_path)?;
     let mut command = Command::new(program);
@@ -489,17 +692,30 @@ fn spawn_sidecar_process(request: &SidecarBridgeOpenRequest) -> Result<Child, St
         command.env("PXP_COMMAND_ARGS_JSON", encoded);
     }
 
+    #[cfg(unix)]
+    command.process_group(0);
+
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
+        use std::os::windows::process::CommandExt as _;
 
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
 
-    command
+    let child = command
         .spawn()
-        .map_err(|error| format!("Failed to spawn sidecar process: {error}"))
+        .map_err(|error| format!("Failed to spawn sidecar process: {error}"))?;
+
+    let (cleanup, cleanup_setup_error) = match configure_sidecar_cleanup(&child) {
+        Ok(cleanup) => (cleanup, None),
+        Err(error) => (SidecarProcessCleanup::Direct, Some(error)),
+    };
+
+    Ok(SpawnedSidecarProcess {
+        process: ManagedSidecarProcess { child, cleanup },
+        cleanup_setup_error,
+    })
 }
 
 fn resolve_sidecar_entry_path(entry_path: &str) -> Result<PathBuf, String> {
@@ -582,11 +798,34 @@ fn build_sidecar_launch_command(entry_path: &Path) -> Result<(PathBuf, Vec<Strin
     }
 }
 
-fn terminate_child_process(child: &Arc<Mutex<Child>>) -> Result<(), String> {
-    let mut child = child
+fn terminate_managed_process(process: &Arc<Mutex<ManagedSidecarProcess>>) -> Result<(), String> {
+    let mut process = process
         .lock()
-        .map_err(|_| "Sidecar child lock poisoned".to_string())?;
+        .map_err(|_| "Sidecar process lock poisoned".to_string())?;
 
+    process.terminate()
+}
+
+fn configure_sidecar_cleanup(child: &Child) -> Result<SidecarProcessCleanup, String> {
+    #[cfg(target_os = "windows")]
+    {
+        return WindowsJobObjectCleanup::new(child).map(SidecarProcessCleanup::WindowsJobObject);
+    }
+
+    #[cfg(unix)]
+    {
+        let pgid = i32::try_from(child.id())
+            .map_err(|_| format!("Sidecar pid does not fit process group id: {}", child.id()))?;
+        return Ok(SidecarProcessCleanup::UnixProcessGroup(
+            UnixProcessGroupCleanup { pgid },
+        ));
+    }
+
+    #[allow(unreachable_code)]
+    Ok(SidecarProcessCleanup::Direct)
+}
+
+fn terminate_direct_child_process(child: &mut Child) -> Result<(), String> {
     match child.try_wait() {
         Ok(Some(_)) => return Ok(()),
         Ok(None) => {}
@@ -607,10 +846,44 @@ fn terminate_child_process(child: &Arc<Mutex<Child>>) -> Result<(), String> {
         }
     }
 
-    child
-        .wait()
-        .map(|_| ())
-        .map_err(|error| format!("Wait sidecar process failed: {error}"))
+    if wait_for_child_exit(child, Duration::from_millis(SIDECAR_FORCE_KILL_WAIT_MS))? {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Timed out waiting for sidecar process exit after force kill ({}ms)",
+        SIDECAR_FORCE_KILL_WAIT_MS
+    ))
+}
+
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> Result<bool, String> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(true),
+            Ok(None) if Instant::now() >= deadline => return Ok(false),
+            Ok(None) => thread::sleep(Duration::from_millis(CHILD_EXIT_POLL_INTERVAL_MS)),
+            Err(error) => return Err(format!("Poll sidecar process failed: {error}")),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn send_process_group_signal(pgid: i32, signal: i32) -> Result<(), String> {
+    let result = unsafe { libc::killpg(pgid, signal) };
+    if result == 0 {
+        return Ok(());
+    }
+
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Send signal {signal} to sidecar process group failed: {error}"
+    ))
 }
 
 #[cfg(test)]
@@ -622,52 +895,19 @@ mod tests {
     use serde_json::{json, Value};
     use std::fs;
     use std::io::{BufRead, BufReader, Write};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::thread;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-    const ECHO_SIDECAR_FIXTURE: &str = r#"const readline = require('node:readline');
+    const ORPHAN_PARENT_SCRIPT: &str = r#"
+const { spawn } = require('child_process');
 
-process.stdout.write(JSON.stringify({
-  bridgeVersion: '1.0',
-  op: 'runtime.hello',
-  runtimeKind: 'sidecar',
-  carrier: 'native-process',
-}) + '\n');
-
-const rl = readline.createInterface({
-  input: process.stdin,
-  crlfDelay: Infinity,
+const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], {
+  stdio: 'ignore',
 });
-
-rl.on('line', (line) => {
-  const message = JSON.parse(line);
-  if (message.op === 'runtime.init') {
-    process.stdout.write(JSON.stringify({ bridgeVersion: '1.0', op: 'runtime.init.ack' }) + '\n');
-    return;
-  }
-
-  if (message.op === 'runtime.activate') {
-    process.stdout.write(JSON.stringify({ bridgeVersion: '1.0', op: 'runtime.activate.ack' }) + '\n');
-    process.stdout.write(JSON.stringify({
-      protocolVersion: '1.0',
-      op: 'capability.invoke.request',
-      requestId: 'req-1',
-      capabilityId: 'core.capability-registry',
-      method: 'list',
-    }) + '\n');
-    return;
-  }
-
-  if (message.op === 'capability.invoke.response') {
-    process.stdout.write(JSON.stringify({
-      bridgeVersion: '1.0',
-      op: 'runtime.event',
-      eventName: 'command.result',
-      payload: { ok: true },
-    }) + '\n');
-  }
-});
+process.stdout.write(JSON.stringify({ childPid: child.pid }) + '\n');
+setInterval(() => {}, 1000);
 "#;
 
     #[test]
@@ -689,16 +929,16 @@ rl.on('line', (line) => {
 
     #[test]
     fn spawns_node_sidecar_fixture_and_completes_bridge_handshake() {
-        let Ok(output) = Command::new("node").arg("--version").output() else {
-            return;
-        };
-        if !output.status.success() {
+        if !node_available() {
             return;
         }
 
-        let entry = write_temp_sidecar_fixture("echo-runtime.js", ECHO_SIDECAR_FIXTURE);
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../community/plugins/sidecar-echo-demo/sidecar/echo-runtime.js")
+            .canonicalize()
+            .expect("sidecar fixture path");
 
-        let mut child = spawn_sidecar_process(&SidecarBridgeOpenRequest {
+        let mut spawned = spawn_sidecar_process(&SidecarBridgeOpenRequest {
             plugin_id: "sidecar-echo-demo".to_string(),
             runtime_id: "sidecar.echo".to_string(),
             runtime_instance_id: "sidecar-test-instance".to_string(),
@@ -709,8 +949,8 @@ rl.on('line', (line) => {
         })
         .expect("spawn sidecar");
 
-        let mut stdin = child.stdin.take().expect("sidecar stdin");
-        let stdout = child.stdout.take().expect("sidecar stdout");
+        let mut stdin = spawned.process.child.stdin.take().expect("sidecar stdin");
+        let stdout = spawned.process.child.stdout.take().expect("sidecar stdout");
         let mut reader = BufReader::new(stdout);
 
         let hello = read_json_line(&mut reader);
@@ -778,9 +1018,46 @@ rl.on('line', (line) => {
         assert_eq!(command_result["eventName"], "command.result");
         assert_eq!(command_result["payload"]["ok"], true);
 
-        let _ = child.kill();
-        let _ = child.wait();
-        remove_temp_sidecar_fixture(&entry);
+        spawned.process.terminate().expect("terminate sidecar");
+    }
+
+    #[test]
+    fn forced_cleanup_terminates_spawned_descendants() {
+        if !node_available() {
+            return;
+        }
+
+        let temp_dir = TempTestDir::new("sidecar-orphan-cleanup");
+        let entry = temp_dir.path.join("orphan-parent.js");
+        fs::write(&entry, ORPHAN_PARENT_SCRIPT).expect("write sidecar fixture");
+
+        let mut spawned = spawn_sidecar_process(&SidecarBridgeOpenRequest {
+            plugin_id: "sidecar-cleanup-test".to_string(),
+            runtime_id: "sidecar.cleanup".to_string(),
+            runtime_instance_id: "sidecar-cleanup-instance".to_string(),
+            entry_path: entry.to_string_lossy().to_string(),
+            command_id: "sidecar.cleanup.run".to_string(),
+            args: None,
+            timeout_ms: 2_000,
+        })
+        .expect("spawn sidecar");
+
+        let stdout = spawned.process.child.stdout.take().expect("sidecar stdout");
+        let mut reader = BufReader::new(stdout);
+        let child_info = read_json_line(&mut reader);
+        let child_pid = child_info["childPid"].as_u64().expect("child pid") as u32;
+
+        assert!(
+            wait_for_pid_state(child_pid, true, Duration::from_secs(2)),
+            "spawned descendant should be running before teardown"
+        );
+
+        spawned.process.terminate().expect("terminate sidecar");
+
+        assert!(
+            wait_for_pid_state(child_pid, false, Duration::from_secs(2)),
+            "spawned descendant should exit during teardown"
+        );
     }
 
     fn read_json_line(reader: &mut BufReader<std::process::ChildStdout>) -> Value {
@@ -798,24 +1075,85 @@ rl.on('line', (line) => {
         stdin.flush().expect("flush stdin");
     }
 
-    fn write_temp_sidecar_fixture(script_name: &str, script: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "pmp-sidecar-fixture-{}-{unique}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&dir).expect("create sidecar fixture dir");
-        let path = dir.join(script_name);
-        fs::write(&path, script).expect("write sidecar fixture");
-        path
+    fn node_available() -> bool {
+        Command::new(node_command())
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
     }
 
-    fn remove_temp_sidecar_fixture(entry: &PathBuf) {
-        if let Some(parent) = entry.parent() {
-            let _ = fs::remove_dir_all(parent);
+    fn node_command() -> String {
+        std::env::var("PXP_SIDECAR_NODE_EXE").unwrap_or_else(|_| "node".to_string())
+    }
+
+    fn wait_for_pid_state(pid: u32, should_exist: bool, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+
+        loop {
+            if is_process_running(pid) == should_exist {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    #[cfg(unix)]
+    fn is_process_running(pid: u32) -> bool {
+        let result = unsafe { libc::kill(pid as i32, 0) };
+        if result == 0 {
+            return true;
+        }
+
+        let error = std::io::Error::last_os_error();
+        error.raw_os_error() == Some(libc::EPERM)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn is_process_running(pid: u32) -> bool {
+        use windows::Win32::Foundation::{CloseHandle, BOOL, STILL_ACTIVE};
+        use windows::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+
+        let Ok(handle) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, BOOL(0), pid) })
+        else {
+            return false;
+        };
+
+        let mut exit_code = 0u32;
+        let result = unsafe { GetExitCodeProcess(handle, &mut exit_code) }.is_ok();
+        let _ = unsafe { CloseHandle(handle) };
+        result && exit_code == STILL_ACTIVE.0 as u32
+    }
+
+    struct TempTestDir {
+        path: PathBuf,
+    }
+
+    impl TempTestDir {
+        fn new(prefix: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let path =
+                std::env::temp_dir().join(format!("pmp-{prefix}-{}-{unique}", std::process::id()));
+            fs::create_dir_all(&path).expect("create temp dir");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempTestDir {
+        fn drop(&mut self) {
+            remove_dir_if_exists(&self.path);
+        }
+    }
+
+    fn remove_dir_if_exists(path: &Path) {
+        let _ = fs::remove_dir_all(path);
     }
 }

@@ -29,11 +29,7 @@ import {
   subscribeMagnetRenderers,
 } from '../../magnet-system/registry';
 import {
-  createMagnetTemplateFromPlugin,
-  installPmpmPluginFromFilePath,
   loadInstalledPmpmPlugins,
-  parsePmpmPluginFromFilePath,
-  supportsPmpmPluginMagnetSurface,
   uninstallPmpmPlugin,
   type InstalledPmpmPlugin,
 } from '../../magnet-system/plugins/pmpm';
@@ -532,77 +528,6 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
     }
   }, [importData, magnetLibrary, onMagnetAddToLibrary, t, validateAndImportMagnet]);
 
-  const handleImportPmpmPlugin = useCallback(async () => {
-    if (pluginBusy) return;
-    setPluginBusy(true);
-    setPluginError('');
-
-    try {
-      const dialog = await import('@tauri-apps/api/dialog');
-      const selected = await dialog.open({
-        multiple: false,
-        filters: [{ name: t('editor.magnet-library.plugins.fileFilter.pmpm'), extensions: ['pmpm'] }],
-      });
-
-      if (!selected) return;
-      const filePath = Array.isArray(selected) ? selected[0] : selected;
-      if (typeof filePath !== 'string') {
-        throw new Error(t('editor.magnet-library.plugins.import.invalidFilePath'));
-      }
-
-      const plugin = await parsePmpmPluginFromFilePath(filePath);
-      const meta = plugin.manifest.metadata;
-      const permissions = plugin.manifest.permissions ?? [];
-      const isUpdate = installedPlugins.some((p) => p.manifest.metadata.id === meta.id);
-
-      if (!isUpdate && magnetLibrary.some((m) => m.id === meta.id)) {
-        throw new Error(t('editor.magnet-library.plugins.import.idExists', { id: meta.id }));
-      }
-
-      const confirmText = [
-        t('editor.magnet-library.plugins.install.summaryTitle', { name: meta.name }),
-        `${meta.id}@${meta.version}`,
-        meta.author ? t('editor.magnet-library.plugins.install.author', { author: meta.author }) : null,
-        meta.description
-          ? t('editor.magnet-library.plugins.install.description', { description: meta.description })
-          : null,
-        '',
-        t('editor.magnet-library.plugins.install.permissionsTitle'),
-        permissions.length > 0
-          ? permissions.map((p) => `- ${p}`).join('\n')
-          : t('editor.magnet-library.plugins.install.permissionsNone'),
-        '',
-        plugin.entrySha256 ? `entrySha256: ${plugin.entrySha256}` : null,
-        '',
-        t('editor.magnet-library.plugins.install.confirmQuestion'),
-      ]
-        .filter((line): line is string => typeof line === 'string' && line.length > 0)
-        .join('\n');
-
-      const ok = await confirm({
-        title: t('editor.magnet-library.plugins.install.confirmTitle'),
-        message: confirmText,
-        confirmText: t('common.action.install'),
-        cancelText: t('common.action.cancel'),
-      });
-      if (!ok) return;
-
-      await installPmpmPluginFromFilePath(filePath);
-      reloadPlugins();
-
-      if (supportsPmpmPluginMagnetSurface(plugin) && !magnetLibrary.some((m) => m.id === meta.id)) {
-        onMagnetAddToLibrary(createMagnetTemplateFromPlugin(plugin));
-      }
-
-      setShowPlugins(true);
-      alert(t('editor.magnet-library.plugins.install.installed', { id: meta.id }));
-    } catch (error) {
-      setPluginError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPluginBusy(false);
-    }
-  }, [confirm, installedPlugins, magnetLibrary, onMagnetAddToLibrary, pluginBusy, reloadPlugins, t]);
-
   const handleUninstallPmpmPlugin = useCallback(
     async (id: string) => {
       if (pluginBusy) return;
@@ -805,14 +730,8 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
           <div className="import-section" style={{ marginBottom: 6 }}>
             <div className="import-label">{t('editor.magnet-library.plugins.title')}</div>
             {pluginError && <div className="import-error">⚠ {pluginError}</div>}
+            <div className="import-hint">{t('editor.magnet-library.plugins.migrationNote')}</div>
             <div className="import-actions">
-              <button
-                className="import-submit-btn"
-                onClick={() => void handleImportPmpmPlugin()}
-                disabled={pluginBusy}
-              >
-                {t('editor.magnet-library.plugins.action.import')}
-              </button>
               <button
                 className="import-submit-btn"
                 style={{ background: 'rgba(255, 255, 255, 0.12)' }}

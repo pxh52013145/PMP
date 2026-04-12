@@ -21,13 +21,13 @@ function readErrorMessage(error: unknown): string {
 }
 
 function parsePluginWindowHash():
-  | { sourceKind: PluginSurfaceSourceKind; pluginId: string; windowId: string }
+  | { eventSourceKind: PluginSurfaceSourceKind; pluginId: string; windowId: string }
   | null {
   const hash = window.location.hash;
   const kindedMatch = hash.match(/^#\/plugin-window\/(pmpm|extv2)\/([\w-]+)\/([\w-]+)$/);
   if (kindedMatch) {
     return {
-      sourceKind: kindedMatch[1] as PluginSurfaceSourceKind,
+      eventSourceKind: kindedMatch[1] as PluginSurfaceSourceKind,
       pluginId: kindedMatch[2],
       windowId: kindedMatch[3],
     };
@@ -35,13 +35,17 @@ function parsePluginWindowHash():
 
   const legacyMatch = hash.match(/^#\/plugin-window\/([\w-]+)\/([\w-]+)$/);
   if (!legacyMatch) return null;
-  return { sourceKind: 'pmpm', pluginId: legacyMatch[1], windowId: legacyMatch[2] };
+  return {
+    eventSourceKind: 'extv2',
+    pluginId: legacyMatch[1],
+    windowId: legacyMatch[2],
+  };
 }
 
 export function PluginWindowApp() {
   const parsed = useMemo(() => parsePluginWindowHash(), []);
   const expectedPayload = parsed
-    ? `${parsed.sourceKind}/${parsed.pluginId}/${parsed.windowId}`
+    ? `${parsed.eventSourceKind}/${parsed.pluginId}/${parsed.windowId}`
     : null;
   const isTauri = useMemo(() => isTauriRuntime(), []);
   const { settings: performanceSettings } = usePerformanceControlSettings();
@@ -243,7 +247,6 @@ export function PluginWindowApp() {
                 <ResolvedPluginWindowHost
                   pluginId={parsed.pluginId}
                   windowId={parsed.windowId}
-                  preferredKind={parsed.sourceKind}
                 />
               </div>
             </QualityProvider>

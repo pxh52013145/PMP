@@ -33,7 +33,7 @@ fn is_safe_id(value: &str) -> bool {
 }
 
 fn normalize_source_kind(source_kind: Option<&str>) -> Result<&str, String> {
-    match source_kind.unwrap_or("pmpm") {
+    match source_kind.unwrap_or("extv2") {
         "pmpm" => Ok("pmpm"),
         "extv2" => Ok("extv2"),
         other => Err(format!("Invalid sourceKind: {}", other)),
@@ -309,18 +309,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plugin_window_label_defaults_to_pmpm_source_kind() {
+    fn plugin_window_label_defaults_to_extv2_source_kind() {
         assert_eq!(
             plugin_window_label(None, "demo-plugin", "main-window").unwrap(),
-            "plugin-pmpm-demo-plugin-main-window"
+            "plugin-extv2-demo-plugin-main-window"
         );
     }
 
     #[test]
-    fn plugin_window_label_supports_extv2_source_kind() {
+    fn plugin_window_label_supports_pmpm_source_kind() {
         assert_eq!(
-            plugin_window_label(Some("extv2"), "demo-plugin", "main-window").unwrap(),
-            "plugin-extv2-demo-plugin-main-window"
+            plugin_window_label(Some("pmpm"), "demo-plugin", "main-window").unwrap(),
+            "plugin-pmpm-demo-plugin-main-window"
         );
     }
 

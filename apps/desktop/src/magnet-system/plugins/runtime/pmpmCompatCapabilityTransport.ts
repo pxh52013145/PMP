@@ -16,7 +16,7 @@ import type {
 import type {
   PmpmBridgeIncomingMessage,
   PmpmBridgeOutgoingMessage,
-} from '@pixel-matrix/plugin-compat-pmpm';
+} from '@pixel-matrix/plugin-platform-contracts';
 import { PLUGIN_PERMISSIONS, hasPermission, type PluginMountApi } from '../host-api';
 import type { PmpmCompatRuntimeResourceRegistry } from './pmpmCompatRuntimeResources';
 import {

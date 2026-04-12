@@ -13,7 +13,6 @@ import { SHELL_SURFACE_MANAGER_TOKEN } from '../magnet-system/plugins/shellSurfa
 import { createBuiltinContributionsModule } from './builtinContributionsModule';
 import { createBuiltinCommandsModule } from './builtinCommandsModule';
 import { createInstalledExtensionContributionsModule } from '../magnet-system/plugins/extensionContributionsModule';
-import { createPmpmContributionsModule } from '../magnet-system/plugins/pmpmContributionsModule';
 import { createPluginMountApi } from '../magnet-system/plugins/pluginHostApi';
 
 const mocks = vi.hoisted(() => ({
@@ -23,8 +22,6 @@ const mocks = vi.hoisted(() => ({
   openBuiltinPluginWindowViaHostCapabilityMock: vi.fn(async () => {}),
   loadInstalledExtensionsMock: vi.fn((): unknown[] => []),
   subscribeInstalledExtensionsMock: vi.fn(() => () => {}),
-  loadInstalledPmpmPluginsMock: vi.fn((): unknown[] => []),
-  subscribePmpmPluginsMock: vi.fn(() => () => {}),
 }));
 
 vi.mock('./builtinNavigationCapabilityBridge', () => ({
@@ -41,12 +38,6 @@ vi.mock('./builtinNavigationCapabilityBridge', () => ({
 vi.mock('../magnet-system/plugins/extensions', () => ({
   loadInstalledExtensions: mocks.loadInstalledExtensionsMock,
   subscribeInstalledExtensions: mocks.subscribeInstalledExtensionsMock,
-}));
-
-vi.mock('../magnet-system/plugins/pmpm', () => ({
-  loadInstalledPmpmPlugins: mocks.loadInstalledPmpmPluginsMock,
-  subscribePmpmPlugins: mocks.subscribePmpmPluginsMock,
-  recordPmpmPluginCrash: vi.fn(),
 }));
 
 function createNavigationServiceStub(): NavigationService {
@@ -108,9 +99,7 @@ describe('builtin navigation convergence', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadInstalledExtensionsMock.mockReturnValue([]);
-    mocks.loadInstalledPmpmPluginsMock.mockReturnValue([]);
     mocks.subscribeInstalledExtensionsMock.mockReturnValue(() => {});
-    mocks.subscribePmpmPluginsMock.mockReturnValue(() => {});
   });
 
   it('routes builtin keyboard shortcut window opens through command -> capability', async () => {
@@ -193,51 +182,6 @@ describe('builtin navigation convergence', () => {
     );
   });
 
-  it('routes PMPM visualizer opens through the shared builtin bridge', async () => {
-    mocks.loadInstalledPmpmPluginsMock.mockReturnValue([
-      {
-        enabled: true,
-        manifest: {
-          metadata: {
-            id: 'demo-pmpm',
-            name: 'Demo PMPM Plugin',
-          },
-          contributions: {
-            visualizers: [
-              {
-                id: 'demo-visualizer',
-                title: 'Demo Visualizer',
-              },
-            ],
-          },
-        },
-      },
-    ] as unknown[]);
-
-    const navigation = createNavigationServiceStub();
-    const ctx = createModuleContext(navigation);
-
-    createPmpmContributionsModule().activate(ctx);
-
-    const contribution = ctx.contributions.get<VisualizerContribution>(
-      'visualizer',
-      'pmpm:demo-pmpm:visualizer:demo-visualizer'
-    );
-    expect(contribution).not.toBeNull();
-
-    await contribution?.open();
-
-    expect(mocks.openBuiltinPluginVisualizerViaHostCapabilityMock).toHaveBeenCalledWith(
-      navigation,
-      {
-        pluginId: 'demo-pmpm',
-        visualizerId: 'demo-visualizer',
-        sourceKind: 'pmpm',
-      },
-      'visualizer:pmpm:demo-pmpm:demo-visualizer'
-    );
-  });
-
   it('routes plugin window opens through the shared builtin bridge', async () => {
     mocks.loadInstalledExtensionsMock.mockReturnValue([
       {
@@ -293,58 +237,6 @@ describe('builtin navigation convergence', () => {
         y: undefined,
       },
       'window:extv2:demo-ext:demo-window'
-    );
-  });
-
-  it('routes PMPM window opens through the shared builtin bridge', async () => {
-    mocks.loadInstalledPmpmPluginsMock.mockReturnValue([
-      {
-        enabled: true,
-        manifest: {
-          metadata: {
-            id: 'demo-pmpm',
-            name: 'Demo PMPM Plugin',
-          },
-          contributions: {
-            windows: [
-              {
-                id: 'demo-window',
-                title: 'Demo Window',
-                width: 800,
-                height: 600,
-              },
-            ],
-          },
-        },
-      },
-    ] as unknown[]);
-
-    const navigation = createNavigationServiceStub();
-    const ctx = createModuleContext(navigation);
-
-    createPmpmContributionsModule().activate(ctx);
-
-    const contribution = ctx.contributions.get<WindowContribution>(
-      'window',
-      'pmpm:demo-pmpm:window:demo-window'
-    );
-    expect(contribution).not.toBeNull();
-
-    await contribution?.open();
-
-    expect(mocks.openBuiltinPluginWindowViaHostCapabilityMock).toHaveBeenCalledWith(
-      navigation,
-      {
-        sourceKind: 'pmpm',
-        pluginId: 'demo-pmpm',
-        windowId: 'demo-window',
-        title: 'Demo PMPM Plugin: Demo Window',
-        width: 800,
-        height: 600,
-        x: undefined,
-        y: undefined,
-      },
-      'window:pmpm:demo-pmpm:demo-window'
     );
   });
 

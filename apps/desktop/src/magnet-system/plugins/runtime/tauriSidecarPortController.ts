@@ -1,6 +1,11 @@
 import { listen } from '@tauri-apps/api/event';
 import { invokeWithTelemetry } from '../../../services/telemetry/tauriInvokeTelemetry';
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
+import {
+  createPluginSidecarTelemetryContext,
+  reportPluginSidecarBridgeOpened,
+  reportPluginSidecarProcessForcedTeardown,
+} from '../pluginLifecycleTelemetry';
 import type { RuntimeBridgeTransportMessage } from './runtimeBridgeHostSession';
 import type {
   CreatePmpmBridgeSidecarPortControllerOptions,
@@ -35,6 +40,16 @@ export async function createTauriPmpmBridgeSidecarPortController(
     throw new Error('Native sidecar runtime bridge is only available in Tauri runtime');
   }
 
+  const telemetryContext = createPluginSidecarTelemetryContext({
+    pluginId: options.pluginId,
+    sourceKind: options.telemetry?.sourceKind ?? 'extv2',
+    hostLabel: options.telemetry?.hostLabel,
+    runtimeId: options.runtimeId,
+    runtimeInstanceId: options.runtimeInstanceId,
+    surfaceKind: options.telemetry?.surfaceKind,
+    surfaceId: options.telemetry?.surfaceId,
+    cause: options.telemetry?.cause,
+  });
   const listeners = new Set<(message: RuntimeBridgeTransportMessage) => void>();
   const buffered: RuntimeBridgeTransportMessage[] = [];
   let sessionId = '';
@@ -80,6 +95,12 @@ export async function createTauriPmpmBridgeSidecarPortController(
       }
     );
     sessionId = response.sessionId;
+    reportPluginSidecarBridgeOpened(telemetryContext, {
+      extraFields: {
+        sidecarSessionId: sessionId,
+        timeoutMs: options.timeoutMs,
+      },
+    });
   } catch (error) {
     await Promise.resolve(unlisten());
     throw error;
@@ -95,6 +116,15 @@ export async function createTauriPmpmBridgeSidecarPortController(
       try {
         listeners.clear();
         buffered.length = 0;
+        if (reason === 'runtime-unresponsive' || reason.startsWith('runtime-crash')) {
+          reportPluginSidecarProcessForcedTeardown(telemetryContext, {
+            extraFields: {
+              sidecarSessionId: sessionId || null,
+              teardownReason: reason,
+              timeoutMs: options.timeoutMs,
+            },
+          });
+        }
         if (sessionId) {
           await invokeWithTelemetry('plugin_sidecar_bridge_close', { sessionId, reason }, {
             moduleId: 'plugins',

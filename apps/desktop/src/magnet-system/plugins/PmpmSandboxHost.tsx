@@ -5,7 +5,7 @@ import { useKernel } from '../../contexts/KernelContext';
 import type {
   PmpmBridgeIncomingMessage,
   PmpmBridgeOutgoingMessage,
-} from '@pixel-matrix/plugin-compat-pmpm';
+} from '@pixel-matrix/plugin-platform-contracts';
 import { COMMANDS_SERVICE_TOKEN } from '../../services/commands';
 import { KEYBINDINGS_SERVICE_TOKEN } from '../../services/keybindings';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
@@ -191,6 +191,7 @@ export function PmpmSandboxHost({
     return createPluginMountApi({
       pluginId,
       hostLabel,
+      sourceKind: 'pmpm',
       permissions,
       audioService,
       commands,

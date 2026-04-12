@@ -148,6 +148,7 @@ const INLINE_RESOLVED_PMPM_LAUNCHER_ADAPTER: InlineResolvedPmpmLauncherAdapter =
     const api = createPluginMountApi({
       pluginId: options.pluginId,
       hostLabel: options.hostLabel ?? 'PluginCommand',
+      sourceKind: 'pmpm',
       permissions,
       audioService: options.audioService,
       commands: options.commands,

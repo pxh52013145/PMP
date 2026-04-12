@@ -322,6 +322,9 @@ async function runInstalledExtensionWorkerCommand(
         );
       }
     },
+    onRuntimeCrash: (error) => {
+      failCommand(error);
+    },
   });
 
   const onWorkerError: WorkerEventListener = (event) => {
@@ -587,6 +590,9 @@ async function runInstalledExtensionSidecarCommand(
           )
         );
       }
+    },
+    onRuntimeCrash: (error) => {
+      failCommand(error);
     },
   });
 

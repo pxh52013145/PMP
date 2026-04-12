@@ -4,7 +4,7 @@ import {
   mapPmpmPermissionToCapabilityId,
   type InstalledPmpmPluginRecord,
   type PmpmManifest,
-} from '@pixel-matrix/plugin-compat-pmpm';
+} from '@pixel-matrix/plugin-platform-contracts';
 import type { InstalledExtensionRecord, PxpManifestV2 } from '@pixel-matrix/plugin-platform-contracts';
 
 export type InstalledPmpmExtensionRecord = InstalledExtensionRecord<PxpManifestV2>;

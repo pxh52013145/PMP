@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { InstalledPmpmPluginRecord, PmpmManifest } from '@pixel-matrix/plugin-compat-pmpm';
+import type {
+  InstalledPmpmPluginRecord,
+  PmpmManifest,
+} from '@pixel-matrix/plugin-platform-contracts';
 import {
   listEffectiveCapabilityIdsFromInstalledPmpmPlugin,
   listPmpmPermissionCapabilityBindings,

@@ -15,10 +15,6 @@ import {
   getInstalledExtensionsRevision,
   subscribeInstalledExtensions,
 } from './magnet-system/plugins/extensions';
-import {
-  getPmpmPluginsRevision,
-  subscribePmpmPlugins,
-} from './magnet-system/plugins/pmpm';
 import { readPluginShellSurfaceDescriptor } from './magnet-system/plugins/shellSurfaceDescriptors';
 import {
   buildPluginShellSurfaceEventPayload,
@@ -35,7 +31,7 @@ function readErrorMessage(error: unknown): string {
 
 function parsePluginShellSurfaceHash():
   | {
-      sourceKind: PluginSurfaceSourceKind;
+      eventSourceKind: PluginSurfaceSourceKind;
       surfaceType: 'overlay' | 'desktop-widget';
       pluginId: string;
       surfaceId: string;
@@ -48,7 +44,7 @@ function parsePluginShellSurfaceHash():
   if (!match) return null;
 
   return {
-    sourceKind: match[1] as PluginSurfaceSourceKind,
+    eventSourceKind: match[1] as PluginSurfaceSourceKind,
     surfaceType: match[2] as 'overlay' | 'desktop-widget',
     pluginId: match[3],
     surfaceId: match[4],
@@ -59,7 +55,7 @@ export function PluginShellSurfaceApp() {
   const parsed = useMemo(() => parsePluginShellSurfaceHash(), []);
   const expectedPayload = parsed
     ? buildPluginShellSurfaceEventPayload(
-        parsed.sourceKind,
+        parsed.eventSourceKind,
         parsed.surfaceType,
         parsed.pluginId,
         parsed.surfaceId
@@ -67,11 +63,6 @@ export function PluginShellSurfaceApp() {
     : null;
   const isTauri = useMemo(() => isTauriRuntime(), []);
   const { settings: performanceSettings } = usePerformanceControlSettings();
-  const pmpmRevision = useSyncExternalStore(
-    subscribePmpmPlugins,
-    getPmpmPluginsRevision,
-    getPmpmPluginsRevision
-  );
   const extensionRevision = useSyncExternalStore(
     subscribeInstalledExtensions,
     getInstalledExtensionsRevision,
@@ -79,11 +70,15 @@ export function PluginShellSurfaceApp() {
   );
 
   const shellSurfaceLookup = useMemo(() => {
-    void pmpmRevision;
     void extensionRevision;
     if (!parsed) return null;
-    return readPluginShellSurfaceDescriptor(parsed);
-  }, [extensionRevision, parsed, pmpmRevision]);
+    return readPluginShellSurfaceDescriptor({
+      sourceKind: 'extv2',
+      surfaceType: parsed.surfaceType,
+      pluginId: parsed.pluginId,
+      surfaceId: parsed.surfaceId,
+    });
+  }, [extensionRevision, parsed]);
 
   const dismissOnEscape = useMemo(() => {
     if (!parsed) return false;
@@ -285,12 +280,12 @@ export function PluginShellSurfaceApp() {
         parsed.pluginId,
         parsed.surfaceId,
         parsed.surfaceType,
-        parsed.sourceKind
+        parsed.eventSourceKind
       ).catch((error) => {
         telemetry.warn('plugin_shell_surface.dismiss_on_escape.failed', {
           message: readErrorMessage(error),
           fields: {
-            sourceKind: parsed.sourceKind,
+            sourceKind: parsed.eventSourceKind,
             pluginId: parsed.pluginId,
             surfaceId: parsed.surfaceId,
             surfaceType: parsed.surfaceType,
@@ -334,7 +329,6 @@ export function PluginShellSurfaceApp() {
                   pluginId={parsed.pluginId}
                   surfaceId={parsed.surfaceId}
                   surfaceType={parsed.surfaceType}
-                  preferredKind={parsed.sourceKind}
                 />
               </div>
             </QualityProvider>

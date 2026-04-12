@@ -137,7 +137,8 @@ describe('DefaultShellSurfaceManager', () => {
       'demo-plugin',
       'demo-overlay',
       'overlay',
-      'pmpm'
+      'pmpm',
+      'manual-test'
     );
     expect(manager.listTrackedSurfaces()).toEqual([]);
   });
@@ -185,7 +186,8 @@ describe('DefaultShellSurfaceManager', () => {
       'demo-plugin',
       'demo-overlay',
       'overlay',
-      'pmpm'
+      'pmpm',
+      'surface-missing'
     );
     expect(manager.listTrackedSurfaces()).toEqual([]);
   });
@@ -233,7 +235,8 @@ describe('DefaultShellSurfaceManager', () => {
       'demo-plugin',
       'demo-overlay',
       'overlay',
-      'pmpm'
+      'pmpm',
+      'plugin-disabled'
     );
     expect(telemetryLoggerMock.info).toHaveBeenCalledWith(
       'plugin.governance.cleanup.start',
@@ -297,7 +300,8 @@ describe('DefaultShellSurfaceManager', () => {
       'demo.extension',
       'demo-widget',
       'desktop-widget',
-      'extv2'
+      'extv2',
+      'plugin-missing'
     );
     expect(telemetryLoggerMock.info).toHaveBeenCalledWith(
       'plugin.governance.cleanup.start',
@@ -399,7 +403,8 @@ describe('DefaultShellSurfaceManager', () => {
       'demo-plugin',
       'demo-overlay',
       'overlay',
-      'pmpm'
+      'pmpm',
+      'surface-missing'
     );
     expect(manager.listTrackedSurfaces()).toEqual([]);
   });
@@ -456,7 +461,8 @@ describe('DefaultShellSurfaceManager', () => {
       'demo.extension',
       'demo-widget',
       'desktop-widget',
-      'extv2'
+      'extv2',
+      'runtime-restart'
     );
     expect(manager.listTrackedSurfaces()).toEqual([]);
   });
@@ -546,14 +552,16 @@ describe('DefaultShellSurfaceManager', () => {
       'target-plugin',
       'target-overlay',
       'overlay',
-      'pmpm'
+      'pmpm',
+      'capability-revoke'
     );
     expect(destroySurface).toHaveBeenNthCalledWith(
       2,
       'target-plugin',
       'target-widget',
       'desktop-widget',
-      'pmpm'
+      'pmpm',
+      'capability-revoke'
     );
     expect(destroySurface).toHaveBeenCalledTimes(2);
     expect(telemetryLoggerMock.info).toHaveBeenCalledWith(

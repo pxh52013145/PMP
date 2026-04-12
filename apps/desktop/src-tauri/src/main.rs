@@ -91,6 +91,9 @@ fn main() {
     if let Some(exit_code) = audio_smoke::maybe_run_from_cli() {
         std::process::exit(exit_code);
     }
+    if crate::app_runtime::forward_live_host_file_open_to_running_instance_if_any() {
+        return;
+    }
 
     tauri::Builder::default()
         .register_uri_scheme_protocol("pmp", |app, request| {

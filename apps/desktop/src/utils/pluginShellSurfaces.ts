@@ -144,7 +144,7 @@ export async function openPluginShellSurface(config: PluginShellSurfaceConfig): 
     throw new Error(`Invalid surfaceType "${config.surfaceType}"`);
   }
 
-  const sourceKind = config.sourceKind ?? 'pmpm';
+  const sourceKind = config.sourceKind ?? 'extv2';
   const defaults = resolvePluginShellSurfaceDefaults(config);
   const position =
     typeof config.x === 'number' &&
@@ -205,7 +205,7 @@ export async function dismissPluginShellSurface(
   pluginId: string,
   surfaceId: string,
   surfaceType: ShellSurfaceType,
-  sourceKind: PluginSurfaceSourceKind = 'pmpm'
+  sourceKind: PluginSurfaceSourceKind = 'extv2'
 ): Promise<void> {
   if (!isTauriRuntime()) return;
   if (!isSafeId(pluginId) || !isSafeId(surfaceId) || !isShellSurfaceType(surfaceType)) {
@@ -246,7 +246,8 @@ export async function destroyPluginShellSurface(
   pluginId: string,
   surfaceId: string,
   surfaceType: ShellSurfaceType,
-  sourceKind: PluginSurfaceSourceKind = 'pmpm'
+  sourceKind: PluginSurfaceSourceKind = 'extv2',
+  reason?: string
 ): Promise<void> {
   if (!isTauriRuntime()) return;
   if (!isSafeId(pluginId) || !isSafeId(surfaceId) || !isShellSurfaceType(surfaceType)) {
@@ -261,6 +262,7 @@ export async function destroyPluginShellSurface(
         pluginId,
         surfaceId,
         surfaceType,
+        reason: reason ?? null,
       },
       {
         moduleId: 'windowing',
@@ -277,6 +279,7 @@ export async function destroyPluginShellSurface(
         pluginId,
         surfaceId,
         surfaceType,
+        reason: reason ?? null,
       },
     });
     throw error;

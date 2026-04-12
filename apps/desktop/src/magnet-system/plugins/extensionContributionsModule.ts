@@ -9,6 +9,8 @@ import type {
   VisualizerContribution,
   WindowContribution,
 } from '../../contracts/contributions';
+import type { GovernanceService } from '../../services/governance';
+import { GOVERNANCE_SERVICE_TOKEN } from '../../services/governance';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import {
@@ -30,6 +32,7 @@ import {
 import { readInstalledExtensionPmpHostContributions } from './installedExtensionHostPmp';
 import { INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN } from './installedExtensionRuntimeManager';
 import { SHELL_SURFACE_MANAGER_TOKEN } from './shellSurfaceManager';
+import { requestHostExtensionRuntimeRestart } from './hostExtensionRuntimeSupervisor';
 
 const telemetry = getTelemetryLogger('extensions', 'extensionContributionsModule');
 
@@ -101,6 +104,22 @@ export function createInstalledExtensionContributionsModule(): KernelModule<AppE
       const runtimeManager = services.get(INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN);
       const shellSurfaceManager = services.get(SHELL_SURFACE_MANAGER_TOKEN);
       const unregisters = new Map<string, () => void>();
+      const governance: GovernanceService = {
+        restartHostExtensionRuntime: (pluginId, options = {}) => {
+          requestHostExtensionRuntimeRestart(options.kind ?? 'extv2', pluginId, {
+            reason: options.reason,
+          });
+        },
+        restartPmpmPluginRuntime: (pluginId, options = {}) => {
+          requestHostExtensionRuntimeRestart('pmpm', pluginId, { reason: options.reason });
+        },
+        restartInstalledExtensionRuntime: (pluginId, options = {}) => {
+          requestHostExtensionRuntimeRestart('extv2', pluginId, { reason: options.reason });
+        },
+      };
+      const unregisterGovernance = services.register(GOVERNANCE_SERVICE_TOKEN, governance, {
+        replace: true,
+      });
 
       const tryUnregister = (contributionId: string, unregister: () => void) => {
         try {
@@ -435,6 +454,14 @@ export function createInstalledExtensionContributionsModule(): KernelModule<AppE
           unsubscribe();
         } catch (error) {
           telemetry.warn('extension.subscription.unsubscribe.failed', {
+            message: readErrorMessage(error),
+          });
+        }
+
+        try {
+          unregisterGovernance();
+        } catch (error) {
+          telemetry.warn('extension.governance.unregister.failed', {
             message: readErrorMessage(error),
           });
         }

@@ -26,6 +26,7 @@ import { KEYBINDINGS_SERVICE_TOKEN } from './services/keybindings';
 import { getDebugConfig, setDebugConfig } from './modules/debug';
 import { INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN } from './magnet-system/plugins/installedExtensionRuntimeManager';
 import {
+  activateInstalledExtensionsForNativeHostFileOpens,
   activateInstalledExtensionsForHostFiles,
 } from './magnet-system/plugins/installedExtensionHostFileActivation';
 import { consumePendingHostFileOpens } from './modules/startup/hostFileOpen';
@@ -372,37 +373,49 @@ function AppContent() {
       return;
     }
 
-    let cancelled = false;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    let pendingFlush = Promise.resolve();
 
-    void consumePendingHostFileOpens()
-      .then(async (payloads) => {
-        if (cancelled || payloads.length === 0) {
-          return;
-        }
-
-        for (const payload of payloads) {
-          if (cancelled) {
+    const scheduleFlush = () => {
+      pendingFlush = pendingFlush
+        .then(async () => {
+          const payloads = await consumePendingHostFileOpens();
+          if (disposed || payloads.length === 0) {
             return;
           }
 
-          await activateInstalledExtensionsForHostFiles(installedExtensionRuntimeManager, {
-            filePaths: payload.paths,
-            action: payload.action ?? payload.source,
-            hostLabel:
-              payload.source === 'cli-startup'
-                ? 'AppStartupFileOpen'
-                : 'AppHostFileOpen',
+          await activateInstalledExtensionsForNativeHostFileOpens(
+            installedExtensionRuntimeManager,
+            payloads
+          );
+        })
+        .catch((error) => {
+          telemetry.warn('startup.host-file-open.consume.failed', {
+            message: error instanceof Error ? error.message : String(error),
           });
-        }
-      })
-      .catch((error) => {
-        telemetry.warn('startup.host-file-open.consume.failed', {
-          message: error instanceof Error ? error.message : String(error),
         });
+    };
+
+    const attach = async () => {
+      const cleanup = await setupTauriListener(TAURI_EVENTS.HOST_FILE_OPENED, () => {
+        scheduleFlush();
       });
+      if (disposed) {
+        cleanup();
+        return;
+      }
+      unlisten = cleanup;
+    };
+
+    scheduleFlush();
+    void attach();
 
     return () => {
-      cancelled = true;
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+      }
     };
   }, [installedExtensionRuntimeManager, isTauri, telemetry]);
 

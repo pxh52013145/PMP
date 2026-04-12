@@ -234,7 +234,8 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
         target.pluginId,
         target.surfaceId,
         target.surfaceType,
-        target.sourceKind
+        target.sourceKind,
+        target.reason
       );
       this.tracked.delete(key);
       completePluginGovernanceCleanup(handle, {

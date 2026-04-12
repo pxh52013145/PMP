@@ -1,8 +1,6 @@
 import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { removeMagnetCatalogMagnet, upsertMagnetCatalogMagnet, useMagnetConfig } from '../../modules/magnets';
-import { usePersistentSetting } from '../../modules/storage';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
-import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { useKernel } from '../../contexts/KernelContext';
 import { GOVERNANCE_SERVICE_TOKEN } from '../../services/governance';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
@@ -14,16 +12,12 @@ import {
 } from '../../builtin-modules/builtinNavigationCapabilityBridge';
 import {
   clearPmpmPluginQuarantine,
-  createMagnetTemplateFromPlugin,
   getPmpmPluginsRevision,
-  installPmpmPluginFromFilePath,
   listPmpmPermissionCapabilityBindings,
   loadInstalledPmpmExtensionRecords,
   loadInstalledPmpmPlugins,
-  parsePmpmPluginFromFilePath,
   setPmpmPluginDeniedPermissions,
   setPmpmPluginEnabled,
-  supportsPmpmPluginMagnetSurface,
   subscribePmpmPlugins,
   uninstallPmpmPlugin,
 } from '../../magnet-system/plugins/pmpm';
@@ -291,14 +285,6 @@ export function PluginsSettingsPanel() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [allowUnsignedPlugins, setAllowUnsignedPlugins] = usePersistentSetting(
-    STORAGE_KEYS.PMPM_ALLOW_UNSIGNED_PLUGINS,
-    true
-  );
-  const [requireTrustedSignatures, setRequireTrustedSignatures] = usePersistentSetting(
-    STORAGE_KEYS.PMPM_REQUIRE_TRUSTED_SIGNATURES,
-    false
-  );
 
   const pluginStoreRevision = useSyncExternalStore(
     subscribePmpmPlugins,
@@ -512,116 +498,6 @@ export function PluginsSettingsPanel() {
     },
     [activateMagnet, setMagnetLibrary]
   );
-
-  const handleInstall = useCallback(async () => {
-    if (!isTauri) {
-      setError(t('settings.plugins.install.requireTauri'));
-      return;
-    }
-    if (busy) return;
-
-    setBusy(true);
-    setError(null);
-
-    try {
-      const dialog = await import('@tauri-apps/api/dialog');
-      const selected = await dialog.open({
-        multiple: false,
-        filters: [{ name: t('settings.plugins.install.filePickerFilter'), extensions: ['pmpm'] }],
-      });
-      if (!selected) return;
-      const filePath = Array.isArray(selected) ? selected[0] : selected;
-      if (typeof filePath !== 'string') {
-        throw new Error(t('settings.plugins.install.error.invalidFilePath'));
-      }
-
-      const parsed = await parsePmpmPluginFromFilePath(filePath);
-      const meta = parsed.manifest.metadata;
-      const permissions = parsed.manifest.permissions ?? [];
-      const isUpdate = installedPlugins.some((p) => p.manifest.metadata.id === meta.id);
-
-      if (!isUpdate && magnetLibrary.some((m) => m.id === meta.id)) {
-        throw new Error(t('settings.plugins.install.error.magnetIdExists', { id: meta.id }));
-      }
-
-      const signatureLine = (() => {
-        if (parsed.signature) {
-          const keyId = parsed.signature.keyId.slice(0, 12);
-          return trustedKeySet.has(parsed.signature.keyId)
-            ? t('settings.plugins.install.signature.okTrusted', { keyId })
-            : t('settings.plugins.install.signature.okUntrusted', { keyId });
-        }
-
-        if (requireTrustedSignatures) {
-          return t('settings.plugins.install.signature.requiredTrusted');
-        }
-
-        if (allowUnsignedPlugins) {
-          return t('settings.plugins.install.signature.none');
-        }
-
-        return t('settings.plugins.install.signature.required');
-      })();
-
-      const confirmText = [
-        t('settings.plugins.install.confirm.plugin', { name: meta.name }),
-        t('settings.plugins.install.confirm.idVersion', { id: meta.id, version: meta.version }),
-        meta.author ? t('settings.plugins.install.confirm.author', { author: meta.author }) : null,
-        meta.description
-          ? t('settings.plugins.install.confirm.description', { description: meta.description })
-          : null,
-        '',
-        signatureLine,
-        '',
-        t('settings.plugins.install.confirm.permissionsTitle'),
-        permissions.length > 0
-          ? permissions.map((p) => `- ${p}`).join('\n')
-          : t('settings.plugins.install.confirm.permissionsNone'),
-        '',
-        parsed.entrySha256
-          ? t('settings.plugins.install.confirm.entrySha256', { sha256: parsed.entrySha256 })
-          : null,
-        '',
-        t('settings.plugins.install.confirm.prompt'),
-      ]
-        .filter((line): line is string => typeof line === 'string')
-        .join('\n');
-
-      const ok = await confirm({
-        title: t('settings.plugins.install.confirm.title'),
-        message: confirmText,
-        confirmText: t('common.action.install'),
-        cancelText: t('common.action.cancel'),
-      });
-      if (!ok) return;
-
-      await installPmpmPluginFromFilePath(filePath);
-
-      if (supportsPmpmPluginMagnetSurface(parsed)) {
-        const template = createMagnetTemplateFromPlugin(parsed);
-        upsertMagnetCatalogMagnet(template);
-
-        if (!magnetLibrary.some((m) => m.id === meta.id)) {
-          setMagnetLibrary((prev) => [...prev, template]);
-        }
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }, [
-    allowUnsignedPlugins,
-    busy,
-    confirm,
-    installedPlugins,
-    isTauri,
-    magnetLibrary,
-    requireTrustedSignatures,
-    setMagnetLibrary,
-    t,
-    trustedKeySet,
-  ]);
 
   const handleUninstall = useCallback(
     async (pluginId: string) => {
@@ -894,15 +770,11 @@ export function PluginsSettingsPanel() {
           <p className="settings-card-desc">{t('settings.plugins.pmpm.desc')}</p>
         </div>
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <PmpButton
-            className="settings-action-btn"
-            variant="default"
-            onClick={() => void handleInstall()}
-            disabled={busy}
-          >
-            {t('common.action.installEllipsis')}
-          </PmpButton>
+        <div
+          className="settings-card-note"
+          style={{ maxWidth: 360, textAlign: 'right' }}
+        >
+          {t('settings.plugins.pmpm.migrationNote')}
         </div>
       </div>
 
@@ -916,26 +788,6 @@ export function PluginsSettingsPanel() {
           onCheckedChange={(next) => setPmpmSandboxRuntimeEnabled(next)}
         >
           {t('settings.plugins.runtimeSandbox.label')}
-        </PmpCheckbox>
-        <PmpCheckbox
-          className="settings-checkbox settings-plugin-switch-row"
-          variant="settings"
-          checked={requireTrustedSignatures}
-          onCheckedChange={(next) => {
-              setRequireTrustedSignatures(next);
-              if (next) setAllowUnsignedPlugins(false);
-          }}
-        >
-          {t('settings.plugins.requireTrustedSignatures.label')}
-        </PmpCheckbox>
-        <PmpCheckbox
-          className="settings-checkbox settings-plugin-switch-row"
-          variant="settings"
-          checked={allowUnsignedPlugins}
-          disabled={requireTrustedSignatures}
-          onCheckedChange={(next) => setAllowUnsignedPlugins(next)}
-        >
-          {t('settings.plugins.allowUnsignedPlugins.label')}
         </PmpCheckbox>
       </div>
 

@@ -138,6 +138,7 @@ export async function runPmpmBridgeSidecarCommand(
   const api = createPluginMountApi({
     pluginId: options.pluginId,
     hostLabel,
+    sourceKind: 'pmpm',
     permissions,
     audioService: options.audioService,
     commands: options.commands,
@@ -282,6 +283,9 @@ export async function runPmpmBridgeSidecarCommand(
           );
         }
       }
+    },
+    onRuntimeCrash: (error) => {
+      failCommand(error);
     },
   });
 

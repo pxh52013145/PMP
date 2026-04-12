@@ -163,6 +163,7 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
     return createPluginMountApi({
       pluginId,
       hostLabel: 'PluginMagnetHost',
+      sourceKind: 'pmpm',
       permissions,
       audioService,
       commands,

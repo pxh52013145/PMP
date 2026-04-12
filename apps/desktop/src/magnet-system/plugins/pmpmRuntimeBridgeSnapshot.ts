@@ -2,7 +2,7 @@ import {
   PMPM_BRIDGE_VERSION,
   PMPM_DEFAULT_RUNTIME_ID,
   mapPmpmPermissionToCapabilityId,
-} from '@pixel-matrix/plugin-compat-pmpm';
+} from '@pixel-matrix/plugin-platform-contracts';
 import type {
   CapabilityRevoke,
   RuntimeCarrier,

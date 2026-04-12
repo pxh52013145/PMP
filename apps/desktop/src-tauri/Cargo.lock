@@ -3332,6 +3332,7 @@ dependencies = [
  "gif",
  "image 0.25.9",
  "keyring",
+ "libc",
  "lofty",
  "md5",
  "num-bigint",

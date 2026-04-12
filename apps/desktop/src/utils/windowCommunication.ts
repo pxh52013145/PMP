@@ -310,6 +310,7 @@ export const TAURI_EVENTS = {
   MAIN_WINDOW_HIDDEN: 'main-window-hidden',
   MAIN_WINDOW_SHOWN: 'main-window-shown',
   MAIN_WINDOW_CLOSE_REQUESTED: 'main-window-close-requested',
+  HOST_FILE_OPENED: 'host-file-opened',
 
   // Plugin windows / VST manager window
   PLUGIN_WINDOW_HIDDEN: 'plugin-window-hidden',

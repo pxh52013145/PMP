@@ -65,7 +65,7 @@ export async function openPluginWindow(
   if (!isSafeId(config.windowId)) {
     throw new Error(`Invalid windowId "${config.windowId}"`);
   }
-  const sourceKind = config.sourceKind ?? 'pmpm';
+  const sourceKind = config.sourceKind ?? 'extv2';
 
   const width = config.width ?? 720;
   const height = config.height ?? 520;
@@ -110,7 +110,7 @@ export async function openPluginWindow(
 export async function closePluginWindow(
   pluginId: string,
   windowId: string,
-  sourceKind: PluginSurfaceSourceKind = 'pmpm'
+  sourceKind: PluginSurfaceSourceKind = 'extv2'
 ): Promise<void> {
   if (!isTauriRuntime()) return;
   if (!isSafeId(pluginId) || !isSafeId(windowId)) return;

@@ -157,7 +157,7 @@ function createBuiltinWindowBridge(
       }
 
       await openPluginWindow({
-        sourceKind: options?.sourceKind ?? 'pmpm',
+        sourceKind: options?.sourceKind ?? 'extv2',
         pluginId: options?.pluginId ?? '',
         windowId,
         title: options?.title,

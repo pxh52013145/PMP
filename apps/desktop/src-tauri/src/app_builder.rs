@@ -2,7 +2,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::json;
 use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu};
 
 const TRAY_MENU_SHOW_ID: &str = "show";
@@ -91,24 +90,7 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
     )));
 
     if let Some(payload) = crate::app_runtime::capture_startup_host_file_open_payload() {
-        let source = payload.source.clone();
-        let action = payload.action.clone();
-        let path_count = payload.paths.len();
-        let queued_batch_count = app
-            .state::<crate::app_runtime::HostFileOpenState>()
-            .enqueue(payload);
-
-        crate::backend_telemetry::info(
-            &app.handle(),
-            "startup",
-            "startup.host-file-open.pending.enqueued",
-            crate::backend_telemetry::BackendTelemetryOptions::new()
-                .component("HostFileOpenState")
-                .field("source", json!(source))
-                .field("action", json!(action))
-                .field("pathCount", json!(path_count))
-                .field("queuedBatchCount", json!(queued_batch_count)),
-        );
+        crate::app_runtime::enqueue_startup_host_file_open(&app.handle(), payload);
     }
 
     let magnet_layout_store = crate::magnet_layout_store::MagnetLayoutStore::new(&app.handle())
@@ -120,6 +102,8 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
         .ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, "Main window not found")
         })?;
+
+    crate::app_runtime::install_live_host_file_open_bridge(&app.handle());
 
     #[cfg(target_os = "windows")]
     {

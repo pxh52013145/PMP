@@ -114,11 +114,6 @@ vi.mock('./magnet-system/plugins/extensions', () => ({
   subscribeInstalledExtensions: () => () => {},
 }));
 
-vi.mock('./magnet-system/plugins/pmpm', () => ({
-  getPmpmPluginsRevision: () => 0,
-  subscribePmpmPlugins: () => () => {},
-}));
-
 vi.mock('./magnet-system/plugins/shellSurfaceDescriptors', () => ({
   readPluginShellSurfaceDescriptor: readPluginShellSurfaceDescriptorMock,
 }));
@@ -264,7 +259,14 @@ describe('PluginShellSurfaceApp', () => {
         pluginId: 'demo-plugin',
         surfaceId: 'demo-overlay',
         surfaceType: 'overlay',
-        preferredKind: 'extv2',
+      })
+    );
+    expect(readPluginShellSurfaceDescriptorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceKind: 'extv2',
+        pluginId: 'demo-plugin',
+        surfaceId: 'demo-overlay',
+        surfaceType: 'overlay',
       })
     );
 
@@ -276,6 +278,39 @@ describe('PluginShellSurfaceApp', () => {
       'demo-overlay',
       'overlay',
       'extv2'
+    );
+  });
+
+  it('keeps legacy pmpm window events while resolving descriptors from extv2 records', async () => {
+    readPluginShellSurfaceDescriptorMock.mockReturnValue(createPresentLookup());
+
+    mountedRoot = await renderPluginShellSurfaceApp(
+      '#/plugin-shell-surface/pmpm/overlay/demo-plugin/demo-overlay'
+    );
+
+    expect(buildPluginShellSurfaceEventPayloadMock).toHaveBeenCalledWith(
+      'pmpm',
+      'overlay',
+      'demo-plugin',
+      'demo-overlay'
+    );
+    expect(readPluginShellSurfaceDescriptorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceKind: 'extv2',
+        pluginId: 'demo-plugin',
+        surfaceId: 'demo-overlay',
+        surfaceType: 'overlay',
+      })
+    );
+
+    const event = await pressEscape();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(dismissPluginShellSurfaceMock).toHaveBeenCalledWith(
+      'demo-plugin',
+      'demo-overlay',
+      'overlay',
+      'pmpm'
     );
   });
 

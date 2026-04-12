@@ -8,7 +8,7 @@ import {
   normalizePmpmEntryPoint,
   validatePmpmManifest,
   type PmpmManifest,
-} from '@pixel-matrix/plugin-compat-pmpm';
+} from '@pixel-matrix/plugin-platform-contracts';
 
 const SAMPLE_PMPM_MANIFEST: PmpmManifest = {
   formatVersion: '1.0',

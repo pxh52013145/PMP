@@ -6,7 +6,7 @@ import {
   normalizePmpmEntryPoint,
   type PmpmPluginCrashSurface,
   validatePmpmManifest,
-} from '@pixel-matrix/plugin-compat-pmpm';
+} from '@pixel-matrix/plugin-platform-contracts';
 import type { Magnet } from '../../types/pixel';
 import { createDefaultBoundsForMagnet } from '../../modules/magnets/layoutPresets';
 import type { MagnetRendererDefinition } from '../registry';
@@ -46,7 +46,7 @@ export {
   type PmpmManifestContributionBuckets,
   type PmpmPluginCrashSurface,
   validatePmpmManifest,
-} from '@pixel-matrix/plugin-compat-pmpm';
+} from '@pixel-matrix/plugin-platform-contracts';
 export {
   listEffectiveCapabilityIdsFromInstalledPmpmPlugin,
   listPmpmPermissionCapabilityBindings,

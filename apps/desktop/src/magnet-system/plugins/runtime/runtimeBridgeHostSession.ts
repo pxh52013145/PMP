@@ -68,6 +68,7 @@ export interface RuntimeBridgeHostSessionOptions {
   startupTimeoutMs?: number;
   requestTimeoutMs?: number;
   onRuntimeEvent?: (message: RuntimeEvent) => void | Promise<void>;
+  onRuntimeCrash?: (error: Error) => void | Promise<void>;
   telemetry?: {
     sourceKind: PluginLifecycleSourceKind;
     launcherId?: string | null;
@@ -416,6 +417,14 @@ export function createRuntimeBridgeHostSession(
       },
     });
     rejectAllPending(error);
+    try {
+      const crashResult = options.onRuntimeCrash?.(error);
+      if (crashResult && typeof (crashResult as Promise<void>).then === 'function') {
+        void (crashResult as Promise<void>).catch(() => undefined);
+      }
+    } catch {
+      // Crash handlers are best-effort and must not block teardown.
+    }
     const currentUnsubscribe = unsubscribe;
     unsubscribe = null;
     try {

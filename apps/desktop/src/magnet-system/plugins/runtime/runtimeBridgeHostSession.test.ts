@@ -1168,6 +1168,62 @@ describe('runtime bridge host session', () => {
     expect(forcedTeardownCompleted?.fields?.durationMs).toEqual(expect.any(Number));
   });
 
+  it('notifies onRuntimeCrash when a started sidecar session reports a fatal runtime error', async () => {
+    const api = createStubApi();
+    const harness = createPortHarness();
+    const onRuntimeCrash = vi.fn();
+    const session = createRuntimeBridgeHostSession({
+      pluginId: 'sidecar-plugin',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId: 'sidecar-instance-1',
+      runtimeKind: 'sidecar',
+      carrier: 'native-process',
+      api,
+      permissions: new Set(['api:host']),
+      port: harness.port,
+      runtimeInit: createSidecarRuntimeInit(),
+      runtimeActivate: createSidecarRuntimeActivate(),
+      onRuntimeCrash,
+    });
+
+    const startPromise = session.start();
+    harness.emit(createSidecarRuntimeHello());
+    await flushMessages();
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.init.ack',
+      pluginId: 'sidecar-plugin',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId: 'sidecar-instance-1',
+    });
+    await flushMessages();
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.activate.ack',
+      pluginId: 'sidecar-plugin',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId: 'sidecar-instance-1',
+    });
+    await startPromise;
+
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.error',
+      pluginId: 'sidecar-plugin',
+      runtimeId: 'sidecar.main',
+      runtimeInstanceId: 'sidecar-instance-1',
+      fatal: true,
+      message: 'sidecar crashed',
+    });
+    await flushMessages();
+
+    expect(onRuntimeCrash).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'sidecar crashed',
+      })
+    );
+  });
+
   it('accepts a buffered runtime.hello flushed immediately on subscription', async () => {
     const api = createStubApi();
     const harness = createPortHarness([createRuntimeHello()]);

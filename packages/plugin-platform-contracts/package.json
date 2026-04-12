@@ -8,6 +8,7 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./compat-pmpm": "./src/compat-pmpm.ts",
     "./core": "./src/core.ts",
     "./runtime-bridge": "./src/runtime-bridge.ts",
     "./host": "./src/host.ts"

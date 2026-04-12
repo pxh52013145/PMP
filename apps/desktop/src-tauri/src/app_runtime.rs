@@ -8,8 +8,14 @@ use std::sync::{
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use once_cell::sync::OnceCell;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri::Manager;
+
+const HOST_FILE_OPEN_SOURCE_STARTUP: &str = "cli-startup";
+const HOST_FILE_OPEN_SOURCE_OS_REOPEN: &str = "os-reopen";
+const HOST_FILE_OPEN_ACTION_STARTUP: &str = "startup-opened";
+const HOST_FILE_OPEN_ACTION_OS_REOPEN: &str = "reopened";
 
 pub struct ExitFlag(pub Arc<AtomicBool>);
 
@@ -31,7 +37,7 @@ impl EditorEffectsState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostFileOpenPayload {
     pub paths: Vec<String>,
@@ -63,20 +69,43 @@ impl HostFileOpenState {
 }
 
 pub fn capture_startup_host_file_open_payload() -> Option<HostFileOpenPayload> {
-    let paths = collect_startup_host_file_paths(std::env::args_os().skip(1));
+    capture_host_file_open_payload(
+        std::env::args_os().skip(1),
+        HOST_FILE_OPEN_SOURCE_STARTUP,
+        Some(HOST_FILE_OPEN_ACTION_STARTUP),
+    )
+}
+
+pub fn capture_os_reopen_host_file_open_payload() -> Option<HostFileOpenPayload> {
+    capture_host_file_open_payload(
+        std::env::args_os().skip(1),
+        HOST_FILE_OPEN_SOURCE_OS_REOPEN,
+        Some(HOST_FILE_OPEN_ACTION_OS_REOPEN),
+    )
+}
+
+fn capture_host_file_open_payload<I>(
+    args: I,
+    source: &str,
+    action: Option<&str>,
+) -> Option<HostFileOpenPayload>
+where
+    I: IntoIterator<Item = std::ffi::OsString>,
+{
+    let paths = collect_host_file_open_paths(args);
     if paths.is_empty() {
         return None;
     }
 
     Some(HostFileOpenPayload {
         paths,
-        source: "cli-startup".to_string(),
-        action: Some("startup-opened".to_string()),
+        source: source.to_string(),
+        action: action.map(|value| value.to_string()),
         received_at_ms: now_ms(),
     })
 }
 
-fn collect_startup_host_file_paths<I>(args: I) -> Vec<String>
+fn collect_host_file_open_paths<I>(args: I) -> Vec<String>
 where
     I: IntoIterator<Item = std::ffi::OsString>,
 {
@@ -149,6 +178,73 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+fn enqueue_host_file_open_payload(
+    app: &tauri::AppHandle,
+    payload: HostFileOpenPayload,
+    telemetry_event: &str,
+    emit_signal: bool,
+) -> usize {
+    let source = payload.source.clone();
+    let action = payload.action.clone();
+    let path_count = payload.paths.len();
+    let queued_batch_count = app.state::<HostFileOpenState>().enqueue(payload);
+
+    if emit_signal {
+        let _ = app.emit_all(crate::windows::EVENT_HOST_FILE_OPENED, ());
+    }
+
+    crate::backend_telemetry::info(
+        app,
+        "startup",
+        telemetry_event,
+        crate::backend_telemetry::BackendTelemetryOptions::new()
+            .component("HostFileOpenState")
+            .field("source", json!(source))
+            .field("action", json!(action))
+            .field("pathCount", json!(path_count))
+            .field("queuedBatchCount", json!(queued_batch_count)),
+    );
+
+    queued_batch_count
+}
+
+pub fn enqueue_startup_host_file_open(
+    app: &tauri::AppHandle,
+    payload: HostFileOpenPayload,
+) -> usize {
+    enqueue_host_file_open_payload(
+        app,
+        payload,
+        "startup.host-file-open.pending.enqueued",
+        false,
+    )
+}
+
+pub fn enqueue_live_host_file_open(app: &tauri::AppHandle, payload: HostFileOpenPayload) -> usize {
+    crate::windows::focus_main_window_if_needed(app);
+    enqueue_host_file_open_payload(app, payload, "startup.host-file-open.live.enqueued", true)
+}
+
+pub fn install_live_host_file_open_bridge(app: &tauri::AppHandle) {
+    #[cfg(target_os = "windows")]
+    live_host_file_open_bridge::install(app);
+
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
+}
+
+pub fn forward_live_host_file_open_to_running_instance_if_any() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        return live_host_file_open_bridge::forward_to_running_instance_if_any();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
 pub fn request_app_exit(app: &tauri::AppHandle) {
     static EXIT_REQUESTED: OnceCell<()> = OnceCell::new();
     if EXIT_REQUESTED.set(()).is_err() {
@@ -201,11 +297,167 @@ pub fn request_app_exit(app: &tauri::AppHandle) {
     app.exit(0);
 }
 
+#[cfg(target_os = "windows")]
+mod live_host_file_open_bridge {
+    use super::{
+        capture_os_reopen_host_file_open_payload, enqueue_live_host_file_open, HostFileOpenPayload,
+    };
+    use once_cell::sync::{Lazy, OnceCell};
+    use std::{collections::HashMap, mem, sync::Mutex};
+    use tauri::{AppHandle, Manager};
+    use windows::{
+        core::{w, PCWSTR},
+        Win32::{
+            Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+            System::DataExchange::COPYDATASTRUCT,
+            UI::WindowsAndMessaging::{
+                CallWindowProcW, DefWindowProcW, FindWindowW, GetWindowLongPtrW,
+                SendMessageTimeoutW, SetWindowLongPtrW, GWLP_WNDPROC, SMTO_ABORTIFHUNG,
+                WM_COPYDATA, WNDPROC,
+            },
+        },
+    };
+
+    const HOST_FILE_OPEN_COPYDATA_KIND: usize = 0x504D_5048;
+    const MAX_COPYDATA_BYTES: usize = 256 * 1024;
+    const SEND_TIMEOUT_MS: u32 = 1_500;
+
+    static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
+
+    #[derive(Default)]
+    struct WndProcRegistry {
+        original: HashMap<isize, isize>,
+    }
+
+    static WNDPROCS: Lazy<Mutex<WndProcRegistry>> =
+        Lazy::new(|| Mutex::new(WndProcRegistry::default()));
+
+    fn try_read_payload(copy_data: &COPYDATASTRUCT) -> Option<HostFileOpenPayload> {
+        if copy_data.dwData != HOST_FILE_OPEN_COPYDATA_KIND {
+            return None;
+        }
+        if copy_data.cbData <= 0 || copy_data.lpData.is_null() {
+            return None;
+        }
+
+        let byte_len = copy_data.cbData as usize;
+        if byte_len > MAX_COPYDATA_BYTES {
+            return None;
+        }
+
+        let bytes = unsafe { std::slice::from_raw_parts(copy_data.lpData as *const u8, byte_len) };
+        serde_json::from_slice::<HostFileOpenPayload>(bytes).ok()
+    }
+
+    unsafe extern "system" fn wnd_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if msg == WM_COPYDATA {
+            let copy_data_ptr = lparam.0 as *const COPYDATASTRUCT;
+            if !copy_data_ptr.is_null() {
+                let copy_data = &*copy_data_ptr;
+                if let Some(payload) = try_read_payload(copy_data) {
+                    if let Some(app) = APP_HANDLE.get() {
+                        enqueue_live_host_file_open(app, payload);
+                    }
+                    return LRESULT(1);
+                }
+            }
+        }
+
+        let original = {
+            let registry = WNDPROCS.lock().ok();
+            registry
+                .and_then(|r| r.original.get(&(hwnd.0 as isize)).copied())
+                .unwrap_or(0)
+        };
+        if original == 0 {
+            return DefWindowProcW(hwnd, msg, wparam, lparam);
+        }
+
+        CallWindowProcW(
+            mem::transmute::<isize, WNDPROC>(original),
+            hwnd,
+            msg,
+            wparam,
+            lparam,
+        )
+    }
+
+    pub fn install(app: &AppHandle) {
+        let _ = APP_HANDLE.set(app.clone());
+
+        let Some(window) = app.get_window(crate::windows::MAIN_WINDOW_LABEL) else {
+            return;
+        };
+        let Ok(hwnd) = window.hwnd() else {
+            return;
+        };
+
+        unsafe {
+            let hwnd_raw = HWND(hwnd.0 as isize);
+            let mut registry = match WNDPROCS.lock() {
+                Ok(registry) => registry,
+                Err(_) => return,
+            };
+
+            if registry.original.contains_key(&(hwnd_raw.0 as isize)) {
+                return;
+            }
+
+            let original = GetWindowLongPtrW(hwnd_raw, GWLP_WNDPROC);
+            registry.original.insert(hwnd_raw.0 as isize, original);
+            drop(registry);
+
+            let _ = SetWindowLongPtrW(hwnd_raw, GWLP_WNDPROC, wnd_proc as isize);
+        }
+    }
+
+    pub fn forward_to_running_instance_if_any() -> bool {
+        let Some(payload) = capture_os_reopen_host_file_open_payload() else {
+            return false;
+        };
+
+        let bytes = match serde_json::to_vec(&payload) {
+            Ok(bytes) if !bytes.is_empty() => bytes,
+            _ => return false,
+        };
+
+        let target = unsafe { FindWindowW(PCWSTR::null(), w!("Pixel Matrix Player")) };
+        if target.0 == 0 {
+            return false;
+        }
+
+        let copy_data = COPYDATASTRUCT {
+            dwData: HOST_FILE_OPEN_COPYDATA_KIND,
+            cbData: bytes.len() as u32,
+            lpData: bytes.as_ptr() as *mut _,
+        };
+        let mut result = 0usize;
+        let sent = unsafe {
+            SendMessageTimeoutW(
+                target,
+                WM_COPYDATA,
+                WPARAM(0),
+                LPARAM((&copy_data as *const COPYDATASTRUCT) as isize),
+                SMTO_ABORTIFHUNG,
+                SEND_TIMEOUT_MS,
+                Some(&mut result),
+            )
+        };
+
+        sent.0 != 0 && result != 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        capture_startup_host_file_open_payload, collect_startup_host_file_paths,
-        HostFileOpenPayload, HostFileOpenState,
+        capture_os_reopen_host_file_open_payload, capture_startup_host_file_open_payload,
+        collect_host_file_open_paths, HostFileOpenPayload, HostFileOpenState,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -243,7 +495,7 @@ mod tests {
             .expect("file url")
             .to_string();
 
-        let paths = collect_startup_host_file_paths(vec![
+        let paths = collect_host_file_open_paths(vec![
             manifest_path.as_os_str().to_os_string(),
             asset_url.into(),
         ]);
@@ -266,7 +518,7 @@ mod tests {
             .to_string();
 
         let missing = root.join("missing.json");
-        let paths = collect_startup_host_file_paths(vec![
+        let paths = collect_host_file_open_paths(vec![
             "--flag".into(),
             missing.as_os_str().to_os_string(),
             manifest_path.as_os_str().to_os_string(),
@@ -310,6 +562,16 @@ mod tests {
         if let Some(payload) = payload {
             assert_eq!(payload.source, "cli-startup");
             assert_eq!(payload.action.as_deref(), Some("startup-opened"));
+            assert!(payload.received_at_ms > 0);
+        }
+    }
+
+    #[test]
+    fn capture_os_reopen_payload_uses_live_defaults() {
+        let payload = capture_os_reopen_host_file_open_payload();
+        if let Some(payload) = payload {
+            assert_eq!(payload.source, "os-reopen");
+            assert_eq!(payload.action.as_deref(), Some("reopened"));
             assert!(payload.received_at_ms > 0);
         }
     }

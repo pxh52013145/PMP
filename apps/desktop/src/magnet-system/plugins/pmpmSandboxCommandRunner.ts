@@ -24,7 +24,7 @@ import {
 import type {
   PmpmBridgeIncomingMessage,
   PmpmBridgeOutgoingMessage,
-} from '@pixel-matrix/plugin-compat-pmpm';
+} from '@pixel-matrix/plugin-platform-contracts';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { dispatchPmpmCompatRpcRequest } from './runtime/pmpmCompatCapabilityTransport';
 import { createPmpmCompatRuntimeResourceRegistry } from './runtime/pmpmCompatRuntimeResources';
@@ -997,6 +997,7 @@ async function runPmpmSandboxedCommandInWorker(options: {
   const api: PluginMountApi = createPluginMountApi({
     pluginId: options.pluginId,
     hostLabel: options.hostLabel,
+    sourceKind: 'pmpm',
     permissions,
     audioService: options.audioService,
     commands: options.commands,
@@ -1342,6 +1343,7 @@ export async function runPmpmSandboxedCommand(options: {
   const api: PluginMountApi = createPluginMountApi({
     pluginId: options.pluginId,
     hostLabel,
+    sourceKind: 'pmpm',
     permissions,
     audioService: options.audioService,
     commands: options.commands,

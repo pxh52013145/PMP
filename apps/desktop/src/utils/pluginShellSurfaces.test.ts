@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import {
   calculatePluginShellSurfacePosition,
+  dismissPluginShellSurface,
   openPluginShellSurface,
   resolvePluginShellSurfaceDefaults,
 } from './pluginShellSurfaces';
@@ -139,6 +140,38 @@ describe('plugin shell surfaces', () => {
       expect.objectContaining({
         event: 'window.plugin-shell-surface.open',
       })
+    );
+  });
+
+  it('defaults shell-surface helper calls to extv2 when sourceKind is omitted', async () => {
+    invokeWithTelemetryMock.mockResolvedValue(undefined);
+
+    await openPluginShellSurface({
+      pluginId: 'demo-plugin',
+      surfaceId: 'demo-overlay',
+      surfaceType: 'overlay',
+    });
+    await dismissPluginShellSurface('demo-plugin', 'demo-overlay', 'overlay');
+
+    expect(invokeWithTelemetryMock).toHaveBeenNthCalledWith(
+      1,
+      'open_plugin_shell_surface',
+      expect.objectContaining({
+        sourceKind: 'extv2',
+        pluginId: 'demo-plugin',
+        surfaceId: 'demo-overlay',
+      }),
+      expect.any(Object)
+    );
+    expect(invokeWithTelemetryMock).toHaveBeenNthCalledWith(
+      2,
+      'dismiss_plugin_shell_surface',
+      expect.objectContaining({
+        sourceKind: 'extv2',
+        pluginId: 'demo-plugin',
+        surfaceId: 'demo-overlay',
+      }),
+      expect.any(Object)
     );
   });
 });

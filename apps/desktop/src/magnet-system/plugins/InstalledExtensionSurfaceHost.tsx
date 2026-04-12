@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import type {
   PmpmBridgeIncomingMessage,
   PmpmBridgeOutgoingMessage,
-} from '@pixel-matrix/plugin-compat-pmpm';
+} from '@pixel-matrix/plugin-platform-contracts';
 import { APP_VERSION, HOST_API_VERSION } from '../../constants/versions';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { useKernel } from '../../contexts/KernelContext';
