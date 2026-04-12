@@ -620,9 +620,55 @@ mod tests {
         SidecarBridgeOpenRequest,
     };
     use serde_json::{json, Value};
+    use std::fs;
     use std::io::{BufRead, BufReader, Write};
     use std::path::PathBuf;
     use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    const ECHO_SIDECAR_FIXTURE: &str = r#"const readline = require('node:readline');
+
+process.stdout.write(JSON.stringify({
+  bridgeVersion: '1.0',
+  op: 'runtime.hello',
+  runtimeKind: 'sidecar',
+  carrier: 'native-process',
+}) + '\n');
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  crlfDelay: Infinity,
+});
+
+rl.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.op === 'runtime.init') {
+    process.stdout.write(JSON.stringify({ bridgeVersion: '1.0', op: 'runtime.init.ack' }) + '\n');
+    return;
+  }
+
+  if (message.op === 'runtime.activate') {
+    process.stdout.write(JSON.stringify({ bridgeVersion: '1.0', op: 'runtime.activate.ack' }) + '\n');
+    process.stdout.write(JSON.stringify({
+      protocolVersion: '1.0',
+      op: 'capability.invoke.request',
+      requestId: 'req-1',
+      capabilityId: 'core.capability-registry',
+      method: 'list',
+    }) + '\n');
+    return;
+  }
+
+  if (message.op === 'capability.invoke.response') {
+    process.stdout.write(JSON.stringify({
+      bridgeVersion: '1.0',
+      op: 'runtime.event',
+      eventName: 'command.result',
+      payload: { ok: true },
+    }) + '\n');
+  }
+});
+"#;
 
     #[test]
     fn resolves_absolute_sidecar_entry_path() {
@@ -650,10 +696,7 @@ mod tests {
             return;
         }
 
-        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../community/plugins/sidecar-echo-demo/sidecar/echo-runtime.js")
-            .canonicalize()
-            .expect("sidecar fixture path");
+        let entry = write_temp_sidecar_fixture("echo-runtime.js", ECHO_SIDECAR_FIXTURE);
 
         let mut child = spawn_sidecar_process(&SidecarBridgeOpenRequest {
             plugin_id: "sidecar-echo-demo".to_string(),
@@ -737,6 +780,7 @@ mod tests {
 
         let _ = child.kill();
         let _ = child.wait();
+        remove_temp_sidecar_fixture(&entry);
     }
 
     fn read_json_line(reader: &mut BufReader<std::process::ChildStdout>) -> Value {
@@ -752,5 +796,26 @@ mod tests {
             .expect("write json line");
         stdin.write_all(b"\n").expect("write newline");
         stdin.flush().expect("flush stdin");
+    }
+
+    fn write_temp_sidecar_fixture(script_name: &str, script: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "pmp-sidecar-fixture-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("create sidecar fixture dir");
+        let path = dir.join(script_name);
+        fs::write(&path, script).expect("write sidecar fixture");
+        path
+    }
+
+    fn remove_temp_sidecar_fixture(entry: &PathBuf) {
+        if let Some(parent) = entry.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
     }
 }

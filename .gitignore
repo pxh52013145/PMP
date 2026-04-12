@@ -54,23 +54,8 @@ lerna-debug.log*
 community/supabase/.branches/
 community/supabase/.temp/
 
-# Community (local-only, except shared resource packs)
-community/*
-!community/plugins/
-community/plugins/*
-!community/plugins/README.md
-!community/plugins/_tools/
-!community/plugins/_tools/**
-!community/plugins/hello-magnet-demo/
-!community/plugins/hello-magnet-demo/**
-!community/plugins/capability-registry-demo/
-!community/plugins/capability-registry-demo/**
-!community/plugins/command-surface-demo/
-!community/plugins/command-surface-demo/**
-!community/plugins/settings-panel-demo/
-!community/plugins/settings-panel-demo/**
-!community/plugins/stream-protocol-demo/
-!community/plugins/stream-protocol-demo/**
+# Community (local-only)
+/community/
 
 # New source-first phase: archive and local package experiments
 legacy/
