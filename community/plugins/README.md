@@ -25,8 +25,6 @@ This folder contains demo plugins used to validate the plugin runtime, protocol 
   - Shares the same sidecar script, but keeps `manifest.v2.json` as a resolver/runtime-bridge fixture.
 - `plugin-starter`
   - Reusable manifest-v2 starter scaffold for new page/settings/magnet plugins.
-- `utils`
-  - SAO Utils-inspired hybrid fixture combining a host-managed magnet/page/overlay/widget shell with a sidecar probe lane.
 
 ## Packaging
 - `pnpm plugin:pack:stream-demo`
