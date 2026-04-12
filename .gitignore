@@ -76,10 +76,7 @@ community/plugins/*
 
 # New source-first phase: archive and local package experiments
 legacy/
-design/
-!design/
-design/*
-!design/audio-score-gate-baseline.json
+/design/
 packages/
 !packages/
 packages/*
@@ -136,20 +133,10 @@ pnpm-lock.yaml
 package-lock.json
 npm-shrinkwrap.json
 
-# Documentation
-docs/examples/**/dist/
-docs/perf-snapshots/*.csv
-docs/examples/**/*.pmpm
-
-# Root docs and local architecture notes
+# Documentation and local planning folders
 /docs/
-
-# Local blueprint drafts and docs (do not commit by default)
-/documents/*
-!/documents/plugin-platform.md
-!/documents/plugin-platform-phases.md
-!/documents/plugin-platform-preflight.md
-!/documents/magnet-plugin-utils-design.md
+/documents/
+/future/
 
 # Manuals (work-in-progress)
 Mannuals/
