@@ -8,9 +8,9 @@ import {
 } from '../pluginLifecycleTelemetry';
 import type { RuntimeBridgeTransportMessage } from './runtimeBridgeHostSession';
 import type {
-  CreatePmpmBridgeSidecarPortControllerOptions,
-  PmpmBridgeSidecarPortController,
-} from './sidecarCommandRuntime';
+  CreateRuntimeSidecarPortControllerOptions,
+  RuntimeSidecarPortController,
+} from './runtimeSidecarPort';
 
 const SIDECAR_BRIDGE_MESSAGE_EVENT = 'plugin-sidecar-bridge-message';
 
@@ -33,9 +33,9 @@ function isRuntimeBridgeTransportMessage(value: unknown): value is RuntimeBridge
   return typeof asObject(value)?.op === 'string';
 }
 
-export async function createTauriPmpmBridgeSidecarPortController(
-  options: CreatePmpmBridgeSidecarPortControllerOptions
-): Promise<PmpmBridgeSidecarPortController> {
+export async function createTauriRuntimeSidecarPortController(
+  options: CreateRuntimeSidecarPortControllerOptions
+): Promise<RuntimeSidecarPortController> {
   if (!isTauriRuntime()) {
     throw new Error('Native sidecar runtime bridge is only available in Tauri runtime');
   }

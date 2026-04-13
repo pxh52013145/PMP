@@ -6,7 +6,7 @@ import type {
 import type { PluginRuntimeResolution } from './runtime/types';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 
-export type PluginLifecycleSourceKind = 'pmpm' | 'extv2';
+export type PluginLifecycleSourceKind = 'extv2';
 
 export type PluginLifecycleTelemetryContext = {
   pluginId: string;
@@ -198,19 +198,11 @@ function buildPluginRuntimeResolveFields(
       runtimeSource: null,
       issueCount: 0,
       issues: [],
-      compatLayerIds: [],
       candidateLauncherIds: [],
-      compatMode: 'none',
     };
   }
 
   if (resolution.status === 'resolved') {
-    const compatMode =
-      resolution.source === 'compat-runtime'
-        ? 'active'
-        : resolution.compatLayerIds.length > 0
-          ? 'fallback-available'
-          : 'none';
     return {
       resolutionStatus: 'resolved',
       hostId: resolution.hostId,
@@ -220,9 +212,7 @@ function buildPluginRuntimeResolveFields(
       runtimeSource: resolution.source,
       issueCount: resolution.issues.length,
       issues: [...resolution.issues],
-      compatLayerIds: [...resolution.compatLayerIds],
       candidateLauncherIds: [resolution.launcher.id],
-      compatMode,
     };
   }
 
@@ -235,9 +225,7 @@ function buildPluginRuntimeResolveFields(
     runtimeSource: null,
     issueCount: resolution.issues.length,
     issues: [...resolution.issues],
-    compatLayerIds: [...resolution.compatLayerIds],
     candidateLauncherIds: resolution.candidateLaunchers.map((launcher) => launcher.id),
-    compatMode: resolution.compatLayerIds.length > 0 ? 'declared' : 'none',
   };
 }
 
@@ -248,7 +236,7 @@ function readPluginRuntimeResolveError(
   if (resolution.status === 'resolved') {
     return 'Plugin runtime resolve unexpectedly failed';
   }
-  return resolution.issues[0] ?? 'No compatible runtime launcher is available';
+  return resolution.issues[0] ?? 'No supported runtime launcher is available';
 }
 
 export function startPluginSurfaceMount(

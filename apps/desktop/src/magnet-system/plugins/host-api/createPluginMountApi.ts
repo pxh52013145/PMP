@@ -14,14 +14,14 @@ import { closePluginWindow, openPluginWindow } from '../../../utils/pluginWindow
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
 import { broadcastSignal, TAURI_EVENTS } from '../../../utils/windowCommunication';
 import {
-  patchPmpmPluginConfig,
-  readPmpmPluginConfig,
-  subscribePmpmPluginConfig,
-  clearPmpmPluginConfig,
-  writePmpmPluginConfig,
-  type PmpmPluginConfig,
+  patchExtensionConfig,
+  readExtensionConfig,
+  subscribeExtensionConfig,
+  clearExtensionConfig,
+  writeExtensionConfig,
+  type ExtensionConfig,
 } from '../pluginConfig';
-import { recordPmpmPermissionDenied } from '../pmpmGovernance';
+import { recordInstalledExtensionPermissionDenied } from '../extensionsGovernance';
 import type { KeybindingsService } from '../../../services/keybindings';
 import {
   getPluginHostCapability,
@@ -62,7 +62,7 @@ const HOST_CAPABILITY_INVOKE_TIMEOUT_MS = 6000;
 const HOST_CAPABILITY_PAYLOAD_MAX_BYTES = 256 * 1024;
 const HOST_STREAM_INTERVAL_MIN_MS = 16;
 const HOST_STREAM_INTERVAL_MAX_MS = 2_000;
-const telemetry = getTelemetryLogger('pmpm-host-api', 'createPluginMountApi');
+const telemetry = getTelemetryLogger('extensions-host-api', 'createPluginMountApi');
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -251,7 +251,7 @@ export function createPluginMountApi({
       }
     );
     try {
-      recordPmpmPermissionDenied({ pluginId, hostLabel, capability, action });
+      recordInstalledExtensionPermissionDenied({ pluginId, hostLabel, capability, action });
     } catch {
       // ignore
     }
@@ -517,28 +517,28 @@ export function createPluginMountApi({
         warnDenied('storage:local', 'config.get()');
         return {};
       }
-      return readPmpmPluginConfig(pluginId, sourceKind);
+      return readExtensionConfig(pluginId, sourceKind);
     },
     set: (next: Record<string, unknown>) => {
       if (!allowPluginConfig) {
         warnDenied('storage:local', 'config.set(next)');
         return;
       }
-      writePmpmPluginConfig(pluginId, next as PmpmPluginConfig, sourceKind);
+      writeExtensionConfig(pluginId, next as ExtensionConfig, sourceKind);
     },
     patch: (next: Record<string, unknown>) => {
       if (!allowPluginConfig) {
         warnDenied('storage:local', 'config.patch(next)');
         return;
       }
-      patchPmpmPluginConfig(pluginId, next, sourceKind);
+      patchExtensionConfig(pluginId, next, sourceKind);
     },
     reset: () => {
       if (!allowPluginConfig) {
         warnDenied('storage:local', 'config.reset()');
         return;
       }
-      clearPmpmPluginConfig(pluginId, sourceKind);
+      clearExtensionConfig(pluginId, sourceKind);
     },
     onChange: (cb: (config: Record<string, unknown>) => void) => {
       if (!allowPluginConfig) {
@@ -552,7 +552,7 @@ export function createPluginMountApi({
         );
         return () => {};
       }
-      return subscribePmpmPluginConfig(pluginId, cb, sourceKind);
+      return subscribeExtensionConfig(pluginId, cb, sourceKind);
     },
   };
 

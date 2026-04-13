@@ -1,7 +1,6 @@
 import { strFromU8, strToU8, unzip, zip } from 'fflate';
 import type { AsyncZippable, Unzipped } from 'fflate';
 
-import { validatePmpmManifest, type PmpmManifest } from '../../magnet-system/plugins/pmpm';
 import { validatePmpsManifest, type PmpsManifest } from '../../shader-system/pmps';
 
 async function unzipAsync(bytes: Uint8Array): Promise<Unzipped> {
@@ -94,7 +93,6 @@ export type ThemePackManifestV1 = {
     theme: string;
   };
   dependencies?: {
-    pmpm?: ThemePackDependency[];
     pmps?: ThemePackDependency[];
   };
   requires?: {
@@ -177,14 +175,6 @@ export function validateThemePackManifestV1(manifest: unknown): asserts manifest
 
   if (typeof manifest.dependencies !== 'undefined') {
     assertObject(manifest.dependencies, 'manifest.dependencies');
-    if (typeof manifest.dependencies.pmpm !== 'undefined') {
-      if (!Array.isArray(manifest.dependencies.pmpm)) {
-        throw new Error('manifest.dependencies.pmpm must be an array');
-      }
-      manifest.dependencies.pmpm = manifest.dependencies.pmpm.map((dep, index) =>
-        validateDependency(dep, index, 'manifest.dependencies.pmpm')
-      );
-    }
     if (typeof manifest.dependencies.pmps !== 'undefined') {
       if (!Array.isArray(manifest.dependencies.pmps)) {
         throw new Error('manifest.dependencies.pmps must be an array');
@@ -227,7 +217,7 @@ export function validateThemePackManifestV1(manifest: unknown): asserts manifest
 }
 
 export type ParsedThemePackDependency = {
-  kind: 'pmpm' | 'pmps';
+  kind: 'pmps';
   id: string;
   version?: string;
   bundlePath?: string;
@@ -316,33 +306,6 @@ export async function parseThemePackFromZipBytes(bytes: Uint8Array): Promise<Par
 
   const dependencies: ParsedThemePackDependency[] = [];
 
-  const pmpmDeps = manifestUnknown.dependencies?.pmpm ?? [];
-  for (const dep of pmpmDeps) {
-    const bundlePath = dep.bundlePath;
-    const bundleBytes = bundlePath ? findZipEntry(files, bundlePath) : undefined;
-    let bundleMeta: ParsedThemePackDependency['bundleMeta'];
-    let bundleMetaError: string | undefined;
-    if (bundleBytes) {
-      try {
-        const meta = await readPmpmMetaFromZipBytes(bundleBytes);
-        bundleMeta = meta;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        bundleMetaError = message;
-      }
-    }
-    dependencies.push({
-      kind: 'pmpm',
-      id: dep.id,
-      version: dep.version,
-      bundlePath,
-      bundled: typeof bundleBytes !== 'undefined',
-      bundleBytes,
-      bundleMeta,
-      bundleMetaError,
-    });
-  }
-
   const pmpsDeps = manifestUnknown.dependencies?.pmps ?? [];
   for (const dep of pmpsDeps) {
     const bundlePath = dep.bundlePath;
@@ -377,29 +340,6 @@ export async function parseThemePackFromZipBytes(bytes: Uint8Array): Promise<Par
     entryThemeText: themeText,
     checksums,
     dependencies,
-  };
-}
-
-export async function readPmpmMetaFromZipBytes(bytes: Uint8Array): Promise<{
-  id: string;
-  version: string;
-  name: string;
-  permissions?: string[];
-}> {
-  const files = await unzipAsync(bytes);
-  const manifestBytes = findZipEntry(files, 'manifest.json');
-  if (!manifestBytes) {
-    throw new Error('Invalid bundled .pmpm: missing manifest.json');
-  }
-  const manifestRaw = strFromU8(manifestBytes);
-  const manifestUnknown = JSON.parse(manifestRaw) as unknown;
-  validatePmpmManifest(manifestUnknown);
-  const manifest = manifestUnknown as PmpmManifest;
-  return {
-    id: manifest.metadata.id,
-    version: manifest.metadata.version,
-    name: manifest.metadata.name,
-    permissions: manifest.permissions,
   };
 }
 
@@ -451,7 +391,6 @@ export async function createThemePackZipBytes(options: {
     bundlePaths.push(normalizeChecksumPath(path));
   };
 
-  for (const dep of deps?.pmpm ?? []) addBundlePath(dep.bundlePath);
   for (const dep of deps?.pmps ?? []) addBundlePath(dep.bundlePath);
 
   for (const path of bundlePaths) {

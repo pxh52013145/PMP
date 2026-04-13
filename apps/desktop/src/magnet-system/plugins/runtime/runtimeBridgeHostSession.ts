@@ -14,13 +14,13 @@ import type {
 } from '@pixel-matrix/plugin-platform-contracts';
 import type { PluginMountApi } from '../pluginHostApi';
 import {
-  dispatchPmpmCapabilityProtocolRequest,
-  type PmpmCapabilityProtocolRequestMessage,
-} from './pmpmCompatCapabilityTransport';
+  dispatchSandboxCapabilityProtocolRequest,
+  type SandboxCapabilityProtocolRequestMessage,
+} from './sandboxCapabilityTransport';
 import {
-  createPmpmCompatRuntimeResourceRegistry,
-  type PmpmCompatRuntimeResourceRegistry,
-} from './pmpmCompatRuntimeResources';
+  createRuntimeResourceRegistry,
+  type RuntimeResourceRegistry,
+} from './runtimeResourceRegistry';
 import {
   completePluginGovernanceCleanup,
   completePluginGovernanceRevoke,
@@ -64,7 +64,7 @@ export interface RuntimeBridgeHostSessionOptions {
   port: RuntimeBridgePort;
   runtimeInit: RuntimeInit;
   runtimeActivate: RuntimeActivate;
-  runtimeResources?: PmpmCompatRuntimeResourceRegistry;
+  runtimeResources?: RuntimeResourceRegistry;
   startupTimeoutMs?: number;
   requestTimeoutMs?: number;
   onRuntimeEvent?: (message: RuntimeEvent) => void | Promise<void>;
@@ -165,7 +165,7 @@ function isRuntimeMessage(message: RuntimeBridgeTransportMessage): message is Ru
 
 function isCapabilityRequestMessage(
   message: RuntimeBridgeTransportMessage
-): message is PmpmCapabilityProtocolRequestMessage {
+): message is SandboxCapabilityProtocolRequestMessage {
   switch (message.op) {
     case 'capability.invoke.request':
     case 'session.open.request':
@@ -219,8 +219,7 @@ function assertMatchingRuntimeIdentity(
 export function createRuntimeBridgeHostSession(
   options: RuntimeBridgeHostSessionOptions
 ): RuntimeBridgeHostSession {
-  const runtimeResources =
-    options.runtimeResources ?? createPmpmCompatRuntimeResourceRegistry();
+  const runtimeResources = options.runtimeResources ?? createRuntimeResourceRegistry();
   const startupTimeoutMs = Math.max(1, Math.floor(options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS));
   const requestTimeoutMs = Math.max(1, Math.floor(options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
   const runtimeTelemetryContext: PluginLifecycleTelemetryContext | null = options.telemetry
@@ -540,7 +539,7 @@ export function createRuntimeBridgeHostSession(
   };
 
   const handleCapabilityRequest = async (
-    message: PmpmCapabilityProtocolRequestMessage
+    message: SandboxCapabilityProtocolRequestMessage
   ): Promise<void> => {
     const capabilityTrace = traceContext
       ? startRuntimeProtocolSpan(traceContext, `plugin.capability.protocol.${message.op.replace(/\./g, '-')}`, {
@@ -554,7 +553,7 @@ export function createRuntimeBridgeHostSession(
           },
         })
       : null;
-    const response = await dispatchPmpmCapabilityProtocolRequest(
+    const response = await dispatchSandboxCapabilityProtocolRequest(
       options.api,
       options.permissions,
       message,

@@ -15,8 +15,6 @@ export type PluginRuntimeSurfaceKind =
   | 'command';
 
 export type PluginRuntimeLauncherId =
-  | 'compat.pmpm.inline-module'
-  | 'compat.pmpm.webview-sandbox'
   | 'pxp.webview.host-frame'
   | 'pxp.extension-host.worker'
   | 'pxp.sidecar.native-process';
@@ -36,15 +34,12 @@ export interface PluginRuntimeLauncherDescriptor {
   availability: PluginRuntimeLauncherAvailability;
   transport: PluginRuntimeLauncherTransport;
   description: string;
-  compatLayerId?: string;
 }
 
 export interface PluginRuntimeResolverContext {
   hostId?: string;
   platform?: string | null;
   arch?: string | null;
-  preferSandboxLauncher?: boolean;
-  preferCompatSandbox?: boolean;
   surfaceKind?: PluginRuntimeSurfaceKind;
   preferCommandWorker?: boolean;
   supportedLauncherIds?: PluginRuntimeLauncherId[];
@@ -61,7 +56,6 @@ export interface PluginRuntimeResolutionBase {
   manifest: PxpManifestV2;
   installedRecord: InstalledExtensionRecord<PxpManifestV2>;
   hostId: string;
-  compatLayerIds: string[];
   issues: string[];
 }
 
@@ -70,7 +64,7 @@ export interface ResolvedPluginRuntime extends PluginRuntimeResolutionBase {
   runtime: RuntimeEntryDescriptor;
   launcher: PluginRuntimeLauncherDescriptor;
   artifact: PluginRuntimeArtifactResolution;
-  source: 'manifest-runtime' | 'compat-runtime';
+  source: 'manifest-runtime';
 }
 
 export interface BlockedPluginRuntime extends PluginRuntimeResolutionBase {

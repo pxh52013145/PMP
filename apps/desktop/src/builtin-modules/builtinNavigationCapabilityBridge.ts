@@ -109,7 +109,7 @@ function createBuiltinWindowBridge(
         x?: number;
         y?: number;
         pluginId?: string;
-        sourceKind?: 'pmpm' | 'extv2';
+        sourceKind?: 'extv2';
       }
     ) => {
       if (windowId === 'keyboard-shortcuts') {
@@ -272,7 +272,7 @@ export async function openBuiltinPluginVisualizerViaHostCapability(
 export async function openBuiltinPluginWindowViaHostCapability(
   navigation: NavigationService,
   params: {
-    sourceKind: 'pmpm' | 'extv2';
+    sourceKind: 'extv2';
     pluginId: string;
     windowId: string;
     title?: string;

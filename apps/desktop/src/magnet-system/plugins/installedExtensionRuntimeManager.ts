@@ -97,7 +97,7 @@ export type ActivateInstalledExtensionCapabilityOptions = {
   method?: string;
   requestKind?: 'invoke' | 'open-session' | 'open-stream' | 'close-session';
   sourcePluginId?: string;
-  sourceKind?: 'extv2' | 'pmpm';
+  sourceKind?: 'extv2';
   hostLabel?: string;
 };
 
@@ -299,7 +299,7 @@ export class DefaultInstalledExtensionRuntimeManager
   };
 
   getRestartToken = (pluginId: string): number => {
-    const request = readHostExtensionRuntimeRestartRequest('extv2');
+    const request = readHostExtensionRuntimeRestartRequest();
     const supervisorToken =
       request && request.pluginId === pluginId ? request.at : 0;
     const lifecycleToken = this.lifecycleTokens.get(pluginId) ?? 0;
@@ -972,7 +972,7 @@ export class DefaultInstalledExtensionRuntimeManager
   };
 
   private handleRestartSignal = (): void => {
-    const restart = readHostExtensionRuntimeRestartRequest('extv2');
+    const restart = readHostExtensionRuntimeRestartRequest();
     if (!restart || restart.at <= this.lastRestartAt) return;
     this.lastRestartAt = restart.at;
     this.notifyRestartListeners();

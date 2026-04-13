@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type {
-  PmpmBridgeIncomingMessage,
-  PmpmBridgeOutgoingMessage,
+  SandboxBridgeIncomingMessage,
+  SandboxBridgeOutgoingMessage,
 } from '@pixel-matrix/plugin-platform-contracts';
 import { APP_VERSION, HOST_API_VERSION } from '../../constants/versions';
 import { useAudioService } from '../../contexts/AudioEngineContext';
@@ -11,23 +11,23 @@ import { KEYBINDINGS_SERVICE_TOKEN } from '../../services/keybindings';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import {
-  buildPmpmRuntimeActivateSnapshot,
-  buildPmpmRuntimeHealthSnapshot,
-  buildPmpmRuntimeHelloSnapshot,
-  buildPmpmRuntimeInitSnapshot,
-  buildPmpmViewMountRequestSnapshot,
-} from './pmpmRuntimeBridgeSnapshot';
-import { buildPmpmSandboxSrcDoc } from './pmpmSandboxSrcDoc';
+  buildRuntimeActivateSnapshot,
+  buildRuntimeHealthSnapshot,
+  buildRuntimeHelloSnapshot,
+  buildRuntimeInitSnapshot,
+  buildViewMountRequestSnapshot,
+} from './runtimeBridgeSnapshots';
+import { buildRuntimeSandboxSrcDoc } from './runtimeSandboxSrcDoc';
 import {
-  dispatchPmpmCompatRpcRequest,
-} from './runtime/pmpmCompatCapabilityTransport';
+  dispatchSandboxRpcRequest,
+} from './runtime/sandboxCapabilityTransport';
 import {
-  createPmpmCompatRuntimeResourceRegistry,
-} from './runtime/pmpmCompatRuntimeResources';
+  createRuntimeResourceRegistry,
+} from './runtime/runtimeResourceRegistry';
 import {
-  createPmpmCompatRuntimeSessionAdapter,
-  type PmpmCompatCapabilityRevokeAckMessage,
-} from './runtime/pmpmCompatRuntimeSessionAdapter';
+  createSandboxRuntimeSessionAdapter,
+  type SandboxCapabilityRevokeAckMessage,
+} from './runtime/sandboxRuntimeSessionAdapter';
 import { createRuntimeBridgeHostSession } from './runtime/runtimeBridgeHostSession';
 import {
   bindHostRuntimeEventChannel,
@@ -47,7 +47,7 @@ import {
   quarantineInstalledExtension,
   getInstalledExtensionRecord,
   getInstalledExtensionsRevision,
-  listInstalledExtensionCompatPermissions,
+  listInstalledExtensionDerivedPermissions,
   recordInstalledExtensionCrash,
   subscribeInstalledExtensions,
 } from './extensions';
@@ -55,7 +55,7 @@ import { recordInstalledExtensionPermissionDenied } from './extensionsGovernance
 import {
   buildInstalledExtensionActivationViewId,
 } from './activationEvents';
-import { readPmpmPluginConfig, subscribePmpmPluginConfig } from './pluginConfig';
+import { readExtensionConfig, subscribeExtensionConfig } from './pluginConfig';
 import { useInstalledExtensionRuntimeRestartToken } from './useInstalledExtensionRuntimeRestartToken';
 import { useMagnetSkin } from '../../themes/useMagnetSkin';
 import {
@@ -86,15 +86,16 @@ type InstalledExtensionSurface =
   | { kind: 'overlay'; surfaceId: string; mountContext?: unknown }
   | { kind: 'desktop-widget'; surfaceId: string; mountContext?: unknown };
 
-type FrameMessage = PmpmBridgeIncomingMessage | PmpmCompatCapabilityRevokeAckMessage;
-type PmpmCompatContentSizeMessage = {
-  frameId: string;
-  type: 'pmpm:content-size';
-  height: number;
-};
+type FrameMessage = SandboxBridgeIncomingMessage | SandboxCapabilityRevokeAckMessage;
 type FramePostMessage =
-  | Omit<PmpmBridgeOutgoingMessage, 'frameId'>
-  | { type: 'pmpm:capabilities-revoke'; requestId: string; capabilityIds: string[]; reason: string; dryRun?: boolean };
+  | Omit<SandboxBridgeOutgoingMessage, 'frameId'>
+  | {
+      type: 'sandbox:capabilities-revoke';
+      requestId: string;
+      capabilityIds: string[];
+      reason: string;
+      dryRun?: boolean;
+    };
 
 function asObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -183,7 +184,7 @@ function InstalledExtensionSurfaceHost({
 
   const permissions = useMemo(() => {
     if (!record || !enabled) return new Set<string>();
-    return new Set(listInstalledExtensionCompatPermissions(record));
+    return new Set(listInstalledExtensionDerivedPermissions(record));
   }, [enabled, record]);
 
   const navigation = useMemo(() => {
@@ -217,7 +218,7 @@ function InstalledExtensionSurfaceHost({
           method: activity.method,
           requestKind: activity.requestKind,
           sourcePluginId: activity.sourcePluginId,
-          sourceKind: activity.sourceKind === 'extv2' ? 'extv2' : 'pmpm',
+          sourceKind: 'extv2',
           hostLabel: activity.hostLabel,
         });
       },
@@ -245,12 +246,12 @@ function InstalledExtensionSurfaceHost({
     record && enabled
       ? runtimeResolution?.status === 'resolved'
         ? null
-        : runtimeResolution?.issues[0] ?? 'No compatible runtime launcher is available'
+        : runtimeResolution?.issues[0] ?? 'No supported runtime launcher is available'
       : null;
 
   const runtimeResources = useMemo(() => {
     void frameId;
-    return createPmpmCompatRuntimeResourceRegistry();
+    return createRuntimeResourceRegistry();
   }, [frameId]);
 
   const surfaceId = buildSurfaceId(surface);
@@ -304,7 +305,7 @@ function InstalledExtensionSurfaceHost({
   );
   const initialConfig = useMemo(() => {
     if (!permissions.has('storage:local')) return {};
-    return readPmpmPluginConfig(pluginId, 'extv2');
+    return readExtensionConfig(pluginId, 'extv2');
   }, [permissions, pluginId]);
   const initialNavigation = useMemo(() => {
     if (!permissions.has('api:navigation')) return null;
@@ -335,8 +336,8 @@ function InstalledExtensionSurfaceHost({
   const lastPongAtRef = useRef<number>(Date.now());
   const frameReadyRef = useRef(false);
   const crashReportedRef = useRef(false);
-  const compatRuntimeAdapterRef = useRef<ReturnType<
-    typeof createPmpmCompatRuntimeSessionAdapter
+  const sandboxRuntimeAdapterRef = useRef<ReturnType<
+    typeof createSandboxRuntimeSessionAdapter
   > | null>(null);
 
   useEffect(() => {
@@ -438,25 +439,25 @@ function InstalledExtensionSurfaceHost({
     const handler = (event: MessageEvent) => {
       if (disposed) return;
       if (event.source !== iframeRef.current?.contentWindow) return;
-      const data = event.data as FrameMessage | PmpmCompatContentSizeMessage;
+      const data = event.data as FrameMessage;
       if (!data || typeof data !== 'object') return;
       if ((data as { frameId?: unknown }).frameId !== frameId) return;
 
-      if (data.type === 'pmpm:iframe-ready') {
+      if (data.type === 'sandbox:iframe-ready') {
         setFrameReady(true);
         frameReadyRef.current = true;
         lastPongAtRef.current = Date.now();
-        compatRuntimeAdapterRef.current?.handleCompatMessage(data);
+        sandboxRuntimeAdapterRef.current?.handleSandboxMessage(data);
         return;
       }
 
-      if (data.type === 'pmpm:mounted') {
+      if (data.type === 'sandbox:mounted') {
         setMounted(true);
-        compatRuntimeAdapterRef.current?.handleCompatMessage(data);
+        sandboxRuntimeAdapterRef.current?.handleSandboxMessage(data);
         return;
       }
 
-      if (data.type === 'pmpm:content-size') {
+      if (data.type === 'sandbox:content-size') {
         if (surface.kind !== 'settings') return;
         const nextHeight = Math.max(
           DEFAULT_SETTINGS_SURFACE_HEIGHT_PX,
@@ -468,8 +469,8 @@ function InstalledExtensionSurfaceHost({
         return;
       }
 
-      if (data.type === 'pmpm:error') {
-        compatRuntimeAdapterRef.current?.handleCompatMessage(data);
+      if (data.type === 'sandbox:error') {
+        sandboxRuntimeAdapterRef.current?.handleSandboxMessage(data);
         if (crashReportedRef.current) return;
         crashReportedRef.current = true;
         const message = typeof data.message === 'string' ? data.message : 'Extension error';
@@ -489,27 +490,27 @@ function InstalledExtensionSurfaceHost({
         return;
       }
 
-      if (data.type === 'pmpm:pong') {
+      if (data.type === 'sandbox:pong') {
         lastPongAtRef.current = Date.now();
         return;
       }
 
-      if (data.type === 'pmpm:capabilities-revoke-ack') {
-        compatRuntimeAdapterRef.current?.handleCompatMessage(data);
+      if (data.type === 'sandbox:capabilities-revoke-ack') {
+        sandboxRuntimeAdapterRef.current?.handleSandboxMessage(data);
         return;
       }
 
-      if (data.type === 'pmpm:permission-denied') {
-        compatRuntimeAdapterRef.current?.handleCompatMessage(data);
+      if (data.type === 'sandbox:permission-denied') {
+        sandboxRuntimeAdapterRef.current?.handleSandboxMessage(data);
         return;
       }
 
-      if (data.type === 'pmpm:rpc') {
+      if (data.type === 'sandbox:rpc') {
         void (async () => {
-          const response = await dispatchPmpmCompatRpcRequest(api, permissions, data, {
+          const response = await dispatchSandboxRpcRequest(api, permissions, data, {
             runtimeResources,
             emitProtocolMessage: (message) =>
-              postToFrame({ type: 'pmpm:event', name: 'protocol.message', payload: message }),
+              postToFrame({ type: 'sandbox:event', name: 'protocol.message', payload: message }),
           });
           postToFrame(response);
         })();
@@ -587,7 +588,7 @@ function InstalledExtensionSurfaceHost({
     let runtimeSession: ReturnType<typeof createRuntimeBridgeHostSession> | null = null;
 
     const cleanupRuntime = async (reason: string) => {
-      compatRuntimeAdapterRef.current = null;
+      sandboxRuntimeAdapterRef.current = null;
       if (pingInterval !== null) {
         window.clearInterval(pingInterval);
         pingInterval = null;
@@ -620,7 +621,7 @@ function InstalledExtensionSurfaceHost({
 
     const boot = async () => {
       try {
-        const runtimeHelloSnapshot = buildPmpmRuntimeHelloSnapshot({
+        const runtimeHelloSnapshot = buildRuntimeHelloSnapshot({
           pluginId,
           runtimeId: runtimeResolution.runtime.runtimeId,
           runtimeInstanceId: frameId,
@@ -628,7 +629,7 @@ function InstalledExtensionSurfaceHost({
           carrier: 'webview-frame',
           supportsViewMount: true,
         });
-        const runtimeInitSnapshot = buildPmpmRuntimeInitSnapshot({
+        const runtimeInitSnapshot = buildRuntimeInitSnapshot({
           pluginId,
           runtimeId: runtimeResolution.runtime.runtimeId,
           runtimeInstanceId: frameId,
@@ -638,7 +639,7 @@ function InstalledExtensionSurfaceHost({
           heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
           unresponsiveTimeoutMs: UNRESPONSIVE_TIMEOUT_MS,
         });
-        const runtimeActivateSnapshot = buildPmpmRuntimeActivateSnapshot({
+        const runtimeActivateSnapshot = buildRuntimeActivateSnapshot({
           pluginId,
           runtimeId: runtimeResolution.runtime.runtimeId,
           runtimeInstanceId: frameId,
@@ -646,12 +647,12 @@ function InstalledExtensionSurfaceHost({
           surfaceId,
           mountContext: surface.mountContext,
         });
-        const runtimeHealthSnapshot = buildPmpmRuntimeHealthSnapshot({
+        const runtimeHealthSnapshot = buildRuntimeHealthSnapshot({
           pluginId,
           runtimeId: runtimeResolution.runtime.runtimeId,
           runtimeInstanceId: frameId,
         });
-        const viewMountRequestSnapshot = buildPmpmViewMountRequestSnapshot({
+        const viewMountRequestSnapshot = buildViewMountRequestSnapshot({
           pluginId,
           runtimeId: runtimeResolution.runtime.runtimeId,
           runtimeInstanceId: frameId,
@@ -662,7 +663,7 @@ function InstalledExtensionSurfaceHost({
         const entryUrl = await createInstalledExtensionEntryUrl(runtimeResolution.artifact.path);
         if (disposed) return;
 
-        const compatRuntimeAdapter = createPmpmCompatRuntimeSessionAdapter({
+        const sandboxRuntimeAdapter = createSandboxRuntimeSessionAdapter({
           runtimeHello: runtimeHelloSnapshot,
           runtimeHealth: runtimeHealthSnapshot,
           viewMountRequest: viewMountRequestSnapshot ?? undefined,
@@ -690,11 +691,11 @@ function InstalledExtensionSurfaceHost({
               : null,
           initialNavigation,
           initialConfig,
-          postCompatMessage: postToFrame,
+          postSandboxMessage: postToFrame,
         });
 
-        compatRuntimeAdapterRef.current = compatRuntimeAdapter;
-        compatRuntimeAdapter.primeRuntimeHello();
+        sandboxRuntimeAdapterRef.current = sandboxRuntimeAdapter;
+        sandboxRuntimeAdapter.primeRuntimeHello();
 
         runtimeSession = createRuntimeBridgeHostSession({
           pluginId,
@@ -704,7 +705,7 @@ function InstalledExtensionSurfaceHost({
           carrier: runtimeHelloSnapshot.carrier,
           api,
           permissions,
-          port: compatRuntimeAdapter.port,
+          port: sandboxRuntimeAdapter.port,
           runtimeInit: runtimeInitSnapshot,
           runtimeActivate: runtimeActivateSnapshot,
           runtimeResources,
@@ -739,7 +740,7 @@ function InstalledExtensionSurfaceHost({
           emitRuntimeEvent: (eventName, payload) =>
             runtimeSession?.emitRuntimeEvent(eventName, payload) ?? Promise.resolve(),
           subscribeConfig: permissions.has('storage:local')
-            ? (listener) => subscribePmpmPluginConfig(pluginId, listener, 'extv2')
+            ? (listener) => subscribeExtensionConfig(pluginId, listener, 'extv2')
             : undefined,
           getSpectrum: permissions.has('api:audio-visual')
             ? () => api.visualizer.getSpectrum()
@@ -752,7 +753,7 @@ function InstalledExtensionSurfaceHost({
         });
 
         pingInterval = window.setInterval(() => {
-          postToFrame({ type: 'pmpm:ping', pingId: Date.now() });
+          postToFrame({ type: 'sandbox:ping', pingId: Date.now() });
 
           const elapsed = Date.now() - lastPongAtRef.current;
           if (elapsed < UNRESPONSIVE_TIMEOUT_MS || crashReportedRef.current) return;
@@ -799,7 +800,7 @@ function InstalledExtensionSurfaceHost({
     return () => {
       disposed = true;
       void cleanupRuntime('runtime-dispose');
-      postToFrame({ type: 'pmpm:dispose' });
+      postToFrame({ type: 'sandbox:dispose' });
     };
   }, [
     activationError,
@@ -857,7 +858,7 @@ function InstalledExtensionSurfaceHost({
         ref={iframeRef}
         title={`${hostLabel}:${pluginId}`}
         sandbox="allow-scripts allow-same-origin"
-        srcDoc={buildPmpmSandboxSrcDoc(frameId)}
+        srcDoc={buildRuntimeSandboxSrcDoc(frameId)}
         style={{
           width: '100%',
           height: '100%',

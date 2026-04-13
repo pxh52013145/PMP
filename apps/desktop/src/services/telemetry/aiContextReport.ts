@@ -12,7 +12,6 @@ const DEFAULT_AI_MODULE_IDS = [
   'music-library',
   'playlists',
   'plugins',
-  'pmpm',
   'extensions',
   'performance',
   'memory-governance',

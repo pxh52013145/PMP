@@ -1,7 +1,7 @@
 import type {
-  PmpmBridgeIncomingMessage,
-  PmpmBridgeOutgoingMessage,
-  PmpmSandboxSurface,
+  SandboxBridgeIncomingMessage,
+  SandboxBridgeOutgoingMessage,
+  SandboxSurface,
 } from '@pixel-matrix/plugin-platform-contracts';
 import type {
   RuntimeActivate,
@@ -15,11 +15,11 @@ import type {
 import type { RuntimeBridgePort, RuntimeBridgeTransportMessage } from './runtimeBridgeHostSession';
 import {
   RUNTIME_EVENT_NAMES,
-  mapRuntimeEventNameToPmpmCompatEvent,
+  mapRuntimeEventNameToSandboxEvent,
 } from './runtimeEventChannel';
 
-export type PmpmCompatCapabilityRevokeDrillMessage = {
-  type: 'pmpm:capabilities-revoke';
+export type SandboxCapabilityRevokeDrillMessage = {
+  type: 'sandbox:capabilities-revoke';
   requestId: string;
   capabilityIds: string[];
   reason: string;
@@ -27,9 +27,9 @@ export type PmpmCompatCapabilityRevokeDrillMessage = {
   traceId?: string;
 };
 
-export type PmpmCompatCapabilityRevokeAckMessage = {
+export type SandboxCapabilityRevokeAckMessage = {
   frameId: string;
-  type: 'pmpm:capabilities-revoke-ack';
+  type: 'sandbox:capabilities-revoke-ack';
   requestId: string;
   ok: boolean;
   ignored?: boolean;
@@ -37,21 +37,21 @@ export type PmpmCompatCapabilityRevokeAckMessage = {
   traceId?: string;
 };
 
-export type PmpmCompatRuntimeIncomingMessage =
-  | PmpmBridgeIncomingMessage
-  | PmpmCompatCapabilityRevokeAckMessage;
+export type SandboxRuntimeIncomingMessage =
+  | SandboxBridgeIncomingMessage
+  | SandboxCapabilityRevokeAckMessage;
 
-export type PmpmCompatRuntimeOutgoingMessage =
-  | Omit<PmpmBridgeOutgoingMessage, 'frameId'>
-  | PmpmCompatCapabilityRevokeDrillMessage;
+export type SandboxRuntimeOutgoingMessage =
+  | Omit<SandboxBridgeOutgoingMessage, 'frameId'>
+  | SandboxCapabilityRevokeDrillMessage;
 
-export interface CreatePmpmCompatRuntimeSessionAdapterOptions {
+export interface CreateSandboxRuntimeSessionAdapterOptions {
   runtimeHello: RuntimeHello;
   runtimeHealth?: RuntimeHealthResponse;
   viewMountRequest?: ViewMountRequest;
-  capabilityRevokeDrill?: PmpmCompatCapabilityRevokeDrillMessage;
+  capabilityRevokeDrill?: SandboxCapabilityRevokeDrillMessage;
   hostLabel: string;
-  surface: PmpmSandboxSurface;
+  surface: SandboxSurface;
   surfaceId?: string | null;
   permissions: string[];
   entryCode: string;
@@ -66,7 +66,7 @@ export interface CreatePmpmCompatRuntimeSessionAdapterOptions {
   initialNavigation?: unknown;
   initialConfig?: unknown;
   activateAckMode?: 'mounted' | 'immediate';
-  postCompatMessage: (message: PmpmCompatRuntimeOutgoingMessage) => void;
+  postSandboxMessage: (message: SandboxRuntimeOutgoingMessage) => void;
 }
 
 function asRuntimeMessage(
@@ -75,11 +75,11 @@ function asRuntimeMessage(
   return message;
 }
 
-export function createPmpmCompatRuntimeSessionAdapter(
-  options: CreatePmpmCompatRuntimeSessionAdapterOptions
+export function createSandboxRuntimeSessionAdapter(
+  options: CreateSandboxRuntimeSessionAdapterOptions
 ): {
   port: RuntimeBridgePort;
-  handleCompatMessage: (message: PmpmCompatRuntimeIncomingMessage) => boolean;
+  handleSandboxMessage: (message: SandboxRuntimeIncomingMessage) => boolean;
   primeRuntimeHello: () => void;
 } {
   const listeners = new Set<(message: RuntimeBridgeTransportMessage) => void>();
@@ -141,8 +141,8 @@ export function createPmpmCompatRuntimeSessionAdapter(
             if (!runtimeInitSnapshot) {
               throw new Error('runtime.activate received before runtime.init');
             }
-            options.postCompatMessage({
-              type: 'pmpm:init',
+            options.postSandboxMessage({
+              type: 'sandbox:init',
               pluginId: options.runtimeHello.pluginId,
               hostLabel: options.hostLabel,
               runtimeHello: options.runtimeHello,
@@ -164,24 +164,24 @@ export function createPmpmCompatRuntimeSessionAdapter(
               initialAudioSpectrumFramePost: options.initialAudioSpectrumFramePost,
               initialNavigation: options.initialNavigation,
               initialConfig: options.initialConfig,
-            } as Extract<PmpmBridgeOutgoingMessage, { type: 'pmpm:init' }>);
+            } as Extract<SandboxBridgeOutgoingMessage, { type: 'sandbox:init' }>);
             if (options.capabilityRevokeDrill) {
-              options.postCompatMessage(options.capabilityRevokeDrill);
+              options.postSandboxMessage(options.capabilityRevokeDrill);
             }
             if ((options.activateAckMode ?? 'mounted') === 'immediate') {
               emitRuntimeActivateAck();
             }
             return;
           case 'runtime.event': {
-            const compatEventName = mapRuntimeEventNameToPmpmCompatEvent(message.eventName);
-            if (!compatEventName) {
+            const sandboxEventName = mapRuntimeEventNameToSandboxEvent(message.eventName);
+            if (!sandboxEventName) {
               return;
             }
-            options.postCompatMessage({
-              type: 'pmpm:event',
-              name: compatEventName,
+            options.postSandboxMessage({
+              type: 'sandbox:event',
+              name: sandboxEventName,
               payload: message.payload,
-            } as Extract<PmpmBridgeOutgoingMessage, { type: 'pmpm:event' }>);
+            } as Extract<SandboxBridgeOutgoingMessage, { type: 'sandbox:event' }>);
             return;
           }
           case 'runtime.health.request': {
@@ -203,8 +203,8 @@ export function createPmpmCompatRuntimeSessionAdapter(
             return;
           }
           case 'runtime.capabilities.revoke':
-            options.postCompatMessage({
-              type: 'pmpm:capabilities-revoke',
+            options.postSandboxMessage({
+              type: 'sandbox:capabilities-revoke',
               requestId: message.requestId,
               capabilityIds: [...message.capabilityIds],
               reason: message.reason,
@@ -237,16 +237,16 @@ export function createPmpmCompatRuntimeSessionAdapter(
         };
       },
     },
-    handleCompatMessage: (message) => {
+    handleSandboxMessage: (message) => {
       switch (message.type) {
-        case 'pmpm:iframe-ready':
-        case 'pmpm:worker-ready':
+        case 'sandbox:iframe-ready':
+        case 'sandbox:worker-ready':
           emitRuntimeHello();
           return true;
-        case 'pmpm:mounted':
+        case 'sandbox:mounted':
           emitRuntimeActivateAck();
           return true;
-        case 'pmpm:permission-denied':
+        case 'sandbox:permission-denied':
           emitRuntimeMessage({
             bridgeVersion: options.runtimeHello.bridgeVersion,
             op: 'runtime.event',
@@ -261,7 +261,7 @@ export function createPmpmCompatRuntimeSessionAdapter(
             emittedAt: Date.now(),
           });
           return true;
-        case 'pmpm:command-finished':
+        case 'sandbox:command-finished':
           emitRuntimeMessage({
             bridgeVersion: options.runtimeHello.bridgeVersion,
             op: 'runtime.event',
@@ -275,7 +275,7 @@ export function createPmpmCompatRuntimeSessionAdapter(
             emittedAt: Date.now(),
           });
           return true;
-        case 'pmpm:error':
+        case 'sandbox:error':
           emitRuntimeMessage({
             bridgeVersion: options.runtimeHello.bridgeVersion,
             op: 'runtime.error',
@@ -286,11 +286,12 @@ export function createPmpmCompatRuntimeSessionAdapter(
             message: message.message,
           });
           return true;
-        case 'pmpm:pong':
-        case 'pmpm:disposed':
-        case 'pmpm:rpc':
+        case 'sandbox:pong':
+        case 'sandbox:disposed':
+        case 'sandbox:rpc':
+        case 'sandbox:content-size':
           return false;
-        case 'pmpm:capabilities-revoke-ack':
+        case 'sandbox:capabilities-revoke-ack':
           emitRuntimeMessage({
             bridgeVersion: options.runtimeHello.bridgeVersion,
             op: 'runtime.capabilities.revoke.ack',

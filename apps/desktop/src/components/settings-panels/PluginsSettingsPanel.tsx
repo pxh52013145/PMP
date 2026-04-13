@@ -10,38 +10,6 @@ import {
   openBuiltinPluginWindowViaHostCapability,
   openBuiltinPluginVisualizerViaHostCapability,
 } from '../../builtin-modules/builtinNavigationCapabilityBridge';
-import {
-  clearPmpmPluginQuarantine,
-  getPmpmPluginsRevision,
-  listPmpmPermissionCapabilityBindings,
-  loadInstalledPmpmExtensionRecords,
-  loadInstalledPmpmPlugins,
-  setPmpmPluginDeniedPermissions,
-  setPmpmPluginEnabled,
-  subscribePmpmPlugins,
-  uninstallPmpmPlugin,
-} from '../../magnet-system/plugins/pmpm';
-import {
-  getPmpmTrustedKeysRevision,
-  readPmpmTrustedKeyIds,
-  subscribePmpmTrustedKeys,
-  trustPmpmSigningKeyId,
-  untrustPmpmSigningKeyId,
-} from '../../magnet-system/plugins/pmpmTrust';
-import {
-  clearPmpmAuditLog,
-  getPmpmAuditRevision,
-  readPmpmAuditLog,
-  subscribePmpmAudit,
-  type PmpmAuditEvent,
-} from '../../magnet-system/plugins/pmpmGovernance';
-import {
-  getPmpmSandboxRevision,
-  getPmpmSandboxRuntimeEnabled,
-  setPmpmSandboxRuntimeEnabled,
-  subscribePmpmSandbox,
-} from '../../magnet-system/plugins/pmpmSandboxConfig';
-import { resolveInstalledPmpmPluginRuntime } from '../../magnet-system/plugins/runtime';
 import { useConfirmDialog } from '../core/ConfirmDialog';
 import { PmpButton, PmpCard, PmpCheckbox } from '../primitives';
 import {
@@ -79,52 +47,6 @@ import {
   supportsInstalledExtensionMagnetSurface,
 } from '../../magnet-system/plugins/installedExtensionHostPmp';
 import type { PluginRuntimeResolution, PluginRuntimeSurfaceKind } from '../../magnet-system/plugins/runtime';
-
-function formatAuditEvent(event: PmpmAuditEvent): string {
-  if (event.type === 'permission-denied') {
-    return `[denied] ${event.hostLabel} ${event.capability} ${event.action}`;
-  }
-  if (event.type === 'crash') {
-    return `[crash:${event.surface}] ${event.message}`;
-  }
-  if (event.type === 'runtime-unresponsive') {
-    return `[hang:${event.surface}] timeout=${event.timeoutMs}ms`;
-  }
-  if (event.type === 'quarantined') {
-    return `[quarantined:${event.surface}] ${event.message}`;
-  }
-  if (event.type === 'quarantine-cleared') {
-    return `[quarantine-cleared] ${event.reason ?? ''}`.trim();
-  }
-  if (event.type === 'runtime-restart') {
-    return `[restart] ${event.reason ?? ''}`.trim();
-  }
-  if (event.type === 'enabled') {
-    return '[enabled]';
-  }
-  if (event.type === 'disabled') {
-    return `[disabled] ${event.reason ?? ''}`.trim();
-  }
-  if (event.type === 'permissions-updated') {
-    return `[permissions] denied=${event.deniedPermissions.join(',') || '(none)'}`;
-  }
-  if (event.type === 'audio-input-adapter-selected') {
-    return `[audio-input:selected:${event.adapterKind}] ${event.adapterId} -> ${event.selectedInputId}`;
-  }
-  if (event.type === 'audio-input-adapter-fallback') {
-    return `[audio-input:fallback] ${event.fromProviderId} -> ${event.toAdapterId} (${event.reason})`;
-  }
-  if (event.type === 'audio-input-adapter-session-closed') {
-    return `[audio-input:closed:${event.adapterKind}] ${event.adapterId} ${event.reason ?? ''}`.trim();
-  }
-  if (event.type === 'audio-input-adapter-provider-quarantined') {
-    return `[audio-input:quarantined] ${event.providerId} failures=${event.consecutiveFailures}`;
-  }
-  if (event.type === 'audio-input-adapter-provider-quarantine-cleared') {
-    return `[audio-input:quarantine-cleared] ${event.providerId ?? 'all'} ${event.reason ?? ''}`.trim();
-  }
-  return '[event]';
-}
 
 function readInstalledExtensionDisplayName(record: InstalledHostExtensionRecord): string {
   return record.manifest.identity.displayName ?? record.manifest.identity.name;
@@ -196,6 +118,21 @@ function formatInstalledExtensionAuditEvent(event: InstalledExtensionAuditEvent)
   if (event.type === 'errors-cleared') {
     return '[errors-cleared]';
   }
+  if (event.type === 'audio-input-adapter-provider-quarantined') {
+    return `[audio-provider-quarantined] ${event.providerId} failures=${event.consecutiveFailures}`;
+  }
+  if (event.type === 'audio-input-adapter-provider-quarantine-cleared') {
+    return `[audio-provider-quarantine-cleared] ${event.providerId ?? 'all'} ${event.reason}`;
+  }
+  if (event.type === 'audio-input-adapter-selected') {
+    return `[audio-selected] ${event.adapterKind}:${event.adapterId} -> ${event.selectedInputId}`;
+  }
+  if (event.type === 'audio-input-adapter-fallback') {
+    return `[audio-fallback] ${event.fromProviderId} -> ${event.toAdapterKind}:${event.toAdapterId}`;
+  }
+  if (event.type === 'audio-input-adapter-session-closed') {
+    return `[audio-session-closed] ${event.sessionId} ${event.reason}`;
+  }
   return '[event]';
 }
 
@@ -204,25 +141,16 @@ function buildRuntimePresentation(
   runtimeResolution: PluginRuntimeResolution | null
 ): {
   runtimeSourceLabel: string | null;
-  compatModeLabel: string | null;
   runtimeProjectionTitle: string;
 } {
   const runtimeSourceLabel =
     runtimeResolution?.status === 'resolved'
-      ? runtimeResolution.source === 'compat-runtime'
-        ? t('settings.plugins.tag.runtimeSourceCompat')
-        : t('settings.plugins.tag.runtimeSourceManifest')
+      ? t('settings.plugins.tag.runtimeSourceManifest')
       : null;
-  const compatModeLabel = runtimeResolution?.compatLayerIds.length
-    ? runtimeResolution?.status === 'resolved' && runtimeResolution.source === 'manifest-runtime'
-      ? t('settings.plugins.tag.compatFallbackAvailable')
-      : t('settings.plugins.tag.compatDeclared')
-    : null;
 
   if (!runtimeResolution) {
     return {
       runtimeSourceLabel,
-      compatModeLabel,
       runtimeProjectionTitle: t('settings.plugins.tag.runtimeMissing'),
     };
   }
@@ -230,13 +158,11 @@ function buildRuntimePresentation(
   if (runtimeResolution.status === 'resolved') {
     return {
       runtimeSourceLabel,
-      compatModeLabel,
       runtimeProjectionTitle: [
         t('settings.plugins.tag.runtimeResolved', {
           runtimeId: runtimeResolution.runtime.runtimeId,
         }),
         runtimeSourceLabel,
-        compatModeLabel,
         t('settings.plugins.tag.launcher', {
           launcherId: runtimeResolution.launcher.id,
         }),
@@ -252,7 +178,6 @@ function buildRuntimePresentation(
 
   return {
     runtimeSourceLabel,
-    compatModeLabel,
     runtimeProjectionTitle: [
       t('settings.plugins.tag.runtimeBlocked'),
       runtimeResolution.candidateLaunchers.length > 0
@@ -262,7 +187,6 @@ function buildRuntimePresentation(
               .join(', '),
           })
         : null,
-      compatModeLabel,
       ...runtimeResolution.issues.map((issue) => t('settings.plugins.runtime.issue', { issue })),
     ]
       .filter((line): line is string => typeof line === 'string' && line.length > 0)
@@ -285,12 +209,6 @@ export function PluginsSettingsPanel() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const pluginStoreRevision = useSyncExternalStore(
-    subscribePmpmPlugins,
-    getPmpmPluginsRevision,
-    getPmpmPluginsRevision
-  );
   const extensionStoreRevision = useSyncExternalStore(
     subscribeInstalledExtensions,
     getInstalledExtensionsRevision,
@@ -302,40 +220,6 @@ export function PluginsSettingsPanel() {
     getInstalledExtensionAuditRevision
   );
 
-  const auditRevision = useSyncExternalStore(
-    subscribePmpmAudit,
-    getPmpmAuditRevision,
-    getPmpmAuditRevision
-  );
-
-  const trustedKeysRevision = useSyncExternalStore(
-    subscribePmpmTrustedKeys,
-    getPmpmTrustedKeysRevision,
-    getPmpmTrustedKeysRevision
-  );
-
-  const sandboxRevision = useSyncExternalStore(
-    subscribePmpmSandbox,
-    getPmpmSandboxRevision,
-    getPmpmSandboxRevision
-  );
-
-  const installedPlugins = useMemo(() => {
-    void pluginStoreRevision;
-    return loadInstalledPmpmPlugins();
-  }, [pluginStoreRevision]);
-
-  const installedExtensionRecords = useMemo(() => {
-    void pluginStoreRevision;
-    return loadInstalledPmpmExtensionRecords();
-  }, [pluginStoreRevision]);
-
-  const installedExtensionRecordById = useMemo(() => {
-    return new Map(
-      installedExtensionRecords.map((record) => [record.manifest.identity.id, record] as const)
-    );
-  }, [installedExtensionRecords]);
-
   const installedExtensionsV2 = useMemo(() => {
     void extensionStoreRevision;
     return loadInstalledExtensions();
@@ -345,34 +229,6 @@ export function PluginsSettingsPanel() {
     void extensionAuditRevision;
     return readInstalledExtensionAuditLog();
   }, [extensionAuditRevision]);
-
-  const trustedKeyIds = useMemo(() => {
-    void trustedKeysRevision;
-    return readPmpmTrustedKeyIds();
-  }, [trustedKeysRevision]);
-
-  const trustedKeySet = useMemo(() => new Set(trustedKeyIds), [trustedKeyIds]);
-
-  const auditLog = useMemo(() => {
-    void auditRevision;
-    return readPmpmAuditLog();
-  }, [auditRevision]);
-
-  const sandboxEnabled = useMemo(() => {
-    void sandboxRevision;
-    return getPmpmSandboxRuntimeEnabled();
-  }, [sandboxRevision]);
-
-  const runtimeResolutionByPluginId = useMemo(() => {
-    return new Map(
-      installedPlugins.map((plugin) => [
-        plugin.manifest.metadata.id,
-        resolveInstalledPmpmPluginRuntime(plugin.manifest.metadata.id, {
-          preferSandbox: sandboxEnabled,
-        }),
-      ] as const)
-    );
-  }, [installedPlugins, sandboxEnabled]);
 
   const runtimeResolutionByExtensionId = useMemo(() => {
     return new Map(
@@ -395,13 +251,6 @@ export function PluginsSettingsPanel() {
       })
     );
   }, [installedExtensionsV2]);
-
-  const restartPmpmRuntime = useCallback(
-    (pluginId: string, reason: string) => {
-      governance?.restartPmpmPluginRuntime(pluginId, { reason });
-    },
-    [governance]
-  );
 
   const restartInstalledExtensionRuntime = useCallback(
     (pluginId: string, reason: string) => {
@@ -499,83 +348,6 @@ export function PluginsSettingsPanel() {
     [activateMagnet, setMagnetLibrary]
   );
 
-  const handleUninstall = useCallback(
-    async (pluginId: string) => {
-      if (busy) return;
-      setBusy(true);
-      setError(null);
-
-      try {
-        const isActive = activeMagnetIds.has(pluginId);
-
-        const ok = await confirm({
-          title: t('settings.plugins.uninstall.confirm.title'),
-          message: t('settings.plugins.uninstall.confirm.message', { id: pluginId }),
-          confirmText: t('common.action.uninstall'),
-          cancelText: t('common.action.cancel'),
-          danger: true,
-        });
-        if (!ok) return;
-
-        if (isActive) {
-          deactivateMagnet(pluginId);
-        }
-
-        uninstallPmpmPlugin(pluginId);
-        restartPmpmRuntime(pluginId, 'uninstall');
-        clearPmpmAuditLog(pluginId);
-
-        removeMagnetCatalogMagnet(pluginId);
-        if (magnetLibrary.some((m) => m.id === pluginId)) {
-          setMagnetLibrary((prev) => prev.filter((m) => m.id !== pluginId));
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [
-      activeMagnetIds,
-      busy,
-      confirm,
-      deactivateMagnet,
-      magnetLibrary,
-      restartPmpmRuntime,
-      setMagnetLibrary,
-      t,
-    ]
-  );
-
-  const handleToggleEnabled = useCallback(
-    async (pluginId: string, enabled: boolean) => {
-      if (busy) return;
-      setBusy(true);
-      setError(null);
-
-      try {
-        if (!enabled && activeMagnetIds.has(pluginId)) {
-          const ok = await confirm({
-            title: t('settings.plugins.disable.confirm.title'),
-            message: t('settings.plugins.disable.confirm.message', { id: pluginId }),
-            confirmText: t('common.action.disable'),
-            cancelText: t('common.action.cancel'),
-            danger: true,
-          });
-          if (!ok) return;
-        }
-
-        setPmpmPluginEnabled(pluginId, enabled);
-        restartPmpmRuntime(pluginId, enabled ? 'enabled' : 'disabled');
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [activeMagnetIds, busy, confirm, restartPmpmRuntime, t]
-  );
-
   const handleInstallManifestV2 = useCallback(async () => {
     if (!isTauri) {
       setError(t('settings.plugins.v2.install.requireTauri'));
@@ -613,7 +385,7 @@ export function PluginsSettingsPanel() {
         magnetLibrary.some((magnet) => magnet.id === parsed.manifest.identity.id)
       ) {
         throw new Error(
-          t('settings.plugins.install.error.magnetIdExists', {
+          t('settings.plugins.v2.install.error.magnetIdExists', {
             id: parsed.manifest.identity.id,
           })
         );
@@ -764,329 +536,7 @@ export function PluginsSettingsPanel() {
 
   return (
     <PmpCard className="settings-card" surfaceId="primitive.card.settings">
-      <div className="settings-card-header">
-        <div>
-          <p className="settings-card-label">{t('settings.plugins.pmpm.label')}</p>
-          <p className="settings-card-desc">{t('settings.plugins.pmpm.desc')}</p>
-        </div>
-
-        <div
-          className="settings-card-note"
-          style={{ maxWidth: 360, textAlign: 'right' }}
-        >
-          {t('settings.plugins.pmpm.migrationNote')}
-        </div>
-      </div>
-
       {error && <div className="settings-inline-error">{error}</div>}
-
-      <div className="settings-plugin-switches settings-card-note">
-        <PmpCheckbox
-          className="settings-checkbox settings-plugin-switch-row"
-          variant="settings"
-          checked={sandboxEnabled}
-          onCheckedChange={(next) => setPmpmSandboxRuntimeEnabled(next)}
-        >
-          {t('settings.plugins.runtimeSandbox.label')}
-        </PmpCheckbox>
-      </div>
-
-      <div className="settings-plugin-list">
-        {installedPlugins.length === 0 ? (
-          <div className="settings-card-note">{t('settings.plugins.empty')}</div>
-        ) : (
-          installedPlugins.map((plugin) => {
-            const meta = plugin.manifest.metadata;
-            const permissions = plugin.manifest.permissions ?? [];
-            const extensionRecord = installedExtensionRecordById.get(meta.id) ?? null;
-            const runtimeResolution = runtimeResolutionByPluginId.get(meta.id) ?? null;
-            const permissionCapabilityBindings = listPmpmPermissionCapabilityBindings(plugin);
-            const capabilityIdByPermission = new Map(
-              permissionCapabilityBindings.map((binding) => [binding.permission, binding.capabilityId] as const)
-            );
-            const deniedPermissions = plugin.deniedPermissions ?? [];
-            const deniedSet = new Set(deniedPermissions);
-            const isActive = activeMagnetIds.has(meta.id);
-            const enabled = plugin.enabled ?? true;
-            const signatureKeyId = plugin.signature?.keyId ?? null;
-            const signatureTrusted = signatureKeyId ? trustedKeySet.has(signatureKeyId) : false;
-            const extensionProjectionTitle = extensionRecord
-              ? [
-                  ...extensionRecord.manifest.hostTargets.map((target) => target.hostId),
-                  ...extensionRecord.manifest.runtimes.map((runtime) => runtime.runtimeId),
-                  ...(extensionRecord.manifest.compat?.map((entry) => entry.compatLayerId) ?? []),
-                ].join('\n')
-              : undefined;
-            const { runtimeSourceLabel, compatModeLabel, runtimeProjectionTitle } =
-              buildRuntimePresentation(t, runtimeResolution);
-            const panels = plugin.manifest.contributions?.settingsPanels?.length ?? 0;
-            const pages = plugin.manifest.contributions?.pages?.length ?? 0;
-            const windows = plugin.manifest.contributions?.windows?.length ?? 0;
-            const visualizers = plugin.manifest.contributions?.visualizers?.length ?? 0;
-            const commands = plugin.manifest.contributions?.commands?.length ?? 0;
-            const pluginAudit = auditLog
-              .filter((event) => event.pluginId === meta.id)
-              .slice(-8)
-              .reverse();
-
-            return (
-              <div key={meta.id} className="settings-plugin-item">
-                <div className="settings-plugin-meta">
-                  <div className="settings-plugin-title">
-                    {meta.name}{' '}
-                    <span
-                      className="settings-plugin-subtitle"
-                      title={extensionProjectionTitle}
-                    >
-                      ({meta.id}@{meta.version})
-                    </span>
-                  </div>
-
-                  {meta.description && <div className="settings-plugin-desc">{meta.description}</div>}
-
-                  <div className="settings-plugin-tags">
-                    <span className="settings-plugin-tag">
-                      {enabled ? t('settings.plugins.tag.enabled') : t('settings.plugins.tag.disabled')}
-                    </span>
-                    <span className="settings-plugin-tag" title={signatureKeyId ?? undefined}>
-                      {signatureKeyId
-                        ? signatureTrusted
-                          ? t('settings.plugins.tag.signedTrusted')
-                          : t('settings.plugins.tag.signedUntrusted')
-                        : t('settings.plugins.tag.unsigned')}
-                    </span>
-                    {runtimeResolution?.status === 'resolved' ? (
-                      <>
-                        <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                          {t('settings.plugins.tag.runtimeResolved', {
-                            runtimeId: runtimeResolution.runtime.runtimeId,
-                          })}
-                        </span>
-                        <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                          {t('settings.plugins.tag.launcher', {
-                            launcherId: runtimeResolution.launcher.id,
-                          })}
-                        </span>
-                        {runtimeSourceLabel ? (
-                          <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                            {runtimeSourceLabel}
-                          </span>
-                        ) : null}
-                        {compatModeLabel ? (
-                          <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                            {compatModeLabel}
-                          </span>
-                        ) : null}
-                        <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                          {t('settings.plugins.tag.transport', {
-                            transport: runtimeResolution.launcher.transport,
-                          })}
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                          {runtimeResolution
-                            ? t('settings.plugins.tag.runtimeBlocked')
-                            : t('settings.plugins.tag.runtimeMissing')}
-                        </span>
-                        {compatModeLabel ? (
-                          <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                            {compatModeLabel}
-                          </span>
-                        ) : null}
-                      </>
-                    )}
-                    {panels > 0 && (
-                      <span className="settings-plugin-tag">
-                        {t('settings.plugins.tag.settingsPanelsCount', { count: panels })}
-                      </span>
-                    )}
-                    {pages > 0 && (
-                      <span className="settings-plugin-tag">
-                        {t('settings.plugins.tag.pagesCount', { count: pages })}
-                      </span>
-                    )}
-                    {windows > 0 && (
-                      <span className="settings-plugin-tag">
-                        {t('settings.plugins.tag.windowsCount', { count: windows })}
-                      </span>
-                    )}
-                    {visualizers > 0 && (
-                      <span className="settings-plugin-tag">
-                        {t('settings.plugins.tag.visualizersCount', { count: visualizers })}
-                      </span>
-                    )}
-                    {commands > 0 && (
-                      <span className="settings-plugin-tag">
-                        {t('settings.plugins.tag.commandsCount', { count: commands })}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="settings-plugin-permissions">
-                    <div>{t('settings.plugins.permissions.label')}</div>
-                    {permissions.length === 0 ? (
-                      <div className="settings-row-desc">{t('settings.plugins.permissions.none')}</div>
-                    ) : (
-                      <div className="settings-row-desc-list settings-row-meta">
-                        {permissions.map((perm) => {
-                          const allowed = !deniedSet.has(perm);
-                          return (
-                            <PmpCheckbox
-                              key={perm}
-                              className="settings-checkbox settings-plugin-permission-line"
-                              variant="settings"
-                              checked={allowed}
-                              disabled={busy}
-                              onCheckedChange={(nextAllowed) => {
-                                  const nextDenied = new Set(deniedPermissions);
-                                  if (nextAllowed) nextDenied.delete(perm);
-                                  else nextDenied.add(perm);
-                                  setPmpmPluginDeniedPermissions(meta.id, Array.from(nextDenied));
-                                  restartPmpmRuntime(meta.id, 'permissions-updated');
-                              }}
-                            >
-                              <span title={capabilityIdByPermission.get(perm) ?? undefined}>
-                                {perm}
-                              </span>
-                            </PmpCheckbox>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  {plugin.lastError && (
-                    <div className="settings-plugin-error" title={plugin.lastError}>
-                      {plugin.lastError}
-                    </div>
-                  )}
-
-                  {pluginAudit.length > 0 && (
-                    <details className="settings-plugin-details">
-                      <summary className="settings-plugin-details-summary">
-                        {t('settings.plugins.audit.summary', { count: pluginAudit.length })}
-                      </summary>
-                      <div className="settings-plugin-details-content">
-                        {pluginAudit.map((event, idx) => (
-                          <div key={idx}>{formatAuditEvent(event)}</div>
-                        ))}
-                      </div>
-                      <div className="settings-plugin-details-actions">
-                        <PmpButton
-                          type="button"
-                          className="settings-action-btn"
-                          variant="default"
-                          onClick={() => clearPmpmAuditLog(meta.id)}
-                          disabled={busy}
-                        >
-                          {t('common.action.clear')}
-                        </PmpButton>
-                      </div>
-                    </details>
-                  )}
-                </div>
-
-                <div className="settings-plugin-actions">
-                  {plugin.disabledReason === 'quarantine' && (
-                    <PmpButton
-                      type="button"
-                      className="settings-action-btn"
-                      variant="default"
-                      disabled={busy}
-                      onClick={() => clearPmpmPluginQuarantine(meta.id)}
-                      title={t('settings.plugins.action.clearQuarantine.title')}
-                    >
-                      {t('settings.plugins.action.clearQuarantine')}
-                    </PmpButton>
-                  )}
-                  <PmpButton
-                    type="button"
-                    className="settings-action-btn"
-                    variant="default"
-                    disabled={busy || (!enabled && plugin.disabledReason === 'quarantine')}
-                    onClick={() => void handleToggleEnabled(meta.id, !enabled)}
-                    title={
-                      enabled
-                        ? t('settings.plugins.action.disable.title')
-                        : t('settings.plugins.action.enable.title')
-                    }
-                  >
-                    {enabled ? t('common.action.disable') : t('common.action.enable')}
-                  </PmpButton>
-
-                  <PmpButton
-                    type="button"
-                    className="settings-action-btn"
-                    variant="default"
-                    disabled={busy || plugin.disabledReason === 'quarantine'}
-                    onClick={() => restartPmpmRuntime(meta.id, 'manual')}
-                    title={t('settings.plugins.action.restart.title')}
-                  >
-                    {t('common.action.restart')}
-                  </PmpButton>
-
-                  {signatureKeyId && (
-                    <PmpButton
-                      type="button"
-                      className="settings-action-btn"
-                      variant="default"
-                      disabled={busy}
-                      onClick={() => {
-                        try {
-                          if (signatureTrusted) {
-                            untrustPmpmSigningKeyId(signatureKeyId);
-                          } else {
-                            trustPmpmSigningKeyId(signatureKeyId);
-                            if (
-                              plugin.disabledReason === 'policy' ||
-                              plugin.disabledReason === 'quarantine'
-                            ) {
-                              setPmpmPluginEnabled(meta.id, true);
-                            }
-                          }
-                          restartPmpmRuntime(
-                            meta.id,
-                            signatureTrusted ? 'key-untrusted' : 'key-trusted'
-                          );
-                        } catch (err) {
-                          setError(err instanceof Error ? err.message : String(err));
-                        }
-                      }}
-                      title={
-                        signatureTrusted
-                          ? t('settings.plugins.action.untrustKey.title')
-                          : t('settings.plugins.action.trustKey.title')
-                      }
-                    >
-                      {signatureTrusted
-                        ? t('settings.plugins.action.untrustKey.label')
-                        : t('settings.plugins.action.trustKey.label')}
-                    </PmpButton>
-                  )}
-
-                  <PmpButton
-                    type="button"
-                    className="settings-danger-btn"
-                    variant="danger"
-                    disabled={busy}
-                    onClick={() => void handleUninstall(meta.id)}
-                    title={
-                      isActive
-                        ? t('settings.plugins.action.uninstall.title.magnetActive')
-                        : t('settings.plugins.action.uninstall.title')
-                    }
-                  >
-                    {t('common.action.uninstall')}
-                  </PmpButton>
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-
       <div className="settings-card-header" style={{ marginTop: 20 }}>
         <div>
           <p className="settings-card-label">{t('settings.plugins.v2.label')}</p>
@@ -1124,7 +574,7 @@ export function PluginsSettingsPanel() {
             const windows = hostContributions?.windows?.length ?? 0;
             const visualizers = hostContributions?.visualizers?.length ?? 0;
             const magnets = hostContributions?.magnets ? 1 : 0;
-            const { runtimeSourceLabel, compatModeLabel, runtimeProjectionTitle } =
+            const { runtimeSourceLabel, runtimeProjectionTitle } =
               buildRuntimePresentation(t, runtimeResolution);
             const commands = record.manifest.contributes?.core?.commands?.length ?? 0;
             const keybindings = record.manifest.contributes?.core?.keybindings?.length ?? 0;
@@ -1176,11 +626,6 @@ export function PluginsSettingsPanel() {
                             {runtimeSourceLabel}
                           </span>
                         ) : null}
-                        {compatModeLabel ? (
-                          <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                            {compatModeLabel}
-                          </span>
-                        ) : null}
                       </>
                     ) : (
                       <>
@@ -1189,11 +634,6 @@ export function PluginsSettingsPanel() {
                             ? t('settings.plugins.tag.runtimeBlocked')
                             : t('settings.plugins.tag.runtimeMissing')}
                         </span>
-                        {compatModeLabel ? (
-                          <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                            {compatModeLabel}
-                          </span>
-                        ) : null}
                       </>
                     )}
                     {commands > 0 && (

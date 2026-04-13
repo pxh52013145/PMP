@@ -72,7 +72,8 @@ cargo test
 ## 工程结构
 
 - `apps/desktop/`：桌面应用（React + Tauri）
-- `packages/app-contracts/`：跨前端/后端共享契约（command/event/perf profile key）
+- `apps/desktop/src/contracts/`：桌面端共享契约（performance / governance / debug）
+- `packages/plugin-platform-contracts/`：插件平台共享契约（manifest / runtime / host capability）
 
 ## 开发协作规范
 

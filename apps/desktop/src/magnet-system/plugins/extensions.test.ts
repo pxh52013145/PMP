@@ -491,7 +491,7 @@ describe('manifest-v2 extension install artifacts', () => {
     const {
       getInstalledExtensionRecord,
       installInstalledExtensionFromFilePath,
-      listInstalledExtensionCompatPermissions,
+      listInstalledExtensionDerivedPermissions,
     } = await import('./extensions');
 
     const installed = await installInstalledExtensionFromFilePath(manifestPath);
@@ -507,7 +507,7 @@ describe('manifest-v2 extension install artifacts', () => {
       },
     ]);
     expect(stored?.resolvedArtifacts).toEqual(installed.resolvedArtifacts);
-    expect(listInstalledExtensionCompatPermissions(installed)).toEqual([
+    expect(listInstalledExtensionDerivedPermissions(installed)).toEqual([
       'api:audio-visual',
       'api:host',
       'api:host-capability',
@@ -548,12 +548,12 @@ describe('manifest-v2 extension install artifacts', () => {
     expect(fsState.has(`22:${artifactRelative}`)).toBe(false);
   }, 10_000);
 
-  it('updates denied capabilities and removes derived compat permissions', async () => {
+  it('updates denied capabilities and removes derived runtime permissions', async () => {
     const {
       getInstalledExtensionRecord,
       installInstalledExtensionFromFilePath,
       listInstalledExtensionCapabilityBindings,
-      listInstalledExtensionCompatPermissions,
+      listInstalledExtensionDerivedPermissions,
       setInstalledExtensionDeniedCapabilities,
     } = await import('./extensions');
 
@@ -577,7 +577,7 @@ describe('manifest-v2 extension install artifacts', () => {
         required: false,
       },
     ]);
-    expect(listInstalledExtensionCompatPermissions(stored!)).toEqual(['api:audio-visual']);
+    expect(listInstalledExtensionDerivedPermissions(stored!)).toEqual(['api:audio-visual']);
   }, 10_000);
 
   it('records governance audit events for install, capability changes, disable, crash, clear, and uninstall', async () => {

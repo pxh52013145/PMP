@@ -5,31 +5,6 @@ import { SHELL_SURFACE_MANAGER_TOKEN, DefaultShellSurfaceManager } from './shell
 import { createInstalledExtensionContributionsModule } from './extensionContributionsModule';
 import { INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN } from './installedExtensionRuntimeManager';
 
-type MockPmpmPlugin = {
-  manifest: {
-    metadata: {
-      id: string;
-      name: string;
-      version: string;
-    };
-    permissions: string[];
-    contributions?: {
-      shellSurfaces?: Array<{
-        kind: 'shell-surface';
-        id: string;
-        title: string;
-        surfaceType: 'overlay' | 'desktop-widget';
-        width: number;
-        height: number;
-        pointerPolicy: 'capture-input' | 'passthrough';
-      }>;
-    };
-  };
-  installedAt: number;
-  enabled: boolean;
-  disabledReason?: string;
-};
-
 type MockInstalledExtensionRecord = {
   manifest: {
     schemaVersion: '2.0';
@@ -70,9 +45,8 @@ type MockInstalledExtensionRecord = {
 };
 
 const harness = vi.hoisted(() => {
-  type PmpmListener = () => void;
   type ExtensionListener = () => void;
-  type RestartKind = 'pmpm' | 'extv2';
+  type RestartKind = 'extv2';
   type RestartListener = () => void;
 
   return {
@@ -87,13 +61,10 @@ const harness = vi.hoisted(() => {
       metric: vi.fn(),
       startSpan: vi.fn(() => ({ end: vi.fn() })),
     },
-    pmpmPlugins: [] as MockPmpmPlugin[],
     installedExtensions: [] as MockInstalledExtensionRecord[],
-    pmpmListeners: new Set<PmpmListener>(),
     extensionListeners: new Set<ExtensionListener>(),
     restartListeners: new Set<RestartListener>(),
     restartRequests: {
-      pmpm: null as { kind: RestartKind; pluginId: string; at: number; reason?: string } | null,
       extv2: null as { kind: RestartKind; pluginId: string; at: number; reason?: string } | null,
     },
     requestHostExtensionRuntimeRestartMock: vi.fn(),
@@ -105,11 +76,6 @@ const harness = vi.hoisted(() => {
       height: 800,
     })),
     isTauriRuntimeMock: vi.fn(() => true),
-    emitPmpmSync() {
-      for (const listener of Array.from(this.pmpmListeners)) {
-        listener();
-      }
-    },
     emitExtensionSync() {
       for (const listener of Array.from(this.extensionListeners)) {
         listener();
@@ -130,12 +96,9 @@ const harness = vi.hoisted(() => {
       this.telemetryLogger.log.mockReset();
       this.telemetryLogger.metric.mockReset();
       this.telemetryLogger.startSpan.mockClear();
-      this.pmpmPlugins = [];
       this.installedExtensions = [];
-      this.pmpmListeners.clear();
       this.extensionListeners.clear();
       this.restartListeners.clear();
-      this.restartRequests.pmpm = null;
       this.restartRequests.extv2 = null;
       this.requestHostExtensionRuntimeRestartMock.mockReset();
       this.invokeWithTelemetryMock.mockReset();
@@ -169,16 +132,6 @@ vi.mock('../../utils/tauriRuntime', () => ({
   isTauriRuntime: harness.isTauriRuntimeMock,
 }));
 
-vi.mock('./pmpm', () => ({
-  loadInstalledPmpmPlugins: () => harness.pmpmPlugins,
-  getInstalledPmpmPlugin: (id: string) =>
-    harness.pmpmPlugins.find((plugin) => plugin.manifest.metadata.id === id) ?? null,
-  subscribePmpmPlugins: (listener: () => void) => {
-    harness.pmpmListeners.add(listener);
-    return () => harness.pmpmListeners.delete(listener);
-  },
-}));
-
 vi.mock('./extensions', () => ({
   loadInstalledExtensions: () => harness.installedExtensions,
   getInstalledExtensionRecord: (id: string) =>
@@ -194,8 +147,7 @@ vi.mock('./hostExtensionRuntimeSupervisor', () => ({
     harness.restartListeners.add(listener);
     return () => harness.restartListeners.delete(listener);
   },
-  readHostExtensionRuntimeRestartRequest: (kind: 'pmpm' | 'extv2') =>
-    harness.restartRequests[kind],
+  readHostExtensionRuntimeRestartRequest: () => harness.restartRequests.extv2,
   requestHostExtensionRuntimeRestart: harness.requestHostExtensionRuntimeRestartMock,
 }));
 

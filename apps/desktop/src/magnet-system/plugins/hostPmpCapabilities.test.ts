@@ -244,7 +244,7 @@ import {
   registerAudioInputAdapterProvider,
 } from './pluginHostApi';
 import type { HostAudioService, HostNavigation, PluginHostTrayApi } from './pluginHostApi';
-import { clearPmpmPluginConfig, getPmpmPluginConfigKey } from './pluginConfig';
+import { clearExtensionConfig, getExtensionConfigKey } from './pluginConfig';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 
 const TEST_PLUGIN_ID = 'host-pmp-capability-test';
@@ -462,7 +462,7 @@ function createMountApi(options: {
   commands?: CommandsService | null;
   keybindings?: KeybindingsService | null;
   pluginId?: string;
-  sourceKind?: 'pmpm' | 'extv2';
+  sourceKind?: 'extv2';
   trayApi?: PluginHostTrayApi | null;
 }) {
   return createPluginMountApi({
@@ -490,7 +490,7 @@ afterEach(() => {
   durableTextState.clear();
   clearMagnetRenderers();
   clearMagnetVariants();
-  clearPmpmPluginConfig(TEST_PLUGIN_ID);
+  clearExtensionConfig(TEST_PLUGIN_ID);
   setLocale('zh-CN');
   setGlobalTelemetryService(null);
   if (typeof localStorage !== 'undefined') {
@@ -679,7 +679,7 @@ describe('host.pmp capabilities', () => {
       data: {
         capabilityId: 'host.pmp.shell.window',
         stage: 'host-pack',
-        implementation: 'pmp-legacy-window-shell',
+        implementation: 'pmp-host-window-shell',
         methods: ['describe', 'open', 'close'],
       },
     });
@@ -1118,7 +1118,7 @@ describe('host.pmp capabilities', () => {
     });
   });
 
-  it('routes host.pmp.storage.config through the existing PMPM config store', async () => {
+  it('routes host.pmp.storage.config through the extv2 config store', async () => {
     const api = createMountApi({
       permissions: ['api:host', 'api:host-capability', 'storage:local'],
     });
@@ -1150,31 +1150,19 @@ describe('host.pmp capabilities', () => {
     expect(api.config.get()).toEqual({});
   });
 
-  it('separates PMPM and extv2 config namespaces for the same pluginId', async () => {
-    const pmpmApi = createMountApi({
-      permissions: ['api:host', 'api:host-capability', 'storage:local'],
-      pluginId: 'shared-plugin',
-      sourceKind: 'pmpm',
-    });
-    const extv2Api = createMountApi({
+  it('persists extv2 config under the extv2 namespace', async () => {
+    const api = createMountApi({
       permissions: ['api:host', 'api:host-capability', 'storage:local'],
       pluginId: 'shared-plugin',
       sourceKind: 'extv2',
     });
 
-    await pmpmApi.host.invokeCapability('host.pmp.storage.config', 'set', {
-      profile: 'pmpm',
-    });
-    await extv2Api.host.invokeCapability('host.pmp.storage.config', 'set', {
+    await api.host.invokeCapability('host.pmp.storage.config', 'set', {
       profile: 'extv2',
     });
 
-    expect(pmpmApi.config.get()).toEqual({ profile: 'pmpm' });
-    expect(extv2Api.config.get()).toEqual({ profile: 'extv2' });
-    expect(localStorage.getItem(getPmpmPluginConfigKey('shared-plugin', 'pmpm'))).toBe(
-      JSON.stringify({ profile: 'pmpm' })
-    );
-    expect(localStorage.getItem(getPmpmPluginConfigKey('shared-plugin', 'extv2'))).toBe(
+    expect(api.config.get()).toEqual({ profile: 'extv2' });
+    expect(localStorage.getItem(getExtensionConfigKey('shared-plugin', 'extv2'))).toBe(
       JSON.stringify({ profile: 'extv2' })
     );
   });
@@ -1721,7 +1709,7 @@ describe('host.pmp capabilities', () => {
     });
   });
 
-  it('aliases host.pmp.audio-engine.input to the legacy audio input bridge', async () => {
+  it('aliases host.pmp.audio-engine.input to the shared audio input bridge', async () => {
     const api = createMountApi({
       permissions: ['api:host', 'api:host-capability', 'api:audio-input-adapter'],
       audioService: createAudioServiceStub({
@@ -2273,7 +2261,7 @@ describe('host.pmp capabilities', () => {
       ok: true,
       data: {
         acceptedCount: 1,
-        moduleId: 'pmpm-plugin',
+          moduleId: 'extension-plugin',
         pluginId: TEST_PLUGIN_ID,
         loggerId: 'plugin.ui',
         event: 'plugin.render.failed',
@@ -2283,7 +2271,7 @@ describe('host.pmp capabilities', () => {
     });
     expect(telemetry.ingested).toHaveLength(1);
     expect(telemetry.ingested[0]).toEqual({
-      moduleId: 'pmpm-plugin',
+      moduleId: 'extension-plugin',
       component: 'host-pmp-capability-test:plugin.ui',
       record: {
         level: 'warn',

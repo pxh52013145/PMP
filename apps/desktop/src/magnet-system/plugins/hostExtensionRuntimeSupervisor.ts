@@ -2,10 +2,8 @@ import { readJson } from '../../modules/storage';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { broadcastDataUpdate, setupStorageListener, STORAGE_KEYS } from '../../utils/windowCommunication';
 import { recordInstalledExtensionAuditEvent } from './extensionsGovernance';
-import { recordPmpmAuditEvent } from './pmpmGovernance';
-import { clearPmpmPluginRuntimeCache } from './pmpmRuntime';
 
-export type HostExtensionRuntimeKind = 'pmpm' | 'extv2';
+export type HostExtensionRuntimeKind = 'extv2';
 
 export type HostExtensionRuntimeRestartRequest = {
   kind: HostExtensionRuntimeKind;
@@ -21,11 +19,6 @@ const listeners = new Set<HostExtensionRuntimeRestartListener>();
 
 let revision = 0;
 let syncDisposer: (() => void) | null = null;
-
-const STORAGE_KEY_BY_KIND: Record<HostExtensionRuntimeKind, string> = {
-  pmpm: STORAGE_KEYS.PMPM_RUNTIME_RESTART_V1,
-  extv2: STORAGE_KEYS.EXTENSIONS_V2_RUNTIME_RESTART_V1,
-};
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -49,11 +42,10 @@ function notifyListeners(): void {
 }
 
 function ensureSync(): void {
-  if (syncDisposer) return;
-  if (typeof window === 'undefined') return;
+  if (syncDisposer || typeof window === 'undefined') return;
 
   const disposeStorageSync = setupStorageListener(
-    [STORAGE_KEYS.PMPM_RUNTIME_RESTART_V1, STORAGE_KEYS.EXTENSIONS_V2_RUNTIME_RESTART_V1],
+    [STORAGE_KEYS.EXTENSIONS_V2_RUNTIME_RESTART_V1],
     () => {
       notifyListeners();
     }
@@ -82,10 +74,8 @@ export function subscribeHostExtensionRuntimeRestart(
   };
 }
 
-export function readHostExtensionRuntimeRestartRequest(
-  kind: HostExtensionRuntimeKind
-): HostExtensionRuntimeRestartRequest | null {
-  const data = readJson<unknown>(STORAGE_KEY_BY_KIND[kind], null);
+export function readHostExtensionRuntimeRestartRequest(): HostExtensionRuntimeRestartRequest | null {
+  const data = readJson<unknown>(STORAGE_KEYS.EXTENSIONS_V2_RUNTIME_RESTART_V1, null);
   if (!isRecord(data)) return null;
 
   const pluginId = typeof data.pluginId === 'string' ? data.pluginId : null;
@@ -93,52 +83,38 @@ export function readHostExtensionRuntimeRestartRequest(
   const reason = typeof data.reason === 'string' ? data.reason : undefined;
 
   if (!pluginId || !at) return null;
-  return { kind, pluginId, at, reason };
+  return { kind: 'extv2', pluginId, at, reason };
 }
 
 export function requestHostExtensionRuntimeRestart(
-  kind: HostExtensionRuntimeKind,
   pluginId: string,
   options: { reason?: string } = {}
 ): void {
-  if (typeof window === 'undefined') return;
-  if (!pluginId) return;
+  if (typeof window === 'undefined' || !pluginId) return;
 
   const now = Date.now();
 
-  if (kind === 'pmpm') {
-    clearPmpmPluginRuntimeCache(pluginId);
-  }
-
   telemetry.info('plugin.governance.runtime-restart.requested', {
     fields: {
-      kind,
+      kind: 'extv2',
       pluginId,
       reason: options.reason ?? null,
       requestedAtMs: now,
     },
   });
 
-  void broadcastDataUpdate(STORAGE_KEY_BY_KIND[kind], {
+  void broadcastDataUpdate(STORAGE_KEYS.EXTENSIONS_V2_RUNTIME_RESTART_V1, {
     pluginId,
     at: now,
     reason: options.reason,
   });
 
   try {
-    if (kind === 'pmpm') {
-      recordPmpmAuditEvent({
-        type: 'runtime-restart',
-        pluginId,
-        reason: options.reason,
-      });
-    } else {
-      recordInstalledExtensionAuditEvent({
-        type: 'runtime-restart',
-        pluginId,
-        reason: options.reason,
-      });
-    }
+    recordInstalledExtensionAuditEvent({
+      type: 'runtime-restart',
+      pluginId,
+      reason: options.reason,
+    });
   } catch {
     // ignore
   }
@@ -146,16 +122,9 @@ export function requestHostExtensionRuntimeRestart(
   notifyListeners();
 }
 
-export function requestPmpmPluginRuntimeRestart(
-  pluginId: string,
-  options: { reason?: string } = {}
-): void {
-  requestHostExtensionRuntimeRestart('pmpm', pluginId, options);
-}
-
 export function requestInstalledExtensionRuntimeRestart(
   pluginId: string,
   options: { reason?: string } = {}
 ): void {
-  requestHostExtensionRuntimeRestart('extv2', pluginId, options);
+  requestHostExtensionRuntimeRestart(pluginId, options);
 }

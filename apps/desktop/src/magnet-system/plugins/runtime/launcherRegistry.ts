@@ -3,42 +3,6 @@ import type { PluginRuntimeLauncherDescriptor, PluginRuntimeLauncherId } from '.
 
 const PLUGIN_RUNTIME_LAUNCHERS: readonly PluginRuntimeLauncherDescriptor[] = Object.freeze([
   {
-    id: 'compat.pmpm.inline-module',
-    runtimeKinds: ['extension-host'],
-    surfaceKinds: [
-      'magnet',
-      'settings',
-      'page',
-      'visualizer',
-      'window',
-      'overlay',
-      'desktop-widget',
-      'command',
-    ],
-    availability: 'available',
-    transport: 'inline-module',
-    compatLayerId: 'compat.pmpm',
-    description: 'Current PMPM in-process module runtime',
-  },
-  {
-    id: 'compat.pmpm.webview-sandbox',
-    runtimeKinds: ['extension-host', 'webview'],
-    surfaceKinds: [
-      'magnet',
-      'settings',
-      'page',
-      'visualizer',
-      'window',
-      'overlay',
-      'desktop-widget',
-      'command',
-    ],
-    availability: 'available',
-    transport: 'webview-frame',
-    compatLayerId: 'compat.pmpm',
-    description: 'Current PMPM iframe sandbox runtime',
-  },
-  {
     id: 'pxp.webview.host-frame',
     runtimeKinds: ['webview'],
     surfaceKinds: ['magnet', 'settings', 'page', 'visualizer', 'window', 'overlay', 'desktop-widget'],

@@ -22,7 +22,7 @@ const {
   },
   buildPluginShellSurfaceEventPayloadMock: vi.fn(
     (
-      sourceKind: 'pmpm' | 'extv2',
+      sourceKind: 'extv2',
       surfaceType: 'overlay' | 'desktop-widget',
       pluginId: string,
       surfaceId: string
@@ -125,7 +125,7 @@ vi.mock('./utils/pluginShellSurfaces', () => ({
 
 function createPresentLookup(
   overrides: Partial<{
-    sourceKind: 'pmpm' | 'extv2';
+    sourceKind: 'extv2';
     pluginId: string;
     pluginName: string;
     enabled: boolean;
@@ -198,7 +198,7 @@ async function pressEscape(): Promise<KeyboardEvent> {
   return event;
 }
 
-let mountedRoot: { cleanup: () => Promise<void> } | null = null;
+let mountedRoot: { container: HTMLDivElement; cleanup: () => Promise<void> } | null = null;
 
 beforeEach(() => {
   (
@@ -281,37 +281,16 @@ describe('PluginShellSurfaceApp', () => {
     );
   });
 
-  it('keeps legacy pmpm window events while resolving descriptors from extv2 records', async () => {
-    readPluginShellSurfaceDescriptorMock.mockReturnValue(createPresentLookup());
-
+  it('rejects unsupported shell-surface routes', async () => {
     mountedRoot = await renderPluginShellSurfaceApp(
-      '#/plugin-shell-surface/pmpm/overlay/demo-plugin/demo-overlay'
+      '#/plugin-shell-surface/invalid/overlay/demo-plugin/demo-overlay'
     );
 
-    expect(buildPluginShellSurfaceEventPayloadMock).toHaveBeenCalledWith(
-      'pmpm',
-      'overlay',
-      'demo-plugin',
-      'demo-overlay'
-    );
-    expect(readPluginShellSurfaceDescriptorMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sourceKind: 'extv2',
-        pluginId: 'demo-plugin',
-        surfaceId: 'demo-overlay',
-        surfaceType: 'overlay',
-      })
-    );
-
-    const event = await pressEscape();
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(dismissPluginShellSurfaceMock).toHaveBeenCalledWith(
-      'demo-plugin',
-      'demo-overlay',
-      'overlay',
-      'pmpm'
-    );
+    expect(
+      mountedRoot.container.querySelector('.plugin-shell-surface-error')?.textContent
+    ).toContain('Invalid plugin shell surface route.');
+    expect(buildPluginShellSurfaceEventPayloadMock).not.toHaveBeenCalled();
+    expect(readPluginShellSurfaceDescriptorMock).not.toHaveBeenCalled();
   });
 
   it('lets the descriptor opt out of Escape dismissal', async () => {

@@ -34,8 +34,7 @@ function resolveSettingsSectionId(panel: SettingsPanelContribution): SettingsSec
   if (
     panel.id === 'plugins' ||
     panel.source === 'plugin' ||
-    panel.group === 'plugin' ||
-    panel.id.startsWith('pmpm:')
+    panel.group === 'plugin'
   ) {
     return 'plugins';
   }

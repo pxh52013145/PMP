@@ -11,9 +11,7 @@ import { subscribeInstalledExtensions } from './extensions';
 import {
   readHostExtensionRuntimeRestartRequest,
   subscribeHostExtensionRuntimeRestart,
-  type HostExtensionRuntimeKind,
 } from './hostExtensionRuntimeSupervisor';
-import { subscribePmpmPlugins } from './pmpm';
 import {
   dismissPluginShellSurface,
   destroyPluginShellSurface,
@@ -67,7 +65,6 @@ type ShellSurfaceManagerDeps = {
   dismissSurface: typeof dismissPluginShellSurface;
   destroySurface: typeof destroyPluginShellSurface;
   inspectSurface: typeof readPluginShellSurfaceDescriptor;
-  subscribePmpm: typeof subscribePmpmPlugins;
   subscribeExtensions: typeof subscribeInstalledExtensions;
   subscribeRuntimeRestart: typeof subscribeHostExtensionRuntimeRestart;
   readRuntimeRestart: typeof readHostExtensionRuntimeRestartRequest;
@@ -148,14 +145,10 @@ function subscribeShellSurfaceEnvironmentSignals(
 
 export class DefaultShellSurfaceManager implements ShellSurfaceManager {
   private readonly tracked = new Map<string, ManagedPluginShellSurfaceSpec>();
-  private readonly lastHandledRestartAt: Record<HostExtensionRuntimeKind, number> = {
-    pmpm: 0,
-    extv2: 0,
-  };
+  private lastHandledExtensionRestartAt = 0;
   private readonly deps: ShellSurfaceManagerDeps;
   private started = false;
   private disposed = false;
-  private unsubscribePmpm: (() => void) | null = null;
   private unsubscribeExtensions: (() => void) | null = null;
   private unsubscribeRuntimeRestart: (() => void) | null = null;
   private unsubscribeEnvironmentSignals: (() => void) | null = null;
@@ -171,7 +164,6 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
       dismissSurface: dismissPluginShellSurface,
       destroySurface: destroyPluginShellSurface,
       inspectSurface: readPluginShellSurfaceDescriptor,
-      subscribePmpm: subscribePmpmPlugins,
       subscribeExtensions: subscribeInstalledExtensions,
       subscribeRuntimeRestart: subscribeHostExtensionRuntimeRestart,
       readRuntimeRestart: readHostExtensionRuntimeRestartRequest,
@@ -306,7 +298,6 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
       this.syncTrackedSurfaces();
     };
 
-    this.unsubscribePmpm = this.deps.subscribePmpm(sync);
     this.unsubscribeExtensions = this.deps.subscribeExtensions(sync);
     this.unsubscribeRuntimeRestart = this.deps.subscribeRuntimeRestart(
       this.handleRuntimeRestartSignal
@@ -322,13 +313,6 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
     this.disposed = true;
     this.started = false;
 
-    try {
-      this.unsubscribePmpm?.();
-    } catch (error) {
-      telemetry.warn('shell-surface.unsubscribe.pmpm.failed', {
-        message: readErrorMessage(error),
-      });
-    }
     try {
       this.unsubscribeExtensions?.();
     } catch (error) {
@@ -351,7 +335,6 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
       });
     }
 
-    this.unsubscribePmpm = null;
     this.unsubscribeExtensions = null;
     this.unsubscribeRuntimeRestart = null;
     this.unsubscribeEnvironmentSignals = null;
@@ -392,18 +375,16 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
   }
 
   private handleRuntimeRestartSignal = (): void => {
-    for (const kind of ['pmpm', 'extv2'] as const) {
-      const request = this.deps.readRuntimeRestart(kind);
-      if (!request) continue;
-      if (request.at <= this.lastHandledRestartAt[kind]) continue;
-      this.lastHandledRestartAt[kind] = request.at;
+    const request = this.deps.readRuntimeRestart();
+    if (!request) return;
+    if (request.at <= this.lastHandledExtensionRestartAt) return;
+    this.lastHandledExtensionRestartAt = request.at;
 
-      void this.cleanupPluginSurfaces({
-        sourceKind: kind,
-        pluginId: request.pluginId,
-        reason: request.reason ?? 'runtime-restart',
-      });
-    }
+    void this.cleanupPluginSurfaces({
+      sourceKind: 'extv2',
+      pluginId: request.pluginId,
+      reason: request.reason ?? 'runtime-restart',
+    });
   };
 
   private handleEnvironmentSignal = (signal: ShellSurfaceEnvironmentSignal): void => {

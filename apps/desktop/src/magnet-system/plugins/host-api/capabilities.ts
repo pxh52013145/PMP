@@ -83,8 +83,8 @@ import {
   TAURI_EVENTS,
 } from '../../../utils/windowCommunication';
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
-import { readPmpmPluginConfigSyncState } from '../pluginConfig';
-import { recordPmpmAuditEvent } from '../pmpmGovernance';
+import { readExtensionConfigSyncState } from '../pluginConfig';
+import { recordInstalledExtensionAuditEvent } from '../extensionsGovernance';
 import { hasPermission } from './permissions';
 import type {
   PluginHostAudioInputAdapterGovernanceOptions,
@@ -190,7 +190,7 @@ const AUDIO_INPUT_ADAPTER_QUARANTINE_MS_DEFAULT = 120_000;
 const AUDIO_INPUT_ADAPTER_QUARANTINE_MS_MAX = 86_400_000;
 const TELEMETRY_IDENTIFIER_PATTERN = /^[a-z][a-z0-9._-]{0,127}$/i;
 const TELEMETRY_REDACTED_VALUE = '[REDACTED]';
-const TELEMETRY_PLUGIN_MODULE_ID = 'pmpm-plugin';
+const TELEMETRY_PLUGIN_MODULE_ID = 'extensions-plugin';
 const TELEMETRY_MAX_TEXT_LENGTH = 2_048;
 const TELEMETRY_MAX_FIELD_DEPTH = 4;
 const TELEMETRY_MAX_FIELD_ITEMS = 50;
@@ -1584,10 +1584,10 @@ function listAudioInputAdapterProviderRuntimeStats(): Array<{
 }
 
 function recordAudioInputAdapterAuditEvent(
-  event: Parameters<typeof recordPmpmAuditEvent>[0]
+  event: Parameters<typeof recordInstalledExtensionAuditEvent>[0]
 ): void {
   try {
-    recordPmpmAuditEvent(event);
+    recordInstalledExtensionAuditEvent(event);
   } catch {
     // best-effort only
   }
@@ -3021,7 +3021,7 @@ function createPmpNavigationHandler(): PluginHostCapabilityHandler {
         return resultOk({
           capabilityId: HOST_PMP_NAVIGATION_CAPABILITY_ID,
           stage: 'host-pack',
-          implementation: 'pmp-legacy-navigation',
+          implementation: 'pmp-host-navigation',
           methods: ['describe', 'getSnapshot', 'canGoBack', 'navigateTo', 'goBack'],
         });
       case 'getSnapshot':
@@ -3101,7 +3101,7 @@ function createPmpWindowHandler(): PluginHostCapabilityHandler {
         return resultOk({
           capabilityId: HOST_PMP_WINDOW_CAPABILITY_ID,
           stage: 'host-pack',
-          implementation: 'pmp-legacy-window-shell',
+          implementation: 'pmp-host-window-shell',
           methods: ['describe', 'open', 'close'],
         });
       case 'open': {
@@ -3431,7 +3431,7 @@ function createPmpShellStatusItemHandler(): PluginHostCapabilityHandler {
 function buildPmpStorageSyncSnapshot(pluginId: string, config: Record<string, unknown>) {
   return {
     config,
-    syncState: readPmpmPluginConfigSyncState(pluginId),
+    syncState: readExtensionConfigSyncState(pluginId),
   };
 }
 
@@ -3520,7 +3520,7 @@ function createPmpStorageSyncHandler(): PluginHostCapabilityHandler {
         return resultOk(buildPmpStorageSyncSnapshot(pluginId, configApi.get()));
       case 'getSyncState':
         return resultOk({
-          syncState: readPmpmPluginConfigSyncState(pluginId),
+          syncState: readExtensionConfigSyncState(pluginId),
         });
       case 'writeConfig': {
         const next = resolvePayloadRecord(request.payload, 'value');

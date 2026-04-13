@@ -14,7 +14,7 @@ import {
   type TelemetryService,
   type TelemetrySnapshot,
 } from '../../../services/telemetry';
-import { createPmpmCompatRuntimeResourceRegistry } from './pmpmCompatRuntimeResources';
+import { createRuntimeResourceRegistry } from './runtimeResourceRegistry';
 import {
   createRuntimeBridgeHostSession,
   type RuntimeBridgePort,
@@ -629,7 +629,7 @@ describe('runtime bridge host session', () => {
         },
       }),
       telemetry: {
-        sourceKind: 'pmpm',
+        sourceKind: 'extv2',
         launcherId: 'pxp.extension-host.worker',
         hostLabel: 'PluginCommandWorker',
       },
@@ -667,7 +667,7 @@ describe('runtime bridge host session', () => {
       event: 'plugin.runtime.activate.start',
       fields: expect.objectContaining({
         pluginId: 'worker-plugin',
-        sourceKind: 'pmpm',
+        sourceKind: 'extv2',
         launcherId: 'pxp.extension-host.worker',
         runtimeId: 'worker.main',
         runtimeInstanceId: 'runtime-instance-1',
@@ -682,7 +682,7 @@ describe('runtime bridge host session', () => {
       event: 'plugin.runtime.activate.completed',
       fields: expect.objectContaining({
         pluginId: 'worker-plugin',
-        sourceKind: 'pmpm',
+        sourceKind: 'extv2',
         status: 'completed',
       }),
     });
@@ -707,7 +707,7 @@ describe('runtime bridge host session', () => {
       runtimeInit: createRuntimeInit(),
       runtimeActivate: createRuntimeActivate(),
       telemetry: {
-        sourceKind: 'pmpm',
+        sourceKind: 'extv2',
         launcherId: 'pxp.extension-host.worker',
         hostLabel: 'PluginCommandWorker',
       },
@@ -1357,7 +1357,7 @@ describe('runtime bridge host session', () => {
     const controller = createStreamController();
     const api = createStubApi({ streamHandle: controller.handle });
     const harness = createPortHarness();
-    const runtimeResources = createPmpmCompatRuntimeResourceRegistry();
+    const runtimeResources = createRuntimeResourceRegistry();
     const session = createRuntimeBridgeHostSession({
       pluginId: 'sidecar-plugin',
       runtimeId: 'sidecar.main',

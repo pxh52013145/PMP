@@ -5,13 +5,13 @@ import type { CommandsService } from '../../../services/commands';
 import type { KeybindingsService } from '../../../services/keybindings';
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
 import {
-  buildPmpmRuntimeActivateSnapshot,
-  buildPmpmRuntimeHelloSnapshot,
-  buildPmpmRuntimeInitSnapshot,
-} from '../pmpmRuntimeBridgeSnapshot';
+  buildRuntimeActivateSnapshot,
+  buildRuntimeHelloSnapshot,
+  buildRuntimeInitSnapshot,
+} from '../runtimeBridgeSnapshots';
 import {
   disableInstalledExtensionByPolicy,
-  listInstalledExtensionCompatPermissions,
+  listInstalledExtensionDerivedPermissions,
   quarantineInstalledExtension,
   recordInstalledExtensionCrash,
   type InstalledHostExtensionRecord,
@@ -23,14 +23,14 @@ import {
   reportPluginSidecarProcessUnresponsive,
 } from '../pluginLifecycleTelemetry';
 import { createPluginMountApi, type HostAudioService, type HostNavigation } from '../pluginHostApi';
-import { readPmpmPluginConfig, subscribePmpmPluginConfig } from '../pluginConfig';
+import { readExtensionConfig, subscribeExtensionConfig } from '../pluginConfig';
 import type {
-  CreatePmpmBridgeSidecarPortControllerOptions,
-  PmpmBridgeSidecarPortController,
-} from './sidecarCommandRuntime';
+  CreateRuntimeSidecarPortControllerOptions,
+  RuntimeSidecarPortController,
+} from './runtimeSidecarPort';
 import { createRuntimeBridgeHostSession } from './runtimeBridgeHostSession';
 import { bindHostRuntimeEventChannel, RUNTIME_EVENT_NAMES } from './runtimeEventChannel';
-import { createTauriPmpmBridgeSidecarPortController } from './tauriSidecarPortController';
+import { createTauriRuntimeSidecarPortController } from './tauriRuntimeSidecarPortController';
 import { createInstalledExtensionEntryUrl } from './installedExtensionRuntimeAssets';
 import {
   assertRuntimeArtifactIntegrity,
@@ -41,7 +41,7 @@ import {
   buildWorkerPort,
   type WorkerEventListener,
   type WorkerLike,
-} from './workerCommandRuntime';
+} from './runtimeWorkerBridge';
 import { isResolvedPluginRuntime, type PluginRuntimeResolution } from './types';
 
 const STARTUP_TIMEOUT_MS = 3_000;
@@ -71,8 +71,8 @@ export interface RunResolvedInstalledExtensionCommandOptions {
 
 export interface InstalledExtensionCommandRuntimeDeps {
   createPortController?: (
-    options: CreatePmpmBridgeSidecarPortControllerOptions
-  ) => Promise<PmpmBridgeSidecarPortController> | PmpmBridgeSidecarPortController;
+    options: CreateRuntimeSidecarPortControllerOptions
+  ) => Promise<RuntimeSidecarPortController> | RuntimeSidecarPortController;
   readArtifactBytes?: RuntimeArtifactIntegrityDeps['readArtifactBytes'];
   createWorker?: (
     scriptUrl: string,
@@ -103,7 +103,7 @@ function readUnsupportedLauncherError(
 ): string {
   if (!resolution) return 'Installed extension runtime record not found';
   if (resolution.status !== 'resolved') {
-    return resolution.issues[0] ?? 'No compatible runtime launcher is available';
+    return resolution.issues[0] ?? 'No supported runtime launcher is available';
   }
   return `Resolved runtime launcher is not wired for manifest-v2 commands: ${resolution.launcher.id}`;
 }
@@ -113,10 +113,10 @@ function createMissingBridgeController(): never {
 }
 
 function createDefaultBridgeController(
-  options: CreatePmpmBridgeSidecarPortControllerOptions
-): Promise<PmpmBridgeSidecarPortController> | PmpmBridgeSidecarPortController {
+  options: CreateRuntimeSidecarPortControllerOptions
+): Promise<RuntimeSidecarPortController> | RuntimeSidecarPortController {
   if (isTauriRuntime()) {
-    return createTauriPmpmBridgeSidecarPortController(options);
+    return createTauriRuntimeSidecarPortController(options);
   }
   return createMissingBridgeController();
 }
@@ -172,8 +172,8 @@ async function runInstalledExtensionWorkerCommand(
   const createEntryUrl = deps.createEntryUrl ?? createInstalledExtensionEntryUrl;
 
   const runtimeInstanceId = `${pluginId}:command:${now()}:${Math.random().toString(16).slice(2)}`;
-  const permissions = new Set(listInstalledExtensionCompatPermissions(record));
-  const initialConfig = readPmpmPluginConfig(pluginId, 'extv2');
+  const permissions = new Set(listInstalledExtensionDerivedPermissions(record));
+  const initialConfig = readExtensionConfig(pluginId, 'extv2');
 
   const api = createPluginMountApi({
     pluginId,
@@ -187,7 +187,7 @@ async function runInstalledExtensionWorkerCommand(
     onHostCapabilityActivity: options.onHostCapabilityActivity,
   });
 
-  const runtimeHello = buildPmpmRuntimeHelloSnapshot({
+  const runtimeHello = buildRuntimeHelloSnapshot({
     pluginId,
     runtimeId,
     runtimeInstanceId,
@@ -196,7 +196,7 @@ async function runInstalledExtensionWorkerCommand(
     supportsViewMount: false,
   });
 
-  const runtimeInit = buildPmpmRuntimeInitSnapshot({
+  const runtimeInit = buildRuntimeInitSnapshot({
     pluginId,
     runtimeId,
     runtimeInstanceId,
@@ -205,7 +205,7 @@ async function runInstalledExtensionWorkerCommand(
     startupTimeoutMs: STARTUP_TIMEOUT_MS,
   });
 
-  const activateBase = buildPmpmRuntimeActivateSnapshot({
+  const activateBase = buildRuntimeActivateSnapshot({
     pluginId,
     runtimeId,
     runtimeInstanceId,
@@ -342,7 +342,7 @@ async function runInstalledExtensionWorkerCommand(
     navigation: options.navigation,
     emitRuntimeEvent: (eventName, payload) => session.emitRuntimeEvent(eventName, payload),
     subscribeConfig: permissions.has('storage:local')
-      ? (listener) => subscribePmpmPluginConfig(pluginId, listener, 'extv2')
+      ? (listener) => subscribeExtensionConfig(pluginId, listener, 'extv2')
       : undefined,
     getSpectrum:
       permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrum === 'function'
@@ -424,8 +424,8 @@ async function runInstalledExtensionSidecarCommand(
     surfaceId: options.commandId,
     cause: 'command',
   });
-  const permissions = new Set(listInstalledExtensionCompatPermissions(record));
-  const initialConfig = readPmpmPluginConfig(pluginId, 'extv2');
+  const permissions = new Set(listInstalledExtensionDerivedPermissions(record));
+  const initialConfig = readExtensionConfig(pluginId, 'extv2');
 
   await assertInstalledExtensionSidecarLaunchAllowed(record, runtimeId, entryPath, {
     readArtifactBytes: deps.readArtifactBytes,
@@ -451,7 +451,7 @@ async function runInstalledExtensionSidecarCommand(
     onHostCapabilityActivity: options.onHostCapabilityActivity,
   });
 
-  const runtimeInit = buildPmpmRuntimeInitSnapshot({
+  const runtimeInit = buildRuntimeInitSnapshot({
     pluginId,
     runtimeId,
     runtimeInstanceId,
@@ -460,7 +460,7 @@ async function runInstalledExtensionSidecarCommand(
     startupTimeoutMs: STARTUP_TIMEOUT_MS,
   });
 
-  const activateBase = buildPmpmRuntimeActivateSnapshot({
+  const activateBase = buildRuntimeActivateSnapshot({
     pluginId,
     runtimeId,
     runtimeInstanceId,
@@ -602,7 +602,7 @@ async function runInstalledExtensionSidecarCommand(
     navigation: options.navigation,
     emitRuntimeEvent: (eventName, payload) => session.emitRuntimeEvent(eventName, payload),
     subscribeConfig: permissions.has('storage:local')
-      ? (listener) => subscribePmpmPluginConfig(pluginId, listener, 'extv2')
+      ? (listener) => subscribeExtensionConfig(pluginId, listener, 'extv2')
       : undefined,
     getSpectrum:
       permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrum === 'function'

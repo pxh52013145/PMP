@@ -210,12 +210,11 @@ vi.mock('../../utils/editorWindows', () => ({
 }));
 
 vi.mock('../../utils/windowCommunication', () => ({
-  STORAGE_KEYS: {
-    EXTENSIONS_V2: 'test:extensions-v2',
-    EXTENSIONS_V2_AUDIT_LOG_V1: 'test:extensions-v2-audit-log-v1',
-    EXTENSIONS_V2_RUNTIME_RESTART_V1: 'test:extensions-v2-runtime-restart-v1',
-    PMPM_RUNTIME_RESTART_V1: 'test:pmpm-runtime-restart-v1',
-  },
+    STORAGE_KEYS: {
+      EXTENSIONS_V2: 'test:extensions-v2',
+      EXTENSIONS_V2_AUDIT_LOG_V1: 'test:extensions-v2-audit-log-v1',
+      EXTENSIONS_V2_RUNTIME_RESTART_V1: 'test:extensions-v2-runtime-restart-v1',
+    },
   TAURI_EVENTS: {
     EXTENSIONS_V2_UPDATED: 'test:extensions-v2-updated',
   },

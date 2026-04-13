@@ -67,7 +67,6 @@ fn is_safe_id(value: &str) -> bool {
 
 fn normalize_source_kind(source_kind: Option<&str>) -> Result<&str, String> {
     match source_kind.unwrap_or("extv2") {
-        "pmpm" => Ok("pmpm"),
         "extv2" => Ok("extv2"),
         other => Err(format!("Invalid sourceKind: {}", other)),
     }
@@ -541,16 +540,16 @@ mod tests {
     }
 
     #[test]
-    fn plugin_shell_surface_label_supports_pmpm_and_widget_types() {
+    fn plugin_shell_surface_label_supports_widget_types() {
         assert_eq!(
             plugin_shell_surface_label(
-                Some("pmpm"),
+                Some("extv2"),
                 "desktop-widget",
                 "demo-plugin",
                 "widget-main"
             )
             .unwrap(),
-            "plugin-shell-surface-pmpm-desktop-widget-demo-plugin-widget-main"
+            "plugin-shell-surface-extv2-desktop-widget-demo-plugin-widget-main"
         );
     }
 
@@ -562,7 +561,17 @@ mod tests {
             "Invalid sourceKind: unknown"
         );
         assert_eq!(
-            plugin_shell_surface_label(Some("pmpm"), "floating-panel", "demo-plugin", "shell-main")
+            plugin_shell_surface_label(Some("pmpm"), "overlay", "demo-plugin", "shell-main")
+                .unwrap_err(),
+            "Invalid sourceKind: pmpm"
+        );
+        assert_eq!(
+            plugin_shell_surface_label(
+                Some("extv2"),
+                "floating-panel",
+                "demo-plugin",
+                "shell-main"
+            )
                 .unwrap_err(),
             "Invalid surfaceType: floating-panel"
         );
@@ -594,7 +603,7 @@ mod tests {
     fn resolve_plugin_shell_surface_target_rejects_invalid_ids() {
         assert_eq!(
             resolve_plugin_shell_surface_target(
-                Some("pmpm"),
+                Some("extv2"),
                 "overlay",
                 "demo.plugin",
                 "shell-main"
@@ -604,7 +613,7 @@ mod tests {
         );
         assert_eq!(
             resolve_plugin_shell_surface_target(
-                Some("pmpm"),
+                Some("extv2"),
                 "overlay",
                 "demo-plugin",
                 "shell.main"

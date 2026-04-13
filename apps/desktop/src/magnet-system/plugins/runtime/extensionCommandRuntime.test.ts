@@ -237,7 +237,6 @@ describe('installed extension command runtime', () => {
       manifest: record.manifest,
       installedRecord: record,
       hostId: 'pmp',
-      compatLayerIds: [],
       issues: [],
       runtime: record.manifest.runtimes[0],
       launcher: {
@@ -253,8 +252,8 @@ describe('installed extension command runtime', () => {
     };
 
     vi.spyOn(pluginHostApiModule, 'createPluginMountApi').mockReturnValue(api);
-    vi.spyOn(pluginConfigModule, 'readPmpmPluginConfig').mockReturnValue({ ...configState });
-    vi.spyOn(pluginConfigModule, 'subscribePmpmPluginConfig').mockReturnValue(() => {});
+    vi.spyOn(pluginConfigModule, 'readExtensionConfig').mockReturnValue({ ...configState });
+    vi.spyOn(pluginConfigModule, 'subscribeExtensionConfig').mockReturnValue(() => {});
     const crashSpy = vi
       .spyOn(extensionsModule, 'recordInstalledExtensionCrash')
       .mockImplementation(() => {});
@@ -401,7 +400,6 @@ describe('installed extension command runtime', () => {
       manifest: record.manifest,
       installedRecord: record,
       hostId: 'pmp',
-      compatLayerIds: [],
       issues: [],
       runtime: record.manifest.runtimes[0],
       launcher: {
@@ -417,8 +415,8 @@ describe('installed extension command runtime', () => {
     };
 
     vi.spyOn(pluginHostApiModule, 'createPluginMountApi').mockReturnValue(api);
-    vi.spyOn(pluginConfigModule, 'readPmpmPluginConfig').mockReturnValue({ ...configState });
-    vi.spyOn(pluginConfigModule, 'subscribePmpmPluginConfig').mockReturnValue(() => {});
+    vi.spyOn(pluginConfigModule, 'readExtensionConfig').mockReturnValue({ ...configState });
+    vi.spyOn(pluginConfigModule, 'subscribeExtensionConfig').mockReturnValue(() => {});
     const crashSpy = vi
       .spyOn(extensionsModule, 'recordInstalledExtensionCrash')
       .mockImplementation(() => {});
@@ -560,7 +558,6 @@ describe('installed extension command runtime', () => {
       manifest: record.manifest,
       installedRecord: record,
       hostId: 'pmp',
-      compatLayerIds: [],
       issues: [],
       runtime: record.manifest.runtimes[0],
       launcher: {
@@ -576,8 +573,8 @@ describe('installed extension command runtime', () => {
     };
 
     vi.spyOn(pluginHostApiModule, 'createPluginMountApi').mockReturnValue(api);
-    vi.spyOn(pluginConfigModule, 'readPmpmPluginConfig').mockReturnValue({ count: 0 });
-    vi.spyOn(pluginConfigModule, 'subscribePmpmPluginConfig').mockReturnValue(() => {});
+    vi.spyOn(pluginConfigModule, 'readExtensionConfig').mockReturnValue({ count: 0 });
+    vi.spyOn(pluginConfigModule, 'subscribeExtensionConfig').mockReturnValue(() => {});
     extensionsModule.upsertInstalledExtensionRecord(record);
     const crashSpy = vi
       .spyOn(extensionsModule, 'recordInstalledExtensionCrash')
@@ -676,7 +673,6 @@ describe('installed extension command runtime', () => {
       manifest: record.manifest,
       installedRecord: record,
       hostId: 'pmp',
-      compatLayerIds: [],
       issues: [],
       runtime: record.manifest.runtimes[0],
       launcher: {
@@ -692,8 +688,8 @@ describe('installed extension command runtime', () => {
     };
 
     vi.spyOn(pluginHostApiModule, 'createPluginMountApi').mockReturnValue(api);
-    vi.spyOn(pluginConfigModule, 'readPmpmPluginConfig').mockReturnValue({ count: 0 });
-    vi.spyOn(pluginConfigModule, 'subscribePmpmPluginConfig').mockReturnValue(() => {});
+    vi.spyOn(pluginConfigModule, 'readExtensionConfig').mockReturnValue({ count: 0 });
+    vi.spyOn(pluginConfigModule, 'subscribeExtensionConfig').mockReturnValue(() => {});
     extensionsModule.upsertInstalledExtensionRecord(record);
 
     const createPortController = vi.fn();

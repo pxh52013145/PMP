@@ -6,7 +6,6 @@ import type {
   TrackPageParams,
 } from './navigationParams';
 
-export type PmpmPluginPageType = `pmpm:${string}:page:${string}`;
 export type InstalledExtensionPageType = `extv2:${string}:page:${string}`;
 
 export type NavigationPageType =
@@ -26,7 +25,6 @@ export type NavigationPageType =
   | 'plugin-page'
   | 'plugin-visualizer'
   | 'native-debug'
-  | PmpmPluginPageType
   | InstalledExtensionPageType;
 
 export type NavigationParamsMap = {

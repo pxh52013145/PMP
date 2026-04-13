@@ -4,31 +4,29 @@ import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import type { PluginSurfaceSourceKind } from '../../contracts/pluginSurfaceSource';
 import { TAURI_EVENTS, broadcastDataUpdate } from '../../utils/windowCommunication';
 
-export type PmpmPluginConfig = Record<string, unknown>;
-export type PmpmPluginConfigSyncState = {
+export type ExtensionConfig = Record<string, unknown>;
+export type ExtensionConfigSyncState = {
   revision: number;
   updatedAt: number | null;
   present: boolean;
 };
 
 const CONFIG_PREFIX_BY_SOURCE_KIND: Record<PluginSurfaceSourceKind, string> = {
-  pmpm: 'pixel-matrix-pmpm-plugin-config:',
   extv2: 'pixel-matrix-extv2-plugin-config:',
 };
 const CONFIG_SYNC_STATE_PREFIX_BY_SOURCE_KIND: Record<PluginSurfaceSourceKind, string> = {
-  pmpm: 'pixel-matrix-pmpm-plugin-config-sync:',
   extv2: 'pixel-matrix-extv2-plugin-config-sync:',
 };
-const telemetry = getTelemetryLogger('pmpm', 'pluginConfig');
+const telemetry = getTelemetryLogger('extensions', 'pluginConfig');
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-const listenersByPluginId = new Map<string, Set<(config: PmpmPluginConfig) => void>>();
+const listenersByPluginId = new Map<string, Set<(config: ExtensionConfig) => void>>();
 const syncDisposersByPluginId = new Map<string, () => void>();
 
-function notify(pluginId: string, config: PmpmPluginConfig): void {
+function notify(pluginId: string, config: ExtensionConfig): void {
   const listeners = listenersByPluginId.get(pluginId);
   if (!listeners || listeners.size === 0) return;
 
@@ -46,39 +44,39 @@ function notify(pluginId: string, config: PmpmPluginConfig): void {
   }
 }
 
-export function getPmpmPluginConfigKey(
+export function getExtensionConfigKey(
   pluginId: string,
-  sourceKind: PluginSurfaceSourceKind = 'pmpm'
+  sourceKind: PluginSurfaceSourceKind = 'extv2'
 ): string {
   return `${CONFIG_PREFIX_BY_SOURCE_KIND[sourceKind]}${pluginId}`;
 }
 
-function getPmpmPluginConfigSyncStateKey(
+function getExtensionConfigSyncStateKey(
   pluginId: string,
-  sourceKind: PluginSurfaceSourceKind = 'pmpm'
+  sourceKind: PluginSurfaceSourceKind = 'extv2'
 ): string {
   return `${CONFIG_SYNC_STATE_PREFIX_BY_SOURCE_KIND[sourceKind]}${pluginId}`;
 }
 
-export function readPmpmPluginConfig(
+export function readExtensionConfig(
   pluginId: string,
-  sourceKind: PluginSurfaceSourceKind = 'pmpm'
-): PmpmPluginConfig {
-  return readJson<PmpmPluginConfig>(getPmpmPluginConfigKey(pluginId, sourceKind), {});
+  sourceKind: PluginSurfaceSourceKind = 'extv2'
+): ExtensionConfig {
+  return readJson<ExtensionConfig>(getExtensionConfigKey(pluginId, sourceKind), {});
 }
 
-export function readPmpmPluginConfigSyncState(
+export function readExtensionConfigSyncState(
   pluginId: string,
-  sourceKind: PluginSurfaceSourceKind = 'pmpm'
-): PmpmPluginConfigSyncState {
-  const fallbackPresent = readString(getPmpmPluginConfigKey(pluginId, sourceKind)) !== null;
-  const fallback: PmpmPluginConfigSyncState = {
+  sourceKind: PluginSurfaceSourceKind = 'extv2'
+): ExtensionConfigSyncState {
+  const fallbackPresent = readString(getExtensionConfigKey(pluginId, sourceKind)) !== null;
+  const fallback: ExtensionConfigSyncState = {
     revision: 0,
     updatedAt: null,
     present: fallbackPresent,
   };
 
-  const parsed = readJson<unknown>(getPmpmPluginConfigSyncStateKey(pluginId, sourceKind), fallback);
+  const parsed = readJson<unknown>(getExtensionConfigSyncStateKey(pluginId, sourceKind), fallback);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return fallback;
   }
@@ -101,54 +99,56 @@ export function readPmpmPluginConfigSyncState(
   };
 }
 
-function writePmpmPluginConfigSyncState(
+function writeExtensionConfigSyncState(
   pluginId: string,
   present: boolean,
-  sourceKind: PluginSurfaceSourceKind = 'pmpm'
-): PmpmPluginConfigSyncState {
-  const previous = readPmpmPluginConfigSyncState(pluginId, sourceKind);
-  const next: PmpmPluginConfigSyncState = {
+  sourceKind: PluginSurfaceSourceKind = 'extv2'
+): ExtensionConfigSyncState {
+  const previous = readExtensionConfigSyncState(pluginId, sourceKind);
+  const next: ExtensionConfigSyncState = {
     revision: previous.revision + 1,
     updatedAt: Date.now(),
     present,
   };
-  writeJson(getPmpmPluginConfigSyncStateKey(pluginId, sourceKind), next, { mode: 'sync' });
+  writeJson(getExtensionConfigSyncStateKey(pluginId, sourceKind), next, { mode: 'sync' });
   return next;
 }
 
 function ensureCrossWindowSync(
   pluginId: string,
-  sourceKind: PluginSurfaceSourceKind = 'pmpm'
+  sourceKind: PluginSurfaceSourceKind = 'extv2'
 ): void {
   if (typeof window === 'undefined') return;
   const syncId = `${sourceKind}:${pluginId}`;
   if (syncDisposersByPluginId.has(syncId)) return;
 
-  const key = getPmpmPluginConfigKey(pluginId, sourceKind);
+  const key = getExtensionConfigKey(pluginId, sourceKind);
 
   const onStorage = (e: StorageEvent) => {
     if (e.key !== key) return;
-    notify(syncId, readPmpmPluginConfig(pluginId, sourceKind));
+    notify(syncId, readExtensionConfig(pluginId, sourceKind));
   };
 
   window.addEventListener('storage', onStorage);
 
   let disposed = false;
-  let unlistenTauri: null | (() => void) = null;
+  const tauriUnlisteners: Array<() => void> = [];
 
   void import('../../utils/windowCommunication')
-    .then(({ setupTauriListenerWithPayload }) =>
-      setupTauriListenerWithPayload<{ key?: string }>(TAURI_EVENTS.PMPM_PLUGIN_CONFIG_UPDATED, (p) => {
-        if (!p?.key || p.key !== key) return;
-        notify(syncId, readPmpmPluginConfig(pluginId, sourceKind));
-      })
-    )
-    .then((unlisten) => {
+    .then(async ({ setupTauriListenerWithPayload }) => {
+      const unlisten = await setupTauriListenerWithPayload<{ key?: string }>(
+        TAURI_EVENTS.EXTENSIONS_CONFIG_UPDATED,
+        (p) => {
+          if (!p?.key || p.key !== key) return;
+          notify(syncId, readExtensionConfig(pluginId, sourceKind));
+        }
+      );
+
       if (disposed) {
         unlisten();
         return;
       }
-      unlistenTauri = unlisten;
+      tauriUnlisteners.push(unlisten);
     })
     .catch(() => {
       // ignore (web runtime or tauri listener not available)
@@ -157,17 +157,19 @@ function ensureCrossWindowSync(
   syncDisposersByPluginId.set(syncId, () => {
     disposed = true;
     window.removeEventListener('storage', onStorage);
-    try {
-      unlistenTauri?.();
-    } catch {
-      // ignore
+    for (const unlisten of tauriUnlisteners) {
+      try {
+        unlisten();
+      } catch {
+        // ignore
+      }
     }
   });
 }
 
 function teardownCrossWindowSync(
   pluginId: string,
-  sourceKind: PluginSurfaceSourceKind = 'pmpm'
+  sourceKind: PluginSurfaceSourceKind = 'extv2'
 ): void {
   const syncId = `${sourceKind}:${pluginId}`;
   const dispose = syncDisposersByPluginId.get(syncId);
@@ -176,43 +178,43 @@ function teardownCrossWindowSync(
   syncDisposersByPluginId.delete(syncId);
 }
 
-export function writePmpmPluginConfig(
+export function writeExtensionConfig(
   pluginId: string,
-  config: PmpmPluginConfig,
-  sourceKind: PluginSurfaceSourceKind = 'pmpm'
+  config: ExtensionConfig,
+  sourceKind: PluginSurfaceSourceKind = 'extv2'
 ): void {
-  const key = getPmpmPluginConfigKey(pluginId, sourceKind);
-  writePmpmPluginConfigSyncState(pluginId, true, sourceKind);
-  void broadcastDataUpdate(key, config, TAURI_EVENTS.PMPM_PLUGIN_CONFIG_UPDATED);
+  const key = getExtensionConfigKey(pluginId, sourceKind);
+  writeExtensionConfigSyncState(pluginId, true, sourceKind);
+  void broadcastDataUpdate(key, config, TAURI_EVENTS.EXTENSIONS_CONFIG_UPDATED);
   notify(`${sourceKind}:${pluginId}`, config);
 }
 
-export function patchPmpmPluginConfig(
+export function patchExtensionConfig(
   pluginId: string,
   patch: Record<string, unknown>,
-  sourceKind: PluginSurfaceSourceKind = 'pmpm'
-): PmpmPluginConfig {
-  const next = { ...readPmpmPluginConfig(pluginId, sourceKind), ...patch };
-  writePmpmPluginConfig(pluginId, next, sourceKind);
+  sourceKind: PluginSurfaceSourceKind = 'extv2'
+): ExtensionConfig {
+  const next = { ...readExtensionConfig(pluginId, sourceKind), ...patch };
+  writeExtensionConfig(pluginId, next, sourceKind);
   return next;
 }
 
-export function clearPmpmPluginConfig(
+export function clearExtensionConfig(
   pluginId: string,
-  sourceKind: PluginSurfaceSourceKind = 'pmpm'
+  sourceKind: PluginSurfaceSourceKind = 'extv2'
 ): void {
-  const key = getPmpmPluginConfigKey(pluginId, sourceKind);
-  writePmpmPluginConfigSyncState(pluginId, false, sourceKind);
+  const key = getExtensionConfigKey(pluginId, sourceKind);
+  writeExtensionConfigSyncState(pluginId, false, sourceKind);
   removeKey(key);
   // Fan out to other windows (storage event will cover browsers; Tauri windows also get an event).
-  void emit(TAURI_EVENTS.PMPM_PLUGIN_CONFIG_UPDATED, { timestamp: Date.now(), key }).catch(() => {});
+  void emit(TAURI_EVENTS.EXTENSIONS_CONFIG_UPDATED, { timestamp: Date.now(), key }).catch(() => {});
   notify(`${sourceKind}:${pluginId}`, {});
 }
 
-export function subscribePmpmPluginConfig(
+export function subscribeExtensionConfig(
   pluginId: string,
-  listener: (config: PmpmPluginConfig) => void,
-  sourceKind: PluginSurfaceSourceKind = 'pmpm'
+  listener: (config: ExtensionConfig) => void,
+  sourceKind: PluginSurfaceSourceKind = 'extv2'
 ): () => void {
   const syncId = `${sourceKind}:${pluginId}`;
   let listeners = listenersByPluginId.get(syncId);

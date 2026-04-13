@@ -7,7 +7,7 @@ import {
   InstalledExtensionWindowHost,
 } from './InstalledExtensionSurfaceHost';
 
-type LegacyResolvedHostProps = {
+type ResolvedHostProps = {
   preferredKind?: PluginSurfaceSourceKind;
 };
 
@@ -17,7 +17,7 @@ export function ResolvedPluginPageHost({
 }: {
   pluginId: string;
   pageId: string;
-} & LegacyResolvedHostProps) {
+} & ResolvedHostProps) {
   return <InstalledExtensionPageHost pluginId={pluginId} pageId={pageId} />;
 }
 
@@ -27,7 +27,7 @@ export function ResolvedPluginVisualizerHost({
 }: {
   pluginId: string;
   visualizerId: string;
-} & LegacyResolvedHostProps) {
+} & ResolvedHostProps) {
   return (
     <InstalledExtensionVisualizerHost
       pluginId={pluginId}
@@ -42,7 +42,7 @@ export function ResolvedPluginWindowHost({
 }: {
   pluginId: string;
   windowId: string;
-} & LegacyResolvedHostProps) {
+} & ResolvedHostProps) {
   return <InstalledExtensionWindowHost pluginId={pluginId} windowId={windowId} />;
 }
 
@@ -54,7 +54,7 @@ export function ResolvedPluginShellSurfaceHost({
   pluginId: string;
   surfaceId: string;
   surfaceType: 'overlay' | 'desktop-widget';
-} & LegacyResolvedHostProps) {
+} & ResolvedHostProps) {
   return surfaceType === 'overlay' ? (
     <InstalledExtensionOverlayHost pluginId={pluginId} surfaceId={surfaceId} />
   ) : (

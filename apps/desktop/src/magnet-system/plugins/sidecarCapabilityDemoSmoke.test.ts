@@ -18,9 +18,9 @@ import {
 import type { InstalledHostExtensionRecord } from './extensions';
 import type { HostAudioService, HostNavigation } from './pluginHostApi';
 import type {
-  CreatePmpmBridgeSidecarPortControllerOptions,
-  PmpmBridgeSidecarPortController,
-} from './runtime/sidecarCommandRuntime';
+  CreateRuntimeSidecarPortControllerOptions,
+  RuntimeSidecarPortController,
+} from './runtime/runtimeSidecarPort';
 import type { RuntimeBridgeTransportMessage } from './runtime/runtimeBridgeHostSession';
 import type { ResolvedPluginRuntime } from './runtime/types';
 
@@ -37,8 +37,8 @@ type TelemetryCall = {
 
 type RealSidecarHarness = {
   createPortController: (
-    options: CreatePmpmBridgeSidecarPortControllerOptions
-  ) => Promise<PmpmBridgeSidecarPortController>;
+    options: CreateRuntimeSidecarPortControllerOptions
+  ) => Promise<RuntimeSidecarPortController>;
   disposeAll: () => Promise<void>;
   lastPid: () => number | null;
   disposeReasons: string[];
@@ -249,8 +249,8 @@ function createRealSidecarHarness(): RealSidecarHarness {
   let mostRecentPid: number | null = null;
 
   const createPortController = async (
-    options: CreatePmpmBridgeSidecarPortControllerOptions
-  ): Promise<PmpmBridgeSidecarPortController> => {
+    options: CreateRuntimeSidecarPortControllerOptions
+  ): Promise<RuntimeSidecarPortController> => {
     const listeners = new Set<(message: RuntimeBridgeTransportMessage) => void>();
     const buffered: RuntimeBridgeTransportMessage[] = [];
     const telemetryContext = createPluginSidecarTelemetryContext({
@@ -397,13 +397,13 @@ function createRealSidecarHarness(): RealSidecarHarness {
 
     return {
       port: {
-        postMessage: (message) => {
+        postMessage: (message: RuntimeBridgeTransportMessage) => {
           if (closed || child.stdin.destroyed) {
             throw new Error('Real sidecar harness is already closed');
           }
           child.stdin.write(`${JSON.stringify(message)}\n`);
         },
-        onMessage: (listener) => {
+        onMessage: (listener: (message: RuntimeBridgeTransportMessage) => void) => {
           listeners.add(listener);
           if (buffered.length > 0) {
             const pending = buffered.splice(0, buffered.length);
@@ -473,16 +473,15 @@ vi.mock('../../utils/tauriRuntime', () => ({
 }));
 
 vi.mock('../../utils/windowCommunication', () => ({
-  STORAGE_KEYS: {
-    EXTENSIONS_V2: 'test:extensions-v2',
-    EXTENSIONS_V2_AUDIT_LOG_V1: 'test:extensions-v2-audit-log-v1',
-    EXTENSIONS_V2_RUNTIME_RESTART_V1: 'test:extensions-v2-runtime-restart-v1',
-    PMPM_PLUGIN_CONFIG_UPDATED: 'test:pmpm-plugin-config-updated',
-  },
-  TAURI_EVENTS: {
-    EXTENSIONS_V2_UPDATED: 'test:extensions-v2-updated',
-    PMPM_PLUGIN_CONFIG_UPDATED: 'test:pmpm-plugin-config-updated',
-  },
+    STORAGE_KEYS: {
+      EXTENSIONS_V2: 'test:extensions-v2',
+      EXTENSIONS_V2_AUDIT_LOG_V1: 'test:extensions-v2-audit-log-v1',
+      EXTENSIONS_V2_RUNTIME_RESTART_V1: 'test:extensions-v2-runtime-restart-v1',
+    },
+    TAURI_EVENTS: {
+      EXTENSIONS_V2_UPDATED: 'test:extensions-v2-updated',
+      EXTENSIONS_CONFIG_UPDATED: 'test:extensions-config-updated',
+    },
   broadcastSignal: vi.fn(async () => undefined),
   broadcastDataUpdate: vi.fn(async (storageKey: string, data: unknown) => {
     localStorage.setItem(storageKey, JSON.stringify(data));

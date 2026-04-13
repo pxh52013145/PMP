@@ -1,7 +1,7 @@
 import {
-  PMPM_BRIDGE_VERSION,
-  PMPM_DEFAULT_RUNTIME_ID,
-  mapPmpmPermissionToCapabilityId,
+  DEFAULT_EXTENSION_RUNTIME_ID,
+  EXTENSION_BRIDGE_VERSION,
+  mapPermissionToCapabilityId,
 } from '@pixel-matrix/plugin-platform-contracts';
 import type {
   CapabilityRevoke,
@@ -21,9 +21,9 @@ import {
   listPluginHostCapabilities,
 } from './host-api';
 
-const PMPM_COMPAT_CAPABILITY_VERSION = 'compat.pmpm.v1';
+const SANDBOX_CAPABILITY_VERSION = 'pxp.capability.v1';
 
-type PmpmRuntimeInitSnapshotOptions = {
+type RuntimeInitSnapshotOptions = {
   pluginId: string;
   runtimeInstanceId: string;
   permissions: Iterable<string>;
@@ -40,7 +40,7 @@ type PmpmRuntimeInitSnapshotOptions = {
   trustLevel?: string;
 };
 
-type PmpmRuntimeHelloSnapshotOptions = {
+type RuntimeHelloSnapshotOptions = {
   pluginId: string;
   runtimeInstanceId: string;
   runtimeKind: RuntimeKind;
@@ -50,7 +50,7 @@ type PmpmRuntimeHelloSnapshotOptions = {
   runtimeId?: string;
 };
 
-type PmpmRuntimeHealthSnapshotOptions = {
+type RuntimeHealthSnapshotOptions = {
   pluginId: string;
   runtimeInstanceId: string;
   runtimeId?: string;
@@ -60,7 +60,7 @@ type PmpmRuntimeHealthSnapshotOptions = {
   message?: string;
 };
 
-type PmpmRuntimeCapabilityRevokeDrillSnapshotOptions = {
+type RuntimeCapabilityRevokeDrillSnapshotOptions = {
   pluginId: string;
   runtimeInstanceId: string;
   capabilityIds?: Iterable<string>;
@@ -69,7 +69,7 @@ type PmpmRuntimeCapabilityRevokeDrillSnapshotOptions = {
   runtimeId?: string;
 };
 
-type PmpmRuntimeCompatSurfaceKind =
+type RuntimeBridgeSurfaceKind =
   | 'magnet'
   | 'settings'
   | 'page'
@@ -79,17 +79,17 @@ type PmpmRuntimeCompatSurfaceKind =
   | 'desktop-widget'
   | 'command';
 
-type PmpmRuntimeBridgeSurfaceOptions = {
+type RuntimeBridgeSurfaceOptions = {
   pluginId: string;
   runtimeInstanceId: string;
-  kind: PmpmRuntimeCompatSurfaceKind;
+  kind: RuntimeBridgeSurfaceKind;
   surfaceId?: string | null;
   mountContext?: unknown;
   commandArgs?: unknown;
   runtimeId?: string;
 };
 
-const VIEW_TYPE_BY_SURFACE: Record<Exclude<PmpmRuntimeCompatSurfaceKind, 'command'>, string> = {
+const VIEW_TYPE_BY_SURFACE: Record<Exclude<RuntimeBridgeSurfaceKind, 'command'>, string> = {
   magnet: 'magnet',
   settings: 'settings-panel',
   page: 'page',
@@ -99,7 +99,7 @@ const VIEW_TYPE_BY_SURFACE: Record<Exclude<PmpmRuntimeCompatSurfaceKind, 'comman
   'desktop-widget': 'desktop-widget',
 };
 
-const SURFACE_SLOT_BY_SURFACE: Record<Exclude<PmpmRuntimeCompatSurfaceKind, 'command'>, string> = {
+const SURFACE_SLOT_BY_SURFACE: Record<Exclude<RuntimeBridgeSurfaceKind, 'command'>, string> = {
   magnet: 'host.pmp.surface.magnet',
   settings: 'host.pmp.surface.settings-panel',
   page: 'host.pmp.surface.page',
@@ -109,7 +109,7 @@ const SURFACE_SLOT_BY_SURFACE: Record<Exclude<PmpmRuntimeCompatSurfaceKind, 'com
   'desktop-widget': 'host.pmp.surface.desktop-widget',
 };
 
-const PMPM_COMPAT_DATA_PLANES: NonNullable<RuntimeHello['supportedDataPlanes']> = ['inline-json'];
+const SANDBOX_DATA_PLANES: NonNullable<RuntimeHello['supportedDataPlanes']> = ['inline-json'];
 
 function normalizePositiveInt(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
@@ -219,7 +219,7 @@ function resolveNegotiatedCapabilityVersion(
     return knownVersion;
   }
 
-  return knownVersion ?? PMPM_COMPAT_CAPABILITY_VERSION;
+  return knownVersion ?? SANDBOX_CAPABILITY_VERSION;
 }
 
 function resolveCapabilityGrantMode(
@@ -269,7 +269,7 @@ function collectNegotiatedGrantedPermissions(options: {
 
 function listGrantedCapabilities(
   options: Pick<
-    PmpmRuntimeInitSnapshotOptions,
+    RuntimeInitSnapshotOptions,
     | 'permissions'
     | 'manifestPermissions'
     | 'deniedPermissions'
@@ -306,7 +306,7 @@ function listGrantedCapabilities(
   const granted: RuntimeInit['grantedCapabilities'] = [];
 
   for (const permission of negotiatedPermissions) {
-    const capabilityId = mapPmpmPermissionToCapabilityId(permission);
+    const capabilityId = mapPermissionToCapabilityId(permission);
     if (seen.has(capabilityId)) continue;
     seen.add(capabilityId);
 
@@ -331,11 +331,11 @@ function listGrantedCapabilities(
 }
 
 function resolveRuntimeId(runtimeId?: string): string {
-  return runtimeId ?? PMPM_DEFAULT_RUNTIME_ID;
+  return runtimeId ?? DEFAULT_EXTENSION_RUNTIME_ID;
 }
 
-function buildCompatSurfacePayload(
-  options: PmpmRuntimeBridgeSurfaceOptions
+function buildSurfacePayload(
+  options: RuntimeBridgeSurfaceOptions
 ): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     surface: options.kind,
@@ -354,7 +354,7 @@ function buildCompatSurfacePayload(
   return payload;
 }
 
-function resolveViewId(options: PmpmRuntimeBridgeSurfaceOptions): string {
+function resolveViewId(options: RuntimeBridgeSurfaceOptions): string {
   if (options.kind === 'magnet') {
     return options.pluginId;
   }
@@ -363,16 +363,16 @@ function resolveViewId(options: PmpmRuntimeBridgeSurfaceOptions): string {
   return normalizedSurfaceId.length > 0 ? normalizedSurfaceId : options.pluginId;
 }
 
-export function buildPmpmRuntimeInitSnapshot(options: PmpmRuntimeInitSnapshotOptions): RuntimeInit {
+export function buildRuntimeInitSnapshot(options: RuntimeInitSnapshotOptions): RuntimeInit {
   const startupTimeoutMs = normalizePositiveInt(options.startupTimeoutMs);
   const heartbeatIntervalMs = normalizePositiveInt(options.heartbeatIntervalMs);
   const unresponsiveTimeoutMs = normalizePositiveInt(options.unresponsiveTimeoutMs);
 
   return {
-    bridgeVersion: PMPM_BRIDGE_VERSION,
+    bridgeVersion: EXTENSION_BRIDGE_VERSION,
     op: 'runtime.init',
     pluginId: options.pluginId,
-    runtimeId: options.runtimeId ?? PMPM_DEFAULT_RUNTIME_ID,
+    runtimeId: options.runtimeId ?? DEFAULT_EXTENSION_RUNTIME_ID,
     runtimeInstanceId: options.runtimeInstanceId,
     hostId: options.hostId ?? 'pmp',
     hostVersion: options.hostVersion ?? APP_VERSION,
@@ -393,58 +393,58 @@ export function buildPmpmRuntimeInitSnapshot(options: PmpmRuntimeInitSnapshotOpt
   };
 }
 
-export function buildPmpmRuntimeCapabilityRevokeDrillSnapshot(
-  options: PmpmRuntimeCapabilityRevokeDrillSnapshotOptions
+export function buildRuntimeCapabilityRevokeDrillSnapshot(
+  options: RuntimeCapabilityRevokeDrillSnapshotOptions
 ): CapabilityRevoke {
   const capabilityIds = normalizeCapabilityIdList(options.capabilityIds);
   return {
-    bridgeVersion: PMPM_BRIDGE_VERSION,
+    bridgeVersion: EXTENSION_BRIDGE_VERSION,
     op: 'runtime.capabilities.revoke',
     pluginId: options.pluginId,
     runtimeId: resolveRuntimeId(options.runtimeId),
     runtimeInstanceId: options.runtimeInstanceId,
     requestId: options.requestId ?? `runtime-capability-revoke:${options.runtimeInstanceId}`,
-    capabilityIds: capabilityIds.length > 0 ? capabilityIds : ['compat.pmpm.permission.noop'],
-    reason: options.reason ?? 'compat-drill:no-op',
+    capabilityIds: capabilityIds.length > 0 ? capabilityIds : ['pxp.permission.noop'],
+    reason: options.reason ?? 'sandbox-drill:no-op',
   };
 }
 
-export function buildPmpmRuntimeHelloSnapshot(
-  options: PmpmRuntimeHelloSnapshotOptions
+export function buildRuntimeHelloSnapshot(
+  options: RuntimeHelloSnapshotOptions
 ): RuntimeHello {
   return {
-    bridgeVersion: PMPM_BRIDGE_VERSION,
+    bridgeVersion: EXTENSION_BRIDGE_VERSION,
     op: 'runtime.hello',
     pluginId: options.pluginId,
     runtimeId: resolveRuntimeId(options.runtimeId),
     runtimeInstanceId: options.runtimeInstanceId,
-    supportedBridgeVersions: [PMPM_BRIDGE_VERSION],
+    supportedBridgeVersions: [EXTENSION_BRIDGE_VERSION],
     runtimeKind: options.runtimeKind,
     carrier: options.carrier,
     supportsViewMount: options.supportsViewMount,
-    supportedDataPlanes: [...(options.supportedDataPlanes ?? PMPM_COMPAT_DATA_PLANES)],
+    supportedDataPlanes: [...(options.supportedDataPlanes ?? SANDBOX_DATA_PLANES)],
   };
 }
 
-export function buildPmpmRuntimeActivateSnapshot(
-  options: PmpmRuntimeBridgeSurfaceOptions
+export function buildRuntimeActivateSnapshot(
+  options: RuntimeBridgeSurfaceOptions
 ): RuntimeActivate {
   return {
-    bridgeVersion: PMPM_BRIDGE_VERSION,
+    bridgeVersion: EXTENSION_BRIDGE_VERSION,
     op: 'runtime.activate',
     pluginId: options.pluginId,
     runtimeId: resolveRuntimeId(options.runtimeId),
     runtimeInstanceId: options.runtimeInstanceId,
     cause: options.kind === 'command' ? 'command' : 'view',
-    payload: buildCompatSurfacePayload(options),
+    payload: buildSurfacePayload(options),
   };
 }
 
-export function buildPmpmRuntimeHealthSnapshot(
-  options: PmpmRuntimeHealthSnapshotOptions
+export function buildRuntimeHealthSnapshot(
+  options: RuntimeHealthSnapshotOptions
 ): RuntimeHealthResponse {
   return {
-    bridgeVersion: PMPM_BRIDGE_VERSION,
+    bridgeVersion: EXTENSION_BRIDGE_VERSION,
     op: 'runtime.health.response',
     pluginId: options.pluginId,
     runtimeId: resolveRuntimeId(options.runtimeId),
@@ -456,8 +456,8 @@ export function buildPmpmRuntimeHealthSnapshot(
   };
 }
 
-export function buildPmpmViewMountRequestSnapshot(
-  options: PmpmRuntimeBridgeSurfaceOptions
+export function buildViewMountRequestSnapshot(
+  options: RuntimeBridgeSurfaceOptions
 ): ViewMountRequest | null {
   if (options.kind === 'command') {
     return null;
@@ -468,7 +468,7 @@ export function buildPmpmViewMountRequestSnapshot(
   const viewInstanceId = `${options.runtimeInstanceId}:${viewType}:${viewId}`;
 
   return {
-    bridgeVersion: PMPM_BRIDGE_VERSION,
+    bridgeVersion: EXTENSION_BRIDGE_VERSION,
     op: 'view.mount.request',
     pluginId: options.pluginId,
     runtimeId: resolveRuntimeId(options.runtimeId),
@@ -478,6 +478,6 @@ export function buildPmpmViewMountRequestSnapshot(
     viewId,
     viewType,
     surfaceSlot: SURFACE_SLOT_BY_SURFACE[options.kind],
-    props: buildCompatSurfacePayload(options),
+    props: buildSurfacePayload(options),
   };
 }

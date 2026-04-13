@@ -151,7 +151,6 @@ function createResolvedRuntimeResolution(): PluginRuntimeResolution {
     manifest,
     installedRecord,
     hostId: 'pmp',
-    compatLayerIds: ['compat.pmpm'],
     issues: [],
     runtime: {
       runtimeId: 'worker.main',
@@ -206,8 +205,7 @@ function createBlockedRuntimeResolution(): PluginRuntimeResolution {
     manifest,
     installedRecord,
     hostId: 'pmp',
-    compatLayerIds: [],
-    issues: ['Runtime "webview.main" has no compatible launcher'],
+    issues: ['Runtime "webview.main" has no supported launcher'],
     runtime: {
       runtimeId: 'webview.main',
       kind: 'webview',
@@ -224,9 +222,9 @@ describe('pluginLifecycleTelemetry', () => {
 
     const context = createPluginSurfaceTelemetryContext({
       pluginId: 'demo.plugin',
-      sourceKind: 'pmpm',
-      hostLabel: 'PmpmSandboxHost',
-      launcherId: 'compat.pmpm.webview-sandbox',
+      sourceKind: 'extv2',
+      hostLabel: 'InstalledExtensionPageHost',
+      launcherId: 'pxp.webview.host-frame',
       surfaceKind: 'page',
       surfaceId: 'demo-page',
     });
@@ -250,8 +248,8 @@ describe('pluginLifecycleTelemetry', () => {
       event: 'plugin.surface.mount.start',
       fields: expect.objectContaining({
         pluginId: 'demo.plugin',
-        sourceKind: 'pmpm',
-        launcherId: 'compat.pmpm.webview-sandbox',
+        sourceKind: 'extv2',
+        launcherId: 'pxp.webview.host-frame',
         surfaceKind: 'page',
         surfaceId: 'demo-page',
         status: 'start',
@@ -356,21 +354,20 @@ describe('pluginLifecycleTelemetry', () => {
         runtimeKind: 'extension-host',
         launcherId: 'pxp.extension-host.worker',
         runtimeSource: 'manifest-runtime',
-        compatMode: 'fallback-available',
         status: 'completed',
       }),
     });
     expect(telemetry.calls[1]?.fields?.durationMs).toEqual(expect.any(Number));
   });
 
-  it('emits plugin.runtime.resolve.failed when no compatible runtime launcher is available', () => {
+  it('emits plugin.runtime.resolve.failed when no supported runtime launcher is available', () => {
     const telemetry = createTelemetryServiceSpy();
     setGlobalTelemetryService(telemetry.service);
 
     const context = createPluginRuntimeResolveTelemetryContext({
       pluginId: 'demo.plugin',
-      sourceKind: 'pmpm',
-      hostLabel: 'PmpmSandboxHost',
+      sourceKind: 'extv2',
+      hostLabel: 'InstalledExtensionPageHost',
       surfaceKind: 'page',
       surfaceId: 'demo-page',
       cause: 'view',
@@ -389,10 +386,10 @@ describe('pluginLifecycleTelemetry', () => {
     expect(telemetry.calls[1]).toMatchObject({
       level: 'warn',
       event: 'plugin.runtime.resolve.failed',
-      message: 'Runtime "webview.main" has no compatible launcher',
+      message: 'Runtime "webview.main" has no supported launcher',
       fields: expect.objectContaining({
         pluginId: 'demo.plugin',
-        sourceKind: 'pmpm',
+        sourceKind: 'extv2',
         surfaceKind: 'page',
         surfaceId: 'demo-page',
         cause: 'view',
@@ -400,7 +397,6 @@ describe('pluginLifecycleTelemetry', () => {
         runtimeId: 'webview.main',
         runtimeKind: 'webview',
         issueCount: 1,
-        compatMode: 'none',
         status: 'failed',
         preferSandboxLauncher: true,
       }),

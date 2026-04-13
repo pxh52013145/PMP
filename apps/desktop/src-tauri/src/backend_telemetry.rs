@@ -34,11 +34,13 @@ impl BackendTelemetryOptions {
         self
     }
 
+    #[allow(dead_code)]
     pub fn trace_id(mut self, value: impl Into<String>) -> Self {
         self.trace_id = Some(value.into());
         self
     }
 
+    #[allow(dead_code)]
     pub fn span_id(mut self, value: impl Into<String>) -> Self {
         self.span_id = Some(value.into());
         self

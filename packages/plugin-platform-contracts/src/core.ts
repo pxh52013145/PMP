@@ -363,7 +363,7 @@ export type ActivationEventDescriptor =
 
 export interface DependencyDescriptor {
   id: string;
-  kind: 'plugin' | 'host-pack' | 'resource-pack' | 'compat-layer';
+  kind: 'plugin' | 'host-pack' | 'resource-pack';
   versionRange?: string;
   optional?: boolean;
 }
@@ -424,11 +424,6 @@ export interface TrustHintsDescriptor {
   notes?: string[];
 }
 
-export interface CompatDescriptor {
-  compatLayerId: string;
-  metadata?: Record<string, unknown>;
-}
-
 export interface PxpManifestV2 {
   schemaVersion: '2.0';
   kind: 'extension';
@@ -459,7 +454,6 @@ export interface PxpManifestV2 {
   contributes?: ManifestContributionDescriptor;
   integrity?: IntegrityDescriptor;
   trustHints?: TrustHintsDescriptor;
-  compat?: CompatDescriptor[];
 }
 
 export interface InstalledExtensionRecord<TManifest = PxpManifestV2> {

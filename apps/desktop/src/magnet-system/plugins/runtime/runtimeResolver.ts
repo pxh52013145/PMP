@@ -3,10 +3,7 @@ import type {
   PxpManifestV2,
   RuntimeEntryDescriptor,
 } from '@pixel-matrix/plugin-platform-contracts';
-import {
-  listLaunchersForRuntimeKind,
-  getPluginRuntimeLauncher,
-} from './launcherRegistry';
+import { listLaunchersForRuntimeKind } from './launcherRegistry';
 import type {
   BlockedPluginRuntime,
   PluginRuntimeArtifactResolution,
@@ -18,13 +15,6 @@ import type {
 } from './types';
 
 const DEFAULT_HOST_ID = 'pmp';
-const PMPM_COMPAT_LAYER_ID = 'compat.pmpm';
-
-function normalizeCompatLayerIds(manifest: PxpManifestV2): string[] {
-  return (manifest.compat ?? [])
-    .map((entry) => entry.compatLayerId)
-    .filter((value): value is string => typeof value === 'string' && value.length > 0);
-}
 
 function matchesConstraint(
   value: string | null | undefined,
@@ -75,44 +65,9 @@ function listCandidateLaunchers(
   runtime: RuntimeEntryDescriptor,
   context: Required<PluginRuntimeResolverContext>
 ): PluginRuntimeLauncherDescriptor[] {
-  const requestedSurface = context.surfaceKind;
-  const runtimeProvides = runtime.provides ?? [];
-  const supportsPmpmCompat =
-    runtimeProvides.includes(PMPM_COMPAT_LAYER_ID) || runtime.runtimeId.startsWith('compat.');
-
-  const surfaceLaunchers = listLaunchersForRuntimeKind(runtime.kind).filter((launcher) =>
-    requestedSurface ? launcher.surfaceKinds.includes(requestedSurface) : true
+  return listLaunchersForRuntimeKind(runtime.kind).filter((launcher) =>
+    context.surfaceKind ? launcher.surfaceKinds.includes(context.surfaceKind) : true
   );
-  const genericLaunchers = surfaceLaunchers.filter((launcher) => !launcher.compatLayerId);
-  const compatLaunchers = surfaceLaunchers.filter(
-    (launcher) => launcher.compatLayerId === PMPM_COMPAT_LAYER_ID && supportsPmpmCompat
-  );
-
-  if (!supportsPmpmCompat) {
-    return genericLaunchers;
-  }
-
-  const preferredCompatOrder = context.preferSandboxLauncher
-    ? ([
-        getPluginRuntimeLauncher('compat.pmpm.webview-sandbox'),
-        getPluginRuntimeLauncher('compat.pmpm.inline-module'),
-      ] as const)
-    : ([
-        getPluginRuntimeLauncher('compat.pmpm.inline-module'),
-        getPluginRuntimeLauncher('compat.pmpm.webview-sandbox'),
-      ] as const);
-
-  const orderedCompat = preferredCompatOrder.filter(
-    (launcher): launcher is PluginRuntimeLauncherDescriptor => {
-      if (!launcher) return false;
-      return compatLaunchers.some((candidate) => candidate.id === launcher.id);
-    }
-  );
-
-  // Phase 4: compat is a downgrade/fallback path, not the default platform path.
-  // Prefer manifest-native launchers whenever the runtime can use them, and only
-  // fall back to compat launchers when generic launchers are unavailable.
-  return [...genericLaunchers, ...orderedCompat];
 }
 
 function buildBlockedResolution(
@@ -128,7 +83,6 @@ function buildBlockedResolution(
     manifest: record.manifest,
     installedRecord: record,
     hostId,
-    compatLayerIds: normalizeCompatLayerIds(record.manifest),
     issues,
     runtime,
     candidateLaunchers,
@@ -148,12 +102,11 @@ function buildResolvedRuntime(
     manifest: record.manifest,
     installedRecord: record,
     hostId,
-    compatLayerIds: normalizeCompatLayerIds(record.manifest),
     issues,
     runtime,
     launcher,
     artifact: resolveArtifact(record, runtime),
-    source: launcher.compatLayerId ? 'compat-runtime' : 'manifest-runtime',
+    source: 'manifest-runtime',
   };
 }
 
@@ -165,8 +118,6 @@ export function resolveInstalledExtensionRuntime(
     hostId: context.hostId ?? DEFAULT_HOST_ID,
     platform: context.platform ?? null,
     arch: context.arch ?? null,
-    preferSandboxLauncher: context.preferSandboxLauncher ?? context.preferCompatSandbox ?? false,
-    preferCompatSandbox: context.preferCompatSandbox ?? false,
     surfaceKind: context.surfaceKind ?? 'magnet',
     preferCommandWorker: context.preferCommandWorker ?? false,
     supportedLauncherIds: context.supportedLauncherIds ?? [],
@@ -229,6 +180,7 @@ export function resolveInstalledExtensionRuntime(
     const candidateLaunchers = supportedLauncherIds
       ? runtimeLaunchers.filter((launcher) => supportedLauncherIds.has(launcher.id))
       : runtimeLaunchers;
+
     if (runtimeLaunchers.length > 0 && candidateLaunchers.length === 0) {
       issues.push(
         `Runtime "${runtime.runtimeId}" only matches unsupported launchers: ${runtimeLaunchers
@@ -238,7 +190,7 @@ export function resolveInstalledExtensionRuntime(
       continue;
     }
     if (candidateLaunchers.length === 0) {
-      issues.push(`Runtime "${runtime.runtimeId}" has no compatible launcher`);
+      issues.push(`Runtime "${runtime.runtimeId}" has no supported launcher`);
       continue;
     }
 

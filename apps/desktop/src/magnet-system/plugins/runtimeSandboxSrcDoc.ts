@@ -1,4 +1,4 @@
-export function buildPmpmSandboxSrcDoc(frameId: string): string {
+export function buildRuntimeSandboxSrcDoc(frameId: string): string {
   const idLiteral = JSON.stringify(frameId);
 
   return `<!doctype html>
@@ -73,7 +73,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
       };
       const warnDenied = (capability, action) => {
         try {
-          post({ type: 'pmpm:permission-denied', pluginId, hostLabel, capability, action });
+          post({ type: 'sandbox:permission-denied', pluginId, hostLabel, capability, action });
         } catch {}
       };
       const stopContentSizeObservers = () => {
@@ -115,7 +115,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
         );
         if (nextHeight <= 0 || nextHeight === lastReportedContentHeight) return;
         lastReportedContentHeight = nextHeight;
-        post({ type: 'pmpm:content-size', height: nextHeight });
+        post({ type: 'sandbox:content-size', height: nextHeight });
       };
       const queueContentSizeReport = () => {
         if (mountedKind !== 'settings') return;
@@ -273,7 +273,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
 
       const sendRpc = (method, args = []) => {
         const id = String(++rpcSeq);
-        post({ type: 'pmpm:rpc', id, method, args });
+        post({ type: 'sandbox:rpc', id, method, args });
         return new Promise((resolve, reject) => {
           pending.set(id, { resolve, reject });
         });
@@ -286,7 +286,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
           {
             protocolVersion: CAPABILITY_PROTOCOL_VERSION,
             op: 'capability.invoke.request',
-            requestId: 'compat:' + String(rpcSeq + 1),
+            requestId: 'sandbox:' + String(rpcSeq + 1),
             capabilityId,
             method,
             payload,
@@ -908,7 +908,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
         const data = event.data;
         if (!data || data.frameId !== FRAME_ID) return;
 
-        if (data.type === 'pmpm:init') {
+        if (data.type === 'sandbox:init') {
           pluginId = String(data.pluginId || '');
           hostLabel = String(data.hostLabel || '');
           hostInfo = data.hostInfo && typeof data.hostInfo === 'object' ? data.hostInfo : null;
@@ -975,31 +975,34 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
             await runSurface(mountedKind, mountedId, commandArgs);
             startContentSizeObservers();
             if (mountedKind === 'command') {
-              post({ type: 'pmpm:command-finished', ok: true });
+              post({ type: 'sandbox:command-finished', ok: true });
               dispose();
-              post({ type: 'pmpm:disposed' });
+              post({ type: 'sandbox:disposed' });
               return;
             }
 
-            post({ type: 'pmpm:mounted' });
+            post({ type: 'sandbox:mounted' });
           } catch (err) {
-            post({ type: 'pmpm:error', message: err instanceof Error ? (err.stack || err.message) : String(err) });
+            post({
+              type: 'sandbox:error',
+              message: err instanceof Error ? (err.stack || err.message) : String(err),
+            });
           }
           return;
         }
 
-        if (data.type === 'pmpm:dispose') {
+        if (data.type === 'sandbox:dispose') {
           dispose();
-          post({ type: 'pmpm:disposed' });
+          post({ type: 'sandbox:disposed' });
           return;
         }
 
-        if (data.type === 'pmpm:ping') {
-          post({ type: 'pmpm:pong', pingId: Number(data.pingId || 0) });
+        if (data.type === 'sandbox:ping') {
+          post({ type: 'sandbox:pong', pingId: Number(data.pingId || 0) });
           return;
         }
 
-        if (data.type === 'pmpm:capabilities-revoke') {
+        if (data.type === 'sandbox:capabilities-revoke') {
           const requestId =
             typeof data.requestId === 'string' ? data.requestId : 'runtime-capability-revoke:unknown';
           const capabilityIds = Array.isArray(data.capabilityIds)
@@ -1008,19 +1011,19 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
           const reason =
             typeof data.reason === 'string' && data.reason.length > 0
               ? data.reason
-              : 'compat-drill:no-op';
+              : 'sandbox-drill:no-op';
 
           runtimeRevokeSnapshot = {
             bridgeVersion:
               runtimeInitSnapshot && typeof runtimeInitSnapshot.bridgeVersion === 'string'
                 ? runtimeInitSnapshot.bridgeVersion
-                : 'compat.pmpm.bridge.v1',
+                : 'pxp.runtime.bridge.v1',
             op: 'runtime.capabilities.revoke',
             pluginId,
             runtimeId:
               runtimeInitSnapshot && typeof runtimeInitSnapshot.runtimeId === 'string'
                 ? runtimeInitSnapshot.runtimeId
-                : 'compat.pmpm.main',
+                : 'pxp.runtime.main',
             runtimeInstanceId:
               runtimeInitSnapshot && typeof runtimeInitSnapshot.runtimeInstanceId === 'string'
                 ? runtimeInitSnapshot.runtimeInstanceId
@@ -1042,7 +1045,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
           };
 
           post({
-            type: 'pmpm:capabilities-revoke-ack',
+            type: 'sandbox:capabilities-revoke-ack',
             requestId,
             traceId: runtimeRevokeSnapshot.traceId,
             ok: true,
@@ -1052,7 +1055,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
           return;
         }
 
-        if (data.type === 'pmpm:event') {
+        if (data.type === 'sandbox:event') {
           if (data.name === 'protocol.message') {
             const envelope = data.payload && typeof data.payload === 'object' ? data.payload : null;
             const streamId = envelope && typeof envelope.streamId === 'string' ? envelope.streamId : '';
@@ -1146,7 +1149,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
           return;
         }
 
-        if (data.type === 'pmpm:rpc-result') {
+        if (data.type === 'sandbox:rpc-result') {
           const id = String(data.id || '');
           const entry = pending.get(id);
           if (!entry) return;
@@ -1160,13 +1163,16 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
       });
 
       window.addEventListener('error', (event) => {
-        post({ type: 'pmpm:error', message: event?.error?.stack || event?.message || 'error' });
+        post({ type: 'sandbox:error', message: event?.error?.stack || event?.message || 'error' });
       });
       window.addEventListener('unhandledrejection', (event) => {
-        post({ type: 'pmpm:error', message: event?.reason?.stack || String(event?.reason || 'unhandledrejection') });
+        post({
+          type: 'sandbox:error',
+          message: event?.reason?.stack || String(event?.reason || 'unhandledrejection'),
+        });
       });
 
-      post({ type: 'pmpm:iframe-ready' });
+      post({ type: 'sandbox:iframe-ready' });
     </script>
   </body>
 </html>`;

@@ -106,15 +106,12 @@ export function createInstalledExtensionContributionsModule(): KernelModule<AppE
       const unregisters = new Map<string, () => void>();
       const governance: GovernanceService = {
         restartHostExtensionRuntime: (pluginId, options = {}) => {
-          requestHostExtensionRuntimeRestart(options.kind ?? 'extv2', pluginId, {
+          requestHostExtensionRuntimeRestart(pluginId, {
             reason: options.reason,
           });
         },
-        restartPmpmPluginRuntime: (pluginId, options = {}) => {
-          requestHostExtensionRuntimeRestart('pmpm', pluginId, { reason: options.reason });
-        },
         restartInstalledExtensionRuntime: (pluginId, options = {}) => {
-          requestHostExtensionRuntimeRestart('extv2', pluginId, { reason: options.reason });
+          requestHostExtensionRuntimeRestart(pluginId, { reason: options.reason });
         },
       };
       const unregisterGovernance = services.register(GOVERNANCE_SERVICE_TOKEN, governance, {

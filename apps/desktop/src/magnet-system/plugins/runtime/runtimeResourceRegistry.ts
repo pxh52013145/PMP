@@ -1,11 +1,11 @@
-type PmpmCompatSessionResource = {
+type RuntimeSessionResource = {
   capabilityId: string;
   sessionId: string;
   close: (reason?: string) => Promise<void> | void;
   release?: () => void;
 };
 
-type PmpmCompatStreamResource = {
+type RuntimeStreamResource = {
   capabilityId: string;
   streamId: string;
   cancel?: (reason?: string) => Promise<void> | void;
@@ -13,11 +13,11 @@ type PmpmCompatStreamResource = {
   release?: () => void;
 };
 
-export type PmpmCompatRuntimeResourceRegistry = {
-  trackSession: (resource: PmpmCompatSessionResource) => void;
+export type RuntimeResourceRegistry = {
+  trackSession: (resource: RuntimeSessionResource) => void;
   releaseSession: (sessionId: string, capabilityId?: string) => void;
   disposeSession: (sessionId: string, reason?: string, capabilityId?: string) => Promise<boolean>;
-  trackStream: (resource: PmpmCompatStreamResource) => void;
+  trackStream: (resource: RuntimeStreamResource) => void;
   releaseStream: (streamId: string) => void;
   cancelStream: (streamId: string, reason?: string) => Promise<boolean>;
   disposeStream: (streamId: string, reason?: string) => Promise<boolean>;
@@ -29,7 +29,7 @@ function sessionKey(capabilityId: string, sessionId: string): string {
 }
 
 function findSessionKey(
-  sessions: Map<string, PmpmCompatSessionResource>,
+  sessions: Map<string, RuntimeSessionResource>,
   sessionId: string,
   capabilityId?: string
 ): string | null {
@@ -68,9 +68,9 @@ async function settleResourceRelease(
   }
 }
 
-export function createPmpmCompatRuntimeResourceRegistry(): PmpmCompatRuntimeResourceRegistry {
-  const sessions = new Map<string, PmpmCompatSessionResource>();
-  const streams = new Map<string, PmpmCompatStreamResource>();
+export function createRuntimeResourceRegistry(): RuntimeResourceRegistry {
+  const sessions = new Map<string, RuntimeSessionResource>();
+  const streams = new Map<string, RuntimeStreamResource>();
 
   return {
     trackSession: (resource) => {

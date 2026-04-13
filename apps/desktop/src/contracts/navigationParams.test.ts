@@ -21,12 +21,12 @@ describe('parseNavigationParams', () => {
       parseNavigationParams('plugin-visualizer', {
         pluginId: 'demo-plugin',
         visualizerId: 'demo-visualizer',
-        sourceKind: 'pmpm',
+        sourceKind: 'extv2',
       })
     ).toEqual({
       pluginId: 'demo-plugin',
       visualizerId: 'demo-visualizer',
-      sourceKind: 'pmpm',
+      sourceKind: 'extv2',
     });
   });
 

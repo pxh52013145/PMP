@@ -14,11 +14,11 @@ import type {
   StreamOpenResponse,
 } from '@pixel-matrix/plugin-platform-contracts';
 import type {
-  PmpmBridgeIncomingMessage,
-  PmpmBridgeOutgoingMessage,
+  SandboxBridgeIncomingMessage,
+  SandboxBridgeOutgoingMessage,
 } from '@pixel-matrix/plugin-platform-contracts';
 import { PLUGIN_PERMISSIONS, hasPermission, type PluginMountApi } from '../host-api';
-import type { PmpmCompatRuntimeResourceRegistry } from './pmpmCompatRuntimeResources';
+import type { RuntimeResourceRegistry } from './runtimeResourceRegistry';
 import {
   createRuntimeProtocolChildTraceContext,
   traceRuntimeProtocolStep,
@@ -37,18 +37,18 @@ const NAVIGATION_CAPABILITY_ID = 'host.pmp.navigation';
 const STORAGE_CONFIG_CAPABILITY_ID = 'host.pmp.storage.config';
 const WINDOW_CAPABILITY_ID = 'host.pmp.shell.window';
 
-export const PMPM_COMPAT_CAPABILITY_PROTOCOL_VERSION = '1.0';
+export const SANDBOX_CAPABILITY_PROTOCOL_VERSION = '1.0';
 
-type RpcRequest = Extract<PmpmBridgeIncomingMessage, { type: 'pmpm:rpc' }>;
-type RpcResultMessage = Extract<PmpmBridgeOutgoingMessage, { type: 'pmpm:rpc-result' }>;
+type RpcRequest = Extract<SandboxBridgeIncomingMessage, { type: 'sandbox:rpc' }>;
+type RpcResultMessage = Extract<SandboxBridgeOutgoingMessage, { type: 'sandbox:rpc-result' }>;
 
-export type PmpmCompatRpcDispatchOptions = {
-  runtimeResources?: PmpmCompatRuntimeResourceRegistry;
+export type SandboxRpcDispatchOptions = {
+  runtimeResources?: RuntimeResourceRegistry;
   emitProtocolMessage?: (message: CapabilityProtocolMessage) => void;
   protocolTraceContext?: RuntimeProtocolTraceContext | null;
 };
 
-export type PmpmCapabilityProtocolRequestMessage =
+export type SandboxCapabilityProtocolRequestMessage =
   | CapabilityInvokeRequest
   | SessionOpenRequest
   | SessionCloseRequest
@@ -56,14 +56,14 @@ export type PmpmCapabilityProtocolRequestMessage =
   | CancelRequest
   | DisposeRequest;
 
-type LegacyResultMode = 'void' | 'data';
+type SandboxResultMode = 'void' | 'data';
 
 type DecodedCapabilityInvokeRequest =
   | {
-      source: 'legacy';
-      legacyMethod: string;
-      legacyResultMode: LegacyResultMode;
-      legacyFallbackValue?: unknown;
+      source: 'sandbox-bridge';
+      bridgeMethod: string;
+      bridgeResultMode: SandboxResultMode;
+      bridgeFallbackValue?: unknown;
       request: CapabilityInvokeRequest;
     }
   | {
@@ -71,123 +71,123 @@ type DecodedCapabilityInvokeRequest =
       request: CapabilityInvokeRequest;
     };
 
-type LegacyCompatMapping = {
+type SandboxBridgeMapping = {
   capabilityId: string;
   method: string;
   buildPayload: (args: unknown[]) => unknown;
-  legacyResultMode: LegacyResultMode;
-  legacyFallbackValue?: unknown;
+  bridgeResultMode: SandboxResultMode;
+  bridgeFallbackValue?: unknown;
 };
 
-const LEGACY_COMPAT_METHODS: Record<string, LegacyCompatMapping> = {
+const SANDBOX_BRIDGE_METHODS: Record<string, SandboxBridgeMapping> = {
   'audio.play': {
     capabilityId: AUDIO_PLAYBACK_CAPABILITY_ID,
     method: 'play',
     buildPayload: () => undefined,
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'audio.pause': {
     capabilityId: AUDIO_PLAYBACK_CAPABILITY_ID,
     method: 'pause',
     buildPayload: () => undefined,
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'audio.stop': {
     capabilityId: AUDIO_PLAYBACK_CAPABILITY_ID,
     method: 'stop',
     buildPayload: () => undefined,
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'audio.seek': {
     capabilityId: AUDIO_PLAYBACK_CAPABILITY_ID,
     method: 'seek',
     buildPayload: (args) => ({ time: args[0] }),
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'audio.setVolume': {
     capabilityId: AUDIO_PLAYBACK_CAPABILITY_ID,
     method: 'setVolume',
     buildPayload: (args) => ({ volume: args[0] }),
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'audio.toggleMute': {
     capabilityId: AUDIO_PLAYBACK_CAPABILITY_ID,
     method: 'toggleMute',
     buildPayload: () => undefined,
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'audio.playNext': {
     capabilityId: AUDIO_PLAYBACK_CAPABILITY_ID,
     method: 'playNext',
     buildPayload: () => undefined,
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'audio.playPrevious': {
     capabilityId: AUDIO_PLAYBACK_CAPABILITY_ID,
     method: 'playPrevious',
     buildPayload: () => undefined,
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'audio.playTrackAtIndex': {
     capabilityId: AUDIO_PLAYBACK_CAPABILITY_ID,
     method: 'playTrackAtIndex',
     buildPayload: (args) => ({ index: args[0] }),
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'audio.setPlayMode': {
     capabilityId: AUDIO_PLAYBACK_CAPABILITY_ID,
     method: 'setPlayMode',
     buildPayload: (args) => ({ mode: args[0] }),
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'audio.getCover': {
     capabilityId: AUDIO_PLAYBACK_CAPABILITY_ID,
     method: 'getCover',
     buildPayload: () => undefined,
-    legacyResultMode: 'data',
-    legacyFallbackValue: null,
+    bridgeResultMode: 'data',
+    bridgeFallbackValue: null,
   },
   'navigation.navigateTo': {
     capabilityId: NAVIGATION_CAPABILITY_ID,
     method: 'navigateTo',
     buildPayload: (args) => ({ page: args[0], params: args[1] }),
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'navigation.goBack': {
     capabilityId: NAVIGATION_CAPABILITY_ID,
     method: 'goBack',
     buildPayload: () => undefined,
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'config.set': {
     capabilityId: STORAGE_CONFIG_CAPABILITY_ID,
     method: 'set',
     buildPayload: (args) => ({ value: args[0] }),
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'config.patch': {
     capabilityId: STORAGE_CONFIG_CAPABILITY_ID,
     method: 'patch',
     buildPayload: (args) => ({ value: args[0] }),
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'config.reset': {
     capabilityId: STORAGE_CONFIG_CAPABILITY_ID,
     method: 'reset',
     buildPayload: () => undefined,
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'window.open': {
     capabilityId: WINDOW_CAPABILITY_ID,
     method: 'open',
     buildPayload: (args) => ({ windowId: args[0], options: args[1] }),
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
   'window.close': {
     capabilityId: WINDOW_CAPABILITY_ID,
     method: 'close',
     buildPayload: (args) => ({ windowId: args[0] }),
-    legacyResultMode: 'void',
+    bridgeResultMode: 'void',
   },
 };
 
@@ -218,7 +218,7 @@ function asWindowId(value: unknown): string | null {
 }
 
 function getDataPlaneTraceContext(
-  options?: PmpmCompatRpcDispatchOptions
+  options?: SandboxRpcDispatchOptions
 ): RuntimeProtocolTraceContext | null {
   if (!options?.protocolTraceContext) {
     return null;
@@ -229,7 +229,7 @@ function getDataPlaneTraceContext(
 }
 
 function traceDataPlaneProtocolMessage(
-  options: PmpmCompatRpcDispatchOptions | undefined,
+  options: SandboxRpcDispatchOptions | undefined,
   event: string,
   message: {
     op: string;
@@ -263,7 +263,7 @@ function buildResponseBase(
   request: CapabilityInvokeRequest
 ): Omit<CapabilityInvokeResponse, 'op' | 'ok' | 'data' | 'error'> {
   return {
-    protocolVersion: request.protocolVersion || PMPM_COMPAT_CAPABILITY_PROTOCOL_VERSION,
+    protocolVersion: request.protocolVersion || SANDBOX_CAPABILITY_PROTOCOL_VERSION,
     requestId: request.requestId,
     capabilityId: request.capabilityId,
     handleId: request.handleId,
@@ -317,7 +317,7 @@ function buildSessionResponseBase(
   traceId?: string;
 } {
   return {
-    protocolVersion: request.protocolVersion || PMPM_COMPAT_CAPABILITY_PROTOCOL_VERSION,
+    protocolVersion: request.protocolVersion || SANDBOX_CAPABILITY_PROTOCOL_VERSION,
     requestId: request.requestId,
     capabilityId: request.capabilityId,
     handleId: request.handleId,
@@ -343,7 +343,7 @@ function buildStreamResponseBase(
   traceId?: string;
 } {
   return {
-    protocolVersion: request.protocolVersion || PMPM_COMPAT_CAPABILITY_PROTOCOL_VERSION,
+    protocolVersion: request.protocolVersion || SANDBOX_CAPABILITY_PROTOCOL_VERSION,
     requestId: request.requestId,
     capabilityId: request.capabilityId,
     handleId: request.handleId,
@@ -370,7 +370,7 @@ function buildStreamMessageBase(
   traceId?: string;
 } {
   return {
-    protocolVersion: request.protocolVersion || PMPM_COMPAT_CAPABILITY_PROTOCOL_VERSION,
+    protocolVersion: request.protocolVersion || SANDBOX_CAPABILITY_PROTOCOL_VERSION,
     requestId: request.requestId,
     capabilityId: request.capabilityId,
     handleId: request.handleId,
@@ -490,7 +490,7 @@ function normalizeProtocolRequest(rpcRequest: RpcRequest): CapabilityInvokeReque
   const method = asNonEmptyString(rawRequest.method);
   const requestId = asNonEmptyString(rawRequest.requestId) ?? rpcRequest.id;
   const protocolVersion =
-    asNonEmptyString(rawRequest.protocolVersion) ?? PMPM_COMPAT_CAPABILITY_PROTOCOL_VERSION;
+    asNonEmptyString(rawRequest.protocolVersion) ?? SANDBOX_CAPABILITY_PROTOCOL_VERSION;
 
   if (!capabilityId || !CAPABILITY_ID_PATTERN.test(capabilityId)) {
     throw new Error('capability.invoke.request requires a valid capabilityId');
@@ -515,7 +515,7 @@ function normalizeProtocolRequest(rpcRequest: RpcRequest): CapabilityInvokeReque
   };
 }
 
-function normalizeDirectCompatCapabilityInvokeRequest(rpcRequest: RpcRequest): CapabilityInvokeRequest {
+function normalizeDirectBridgeCapabilityInvokeRequest(rpcRequest: RpcRequest): CapabilityInvokeRequest {
   const args = Array.isArray(rpcRequest.args) ? rpcRequest.args : [];
   const capabilityId = asNonEmptyString(args[0]);
   const method = asNonEmptyString(args[1]);
@@ -528,9 +528,9 @@ function normalizeDirectCompatCapabilityInvokeRequest(rpcRequest: RpcRequest): C
   }
 
   return {
-    protocolVersion: PMPM_COMPAT_CAPABILITY_PROTOCOL_VERSION,
+    protocolVersion: SANDBOX_CAPABILITY_PROTOCOL_VERSION,
     op: 'capability.invoke.request',
-    requestId: `compat-host-capability:${rpcRequest.id}`,
+    requestId: `sandbox-host-capability:${rpcRequest.id}`,
     capabilityId,
     method,
     payload: args[2],
@@ -548,7 +548,7 @@ function normalizeSessionOpenRequest(rpcRequest: RpcRequest): SessionOpenRequest
   const method = asNonEmptyString(rawRequest.method);
   const requestId = asNonEmptyString(rawRequest.requestId) ?? rpcRequest.id;
   const protocolVersion =
-    asNonEmptyString(rawRequest.protocolVersion) ?? PMPM_COMPAT_CAPABILITY_PROTOCOL_VERSION;
+    asNonEmptyString(rawRequest.protocolVersion) ?? SANDBOX_CAPABILITY_PROTOCOL_VERSION;
 
   if (!capabilityId || !CAPABILITY_ID_PATTERN.test(capabilityId)) {
     throw new Error('session.open.request requires a valid capabilityId');
@@ -584,7 +584,7 @@ function normalizeSessionCloseRequest(rpcRequest: RpcRequest): SessionCloseReque
   const sessionId = asNonEmptyString(rawRequest.sessionId);
   const requestId = asNonEmptyString(rawRequest.requestId) ?? rpcRequest.id;
   const protocolVersion =
-    asNonEmptyString(rawRequest.protocolVersion) ?? PMPM_COMPAT_CAPABILITY_PROTOCOL_VERSION;
+    asNonEmptyString(rawRequest.protocolVersion) ?? SANDBOX_CAPABILITY_PROTOCOL_VERSION;
 
   if (!capabilityId || !CAPABILITY_ID_PATTERN.test(capabilityId)) {
     throw new Error('session.close.request requires a valid capabilityId');
@@ -619,7 +619,7 @@ function normalizeStreamOpenRequest(rpcRequest: RpcRequest): StreamOpenRequest {
   const method = asNonEmptyString(rawRequest.method);
   const requestId = asNonEmptyString(rawRequest.requestId) ?? rpcRequest.id;
   const protocolVersion =
-    asNonEmptyString(rawRequest.protocolVersion) ?? PMPM_COMPAT_CAPABILITY_PROTOCOL_VERSION;
+    asNonEmptyString(rawRequest.protocolVersion) ?? SANDBOX_CAPABILITY_PROTOCOL_VERSION;
 
   if (!capabilityId || !CAPABILITY_ID_PATTERN.test(capabilityId)) {
     throw new Error('stream.open.request requires a valid capabilityId');
@@ -653,7 +653,7 @@ function normalizeCancelRequest(rpcRequest: RpcRequest): CancelRequest {
 
   const requestId = asNonEmptyString(rawRequest.requestId) ?? rpcRequest.id;
   const protocolVersion =
-    asNonEmptyString(rawRequest.protocolVersion) ?? PMPM_COMPAT_CAPABILITY_PROTOCOL_VERSION;
+    asNonEmptyString(rawRequest.protocolVersion) ?? SANDBOX_CAPABILITY_PROTOCOL_VERSION;
   const streamId = asNonEmptyString(rawRequest.streamId) ?? undefined;
   const sessionId = asNonEmptyString(rawRequest.sessionId) ?? undefined;
 
@@ -686,7 +686,7 @@ function normalizeDisposeRequest(rpcRequest: RpcRequest): DisposeRequest {
 
   const requestId = asNonEmptyString(rawRequest.requestId) ?? rpcRequest.id;
   const protocolVersion =
-    asNonEmptyString(rawRequest.protocolVersion) ?? PMPM_COMPAT_CAPABILITY_PROTOCOL_VERSION;
+    asNonEmptyString(rawRequest.protocolVersion) ?? SANDBOX_CAPABILITY_PROTOCOL_VERSION;
   const streamId = asNonEmptyString(rawRequest.streamId) ?? undefined;
   const sessionId = asNonEmptyString(rawRequest.sessionId) ?? undefined;
   const handleId = asNonEmptyString(rawRequest.handleId) ?? undefined;
@@ -710,7 +710,7 @@ function normalizeDisposeRequest(rpcRequest: RpcRequest): DisposeRequest {
   };
 }
 
-export function decodePmpmCompatCapabilityInvokeRequest(
+export function decodeSandboxCapabilityInvokeRequest(
   rpcRequest: RpcRequest
 ): DecodedCapabilityInvokeRequest | null {
   if (rpcRequest.method === 'capability.invoke.request') {
@@ -720,19 +720,19 @@ export function decodePmpmCompatCapabilityInvokeRequest(
     };
   }
 
-  const mapping = LEGACY_COMPAT_METHODS[rpcRequest.method];
+  const mapping = SANDBOX_BRIDGE_METHODS[rpcRequest.method];
   if (!mapping) return null;
 
   const args = Array.isArray(rpcRequest.args) ? rpcRequest.args : [];
   return {
-    source: 'legacy',
-    legacyMethod: rpcRequest.method,
-    legacyResultMode: mapping.legacyResultMode,
-    legacyFallbackValue: mapping.legacyFallbackValue,
+    source: 'sandbox-bridge',
+    bridgeMethod: rpcRequest.method,
+    bridgeResultMode: mapping.bridgeResultMode,
+    bridgeFallbackValue: mapping.bridgeFallbackValue,
     request: {
-      protocolVersion: PMPM_COMPAT_CAPABILITY_PROTOCOL_VERSION,
+      protocolVersion: SANDBOX_CAPABILITY_PROTOCOL_VERSION,
       op: 'capability.invoke.request',
-      requestId: `compat:${rpcRequest.id}`,
+      requestId: `sandbox:${rpcRequest.id}`,
       capabilityId: mapping.capabilityId,
       method: mapping.method,
       payload: mapping.buildPayload(args),
@@ -901,7 +901,7 @@ async function dispatchDirectHostStreamOpenRequest(
   api: PluginMountApi,
   permissions: ReadonlySet<string>,
   request: StreamOpenRequest,
-  options?: PmpmCompatRpcDispatchOptions
+  options?: SandboxRpcDispatchOptions
 ): Promise<StreamOpenResponse> {
   if (!hasPermission(permissions, PLUGIN_PERMISSIONS.host)) {
     return streamOpenResponseError(
@@ -921,7 +921,7 @@ async function dispatchDirectHostStreamOpenRequest(
     return streamOpenResponseError(
       request,
       'NOT_AVAILABLE',
-      'Compat runtime resources are not available for stream transport'
+      'Sandbox runtime resources are not available for stream transport'
     );
   }
 
@@ -1026,7 +1026,7 @@ async function dispatchDirectHostStreamOpenRequest(
 
 async function dispatchCancelRequest(
   request: CancelRequest,
-  options?: PmpmCompatRpcDispatchOptions
+  options?: SandboxRpcDispatchOptions
 ): Promise<void> {
   traceDataPlaneProtocolMessage(options, 'plugin.capability.data.cancel.requested', request, {
     reason: request.reason ?? null,
@@ -1050,12 +1050,12 @@ async function dispatchCancelRequest(
     throw new Error(`Unknown session: ${request.sessionId}`);
   }
 
-  throw new Error('cancel.request target is not supported by the compat carrier');
+  throw new Error('cancel.request target is not supported by the sandbox bridge carrier');
 }
 
 async function dispatchDisposeRequest(
   request: DisposeRequest,
-  options?: PmpmCompatRpcDispatchOptions
+  options?: SandboxRpcDispatchOptions
 ): Promise<void> {
   traceDataPlaneProtocolMessage(options, 'plugin.capability.data.dispose.requested', request, {
     reason: request.reason ?? null,
@@ -1080,10 +1080,10 @@ async function dispatchDisposeRequest(
   }
 
   if (request.handleId) {
-    throw new Error(`Compat carrier does not support handle disposal: ${request.handleId}`);
+    throw new Error(`Sandbox carrier does not support handle disposal: ${request.handleId}`);
   }
 
-  throw new Error('dispose.request target is not supported by the compat carrier');
+  throw new Error('dispose.request target is not supported by the sandbox bridge carrier');
 }
 
 async function dispatchAudioPlaybackCapability(
@@ -1545,7 +1545,7 @@ async function dispatchWindowCapability(
   }
 }
 
-export async function dispatchPmpmCompatCapabilityInvokeRequest(
+export async function dispatchSandboxCapabilityInvokeRequest(
   api: PluginMountApi,
   permissions: ReadonlySet<string>,
   request: CapabilityInvokeRequest
@@ -1567,22 +1567,22 @@ export async function dispatchPmpmCompatCapabilityInvokeRequest(
       return responseError(
         request,
         'CAPABILITY_NOT_SUPPORTED',
-        `Compat capability transport does not expose: ${request.capabilityId}`
+        `Sandbox capability transport does not expose: ${request.capabilityId}`
       );
   }
 }
 
-export async function dispatchPmpmCapabilityProtocolRequest(
+export async function dispatchSandboxCapabilityProtocolRequest(
   api: PluginMountApi,
   permissions: ReadonlySet<string>,
-  request: PmpmCapabilityProtocolRequestMessage,
-  options?: PmpmCompatRpcDispatchOptions
+  request: SandboxCapabilityProtocolRequestMessage,
+  options?: SandboxRpcDispatchOptions
 ): Promise<
   CapabilityInvokeResponse | SessionOpenResponse | SessionCloseResponse | StreamOpenResponse | null
 > {
   switch (request.op) {
     case 'capability.invoke.request':
-      return await dispatchPmpmCompatCapabilityInvokeRequest(api, permissions, request);
+      return await dispatchSandboxCapabilityInvokeRequest(api, permissions, request);
     case 'session.open.request': {
       const response = await dispatchDirectHostSessionOpenRequest(api, permissions, request);
 
@@ -1616,14 +1616,14 @@ export async function dispatchPmpmCapabilityProtocolRequest(
   }
 }
 
-function encodeLegacyRpcResult(
+function encodeSandboxBridgeRpcResult(
   rpcRequest: RpcRequest,
-  decoded: Extract<DecodedCapabilityInvokeRequest, { source: 'legacy' }>,
+  decoded: Extract<DecodedCapabilityInvokeRequest, { source: 'sandbox-bridge' }>,
   response: CapabilityInvokeResponse
 ): Omit<RpcResultMessage, 'frameId'> {
-  if (decoded.legacyResultMode === 'data' && response.ok) {
+  if (decoded.bridgeResultMode === 'data' && response.ok) {
     return {
-      type: 'pmpm:rpc-result',
+      type: 'sandbox:rpc-result',
       id: rpcRequest.id,
       ok: true,
       result: response.data,
@@ -1631,25 +1631,25 @@ function encodeLegacyRpcResult(
   }
 
   return {
-    type: 'pmpm:rpc-result',
+    type: 'sandbox:rpc-result',
     id: rpcRequest.id,
     ok: true,
-    result: response.ok ? undefined : decoded.legacyFallbackValue,
+    result: response.ok ? undefined : decoded.bridgeFallbackValue,
   };
 }
 
-export async function dispatchPmpmCompatRpcRequest(
+export async function dispatchSandboxRpcRequest(
   api: PluginMountApi,
   permissions: ReadonlySet<string>,
   rpcRequest: RpcRequest,
-  options?: PmpmCompatRpcDispatchOptions
+  options?: SandboxRpcDispatchOptions
 ): Promise<Omit<RpcResultMessage, 'frameId'>> {
   try {
     if (rpcRequest.method === 'host.listCapabilities') {
       const response = await dispatchRegistryCapability(api, permissions, {
-        protocolVersion: PMPM_COMPAT_CAPABILITY_PROTOCOL_VERSION,
+        protocolVersion: SANDBOX_CAPABILITY_PROTOCOL_VERSION,
         op: 'capability.invoke.request',
-        requestId: `compat-host-list:${rpcRequest.id}`,
+        requestId: `sandbox-host-list:${rpcRequest.id}`,
         capabilityId: CORE_CAPABILITY_REGISTRY_ID,
         method: 'list',
       });
@@ -1659,7 +1659,7 @@ export async function dispatchPmpmCompatRpcRequest(
       }
 
       return {
-        type: 'pmpm:rpc-result',
+        type: 'sandbox:rpc-result',
         id: rpcRequest.id,
         ok: true,
         result: response.data,
@@ -1667,7 +1667,7 @@ export async function dispatchPmpmCompatRpcRequest(
     }
 
     if (rpcRequest.method === 'host.invokeCapability') {
-      const request = normalizeDirectCompatCapabilityInvokeRequest(rpcRequest);
+      const request = normalizeDirectBridgeCapabilityInvokeRequest(rpcRequest);
       const response = await dispatchDirectHostCapabilityInvokeRequest(api, permissions, request);
 
       if (!response.ok) {
@@ -1675,7 +1675,7 @@ export async function dispatchPmpmCompatRpcRequest(
       }
 
       return {
-        type: 'pmpm:rpc-result',
+        type: 'sandbox:rpc-result',
         id: rpcRequest.id,
         ok: true,
         result: response.data,
@@ -1684,10 +1684,10 @@ export async function dispatchPmpmCompatRpcRequest(
 
     if (rpcRequest.method === 'session.open.request') {
       const request = normalizeSessionOpenRequest(rpcRequest);
-      const response = await dispatchPmpmCapabilityProtocolRequest(api, permissions, request, options);
+      const response = await dispatchSandboxCapabilityProtocolRequest(api, permissions, request, options);
 
       return {
-        type: 'pmpm:rpc-result',
+        type: 'sandbox:rpc-result',
         id: rpcRequest.id,
         ok: true,
         result: response,
@@ -1696,10 +1696,10 @@ export async function dispatchPmpmCompatRpcRequest(
 
     if (rpcRequest.method === 'session.close.request') {
       const request = normalizeSessionCloseRequest(rpcRequest);
-      const response = await dispatchPmpmCapabilityProtocolRequest(api, permissions, request, options);
+      const response = await dispatchSandboxCapabilityProtocolRequest(api, permissions, request, options);
 
       return {
-        type: 'pmpm:rpc-result',
+        type: 'sandbox:rpc-result',
         id: rpcRequest.id,
         ok: true,
         result: response,
@@ -1708,10 +1708,10 @@ export async function dispatchPmpmCompatRpcRequest(
 
     if (rpcRequest.method === 'stream.open.request') {
       const request = normalizeStreamOpenRequest(rpcRequest);
-      const response = await dispatchPmpmCapabilityProtocolRequest(api, permissions, request, options);
+      const response = await dispatchSandboxCapabilityProtocolRequest(api, permissions, request, options);
 
       return {
-        type: 'pmpm:rpc-result',
+        type: 'sandbox:rpc-result',
         id: rpcRequest.id,
         ok: true,
         result: response,
@@ -1720,9 +1720,9 @@ export async function dispatchPmpmCompatRpcRequest(
 
     if (rpcRequest.method === 'cancel.request') {
       const request = normalizeCancelRequest(rpcRequest);
-      await dispatchPmpmCapabilityProtocolRequest(api, permissions, request, options);
+      await dispatchSandboxCapabilityProtocolRequest(api, permissions, request, options);
       return {
-        type: 'pmpm:rpc-result',
+        type: 'sandbox:rpc-result',
         id: rpcRequest.id,
         ok: true,
         result: null,
@@ -1731,43 +1731,44 @@ export async function dispatchPmpmCompatRpcRequest(
 
     if (rpcRequest.method === 'dispose.request') {
       const request = normalizeDisposeRequest(rpcRequest);
-      await dispatchPmpmCapabilityProtocolRequest(api, permissions, request, options);
+      await dispatchSandboxCapabilityProtocolRequest(api, permissions, request, options);
 
       return {
-        type: 'pmpm:rpc-result',
+        type: 'sandbox:rpc-result',
         id: rpcRequest.id,
         ok: true,
         result: null,
       };
     }
 
-    const decoded = decodePmpmCompatCapabilityInvokeRequest(rpcRequest);
+    const decoded = decodeSandboxCapabilityInvokeRequest(rpcRequest);
     if (!decoded) {
       throw new Error(`Unsupported RPC method: ${rpcRequest.method}`);
     }
 
-    const response = await dispatchPmpmCompatCapabilityInvokeRequest(
+    const response = await dispatchSandboxCapabilityInvokeRequest(
       api,
       permissions,
       decoded.request
     );
 
-    if (decoded.source === 'legacy') {
-      return encodeLegacyRpcResult(rpcRequest, decoded, response);
+    if (decoded.source === 'sandbox-bridge') {
+      return encodeSandboxBridgeRpcResult(rpcRequest, decoded, response);
     }
 
     return {
-      type: 'pmpm:rpc-result',
+      type: 'sandbox:rpc-result',
       id: rpcRequest.id,
       ok: true,
       result: response,
     };
   } catch (error) {
     return {
-      type: 'pmpm:rpc-result',
+      type: 'sandbox:rpc-result',
       id: rpcRequest.id,
       ok: false,
       error: error instanceof Error ? error.message : String(error),
     };
   }
 }
+

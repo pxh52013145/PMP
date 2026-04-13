@@ -13,13 +13,6 @@ function hasStringFieldCandidates(raw: unknown, fieldName: string): boolean {
   return false;
 }
 
-export function shouldRunPmpmDurableMigration(): boolean {
-  const flag = readString(STORAGE_KEYS.PMPM_DURABLE_MIGRATION_V1);
-  if (flag === 'rolled-back') return false;
-  if (flag !== 'done') return true;
-  return hasStringFieldCandidates(readJson<unknown>(STORAGE_KEYS.PMPM_PLUGINS, []), 'entryCode');
-}
-
 export function shouldRunPmpsDurableMigration(): boolean {
   const flag = readString(STORAGE_KEYS.PMPS_DURABLE_MIGRATION_V1);
   if (flag === 'rolled-back') return false;
@@ -28,6 +21,6 @@ export function shouldRunPmpsDurableMigration(): boolean {
 }
 
 export function shouldRunDurableStorageMigrations(): boolean {
-  return shouldRunPmpmDurableMigration() || shouldRunPmpsDurableMigration();
+  return shouldRunPmpsDurableMigration();
 }
 

@@ -158,9 +158,9 @@ describe('builtin navigation capability bridge', () => {
       {
         pluginId: 'demo-plugin',
         visualizerId: 'demo-visualizer',
-        sourceKind: 'pmpm',
+        sourceKind: 'extv2',
       },
-      'visualizer:pmpm:demo-plugin:demo-visualizer'
+      'visualizer:extv2:demo-plugin:demo-visualizer'
     );
 
     expect(navigation.navigateTo).toHaveBeenNthCalledWith(1, 'plugin-page', {
@@ -171,7 +171,7 @@ describe('builtin navigation capability bridge', () => {
     expect(navigation.navigateTo).toHaveBeenNthCalledWith(2, 'plugin-visualizer', {
       pluginId: 'demo-plugin',
       visualizerId: 'demo-visualizer',
-      sourceKind: 'pmpm',
+      sourceKind: 'extv2',
     });
   });
 

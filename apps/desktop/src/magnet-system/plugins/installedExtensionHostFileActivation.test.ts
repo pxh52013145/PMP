@@ -22,9 +22,9 @@ describe('installedExtensionHostFileActivation', () => {
       'manifest.v2.json',
       'json',
     ]);
-    expect(listInstalledExtensionHostFileTypes('/Users/demo/Demo.PMPM')).toEqual([
-      'demo.pmpm',
-      'pmpm',
+    expect(listInstalledExtensionHostFileTypes('/Users/demo/Demo.EXTENSION')).toEqual([
+      'demo.extension',
+      'extension',
     ]);
     expect(listInstalledExtensionHostFileTypes('/tmp/README')).toEqual(['readme']);
   });
@@ -153,7 +153,7 @@ describe('installedExtensionHostFileActivation', () => {
           receivedAtMs: 1,
         },
         {
-          paths: ['C:\\plugins\\demo.pmpm'],
+          paths: ['C:\\plugins\\demo.extension'],
           source: 'os-reopen',
           action: 'reopened',
           receivedAtMs: 2,
@@ -173,8 +173,8 @@ describe('installedExtensionHostFileActivation', () => {
     });
     expect(activateForHostEvent).toHaveBeenNthCalledWith(2, {
       hostEventId: INSTALLED_EXTENSION_HOST_FILE_OPEN_HOST_EVENT_ID,
-      payload: {
-        paths: ['C:/plugins/demo.pmpm'],
+        payload: {
+        paths: ['C:/plugins/demo.extension'],
         source: 'os-reopen',
         action: 'reopened',
         receivedAtMs: 2,

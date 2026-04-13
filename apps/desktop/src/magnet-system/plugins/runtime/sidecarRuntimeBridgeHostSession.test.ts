@@ -5,7 +5,7 @@ import type {
   RuntimeHello,
 } from '@pixel-matrix/plugin-platform-contracts';
 import type { PluginMountApi } from '../host-api';
-import { createPmpmCompatRuntimeResourceRegistry } from './pmpmCompatRuntimeResources';
+import { createRuntimeResourceRegistry } from './runtimeResourceRegistry';
 import {
   createRuntimeBridgeHostSession,
   type RuntimeBridgePort,
@@ -260,7 +260,7 @@ describe('sidecar runtime bridge host session', () => {
     };
     const api = createStubApi({ streamHandle });
     const harness = createPortHarness();
-    const runtimeResources = createPmpmCompatRuntimeResourceRegistry();
+    const runtimeResources = createRuntimeResourceRegistry();
     const session = createRuntimeBridgeHostSession({
       pluginId: 'sidecar-echo-demo',
       runtimeId: 'sidecar.echo',

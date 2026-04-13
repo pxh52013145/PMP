@@ -46,7 +46,7 @@ type NativeInstalledExtensionInstallSource = {
   }>;
 };
 
-const CAPABILITY_COMPAT_PERMISSION_MAP: Record<string, string[]> = {
+const CAPABILITY_PERMISSION_MAP: Record<string, string[]> = {
   'core.capability-registry': [
     PLUGIN_PERMISSIONS.host,
     PLUGIN_PERMISSIONS.hostCapabilityInvoke,
@@ -576,12 +576,12 @@ export function listInstalledExtensionEffectiveCapabilityIds(
   return listDeclaredCapabilityIds(record);
 }
 
-export function listInstalledExtensionCompatPermissions(
+export function listInstalledExtensionDerivedPermissions(
   record: InstalledHostExtensionRecord
 ): string[] {
   const permissions = new Set<string>();
   for (const capabilityId of listDeclaredCapabilityIds(record)) {
-    for (const permission of CAPABILITY_COMPAT_PERMISSION_MAP[capabilityId] ?? []) {
+    for (const permission of CAPABILITY_PERMISSION_MAP[capabilityId] ?? []) {
       permissions.add(permission);
     }
   }

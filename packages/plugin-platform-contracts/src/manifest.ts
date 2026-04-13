@@ -62,7 +62,6 @@ export interface ExtensionManifestCore<
 
 export type {
   ActivationEventDescriptor,
-  CompatDescriptor,
   ConfigContributionDescriptor,
   ConfigMigrationDescriptor,
   DependencyDescriptor,

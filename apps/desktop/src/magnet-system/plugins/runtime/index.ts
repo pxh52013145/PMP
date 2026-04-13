@@ -1,35 +1,20 @@
-export {
-  getPluginRuntimeResolutionError,
-  resolveInstalledPmpmPluginRuntime,
-  shouldUsePmpmInlineModuleLauncher,
-  shouldUsePmpmSandboxLauncher,
-} from './pmpmCompat';
-export {
-  getResolvedPmpmLauncherAdapter,
-  getResolvedPmpmLauncherAdapterError,
-  runResolvedPmpmPluginCommand,
-} from './pmpmCompatLauncherAdapters';
-export { runPmpmBridgeWorkerCommand } from './workerCommandRuntime';
-export { runPmpmBridgeSidecarCommand } from './sidecarCommandRuntime';
 export { runResolvedInstalledExtensionCommand } from './extensionCommandRuntime';
 export { getPluginRuntimeLauncher, listLaunchersForRuntimeKind, listPluginRuntimeLaunchers } from './launcherRegistry';
 export { resolveInstalledExtensionRuntime } from './runtimeResolver';
 export { createRuntimeBridgeHostSession } from './runtimeBridgeHostSession';
-export {
-  createPmpmCompatRuntimeSessionAdapter,
-} from './pmpmCompatRuntimeSessionAdapter';
+export { createSandboxRuntimeSessionAdapter } from './sandboxRuntimeSessionAdapter';
 export {
   bindHostRuntimeEventChannel,
-  mapRuntimeEventNameToPmpmCompatEvent,
+  mapRuntimeEventNameToSandboxEvent,
   RUNTIME_EVENT_NAMES,
 } from './runtimeEventChannel';
 export { isResolvedPluginRuntime } from './types';
 export type {
-  PmpmCompatCapabilityRevokeAckMessage,
-  PmpmCompatCapabilityRevokeDrillMessage,
-  PmpmCompatRuntimeIncomingMessage,
-  PmpmCompatRuntimeOutgoingMessage,
-} from './pmpmCompatRuntimeSessionAdapter';
+  SandboxCapabilityRevokeAckMessage,
+  SandboxCapabilityRevokeDrillMessage,
+  SandboxRuntimeIncomingMessage,
+  SandboxRuntimeOutgoingMessage,
+} from './sandboxRuntimeSessionAdapter';
 export type {
   BindHostRuntimeEventChannelOptions,
   RuntimeEventName,
@@ -53,13 +38,3 @@ export type {
   RuntimeBridgePort,
   RuntimeBridgeTransportMessage,
 } from './runtimeBridgeHostSession';
-export type {
-  PmpmInlineSurfaceMountOptions,
-  PmpmResolvedLauncherSurfaceProps,
-  ResolvedPmpmLauncherAdapter,
-  RunResolvedPmpmPluginCommandOptions,
-} from './pmpmCompatLauncherAdapters';
-export type {
-  PmpmBridgeWorkerCommandRuntimeDeps,
-  RunPmpmBridgeWorkerCommandOptions,
-} from './workerCommandRuntime';

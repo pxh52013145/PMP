@@ -5,18 +5,18 @@ import type { CommandsService } from '../../../services/commands';
 import type { KeybindingsService } from '../../../services/keybindings';
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
 import {
-  buildPmpmRuntimeHelloSnapshot,
-  buildPmpmRuntimeInitSnapshot,
-} from '../pmpmRuntimeBridgeSnapshot';
+  buildRuntimeHelloSnapshot,
+  buildRuntimeInitSnapshot,
+} from '../runtimeBridgeSnapshots';
 import {
-  listInstalledExtensionCompatPermissions,
+  listInstalledExtensionDerivedPermissions,
   quarantineInstalledExtension,
   recordInstalledExtensionCrash,
   type InstalledHostExtensionRecord,
 } from '../extensions';
 import { recordInstalledExtensionPermissionDenied } from '../extensionsGovernance';
 import { createPluginMountApi, type HostAudioService, type HostNavigation } from '../pluginHostApi';
-import { readPmpmPluginConfig, subscribePmpmPluginConfig } from '../pluginConfig';
+import { readExtensionConfig, subscribeExtensionConfig } from '../pluginConfig';
 import { createRuntimeBridgeHostSession } from './runtimeBridgeHostSession';
 import { bindHostRuntimeEventChannel, RUNTIME_EVENT_NAMES } from './runtimeEventChannel';
 import { createInstalledExtensionEntryUrl } from './installedExtensionRuntimeAssets';
@@ -25,7 +25,7 @@ import {
   buildWorkerPort,
   type WorkerEventListener,
   type WorkerLike,
-} from './workerCommandRuntime';
+} from './runtimeWorkerBridge';
 import { isResolvedPluginRuntime, type PluginRuntimeResolution } from './types';
 
 const STARTUP_TIMEOUT_MS = 3_000;
@@ -113,7 +113,7 @@ function readUnsupportedLauncherError(
 ): string {
   if (!resolution) return 'Installed extension runtime record not found';
   if (resolution.status !== 'resolved') {
-    return resolution.issues[0] ?? 'No compatible runtime launcher is available';
+    return resolution.issues[0] ?? 'No supported runtime launcher is available';
   }
   return `Resolved runtime launcher is not wired for manifest-v2 background activation: ${resolution.launcher.id}`;
 }
@@ -152,8 +152,8 @@ export async function startInstalledExtensionBackgroundRuntime(
   const runtimeInstanceId = `${pluginId}:${activation.cause}:${now()}:${Math.random()
     .toString(16)
     .slice(2)}`;
-  const permissions = new Set(listInstalledExtensionCompatPermissions(record));
-  const initialConfig = readPmpmPluginConfig(pluginId, 'extv2');
+  const permissions = new Set(listInstalledExtensionDerivedPermissions(record));
+  const initialConfig = readExtensionConfig(pluginId, 'extv2');
 
   const api = createPluginMountApi({
     pluginId,
@@ -167,7 +167,7 @@ export async function startInstalledExtensionBackgroundRuntime(
     onHostCapabilityActivity: options.onHostCapabilityActivity,
   });
 
-  const runtimeHello = buildPmpmRuntimeHelloSnapshot({
+  const runtimeHello = buildRuntimeHelloSnapshot({
     pluginId,
     runtimeId,
     runtimeInstanceId,
@@ -176,7 +176,7 @@ export async function startInstalledExtensionBackgroundRuntime(
     supportsViewMount: false,
   });
 
-  const runtimeInit = buildPmpmRuntimeInitSnapshot({
+  const runtimeInit = buildRuntimeInitSnapshot({
     pluginId,
     runtimeId,
     runtimeInstanceId,
@@ -286,7 +286,7 @@ export async function startInstalledExtensionBackgroundRuntime(
     navigation: options.navigation,
     emitRuntimeEvent: (eventName, payload) => session.emitRuntimeEvent(eventName, payload),
     subscribeConfig: permissions.has('storage:local')
-      ? (listener) => subscribePmpmPluginConfig(pluginId, listener, 'extv2')
+      ? (listener) => subscribeExtensionConfig(pluginId, listener, 'extv2')
       : undefined,
     getSpectrum:
       permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrum === 'function'

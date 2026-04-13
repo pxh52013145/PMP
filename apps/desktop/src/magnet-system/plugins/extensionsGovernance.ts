@@ -97,6 +97,65 @@ export type InstalledExtensionErrorsClearedAuditEvent = {
   pluginId: string;
 };
 
+export type InstalledExtensionAudioInputAdapterProviderQuarantinedAuditEvent = {
+  type: 'audio-input-adapter-provider-quarantined';
+  at: number;
+  pluginId: string;
+  hostLabel: string;
+  providerId: string;
+  reason: string;
+  consecutiveFailures: number;
+  quarantineUntilMs: number;
+};
+
+export type InstalledExtensionAudioInputAdapterProviderQuarantineClearedAuditEvent = {
+  type: 'audio-input-adapter-provider-quarantine-cleared';
+  at: number;
+  pluginId: string;
+  hostLabel: string;
+  reason: string;
+  providerId?: string;
+};
+
+export type InstalledExtensionAudioInputAdapterSelectedAuditEvent = {
+  type: 'audio-input-adapter-selected';
+  at: number;
+  pluginId: string;
+  hostLabel: string;
+  sessionId: string;
+  sourcePath: string;
+  adapterKind: 'builtin' | 'provider';
+  adapterId: string;
+  selectedInputId: string;
+  providerSessionId?: string;
+  fallbackFromProviderId?: string;
+};
+
+export type InstalledExtensionAudioInputAdapterFallbackAuditEvent = {
+  type: 'audio-input-adapter-fallback';
+  at: number;
+  pluginId: string;
+  hostLabel: string;
+  sourcePath: string;
+  fromProviderId: string;
+  toAdapterKind: 'builtin' | 'provider';
+  toAdapterId: string;
+  selectedInputId: string;
+  reason: string;
+};
+
+export type InstalledExtensionAudioInputAdapterSessionClosedAuditEvent = {
+  type: 'audio-input-adapter-session-closed';
+  at: number;
+  pluginId: string;
+  hostLabel: string;
+  sessionId: string;
+  adapterKind: 'builtin' | 'provider';
+  adapterId: string;
+  reason: string;
+  providerSessionId?: string;
+};
+
 export type InstalledExtensionAuditEvent =
   | InstalledExtensionPermissionDeniedAuditEvent
   | InstalledExtensionCrashAuditEvent
@@ -109,7 +168,12 @@ export type InstalledExtensionAuditEvent =
   | InstalledExtensionCapabilitiesUpdatedAuditEvent
   | InstalledExtensionInstalledAuditEvent
   | InstalledExtensionUninstalledAuditEvent
-  | InstalledExtensionErrorsClearedAuditEvent;
+  | InstalledExtensionErrorsClearedAuditEvent
+  | InstalledExtensionAudioInputAdapterProviderQuarantinedAuditEvent
+  | InstalledExtensionAudioInputAdapterProviderQuarantineClearedAuditEvent
+  | InstalledExtensionAudioInputAdapterSelectedAuditEvent
+  | InstalledExtensionAudioInputAdapterFallbackAuditEvent
+  | InstalledExtensionAudioInputAdapterSessionClosedAuditEvent;
 
 export type InstalledExtensionAuditEventInput =
   | Omit<InstalledExtensionPermissionDeniedAuditEvent, 'at'>
@@ -123,7 +187,12 @@ export type InstalledExtensionAuditEventInput =
   | Omit<InstalledExtensionCapabilitiesUpdatedAuditEvent, 'at'>
   | Omit<InstalledExtensionInstalledAuditEvent, 'at'>
   | Omit<InstalledExtensionUninstalledAuditEvent, 'at'>
-  | Omit<InstalledExtensionErrorsClearedAuditEvent, 'at'>;
+  | Omit<InstalledExtensionErrorsClearedAuditEvent, 'at'>
+  | Omit<InstalledExtensionAudioInputAdapterProviderQuarantinedAuditEvent, 'at'>
+  | Omit<InstalledExtensionAudioInputAdapterProviderQuarantineClearedAuditEvent, 'at'>
+  | Omit<InstalledExtensionAudioInputAdapterSelectedAuditEvent, 'at'>
+  | Omit<InstalledExtensionAudioInputAdapterFallbackAuditEvent, 'at'>
+  | Omit<InstalledExtensionAudioInputAdapterSessionClosedAuditEvent, 'at'>;
 
 export type InstalledExtensionAuditListener = () => void;
 

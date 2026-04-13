@@ -17,7 +17,7 @@ export const RUNTIME_EVENT_NAMES = {
 
 export type RuntimeEventName = (typeof RUNTIME_EVENT_NAMES)[keyof typeof RUNTIME_EVENT_NAMES];
 
-const RUNTIME_EVENT_TO_PMPM_COMPAT_EVENT: Record<string, string> = {
+const RUNTIME_EVENT_TO_SANDBOX_EVENT: Record<string, string> = {
   [RUNTIME_EVENT_NAMES.configChanged]: 'config.changed',
   [RUNTIME_EVENT_NAMES.audioState]: 'audio.state',
   [RUNTIME_EVENT_NAMES.audioTime]: 'audio.time',
@@ -30,8 +30,8 @@ const RUNTIME_EVENT_TO_PMPM_COMPAT_EVENT: Record<string, string> = {
   [RUNTIME_EVENT_NAMES.visualizerFramePost]: 'audio.spectrumFrame.post',
 };
 
-export function mapRuntimeEventNameToPmpmCompatEvent(eventName: string): string | null {
-  return RUNTIME_EVENT_TO_PMPM_COMPAT_EVENT[eventName] ?? null;
+export function mapRuntimeEventNameToSandboxEvent(eventName: string): string | null {
+  return RUNTIME_EVENT_TO_SANDBOX_EVENT[eventName] ?? null;
 }
 
 export interface BindHostRuntimeEventChannelOptions {

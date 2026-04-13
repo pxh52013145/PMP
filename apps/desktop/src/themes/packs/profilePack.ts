@@ -103,7 +103,6 @@ export type ProfilePackManifestV1 = {
     profile: string;
   };
   dependencies?: {
-    pmpm?: ProfilePackDependency[];
     pmps?: ProfilePackDependency[];
   };
 };
@@ -195,14 +194,6 @@ export function validateProfilePackManifestV1(manifest: unknown): asserts manife
 
   if (typeof manifest.dependencies !== 'undefined') {
     assertObject(manifest.dependencies, 'manifest.dependencies');
-    if (typeof manifest.dependencies.pmpm !== 'undefined') {
-      if (!Array.isArray(manifest.dependencies.pmpm)) {
-        throw new Error('manifest.dependencies.pmpm must be an array');
-      }
-      manifest.dependencies.pmpm = manifest.dependencies.pmpm.map((dep, index) =>
-        validateDependency(dep, index, 'manifest.dependencies.pmpm')
-      );
-    }
     if (typeof manifest.dependencies.pmps !== 'undefined') {
       if (!Array.isArray(manifest.dependencies.pmps)) {
         throw new Error('manifest.dependencies.pmps must be an array');

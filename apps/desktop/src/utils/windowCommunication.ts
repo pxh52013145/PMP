@@ -188,18 +188,9 @@ export const STORAGE_KEYS = {
   // === VST3 ===
   VST_SCAN_SETTINGS: 'pixel-matrix-vst3-scan-settings-v1', // VST3 扫描设置（object，含 scan paths）
 
-  // === Plugins (.pmpm) ===
-  PMPM_PLUGINS: 'pixel-matrix-pmpm-plugins', // 已安装插件（manifest + entryCode）
+  // === Extensions ===
   EXTENSIONS_V2: 'pixel-matrix-installed-extensions-v2', // 已安装 manifest-v2 扩展
   EXTENSIONS_V2_AUDIT_LOG_V1: 'pixel-matrix-installed-extensions-v2-audit-log-v1', // manifest-v2 governance audit log
-  PMPM_DURABLE_MIGRATION_V1: 'pixel-matrix-pmpm-durable-migration-v1', // durable migration state flag (R3)
-  PMPM_DURABLE_MIGRATION_V1_REPORT: 'pixel-matrix-pmpm-durable-migration-v1-report', // migration report (R3)
-  PMPM_AUDIT_LOG_V1: 'pixel-matrix-pmpm-audit-log-v1', // plugin governance audit log (R5, ring buffer)
-  PMPM_ALLOW_UNSIGNED_PLUGINS: 'pixel-matrix-pmpm-allow-unsigned-plugins', // signature policy (R5)
-  PMPM_REQUIRE_TRUSTED_SIGNATURES: 'pixel-matrix-pmpm-require-trusted-signatures', // signature trust policy (R5)
-  PMPM_TRUSTED_KEY_IDS_V1: 'pixel-matrix-pmpm-trusted-key-ids-v1', // trusted signing keys (R5)
-  PMPM_SANDBOX_RUNTIME_ENABLED: 'pixel-matrix-pmpm-sandbox-runtime-enabled', // sandboxed runtime flag (R5, experimental)
-  PMPM_RUNTIME_RESTART_V1: 'pixel-matrix-pmpm-runtime-restart-v1', // runtime restart request (R5)
   EXTENSIONS_V2_RUNTIME_RESTART_V1: 'pixel-matrix-installed-extensions-v2-runtime-restart-v1', // manifest-v2 runtime restart request
 
   // === Shader Packs (.pmps) ===
@@ -356,10 +347,9 @@ export const TAURI_EVENTS = {
   // i18n
   LOCALE_UPDATED: 'locale-updated',
 
-  // Plugins (.pmpm)
-  PMPM_PLUGINS_UPDATED: 'pmpm-plugins-updated',
+  // Extensions
   EXTENSIONS_V2_UPDATED: 'extensions-v2-updated',
-  PMPM_PLUGIN_CONFIG_UPDATED: 'pmpm-plugin-config-updated',
+  EXTENSIONS_CONFIG_UPDATED: 'extensions-config-updated',
 
   // Shader Packs (.pmps)
   PMPS_SHADERS_UPDATED: 'pmps-shaders-updated',

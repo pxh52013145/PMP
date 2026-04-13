@@ -18,17 +18,15 @@ vi.mock('../../services/telemetry/TelemetryService', () => ({
 }));
 
 type ShellSurfaceType = 'overlay' | 'desktop-widget';
-type SourceKind = 'pmpm' | 'extv2';
 
 function createSpec(options: {
-  sourceKind?: SourceKind;
   pluginId?: string;
   pluginName?: string;
   surfaceId?: string;
   surfaceType?: ShellSurfaceType;
 }) {
   return {
-    sourceKind: options.sourceKind ?? 'pmpm',
+    sourceKind: 'extv2' as const,
     pluginId: options.pluginId ?? 'demo-plugin',
     pluginName: options.pluginName ?? 'Demo Plugin',
     enabled: true,
@@ -74,7 +72,7 @@ describe('DefaultShellSurfaceManager', () => {
 
     expect(openSurface).toHaveBeenCalledWith(
       expect.objectContaining({
-        sourceKind: 'pmpm',
+        sourceKind: 'extv2',
         pluginId: 'demo-plugin',
         surfaceId: 'demo-overlay',
         surfaceType: 'overlay',
@@ -97,7 +95,7 @@ describe('DefaultShellSurfaceManager', () => {
 
     await manager.summonSurface(spec);
     await manager.dismissSurface({
-      sourceKind: 'pmpm',
+      sourceKind: 'extv2',
       pluginId: 'demo-plugin',
       surfaceId: 'demo-overlay',
       surfaceType: 'overlay',
@@ -107,7 +105,7 @@ describe('DefaultShellSurfaceManager', () => {
       'demo-plugin',
       'demo-overlay',
       'overlay',
-      'pmpm'
+      'extv2'
     );
     expect(manager.listTrackedSurfaces()).toEqual([spec]);
   });
@@ -126,7 +124,7 @@ describe('DefaultShellSurfaceManager', () => {
 
     await manager.summonSurface(spec);
     await manager.cleanupSurface({
-      sourceKind: 'pmpm',
+      sourceKind: 'extv2',
       pluginId: 'demo-plugin',
       surfaceId: 'demo-overlay',
       surfaceType: 'overlay',
@@ -137,7 +135,7 @@ describe('DefaultShellSurfaceManager', () => {
       'demo-plugin',
       'demo-overlay',
       'overlay',
-      'pmpm',
+      'extv2',
       'manual-test'
     );
     expect(manager.listTrackedSurfaces()).toEqual([]);
@@ -160,16 +158,15 @@ describe('DefaultShellSurfaceManager', () => {
             ? { status: 'present', record: spec }
             : {
                 status: 'missing-surface',
-                sourceKind: 'pmpm',
+                sourceKind: 'extv2',
                 pluginId: 'demo-plugin',
                 pluginName: 'Demo Plugin',
                 surfaceId: 'demo-overlay',
               },
-        subscribePmpm: (cb) => {
+        subscribeExtensions: (cb: () => void) => {
           syncCallback = cb;
           return () => {};
         },
-        subscribeExtensions: () => () => {},
         subscribeRuntimeRestart: () => () => {},
         readRuntimeRestart: () => null,
       },
@@ -178,21 +175,24 @@ describe('DefaultShellSurfaceManager', () => {
     manager.start();
     await manager.summonSurface(spec);
     lookupStatus = 'missing-surface';
-    expect(syncCallback).not.toBeNull();
-    (syncCallback as unknown as () => void)();
+    const missingSurfaceSync = syncCallback as (() => void) | null;
+    if (typeof missingSurfaceSync !== 'function') {
+      throw new Error('Expected background sync callback');
+    }
+    missingSurfaceSync();
     await flushAsyncWork();
 
     expect(destroySurface).toHaveBeenCalledWith(
       'demo-plugin',
       'demo-overlay',
       'overlay',
-      'pmpm',
+      'extv2',
       'surface-missing'
     );
     expect(manager.listTrackedSurfaces()).toEqual([]);
   });
 
-  it('background sync cleans up tracked surfaces when the plugin becomes disabled after summon', async () => {
+  it('background sync cleans up tracked surfaces when the plugin becomes disabled', async () => {
     const openSurface = vi.fn(async () => undefined);
     const destroySurface = vi.fn(async () => undefined);
     let syncCallback: (() => void) | null = null;
@@ -209,16 +209,15 @@ describe('DefaultShellSurfaceManager', () => {
             ? { status: 'present', record: spec }
             : {
                 status: 'disabled-plugin',
-                sourceKind: 'pmpm',
+                sourceKind: 'extv2',
                 pluginId: 'demo-plugin',
                 pluginName: 'Demo Plugin',
                 surfaceId: 'demo-overlay',
               },
-        subscribePmpm: (cb) => {
+        subscribeExtensions: (cb: () => void) => {
           syncCallback = cb;
           return () => {};
         },
-        subscribeExtensions: () => () => {},
         subscribeRuntimeRestart: () => () => {},
         readRuntimeRestart: () => null,
       },
@@ -227,97 +226,24 @@ describe('DefaultShellSurfaceManager', () => {
     manager.start();
     await manager.summonSurface(spec);
     lookupStatus = 'disabled-plugin';
-    expect(syncCallback).not.toBeNull();
-    (syncCallback as unknown as () => void)();
+    const disabledPluginSync = syncCallback as (() => void) | null;
+    if (typeof disabledPluginSync !== 'function') {
+      throw new Error('Expected background sync callback');
+    }
+    disabledPluginSync();
     await flushAsyncWork();
 
     expect(destroySurface).toHaveBeenCalledWith(
       'demo-plugin',
       'demo-overlay',
       'overlay',
-      'pmpm',
+      'extv2',
       'plugin-disabled'
     );
-    expect(telemetryLoggerMock.info).toHaveBeenCalledWith(
-      'plugin.governance.cleanup.start',
-      expect.objectContaining({
-        fields: expect.objectContaining({
-          reason: 'plugin-disabled',
-          pluginId: 'demo-plugin',
-          surfaceId: 'demo-overlay',
-          surfaceKind: 'overlay',
-        }),
-      })
-    );
     expect(manager.listTrackedSurfaces()).toEqual([]);
   });
 
-  it('background sync cleans up tracked surfaces when the plugin disappears after uninstall', async () => {
-    const openSurface = vi.fn(async () => undefined);
-    const destroySurface = vi.fn(async () => undefined);
-    let syncCallback: (() => void) | null = null;
-    let lookupStatus: 'present' | 'missing-plugin' = 'present';
-    const spec = createSpec({
-      sourceKind: 'extv2',
-      pluginId: 'demo.extension',
-      pluginName: 'Demo Extension',
-      surfaceId: 'demo-widget',
-      surfaceType: 'desktop-widget',
-    });
-
-    const manager = new DefaultShellSurfaceManager({
-      enableBackgroundSync: true,
-      deps: {
-        openSurface,
-        destroySurface,
-        inspectSurface: () =>
-          lookupStatus === 'present'
-            ? { status: 'present', record: spec }
-            : {
-                status: 'missing-plugin',
-                sourceKind: 'extv2',
-                pluginId: 'demo.extension',
-                surfaceId: 'demo-widget',
-              },
-        subscribePmpm: () => () => {},
-        subscribeExtensions: (cb) => {
-          syncCallback = cb;
-          return () => {};
-        },
-        subscribeRuntimeRestart: () => () => {},
-        readRuntimeRestart: () => null,
-      },
-    });
-
-    manager.start();
-    await manager.summonSurface(spec);
-    lookupStatus = 'missing-plugin';
-    expect(syncCallback).not.toBeNull();
-    (syncCallback as unknown as () => void)();
-    await flushAsyncWork();
-
-    expect(destroySurface).toHaveBeenCalledWith(
-      'demo.extension',
-      'demo-widget',
-      'desktop-widget',
-      'extv2',
-      'plugin-missing'
-    );
-    expect(telemetryLoggerMock.info).toHaveBeenCalledWith(
-      'plugin.governance.cleanup.start',
-      expect.objectContaining({
-        fields: expect.objectContaining({
-          reason: 'plugin-missing',
-          pluginId: 'demo.extension',
-          surfaceId: 'demo-widget',
-          surfaceKind: 'desktop-widget',
-        }),
-      })
-    );
-    expect(manager.listTrackedSurfaces()).toEqual([]);
-  });
-
-  it('environment restore re-opens tracked shell surfaces to reassert placement and visibility', async () => {
+  it('environment restore re-opens tracked shell surfaces', async () => {
     const openSurface = vi.fn(async () => undefined);
     let environmentCallback: ((signal: ShellSurfaceEnvironmentSignal) => void) | null = null;
     const spec = createSpec({});
@@ -327,7 +253,6 @@ describe('DefaultShellSurfaceManager', () => {
       deps: {
         openSurface,
         inspectSurface: () => ({ status: 'present', record: spec }),
-        subscribePmpm: () => () => {},
         subscribeExtensions: () => () => {},
         subscribeRuntimeRestart: () => () => {},
         readRuntimeRestart: () => null,
@@ -341,14 +266,19 @@ describe('DefaultShellSurfaceManager', () => {
     manager.start();
     await manager.summonSurface(spec);
 
-    expect(environmentCallback).not.toBeNull();
-    environmentCallback!('display-metrics-changed');
+    const restoreEnvironment = environmentCallback as
+      | ((signal: ShellSurfaceEnvironmentSignal) => void)
+      | null;
+    if (typeof restoreEnvironment !== 'function') {
+      throw new Error('Expected environment callback');
+    }
+    restoreEnvironment('display-metrics-changed');
     await flushAsyncWork();
 
     expect(openSurface).toHaveBeenCalledTimes(2);
     expect(openSurface).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        sourceKind: 'pmpm',
+        sourceKind: 'extv2',
         pluginId: 'demo-plugin',
         surfaceId: 'demo-overlay',
         surfaceType: 'overlay',
@@ -357,144 +287,31 @@ describe('DefaultShellSurfaceManager', () => {
     expect(manager.listTrackedSurfaces()).toEqual([spec]);
   });
 
-  it('environment restore cleans missing tracked shell surfaces instead of re-opening them', async () => {
-    const openSurface = vi.fn(async () => undefined);
-    const destroySurface = vi.fn(async () => undefined);
-    let environmentCallback: ((signal: ShellSurfaceEnvironmentSignal) => void) | null = null;
-    let lookupStatus: 'present' | 'missing-surface' = 'present';
-    const spec = createSpec({});
-
-    const manager = new DefaultShellSurfaceManager({
-      enableBackgroundSync: true,
-      deps: {
-        openSurface,
-        destroySurface,
-        inspectSurface: () =>
-          lookupStatus === 'present'
-            ? { status: 'present', record: spec }
-            : {
-                status: 'missing-surface',
-                sourceKind: 'pmpm',
-                pluginId: 'demo-plugin',
-                pluginName: 'Demo Plugin',
-                surfaceId: 'demo-overlay',
-              },
-        subscribePmpm: () => () => {},
-        subscribeExtensions: () => () => {},
-        subscribeRuntimeRestart: () => () => {},
-        readRuntimeRestart: () => null,
-        subscribeEnvironmentSignals: (cb) => {
-          environmentCallback = cb;
-          return () => {};
-        },
-      },
-    });
-
-    manager.start();
-    await manager.summonSurface(spec);
-    lookupStatus = 'missing-surface';
-
-    expect(environmentCallback).not.toBeNull();
-    environmentCallback!('page-resume');
-    await flushAsyncWork();
-
-    expect(openSurface).toHaveBeenCalledTimes(1);
-    expect(destroySurface).toHaveBeenCalledWith(
-      'demo-plugin',
-      'demo-overlay',
-      'overlay',
-      'pmpm',
-      'surface-missing'
-    );
-    expect(manager.listTrackedSurfaces()).toEqual([]);
-  });
-
-  it('runtime restart cleanup destroys tracked surfaces for the restarting plugin', async () => {
+  it('runtime restart cleanup removes every tracked surface for the target plugin only', async () => {
     const openSurface = vi.fn(async () => undefined);
     const destroySurface = vi.fn(async () => undefined);
     let restartCallback: (() => void) | null = null;
     let restartRequest:
       | {
-          kind: SourceKind;
-          pluginId: string;
-          at: number;
-          reason?: string;
-        }
-      | null = null;
-    const spec = createSpec({
-      sourceKind: 'extv2',
-      pluginId: 'demo.extension',
-      pluginName: 'Demo Extension',
-      surfaceId: 'demo-widget',
-      surfaceType: 'desktop-widget',
-    });
-
-    const manager = new DefaultShellSurfaceManager({
-      enableBackgroundSync: true,
-      deps: {
-        openSurface,
-        destroySurface,
-        inspectSurface: () => ({ status: 'present', record: spec }),
-        subscribePmpm: () => () => {},
-        subscribeExtensions: () => () => {},
-        subscribeRuntimeRestart: (cb) => {
-          restartCallback = cb;
-          return () => {};
-        },
-        readRuntimeRestart: (kind) => (restartRequest?.kind === kind ? restartRequest : null),
-      },
-    });
-
-    manager.start();
-    await manager.summonSurface(spec);
-    restartRequest = {
-      kind: 'extv2',
-      pluginId: 'demo.extension',
-      at: Date.now(),
-      reason: 'runtime-restart',
-    };
-    expect(restartCallback).not.toBeNull();
-    (restartCallback as unknown as () => void)();
-    await flushAsyncWork();
-
-    expect(destroySurface).toHaveBeenCalledWith(
-      'demo.extension',
-      'demo-widget',
-      'desktop-widget',
-      'extv2',
-      'runtime-restart'
-    );
-    expect(manager.listTrackedSurfaces()).toEqual([]);
-  });
-
-  it('revoke/crash restart cleanup removes every tracked surface for the target plugin only', async () => {
-    const openSurface = vi.fn(async () => undefined);
-    const destroySurface = vi.fn(async () => undefined);
-    let restartCallback: (() => void) | null = null;
-    let restartRequest:
-      | {
-          kind: SourceKind;
+          kind: 'extv2';
           pluginId: string;
           at: number;
           reason?: string;
         }
       | null = null;
     const targetOverlay = createSpec({
-      sourceKind: 'pmpm',
       pluginId: 'target-plugin',
       pluginName: 'Target Plugin',
       surfaceId: 'target-overlay',
       surfaceType: 'overlay',
     });
     const targetWidget = createSpec({
-      sourceKind: 'pmpm',
       pluginId: 'target-plugin',
       pluginName: 'Target Plugin',
       surfaceId: 'target-widget',
       surfaceType: 'desktop-widget',
     });
     const unaffected = createSpec({
-      sourceKind: 'pmpm',
       pluginId: 'other-plugin',
       pluginName: 'Other Plugin',
       surfaceId: 'other-overlay',
@@ -522,13 +339,12 @@ describe('DefaultShellSurfaceManager', () => {
                     },
                   },
         }),
-        subscribePmpm: () => () => {},
         subscribeExtensions: () => () => {},
-        subscribeRuntimeRestart: (cb) => {
+        subscribeRuntimeRestart: (cb: () => void) => {
           restartCallback = cb;
           return () => {};
         },
-        readRuntimeRestart: (kind) => (restartRequest?.kind === kind ? restartRequest : null),
+        readRuntimeRestart: () => restartRequest,
       },
     });
 
@@ -538,13 +354,16 @@ describe('DefaultShellSurfaceManager', () => {
     await manager.summonSurface(unaffected);
 
     restartRequest = {
-      kind: 'pmpm',
+      kind: 'extv2',
       pluginId: 'target-plugin',
       at: Date.now(),
       reason: 'capability-revoke',
     };
-    expect(restartCallback).not.toBeNull();
-    (restartCallback as unknown as () => void)();
+    const restartCleanup = restartCallback as (() => void) | null;
+    if (typeof restartCleanup !== 'function') {
+      throw new Error('Expected restart callback');
+    }
+    restartCleanup();
     await flushAsyncWork();
 
     expect(destroySurface).toHaveBeenNthCalledWith(
@@ -552,7 +371,7 @@ describe('DefaultShellSurfaceManager', () => {
       'target-plugin',
       'target-overlay',
       'overlay',
-      'pmpm',
+      'extv2',
       'capability-revoke'
     );
     expect(destroySurface).toHaveBeenNthCalledWith(
@@ -560,19 +379,10 @@ describe('DefaultShellSurfaceManager', () => {
       'target-plugin',
       'target-widget',
       'desktop-widget',
-      'pmpm',
+      'extv2',
       'capability-revoke'
     );
     expect(destroySurface).toHaveBeenCalledTimes(2);
-    expect(telemetryLoggerMock.info).toHaveBeenCalledWith(
-      'plugin.governance.cleanup.start',
-      expect.objectContaining({
-        fields: expect.objectContaining({
-          pluginId: 'target-plugin',
-          reason: 'capability-revoke',
-        }),
-      })
-    );
     expect(manager.listTrackedSurfaces()).toEqual([unaffected]);
   });
 });

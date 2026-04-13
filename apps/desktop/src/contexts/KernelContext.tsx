@@ -65,28 +65,6 @@ function forwardKernelLog(
   }
 }
 
-export function hasEnabledPmpmPluginCandidates(raw: string | null | undefined): boolean {
-  if (typeof raw !== 'string') return false;
-  const trimmed = raw.trim();
-  if (!trimmed || trimmed === '[]') return false;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return false;
-  }
-
-  if (!Array.isArray(parsed) || parsed.length === 0) return false;
-  for (const entry of parsed) {
-    if (!entry || typeof entry !== 'object') continue;
-    const enabled = (entry as { enabled?: unknown }).enabled;
-    if (enabled === false) continue;
-    return true;
-  }
-  return false;
-}
-
 export function hasEnabledInstalledExtensionCandidates(raw: string | null | undefined): boolean {
   if (typeof raw !== 'string') return false;
   const trimmed = raw.trim();
@@ -109,17 +87,6 @@ export function hasEnabledInstalledExtensionCandidates(raw: string | null | unde
   return false;
 }
 
-function hasLikelyInstalledPmpmPlugins(): boolean {
-  if (typeof window === 'undefined') return false;
-  let raw: string | null = null;
-  try {
-    raw = window.localStorage.getItem(STORAGE_KEYS.PMPM_PLUGINS);
-  } catch {
-    return false;
-  }
-  return hasEnabledPmpmPluginCandidates(raw);
-}
-
 function hasLikelyInstalledExtensionsV2(): boolean {
   if (typeof window === 'undefined') return false;
   let raw: string | null = null;
@@ -133,7 +100,6 @@ function hasLikelyInstalledExtensionsV2(): boolean {
 
 async function loadPluginRuntimeModules(options: {
   enableShellSurfaceBackgroundSync: boolean;
-  enablePmpmCompat: boolean;
 }): Promise<KernelModule<AppEvents>[]> {
   const [shellSurfaceManagerModule, runtimeManagerModule, extensionContributionModule, extensionRendererModule] =
     await Promise.all([
@@ -151,11 +117,6 @@ async function loadPluginRuntimeModules(options: {
     extensionContributionModule.createInstalledExtensionContributionsModule(),
     extensionRendererModule.createInstalledExtensionMagnetRenderersModule(),
   ];
-
-  if (options.enablePmpmCompat) {
-    const rendererModule = await import('../magnet-system/plugins/pmpmMagnetRenderersModule');
-    modules.unshift(rendererModule.createPmpmMagnetRenderersModule());
-  }
 
   return modules;
 }
@@ -199,17 +160,14 @@ function createRuntime(): KernelRuntime {
     }
 
     pluginActivationPromise = (async () => {
-      const enablePmpmCompat = hasLikelyInstalledPmpmPlugins();
       const modules = await loadPluginRuntimeModules({
         enableShellSurfaceBackgroundSync: !isAuxWindow,
-        enablePmpmCompat,
       });
       if (runtimeDisposed || pluginModulesActivated) return;
       loader.activate(modules);
       pluginModulesActivated = true;
       telemetry.info('kernel.plugin-modules.activated', {
         fields: {
-          enablePmpmCompat,
           moduleCount: modules.length,
         },
       });
@@ -243,7 +201,7 @@ function createRuntime(): KernelRuntime {
   const shouldActivatePluginModules = (): boolean => {
     if (!canUsePluginModules) return false;
     if (runtimeDisposed || pluginModulesActivated || pluginActivationPromise) return false;
-      return hasLikelyInstalledPmpmPlugins() || hasLikelyInstalledExtensionsV2();
+    return hasLikelyInstalledExtensionsV2();
   };
 
   const modules = [
@@ -327,7 +285,7 @@ export function KernelProvider({ children }: { children: ReactNode }) {
     };
 
     const onStorage = (event: StorageEvent) => {
-      if (event.key !== STORAGE_KEYS.PMPM_PLUGINS && event.key !== STORAGE_KEYS.EXTENSIONS_V2) {
+      if (event.key !== STORAGE_KEYS.EXTENSIONS_V2) {
         return;
       }
       tryActivate();
@@ -335,7 +293,7 @@ export function KernelProvider({ children }: { children: ReactNode }) {
 
     const onPmpStorageChange = (event: Event) => {
       const detail = (event as CustomEvent<{ key?: string | null }>).detail;
-      if (detail?.key !== STORAGE_KEYS.PMPM_PLUGINS && detail?.key !== STORAGE_KEYS.EXTENSIONS_V2) {
+      if (detail?.key !== STORAGE_KEYS.EXTENSIONS_V2) {
         return;
       }
       tryActivate();

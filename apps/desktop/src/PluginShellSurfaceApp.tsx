@@ -20,7 +20,6 @@ import {
   buildPluginShellSurfaceEventPayload,
   dismissPluginShellSurface,
 } from './utils/pluginShellSurfaces';
-import type { PluginSurfaceSourceKind } from './contracts/pluginSurfaceSource';
 import './PluginShellSurfaceApp.css';
 
 const telemetry = getTelemetryLogger('windowing', 'PluginShellSurfaceApp');
@@ -31,23 +30,19 @@ function readErrorMessage(error: unknown): string {
 
 function parsePluginShellSurfaceHash():
   | {
-      eventSourceKind: PluginSurfaceSourceKind;
       surfaceType: 'overlay' | 'desktop-widget';
       pluginId: string;
       surfaceId: string;
     }
   | null {
   const hash = window.location.hash;
-  const match = hash.match(
-    /^#\/plugin-shell-surface\/(pmpm|extv2)\/(overlay|desktop-widget)\/([\w-]+)\/([\w-]+)$/
-  );
+  const match = hash.match(/^#\/plugin-shell-surface\/extv2\/(overlay|desktop-widget)\/([\w-]+)\/([\w-]+)$/);
   if (!match) return null;
 
   return {
-    eventSourceKind: match[1] as PluginSurfaceSourceKind,
-    surfaceType: match[2] as 'overlay' | 'desktop-widget',
-    pluginId: match[3],
-    surfaceId: match[4],
+    surfaceType: match[1] as 'overlay' | 'desktop-widget',
+    pluginId: match[2],
+    surfaceId: match[3],
   };
 }
 
@@ -55,7 +50,7 @@ export function PluginShellSurfaceApp() {
   const parsed = useMemo(() => parsePluginShellSurfaceHash(), []);
   const expectedPayload = parsed
     ? buildPluginShellSurfaceEventPayload(
-        parsed.eventSourceKind,
+        'extv2',
         parsed.surfaceType,
         parsed.pluginId,
         parsed.surfaceId
@@ -280,12 +275,12 @@ export function PluginShellSurfaceApp() {
         parsed.pluginId,
         parsed.surfaceId,
         parsed.surfaceType,
-        parsed.eventSourceKind
+        'extv2'
       ).catch((error) => {
         telemetry.warn('plugin_shell_surface.dismiss_on_escape.failed', {
           message: readErrorMessage(error),
           fields: {
-            sourceKind: parsed.eventSourceKind,
+            sourceKind: 'extv2',
             pluginId: parsed.pluginId,
             surfaceId: parsed.surfaceId,
             surfaceType: parsed.surfaceType,

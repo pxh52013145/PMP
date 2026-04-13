@@ -32,7 +32,6 @@ import {
 import { consumePendingHostFileOpens } from './modules/startup/hostFileOpen';
 import {
   shouldRunDurableStorageMigrations,
-  shouldRunPmpmDurableMigration,
   shouldRunPmpsDurableMigration,
 } from './modules/startup/durableMigrationGuards';
 import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
@@ -153,15 +152,7 @@ function AppContent() {
 
     const run = async () => {
       try {
-        let pmpm: { migrated: number; failed: number; skipped?: boolean } | null = null;
         let pmps: { migrated: number; failed: number; skipped?: boolean } | null = null;
-
-        if (shouldRunPmpmDurableMigration()) {
-          const { migrateInstalledPmpmPluginsToDurableStorage } = await import(
-            './magnet-system/plugins/pmpm'
-          );
-          pmpm = await migrateInstalledPmpmPluginsToDurableStorage();
-        }
 
         if (shouldRunPmpsDurableMigration()) {
           const { migrateInstalledPmpsShaderPacksToDurableStorage } = await import(
@@ -170,12 +161,9 @@ function AppContent() {
           pmps = await migrateInstalledPmpsShaderPacksToDurableStorage();
         }
 
-        if (
-          (pmpm && (pmpm.migrated || pmpm.failed)) ||
-          (pmps && (pmps.migrated || pmps.failed))
-        ) {
+        if (pmps && (pmps.migrated || pmps.failed)) {
           telemetry.info('storage.migration.result', {
-            fields: { pmpm, pmps },
+            fields: { pmps },
           });
         }
       } catch {

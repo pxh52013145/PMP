@@ -6,7 +6,6 @@ import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { listRegisteredMagnetRenderers, type MagnetRendererDefinition } from '../../magnet-system/registry';
 import { listMagnetVariants } from '../../magnet-system/variantRegistry';
-import { getInstalledPmpmPlugin, installPmpmPluginFromZipBytes } from '../../magnet-system/plugins/pmpm';
 import { getInstalledPmpsShaderPack } from '../../shader-system/pmps';
 import { installPmpsShaderPackFromZipBytes } from '../../shader-system/pmps';
 import { APP_VERSION, HOST_API_VERSION } from '../../constants/versions';
@@ -31,7 +30,6 @@ import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
 import {
   createThemePackZipBytes,
   parseThemePackFromZipBytes,
-  readPmpmMetaFromZipBytes,
   readPmpsMetaFromZipBytes,
   validateThemePackManifestV1,
   type ParsedThemePack,
@@ -742,12 +740,12 @@ function extractThemeRendererIds(themeValue: unknown): string[] {
 }
 
 type ThemePackExportBundle = {
-  kind: 'pmpm' | 'pmps';
+  kind: 'pmps';
   depId: string;
   bundlePath: string;
   fileName: string;
   bytes: Uint8Array;
-  meta?: { id: string; version: string; name: string; permissions?: string[] };
+  meta?: { id: string; version: string; name: string };
   metaError?: string;
 };
 
@@ -1779,23 +1777,12 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     if (!manifest) return [];
 
     const deps: Array<{
-      kind: 'pmpm' | 'pmps';
+      kind: 'pmps';
       id: string;
       version?: string;
       bundlePath: string;
       normalizedPath: string;
     }> = [];
-
-    for (const dep of manifest.dependencies?.pmpm ?? []) {
-      if (!dep.bundlePath) continue;
-      deps.push({
-        kind: 'pmpm',
-        id: dep.id,
-        version: dep.version,
-        bundlePath: dep.bundlePath,
-        normalizedPath: normalizeBundlePath(dep.bundlePath),
-      });
-    }
 
     for (const dep of manifest.dependencies?.pmps ?? []) {
       if (!dep.bundlePath) continue;
@@ -1829,10 +1816,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       let metaError: string | undefined;
 
       try {
-        meta =
-          dep.kind === 'pmpm'
-            ? await readPmpmMetaFromZipBytes(bytes)
-            : await readPmpsMetaFromZipBytes(bytes);
+        meta = await readPmpsMetaFromZipBytes(bytes);
 
         if (meta.id !== dep.id) {
           metaError = t('editor.theme-editor.pmpk.export.bundle.idMismatch', {
@@ -1985,9 +1969,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
     return themePack.dependencies.map((dep) => {
       const installedVersion =
-        dep.kind === 'pmpm'
-          ? getInstalledPmpmPlugin(dep.id)?.manifest.metadata.version ?? null
-          : getInstalledPmpsShaderPack(dep.id)?.manifest.metadata.version ?? null;
+        getInstalledPmpsShaderPack(dep.id)?.manifest.metadata.version ?? null;
 
       const bundledVersion = dep.bundleMeta?.version ?? null;
 
@@ -2081,11 +2063,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       }
 
       try {
-        if (dep.dep.kind === 'pmpm') {
-          await installPmpmPluginFromZipBytes(bundleBytes, { defaultEnabled: false });
-        } else {
-          await installPmpsShaderPackFromZipBytes(bundleBytes);
-        }
+        await installPmpsShaderPackFromZipBytes(bundleBytes);
 
         setDependencyRevision((prev) => prev + 1);
         setThemePackMessage({
@@ -2167,11 +2145,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       const bundleBytes = item.dep.bundleBytes;
       if (!bundleBytes) continue;
       try {
-        if (item.dep.kind === 'pmpm') {
-          await installPmpmPluginFromZipBytes(bundleBytes, { defaultEnabled: false });
-        } else {
-          await installPmpsShaderPackFromZipBytes(bundleBytes);
-        }
+        await installPmpsShaderPackFromZipBytes(bundleBytes);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         failures.push(`${item.dep.kind} ${item.dep.id}: ${message}`);
@@ -3346,7 +3320,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                                 <label className="theme-editor-file-btn">
                                   <input
                                     type="file"
-                                    accept={dep.kind === 'pmpm' ? '.pmpm,application/zip' : '.pmps,application/zip'}
+                                    accept=".pmps,application/zip"
                                     onChange={async (event) => {
                                       const file = event.target.files?.[0];
                                       if (!file) return;
