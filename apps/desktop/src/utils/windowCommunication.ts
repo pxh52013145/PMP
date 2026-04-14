@@ -239,6 +239,7 @@ export const STORAGE_KEYS = {
   MUSIC_LIBRARY_BASE_SCHEMA_V1: 'pixel-matrix-music-library-base-schema-v1', // MusicLibraryBaseSchema
   MUSIC_LIBRARY_FIELD_CAPABILITIES_V1:
     'pixel-matrix-music-library-field-capabilities-v1', // MusicLibraryExtensionFieldCapabilityInput[]
+  PLATFORM_LOGIN_REGISTRY_V1: 'pixel-matrix-platform-login-registry-v1', // Registered platform login launcher entries
 
   // === Memory Governance ===
   MEMORY_GOVERNANCE_AUTO_ENABLED: 'pixel-matrix-memory-governance-auto-enabled', // boolean
@@ -346,6 +347,9 @@ export const TAURI_EVENTS = {
 
   // i18n
   LOCALE_UPDATED: 'locale-updated',
+
+  // Platform Login
+  PLATFORM_LOGIN_REGISTRY_UPDATED: 'platform-login-registry-updated',
 
   // Extensions
   EXTENSIONS_V2_UPDATED: 'extensions-v2-updated',

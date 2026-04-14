@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-type PopupVerticalPlacement = 'top' | 'bottom';
-type PopupHorizontalPlacement = 'start' | 'center' | 'end';
-export type PopupPlacement = `${PopupVerticalPlacement}-${PopupHorizontalPlacement}`;
+type PopupSide = 'top' | 'bottom' | 'left' | 'right';
+type PopupAlign = 'start' | 'center' | 'end';
+export type PopupPlacement = `${PopupSide}-${PopupAlign}`;
 
 interface CollisionAwarePopupProps {
   open: boolean;
@@ -33,18 +33,31 @@ function computePopupPosition(
   popupRect: DOMRect,
   offset: number
 ): PopupPosition {
-  const [vertical, horizontal] = placement.split('-') as [PopupVerticalPlacement, PopupHorizontalPlacement];
+  const [side, align] = placement.split('-') as [PopupSide, PopupAlign];
 
-  const top =
-    vertical === 'top'
-      ? anchorRect.top - popupRect.height - offset
-      : anchorRect.bottom + offset;
-
+  let top = anchorRect.bottom + offset;
   let left = anchorRect.left;
-  if (horizontal === 'center') {
-    left = anchorRect.left + (anchorRect.width - popupRect.width) / 2;
-  } else if (horizontal === 'end') {
-    left = anchorRect.right - popupRect.width;
+
+  if (side === 'top') {
+    top = anchorRect.top - popupRect.height - offset;
+  } else if (side === 'bottom') {
+    top = anchorRect.bottom + offset;
+  } else if (side === 'left') {
+    left = anchorRect.left - popupRect.width - offset;
+  } else if (side === 'right') {
+    left = anchorRect.right + offset;
+  }
+
+  if (side === 'top' || side === 'bottom') {
+    if (align === 'center') {
+      left = anchorRect.left + (anchorRect.width - popupRect.width) / 2;
+    } else if (align === 'end') {
+      left = anchorRect.right - popupRect.width;
+    }
+  } else if (align === 'center') {
+    top = anchorRect.top + (anchorRect.height - popupRect.height) / 2;
+  } else if (align === 'end') {
+    top = anchorRect.bottom - popupRect.height;
   }
 
   return { top, left };
@@ -65,10 +78,21 @@ function measureOverflow(
   return overflowTop + overflowBottom + overflowLeft + overflowRight;
 }
 
-function flipVerticalPlacement(placement: PopupPlacement): PopupPlacement {
-  const [vertical, horizontal] = placement.split('-') as [PopupVerticalPlacement, PopupHorizontalPlacement];
-  const nextVertical: PopupVerticalPlacement = vertical === 'top' ? 'bottom' : 'top';
-  return `${nextVertical}-${horizontal}`;
+function flipPlacement(placement: PopupPlacement): PopupPlacement {
+  const [side, align] = placement.split('-') as [PopupSide, PopupAlign];
+
+  switch (side) {
+    case 'top':
+      return `bottom-${align}`;
+    case 'bottom':
+      return `top-${align}`;
+    case 'left':
+      return `right-${align}`;
+    case 'right':
+      return `left-${align}`;
+    default:
+      return placement;
+  }
 }
 
 export const CollisionAwarePopup = React.forwardRef<HTMLDivElement, CollisionAwarePopupProps>(
@@ -91,7 +115,7 @@ export const CollisionAwarePopup = React.forwardRef<HTMLDivElement, CollisionAwa
       left: 0,
       top: 0,
       visibility: 'hidden',
-      zIndex: 1000,
+      zIndex: 10000,
     });
 
     const setPopupNode = useCallback(
@@ -123,7 +147,7 @@ export const CollisionAwarePopup = React.forwardRef<HTMLDivElement, CollisionAwa
       const viewportHeight = window.innerHeight;
 
       const preferredCandidate = computePopupPosition(placement, anchorRect, popupRect, offset);
-      const flippedPlacement = flipVerticalPlacement(placement);
+      const flippedPlacement = flipPlacement(placement);
       const flippedCandidate = computePopupPosition(flippedPlacement, anchorRect, popupRect, offset);
 
       const preferredOverflow = measureOverflow(
@@ -153,7 +177,7 @@ export const CollisionAwarePopup = React.forwardRef<HTMLDivElement, CollisionAwa
         left: Math.round(left),
         top: Math.round(top),
         visibility: 'visible',
-        zIndex: 1000,
+        zIndex: 10000,
       });
     }, [anchorRef, offset, open, placement, viewportPadding]);
 

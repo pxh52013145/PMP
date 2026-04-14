@@ -1,8 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Disc3,
+  LogOut,
+  MoreHorizontal,
+  Music,
+  Plus,
+  QrCode,
+  RefreshCw,
+  Tv,
+  X,
+} from 'lucide-react';
+
 import { CollisionAwarePopup } from '../../core/CollisionAwarePopup';
 import { useT } from '../../../i18n';
 import {
   beginPlatformQrLogin,
+  clearPlatformConnectorCookies,
   getPlatformConnectorAuthSnapshot,
   listPlatformConnectorAuthSnapshots,
   listPlatformConnectorDefinitions,
@@ -11,6 +24,7 @@ import {
   subscribePlatformConnectorAuthChanged,
   type PlatformConnectorAuthSnapshot,
   type PlatformConnectorDefinition,
+  type PlatformConnectorId,
   type PlatformQrLoginPollResult,
   type PlatformQrLoginSession,
 } from '../../../modules/music-platform';
@@ -21,26 +35,38 @@ import {
   PLATFORM_LOGIN_VARIANT_PRESETS,
   parsePlatformLoginSkinProps,
 } from './platformLoginSkin';
+import {
+  persistPlatformLoginRegistry,
+  readPlatformLoginRegistry,
+  removePlatformLoginRegistryEntry,
+  subscribePlatformLoginRegistry,
+  upsertPlatformLoginRegistryEntry,
+  type PlatformLoginRegistryEntry,
+} from './platformLoginRegistry';
 import './PlatformLoginButton.css';
-const BILIBILI_CONNECTOR_ID = 'connector.platform.bilibili' as const;
 
-type PlatformSelectorItem = {
-  id: string;
-  labelKey: string;
-  enabled: boolean;
-  icon: React.ReactNode;
+type PlatformLoginButtonRendererProps = {
+  skinProps?: Record<string, unknown>;
 };
 
-function BilibiliBrandIcon(): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path
-        fill="currentColor"
-        d="M17.813 4.653h.854c1.51.054 2.769.578 3.773 1.574 1.004.995 1.524 2.249 1.56 3.76v7.36c-.036 1.51-.556 2.769-1.56 3.773s-2.262 1.524-3.773 1.56H5.333c-1.51-.036-2.769-.556-3.773-1.56S.036 18.858 0 17.347v-7.36c.036-1.511.556-2.765 1.56-3.76 1.004-.996 2.262-1.52 3.773-1.574h.774l-1.174-1.12a1.234 1.234 0 0 1-.373-.906c0-.356.124-.658.373-.907l.027-.027c.267-.249.573-.373.92-.373.347 0 .653.124.92.373L9.653 4.44c.071.071.134.142.187.213h4.267a.836.836 0 0 1 .16-.213l2.853-2.747c.267-.249.573-.373.92-.373.347 0 .662.151.929.4.267.249.391.551.391.907 0 .355-.124.657-.373.906zM5.333 7.24c-.746.018-1.373.276-1.88.773-.506.498-.769 1.13-.786 1.894v7.52c.017.764.28 1.395.786 1.893.507.498 1.134.756 1.88.773h13.334c.746-.017 1.373-.275 1.88-.773.506-.498.769-1.129.786-1.893v-7.52c-.017-.765-.28-1.396-.786-1.894-.507-.497-1.134-.755-1.88-.773zM8 11.107c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c0-.373.129-.689.386-.947.258-.257.574-.386.947-.386zm8 0c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373Z"
-      />
-    </svg>
-  );
-}
+type ManagedConnectorState = 'authorized' | 'pending' | 'unauthorized' | 'disabled';
+
+type ConnectorVisualMeta = {
+  Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
+  color: string;
+};
+
+type ContextMenuState = {
+  connectorId: PlatformConnectorId;
+  x: number;
+  y: number;
+} | null;
+
+const CONNECTOR_VISUAL_META: Partial<Record<PlatformConnectorId, ConnectorVisualMeta>> = {
+  'connector.platform.netease': { Icon: Disc3, color: '#ff6b87' },
+  'connector.platform.bilibili': { Icon: Tv, color: '#67c7ff' },
+  'connector.platform.qqmusic': { Icon: Music, color: '#56db8d' },
+};
 
 function toAuthLabelKey(authState: string): string {
   const normalized = authState.trim().toLowerCase();
@@ -74,43 +100,22 @@ function isTerminalPollState(result: PlatformQrLoginPollResult | null): boolean 
   return normalized === 'authorized' || normalized === 'expired' || normalized === 'failed';
 }
 
-function getConnectorMonogram(definition: PlatformConnectorDefinition): string {
-  const normalizedId = definition.connectorId.replace(/^connector\.platform\./i, '').trim();
-  if (!normalizedId) return 'P';
-  return normalizedId[0]?.toUpperCase() ?? 'P';
-}
-
-function renderConnectorIcon(definition: PlatformConnectorDefinition): React.ReactNode {
-  if (definition.connectorId === BILIBILI_CONNECTOR_ID || definition.iconKey === 'bilibili') {
-    return <BilibiliBrandIcon />;
-  }
-  return <span className="platform-login-placeholder-icon">{getConnectorMonogram(definition)}</span>;
-}
-
-function buildPlatformSelectorItems(): PlatformSelectorItem[] {
-  return listPlatformConnectorDefinitions().map((definition) => ({
-    id: definition.connectorId,
-    labelKey: definition.labelKey,
-    enabled: definition.enabled && definition.authFlow === 'qr',
-    icon: renderConnectorIcon(definition),
-  }));
-}
-
-function resolvePlatformSelectorId(
+function resolvePreferredConnectorId(
   requestedConnectorId: string | undefined,
-  items: PlatformSelectorItem[]
-): string | null {
-  if (items.length === 0) return null;
-  if (!requestedConnectorId) {
-    return items.find((item) => item.id === BILIBILI_CONNECTOR_ID)?.id ?? items[0]?.id ?? null;
-  }
+  definitions: PlatformConnectorDefinition[]
+): PlatformConnectorId | null {
+  if (definitions.length === 0) return null;
+  if (!requestedConnectorId) return definitions[0]?.connectorId ?? null;
 
   const normalizedRequested = requestedConnectorId.trim().toLowerCase();
   const exactMatch =
-    items.find((item) => item.id.trim().toLowerCase() === normalizedRequested)?.id ??
-    items.find((item) => item.id.trim().toLowerCase().endsWith(`.${normalizedRequested}`))?.id;
+    definitions.find((definition) => definition.connectorId.trim().toLowerCase() === normalizedRequested)
+      ?.connectorId ??
+    definitions.find((definition) =>
+      definition.connectorId.trim().toLowerCase().endsWith(`.${normalizedRequested}`)
+    )?.connectorId;
 
-  return exactMatch ?? items.find((item) => item.id === BILIBILI_CONNECTOR_ID)?.id ?? items[0]?.id ?? null;
+  return exactMatch ?? definitions[0]?.connectorId ?? null;
 }
 
 function updateConnectorScopedValue<TRecord extends Record<string, unknown>>(
@@ -124,72 +129,133 @@ function updateConnectorScopedValue<TRecord extends Record<string, unknown>>(
   } as TRecord));
 }
 
-type PlatformLoginButtonRendererProps = {
-  skinProps?: Record<string, unknown>;
-};
+function getConnectorVisualMeta(definition: PlatformConnectorDefinition): ConnectorVisualMeta {
+  return CONNECTOR_VISUAL_META[definition.connectorId] ?? { Icon: Music, color: '#a1a1aa' };
+}
 
-const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererProps> = ({ skinProps: rawSkinProps }) => {
+function resolveManagedConnectorState(
+  definition: PlatformConnectorDefinition,
+  snapshot: PlatformConnectorAuthSnapshot | null | undefined
+): ManagedConnectorState {
+  if (!definition.enabled || definition.authFlow !== 'qr') return 'disabled';
+  const normalized = snapshot?.authState?.trim().toLowerCase() ?? 'unauthorized';
+  if (normalized === 'pending') return 'pending';
+  if (normalized === 'authorized') return 'authorized';
+  return 'unauthorized';
+}
+
+function resolveStateHintKey(state: ManagedConnectorState): string {
+  switch (state) {
+    case 'authorized':
+      return 'magnet.platform-login.tip.authorized';
+    case 'pending':
+      return 'magnet.platform-login.tip.pending';
+    case 'disabled':
+      return 'magnet.platform-login.tip.disabled';
+    default:
+      return 'magnet.platform-login.tip.unauthorized';
+  }
+}
+
+function ConnectorGlyph({
+  definition,
+  compact = false,
+}: {
+  definition: PlatformConnectorDefinition;
+  compact?: boolean;
+}): JSX.Element {
+  const { Icon, color } = getConnectorVisualMeta(definition);
+  return <Icon className={compact ? 'platform-login-glyph platform-login-glyph--compact' : 'platform-login-glyph'} style={{ color }} />;
+}
+
+const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererProps> = ({
+  skinProps: rawSkinProps,
+}) => {
   const skinProps = useMemo(() => parsePlatformLoginSkinProps(rawSkinProps), [rawSkinProps]);
   const t = useT();
 
-  const [selectorOpen, setSelectorOpen] = useState(false);
-  const [authPopupOpen, setAuthPopupOpen] = useState(false);
-  const [selectedPlatformId, setSelectedPlatformId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const [authSnapshotsByConnectorId, setAuthSnapshotsByConnectorId] = useState<
-    Record<string, PlatformConnectorAuthSnapshot | null>
-  >({});
-  const [qrSessionsByConnectorId, setQrSessionsByConnectorId] = useState<
-    Record<string, PlatformQrLoginSession | null>
-  >({});
-  const [pollResultsByConnectorId, setPollResultsByConnectorId] = useState<
-    Record<string, PlatformQrLoginPollResult | null>
-  >({});
-  const [errorsByConnectorId, setErrorsByConnectorId] = useState<Record<string, string | null>>({});
-  const [statusMessagesByConnectorId, setStatusMessagesByConnectorId] = useState<
-    Record<string, string | null>
-  >({});
-
-  const triggerRef = useRef<HTMLDivElement | null>(null);
-  const selectorPopupRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerButtonRef = useRef<HTMLButtonElement | null>(null);
+  const moreButtonRef = useRef<HTMLButtonElement | null>(null);
+  const stripPopupRef = useRef<HTMLDivElement | null>(null);
   const authPopupRef = useRef<HTMLDivElement | null>(null);
+  const registerPopupRef = useRef<HTMLDivElement | null>(null);
+  const contextPopupRef = useRef<HTMLDivElement | null>(null);
+  const contextAnchorRef = useRef<HTMLDivElement | null>(null);
+  const connectorButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
-  const platformItems = useMemo<PlatformSelectorItem[]>(() => buildPlatformSelectorItems(), []);
-  const preferredPlatformId = useMemo(
-    () => resolvePlatformSelectorId(skinProps.defaultConnectorId, platformItems),
-    [platformItems, skinProps.defaultConnectorId]
+  const [stripOpen, setStripOpen] = useState(false);
+  const [registerMenuOpen, setRegisterMenuOpen] = useState(false);
+  const [authPopupOpen, setAuthPopupOpen] = useState(false);
+  const [selectedConnectorId, setSelectedConnectorId] = useState<PlatformConnectorId | null>(null);
+  const [contextMenuState, setContextMenuState] = useState<ContextMenuState>(null);
+  const [busyConnectorId, setBusyConnectorId] = useState<string | null>(null);
+
+  const platformDefinitions = useMemo(() => listPlatformConnectorDefinitions(), []);
+  const preferredConnectorId = useMemo(
+    () => resolvePreferredConnectorId(skinProps.defaultConnectorId, platformDefinitions),
+    [platformDefinitions, skinProps.defaultConnectorId]
   );
+  const platformDefinitionsById = useMemo(
+    () => new Map(platformDefinitions.map((definition) => [definition.connectorId, definition])),
+    [platformDefinitions]
+  );
+
+  const [registryEntries, setRegistryEntries] = useState<PlatformLoginRegistryEntry[]>(() =>
+    readPlatformLoginRegistry(platformDefinitions, preferredConnectorId)
+  );
+
+  const [authSnapshotsByConnectorId, setAuthSnapshotsByConnectorId] = useState<Record<string, PlatformConnectorAuthSnapshot | null>>({});
+  const [qrSessionsByConnectorId, setQrSessionsByConnectorId] = useState<Record<string, PlatformQrLoginSession | null>>({});
+  const [pollResultsByConnectorId, setPollResultsByConnectorId] = useState<Record<string, PlatformQrLoginPollResult | null>>({});
+  const [errorsByConnectorId, setErrorsByConnectorId] = useState<Record<string, string | null>>({});
+  const [statusMessagesByConnectorId, setStatusMessagesByConnectorId] = useState<Record<string, string | null>>({});
+
+  const persistRegistryState = useCallback(
+    (updater: (prev: PlatformLoginRegistryEntry[]) => PlatformLoginRegistryEntry[]) => {
+      setRegistryEntries((prev) => {
+        const next = updater(prev);
+        void persistPlatformLoginRegistry(next);
+        return next;
+      });
+    },
+    []
+  );
+
+  const refreshRegistryState = useCallback(() => {
+    setRegistryEntries(readPlatformLoginRegistry(platformDefinitions, preferredConnectorId));
+  }, [platformDefinitions, preferredConnectorId]);
 
   useEffect(() => {
-    setSelectedPlatformId(preferredPlatformId);
-  }, [preferredPlatformId]);
+    refreshRegistryState();
+  }, [refreshRegistryState]);
 
-  const selectedPlatformItem = useMemo(
-    () =>
-      platformItems.find((item) => item.id === selectedPlatformId) ??
-      platformItems.find((item) => item.id === preferredPlatformId) ??
-      platformItems.find((item) => item.id === BILIBILI_CONNECTOR_ID) ??
-      platformItems[0] ??
-      null,
-    [platformItems, preferredPlatformId, selectedPlatformId]
-  );
+  useEffect(() => {
+    let disposed = false;
+    let unsubscribe = () => {};
 
-  const activeConnectorId = selectedPlatformItem?.id ?? null;
-  const activeAuthSnapshot =
-    (activeConnectorId ? authSnapshotsByConnectorId[activeConnectorId] : null) ?? null;
-  const activeQrSession = (activeConnectorId ? qrSessionsByConnectorId[activeConnectorId] : null) ?? null;
-  const activePollResult =
-    (activeConnectorId ? pollResultsByConnectorId[activeConnectorId] : null) ?? null;
-  const activeError = (activeConnectorId ? errorsByConnectorId[activeConnectorId] : null) ?? null;
-  const activeStatusMessage =
-    (activeConnectorId ? statusMessagesByConnectorId[activeConnectorId] : null) ?? null;
+    void subscribePlatformLoginRegistry(() => {
+      if (!disposed) {
+        refreshRegistryState();
+      }
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+        return;
+      }
+      unsubscribe = cleanup;
+    });
 
-  const authPopupVisible = selectorOpen && authPopupOpen && Boolean(selectedPlatformItem?.enabled);
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [refreshRegistryState]);
 
-  const refreshAuthSnapshot = useCallback(async (connectorId: string) => {
+  const refreshAuthSnapshot = useCallback(async (connectorId: PlatformConnectorId) => {
     const snapshot = await getPlatformConnectorAuthSnapshot(connectorId);
     updateConnectorScopedValue(setAuthSnapshotsByConnectorId, connectorId, snapshot);
+    return snapshot;
   }, []);
 
   const refreshAllAuthSnapshots = useCallback(async () => {
@@ -215,35 +281,99 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     };
   }, [refreshAllAuthSnapshots]);
 
-  useEffect(() => {
-    if (!activeConnectorId) return;
-    if (authSnapshotsByConnectorId[activeConnectorId] !== undefined) return;
-    void refreshAuthSnapshot(activeConnectorId);
-  }, [activeConnectorId, authSnapshotsByConnectorId, refreshAuthSnapshot]);
+  const registeredConnectors = useMemo(
+    () =>
+      registryEntries
+        .map((entry) => {
+          const definition = platformDefinitionsById.get(entry.connectorId);
+          if (!definition) return null;
+          return {
+            entry,
+            definition,
+            snapshot: authSnapshotsByConnectorId[entry.connectorId] ?? null,
+          };
+        })
+        .filter(
+          (
+            item
+          ): item is {
+            entry: PlatformLoginRegistryEntry;
+            definition: PlatformConnectorDefinition;
+            snapshot: PlatformConnectorAuthSnapshot | null;
+          } => Boolean(item)
+        ),
+    [authSnapshotsByConnectorId, platformDefinitionsById, registryEntries]
+  );
+
+  const unregisteredDefinitions = useMemo(() => {
+    const registeredIds = new Set(registryEntries.map((entry) => entry.connectorId));
+    return platformDefinitions.filter((definition) => !registeredIds.has(definition.connectorId));
+  }, [platformDefinitions, registryEntries]);
+
+  const activeConnectorDefinition = selectedConnectorId
+    ? platformDefinitionsById.get(selectedConnectorId) ?? null
+    : null;
+  const activeAuthSnapshot =
+    (selectedConnectorId ? authSnapshotsByConnectorId[selectedConnectorId] : null) ?? null;
+  const activeQrSession =
+    (selectedConnectorId ? qrSessionsByConnectorId[selectedConnectorId] : null) ?? null;
+  const activePollResult =
+    (selectedConnectorId ? pollResultsByConnectorId[selectedConnectorId] : null) ?? null;
+  const activeError = (selectedConnectorId ? errorsByConnectorId[selectedConnectorId] : null) ?? null;
+  const activeStatusMessage =
+    (selectedConnectorId ? statusMessagesByConnectorId[selectedConnectorId] : null) ?? null;
+  const activeBusy = selectedConnectorId ? busyConnectorId === selectedConnectorId : false;
 
   useEffect(() => {
-    if (!selectorOpen && !authPopupVisible) return;
+    if (!selectedConnectorId) {
+      setSelectedConnectorId(preferredConnectorId);
+      return;
+    }
+
+    if (registryEntries.some((entry) => entry.connectorId === selectedConnectorId)) return;
+
+    setSelectedConnectorId(registryEntries[0]?.connectorId ?? preferredConnectorId ?? null);
+    setAuthPopupOpen(false);
+    setContextMenuState(null);
+  }, [preferredConnectorId, registryEntries, selectedConnectorId]);
+
+  useEffect(() => {
+    for (const item of registeredConnectors) {
+      if (authSnapshotsByConnectorId[item.entry.connectorId] !== undefined) continue;
+      void refreshAuthSnapshot(item.entry.connectorId);
+    }
+  }, [authSnapshotsByConnectorId, refreshAuthSnapshot, registeredConnectors]);
+
+  const closeMenus = useCallback(() => {
+    setRegisterMenuOpen(false);
+    setAuthPopupOpen(false);
+    setContextMenuState(null);
+  }, []);
+
+  const closeAll = useCallback(() => {
+    closeMenus();
+    setStripOpen(false);
+  }, [closeMenus]);
+
+  useEffect(() => {
+    if (!stripOpen && !registerMenuOpen && !authPopupOpen && !contextMenuState) return;
 
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
-      if (triggerRef.current?.contains(target)) return;
-      if (selectorPopupRef.current?.contains(target)) return;
+      if (rootRef.current?.contains(target)) return;
+      if (stripPopupRef.current?.contains(target)) return;
+      if (registerPopupRef.current?.contains(target)) return;
       if (authPopupRef.current?.contains(target)) return;
-
-      setSelectorOpen(false);
-      setAuthPopupOpen(false);
-      setSelectedPlatformId(null);
+      if (contextPopupRef.current?.contains(target)) return;
+      if (contextAnchorRef.current?.contains(target)) return;
+      closeAll();
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      if (authPopupVisible) {
-        setAuthPopupOpen(false);
-        return;
+      if (event.key === 'Escape') {
+        closeAll();
       }
-      setSelectorOpen(false);
-      setSelectedPlatformId(null);
     };
 
     document.addEventListener('mousedown', handlePointerDown);
@@ -252,182 +382,317 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
       document.removeEventListener('mousedown', handlePointerDown);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [authPopupVisible, selectorOpen]);
+  }, [authPopupOpen, closeAll, contextMenuState, registerMenuOpen, stripOpen]);
+
+  const setConnectorRegistered = useCallback(
+    (connectorId: PlatformConnectorId, enabled: boolean) => {
+      persistRegistryState((prev) => upsertPlatformLoginRegistryEntry(prev, connectorId, enabled));
+    },
+    [persistRegistryState]
+  );
+
+  const removeConnectorRegistration = useCallback(
+    (connectorId: PlatformConnectorId) => {
+      persistRegistryState((prev) => removePlatformLoginRegistryEntry(prev, connectorId));
+      updateConnectorScopedValue(
+        setStatusMessagesByConnectorId,
+        connectorId,
+        t('magnet.platform-login.status.registrationRemoved')
+      );
+      if (selectedConnectorId === connectorId) {
+        setAuthPopupOpen(false);
+        setContextMenuState(null);
+      }
+    },
+    [persistRegistryState, selectedConnectorId, t]
+  );
+
+  const openAuthPopup = useCallback((connectorId: PlatformConnectorId) => {
+    setStripOpen(true);
+    setRegisterMenuOpen(false);
+    setContextMenuState(null);
+    setSelectedConnectorId(connectorId);
+    setAuthPopupOpen(true);
+  }, []);
+
+  const handleToggleStrip = useCallback(() => {
+    setStripOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        if (skinProps.openAuthOnTrigger && preferredConnectorId) {
+          setSelectedConnectorId(preferredConnectorId);
+          setAuthPopupOpen(true);
+        }
+        return true;
+      }
+
+      closeMenus();
+      return false;
+    });
+  }, [closeMenus, preferredConnectorId, skinProps.openAuthOnTrigger]);
+
+  const handleConnectorActivate = useCallback(
+    (definition: PlatformConnectorDefinition) => {
+      const snapshot = authSnapshotsByConnectorId[definition.connectorId] ?? null;
+      const state = resolveManagedConnectorState(definition, snapshot);
+
+      if (state === 'disabled') {
+        updateConnectorScopedValue(
+          setStatusMessagesByConnectorId,
+          definition.connectorId,
+          t('magnet.platform-login.status.comingSoon')
+        );
+        return;
+      }
+
+      openAuthPopup(definition.connectorId);
+    },
+    [authSnapshotsByConnectorId, openAuthPopup, t]
+  );
+
+  const handleConnectorContextMenu = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>, connectorId: PlatformConnectorId) => {
+      event.preventDefault();
+      setStripOpen(true);
+      setRegisterMenuOpen(false);
+      setAuthPopupOpen(false);
+      setSelectedConnectorId(connectorId);
+      setContextMenuState({
+        connectorId,
+        x: event.clientX,
+        y: event.clientY,
+      });
+    },
+    []
+  );
+
+  const handleRegisterMenuToggle = useCallback(() => {
+    setStripOpen(true);
+    setAuthPopupOpen(false);
+    setContextMenuState(null);
+    setRegisterMenuOpen((prev) => !prev);
+  }, []);
+
+  const handleRegisterConnector = useCallback(
+    async (definition: PlatformConnectorDefinition) => {
+      if (!definition.enabled || definition.authFlow !== 'qr') {
+        updateConnectorScopedValue(
+          setStatusMessagesByConnectorId,
+          definition.connectorId,
+          t('magnet.platform-login.status.comingSoon')
+        );
+        return;
+      }
+
+      const existingSnapshot =
+        authSnapshotsByConnectorId[definition.connectorId] ?? (await refreshAuthSnapshot(definition.connectorId));
+
+      setConnectorRegistered(definition.connectorId, true);
+      updateConnectorScopedValue(
+        setStatusMessagesByConnectorId,
+        definition.connectorId,
+        t('magnet.platform-login.status.registrationAdded')
+      );
+      setRegisterMenuOpen(false);
+
+      if (existingSnapshot?.authState !== 'authorized') {
+        openAuthPopup(definition.connectorId);
+      }
+    },
+    [authSnapshotsByConnectorId, openAuthPopup, refreshAuthSnapshot, setConnectorRegistered, t]
+  );
 
   const runPoll = useCallback(
-    async (sessionId?: string, connectorId?: string) => {
-      const targetConnectorId = (connectorId ?? activeConnectorId ?? '').trim();
-      if (!targetConnectorId || busy) return;
+    async (connectorId: PlatformConnectorId, sessionId?: string) => {
+      const targetSessionId = (sessionId ?? qrSessionsByConnectorId[connectorId]?.sessionId ?? '').trim();
+      if (!targetSessionId || busyConnectorId) return;
 
-      const targetSessionId = (
-        sessionId ?? qrSessionsByConnectorId[targetConnectorId]?.sessionId ?? ''
-      ).trim();
-      if (!targetSessionId) return;
-
-      setBusy(true);
+      setBusyConnectorId(connectorId);
       try {
-        const result = await pollPlatformQrLogin(targetConnectorId, targetSessionId);
-        updateConnectorScopedValue(setPollResultsByConnectorId, targetConnectorId, result);
-        updateConnectorScopedValue(setErrorsByConnectorId, targetConnectorId, null);
+        const result = await pollPlatformQrLogin(connectorId, targetSessionId);
+        updateConnectorScopedValue(setPollResultsByConnectorId, connectorId, result);
+        updateConnectorScopedValue(setErrorsByConnectorId, connectorId, null);
 
         if (!result) {
           updateConnectorScopedValue(
             setErrorsByConnectorId,
-            targetConnectorId,
+            connectorId,
             t('magnet.platform-login.error.pollFailed')
           );
           return;
         }
 
         if (result.authState === 'authorized') {
+          setConnectorRegistered(connectorId, true);
           updateConnectorScopedValue(
             setStatusMessagesByConnectorId,
-            targetConnectorId,
+            connectorId,
             t('magnet.platform-login.status.authorized', {
               accountUid: result.accountUid ?? '-',
             })
           );
-          updateConnectorScopedValue(setQrSessionsByConnectorId, targetConnectorId, null);
-        } else if (isTerminalPollState(result)) {
-          updateConnectorScopedValue(setQrSessionsByConnectorId, targetConnectorId, null);
+          updateConnectorScopedValue(setQrSessionsByConnectorId, connectorId, null);
+          await refreshAuthSnapshot(connectorId);
+          return;
+        }
+
+        if (isTerminalPollState(result)) {
+          updateConnectorScopedValue(setQrSessionsByConnectorId, connectorId, null);
           updateConnectorScopedValue(
             setStatusMessagesByConnectorId,
-            targetConnectorId,
+            connectorId,
             t('magnet.platform-login.status.pollState', {
               state: result.state,
               message: result.stateMessage,
             })
           );
+          await refreshAuthSnapshot(connectorId);
         }
-      } catch (err) {
+      } catch (error) {
         updateConnectorScopedValue(
           setErrorsByConnectorId,
-          targetConnectorId,
-          err instanceof Error ? err.message : t('magnet.platform-login.error.pollFailed')
+          connectorId,
+          error instanceof Error ? error.message : t('magnet.platform-login.error.pollFailed')
         );
       } finally {
-        setBusy(false);
+        setBusyConnectorId(null);
       }
     },
-    [activeConnectorId, busy, qrSessionsByConnectorId, t]
+    [busyConnectorId, qrSessionsByConnectorId, refreshAuthSnapshot, setConnectorRegistered, t]
   );
 
   useEffect(() => {
-    if (!authPopupVisible) return;
-    if (!activeConnectorId) return;
-    if (!activeQrSession?.sessionId) return;
+    if (!authPopupOpen || !selectedConnectorId || !activeQrSession?.sessionId) return;
 
     const timer = window.setInterval(() => {
-      void runPoll(activeQrSession.sessionId, activeConnectorId);
+      void runPoll(selectedConnectorId, activeQrSession.sessionId);
     }, skinProps.qrAutoPollIntervalMs || PLATFORM_LOGIN_DEFAULT_QR_AUTO_POLL_INTERVAL_MS);
 
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeConnectorId, activeQrSession?.sessionId, authPopupVisible, runPoll, skinProps.qrAutoPollIntervalMs]);
-
-  const handleToggleSelector = (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    setSelectorOpen((prev) => {
-      const next = !prev;
-      if (!next) {
-        setAuthPopupOpen(false);
-        setSelectedPlatformId(null);
-        return next;
-      }
-
-      const nextPlatformId = preferredPlatformId ?? selectedPlatformItem?.id ?? null;
-      setSelectedPlatformId(nextPlatformId);
-      const nextPlatformItem = platformItems.find((item) => item.id === nextPlatformId) ?? null;
-      setAuthPopupOpen(Boolean(skinProps.openAuthOnTrigger && nextPlatformItem?.enabled));
-      return next;
-    });
-  };
-
-  const handleSelectPlatform = useCallback(
-    (item: PlatformSelectorItem) => {
-      setSelectedPlatformId(item.id);
-      if (!item.enabled) {
-        setAuthPopupOpen(false);
-        updateConnectorScopedValue(
-          setStatusMessagesByConnectorId,
-          item.id,
-          t('magnet.platform-login.status.comingSoon')
-        );
-        return;
-      }
-
-      updateConnectorScopedValue(setErrorsByConnectorId, item.id, null);
-      updateConnectorScopedValue(setStatusMessagesByConnectorId, item.id, null);
-      setAuthPopupOpen(true);
-    },
-    [t]
-  );
+  }, [activeQrSession?.sessionId, authPopupOpen, runPoll, selectedConnectorId, skinProps.qrAutoPollIntervalMs]);
 
   const handleGenerateQr = useCallback(async () => {
-    const connectorId = (activeConnectorId ?? '').trim();
-    if (!connectorId || busy) return;
-    setBusy(true);
+    if (!selectedConnectorId || activeBusy) return;
+    setBusyConnectorId(selectedConnectorId);
 
     try {
-      const session = await beginPlatformQrLogin(connectorId);
+      const session = await beginPlatformQrLogin(selectedConnectorId);
       if (!session) {
         updateConnectorScopedValue(
           setErrorsByConnectorId,
-          connectorId,
+          selectedConnectorId,
           t('magnet.platform-login.error.generateFailed')
         );
         return;
       }
 
-      updateConnectorScopedValue(setQrSessionsByConnectorId, connectorId, session);
-      updateConnectorScopedValue(setPollResultsByConnectorId, connectorId, null);
-      updateConnectorScopedValue(setErrorsByConnectorId, connectorId, null);
+      updateConnectorScopedValue(setQrSessionsByConnectorId, selectedConnectorId, session);
+      updateConnectorScopedValue(setPollResultsByConnectorId, selectedConnectorId, null);
+      updateConnectorScopedValue(setErrorsByConnectorId, selectedConnectorId, null);
       updateConnectorScopedValue(
         setStatusMessagesByConnectorId,
-        connectorId,
+        selectedConnectorId,
         t('magnet.platform-login.status.generated')
       );
-      await refreshAuthSnapshot(connectorId);
-    } catch (err) {
+      await refreshAuthSnapshot(selectedConnectorId);
+    } catch (error) {
       updateConnectorScopedValue(
         setErrorsByConnectorId,
-        connectorId,
-        err instanceof Error ? err.message : t('magnet.platform-login.error.generateFailed')
+        selectedConnectorId,
+        error instanceof Error ? error.message : t('magnet.platform-login.error.generateFailed')
       );
     } finally {
-      setBusy(false);
+      setBusyConnectorId(null);
     }
-  }, [activeConnectorId, busy, refreshAuthSnapshot, t]);
+  }, [activeBusy, refreshAuthSnapshot, selectedConnectorId, t]);
 
-  const handleLogout = useCallback(async () => {
-    const connectorId = (activeConnectorId ?? '').trim();
-    if (!connectorId || busy) return;
-    setBusy(true);
+  const handleRefreshConnector = useCallback(
+    async (connectorId: PlatformConnectorId) => {
+      if (busyConnectorId) return;
+      setBusyConnectorId(connectorId);
+      try {
+        await refreshAuthSnapshot(connectorId);
+        updateConnectorScopedValue(
+          setStatusMessagesByConnectorId,
+          connectorId,
+          t('magnet.platform-login.status.refreshed')
+        );
+      } catch (error) {
+        updateConnectorScopedValue(
+          setErrorsByConnectorId,
+          connectorId,
+          error instanceof Error ? error.message : t('magnet.platform-login.error.refreshFailed')
+        );
+      } finally {
+        setBusyConnectorId(null);
+      }
+    },
+    [busyConnectorId, refreshAuthSnapshot, t]
+  );
 
-    try {
-      const snapshot = await logoutPlatformConnector(connectorId);
-      updateConnectorScopedValue(setAuthSnapshotsByConnectorId, connectorId, snapshot);
-      updateConnectorScopedValue(setQrSessionsByConnectorId, connectorId, null);
-      updateConnectorScopedValue(setPollResultsByConnectorId, connectorId, null);
-      updateConnectorScopedValue(setErrorsByConnectorId, connectorId, null);
-      updateConnectorScopedValue(
-        setStatusMessagesByConnectorId,
-        connectorId,
-        t('magnet.platform-login.status.loggedOut')
-      );
-    } catch (err) {
-      updateConnectorScopedValue(
-        setErrorsByConnectorId,
-        connectorId,
-        err instanceof Error ? err.message : t('magnet.platform-login.error.logoutFailed')
-      );
-    } finally {
-      setBusy(false);
-    }
-  }, [activeConnectorId, busy, t]);
+  const handleLogout = useCallback(
+    async (connectorId: PlatformConnectorId) => {
+      if (busyConnectorId) return;
+      setBusyConnectorId(connectorId);
 
-  const selectedPlatformLabelKey = selectedPlatformItem?.labelKey ?? 'magnet.platform-login.platform.bilibili';
+      try {
+        const snapshot = await logoutPlatformConnector(connectorId);
+        updateConnectorScopedValue(setAuthSnapshotsByConnectorId, connectorId, snapshot);
+        updateConnectorScopedValue(setQrSessionsByConnectorId, connectorId, null);
+        updateConnectorScopedValue(setPollResultsByConnectorId, connectorId, null);
+        updateConnectorScopedValue(setErrorsByConnectorId, connectorId, null);
+        updateConnectorScopedValue(
+          setStatusMessagesByConnectorId,
+          connectorId,
+          t('magnet.platform-login.status.loggedOut')
+        );
+      } catch (error) {
+        updateConnectorScopedValue(
+          setErrorsByConnectorId,
+          connectorId,
+          error instanceof Error ? error.message : t('magnet.platform-login.error.logoutFailed')
+        );
+      } finally {
+        setBusyConnectorId(null);
+      }
+    },
+    [busyConnectorId, t]
+  );
+
+  const handleClearCookies = useCallback(
+    async (connectorId: PlatformConnectorId) => {
+      if (busyConnectorId) return;
+      setBusyConnectorId(connectorId);
+
+      try {
+        const snapshot = await clearPlatformConnectorCookies(connectorId);
+        updateConnectorScopedValue(setAuthSnapshotsByConnectorId, connectorId, snapshot);
+        updateConnectorScopedValue(setQrSessionsByConnectorId, connectorId, null);
+        updateConnectorScopedValue(setPollResultsByConnectorId, connectorId, null);
+        updateConnectorScopedValue(setErrorsByConnectorId, connectorId, null);
+        updateConnectorScopedValue(
+          setStatusMessagesByConnectorId,
+          connectorId,
+          t('magnet.platform-login.status.cookiesCleared')
+        );
+      } catch (error) {
+        updateConnectorScopedValue(
+          setErrorsByConnectorId,
+          connectorId,
+          error instanceof Error ? error.message : t('magnet.platform-login.error.clearCookiesFailed')
+        );
+      } finally {
+        setBusyConnectorId(null);
+      }
+    },
+    [busyConnectorId, t]
+  );
+
+  const activeConnectorLabel = activeConnectorDefinition
+    ? t(activeConnectorDefinition.labelKey)
+    : t('magnet.platform-login.trigger.title');
   const authStateLabel = useMemo(
     () => t(toAuthLabelKey(activeAuthSnapshot?.authState ?? 'unauthorized')),
     [activeAuthSnapshot?.authState, t]
@@ -437,133 +702,379 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     [activeAuthSnapshot?.availability, t]
   );
 
+  const contextMenuConnector = contextMenuState
+    ? registeredConnectors.find((item) => item.entry.connectorId === contextMenuState.connectorId) ?? null
+    : null;
+  const contextMenuStateType =
+    contextMenuConnector &&
+    resolveManagedConnectorState(contextMenuConnector.definition, contextMenuConnector.snapshot);
+
   return (
     <>
-      <div className="platform-login-magnet" ref={triggerRef}>
-        <button
-          className="platform-login-trigger"
-          title={t('magnet.platform-login.trigger.title')}
-          onClick={handleToggleSelector}
-        >
-          <span className="platform-login-trigger-icon" aria-hidden="true">
-            <BilibiliBrandIcon />
-          </span>
-        </button>
+      <div className="platform-login-magnet" ref={rootRef}>
+        <div className="platform-login-shell">
+          <button
+            type="button"
+            ref={triggerButtonRef}
+            className={`platform-login-trigger${stripOpen ? ' platform-login-trigger--open' : ''}`}
+            title={t('magnet.platform-login.trigger.title')}
+            onClick={handleToggleStrip}
+          >
+            <QrCode className="platform-login-trigger-icon" />
+          </button>
+        </div>
       </div>
 
       <CollisionAwarePopup
-        ref={selectorPopupRef}
-        open={selectorOpen}
-        anchorRef={triggerRef}
-        placement="bottom-start"
-        offset={8}
+        ref={stripPopupRef}
+        open={stripOpen}
+        anchorRef={triggerButtonRef}
+        placement="right-center"
+        offset={12}
         viewportPadding={10}
-        className="platform-login-selector-popup"
+        className="platform-login-strip-popup"
+        role="dialog"
+      >
+        <div className="platform-login-strip">
+          {registeredConnectors.map(({ definition, snapshot }) => {
+            const visualState = resolveManagedConnectorState(definition, snapshot);
+            const tooltipTitle = `${t(definition.labelKey)}\n${t(resolveStateHintKey(visualState))}`;
+
+            return (
+              <button
+                key={definition.connectorId}
+                type="button"
+                ref={(node) => {
+                  connectorButtonRefs.current[definition.connectorId] = node;
+                }}
+                className={`platform-login-connector-button platform-login-connector-button--${visualState}`}
+                title={tooltipTitle}
+                onClick={() => handleConnectorActivate(definition)}
+                onContextMenu={(event) => handleConnectorContextMenu(event, definition.connectorId)}
+              >
+                <ConnectorGlyph definition={definition} />
+                <span className={`platform-login-connector-dot platform-login-connector-dot--${visualState}`} />
+                <span className="platform-login-connector-tooltip" role="tooltip">
+                  <span className="platform-login-connector-tooltip-title">{t(definition.labelKey)}</span>
+                  <span className="platform-login-connector-tooltip-subtitle">
+                    {t(resolveStateHintKey(visualState))}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+
+          <button
+            type="button"
+            ref={moreButtonRef}
+            className={`platform-login-more-button${registerMenuOpen ? ' platform-login-more-button--open' : ''}`}
+            title={t('magnet.platform-login.action.register')}
+            onClick={handleRegisterMenuToggle}
+          >
+            <MoreHorizontal className="platform-login-more-icon" />
+          </button>
+        </div>
+      </CollisionAwarePopup>
+
+      <CollisionAwarePopup
+        ref={registerPopupRef}
+        open={registerMenuOpen}
+        anchorRef={{ current: moreButtonRef.current }}
+        placement="bottom-start"
+        offset={10}
+        viewportPadding={10}
+        className="platform-login-menu-popup"
         role="dialog"
       >
         {skinProps.showSelectorTitle ? (
-          <div className="platform-login-selector-title">
-            {t('magnet.platform-login.selector.title')}
-          </div>
+          <div className="platform-login-menu-title">{t('magnet.platform-login.add.title')}</div>
         ) : null}
 
-        <div className="platform-login-platform-list">
-          {platformItems.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`platform-login-platform-item ${
-                selectedPlatformId === item.id ? 'platform-login-platform-item--active' : ''
-              }`}
-              disabled={!item.enabled}
-              onClick={() => handleSelectPlatform(item)}
-            >
-              <span className="platform-login-platform-icon" aria-hidden="true">
-                {item.icon}
-              </span>
-              <span className="platform-login-platform-label">{t(item.labelKey)}</span>
-            </button>
-          ))}
-        </div>
-
-        {activeStatusMessage ? <p className="platform-login-status">{activeStatusMessage}</p> : null}
+        {unregisteredDefinitions.length > 0 ? (
+          <div className="platform-login-register-list">
+            {unregisteredDefinitions.map((definition) => (
+              <button
+                key={definition.connectorId}
+                type="button"
+                className="platform-login-register-item"
+                disabled={!definition.enabled || definition.authFlow !== 'qr'}
+                onClick={() => {
+                  void handleRegisterConnector(definition);
+                }}
+              >
+                <ConnectorGlyph definition={definition} compact />
+                <span className="platform-login-register-copy">
+                  <span className="platform-login-register-label">{t(definition.labelKey)}</span>
+                  <span className="platform-login-register-hint">
+                    {definition.enabled && definition.authFlow === 'qr'
+                      ? t('magnet.platform-login.add.ready')
+                      : t('magnet.platform-login.status.comingSoon')}
+                  </span>
+                </span>
+                <Plus className="platform-login-register-plus" />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="platform-login-empty-state">{t('magnet.platform-login.add.empty')}</div>
+        )}
       </CollisionAwarePopup>
 
       <CollisionAwarePopup
         ref={authPopupRef}
-        open={authPopupVisible}
-        anchorRef={triggerRef}
+        open={authPopupOpen && Boolean(activeConnectorDefinition)}
+        anchorRef={{
+          current:
+            (selectedConnectorId ? connectorButtonRefs.current[selectedConnectorId] : null) ??
+            triggerButtonRef.current ??
+            rootRef.current,
+        }}
         placement="bottom-start"
-        offset={10}
+        offset={12}
         viewportPadding={10}
         className="platform-login-auth-popup"
         role="dialog"
       >
-        <div className="platform-login-auth-title">
-          {t('magnet.platform-login.popup.title', {
-            platform: t(selectedPlatformLabelKey),
-          })}
-        </div>
+        {activeConnectorDefinition ? (
+          <>
+            <div className="platform-login-auth-header">
+              <div className="platform-login-auth-brand">
+                <ConnectorGlyph definition={activeConnectorDefinition} compact />
+                <div className="platform-login-auth-copy">
+                  <div className="platform-login-auth-title">
+                    {t('magnet.platform-login.popup.title', {
+                      platform: activeConnectorLabel,
+                    })}
+                  </div>
+                  <div className="platform-login-auth-state-line">
+                    {t('magnet.platform-login.auth.line', {
+                      state: authStateLabel,
+                      accountUid: activeAuthSnapshot?.accountUid ?? '-',
+                    })}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="platform-login-inline-close"
+                onClick={() => setAuthPopupOpen(false)}
+                title={t('common.action.close')}
+              >
+                <X className="platform-login-inline-close-icon" />
+              </button>
+            </div>
 
-        <p className="platform-login-auth-line">
-          {t('magnet.platform-login.auth.line', {
-            state: authStateLabel,
-            accountUid: activeAuthSnapshot?.accountUid ?? '-',
-          })}
-        </p>
-        <p className="platform-login-auth-line">
-          {t('magnet.platform-login.availability.line', {
-            availability: availabilityLabel,
-            message: activeAuthSnapshot?.availabilityMessage ?? t('magnet.platform-login.availability.none'),
-          })}
-        </p>
-
-        <div className="platform-login-actions">
-          <button type="button" onClick={() => void handleGenerateQr()} disabled={busy}>
-            {t('magnet.platform-login.action.generate')}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              void runPoll();
-            }}
-            disabled={busy || !activeQrSession}
-          >
-            {t('magnet.platform-login.action.poll')}
-          </button>
-          <button type="button" onClick={() => void handleLogout()} disabled={busy}>
-            {t('magnet.platform-login.action.logout')}
-          </button>
-        </div>
-
-        {activeQrSession ? (
-          <div className="platform-login-qr-card">
-            <img
-              src={activeQrSession.qrImageDataUrl}
-              alt={t('magnet.platform-login.qr.alt')}
-              className="platform-login-qr-image"
-            />
-            <p className="platform-login-qr-hint">{t('magnet.platform-login.qr.hint')}</p>
-            <p className="platform-login-qr-expire">
-              {t('magnet.platform-login.qr.expiresAt', {
-                expiresAt: new Date(activeQrSession.expiresAtMs).toLocaleString(),
+            <p className="platform-login-auth-line">
+              {t('magnet.platform-login.availability.line', {
+                availability: availabilityLabel,
+                message:
+                  activeAuthSnapshot?.availabilityMessage ??
+                  t('magnet.platform-login.availability.none'),
               })}
             </p>
-          </div>
-        ) : (
-          <p className="platform-login-empty">{t('magnet.platform-login.qr.empty')}</p>
-        )}
 
-        {activePollResult ? (
-          <p className="platform-login-poll-result">
-            {t('magnet.platform-login.status.pollState', {
-              state: activePollResult.state,
-              message: activePollResult.stateMessage,
-            })}
-          </p>
+            <div className="platform-login-actions">
+              <button type="button" onClick={() => void handleGenerateQr()} disabled={activeBusy}>
+                {t('magnet.platform-login.action.generate')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedConnectorId) {
+                    void runPoll(selectedConnectorId);
+                  }
+                }}
+                disabled={activeBusy || !activeQrSession || !selectedConnectorId}
+              >
+                {t('magnet.platform-login.action.poll')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedConnectorId) {
+                    void handleRefreshConnector(selectedConnectorId);
+                  }
+                }}
+                disabled={activeBusy || !selectedConnectorId}
+              >
+                {t('magnet.platform-login.action.refresh')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedConnectorId) {
+                    void handleClearCookies(selectedConnectorId);
+                  }
+                }}
+                disabled={activeBusy || !selectedConnectorId}
+              >
+                {t('magnet.platform-login.action.clearCookies')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedConnectorId) {
+                    void handleLogout(selectedConnectorId);
+                  }
+                }}
+                disabled={activeBusy || !selectedConnectorId}
+              >
+                {t('magnet.platform-login.action.logout')}
+              </button>
+            </div>
+
+            {activeQrSession ? (
+              <div className="platform-login-qr-card">
+                <img
+                  src={activeQrSession.qrImageDataUrl}
+                  alt={t('magnet.platform-login.qr.alt')}
+                  className="platform-login-qr-image"
+                />
+                <p className="platform-login-qr-hint">{t('magnet.platform-login.qr.hint')}</p>
+                <p className="platform-login-qr-expire">
+                  {t('magnet.platform-login.qr.expiresAt', {
+                    expiresAt: new Date(activeQrSession.expiresAtMs).toLocaleString(),
+                  })}
+                </p>
+              </div>
+            ) : (
+              <p className="platform-login-empty-state">{t('magnet.platform-login.qr.empty')}</p>
+            )}
+
+            {activePollResult ? (
+              <p className="platform-login-poll-result">
+                {t('magnet.platform-login.status.pollState', {
+                  state: activePollResult.state,
+                  message: activePollResult.stateMessage,
+                })}
+              </p>
+            ) : null}
+
+            {activeStatusMessage ? <p className="platform-login-status">{activeStatusMessage}</p> : null}
+            {activeError ? <p className="platform-login-error">{activeError}</p> : null}
+          </>
         ) : null}
+      </CollisionAwarePopup>
 
-        {activeError ? <p className="platform-login-error">{activeError}</p> : null}
+      {contextMenuState ? (
+        <div
+          ref={contextAnchorRef}
+          style={{
+            position: 'fixed',
+            left: contextMenuState.x,
+            top: contextMenuState.y,
+            width: 1,
+            height: 1,
+            pointerEvents: 'none',
+          }}
+        />
+      ) : null}
+
+      <CollisionAwarePopup
+        ref={contextPopupRef}
+        open={Boolean(contextMenuState && contextMenuConnector)}
+        anchorRef={{ current: contextAnchorRef.current }}
+        placement="bottom-start"
+        offset={6}
+        viewportPadding={10}
+        className="platform-login-menu-popup"
+        role="dialog"
+      >
+        {contextMenuConnector ? (
+          <>
+            <div className="platform-login-menu-title">
+              {t('magnet.platform-login.manage.title', {
+                platform: t(contextMenuConnector.definition.labelKey),
+              })}
+            </div>
+
+            <button
+              type="button"
+              className="platform-login-menu-action"
+              onClick={() => {
+                setContextMenuState(null);
+                if (contextMenuStateType === 'disabled') {
+                  updateConnectorScopedValue(
+                    setStatusMessagesByConnectorId,
+                    contextMenuConnector.definition.connectorId,
+                    t('magnet.platform-login.status.comingSoon')
+                  );
+                  return;
+                }
+                openAuthPopup(contextMenuConnector.definition.connectorId);
+              }}
+            >
+              <span className="platform-login-menu-action-icon" aria-hidden="true">
+                <QrCode className="platform-login-menu-action-icon-svg" />
+              </span>
+              <span>
+                {t(
+                  contextMenuStateType === 'unauthorized'
+                    ? 'magnet.platform-login.action.login'
+                    : 'magnet.platform-login.action.viewStatus'
+                )}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className="platform-login-menu-action"
+              onClick={() => {
+                setContextMenuState(null);
+                void handleRefreshConnector(contextMenuConnector.definition.connectorId);
+              }}
+            >
+              <span className="platform-login-menu-action-icon" aria-hidden="true">
+                <RefreshCw className="platform-login-menu-action-icon-svg" />
+              </span>
+              <span>{t('magnet.platform-login.action.refresh')}</span>
+            </button>
+
+            <button
+              type="button"
+              className="platform-login-menu-action"
+              onClick={() => {
+                setContextMenuState(null);
+                void handleLogout(contextMenuConnector.definition.connectorId);
+              }}
+            >
+              <span className="platform-login-menu-action-icon" aria-hidden="true">
+                <LogOut className="platform-login-menu-action-icon-svg" />
+              </span>
+              <span>{t('magnet.platform-login.action.logout')}</span>
+            </button>
+
+            <button
+              type="button"
+              className="platform-login-menu-action"
+              onClick={() => {
+                setContextMenuState(null);
+                void handleClearCookies(contextMenuConnector.definition.connectorId);
+              }}
+            >
+              <span className="platform-login-menu-action-icon" aria-hidden="true">
+                <X className="platform-login-menu-action-icon-svg" />
+              </span>
+              <span>{t('magnet.platform-login.action.clearCookies')}</span>
+            </button>
+
+            <div className="platform-login-menu-separator" />
+
+            <button
+              type="button"
+              className="platform-login-menu-action platform-login-menu-action--danger"
+              onClick={() => {
+                setContextMenuState(null);
+                removeConnectorRegistration(contextMenuConnector.definition.connectorId);
+              }}
+            >
+              <span className="platform-login-menu-action-icon" aria-hidden="true">
+                <X className="platform-login-menu-action-icon-svg" />
+              </span>
+              <span>{t('magnet.platform-login.action.removeRegistration')}</span>
+            </button>
+          </>
+        ) : null}
       </CollisionAwarePopup>
     </>
   );

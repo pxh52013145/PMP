@@ -257,6 +257,15 @@ pub async fn music_library_bilibili_logout(
 }
 
 #[tauri::command]
+pub async fn music_library_bilibili_clear_auth_cookies(
+    app: tauri::AppHandle,
+) -> Result<music_platform_bilibili::BilibiliAuthStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || music_platform_bilibili::clear_auth_cookies(&app))
+        .await
+        .map_err(|e| format!("Bilibili clear auth cookies task failed: {e}"))?
+}
+
+#[tauri::command]
 pub async fn music_library_bilibili_list_favorite_folders(
     app: tauri::AppHandle,
 ) -> Result<Vec<music_platform_bilibili::BilibiliFavoriteFolder>, String> {
@@ -406,6 +415,15 @@ pub async fn music_library_netease_logout(
     tauri::async_runtime::spawn_blocking(move || music_platform_netease::logout(&app))
         .await
         .map_err(|e| format!("Netease logout task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_netease_clear_auth_cookies(
+    app: tauri::AppHandle,
+) -> Result<music_platform_netease::NeteaseAuthStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || music_platform_netease::clear_auth_cookies(&app))
+        .await
+        .map_err(|e| format!("Netease clear auth cookies task failed: {e}"))?
 }
 
 #[tauri::command]

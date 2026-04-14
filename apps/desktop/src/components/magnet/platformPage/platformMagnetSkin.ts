@@ -3,7 +3,7 @@ import { readBooleanProp, readEnumProp, readIntegerProp } from '../shared/skinPr
 
 export const PLATFORM_MAGNET_DEFAULT_SEARCH_LIMIT = 30;
 
-const PLATFORM_MAGNET_DEFAULT_MODES = ['generic', 'bilibili', 'netease', 'qqmusic'] as const;
+const PLATFORM_MAGNET_DEFAULT_MODES = ['generic', 'bilibili', 'netease'] as const;
 
 export type PlatformMagnetDefaultMode = (typeof PLATFORM_MAGNET_DEFAULT_MODES)[number];
 

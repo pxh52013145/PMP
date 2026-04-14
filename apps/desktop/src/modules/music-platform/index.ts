@@ -1,6 +1,7 @@
 export {
   beginPlatformQrLogin,
   beginBilibiliQrLogin,
+  clearPlatformConnectorCookies,
   emitPlatformConnectorAuthChanged,
   getPlatformConnectorAuthSnapshot,
   getBilibiliConnectorAuthSnapshot,

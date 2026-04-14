@@ -2225,6 +2225,61 @@ pub fn logout(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
     get_auth_status(app)
 }
 
+pub fn clear_auth_cookies(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
+    init_netease_debug_logging(app);
+    ensure_connector(app)?;
+    netease_log("clear_auth_cookies", "starting clear auth cookies");
+
+    if let Some(account) = crate::music_library_db::get_latest_connector_account_by_connector_id(
+        app,
+        NETEASE_CONNECTOR_ID,
+    )? {
+        if let Some(token_ref) = account.token_ref.as_deref() {
+            match delete_cookie_header_from_keyring_token_ref(token_ref) {
+                Ok(_) => netease_log(
+                    "clear_auth_cookies",
+                    format!(
+                        "deleted keyring credential id={} token_ref={}",
+                        redact_identifier(&account.id),
+                        summarize_token_ref(Some(token_ref))
+                    ),
+                ),
+                Err(error) => netease_log(
+                    "clear_auth_cookies",
+                    format!(
+                        "failed to delete keyring credential id={} token_ref={} error={error}",
+                        redact_identifier(&account.id),
+                        summarize_token_ref(Some(token_ref))
+                    ),
+                ),
+            }
+        }
+
+        let _ = crate::music_library_db::upsert_connector_account(
+            app,
+            crate::music_library_db::LibraryConnectorAccountUpsertInput {
+                id: account.id,
+                connector_id: NETEASE_CONNECTOR_ID.to_string(),
+                account_uid: account.account_uid,
+                auth_state: "expired".to_string(),
+                token_ref: None,
+                refresh_token_ref: None,
+                expires_at_ms: None,
+                created_at_ms: Some(account.created_at_ms),
+                updated_at_ms: Some(now_ms()),
+            },
+        );
+    }
+
+    if let Ok(mut sessions) = lock_qr_sessions() {
+        sessions.clear();
+    }
+    clear_auth_cookie_state();
+    netease_log("clear_auth_cookies", "cleared in-memory auth and qr sessions");
+
+    get_auth_status(app)
+}
+
 pub fn list_user_playlists(app: &AppHandle) -> Result<Vec<NeteaseUserPlaylist>, String> {
     ensure_connector(app)?;
     let auth_context = ensure_auth_context(app)?;

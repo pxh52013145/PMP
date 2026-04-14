@@ -1,4 +1,6 @@
 import {
+  clearNativeBilibiliAuthCookies,
+  clearNativeNeteaseAuthCookies,
   generateNativeBilibiliQrCodeSession,
   getNativeBilibiliAuthStatus,
   generateNativeNeteaseQrCodeSession,
@@ -86,6 +88,7 @@ export interface PlatformConnectorAdapter {
   beginQrLogin?: () => Promise<PlatformQrLoginSession | null>;
   pollQrLogin?: (sessionId: string) => Promise<PlatformQrLoginPollResult | null>;
   logout?: () => Promise<PlatformConnectorAuthSnapshot | null>;
+  clearAuthCookies?: () => Promise<PlatformConnectorAuthSnapshot | null>;
 }
 
 export const PLATFORM_CONNECTOR_AUTH_CHANGED_EVENT =
@@ -291,6 +294,7 @@ function createPassiveAdapter(definition: PlatformConnectorDefinition): Platform
     beginQrLogin: async () => null,
     pollQrLogin: async () => null,
     logout: async () => createUnsupportedSnapshot(definition),
+    clearAuthCookies: async () => createUnsupportedSnapshot(definition),
   };
 }
 
@@ -327,6 +331,13 @@ function createBilibiliAdapter(): PlatformConnectorAdapter {
     },
     logout: async () => {
       const snapshot = mapBilibiliAuthStatus(await logoutNativeBilibili());
+      if (snapshot) {
+        emitPlatformConnectorAuthChanged(snapshot);
+      }
+      return snapshot;
+    },
+    clearAuthCookies: async () => {
+      const snapshot = mapBilibiliAuthStatus(await clearNativeBilibiliAuthCookies());
       if (snapshot) {
         emitPlatformConnectorAuthChanged(snapshot);
       }
@@ -370,6 +381,14 @@ function createNeteaseAdapter(): PlatformConnectorAdapter {
     logout: async () => {
       clearNeteaseFacadeCaches();
       const snapshot = mapNeteaseAuthStatus(await logoutNativeNetease());
+      if (snapshot) {
+        emitPlatformConnectorAuthChanged(snapshot);
+      }
+      return snapshot;
+    },
+    clearAuthCookies: async () => {
+      clearNeteaseFacadeCaches();
+      const snapshot = mapNeteaseAuthStatus(await clearNativeNeteaseAuthCookies());
       if (snapshot) {
         emitPlatformConnectorAuthChanged(snapshot);
       }
@@ -503,6 +522,15 @@ export async function logoutPlatformConnector(
   const adapter = getPlatformConnectorAdapter(connectorId);
   if (!adapter || typeof adapter.logout !== 'function') return null;
   const snapshot = await adapter.logout();
+  return snapshot ?? createUnsupportedSnapshot(adapter.definition);
+}
+
+export async function clearPlatformConnectorCookies(
+  connectorId: string
+): Promise<PlatformConnectorAuthSnapshot | null> {
+  const adapter = getPlatformConnectorAdapter(connectorId);
+  if (!adapter || typeof adapter.clearAuthCookies !== 'function') return null;
+  const snapshot = await adapter.clearAuthCookies();
   return snapshot ?? createUnsupportedSnapshot(adapter.definition);
 }
 

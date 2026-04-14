@@ -1,8 +1,10 @@
 export {
   cleanupNativeLibrarySourceTracks,
+  clearNativeBilibiliAuthCookies,
   clearNativeLibraryPlaylistItems,
   clearNativeLibrarySyncFailedSources,
   clearNativeLibraryTracks,
+  clearNativeNeteaseAuthCookies,
   getNativeLibrarySyncFailureOverview,
   getNativeLibrarySyncSchedulerStatus,
   getNativeLibrarySyncStatus,

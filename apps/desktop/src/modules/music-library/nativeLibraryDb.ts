@@ -2841,6 +2841,22 @@ export async function logoutNativeBilibili(): Promise<NativeBilibiliAuthStatus |
   return ensureBilibiliAuthStatus(raw);
 }
 
+export async function clearNativeBilibiliAuthCookies(): Promise<NativeBilibiliAuthStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invokeWithTelemetry<unknown>(
+    'music_library_bilibili_clear_auth_cookies',
+    undefined,
+    {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.bilibili.clear-auth-cookies',
+      includeResultSize: true,
+      failureLevel: 'warn',
+    }
+  ).catch(() => null);
+  return ensureBilibiliAuthStatus(raw);
+}
+
 export async function listNativeBilibiliFavoriteFolders(): Promise<NativeBilibiliFavoriteFolder[]> {
   if (!isTauriRuntime()) return [];
   const raw = await invoke<unknown>('music_library_bilibili_list_favorite_folders').catch(() => null);
@@ -3063,6 +3079,22 @@ export async function logoutNativeNetease(): Promise<NativeNeteaseAuthStatus | n
     includeResultSize: true,
     failureLevel: 'warn',
   }).catch(() => null);
+  return ensureNeteaseAuthStatus(raw);
+}
+
+export async function clearNativeNeteaseAuthCookies(): Promise<NativeNeteaseAuthStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invokeWithTelemetry<unknown>(
+    'music_library_netease_clear_auth_cookies',
+    undefined,
+    {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.netease.clear-auth-cookies',
+      includeResultSize: true,
+      failureLevel: 'warn',
+    }
+  ).catch(() => null);
   return ensureNeteaseAuthStatus(raw);
 }
 
