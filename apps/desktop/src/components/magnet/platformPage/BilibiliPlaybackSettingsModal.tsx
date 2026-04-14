@@ -6,8 +6,7 @@ import { PmpButton, PmpDialog } from '../../primitives';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
 
-type BilibiliPlaybackSettingsModalProps = {
-  open: boolean;
+export type BilibiliPlaybackSettingsContentProps = {
   t: Translator;
   bilibiliAuthorized: boolean;
   normalizedPlaybackQualityHint: string;
@@ -17,7 +16,6 @@ type BilibiliPlaybackSettingsModalProps = {
   qualityProbeSourceLocator: string | null;
   availablePlaybackQualityLabel: string;
   qualityLabelForKey: (qualityKey: string) => string;
-  onClose: () => void;
   onQualityHintChange: (qualityKey: string) => void;
   onBilibiliThemePreferenceChange: (themePreference: string) => void;
   onRefreshQualityOptions: () => void;
@@ -33,9 +31,13 @@ type BilibiliPlaybackSettingsModalProps = {
   onResetPlaybackCachePath: () => void;
 };
 
-export function BilibiliPlaybackSettingsModal(props: BilibiliPlaybackSettingsModalProps) {
+type BilibiliPlaybackSettingsModalProps = BilibiliPlaybackSettingsContentProps & {
+  open: boolean;
+  onClose: () => void;
+};
+
+export function BilibiliPlaybackSettingsContent(props: BilibiliPlaybackSettingsContentProps) {
   const {
-    open,
     t,
     bilibiliAuthorized,
     normalizedPlaybackQualityHint,
@@ -45,7 +47,6 @@ export function BilibiliPlaybackSettingsModal(props: BilibiliPlaybackSettingsMod
     qualityProbeSourceLocator,
     availablePlaybackQualityLabel,
     qualityLabelForKey,
-    onClose,
     onQualityHintChange,
     onBilibiliThemePreferenceChange,
     onRefreshQualityOptions,
@@ -62,21 +63,7 @@ export function BilibiliPlaybackSettingsModal(props: BilibiliPlaybackSettingsMod
   } = props;
 
   return (
-    <PmpDialog
-      open={open}
-      title={<h4>{t('magnet.platform.bilibili.settings.title')}</h4>}
-      overlaySurfaceId="overlay.modal"
-      dialogSurfaceId="primitive.dialog.default"
-      overlayClassName="platform-magnet-settings-overlay"
-      className="platform-magnet-settings-modal"
-      headerClassName="platform-magnet-panel-header"
-      onClose={onClose}
-      headerActions={
-        <PmpButton type="button" className="platform-magnet-mini-btn" variant="ghost" onClick={onClose}>
-          {t('common.action.done')}
-        </PmpButton>
-      }
-    >
+    <>
       <div className="platform-magnet-settings-row">
         <select
           value={normalizedPlaybackQualityHint}
@@ -224,6 +211,30 @@ export function BilibiliPlaybackSettingsModal(props: BilibiliPlaybackSettingsMod
           <p className="platform-magnet-error">{playbackCacheSettingsError}</p>
         ) : null}
       </div>
+    </>
+  );
+}
+
+export function BilibiliPlaybackSettingsModal(props: BilibiliPlaybackSettingsModalProps) {
+  const { open, t, onClose, ...contentProps } = props;
+
+  return (
+    <PmpDialog
+      open={open}
+      title={<h4>{t('magnet.platform.bilibili.settings.title')}</h4>}
+      overlaySurfaceId="overlay.modal"
+      dialogSurfaceId="primitive.dialog.default"
+      overlayClassName="platform-magnet-settings-overlay"
+      className="platform-magnet-settings-modal"
+      headerClassName="platform-magnet-panel-header"
+      onClose={onClose}
+      headerActions={
+        <PmpButton type="button" className="platform-magnet-mini-btn" variant="ghost" onClick={onClose}>
+          {t('common.action.done')}
+        </PmpButton>
+      }
+    >
+      <BilibiliPlaybackSettingsContent t={t} {...contentProps} />
     </PmpDialog>
   );
 }

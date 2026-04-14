@@ -1,4 +1,6 @@
 import type { BilibiliFavoriteResourceItem } from '../../../modules/music-platform';
+import { Tv } from 'lucide-react';
+import { PlatformResourceCard } from './PlatformResourceCard';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
 type BilibiliQualityBadge = 'dolby' | 'hires';
@@ -12,12 +14,10 @@ type BilibiliResourceGridProps = {
   normalizedPlaybackQualityHint: string;
   resourceCoverUrlMap: Record<string, string>;
   resourceQualityTagMap: Record<string, BilibiliQualityBadge[]>;
-  bvidSearchResultResourceId: string | null;
   resourceGridRef: React.RefObject<HTMLDivElement>;
   resourceLoadMoreSentinelRef: React.RefObject<HTMLDivElement>;
   t: Translator;
   getResourceCacheKey: (item: BilibiliFavoriteResourceItem) => string;
-  getKindLabel: (kind: string) => string;
   getQualityBadgeLabel: (badge: BilibiliQualityBadge) => string;
   formatDuration: (seconds: number | undefined) => string;
   onContextMenu: (item: BilibiliFavoriteResourceItem, event: React.MouseEvent) => void;
@@ -33,12 +33,10 @@ export function BilibiliResourceGrid(props: BilibiliResourceGridProps) {
     normalizedPlaybackQualityHint,
     resourceCoverUrlMap,
     resourceQualityTagMap,
-    bvidSearchResultResourceId,
     resourceGridRef,
     resourceLoadMoreSentinelRef,
     t,
     getResourceCacheKey,
-    getKindLabel,
     getQualityBadgeLabel,
     formatDuration,
     onContextMenu,
@@ -53,54 +51,37 @@ export function BilibiliResourceGrid(props: BilibiliResourceGridProps) {
         const resolvedCoverUrl = resourceCoverUrlMap[resourceCacheKey] || item.coverUrl;
         const qualityBadges = resourceQualityTagMap[resourceCacheKey] ?? [];
         return (
-          <article
+          <PlatformResourceCard
             key={resourceCacheKey}
-            className={`platform-magnet-bilibili-resource-card ${
-              preparing ? 'platform-magnet-bilibili-resource-card--preparing' : ''
-            }`}
-            title={t('magnet.platform.bilibili.resource.contextHint')}
+            accentColor="#67c7ff"
+            coverUrl={resolvedCoverUrl}
+            coverAlt={item.title}
+            coverFallbackLabel="B"
+            title={item.title}
+            subtitle={t('magnet.platform.bilibili.resource.owner', {
+              owner: item.ownerName ?? '-',
+            })}
+            detail={null}
+            durationLabel={formatDuration(item.durationSeconds)}
+            coverBadges={[]}
+            badges={[
+              ...qualityBadges.map((badge) => ({
+                id: `${resourceCacheKey}:quality:${badge}`,
+                label: getQualityBadgeLabel(badge),
+                tone: 'accent' as const,
+              })),
+              {
+                id: `${resourceCacheKey}:platform`,
+                label: 'Bilibili',
+                tone: 'default' as const,
+                compact: true,
+                icon: <Tv className="h-3.5 w-3.5" />,
+              },
+            ]}
+            preparing={preparing}
+            titleHint={t('magnet.platform.bilibili.resource.contextHint')}
             onContextMenu={(event) => onContextMenu(item, event)}
-          >
-            <div className="platform-magnet-bilibili-resource-cover" aria-hidden="true">
-              {resolvedCoverUrl ? <img src={resolvedCoverUrl} alt={item.title} loading="lazy" /> : <span>B</span>}
-              {qualityBadges.length > 0 ? (
-                <div className="platform-magnet-bilibili-resource-quality-tags">
-                  {qualityBadges.map((badge) => (
-                    <span
-                      key={`${resourceCacheKey}:${badge}`}
-                      className="platform-magnet-bilibili-resource-quality-tag"
-                    >
-                      {getQualityBadgeLabel(badge)}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-
-            <div className="platform-magnet-bilibili-resource-main">
-              <p className="platform-magnet-bilibili-resource-title">{item.title}</p>
-              <p className="platform-magnet-bilibili-resource-meta">
-                {t('magnet.platform.bilibili.resource.meta', {
-                  owner: item.ownerName ?? '-',
-                  duration: formatDuration(item.durationSeconds),
-                  kind: getKindLabel(item.contentKind),
-                })}
-              </p>
-              <p className="platform-magnet-bilibili-resource-bvid">
-                {item.bvid ? `BV: ${item.bvid}` : item.resourceId}
-              </p>
-              {bvidSearchResultResourceId === item.resourceId ? (
-                <span className="platform-magnet-bilibili-resource-badge">
-                  {t('magnet.platform.bilibili.resource.bvSearchResultTag')}
-                </span>
-              ) : null}
-              {preparing ? (
-                <span className="platform-magnet-bilibili-resource-badge">
-                  {t('magnet.platform.bilibili.resource.actionPreparing')}
-                </span>
-              ) : null}
-            </div>
-          </article>
+          />
         );
       })}
 

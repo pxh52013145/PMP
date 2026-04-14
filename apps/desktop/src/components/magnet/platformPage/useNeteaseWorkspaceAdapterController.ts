@@ -126,6 +126,15 @@ export interface UseNeteaseWorkspaceAdapterControllerParams {
 export interface NeteaseWorkspaceAdapterControllerResult {
   neteaseWorkspaceActive: boolean;
   neteaseUseDarkMode: boolean;
+  neteaseShellSearch: {
+    value: string;
+    placeholder: string;
+    disabled: boolean;
+    loading: boolean;
+    onChange: (value: string) => void;
+    onSubmit: () => void;
+  };
+  openNeteasePlaylistDrawer: () => void;
   neteaseToolbarProps: NeteaseWorkspaceToolbarProps;
   neteaseWorkspaceProps: NeteaseWorkspaceProps;
 }
@@ -421,6 +430,26 @@ export function useNeteaseWorkspaceAdapterController(
     [t]
   );
 
+  const openNeteasePlaylistDrawer = useCallback(() => {
+    if (!neteaseAuthorized) return;
+    setPlaylistDrawerOpen(true);
+    setCollectionDrawerOpen(false);
+  }, [neteaseAuthorized]);
+
+  const neteaseShellSearch = useMemo(
+    () => ({
+      value: searchQuery,
+      placeholder: t('magnet.platform.netease.resource.searchPlaceholder'),
+      disabled: !neteaseAuthorized,
+      loading: resourceLoading,
+      onChange: setSearchQuery,
+      onSubmit: () => {
+        void refreshResources();
+      },
+    }),
+    [neteaseAuthorized, refreshResources, resourceLoading, searchQuery, t]
+  );
+
   const neteaseToolbarProps: NeteaseWorkspaceToolbarProps = {
     neteaseAuthorized,
     collectionLoading,
@@ -533,6 +562,8 @@ export function useNeteaseWorkspaceAdapterController(
   return {
     neteaseWorkspaceActive,
     neteaseUseDarkMode: neteaseWorkspaceActive && prefersDarkMode,
+    neteaseShellSearch,
+    openNeteasePlaylistDrawer,
     neteaseToolbarProps,
     neteaseWorkspaceProps,
   };

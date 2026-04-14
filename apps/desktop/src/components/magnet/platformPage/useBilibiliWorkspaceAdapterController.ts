@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { Playlist, Track } from '../../../services/audio';
+import type { Track } from '../../../services/audio';
 import type { IAudioService } from '../../../services/audio/types';
 import {
+  type BilibiliFavoriteFolderItem,
   listBilibiliPlaybackQualities,
   type BilibiliFavoriteResourceItem,
   type BilibiliPlaybackQualityOption,
@@ -11,7 +12,7 @@ import {
 } from '../../../modules/music-platform';
 import { usePersistentSetting } from '../../../modules/storage';
 import type { BilibiliWorkspaceProps } from './BilibiliWorkspace';
-import type { BilibiliWorkspaceToolbarProps } from './BilibiliWorkspaceAdapter';
+import type { BilibiliPlaybackSettingsContentProps } from './BilibiliPlaybackSettingsModal';
 import { useBilibiliPlaybackCacheSettings } from './useBilibiliPlaybackCacheSettings';
 import { useBilibiliResourceBrowser } from './useBilibiliResourceBrowser';
 import { useBilibiliResourceContextMenu } from './useBilibiliResourceContextMenu';
@@ -46,18 +47,6 @@ const DEFAULT_BILIBILI_QUALITY_OPTIONS: BilibiliPlaybackQualityOption[] =
     label: key,
     available: key === 'auto',
   }));
-
-function toBilibiliKindLabelKey(kind: string): string {
-  const normalized = kind.trim().toLowerCase();
-  switch (normalized) {
-    case 'video':
-      return 'magnet.platform.bilibili.kind.video';
-    case 'audio':
-      return 'magnet.platform.bilibili.kind.audio';
-    default:
-      return 'magnet.platform.bilibili.kind.unknown';
-  }
-}
 
 function toBilibiliQualityLabelKey(key: string): string {
   const normalized = key.trim().toLowerCase();
@@ -195,25 +184,37 @@ function buildTrackFromPreparedPlayback(
 
 export interface UseBilibiliWorkspaceAdapterControllerParams {
   activeWorkspaceConnectorId: string | null;
+  settingsVisible: boolean;
   prefersDarkMode: boolean;
   items: PlatformConnectorFacadeItem[];
   audioService: IAudioService;
   t: Translator;
-  platformPlaylists: Playlist[];
-  selectedPlaylist: Playlist | null;
-  selectedPlaylistId: string | null;
-  newPlaylistName: string;
+  selectedLocalPlaylistId: string | null;
   playlistError: string | null;
-  onCreatePlaylist: () => void;
-  setSelectedPlaylistId: (playlistId: string | null) => void;
-  setNewPlaylistName: (value: string) => void;
   setPlaylistError: (value: string | null) => void;
 }
 
 export interface BilibiliWorkspaceAdapterControllerResult {
   bilibiliWorkspaceActive: boolean;
   bilibiliUseDarkMode: boolean;
-  bilibiliToolbarProps: BilibiliWorkspaceToolbarProps;
+  bilibiliShellSearch: {
+    value: string;
+    placeholder: string;
+    disabled: boolean;
+    loading: boolean;
+    onChange: (value: string) => void;
+    onSubmit: () => void;
+  };
+  bilibiliPreviewFolders: {
+    authorized: boolean;
+    loading: boolean;
+    error: string | null;
+    folders: BilibiliFavoriteFolderItem[];
+    selectedFolderId: string | null;
+    onShowRecommended: () => void;
+    onSelectFolder: (folderId: string) => void;
+  };
+  bilibiliSettingsProps: BilibiliPlaybackSettingsContentProps;
   bilibiliWorkspaceProps: BilibiliWorkspaceProps;
 }
 
@@ -222,18 +223,13 @@ export function useBilibiliWorkspaceAdapterController(
 ): BilibiliWorkspaceAdapterControllerResult {
   const {
     activeWorkspaceConnectorId,
+    settingsVisible,
     prefersDarkMode,
     items,
     audioService,
     t,
-    platformPlaylists,
-    selectedPlaylist,
-    selectedPlaylistId,
-    newPlaylistName,
+    selectedLocalPlaylistId,
     playlistError,
-    onCreatePlaylist,
-    setSelectedPlaylistId,
-    setNewPlaylistName,
     setPlaylistError,
   } = params;
 
@@ -259,7 +255,6 @@ export function useBilibiliWorkspaceAdapterController(
   const [playbackQualityOptions, setPlaybackQualityOptions] = useState<BilibiliPlaybackQualityOption[]>(
     DEFAULT_BILIBILI_QUALITY_OPTIONS
   );
-  const [playbackSettingsOpen, setPlaybackSettingsOpen] = useState(false);
 
   const {
     playbackCacheSettingsLoading,
@@ -274,9 +269,6 @@ export function useBilibiliWorkspaceAdapterController(
     handleSavePlaybackCachePath,
     handleResetPlaybackCachePath,
   } = useBilibiliPlaybackCacheSettings(t);
-
-  const [folderDrawerOpen, setFolderDrawerOpen] = useState(false);
-  const [playlistDrawerOpen, setPlaylistDrawerOpen] = useState(false);
 
   const resourceGridRef = useRef<HTMLDivElement>(null);
   const resourceLoadMoreSentinelRef = useRef<HTMLDivElement>(null);
@@ -294,19 +286,16 @@ export function useBilibiliWorkspaceAdapterController(
     resourcePage,
     resourceFilterQuery,
     setResourceFilterQuery,
-    bvidQuery,
-    setBvidQuery,
     bvidSearching,
     bvidSearchError,
     bvidSearchResult,
     bilibiliResources,
     filteredBilibiliResources,
-    refreshBilibiliFolders,
     refreshBilibiliRecommendedResources,
     searchBilibiliHomepageResources,
     refreshBilibiliResources,
     loadMoreBilibiliResources,
-    handleBvSearch,
+    searchBilibiliResourceByLookupInput,
   } = useBilibiliResourceBrowser({
     bilibiliAuthorized,
     t,
@@ -375,7 +364,7 @@ export function useBilibiliWorkspaceAdapterController(
     audioService,
     normalizedPlaybackQualityHint,
     preferredQualityLabel: preferredPlaybackQualityLabel,
-    selectedPlaylistId,
+    targetPlaylistId: selectedLocalPlaylistId,
     t,
     setResourceError,
     setPlaylistError,
@@ -399,9 +388,9 @@ export function useBilibiliWorkspaceAdapterController(
   }, []);
 
   useEffect(() => {
-    if (!playbackSettingsOpen || !bilibiliWorkspaceActive) return;
+    if (!settingsVisible || !bilibiliAuthorized) return;
     void refreshPlaybackCacheSettings();
-  }, [bilibiliWorkspaceActive, playbackSettingsOpen, refreshPlaybackCacheSettings]);
+  }, [bilibiliAuthorized, refreshPlaybackCacheSettings, settingsVisible]);
 
   useEffect(() => {
     if (!selectedFolderId || !resourcePage?.hasMore) return;
@@ -473,9 +462,6 @@ export function useBilibiliWorkspaceAdapterController(
 
   useEffect(() => {
     if (!bilibiliWorkspaceActive || !bilibiliAuthorized) {
-      setFolderDrawerOpen(false);
-      setPlaylistDrawerOpen(false);
-      setPlaybackSettingsOpen(false);
       setResourceContextMenu(null);
     }
   }, [bilibiliAuthorized, bilibiliWorkspaceActive, setResourceContextMenu]);
@@ -485,27 +471,105 @@ export function useBilibiliWorkspaceAdapterController(
     (normalizedBilibiliThemePreference === 'dark' ||
       (normalizedBilibiliThemePreference === 'auto' && prefersDarkMode));
 
-  const bilibiliToolbarProps: BilibiliWorkspaceToolbarProps = {
-    bvidQuery,
-    bvidSearching,
-    bilibiliAuthorized,
+  const handleBilibiliResourceSearchSubmit = useCallback(() => {
+    void (async () => {
+      const lookupHandled = await searchBilibiliResourceByLookupInput(resourceFilterQuery);
+      if (lookupHandled) return;
+      if (!selectedFolderId) {
+        await searchBilibiliHomepageResources(resourceFilterQuery);
+        return;
+      }
+      await refreshBilibiliResources(selectedFolderId);
+    })();
+  }, [
+    refreshBilibiliResources,
+    resourceFilterQuery,
+    searchBilibiliResourceByLookupInput,
+    searchBilibiliHomepageResources,
+    selectedFolderId,
+  ]);
+
+  const bilibiliShellSearch = useMemo(
+    () => ({
+      value: resourceFilterQuery,
+      placeholder: selectedFolderId
+        ? t('magnet.platform.bilibili.resource.searchPlaceholder')
+        : t('magnet.platform.bilibili.resource.searchPlaceholderHomepage'),
+      disabled: !bilibiliAuthorized,
+      loading: resourceLoading || resourceLoadingMore || bvidSearching,
+      onChange: setResourceFilterQuery,
+      onSubmit: handleBilibiliResourceSearchSubmit,
+    }),
+    [
+      bilibiliAuthorized,
+      bvidSearching,
+      handleBilibiliResourceSearchSubmit,
+      resourceFilterQuery,
+      resourceLoading,
+      resourceLoadingMore,
+      selectedFolderId,
+      setResourceFilterQuery,
+      t,
+    ]
+  );
+
+  const bilibiliPreviewFolders = useMemo(
+    () => ({
+      authorized: bilibiliAuthorized,
+      loading: folderLoading,
+      error: folderError,
+      folders: bilibiliFolders,
+      selectedFolderId,
+      onShowRecommended: () => {
+        setSelectedFolderId(null);
+      },
+      onSelectFolder: (folderId: string) => {
+        setSelectedFolderId(folderId);
+      },
+    }),
+    [bilibiliAuthorized, bilibiliFolders, folderError, folderLoading, selectedFolderId, setSelectedFolderId]
+  );
+
+  const bilibiliSettingsProps: BilibiliPlaybackSettingsContentProps = {
     t,
-    onBvidQueryChange: setBvidQuery,
-    onBvSearch: () => {
-      void handleBvSearch();
+    bilibiliAuthorized,
+    normalizedPlaybackQualityHint,
+    normalizedBilibiliThemePreference,
+    playbackQualityOptions,
+    playbackQualityLoading,
+    qualityProbeSourceLocator,
+    availablePlaybackQualityLabel,
+    qualityLabelForKey: (qualityKey) => t(toBilibiliQualityLabelKey(normalizeBilibiliQualityHint(qualityKey))),
+    onQualityHintChange: (qualityKey) => {
+      setPlaybackQualityHint(normalizeBilibiliQualityHint(qualityKey));
     },
-    onOpenPlaybackSettings: () => {
-      setPlaybackSettingsOpen(true);
+    onBilibiliThemePreferenceChange: (themePreference) => {
+      setBilibiliThemePreference(normalizeBilibiliThemePreference(themePreference));
+    },
+    onRefreshQualityOptions: () => {
+      if (!qualityProbeSourceLocator) return;
+      void refreshPlaybackQualityOptions(qualityProbeSourceLocator);
+    },
+    playbackCacheSettingsLoading,
+    playbackCacheSettingsSaving,
+    playbackCacheSettingsInfo,
+    playbackCacheSettingsError,
+    playbackCacheSettings,
+    playbackCachePathDraft,
+    onPlaybackCachePathDraftChange: setPlaybackCachePathDraft,
+    onBrowsePlaybackCachePath: () => {
+      void handleBrowsePlaybackCachePath();
+    },
+    onSavePlaybackCachePath: () => {
+      void handleSavePlaybackCachePath();
+    },
+    onResetPlaybackCachePath: () => {
+      void handleResetPlaybackCachePath();
     },
   };
 
   const bilibiliWorkspaceProps: BilibiliWorkspaceProps = {
     bilibiliAuthorized,
-    folderDrawerOpen,
-    playlistDrawerOpen,
-    folderLoading,
-    folderError,
-    bilibiliFolders,
     selectedFolderId,
     resourceFilterQuery,
     resourceLoading,
@@ -515,62 +579,21 @@ export function useBilibiliWorkspaceAdapterController(
     resourceInfo,
     resourceError,
     bvidSearchError,
-    bvidSearchResult,
     filteredBilibiliResources,
     preparingResourceId,
     normalizedPlaybackQualityHint,
-    normalizedBilibiliThemePreference,
     resourceCoverUrlMap,
     resourceQualityTagMap,
     resourceGridRef,
     resourceLoadMoreSentinelRef,
-    selectedPlaylist,
-    selectedPlaylistId,
-    playlists: platformPlaylists,
-    newPlaylistName,
     playlistError,
     resolvedLyric,
     lyricError,
-    playbackSettingsOpen,
-    playbackQualityOptions,
-    playbackQualityLoading,
-    qualityProbeSourceLocator,
-    availablePlaybackQualityLabel,
-    playbackCacheSettingsLoading,
-    playbackCacheSettingsSaving,
-    playbackCacheSettingsInfo,
-    playbackCacheSettingsError,
-    playbackCacheSettings,
-    playbackCachePathDraft,
     resourceContextMenu,
     t,
     formatDuration,
     getResourceCacheKey: toResourceCacheKey,
-    getKindLabel: (kind) => t(toBilibiliKindLabelKey(kind)),
     getQualityBadgeLabel: (badge) => t(toBilibiliQualityBadgeLabelKey(badge)),
-    qualityLabelForKey: (qualityKey) => t(toBilibiliQualityLabelKey(normalizeBilibiliQualityHint(qualityKey))),
-    onRefreshFolders: () => {
-      void refreshBilibiliFolders();
-    },
-    onCloseFolderDrawer: () => {
-      setFolderDrawerOpen(false);
-    },
-    onShowRecommended: () => {
-      setSelectedFolderId(null);
-      setFolderDrawerOpen(false);
-    },
-    onSelectFolder: (folderId) => {
-      setSelectedFolderId(folderId);
-      setFolderDrawerOpen(false);
-    },
-    onResourceFilterQueryChange: setResourceFilterQuery,
-    onResourceSearchSubmit: () => {
-      if (!selectedFolderId) {
-        void searchBilibiliHomepageResources(resourceFilterQuery);
-        return;
-      }
-      void refreshBilibiliResources(selectedFolderId);
-    },
     onRefreshResources: () => {
       if (!selectedFolderId) {
         const keyword = resourceFilterQuery.trim();
@@ -588,65 +611,6 @@ export function useBilibiliWorkspaceAdapterController(
       if (!selectedFolderId) return;
       void loadMoreBilibiliResources(selectedFolderId);
     },
-    onClosePlaylistDrawer: () => {
-      setPlaylistDrawerOpen(false);
-    },
-    onNewPlaylistNameChange: setNewPlaylistName,
-    onCreatePlaylist,
-    onSelectPlaylist: setSelectedPlaylistId,
-    onPlaySelectedPlaylist: () => {
-      if (!selectedPlaylistId) return;
-      void audioService.playPlaylist(selectedPlaylistId);
-    },
-    onDeleteSelectedPlaylist: () => {
-      if (!selectedPlaylistId) return;
-      audioService.deletePlaylist(selectedPlaylistId);
-    },
-    onRemoveTrackFromSelectedPlaylist: (trackIndex) => {
-      if (!selectedPlaylistId) return;
-      audioService.removeTrackFromPlaylist(selectedPlaylistId, trackIndex);
-    },
-    onCloseDrawers: () => {
-      setFolderDrawerOpen(false);
-      setPlaylistDrawerOpen(false);
-    },
-    onToggleFolderDrawer: () => {
-      setFolderDrawerOpen((prev) => {
-        const next = !prev;
-        if (next) setPlaylistDrawerOpen(false);
-        return next;
-      });
-    },
-    onTogglePlaylistDrawer: () => {
-      setPlaylistDrawerOpen((prev) => {
-        const next = !prev;
-        if (next) setFolderDrawerOpen(false);
-        return next;
-      });
-    },
-    onClosePlaybackSettings: () => {
-      setPlaybackSettingsOpen(false);
-    },
-    onQualityHintChange: (qualityKey) => {
-      setPlaybackQualityHint(normalizeBilibiliQualityHint(qualityKey));
-    },
-    onBilibiliThemePreferenceChange: (themePreference) => {
-      setBilibiliThemePreference(normalizeBilibiliThemePreference(themePreference));
-    },
-    onRefreshQualityOptions: () => {
-      if (!qualityProbeSourceLocator) return;
-      void refreshPlaybackQualityOptions(qualityProbeSourceLocator);
-    },
-    onPlaybackCachePathDraftChange: setPlaybackCachePathDraft,
-    onBrowsePlaybackCachePath: () => {
-      void handleBrowsePlaybackCachePath();
-    },
-    onSavePlaybackCachePath: () => {
-      void handleSavePlaybackCachePath();
-    },
-    onResetPlaybackCachePath: () => {
-      void handleResetPlaybackCachePath();
-    },
     onCloseResourceContextMenu: () => {
       setResourceContextMenu(null);
     },
@@ -655,7 +619,9 @@ export function useBilibiliWorkspaceAdapterController(
   return {
     bilibiliWorkspaceActive,
     bilibiliUseDarkMode,
-    bilibiliToolbarProps,
+    bilibiliShellSearch,
+    bilibiliPreviewFolders,
+    bilibiliSettingsProps,
     bilibiliWorkspaceProps,
   };
 }

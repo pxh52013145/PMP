@@ -1,37 +1,55 @@
-import React, { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
-import { exists } from '@tauri-apps/api/fs';
-import { resolve as resolvePath } from '@tauri-apps/api/path';
-
+import React, { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
-  BarChart3,
-  ChevronLeft,
   Check,
-  Clock3,
+  ChevronLeft,
   Compass,
   Disc3,
   Filter,
-  Heart,
   LayoutGrid,
   Library,
   Mic,
-  MoreHorizontal,
   Music,
   Play,
   Plus,
-  Radio,
+  Power,
+  RefreshCw,
   Search,
   Settings,
   SlidersHorizontal,
-  Sparkles,
   Tv,
   X,
 } from 'lucide-react';
 
+import type {
+  PlatformCompatContractFile,
+  PlatformInstanceRecord,
+  PlatformRenderSelectionRecord,
+} from '@pixel-matrix/plugin-platform-contracts';
+
 import { useAudioService } from '../../../contexts/AudioEngineContext';
 import { useT } from '../../../i18n';
-import type { Playlist as AudioPlaylist, Track as AudioTrack } from '../../../services/audio';
+import type { Playlist as AudioPlaylist } from '../../../services/audio';
 import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
-import { isTauriRuntime } from '../../../utils/tauriRuntime';
+import {
+  listPlatformCompatRegistryRecords,
+  listPlatformConnectorDefinitions,
+  listPlatformConnectorFacadeItems,
+  listPlatformInstances,
+  listPlatformRenderSelections,
+  readPlatformLoginRegistry,
+  refreshAndEmitPlatformConnectorAuthSnapshot,
+  setPlatformRenderSelectionMounted,
+  subscribePlatformCompatRegistry,
+  subscribePlatformConnectorAuthChanged,
+  subscribePlatformInstances,
+  subscribePlatformLoginRegistry,
+  subscribePlatformRenderSelections,
+  type PlatformCompatRegistryRecord,
+  type PlatformConnectorDefinition,
+  type PlatformConnectorFacadeItem,
+  type PlatformConnectorId,
+  type PlatformLoginRegistryEntry,
+} from '../../../modules/music-platform';
 import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 import {
@@ -39,99 +57,72 @@ import {
   parsePlatformMagnetSkinProps,
   type PlatformMagnetDefaultMode,
 } from './platformMagnetSkin';
+import { BilibiliPlaybackSettingsContent } from './BilibiliPlaybackSettingsModal';
+import { BilibiliWorkspaceAdapter } from './BilibiliWorkspaceAdapter';
 import {
-  MOCK_INSTANCES,
-  MOCK_LOCAL_PLAYLISTS,
-  MOCK_LOADED_STATE,
-  type MockChannel,
-  type MockChannelIcon,
-  type MockInstance,
-  type MockPlaylist,
-  type MockTrack,
-  type PlatformKind,
-} from './platformMockData';
+  DedicatedWorkspacePlaceholderAdapter,
+  DedicatedWorkspacePlaceholderToolbar,
+} from './DedicatedWorkspacePlaceholderAdapter';
+import {
+  NeteaseWorkspaceAdapter,
+  NeteaseWorkspaceToolbar,
+} from './NeteaseWorkspaceAdapter';
+import {
+  toConnectorWorkspaceMode,
+  type PlatformWorkspaceDescriptor,
+} from './platformWorkspaceModes';
+import { useBilibiliWorkspaceAdapterController } from './useBilibiliWorkspaceAdapterController';
+import { useDedicatedWorkspacePlaceholderController } from './useDedicatedWorkspacePlaceholderController';
+import { useNeteaseWorkspaceAdapterController } from './useNeteaseWorkspaceAdapterController';
 
 import './PlatformMagnet.css';
 
 type IconComponent = ComponentType<{ className?: string; style?: React.CSSProperties }>;
-type PageId = 'daily' | 'local' | 'config' | string;
-type SearchScope = 'loaded' | 'local' | string;
-type SettingsTabId = 'host' | string;
-type CreateView = 'create' | 'existing';
-type ContentTransitionPhase = 'entered' | 'entering' | 'exiting';
-type ParsedPageId =
-  | { kind: 'daily' }
-  | { kind: 'local' }
-  | { kind: 'config' }
-  | { kind: 'instance'; instanceId: string }
-  | { kind: 'detail'; instanceId: string; detailId: string };
-
-type SearchResult = {
-  id: string;
-  title: string;
-  artist: string;
-  album: string;
-  duration: string;
-  badges: string[];
-  sourceId: string;
-  playlistName: string;
-  platform: PlatformKind | 'local';
-  coverUrl?: string;
-};
-
-type SearchSnapshot = {
-  query: string;
-  results: SearchResult[];
-  emptyText: string;
-};
-
-type DetailPageContent = {
-  kicker: string;
-  title: string;
-  subtitle: string;
-  tracks: MockTrack[];
-};
-
-type CreateStagedTrack = MockTrack & {
-  platform: PlatformKind;
-};
 
 type PlatformMagnetRendererProps = {
   skinProps?: Record<string, unknown>;
 };
 
-const PLATFORM_META: Record<
-  PlatformKind,
-  { labelKey: string; accent: string; Icon: IconComponent }
-> = {
-  netease: {
-    labelKey: 'magnet.platform-login.platform.netease',
-    accent: '#ff6b87',
-    Icon: Disc3,
-  },
-  bilibili: {
-    labelKey: 'magnet.platform-login.platform.bilibili',
-    accent: '#67c7ff',
-    Icon: Tv,
-  },
-  qqmusic: {
-    labelKey: 'magnet.platform-login.platform.qqmusic',
-    accent: '#56db8d',
-    Icon: Music,
-  },
+type PlatformPageView = 'daily' | 'config' | 'instance';
+type SettingsTabId = 'host' | string;
+type CreateView = 'create' | 'existing';
+type ContentTransitionPhase = 'entered' | 'entering' | 'exiting';
+
+type RegisteredPlatformItem = {
+  entry: PlatformLoginRegistryEntry;
+  definition: PlatformConnectorDefinition | null;
+  contractRecord: PlatformCompatRegistryRecord | null;
+  instance: PlatformInstanceRecord | null;
+  renderSelection: PlatformRenderSelectionRecord | null;
+  facade: PlatformConnectorFacadeItem | null;
 };
 
-const ACTIVE_MOCK_PLATFORM_KINDS = Array.from(
-  new Set(MOCK_INSTANCES.map((instance) => instance.platform))
-) as PlatformKind[];
+type PlaylistDrawerGroup = {
+  id: string;
+  connectorId: string | null;
+  label: string;
+  playlists: AudioPlaylist[];
+  bilibiliFolders?: Array<{
+    folderId: string | null;
+    title: string;
+    count: number | null;
+  }>;
+  folderLoading?: boolean;
+  folderError?: string | null;
+};
 
-const CHANNEL_ICON_MAP: Record<MockChannelIcon, IconComponent> = {
-  clock: Clock3,
-  chart: BarChart3,
-  sparkles: Sparkles,
-  heart: Heart,
-  radio: Radio,
-  library: Library,
+const CONNECTOR_VISUAL_META: Partial<
+  Record<
+    PlatformConnectorId,
+    {
+      Icon: IconComponent;
+      color: string;
+    }
+  >
+> = {
+  'connector.platform.bilibili': { Icon: Tv, color: '#67c7ff' },
+  'connector.platform.netease': { Icon: Disc3, color: '#ff6b87' },
+  'connector.platform.qqmusic': { Icon: Music, color: '#56db8d' },
 };
 
 const HOST_SETTINGS = {
@@ -139,15 +130,6 @@ const HOST_SETTINGS = {
   search: ['All', 'Loaded', 'Scoped'],
   identify: ['Slot', 'Mic'],
 } as const;
-
-const MOCK_PLAYBACK_SAMPLE_CANDIDATES = [
-  ['..', '..', 'Eagles_Hotel_California.flac'],
-  ['..', 'Eagles_Hotel_California.flac'],
-  ['Eagles_Hotel_California.flac'],
-] as const;
-
-let mockPlaybackSamplePathPromise: Promise<string | null> | null = null;
-const PLATFORM_DETAIL_PAGE_PREFIX = 'detail:';
 
 function cx(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(' ');
@@ -158,275 +140,132 @@ function readTelemetryErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function formatDurationSeconds(value: number | undefined): string {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-    return '00:00';
-  }
-  const wholeSeconds = Math.max(0, Math.floor(value));
-  const minutes = Math.floor(wholeSeconds / 60);
-  const seconds = wholeSeconds % 60;
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
-
-function parseDurationLabel(value: string): number | undefined {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  const [minutesText, secondsText] = trimmed.split(':');
-  const minutes = Number(minutesText);
-  const seconds = Number(secondsText);
-  if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) return undefined;
-  return minutes * 60 + seconds;
-}
-
-function filterLocalAudioPlaylists(playlists: AudioPlaylist[]): AudioPlaylist[] {
+function filterWorkspacePlaylists(playlists: AudioPlaylist[]): AudioPlaylist[] {
   return playlists.filter((playlist) => playlist.kind !== 'platform' && playlist.kind !== 'smart');
 }
 
-function hashString(value: string): number {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash << 5) - hash + value.charCodeAt(index);
-    hash |= 0;
+function toAuthLabelKey(authState: string | undefined): string {
+  const normalized = authState?.trim().toLowerCase() ?? 'unauthorized';
+  switch (normalized) {
+    case 'pending':
+    case 'authorized':
+    case 'expired':
+    case 'revoked':
+    case 'error':
+      return `magnet.platform-login.auth.${normalized}`;
+    default:
+      return 'magnet.platform-login.auth.unauthorized';
   }
-  return Math.abs(hash);
 }
 
-function audioTrackToMockTrack(track: AudioTrack): MockTrack {
-  const sourcePlatform = Array.isArray(track.tags)
-    ? (track.tags.find((tag): tag is PlatformKind | 'local' =>
-        tag === 'netease' || tag === 'bilibili' || tag === 'qqmusic' || tag === 'local'
-      ) ?? 'local')
-    : 'local';
+function listCapabilityLabelKeys(contract: PlatformCompatContractFile | null): string[] {
+  if (!contract) return [];
 
-  return {
-    id: typeof track.id === 'string' && track.id.trim().length > 0 ? track.id : `track-${Date.now()}`,
-    title: track.title,
-    artist: track.artist ?? '',
-    album: track.album ?? '',
-    duration: formatDurationSeconds(track.duration),
-    badges: Array.isArray(track.tags) && track.tags.length > 0 ? track.tags.slice(0, 3) : ['Local'],
-    coverUrl: track.coverUrl,
-    sourcePlatform,
-  };
-}
-
-function audioPlaylistToMockPlaylist(playlist: AudioPlaylist): MockPlaylist {
-  return {
-    id: playlist.id,
-    name: playlist.name,
-    note: playlist.description ?? '',
-    tracks: Array.isArray(playlist.tracks) ? playlist.tracks.map(audioTrackToMockTrack) : [],
-  };
-}
-
-async function resolveMockPlaybackSamplePath(): Promise<string | null> {
-  if (!isTauriRuntime()) return null;
-  if (!mockPlaybackSamplePathPromise) {
-    mockPlaybackSamplePathPromise = (async () => {
-      for (const candidate of MOCK_PLAYBACK_SAMPLE_CANDIDATES) {
-        try {
-          const absolutePath = await resolvePath(...candidate);
-          if (await exists(absolutePath)) {
-            return absolutePath;
-          }
-        } catch {
-          continue;
-        }
-      }
-      return null;
-    })();
+  const next: string[] = [];
+  if (contract.capabilities.playlists) {
+    next.push('magnet.platform.compat.capability.playlists');
+  }
+  if (contract.capabilities.favorites) {
+    next.push('magnet.platform.compat.capability.favorites');
+  }
+  if (contract.capabilities.dailyRecommendations) {
+    next.push('magnet.platform.compat.capability.dailyRecommendations');
+  }
+  if (contract.capabilities.search) {
+    next.push('magnet.platform.compat.capability.search');
+  }
+  if (contract.capabilities.quality) {
+    next.push('magnet.platform.compat.capability.quality');
+  }
+  if (contract.capabilities.pages) {
+    next.push('magnet.platform.compat.capability.pages');
   }
 
-  return mockPlaybackSamplePathPromise;
+  return next;
 }
 
-function mockTrackToAudioTrack(
-  track: MockTrack,
-  instance: MockInstance,
-  samplePath: string | null
-): AudioTrack {
-  return {
-    id: `platform-mock:${instance.id}:${track.id}`,
-    title: track.title,
-    artist: track.artist,
-    album: track.album,
-    duration: parseDurationLabel(track.duration),
-    tags: ['Platform Mock', instance.platform],
-    comment: 'platform-magnet mock playback sample',
-    ...(samplePath
-      ? {
-          path: samplePath,
-          filePath: samplePath,
-          originalPath: samplePath,
-        }
-      : {}),
-  };
+function listApiBindingKeys(contract: PlatformCompatContractFile | null): string[] {
+  if (!contract) return [];
+
+  return Object.entries(contract.apiBindings)
+    .filter(([, value]) => typeof value === 'string' && value.trim().length > 0)
+    .map(([key]) => key);
 }
 
-function resolveInitialPage(defaultMode: PlatformMagnetDefaultMode): PageId {
-  if (defaultMode === 'bilibili') return 'bilibili-main';
-  if (defaultMode === 'netease') return 'netease-main';
-  return 'daily';
-}
-
-function createDetailPageId(instanceId: string, detailId: string): PageId {
-  return `${PLATFORM_DETAIL_PAGE_PREFIX}${instanceId}:${detailId}`;
-}
-
-function parsePlatformPageId(pageId: PageId): ParsedPageId {
-  if (pageId === 'daily') return { kind: 'daily' };
-  if (pageId === 'local') return { kind: 'local' };
-  if (pageId === 'config') return { kind: 'config' };
-  if (pageId.startsWith(PLATFORM_DETAIL_PAGE_PREFIX)) {
-    const detailPath = pageId.slice(PLATFORM_DETAIL_PAGE_PREFIX.length);
-    const [instanceId, ...detailParts] = detailPath.split(':');
-    const detailId = detailParts.join(':');
-    if (instanceId && detailId) {
-      return { kind: 'detail', instanceId, detailId };
-    }
+function resolvePreferredConnectorId(
+  selectedConnectorId: string | null,
+  items: RegisteredPlatformItem[],
+  defaultMode: PlatformMagnetDefaultMode
+): string | null {
+  const registeredConnectorIds = new Set(items.map((item) => item.entry.connectorId));
+  if (selectedConnectorId && registeredConnectorIds.has(selectedConnectorId as PlatformConnectorId)) {
+    return selectedConnectorId;
   }
-  return { kind: 'instance', instanceId: pageId };
-}
 
-function getPlatformName(
-  t: (key: string, params?: Record<string, unknown>) => string,
-  platform: PlatformKind
-): string {
-  return t(PLATFORM_META[platform].labelKey);
-}
+  const preferredConnectorId =
+    defaultMode === 'bilibili'
+      ? 'connector.platform.bilibili'
+      : defaultMode === 'netease'
+        ? 'connector.platform.netease'
+        : null;
 
-function resolveChannelTracks(instance: MockInstance, channel: MockChannel): MockTrack[] {
-  if (channel.detailPlaylistId) {
-    return instance.playlists.find((playlist) => playlist.id === channel.detailPlaylistId)?.tracks ?? instance.queue;
+  const mountedItems = items.filter((item) => item.renderSelection?.mounted === true);
+  if (preferredConnectorId) {
+    const preferredMounted = mountedItems.find((item) => item.entry.connectorId === preferredConnectorId);
+    if (preferredMounted) return preferredMounted.entry.connectorId;
   }
-  return instance.queue;
+
+  if (mountedItems[0]) {
+    return mountedItems[0].entry.connectorId;
+  }
+
+  if (preferredConnectorId) {
+    const preferredRegistered = items.find((item) => item.entry.connectorId === preferredConnectorId);
+    if (preferredRegistered) return preferredRegistered.entry.connectorId;
+  }
+
+  return items[0]?.entry.connectorId ?? null;
 }
 
-function resolveDetailPageContent(
-  t: (key: string, params?: Record<string, unknown>) => string,
-  instance: MockInstance,
-  detailId: string
-): DetailPageContent {
-  const platformName = getPlatformName(t, instance.platform);
-
-  if (detailId === 'daily') {
-    return {
-      kicker: t('magnet.platform.daily.title'),
-      title: t('magnet.platform.mock.detail.daily.title', { platform: platformName }),
-      subtitle: t('magnet.platform.mock.detail.daily.subtitle'),
-      tracks: instance.queue,
+function getConnectorVisualMeta(
+  connectorId: string | null | undefined
+): {
+  Icon: IconComponent;
+  color: string;
+} {
+  if (connectorId && connectorId in CONNECTOR_VISUAL_META) {
+    return CONNECTOR_VISUAL_META[connectorId as PlatformConnectorId] ?? {
+      Icon: Music,
+      color: '#a1a1aa',
     };
   }
 
-  const channel = instance.channels.find((item) => item.id === detailId);
-  if (!channel) {
-    return {
-      kicker: t('magnet.platform.daily.title'),
-      title: t('magnet.platform.mock.detail.daily.title', { platform: platformName }),
-      subtitle: t('magnet.platform.mock.detail.daily.subtitle'),
-      tracks: instance.queue,
-    };
+  return { Icon: Music, color: '#a1a1aa' };
+}
+
+function getDailySubtitleKey(connectorId: string | null | undefined): string {
+  switch (connectorId) {
+    case 'connector.platform.bilibili':
+      return 'magnet.platform.daily.bilibili.subtitle';
+    case 'connector.platform.netease':
+      return 'magnet.platform.daily.netease.subtitle';
+    case 'connector.platform.qqmusic':
+      return 'magnet.platform.daily.qqmusic.subtitle';
+    default:
+      return 'magnet.platform.daily.defaultSubtitle';
   }
-
-  return {
-    kicker: t(channel.titleKey),
-    title: `${platformName} ${t(channel.titleKey)}`,
-    subtitle: t(channel.subtitleKey),
-    tracks: resolveChannelTracks(instance, channel),
-  };
 }
 
-function collectSearchResults(
-  scope: SearchScope,
-  query: string,
-  loadedInstances: MockInstance[],
-  instancesById: Record<string, MockInstance>,
-  localPlaylists: MockPlaylist[],
-  selectedPlatforms: PlatformKind[],
-  limit: number
-): SearchResult[] {
-  const keyword = query.trim().toLowerCase();
-  if (!keyword) return [];
-
-  const results: SearchResult[] = [];
-  const pushTracks = (
-    tracks: MockTrack[],
-    playlistName: string,
-    sourceId: string,
-    platform: PlatformKind | 'local'
-  ): void => {
-    for (const track of tracks) {
-      const haystack = `${track.title} ${track.artist} ${track.album} ${playlistName}`.toLowerCase();
-      if (!haystack.includes(keyword)) continue;
-      results.push({
-        id: `${sourceId}-${playlistName}-${track.id}`,
-        title: track.title,
-        artist: track.artist,
-        album: track.album,
-        duration: track.duration,
-        badges: track.badges,
-        coverUrl: track.coverUrl,
-        sourceId,
-        playlistName,
-        platform: track.sourcePlatform ?? platform,
-      });
-    }
-  };
-
-  if (scope === 'local') {
-    for (const playlist of localPlaylists) {
-      pushTracks(playlist.tracks, playlist.name, 'local', 'local');
-    }
-    return results.slice(0, limit);
-  }
-
-  const targetInstances =
-    scope === 'loaded'
-      ? loadedInstances.filter((instance) => selectedPlatforms.includes(instance.platform))
-      : instancesById[scope]
-        ? [instancesById[scope]]
-        : [];
-
-  for (const instance of targetInstances) {
-    pushTracks(instance.queue, 'Daily', instance.id, instance.platform);
-    for (const playlist of instance.playlists) {
-      pushTracks(playlist.tracks, playlist.name, instance.id, instance.platform);
-    }
-  }
-
-  return results.slice(0, limit);
-}
-
-function getTrackDisplayBadges(track: Pick<MockTrack, 'badges'> | Pick<SearchResult, 'badges'>): string[] {
-  const filtered = track.badges.filter((badge) => badge.trim().length > 0 && badge !== 'Daily');
-  return filtered.slice(0, 2);
-}
-
-function getTrackCoverLabel(track: { album: string; title: string }): string {
-  const seed = track.album.trim() || track.title.trim();
-  return seed.slice(0, 1).toUpperCase() || 'M';
-}
-
-function getTrackCoverStyle(platform: PlatformKind | 'local', seed: string): React.CSSProperties {
-  const accent = platform === 'local' ? '#a1a1aa' : PLATFORM_META[platform].accent;
-  const hueRotate = hashString(seed) % 36;
-  return {
-    background: `linear-gradient(145deg, color-mix(in srgb, ${accent} 48%, #ffffff 8%), color-mix(in srgb, ${accent} 22%, #0d131b 78%))`,
-    filter: `hue-rotate(${hueRotate}deg) saturate(0.96)`,
-  };
-}
-
-function PlatformGlyph({
-  platform,
+function ConnectorGlyph({
+  connectorId,
   active = false,
   compact = false,
 }: {
-  platform: PlatformKind;
+  connectorId: string | null | undefined;
   active?: boolean;
   compact?: boolean;
 }): JSX.Element {
-  const meta = PLATFORM_META[platform];
-  const Icon = meta.Icon;
+  const { Icon, color } = getConnectorVisualMeta(connectorId);
 
   return (
     <span
@@ -435,7 +274,7 @@ function PlatformGlyph({
         compact ? 'h-9 w-9' : 'h-11 w-11'
       )}
       style={{
-        color: meta.accent,
+        color,
         background: active ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)',
         boxShadow: active
           ? 'inset 0 0 0 1px rgba(255,255,255,0.12)'
@@ -447,620 +286,38 @@ function PlatformGlyph({
   );
 }
 
-function TrackCover({
-  track,
-  platform,
-  sizeClassName = 'h-11 w-11',
-  shapeClassName = 'rounded-[14px]',
-  labelClassName = 'text-sm',
-}: {
-  track: { album: string; title: string; coverUrl?: string };
-  platform: PlatformKind | 'local';
-  sizeClassName?: string;
-  shapeClassName?: string;
-  labelClassName?: string;
-}): JSX.Element {
-  const label = getTrackCoverLabel(track);
-
-  if (track.coverUrl && track.coverUrl.trim().length > 0) {
-    return (
-      <span
-        className={cx(
-          'platform-preview-track-cover inline-flex shrink-0 overflow-hidden',
-          sizeClassName,
-          shapeClassName
-        )}
-        style={{ backgroundImage: `url("${track.coverUrl}")`, backgroundSize: 'cover', backgroundPosition: 'center' }}
-      />
-    );
-  }
-
-  return (
-    <span
-      className={cx(
-        'platform-preview-track-cover inline-flex shrink-0 items-center justify-center font-semibold text-white/86',
-        sizeClassName,
-        shapeClassName,
-        labelClassName
-      )}
-      style={getTrackCoverStyle(platform, `${track.album}:${track.title}`)}
-    >
-      {label}
-    </span>
-  );
-}
-
-function PlatformTag({ platform }: { platform: PlatformKind | 'local' }): JSX.Element {
-  if (platform === 'local') {
-    return <Library className="h-3.5 w-3.5 shrink-0 text-white/58" />;
-  }
-
-  const Icon = PLATFORM_META[platform].Icon;
-  return <Icon className="h-3.5 w-3.5 shrink-0" style={{ color: PLATFORM_META[platform].accent }} />;
-}
-
-function TrackRows({
-  rows,
-  empty,
-  platform,
-}: {
-  rows: MockTrack[];
-  empty: string;
-  platform?: PlatformKind | 'local';
-}): JSX.Element {
-  if (rows.length === 0) {
-    return (
-      <div className="flex min-h-[220px] items-center justify-center rounded-[22px] border border-dashed border-white/10 bg-white/3 text-sm text-white/42">
-        {empty}
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-2">
-      {rows.map((track) => {
-        const trackPlatform = track.sourcePlatform ?? platform ?? 'local';
-        const badges = getTrackDisplayBadges(track);
-        const subtitle = [track.artist, track.album].filter(Boolean).join(' / ');
-
-        return (
-          <div
-            key={track.id}
-            className="platform-preview-card grid grid-cols-[auto,minmax(0,1fr),auto] items-center gap-3 rounded-[20px] px-4 py-3"
-          >
-            <TrackCover track={track} platform={trackPlatform} />
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium text-white">{track.title}</div>
-              <div className="mt-1 flex min-w-0 items-center gap-2">
-                <div className="min-w-0 truncate text-xs text-white/42">{subtitle}</div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <PlatformTag platform={trackPlatform} />
-                  {badges.length > 0
-                    ? badges.map((badge) => (
-                        <span
-                          key={`${track.id}-${badge}`}
-                          className="rounded-full border border-white/10 bg-white/6 px-2 py-0.5 text-[10px] text-white/58"
-                        >
-                          {badge}
-                        </span>
-                      ))
-                    : null}
-                </div>
-              </div>
-            </div>
-            <div className="text-xs text-white/42">{track.duration}</div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function RecordCard({
-  t,
-  instance,
-  active,
-  onOpen,
-  onPlay,
-}: {
-  t: (key: string, params?: Record<string, unknown>) => string;
-  instance: MockInstance;
-  active: boolean;
-  onOpen: () => void;
-  onPlay: () => void;
-}): JSX.Element {
-  const meta = PLATFORM_META[instance.platform];
-  const Icon = meta.Icon;
-
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          onOpen();
-        }
-      }}
-      className="group flex cursor-pointer flex-col items-center gap-3 text-center outline-none"
-    >
-      <div
-        className={cx(
-          'platform-preview-record relative flex h-[176px] w-[176px] items-center justify-center overflow-hidden rounded-full transition-transform duration-200 group-hover:scale-[1.01]',
-          active ? 'platform-preview-record-active' : ''
-        )}
-      >
-        <div className="platform-preview-record-center relative flex h-[68px] w-[68px] items-center justify-center rounded-full">
-          <div className="platform-preview-record-core flex h-[68px] w-[68px] items-center justify-center rounded-full">
-            <span
-              className="platform-preview-record-icon inline-flex h-10 w-10 items-center justify-center rounded-full"
-              style={{ color: meta.accent }}
-            >
-              <Icon className="h-5 w-5" />
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onPlay();
-            }}
-            className="platform-preview-record-play absolute left-1/2 top-1/2 inline-flex h-14 w-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/18 bg-white/8 text-white shadow-xl backdrop-blur-md transition-all duration-200 hover:scale-105 hover:bg-white/14"
-            title={t('common.action.play')}
-            aria-label={t('common.action.play')}
-          >
-            <Play className="h-6 w-6 translate-x-[1px] fill-current" />
-          </button>
-        </div>
-      </div>
-      <div className="space-y-1">
-        <div className="text-sm font-medium text-white">{getPlatformName(t, instance.platform)}</div>
-        <div className="text-xs text-white/42">{instance.dailyTrack.title}</div>
-      </div>
-    </div>
-  );
-}
-
-function ChannelCard({
-  t,
-  channel,
-  platform,
-  onOpen,
-}: {
-  t: (key: string, params?: Record<string, unknown>) => string;
-  channel: MockChannel;
-  platform: PlatformKind;
-  onOpen: () => void;
-}): JSX.Element {
-  const Icon = CHANNEL_ICON_MAP[channel.icon];
-  const accent = PLATFORM_META[platform].accent;
-
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="platform-preview-channel-card platform-preview-card w-full rounded-[22px] px-4 py-4 text-left transition-transform hover:-translate-y-[1px]"
-    >
-      <div className="flex items-start gap-4">
-        <span className="platform-preview-channel-icon inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[16px]">
-          <Icon className="h-5 w-5" style={{ color: accent }} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-3">
-            <div className="truncate text-sm font-medium text-white">{t(channel.titleKey)}</div>
-            <span className="platform-preview-channel-tag shrink-0 rounded-full px-2 py-1 text-[10px] text-white/56">
-              {t(channel.tagKey)}
-            </span>
-          </div>
-          <p className="mt-2 text-xs leading-5 text-white/42">{t(channel.subtitleKey)}</p>
-        </div>
-      </div>
-    </button>
-  );
-}
-
-function ChannelTrackCard({
-  track,
-  platform,
-  onPlay,
-}: {
-  track: MockTrack;
-  platform: PlatformKind;
-  onPlay: () => void;
-}): JSX.Element {
-  const trackPlatform = track.sourcePlatform ?? platform;
-  const badges = getTrackDisplayBadges(track);
-
-  return (
-    <button
-      type="button"
-      onClick={onPlay}
-      className="platform-preview-channel-song-card platform-preview-card group flex w-full items-center gap-4 rounded-[22px] px-4 py-4 text-left transition-transform hover:-translate-y-[1px]"
-    >
-      <div className="platform-preview-channel-song-cover relative shrink-0">
-        <TrackCover
-          track={track}
-          platform={trackPlatform}
-          sizeClassName="h-14 w-14"
-          shapeClassName="rounded-full"
-          labelClassName="text-base"
-        />
-        <span className="platform-preview-channel-song-play absolute inset-0 inline-flex items-center justify-center rounded-full bg-black/42 text-white">
-          <Play className="h-4 w-4 translate-x-[1px] fill-current" />
-        </span>
-      </div>
-
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium text-white">{track.title}</div>
-        <div className="mt-1 truncate text-xs text-white/42">{track.artist}</div>
-        <div className="mt-2 flex min-w-0 items-center gap-2">
-          <PlatformTag platform={trackPlatform} />
-          <span className="truncate text-[11px] text-white/34">{track.album}</span>
-        </div>
-      </div>
-
-      <div className="flex shrink-0 items-center gap-1">
-        {badges.map((badge) => (
-          <span
-            key={`${track.id}-${badge}`}
-            className="rounded-full border border-white/10 bg-white/6 px-2 py-0.5 text-[10px] text-white/58"
-          >
-            {badge}
-          </span>
-        ))}
-      </div>
-    </button>
-  );
-}
-
-function InstanceTemplatePage({
-  t,
-  instance,
-  onOpenChannel,
-}: {
-  t: (key: string, params?: Record<string, unknown>) => string;
-  instance: MockInstance;
-  onOpenChannel: (channelId: string) => void;
-}): JSX.Element {
-  const platformName = getPlatformName(t, instance.platform);
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <section className="platform-preview-instance-header platform-preview-card rounded-[24px] px-5 py-5">
-        <div className="flex items-center gap-4">
-          <PlatformGlyph platform={instance.platform} active />
-          <div className="min-w-0">
-            <div className="truncate text-[11px] uppercase tracking-[0.18em] text-white/30">
-              {instance.accountUid}
-            </div>
-            <div className="mt-1 truncate text-base font-medium text-white">{platformName}</div>
-          </div>
-        </div>
-        <p className="mt-4 max-w-[560px] text-sm leading-6 text-white/46">
-          {t('magnet.platform.mock.instance.exploreSubtitle')}
-        </p>
-      </section>
-
-      <section className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-medium text-white">{t('magnet.platform.mock.instance.exploreTitle')}</div>
-            <div className="mt-1 text-xs text-white/38">{platformName}</div>
-          </div>
-          <PlatformTag platform={instance.platform} />
-        </div>
-
-        {instance.channels.length > 0 ? (
-          <div className="platform-preview-channel-grid grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {instance.channels.map((channel) => (
-              <ChannelCard
-                key={channel.id}
-                t={t}
-                channel={channel}
-                platform={instance.platform}
-                onOpen={() => onOpenChannel(channel.id)}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="flex min-h-[220px] items-center justify-center rounded-[22px] border border-dashed border-white/10 bg-white/3 text-sm text-white/42">
-            {t('magnet.platform.mock.instance.emptyChannels')}
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function DetailPage({
-  t,
-  instance,
-  detailId,
-  onPlayAll,
-  onPlayTrack,
-}: {
-  t: (key: string, params?: Record<string, unknown>) => string;
-  instance: MockInstance;
-  detailId: string;
-  onPlayAll: () => void;
-  onPlayTrack: (trackIndex: number) => void;
-}): JSX.Element {
-  const meta = PLATFORM_META[instance.platform];
-  const Icon = meta.Icon;
-  const content = resolveDetailPageContent(t, instance, detailId);
-  const tracks = content.tracks;
-
-  return (
-    <div className="mx-auto max-w-6xl">
-      <section className="platform-preview-detail-hero relative overflow-hidden rounded-[28px] px-6 pb-6 pt-8">
-        <div
-          className="platform-preview-detail-backdrop absolute inset-x-0 top-0 h-[220px]"
-          style={
-            {
-              '--platform-detail-accent': meta.accent,
-            } as React.CSSProperties
-          }
-        />
-        <div className="relative z-[1]">
-          <div className="flex items-start gap-6">
-            <div className="platform-preview-detail-cover flex h-24 w-24 shrink-0 items-center justify-center rounded-[18px]">
-              <span className="platform-preview-detail-cover-core inline-flex h-12 w-12 items-center justify-center rounded-full">
-                <Icon className="h-7 w-7" style={{ color: meta.accent }} />
-              </span>
-            </div>
-            <div className="min-w-0 flex-1 pt-2">
-              <div className="text-sm text-white/56">{content.kicker}</div>
-              <h2 className="mt-2 text-[44px] font-semibold tracking-[-0.04em] text-white">{content.title}</h2>
-              <p className="mt-3 text-sm text-white/48">{content.subtitle}</p>
-            </div>
-          </div>
-
-          <div className="mt-8 flex items-center gap-3">
-            <button
-              type="button"
-              onClick={onPlayAll}
-              className="platform-preview-detail-primary inline-flex h-12 w-12 items-center justify-center rounded-full"
-              style={{ background: meta.accent }}
-              title={t('common.action.play')}
-            >
-              <Play className="h-5 w-5 translate-x-[1px] fill-current text-white" />
-            </button>
-            <button
-              type="button"
-              className="platform-preview-detail-ghost inline-flex h-11 w-11 items-center justify-center rounded-full"
-              title={t('magnet.platform.mock.detail.action.favorite')}
-            >
-              <Heart className="h-5 w-5 text-white/72" />
-            </button>
-            <button
-              type="button"
-              className="platform-preview-detail-ghost inline-flex h-11 w-11 items-center justify-center rounded-full"
-              title={t('magnet.platform.mock.detail.action.more')}
-            >
-              <MoreHorizontal className="h-5 w-5 text-white/72" />
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section className="mt-6">
-        <div className="platform-preview-detail-table-header grid grid-cols-[56px,minmax(0,1.5fr),minmax(0,0.9fr),44px,72px] items-center gap-4 px-4 py-3 text-xs text-white/34">
-          <div className="text-center">{t('magnet.platform.mock.detail.column.index')}</div>
-          <div>{t('magnet.platform.mock.detail.column.title')}</div>
-          <div>{t('magnet.platform.mock.detail.column.album')}</div>
-          <div />
-          <div className="text-right">{t('magnet.platform.mock.detail.column.duration')}</div>
-        </div>
-
-        {tracks.length > 0 ? (
-          <div className="space-y-1">
-            {tracks.map((track, index) => {
-              const badges = getTrackDisplayBadges(track);
-              return (
-                <div
-                  key={`${detailId}-${track.id}`}
-                  className="platform-preview-detail-row group grid grid-cols-[56px,minmax(0,1.5fr),minmax(0,0.9fr),44px,72px] items-center gap-4 rounded-[18px] px-4 py-3"
-                >
-                  <div className="flex justify-center">
-                    <button
-                      type="button"
-                      onClick={() => onPlayTrack(index)}
-                      className="platform-preview-detail-row-trigger relative inline-flex h-9 w-9 items-center justify-center rounded-full text-sm text-white/38"
-                      title={t('common.action.play')}
-                    >
-                      <span className="platform-preview-detail-row-number">
-                        {String(index + 1).padStart(2, '0')}
-                      </span>
-                      <Play className="platform-preview-detail-row-play absolute h-4 w-4 translate-x-[1px] fill-current text-white" />
-                    </button>
-                  </div>
-                  <div className="flex min-w-0 items-center gap-4">
-                    <TrackCover track={track} platform={instance.platform} />
-                    <div className="min-w-0">
-                      <div className="truncate text-[15px] text-white">{track.title}</div>
-                      <div className="mt-1 flex min-w-0 items-center gap-2">
-                        <div className="min-w-0 truncate text-xs text-white/40">{track.artist}</div>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <PlatformTag platform={instance.platform} />
-                          {badges.map((badge) => (
-                            <span
-                              key={`${track.id}-${badge}`}
-                              className="rounded-full border border-white/10 bg-white/6 px-1.5 py-0.5 text-[10px] text-white/58"
-                            >
-                              {badge}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="truncate text-sm text-white/46">{track.album}</div>
-                  <button
-                    type="button"
-                    className="platform-preview-detail-row-action inline-flex h-9 w-9 items-center justify-center rounded-full"
-                    title={t('magnet.platform.mock.detail.action.favorite')}
-                  >
-                    <Heart className="h-4.5 w-4.5 text-white/46" />
-                  </button>
-                  <div className="text-right text-sm text-white/42">{track.duration}</div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="flex min-h-[260px] items-center justify-center rounded-[24px] border border-dashed border-white/10 bg-white/3 text-sm text-white/42">
-            {t('magnet.platform.mock.detail.empty')}
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function ChannelDetailPage({
-  t,
-  instance,
-  detailId,
-  onPlayTrack,
-}: {
-  t: (key: string, params?: Record<string, unknown>) => string;
-  instance: MockInstance;
-  detailId: string;
-  onPlayTrack: (trackIndex: number) => void;
-}): JSX.Element {
-  const meta = PLATFORM_META[instance.platform];
-  const channel = instance.channels.find((item) => item.id === detailId);
-  const Icon = channel ? CHANNEL_ICON_MAP[channel.icon] : meta.Icon;
-  const content = resolveDetailPageContent(t, instance, detailId);
-
-  return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <section className="flex items-center gap-4">
-        <span className="platform-preview-channel-icon inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full">
-          <Icon className="h-5 w-5" style={{ color: meta.accent }} />
-        </span>
-        <div className="min-w-0">
-          <div className="truncate text-[11px] uppercase tracking-[0.18em] text-white/30">
-            {getPlatformName(t, instance.platform)}
-          </div>
-          <div className="mt-1 truncate text-[28px] font-semibold tracking-[-0.04em] text-white">
-            {content.title}
-          </div>
-          <div className="mt-1 text-sm text-white/42">{content.subtitle}</div>
-        </div>
-      </section>
-
-      {content.tracks.length > 0 ? (
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {content.tracks.map((track, index) => (
-            <ChannelTrackCard
-              key={`${detailId}-${track.id}`}
-              track={track}
-              platform={instance.platform}
-              onPlay={() => onPlayTrack(index)}
-            />
-          ))}
-        </div>
-      ) : (
-        <div className="flex min-h-[260px] items-center justify-center rounded-[24px] border border-dashed border-white/10 bg-white/3 text-sm text-white/42">
-          {t('magnet.platform.mock.detail.empty')}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ConfigPlaceholderPage({
-  t,
-  loadedCount,
-}: {
-  t: (key: string, params?: Record<string, unknown>) => string;
-  loadedCount: number;
-}): JSX.Element {
-  const configGroups = [
-    {
-      id: 'aggregation',
-      label: t('magnet.platform.mock.settings.groupAggregation'),
-      values: HOST_SETTINGS.aggregation,
-      Icon: Disc3,
-    },
-    {
-      id: 'search',
-      label: t('magnet.platform.mock.settings.groupSearch'),
-      values: HOST_SETTINGS.search,
-      Icon: Search,
-    },
-    {
-      id: 'identify',
-      label: t('magnet.platform.mock.settings.groupIdentify'),
-      values: HOST_SETTINGS.identify,
-      Icon: Mic,
-    },
-  ] as const;
-
-  return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <div className="flex items-center gap-3">
-        <span className="platform-preview-soft-ring inline-flex h-11 w-11 items-center justify-center rounded-full bg-white/4 text-white/72">
-          <SlidersHorizontal className="h-5 w-5" />
-        </span>
-        <div className="min-w-0">
-          <div className="text-sm font-medium text-white">{t('magnet.platform.mock.config.title')}</div>
-          <div className="text-xs text-white/42">
-            {t('magnet.platform.mock.config.subtitle', { count: loadedCount })}
-          </div>
-        </div>
-      </div>
-
-      <div className="grid gap-3 xl:grid-cols-3">
-        {configGroups.map(({ id, label, values, Icon }) => (
-          <section key={id} className="platform-preview-card rounded-[22px] p-4">
-            <div className="mb-4 flex items-center gap-3">
-              <span className="platform-preview-soft-ring inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/4 text-white/62">
-                <Icon className="h-4 w-4" />
-              </span>
-              <div className="text-sm text-white/72">{label}</div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {values.map((item, index) => (
-                <span
-                  key={item}
-                  className={cx(
-                    'rounded-full border px-3 py-1.5 text-xs',
-                    index === 0 ? 'border-white/18 bg-white/10 text-white' : 'border-white/10 text-white/48'
-                  )}
-                >
-                  {item}
-                </span>
-              ))}
-            </div>
-          </section>
-        ))}
-      </div>
-
-      <section className="platform-preview-card rounded-[22px] px-4 py-4 text-sm text-white/52">
-        {t('magnet.platform.mock.settings.mockNote')}
-      </section>
-    </div>
-  );
-}
-
 const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ skinProps: rawSkinProps }) => {
   const skinProps = useMemo(() => parsePlatformMagnetSkinProps(rawSkinProps), [rawSkinProps]);
   const t = useT();
   const audioService = useAudioService();
-  const telemetry = getTelemetryLogger('magnet.platform', 'PlatformMagnet');
+  const telemetry = useMemo(() => getTelemetryLogger('magnet.platform', 'PlatformMagnet'), []);
+  const launcherRef = useRef<HTMLDivElement | null>(null);
+  const navRef = useRef<HTMLDivElement | null>(null);
+  const localPlaylistHydrationRef = useRef<Set<string>>(new Set());
+  const connectorViewsRequestIdRef = useRef(0);
 
-  const instancesById = useMemo(
-    () => Object.fromEntries(MOCK_INSTANCES.map((instance) => [instance.id, instance])) as Record<string, MockInstance>,
-    []
+  const platformDefinitions = useMemo(() => listPlatformConnectorDefinitions(), []);
+  const platformDefinitionsById = useMemo(
+    () => new Map(platformDefinitions.map((definition) => [definition.connectorId, definition])),
+    [platformDefinitions]
   );
-  const initialAudioLocalPlaylists = filterLocalAudioPlaylists(audioService.getPlaylists());
-  const [loadedById, setLoadedById] = useState<Record<string, boolean>>({ ...MOCK_LOADED_STATE });
-  const [activePage, setActivePage] = useState<PageId>(() => resolveInitialPage(skinProps.defaultMode));
-  const [query, setQuery] = useState('');
-  const [submittedQuery, setSubmittedQuery] = useState('');
+
+  const [registryEntries, setRegistryEntries] = useState<PlatformLoginRegistryEntry[]>(() =>
+    readPlatformLoginRegistry(platformDefinitions)
+  );
+  const [platformInstances, setPlatformInstances] = useState<PlatformInstanceRecord[]>(() =>
+    listPlatformInstances()
+  );
+  const [renderSelections, setRenderSelections] = useState<PlatformRenderSelectionRecord[]>(() =>
+    listPlatformRenderSelections()
+  );
+  const [contractRecords, setContractRecords] = useState<PlatformCompatRegistryRecord[]>(() =>
+    listPlatformCompatRegistryRecords()
+  );
+  const [connectorViews, setConnectorViews] = useState<PlatformConnectorFacadeItem[]>([]);
+  const [connectorViewsLoading, setConnectorViewsLoading] = useState(true);
+  const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
+  const [activePage, setActivePage] = useState<PlatformPageView>('daily');
   const [launcherOpen, setLauncherOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -1071,89 +328,54 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const [settingsTab, setSettingsTab] = useState<SettingsTabId>('host');
   const [createName, setCreateName] = useState('');
   const [createNameEditing, setCreateNameEditing] = useState(false);
-  const [audioLocalPlaylists, setAudioLocalPlaylists] = useState<AudioPlaylist[]>(initialAudioLocalPlaylists);
-  const [selectedSearchPlatforms, setSelectedSearchPlatforms] = useState<PlatformKind[]>(() =>
-    ACTIVE_MOCK_PLATFORM_KINDS
-  );
-  const [displayedPage, setDisplayedPage] = useState<PageId>(() => resolveInitialPage(skinProps.defaultMode));
-  const [displayedSearch, setDisplayedSearch] = useState<SearchSnapshot | null>(null);
-  const [displayedContentKey, setDisplayedContentKey] = useState<string>(() => {
-    const initialPage = resolveInitialPage(skinProps.defaultMode);
-    return `page:${initialPage}`;
-  });
+  const [query, setQuery] = useState('');
+  const [submittedQuery, setSubmittedQuery] = useState('');
+  const [, setLastRefreshAt] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [selectedFilterConnectorIds, setSelectedFilterConnectorIds] = useState<string[]>([]);
   const [contentTransitionPhase, setContentTransitionPhase] = useState<ContentTransitionPhase>('entered');
+  const [allPlaylists, setAllPlaylists] = useState<AudioPlaylist[]>(() => audioService.getPlaylists());
+  const [workspacePlaylists, setWorkspacePlaylists] = useState<AudioPlaylist[]>(() =>
+    filterWorkspacePlaylists(audioService.getPlaylists())
+  );
+  const [selectedPlaylistIdsByConnector, setSelectedPlaylistIdsByConnector] = useState<Record<string, string>>({});
+  const [selectedLocalPlaylistIdsByConnector, setSelectedLocalPlaylistIdsByConnector] = useState<
+    Record<string, string>
+  >({});
+  const [newPlaylistName, setNewPlaylistName] = useState('');
+  const [playlistError, setPlaylistError] = useState<string | null>(null);
   const createNameInputRef = useRef<HTMLInputElement | null>(null);
-  const localPlaylistHydrationRef = useRef<Set<string>>(new Set());
-  const [selectedPlaylistByScope, setSelectedPlaylistByScope] = useState<Record<string, string>>(() => ({
-    local: initialAudioLocalPlaylists[0]?.id ?? MOCK_LOCAL_PLAYLISTS[0]?.id ?? '',
-    ...Object.fromEntries(MOCK_INSTANCES.map((instance) => [instance.id, instance.playlists[0]?.id ?? ''])),
-  }));
 
-  const loadedInstances = useMemo(
-    () => MOCK_INSTANCES.filter((instance) => loadedById[instance.id]),
-    [loadedById]
-  );
-  const persistedLocalPlaylists = useMemo(
-    () => audioLocalPlaylists.map(audioPlaylistToMockPlaylist),
-    [audioLocalPlaylists]
-  );
-  const localPlaylists = useMemo(
-    () =>
-      persistedLocalPlaylists.length > 0 ? persistedLocalPlaylists : MOCK_LOCAL_PLAYLISTS,
-    [persistedLocalPlaylists]
-  );
-  const activePageState = useMemo(() => parsePlatformPageId(activePage), [activePage]);
-  const displayedPageState = useMemo(() => parsePlatformPageId(displayedPage), [displayedPage]);
-  const activeInstance =
-    activePageState.kind === 'instance' || activePageState.kind === 'detail'
-      ? instancesById[activePageState.instanceId] ?? null
-      : null;
-  const searchScope: SearchScope = activePageState.kind === 'local' ? 'local' : activeInstance ? activeInstance.id : 'loaded';
-  const searchPlatformOptions = useMemo(() => ACTIVE_MOCK_PLATFORM_KINDS, []);
-  const currentLocalPlaylist =
-    localPlaylists.find((playlist) => playlist.id === selectedPlaylistByScope.local) ?? localPlaylists[0] ?? null;
-  const defaultCreateName = t('magnet.platform.mock.create.defaultName');
-  const primaryNavItems = useMemo(
-    () =>
-      [
-        { id: 'daily' as const, label: t('magnet.platform.daily.title'), Icon: Disc3 },
-        { id: 'local' as const, label: t('magnet.platform.mock.nav.local'), Icon: Library },
-        { id: 'config' as const, label: t('magnet.platform.mock.nav.config'), Icon: SlidersHorizontal },
-      ] satisfies Array<{ id: 'daily' | 'local' | 'config'; label: string; Icon: IconComponent }>,
-    [t]
-  );
+  const refreshConnectorViews = useCallback(async () => {
+    const requestId = ++connectorViewsRequestIdRef.current;
+    setConnectorViewsLoading(true);
 
-  const searchResults = useMemo(
-    () =>
-      collectSearchResults(
-        searchScope,
-        submittedQuery,
-        loadedInstances,
-        instancesById,
-        localPlaylists,
-        selectedSearchPlatforms,
-        skinProps.searchLimit
-      ),
-    [instancesById, loadedInstances, localPlaylists, searchScope, selectedSearchPlatforms, skinProps.searchLimit, submittedQuery]
-  );
-  const stagedCreateTracks = useMemo<CreateStagedTrack[]>(
-    () =>
-      loadedInstances.slice(0, 6).map((instance) => ({
-        ...instance.dailyTrack,
-        id: `${instance.id}-${instance.dailyTrack.id}`,
-        platform: instance.platform,
-      })),
-    [loadedInstances]
-  );
+    try {
+      const nextViews = await listPlatformConnectorFacadeItems();
+      if (connectorViewsRequestIdRef.current !== requestId) return;
+      setConnectorViews(nextViews);
+      setLastRefreshAt(Date.now());
+    } catch (error) {
+      if (connectorViewsRequestIdRef.current !== requestId) return;
+      telemetry.warn('platform.runtime.connector-views.refresh-failed', {
+        message: readTelemetryErrorMessage(error),
+      });
+    } finally {
+      if (connectorViewsRequestIdRef.current === requestId) {
+        setConnectorViewsLoading(false);
+      }
+    }
+  }, [telemetry]);
 
   useEffect(() => {
-    const syncLocalPlaylists = (playlists: AudioPlaylist[]): void => {
-      setAudioLocalPlaylists(filterLocalAudioPlaylists(playlists));
+    const syncWorkspacePlaylists = (playlists: AudioPlaylist[]): void => {
+      setAllPlaylists(playlists);
+      setWorkspacePlaylists(filterWorkspacePlaylists(playlists));
     };
 
-    syncLocalPlaylists(audioService.getState().playlists);
+    syncWorkspacePlaylists(audioService.getState().playlists);
     return audioService.onStateChange((state) => {
-      syncLocalPlaylists(state.playlists);
+      syncWorkspacePlaylists(state.playlists);
     });
   }, [audioService]);
 
@@ -1161,7 +383,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     const hydratePlaylistTracks = audioService.hydratePlaylistTracks;
     if (typeof hydratePlaylistTracks !== 'function') return;
 
-    for (const playlist of audioLocalPlaylists) {
+    for (const playlist of workspacePlaylists) {
       if (playlist.tracksHydrated !== false) continue;
       if ((playlist.trackCount ?? 0) <= 0) continue;
       if (localPlaylistHydrationRef.current.has(playlist.id)) continue;
@@ -1171,32 +393,249 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
         localPlaylistHydrationRef.current.delete(playlist.id);
       });
     }
-  }, [audioLocalPlaylists, audioService]);
+  }, [audioService, workspacePlaylists]);
 
   useEffect(() => {
-    if (localPlaylists.length === 0) return;
-    if (localPlaylists.some((playlist) => playlist.id === selectedPlaylistByScope.local)) return;
+    let disposed = false;
+    let unsubscribe = () => {};
 
-    setSelectedPlaylistByScope((prev) => ({
-      ...prev,
-      local: localPlaylists[0]?.id ?? '',
-    }));
-  }, [localPlaylists, selectedPlaylistByScope.local]);
+    const refresh = () => {
+      if (disposed) return;
+      setRegistryEntries(readPlatformLoginRegistry(platformDefinitions));
+    };
+
+    refresh();
+    void subscribePlatformLoginRegistry(() => {
+      refresh();
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+        return;
+      }
+      unsubscribe = cleanup;
+    });
+
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [platformDefinitions]);
 
   useEffect(() => {
-    if (activePageState.kind !== 'instance' && activePageState.kind !== 'detail') return;
-    if (!loadedById[activePageState.instanceId]) {
-      setActivePage('daily');
+    setPlatformInstances(listPlatformInstances());
+    return subscribePlatformInstances((instances) => {
+      setPlatformInstances(instances);
+    });
+  }, []);
+
+  useEffect(() => {
+    setRenderSelections(listPlatformRenderSelections());
+    return subscribePlatformRenderSelections((records) => {
+      setRenderSelections(records);
+    });
+  }, []);
+
+  useEffect(() => {
+    setContractRecords(listPlatformCompatRegistryRecords());
+    return subscribePlatformCompatRegistry((records) => {
+      setContractRecords(records);
+    });
+  }, []);
+
+  useEffect(() => {
+    void refreshConnectorViews();
+    return subscribePlatformConnectorAuthChanged(() => {
+      void refreshConnectorViews();
+    });
+  }, [refreshConnectorViews]);
+
+  useEffect(() => {
+    if (!launcherOpen && !navOpen) return undefined;
+
+    const handlePointerDown = (event: PointerEvent): void => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (launcherRef.current?.contains(target)) return;
+      if (navRef.current?.contains(target)) return;
+      setLauncherOpen(false);
+      setNavOpen(false);
+    };
+
+    window.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [launcherOpen, navOpen]);
+
+  const connectorViewsById = useMemo(
+    () => new Map(connectorViews.map((item) => [item.connectorId, item])),
+    [connectorViews]
+  );
+  const renderSelectionsByInstanceId = useMemo(
+    () => new Map(renderSelections.map((record) => [record.instanceId, record])),
+    [renderSelections]
+  );
+  const contractRecordsByPlatformId = useMemo(
+    () => new Map(contractRecords.map((record) => [record.platformId, record])),
+    [contractRecords]
+  );
+  const platformInstancesByConnectorId = useMemo(() => {
+    const next = new Map<string, PlatformInstanceRecord>();
+    for (const instance of platformInstances) {
+      const connectorId =
+        typeof instance.metadata?.connectorId === 'string' ? instance.metadata.connectorId : '';
+      if (!connectorId) continue;
+      next.set(connectorId, instance);
     }
-  }, [activePageState, loadedById]);
+    return next;
+  }, [platformInstances]);
+
+  const registeredItems = useMemo<RegisteredPlatformItem[]>(
+    () =>
+      registryEntries
+        .filter((entry) => entry.enabled !== false)
+        .map((entry) => {
+          const definition = platformDefinitionsById.get(entry.connectorId) ?? null;
+          const instance = platformInstancesByConnectorId.get(entry.connectorId) ?? null;
+          const renderSelection = instance
+            ? renderSelectionsByInstanceId.get(instance.instanceId) ?? null
+            : null;
+          const contractRecord = instance
+            ? contractRecordsByPlatformId.get(instance.platformId) ?? null
+            : null;
+
+          return {
+            entry,
+            definition,
+            contractRecord,
+            instance,
+            renderSelection,
+            facade: connectorViewsById.get(entry.connectorId) ?? null,
+          };
+        }),
+    [
+      connectorViewsById,
+      contractRecordsByPlatformId,
+      platformDefinitionsById,
+      platformInstancesByConnectorId,
+      registryEntries,
+      renderSelectionsByInstanceId,
+    ]
+  );
+
+  useEffect(() => {
+    const nextSelectedConnectorId = resolvePreferredConnectorId(
+      selectedConnectorId,
+      registeredItems,
+      skinProps.defaultMode
+    );
+    if (nextSelectedConnectorId !== selectedConnectorId) {
+      setSelectedConnectorId(nextSelectedConnectorId);
+    }
+  }, [registeredItems, selectedConnectorId, skinProps.defaultMode]);
+
+  const activeItem =
+    registeredItems.find((item) => item.entry.connectorId === selectedConnectorId) ??
+    registeredItems[0] ??
+    null;
+  const activeDefinition = activeItem?.definition ?? null;
+  const activeContractRecord = activeItem?.contractRecord ?? null;
+  const activeInstance = activeItem?.instance ?? null;
+  const activeRenderSelection = activeItem?.renderSelection ?? null;
+  const activeFacade = activeItem?.facade ?? null;
+  const activeConnectorId = activeItem?.entry.connectorId ?? null;
+  const activeWorkspaceConnectorId =
+    activeRenderSelection?.mounted === true && activeConnectorId ? activeConnectorId : null;
+
+  const activeWorkspaceDescriptor = useMemo<PlatformWorkspaceDescriptor | null>(() => {
+    if (!activeDefinition) return null;
+    return {
+      mode: toConnectorWorkspaceMode(activeDefinition.connectorId),
+      connectorId: activeDefinition.connectorId,
+      workspaceKind: activeDefinition.workspaceKind,
+      displayName: activeDefinition.displayName,
+      labelKey: activeDefinition.labelKey,
+    };
+  }, [activeDefinition]);
+
+  const platformPlaylistsByConnectorId = useMemo(() => {
+    const next = new Map<string, AudioPlaylist[]>();
+    for (const playlist of allPlaylists) {
+      if (playlist.kind !== 'platform') continue;
+      const connectorId = typeof playlist.sourceConnectorId === 'string' ? playlist.sourceConnectorId.trim() : '';
+      if (!connectorId) continue;
+      const bucket = next.get(connectorId) ?? [];
+      bucket.push(playlist);
+      next.set(connectorId, bucket);
+    }
+    return next;
+  }, [allPlaylists]);
+  const activePlatformPlaylists = useMemo(
+    () => (activeConnectorId ? platformPlaylistsByConnectorId.get(activeConnectorId) ?? [] : []),
+    [activeConnectorId, platformPlaylistsByConnectorId]
+  );
+  const selectedPlaylistId = activeConnectorId
+    ? selectedPlaylistIdsByConnector[activeConnectorId] ?? activePlatformPlaylists[0]?.id ?? null
+    : null;
+  const selectedPlaylist =
+    activePlatformPlaylists.find((playlist) => playlist.id === selectedPlaylistId) ?? null;
+  const localPlaylists = workspacePlaylists;
+  const selectedLocalPlaylistId = activeConnectorId
+    ? selectedLocalPlaylistIdsByConnector[activeConnectorId] ?? localPlaylists[0]?.id ?? null
+    : null;
+
+  useEffect(() => {
+    if (!activeConnectorId || activePlatformPlaylists.length === 0) return;
+    if (
+      selectedPlaylistId &&
+      activePlatformPlaylists.some((playlist) => playlist.id === selectedPlaylistId)
+    ) {
+      return;
+    }
+
+    setSelectedPlaylistIdsByConnector((prev) => ({
+      ...prev,
+      [activeConnectorId]: activePlatformPlaylists[0]?.id ?? '',
+    }));
+  }, [activeConnectorId, activePlatformPlaylists, selectedPlaylistId]);
+
+  useEffect(() => {
+    if (!activeConnectorId || localPlaylists.length === 0) return;
+    if (
+      selectedLocalPlaylistId &&
+      localPlaylists.some((playlist) => playlist.id === selectedLocalPlaylistId)
+    ) {
+      return;
+    }
+
+    setSelectedLocalPlaylistIdsByConnector((prev) => ({
+      ...prev,
+      [activeConnectorId]: localPlaylists[0]?.id ?? '',
+    }));
+  }, [activeConnectorId, localPlaylists, selectedLocalPlaylistId]);
+
+  useEffect(() => {
+    setNewPlaylistName('');
+    setPlaylistError(null);
+  }, [activeConnectorId]);
+
+  useEffect(() => {
+    const availableConnectorIds = registeredItems.map((item) => item.entry.connectorId);
+    const availableConnectorIdSet = new Set<string>(availableConnectorIds);
+    setSelectedFilterConnectorIds((current) => {
+      const next = current.filter((connectorId) => availableConnectorIdSet.has(connectorId));
+      if (availableConnectorIds.length === 0) return [];
+      return next.length > 0 ? next : availableConnectorIds;
+    });
+  }, [registeredItems]);
 
   useEffect(() => {
     if (!settingsOpen) return;
-    setSettingsTab(activeInstance ? activeInstance.id : 'host');
-  }, [activeInstance, settingsOpen]);
+    setSettingsTab(activeConnectorId ?? 'host');
+  }, [activeConnectorId, settingsOpen]);
 
   useEffect(() => {
-    if (!createOpen || createView !== 'create' || !createNameEditing) return;
+    if (!createOpen || !createNameEditing || createView !== 'create') return;
 
     const frameId = window.requestAnimationFrame(() => {
       createNameInputRef.current?.focus();
@@ -1205,157 +644,387 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     return () => window.cancelAnimationFrame(frameId);
   }, [createNameEditing, createOpen, createView]);
 
-  const closeMenus = (): void => {
+  const handleSetSelectedPlaylistId = useCallback(
+    (playlistId: string | null) => {
+      if (!activeConnectorId) return;
+      setSelectedPlaylistIdsByConnector((prev) => ({
+        ...prev,
+        [activeConnectorId]: playlistId ?? '',
+      }));
+    },
+    [activeConnectorId]
+  );
+
+  const handleCreatePlaylist = useCallback(() => {
+    if (!activeConnectorId) return;
+
+    const nextPlaylist = audioService.createPlaylist(
+      newPlaylistName.trim() || t('magnet.platform.playlist.defaultName'),
+      '',
+      {
+        kind: 'platform',
+        sourceConnectorId: activeConnectorId,
+      }
+    );
+
+    setSelectedPlaylistIdsByConnector((prev) => ({
+      ...prev,
+      [activeConnectorId]: nextPlaylist.id,
+    }));
+    setNewPlaylistName('');
+    setPlaylistError(null);
+  }, [activeConnectorId, audioService, newPlaylistName, t]);
+
+  const bilibiliController = useBilibiliWorkspaceAdapterController({
+    activeWorkspaceConnectorId,
+    settingsVisible: settingsOpen && settingsTab === 'connector.platform.bilibili',
+    prefersDarkMode: true,
+    items: connectorViews,
+    audioService,
+    t,
+    selectedLocalPlaylistId,
+    playlistError,
+    setPlaylistError,
+  });
+
+  const neteaseController = useNeteaseWorkspaceAdapterController({
+    activeWorkspaceConnectorId,
+    prefersDarkMode: true,
+    items: connectorViews,
+    audioService,
+    t,
+    platformPlaylists: activePlatformPlaylists,
+    selectedPlaylist,
+    selectedPlaylistId,
+    newPlaylistName,
+    playlistError,
+    onCreatePlaylist: handleCreatePlaylist,
+    setSelectedPlaylistId: handleSetSelectedPlaylistId,
+    setNewPlaylistName,
+    setPlaylistError,
+  });
+
+  const placeholderController = useDedicatedWorkspacePlaceholderController({
+    activeWorkspaceDescriptor,
+    t,
+  });
+
+  const closeTopMenus = useCallback(() => {
     setLauncherOpen(false);
     setNavOpen(false);
     setFilterOpen(false);
-  };
+  }, []);
 
-  const closeCreateDialog = (): void => {
+  const closeCreateDialog = useCallback(() => {
     setCreateOpen(false);
     setCreateView('create');
     setCreateName('');
     setCreateNameEditing(false);
-  };
+  }, []);
 
-  const openCreateDialog = (): void => {
+  const openCreateDialog = useCallback(() => {
     setCreateOpen(true);
     setCreateView('create');
     setCreateName('');
     setCreateNameEditing(false);
-  };
+  }, []);
 
-  const commitCreateName = (): void => {
-    setCreateName((prev) => prev.trim());
+  const commitCreateName = useCallback(() => {
+    setCreateName((current) => current.trim());
     setCreateNameEditing(false);
-  };
+  }, []);
 
-  const drawerGroups = [
-    ...(activePageState.kind === 'daily'
-      ? loadedInstances.map((instance) => ({
-          id: instance.id,
-          label: getPlatformName(t, instance.platform),
-          platform: instance.platform,
-          scopeId: instance.id,
-          playlists: instance.playlists,
-        }))
-      : []),
-    ...(activePageState.kind === 'local'
-      ? [{ id: 'local', label: t('magnet.platform.mock.drawer.local'), platform: null, scopeId: 'local', playlists: localPlaylists }]
-      : []),
-    ...(activeInstance
-      ? [
-          {
-            id: activeInstance.id,
-            label: getPlatformName(t, activeInstance.platform),
-            platform: activeInstance.platform,
-            scopeId: activeInstance.id,
-            playlists: activeInstance.playlists,
-          },
-        ]
-      : []),
-    ...(activePageState.kind === 'daily'
-      ? [{ id: 'local-all', label: t('magnet.platform.mock.drawer.local'), platform: null, scopeId: 'local', playlists: localPlaylists }]
-      : []),
-  ];
+  const handleSelectConnector = useCallback((connectorId: string) => {
+    setSelectedConnectorId(connectorId);
+    setActivePage('instance');
+    setSubmittedQuery('');
+    closeTopMenus();
+  }, [closeTopMenus]);
 
-  const handleSearchSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
+  const handleSearchSubmit = useCallback((event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const activeShellSearch =
+      activePage === 'instance'
+        ? activeDefinition?.workspaceKind === 'bilibili'
+          ? bilibiliController.bilibiliShellSearch
+          : activeDefinition?.workspaceKind === 'netease'
+            ? neteaseController.neteaseShellSearch
+            : null
+        : null;
+
+    if (activeShellSearch) {
+      setSubmittedQuery('');
+      activeShellSearch.onSubmit();
+      closeTopMenus();
+      return;
+    }
+
     setSubmittedQuery(query.trim());
-    closeMenus();
-  };
+    closeTopMenus();
+  }, [
+    activeDefinition?.workspaceKind,
+    activePage,
+    bilibiliController.bilibiliShellSearch,
+    closeTopMenus,
+    neteaseController.neteaseShellSearch,
+    query,
+  ]);
 
-  const handleCreateLocal = (): void => {
-    const nextPlaylist = audioService.createPlaylist(createName.trim() || defaultCreateName, '', {
-      kind: 'manual',
-    });
+  const handleSelectDrawerPlaylist = useCallback(
+    (connectorId: string | null, playlistId: string) => {
+      const targetConnectorId = connectorId ?? activeConnectorId ?? registeredItems[0]?.entry.connectorId ?? null;
+      if (!targetConnectorId) {
+        setDrawerOpen(false);
+        return;
+      }
 
-    setSelectedPlaylistByScope((prev) => ({ ...prev, local: nextPlaylist.id }));
-    setActivePage('local');
+      if (connectorId === null) {
+        setSelectedLocalPlaylistIdsByConnector((prev) => ({
+          ...prev,
+          [targetConnectorId]: playlistId,
+        }));
+      } else {
+        setSelectedPlaylistIdsByConnector((prev) => ({
+          ...prev,
+          [targetConnectorId]: playlistId,
+        }));
+      }
+      setSelectedConnectorId(targetConnectorId);
+      setActivePage('instance');
+      setSubmittedQuery('');
+      setDrawerOpen(false);
+    },
+    [activeConnectorId, registeredItems]
+  );
+
+  const handleSelectBilibiliDrawerFolder = useCallback(
+    (folderId: string | null) => {
+      const connectorId = 'connector.platform.bilibili';
+      if (folderId) {
+        bilibiliController.bilibiliPreviewFolders.onSelectFolder(folderId);
+      } else {
+        bilibiliController.bilibiliPreviewFolders.onShowRecommended();
+      }
+      setSelectedConnectorId(connectorId);
+      setActivePage('instance');
+      setSubmittedQuery('');
+      setDrawerOpen(false);
+    },
+    [bilibiliController.bilibiliPreviewFolders]
+  );
+
+  const handleCreateLocalPlaylist = useCallback(() => {
+    const nextPlaylist = audioService.createPlaylist(
+      createName.trim() || t('magnet.platform.mock.create.defaultName'),
+      '',
+      { kind: 'manual' }
+    );
+    const targetConnectorId = activeConnectorId ?? registeredItems[0]?.entry.connectorId ?? null;
+    if (targetConnectorId) {
+      setSelectedLocalPlaylistIdsByConnector((prev) => ({
+        ...prev,
+        [targetConnectorId]: nextPlaylist.id,
+      }));
+      setSelectedConnectorId(targetConnectorId);
+      setActivePage('instance');
+      setSubmittedQuery('');
+    }
     closeCreateDialog();
-  };
+  }, [activeConnectorId, audioService, closeCreateDialog, createName, registeredItems, t]);
 
-  const handlePlayDaily = (instance: MockInstance): void => {
-    void (async () => {
-      const samplePath = await resolveMockPlaybackSamplePath();
-      if (isTauriRuntime() && !samplePath) {
-        telemetry.warn('platform.mock.daily-playback.sample-missing', {
-          fields: {
-            instanceId: instance.id,
-            platform: instance.platform,
-          },
-        });
-        return;
-      }
+  const handleToggleMounted = useCallback((item: RegisteredPlatformItem) => {
+    if (!item.instance) return;
 
-      const track = mockTrackToAudioTrack(instance.dailyTrack, instance, samplePath);
-      audioService.clearQueue();
-      audioService.addToQueue(track);
-      await audioService.playTrackAtIndex(0);
-    })().catch((error) => {
-      telemetry.warn('platform.mock.daily-playback.failed', {
+    const nextMounted = item.renderSelection?.mounted !== true;
+    setPlatformRenderSelectionMounted(item.instance.instanceId, nextMounted);
+    if (nextMounted) {
+      setSelectedConnectorId(item.entry.connectorId);
+    }
+  }, []);
+
+  const handleRefreshAll = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all(
+        registeredItems.map(async (item) => {
+          if (!item.definition) return;
+          await refreshAndEmitPlatformConnectorAuthSnapshot(item.definition.connectorId);
+        })
+      );
+      await refreshConnectorViews();
+    } catch (error) {
+      telemetry.warn('platform.runtime.refresh-all.failed', {
         message: readTelemetryErrorMessage(error),
-        fields: {
-          instanceId: instance.id,
-          platform: instance.platform,
-        },
       });
-    });
-  };
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshConnectorViews, registeredItems, telemetry]);
 
-  const handlePlayTrackSet = (
-    instance: MockInstance,
-    tracks: MockTrack[],
-    startIndex: number = 0
-  ): void => {
-    if (tracks.length === 0) return;
-
-    void (async () => {
-      const samplePath = await resolveMockPlaybackSamplePath();
-      if (isTauriRuntime() && !samplePath) {
-        telemetry.warn('platform.mock.queue-playback.sample-missing', {
-          fields: {
-            instanceId: instance.id,
-            platform: instance.platform,
-            trackCount: tracks.length,
-          },
-        });
-        return;
-      }
-
-      const safeStartIndex = Math.max(0, Math.min(startIndex, tracks.length - 1));
-      const audioTracks = tracks.map((track) => mockTrackToAudioTrack(track, instance, samplePath));
-      audioService.clearQueue();
-      audioService.addMultipleToQueue(audioTracks);
-      await audioService.playTrackAtIndex(safeStartIndex);
-    })().catch((error) => {
-      telemetry.warn('platform.mock.queue-playback.failed', {
-        message: readTelemetryErrorMessage(error),
-        fields: {
-          instanceId: instance.id,
-          platform: instance.platform,
-          trackCount: tracks.length,
-          startIndex,
-        },
-      });
-    });
-  };
-
-  const searchEmptyText =
-    searchScope === 'local'
-      ? t('magnet.platform.mock.search.emptyLocal')
-      : searchScope === 'loaded'
-        ? loadedInstances.length === 0
-          ? t('magnet.platform.mock.search.noLoaded')
-          : t('magnet.platform.mock.search.emptyGlobal')
-        : t('magnet.platform.mock.search.emptyInstance');
-  const showDailyFilter = activePageState.kind === 'daily';
-  const showBackButton = submittedQuery.length > 0 || activePageState.kind !== 'daily';
-  const targetContentKey = submittedQuery ? `search:${searchScope}:${submittedQuery}` : `page:${activePage}`;
-  const displayedActiveInstance =
-    displayedPageState.kind === 'instance' || displayedPageState.kind === 'detail'
-      ? instancesById[displayedPageState.instanceId] ?? null
+  const registeredCount = registeredItems.length;
+  const loadedCount = registeredItems.filter((item) => item.renderSelection?.mounted === true).length;
+  const authorizedCount = registeredItems.filter((item) => item.facade?.authState === 'authorized').length;
+  const activeConnectorLabel =
+    activeDefinition?.labelKey
+      ? t(activeDefinition.labelKey)
+      : activeFacade?.displayName ?? activeInstance?.displayName ?? '';
+  const activeAccountValue =
+    activeFacade?.accountUid ??
+    activeInstance?.account.accountId ??
+    activeInstance?.account.accountName ??
+    '-';
+  const activeAuthLabel = t(toAuthLabelKey(activeFacade?.authState));
+  const activeVisualMeta = getConnectorVisualMeta(activeConnectorId);
+  const activeMounted = activeRenderSelection?.mounted === true;
+  const activeCanToggleMounted = Boolean(activeInstance) && (activeMounted || activeFacade?.authState === 'authorized');
+  const activeWorkspaceShellSearch =
+    activePage === 'instance'
+      ? activeDefinition?.workspaceKind === 'bilibili'
+        ? bilibiliController.bilibiliShellSearch
+        : activeDefinition?.workspaceKind === 'netease'
+          ? neteaseController.neteaseShellSearch
+          : null
       : null;
+  const activeWorkspacePlaylistOpener =
+    activePage === 'instance' && activeMounted
+      ? activeDefinition?.workspaceKind === 'netease'
+          ? activeContractRecord?.contract.capabilities.playlists
+            ? neteaseController.openNeteasePlaylistDrawer
+            : null
+          : null
+      : null;
+  const activeWorkspacePrimaryActionLabel =
+    activeWorkspacePlaylistOpener && activeDefinition?.workspaceKind === 'netease'
+      ? t('magnet.platform.netease.playlist.open')
+      : t('magnet.platform.mock.fab.playlists');
+  const activeWorkspacePrimaryActionTitle =
+    activeWorkspacePlaylistOpener ? activeWorkspacePrimaryActionLabel : t('magnet.platform.mock.action.openDrawer');
+  const shellSearchValue = activeWorkspaceShellSearch?.value ?? query;
+  const shellSearchPlaceholder =
+    activeWorkspaceShellSearch?.placeholder ?? t('magnet.platform.search.filterTitle');
+  const shellSearchDisabled = activeWorkspaceShellSearch?.disabled ?? false;
+  const searchReadyCount = registeredItems.filter(
+    (item) =>
+      item.facade?.authState === 'authorized' && item.contractRecord?.contract.capabilities.search === true
+  ).length;
+  const dailyItems = registeredItems.filter(
+    (item) => item.facade?.authState === 'authorized' || item.renderSelection?.mounted === true
+  );
+  const normalizedQuery = submittedQuery.trim().toLowerCase();
+  const heroSubtitle = activeItem
+    ? activeMounted
+      ? t('magnet.platform.hero.featuredIdle', { platform: activeConnectorLabel || t('magnet.platform.title') })
+      : t('magnet.platform.hero.subtitle')
+    : t('magnet.platform.subtitle');
+  const matchesSearch = useCallback(
+    (item: RegisteredPlatformItem): boolean => {
+      if (!normalizedQuery) return true;
+
+      const label = item.definition?.labelKey
+        ? t(item.definition.labelKey)
+        : item.facade?.displayName ?? item.entry.connectorId;
+      const haystack = [
+        label,
+        item.entry.connectorId,
+        item.facade?.accountUid,
+        item.instance?.account.accountId,
+        item.instance?.account.accountName,
+      ]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .join(' ')
+        .toLowerCase();
+
+      return haystack.includes(normalizedQuery);
+    },
+    [normalizedQuery, t]
+  );
+  const filteredRegisteredItems = useMemo(
+    () =>
+      registeredItems.filter(
+        (item) =>
+          (selectedFilterConnectorIds.length === 0 ||
+            selectedFilterConnectorIds.includes(item.entry.connectorId)) &&
+          matchesSearch(item)
+      ),
+    [matchesSearch, registeredItems, selectedFilterConnectorIds]
+  );
+  const filteredDailyItems = useMemo(
+    () =>
+      dailyItems.filter(
+        (item) =>
+          (selectedFilterConnectorIds.length === 0 ||
+            selectedFilterConnectorIds.includes(item.entry.connectorId)) &&
+          matchesSearch(item)
+      ),
+    [dailyItems, matchesSearch, selectedFilterConnectorIds]
+  );
+  const showBackButton = Boolean(submittedQuery) || activePage !== 'daily';
+  const showDailyFilter = activePage === 'daily';
+  const defaultCreateName = t('magnet.platform.mock.create.defaultName');
+  const drawerGroups = useMemo(
+    () => {
+      const connectorGroups: PlaylistDrawerGroup[] = registeredItems
+        .map((item) => {
+          const isBilibili = item.entry.connectorId === 'connector.platform.bilibili';
+          const bilibiliFolders =
+            isBilibili && bilibiliController.bilibiliPreviewFolders.authorized
+              ? [
+                  {
+                    folderId: null,
+                    title: t('magnet.platform.bilibili.folder.recommendedEntry'),
+                    count: null,
+                  },
+                  ...bilibiliController.bilibiliPreviewFolders.folders.map((folder) => ({
+                    folderId: folder.folderId,
+                    title: folder.title,
+                    count: folder.mediaCount,
+                  })),
+                ]
+              : [];
+
+          return {
+            id: item.entry.connectorId,
+            connectorId: item.entry.connectorId,
+            label: item.definition?.labelKey
+              ? t(item.definition.labelKey)
+              : item.facade?.displayName ?? item.entry.connectorId,
+            playlists: platformPlaylistsByConnectorId.get(item.entry.connectorId) ?? [],
+            bilibiliFolders: isBilibili ? bilibiliFolders : undefined,
+            folderLoading: isBilibili ? bilibiliController.bilibiliPreviewFolders.loading : undefined,
+            folderError: isBilibili ? bilibiliController.bilibiliPreviewFolders.error : undefined,
+          };
+        })
+        .filter(
+          (group) =>
+            group.playlists.length > 0 ||
+            (group.bilibiliFolders?.length ?? 0) > 0 ||
+            Boolean(group.folderLoading) ||
+            Boolean(group.folderError)
+        );
+
+      const groups: PlaylistDrawerGroup[] = [...connectorGroups];
+      if (localPlaylists.length > 0) {
+        groups.push({
+          id: 'local',
+          connectorId: null,
+          label: t('magnet.platform.mock.drawer.local'),
+          playlists: localPlaylists,
+        });
+      }
+
+      return groups;
+    },
+    [bilibiliController.bilibiliPreviewFolders, localPlaylists, platformPlaylistsByConnectorId, registeredItems, t]
+  );
+  const settingsItem =
+    settingsTab === 'host'
+      ? null
+      : registeredItems.find((item) => item.entry.connectorId === settingsTab) ?? null;
+  const settingsLabel = settingsItem?.definition?.labelKey
+    ? t(settingsItem.definition.labelKey)
+    : settingsItem?.facade?.displayName ?? settingsItem?.entry.connectorId ?? '';
+  const settingsContract = settingsItem?.contractRecord?.contract ?? null;
+  const settingsWorkspaceKind = settingsItem?.definition?.workspaceKind ?? null;
 
   useEffect(() => {
     if (!showDailyFilter && filterOpen) {
@@ -1364,98 +1033,213 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   }, [filterOpen, showDailyFilter]);
 
   useEffect(() => {
-    if (targetContentKey === displayedContentKey) {
-      if (contentTransitionPhase !== 'entered') {
-        setContentTransitionPhase('entered');
-      }
+    let frameId = 0;
+    setContentTransitionPhase('exiting');
 
-      if (submittedQuery.length > 0) {
-        setDisplayedSearch((prev) => {
-          if (
-            prev &&
-            prev.query === submittedQuery &&
-            prev.emptyText === searchEmptyText &&
-            prev.results === searchResults
-          ) {
-            return prev;
-          }
-
-          return {
-            query: submittedQuery,
-            results: searchResults,
-            emptyText: searchEmptyText,
-          };
-        });
-      } else if (displayedSearch !== null) {
-        setDisplayedSearch(null);
-      }
-      return;
-    }
-
-    let enterFrame = 0;
-    const exitTimer = window.setTimeout(() => {
-      setDisplayedPage(activePage);
-      setDisplayedSearch(
-        submittedQuery.length > 0
-          ? {
-              query: submittedQuery,
-              results: searchResults,
-              emptyText: searchEmptyText,
-            }
-          : null
-      );
-      setDisplayedContentKey(targetContentKey);
+    const timerId = window.setTimeout(() => {
       setContentTransitionPhase('entering');
-      enterFrame = window.requestAnimationFrame(() => {
+      frameId = window.requestAnimationFrame(() => {
         setContentTransitionPhase('entered');
       });
     }, 140);
 
-    setContentTransitionPhase('exiting');
-
     return () => {
-      window.clearTimeout(exitTimer);
-      if (enterFrame) {
-        window.cancelAnimationFrame(enterFrame);
+      window.clearTimeout(timerId);
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
       }
     };
-  }, [
-    activePage,
-    contentTransitionPhase,
-    displayedContentKey,
-    displayedSearch,
-    searchEmptyText,
-    searchResults,
-    searchScope,
-    submittedQuery,
-    targetContentKey,
-  ]);
+  }, [activePage, submittedQuery]);
 
-  const handleGoBack = (): void => {
+  const renderWorkspaceToolbar = () => {
+    if (activeDefinition?.workspaceKind === 'netease') {
+      return <NeteaseWorkspaceToolbar {...neteaseController.neteaseToolbarProps} />;
+    }
+    if (activeDefinition?.workspaceKind === 'bilibili') {
+      return null;
+    }
+    return <DedicatedWorkspacePlaceholderToolbar {...placeholderController.placeholderToolbarProps} />;
+  };
+
+  const renderWorkspaceBody = () => {
+    if (activeDefinition?.workspaceKind === 'bilibili') {
+      return <BilibiliWorkspaceAdapter {...bilibiliController.bilibiliWorkspaceProps} />;
+    }
+    if (activeDefinition?.workspaceKind === 'netease') {
+      return <NeteaseWorkspaceAdapter {...neteaseController.neteaseWorkspaceProps} />;
+    }
+    return <DedicatedWorkspacePlaceholderAdapter {...placeholderController.placeholderWorkspaceProps} />;
+  };
+
+  const renderNavPopover = () => {
+    if (!navOpen) return null;
+
+    return (
+      <div className="platform-preview-popover platform-preview-nav-panel absolute left-0 top-12 z-30 w-[244px] rounded-[22px] p-2.5 transition-all duration-150">
+        <div className="platform-preview-nav-section">
+          <button
+            type="button"
+            onClick={() => {
+              setActivePage('daily');
+              setSubmittedQuery('');
+              setNavOpen(false);
+            }}
+            className={cx(
+              'platform-preview-nav-entry flex w-full items-center gap-3 rounded-[16px] px-3.5 py-3 text-left text-sm transition-colors',
+              activePage === 'daily'
+                ? 'platform-preview-nav-entry-active text-white'
+                : 'text-white/62 hover:text-white/88'
+            )}
+          >
+            <Disc3 className="h-4 w-4 shrink-0" />
+            <span className="truncate">{t('magnet.platform.daily.title')}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActivePage('config');
+              setSubmittedQuery('');
+              setNavOpen(false);
+            }}
+            className={cx(
+              'platform-preview-nav-entry flex w-full items-center gap-3 rounded-[16px] px-3.5 py-3 text-left text-sm transition-colors',
+              activePage === 'config'
+                ? 'platform-preview-nav-entry-active text-white'
+                : 'text-white/62 hover:text-white/88'
+            )}
+          >
+            <LayoutGrid className="h-4 w-4 shrink-0" />
+            <span className="truncate">{t('magnet.platform.nav.config')}</span>
+          </button>
+        </div>
+
+        {filteredRegisteredItems.length > 0 ? (
+          <>
+            <div className="platform-preview-nav-divider" />
+            <div className="platform-preview-nav-caption px-2">{t('magnet.platform.launcher.title')}</div>
+            <div className="platform-preview-nav-section">
+              {filteredRegisteredItems.map((item) => {
+                const { Icon, color } = getConnectorVisualMeta(item.entry.connectorId);
+
+                return (
+                  <button
+                    key={item.entry.connectorId}
+                    type="button"
+                    onClick={() => handleSelectConnector(item.entry.connectorId)}
+                    className={cx(
+                      'platform-preview-nav-instance flex w-full items-center justify-between gap-3 rounded-full px-4 py-3 text-left text-sm transition-colors',
+                      activePage === 'instance' && item.entry.connectorId === activeConnectorId
+                        ? 'platform-preview-nav-instance-active text-white'
+                        : 'text-white/64 hover:text-white/88'
+                    )}
+                  >
+                    <div className="flex min-w-0 items-center gap-3">
+                      <Icon className="h-4 w-4 shrink-0" style={{ color }} />
+                      <span className="truncate">
+                        {item.facade?.accountUid ??
+                          (item.definition?.labelKey
+                            ? t(item.definition.labelKey)
+                            : item.facade?.displayName ?? item.entry.connectorId)}
+                      </span>
+                    </div>
+                    <span
+                      className="platform-preview-nav-instance-status inline-flex h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{
+                        background:
+                          item.renderSelection?.mounted === true
+                            ? '#22c55e'
+                            : item.facade?.authState === 'authorized'
+                              ? color
+                              : 'rgba(255,255,255,0.22)',
+                      }}
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        ) : registeredItems.length > 0 ? (
+          <>
+            <div className="platform-preview-nav-divider" />
+            <div className="rounded-[18px] px-3 py-4 text-center text-xs text-white/46">{query.trim()}</div>
+          </>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderWorkspacePanel = () => {
+    if (!activeContractRecord || !activeDefinition) {
+      return (
+        <div className="flex min-h-[340px] flex-1 flex-col items-center justify-center gap-3 rounded-[22px] border border-dashed border-white/10 bg-black/10 px-6 text-center">
+          <LayoutGrid className="h-8 w-8 text-white/24" />
+          <div className="text-base font-medium text-white">{t('magnet.platform-login.status.comingSoon')}</div>
+          <p className="max-w-md text-sm leading-6 text-white/54">{t('magnet.platform.empty.noMountedHint')}</p>
+        </div>
+      );
+    }
+
+    if (!activeMounted) {
+      return (
+        <div className="flex min-h-[340px] flex-1 flex-col items-center justify-center gap-4 rounded-[22px] border border-dashed border-white/10 bg-black/10 px-6 text-center">
+          <LayoutGrid className="h-8 w-8 text-white/24" />
+          <div className="text-base font-medium text-white">{t('magnet.platform.empty.noMounted')}</div>
+          <p className="max-w-md text-sm leading-6 text-white/54">{t('magnet.platform.empty.noMountedHint')}</p>
+          <button
+            type="button"
+            onClick={() => activeItem && handleToggleMounted(activeItem)}
+            disabled={!activeCanToggleMounted}
+            className={cx(
+              'platform-preview-detail-ghost inline-flex items-center gap-2 rounded-full px-4 py-2.5 text-sm text-white/82',
+              !activeCanToggleMounted && 'cursor-not-allowed opacity-50'
+            )}
+          >
+            <Power className="h-4 w-4" />
+            <span>{t('magnet.platform.instance.activateWorkspace')}</span>
+          </button>
+        </div>
+      );
+    }
+
+    const workspaceToolbar = renderWorkspaceToolbar();
+
+    return (
+      <>
+        {workspaceToolbar ? (
+          <div className="mt-3 rounded-[20px] bg-black/15 px-3 py-3">{workspaceToolbar}</div>
+        ) : null}
+        <div className="mt-3 min-h-0 flex-1 overflow-hidden rounded-[24px] bg-black/10 p-2">
+          {connectorViewsLoading && !activeFacade ? (
+            <div className="flex h-full min-h-[320px] items-center justify-center text-sm text-white/48">
+              {t('common.state.loading')}
+            </div>
+          ) : (
+            renderWorkspaceBody()
+          )}
+        </div>
+      </>
+    );
+  };
+
+  const handleGoBack = useCallback(() => {
     if (submittedQuery) {
       setSubmittedQuery('');
       setQuery('');
       return;
     }
 
-    if (activePageState.kind === 'detail') {
-      setActivePage(activePageState.instanceId);
-      closeMenus();
-      return;
-    }
-
     if (activePage !== 'daily') {
       setActivePage('daily');
-      closeMenus();
+      closeTopMenus();
     }
-  };
+  }, [activePage, closeTopMenus, submittedQuery]);
 
-  const renderedContent = displayedSearch ? (
+  const renderSearchPanel = () => (
     <div className="mx-auto max-w-5xl space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm text-white/62">
           <Search className="h-4 w-4" />
-          <span>{displayedSearch.query}</span>
+          <span>{submittedQuery}</span>
         </div>
         <button
           type="button"
@@ -1465,157 +1249,374 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
           }}
           className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/62"
         >
-          {t('magnet.platform.mock.action.clearSearch')}
+          {t('common.action.close')}
         </button>
       </div>
 
-      {displayedSearch.results.length > 0 ? (
+      {filteredRegisteredItems.length > 0 ? (
         <div className="space-y-2">
-          {displayedSearch.results.map((result) => (
-            <div
-              key={result.id}
-              className="platform-preview-card grid grid-cols-[auto,minmax(0,1fr),auto] items-center gap-3 rounded-[18px] px-4 py-3"
-            >
-              <TrackCover track={result} platform={result.platform} />
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-white">{result.title}</div>
-                  <div className="mt-1 flex min-w-0 items-center gap-2">
-                    <div className="min-w-0 truncate text-xs text-white/42">
-                      {[result.artist, result.album, result.playlistName].filter(Boolean).join(' / ')}
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <PlatformTag platform={result.platform} />
-                    {getTrackDisplayBadges(result).length > 0
-                      ? getTrackDisplayBadges(result).map((badge) => (
-                          <span
-                            key={`${result.id}-${badge}`}
-                            className="rounded-full border border-white/10 bg-white/6 px-2 py-0.5 text-[10px] text-white/58"
-                          >
-                            {badge}
-                          </span>
-                        ))
-                      : null}
-                  </div>
-                </div>
-              </div>
-              <div className="text-xs text-white/42">{result.duration}</div>
-            </div>
-          ))}
+          {filteredRegisteredItems.map((item) => {
+            const { Icon, color } = getConnectorVisualMeta(item.entry.connectorId);
+            const label = item.definition?.labelKey
+              ? t(item.definition.labelKey)
+              : item.facade?.displayName ?? item.entry.connectorId;
+
+            return (
+              <button
+                key={item.entry.connectorId}
+                type="button"
+                onClick={() => handleSelectConnector(item.entry.connectorId)}
+                className="platform-preview-card grid w-full grid-cols-[auto,minmax(0,1fr),auto] items-center gap-3 rounded-[18px] px-4 py-3 text-left"
+              >
+                <span className="platform-preview-channel-icon inline-flex h-11 w-11 items-center justify-center rounded-full">
+                  <Icon className="h-5 w-5" style={{ color }} />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium text-white">{label}</span>
+                  <span className="mt-1 block truncate text-xs text-white/42">
+                    {[item.facade?.accountUid, item.entry.connectorId].filter(Boolean).join(' / ')}
+                  </span>
+                </span>
+                <span className="text-xs text-white/42">
+                  {t('magnet.platform.instance.auth', {
+                    state: t(toAuthLabelKey(item.facade?.authState)),
+                  })}
+                </span>
+              </button>
+            );
+          })}
         </div>
       ) : (
         <div className="flex min-h-[280px] items-center justify-center rounded-[24px] border border-dashed border-white/10 bg-white/3 text-sm text-white/42">
-          {displayedSearch.emptyText}
+          {t('magnet.platform.empty')}
         </div>
       )}
     </div>
-  ) : displayedPageState.kind === 'daily' ? (
-    <div className="mx-auto max-w-5xl space-y-6">
-      {skinProps.showSummary ? (
-        <div className="flex items-center gap-4 text-[11px] uppercase tracking-[0.18em] text-white/32">
-          <span>{t('magnet.platform.mock.summary.loaded', { count: loadedInstances.length })}</span>
-          <span>{t('magnet.platform.mock.summary.localPlaylists', { count: localPlaylists.length })}</span>
-        </div>
-      ) : null}
+  );
 
-      {loadedInstances.length > 0 ? (
-        <div className="flex flex-wrap justify-center gap-8">
-          {loadedInstances.map((instance) => (
-            <RecordCard
-              key={instance.id}
-              t={t}
-              instance={instance}
-              active={activeInstance?.id === instance.id}
-              onOpen={() => setActivePage(createDetailPageId(instance.id, 'daily'))}
-              onPlay={() => handlePlayDaily(instance)}
+  const renderConfigPanel = () => {
+    const configGroups = [
+      {
+        id: 'aggregation',
+        label: t('magnet.platform.mock.settings.groupAggregation'),
+        values: [String(loadedCount), String(authorizedCount), String(registeredCount)],
+        Icon: Disc3,
+      },
+      {
+        id: 'search',
+        label: t('magnet.platform.mock.settings.groupSearch'),
+        values: [String(searchReadyCount), t('magnet.platform.search.filterTitle')],
+        Icon: Search,
+      },
+      {
+        id: 'identify',
+        label: t('magnet.platform.mock.settings.groupIdentify'),
+        values: [...HOST_SETTINGS.identify],
+        Icon: Mic,
+      },
+    ] as const;
+
+    return (
+      <div className="mx-auto max-w-5xl space-y-4">
+        <div className="flex items-center gap-3">
+          <span className="platform-preview-soft-ring inline-flex h-11 w-11 items-center justify-center rounded-full bg-white/4 text-white/72">
+            <SlidersHorizontal className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-white">{t('magnet.platform.mock.config.title')}</div>
+            <div className="text-xs text-white/42">
+              {t('magnet.platform.mock.config.subtitle', { count: loadedCount })}
+            </div>
+          </div>
+        </div>
+
+        {activeItem ? (
+          <section className="platform-preview-detail-hero relative overflow-hidden rounded-[28px] px-6 pb-6 pt-7">
+            <div
+              className="platform-preview-detail-backdrop absolute inset-x-0 top-0 h-[220px]"
+              style={
+                {
+                  '--platform-detail-accent': activeVisualMeta.color,
+                } as React.CSSProperties
+              }
             />
+            <div className="relative z-[1]">
+              <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+                <div className="flex min-w-0 flex-1 items-start gap-5">
+                  <div className="platform-preview-detail-cover flex h-24 w-24 shrink-0 items-center justify-center rounded-[20px]">
+                    <span className="platform-preview-detail-cover-core inline-flex h-12 w-12 items-center justify-center rounded-full">
+                      <activeVisualMeta.Icon className="h-7 w-7" style={{ color: activeVisualMeta.color }} />
+                    </span>
+                  </div>
+
+                  <div className="min-w-0 flex-1 pt-1">
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-white/36">
+                      {t('magnet.platform.hero.kicker')}
+                    </div>
+                    <h3 className="mt-3 truncate text-[34px] font-semibold tracking-[-0.04em] text-white xl:text-[42px]">
+                      {activeConnectorLabel}
+                    </h3>
+                    <p className="mt-3 max-w-2xl text-sm leading-6 text-white/54">{heroSubtitle}</p>
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <span
+                        className={cx(
+                          'platform-preview-channel-tag inline-flex items-center rounded-full px-3 py-1 text-xs',
+                          activeMounted ? 'bg-emerald-400/12 text-emerald-200' : 'text-white/62'
+                        )}
+                      >
+                        {t(activeMounted ? 'magnet.platform.instance.loaded' : 'magnet.platform.instance.unloaded')}
+                      </span>
+                      <span className="platform-preview-channel-tag inline-flex items-center rounded-full px-3 py-1 text-xs text-white/62">
+                        {t('magnet.platform.instance.auth', {
+                          state: activeAuthLabel,
+                        })}
+                      </span>
+                      {activeContractRecord ? (
+                        <span className="platform-preview-channel-tag inline-flex items-center rounded-full px-3 py-1 text-xs text-white/62">
+                          {t('magnet.platform.contract.version', {
+                            version: activeContractRecord.contract.contractVersion,
+                          })}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  {activeInstance ? (
+                    <button
+                      type="button"
+                      onClick={() => handleToggleMounted(activeItem)}
+                      disabled={!activeCanToggleMounted}
+                      className={cx(
+                        'platform-preview-detail-primary inline-flex items-center gap-2 rounded-full px-5 py-3 text-sm font-medium',
+                        !activeCanToggleMounted && 'cursor-not-allowed opacity-50'
+                      )}
+                      style={{ background: activeVisualMeta.color, color: '#081017' }}
+                    >
+                      <Power className="h-4 w-4" />
+                      <span>
+                        {t(
+                          activeMounted
+                            ? 'magnet.platform-login.action.deactivate'
+                            : 'magnet.platform.instance.activateWorkspace'
+                        )}
+                      </span>
+                    </button>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleRefreshAll();
+                    }}
+                    className="platform-preview-detail-ghost inline-flex items-center gap-2 rounded-full px-4 py-3 text-sm text-white/78"
+                    disabled={refreshing}
+                  >
+                    <RefreshCw className={cx('h-4 w-4', refreshing && 'animate-spin')} />
+                    <span>{refreshing ? t('common.state.loading') : t('magnet.platform.action.refresh')}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        <div className="grid gap-3 xl:grid-cols-3">
+          {configGroups.map(({ id, label, values, Icon }) => (
+            <section key={id} className="platform-preview-card rounded-[22px] p-4">
+              <div className="mb-4 flex items-center gap-3">
+                <span className="platform-preview-soft-ring inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/4 text-white/62">
+                  <Icon className="h-4 w-4" />
+                </span>
+                <div className="text-sm text-white/72">{label}</div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {values.map((item, index) => (
+                  <span
+                    key={`${id}-${item}`}
+                    className={cx(
+                      'rounded-full border px-3 py-1.5 text-xs',
+                      index === 0 ? 'border-white/18 bg-white/10 text-white' : 'border-white/10 text-white/48'
+                    )}
+                  >
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </section>
           ))}
         </div>
-      ) : (
-        <div className="flex min-h-[320px] items-center justify-center rounded-[24px] border border-dashed border-white/10 bg-white/3 text-sm text-white/42">
-          {t('magnet.platform.daily.emptyHint')}
-        </div>
-      )}
-    </div>
-  ) : displayedPageState.kind === 'config' ? (
-    <ConfigPlaceholderPage t={t} loadedCount={loadedInstances.length} />
-  ) : displayedPageState.kind === 'local' ? (
-    <div className="mx-auto grid max-w-6xl gap-4 xl:grid-cols-[280px,1fr]">
-      <section className="space-y-2">
-        {localPlaylists.map((playlist) => (
-          <button
-            key={playlist.id}
-            type="button"
-            onClick={() => setSelectedPlaylistByScope((prev) => ({ ...prev, local: playlist.id }))}
-            className={cx(
-              'flex w-full items-center gap-3 rounded-[18px] px-3 py-3 text-left transition-colors',
-              currentLocalPlaylist?.id === playlist.id
-                ? 'platform-preview-card-active text-white'
-                : 'platform-preview-card text-white/62'
-            )}
-          >
-            <span className="platform-preview-soft-ring inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/6">
-              <Library className="h-4 w-4" />
-            </span>
-            <span className="truncate text-sm">{playlist.name}</span>
-          </button>
-        ))}
-      </section>
 
-      <section className="space-y-3">
-        <div className="text-sm text-white/62">{currentLocalPlaylist?.name ?? t('magnet.platform.mock.local.title')}</div>
-        <TrackRows
-          rows={currentLocalPlaylist?.tracks ?? []}
-          empty={t('magnet.platform.mock.emptyNoLocalTracks')}
-          platform="local"
-        />
-      </section>
-    </div>
-  ) : displayedPageState.kind === 'detail' && displayedActiveInstance ? (
-    displayedPageState.detailId === 'daily' ? (
-      <DetailPage
-        t={t}
-        instance={displayedActiveInstance}
-        detailId={displayedPageState.detailId}
-        onPlayAll={() => handlePlayTrackSet(displayedActiveInstance, resolveDetailPageContent(t, displayedActiveInstance, displayedPageState.detailId).tracks)}
-        onPlayTrack={(trackIndex) =>
-          handlePlayTrackSet(
-            displayedActiveInstance,
-            resolveDetailPageContent(t, displayedActiveInstance, displayedPageState.detailId).tracks,
-            trackIndex
-          )
-        }
-      />
-    ) : (
-      <ChannelDetailPage
-        t={t}
-        instance={displayedActiveInstance}
-        detailId={displayedPageState.detailId}
-        onPlayTrack={(trackIndex) =>
-          handlePlayTrackSet(
-            displayedActiveInstance,
-            resolveDetailPageContent(t, displayedActiveInstance, displayedPageState.detailId).tracks,
-            trackIndex
-          )
-        }
-      />
-    )
-  ) : displayedPageState.kind === 'instance' && displayedActiveInstance ? (
-    <InstanceTemplatePage
-      t={t}
-      instance={displayedActiveInstance}
-      onOpenChannel={(channelId) => setActivePage(createDetailPageId(displayedActiveInstance.id, channelId))}
-    />
-  ) : null;
+        <section className="platform-preview-card rounded-[22px] px-4 py-4 text-sm text-white/52">
+          {t('magnet.platform.mock.settings.mockNote')}
+        </section>
+      </div>
+    );
+  };
+
+  const renderDailyPanel = () => {
+    if (registeredItems.length === 0) {
+      return (
+        <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+          <LayoutGrid className="h-8 w-8 text-white/24" />
+          <div className="text-base font-medium text-white">{t('magnet.platform.empty.noRegistered')}</div>
+          <p className="max-w-md text-sm leading-6 text-white/54">{t('magnet.platform.empty.noRegisteredHint')}</p>
+        </div>
+      );
+    }
+
+    if (dailyItems.length === 0) {
+      return (
+        <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+          <Disc3 className="h-8 w-8 text-white/24" />
+          <div className="text-base font-medium text-white">{t('magnet.platform.daily.empty')}</div>
+          <p className="max-w-md text-sm leading-6 text-white/54">{t('magnet.platform.daily.emptyHint')}</p>
+        </div>
+      );
+    }
+
+    if (filteredDailyItems.length === 0) {
+      return (
+        <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+          <Search className="h-8 w-8 text-white/24" />
+          <div className="text-base font-medium text-white">{t('magnet.platform.empty')}</div>
+          <p className="max-w-md text-sm leading-6 text-white/54">{query.trim()}</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="mx-auto max-w-5xl space-y-6">
+        {skinProps.showSummary ? (
+          <div className="flex items-center gap-4 text-[11px] uppercase tracking-[0.18em] text-white/32">
+            <span>
+              {t('magnet.platform.summary.connectors', {
+                total: registeredCount,
+                authorized: authorizedCount,
+              })}
+            </span>
+            <span>{t('magnet.platform.summary.loaded', { count: loadedCount })}</span>
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap justify-center gap-8">
+          {filteredDailyItems.map((item) => {
+            const { Icon, color } = getConnectorVisualMeta(item.entry.connectorId);
+            const mounted = item.renderSelection?.mounted === true;
+            const canToggleMounted = item.facade?.authState === 'authorized' && Boolean(item.instance);
+            const active = item.entry.connectorId === activeConnectorId && activePage === 'instance';
+            const platformName = item.definition?.labelKey
+              ? t(item.definition.labelKey)
+              : item.facade?.displayName ?? item.entry.connectorId;
+
+            return (
+              <div
+                key={item.entry.connectorId}
+                role="button"
+                tabIndex={0}
+                onClick={() => handleSelectConnector(item.entry.connectorId)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    handleSelectConnector(item.entry.connectorId);
+                  }
+                }}
+                className="group flex cursor-pointer flex-col items-center gap-3 text-center outline-none"
+              >
+                <div
+                  className={cx(
+                    'platform-preview-record relative flex h-[176px] w-[176px] items-center justify-center overflow-hidden rounded-full transition-transform duration-200 group-hover:scale-[1.01]',
+                    active && 'platform-preview-record-active'
+                  )}
+                >
+                  <div className="platform-preview-record-center relative flex h-[68px] w-[68px] items-center justify-center rounded-full">
+                    <div className="platform-preview-record-core flex h-[68px] w-[68px] items-center justify-center rounded-full">
+                      <span className="platform-preview-record-icon inline-flex h-10 w-10 items-center justify-center rounded-full">
+                        <Icon className="h-5 w-5" style={{ color }} />
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (!mounted && canToggleMounted) {
+                          handleToggleMounted(item);
+                        }
+                        handleSelectConnector(item.entry.connectorId);
+                      }}
+                      className="platform-preview-record-play absolute left-1/2 top-1/2 inline-flex h-14 w-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/18 bg-white/8 text-white shadow-xl backdrop-blur-md transition-all duration-200 hover:scale-105 hover:bg-white/14"
+                      title={t('common.action.open')}
+                      aria-label={t('common.action.open')}
+                    >
+                      <Play className="h-6 w-6 translate-x-[1px] fill-current" />
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-sm font-medium text-white">{platformName}</div>
+                  <div className="text-xs text-white/42">
+                    {mounted
+                      ? t('magnet.platform.hero.featuredIdle', { platform: platformName })
+                      : t(getDailySubtitleKey(item.entry.connectorId))}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const renderMainPanel = () => {
+    if (submittedQuery) {
+      return renderSearchPanel();
+    }
+
+    if (activePage === 'daily') {
+      return renderDailyPanel();
+    }
+
+    if (activePage === 'config') {
+      return renderConfigPanel();
+    }
+
+    if (!activeItem) {
+      return (
+        <div className="flex h-full min-h-[360px] flex-col items-center justify-center gap-3 px-6 text-center">
+          <LayoutGrid className="h-8 w-8 text-white/24" />
+          <div className="text-base font-medium text-white">{t('magnet.platform.empty.noRegistered')}</div>
+          <p className="max-w-md text-sm leading-6 text-white/54">{t('magnet.platform.empty.noRegisteredHint')}</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="min-h-full">
+        <section className="platform-preview-soft-ring flex min-h-[620px] flex-col rounded-[24px] bg-black/10 p-3">
+          <div className="px-2 pt-1">
+            <div>
+              <div className="text-sm font-semibold text-white">{t('magnet.platform.workspace.toolbarTitle')}</div>
+              <p className="mt-1 text-xs leading-5 text-white/46">{t('magnet.platform.workspace.toolbarDesc')}</p>
+            </div>
+          </div>
+          {renderWorkspacePanel()}
+        </section>
+      </div>
+    );
+  };
 
   return (
     <div className="platform-preview-magnet relative h-full w-full overflow-hidden rounded-[24px] text-white">
       <div className="platform-preview-shell relative flex h-full flex-col">
         <header className="platform-preview-header relative z-30 grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 py-4">
-          <div className="relative flex items-center justify-self-start">
+          <div ref={launcherRef} className="relative flex items-center justify-self-start">
             <button
               type="button"
               onClick={() => {
-                setLauncherOpen((prev) => !prev);
+                setLauncherOpen((current) => !current);
                 setNavOpen(false);
                 setFilterOpen(false);
               }}
@@ -1623,7 +1624,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                 'platform-preview-launcher-trigger inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors',
                 launcherOpen ? 'platform-preview-launcher-trigger-open' : 'platform-preview-launcher-trigger-closed'
               )}
-              title={t('magnet.platform.mock.launcher.title')}
+              title={t('magnet.platform.launcher.title')}
               aria-pressed={launcherOpen}
             >
               <LayoutGrid className="h-5 w-5" />
@@ -1637,31 +1638,41 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                   : 'pointer-events-none -translate-x-3 opacity-0 blur-[4px]'
               )}
             >
-              {MOCK_INSTANCES.map((instance) => {
-                const meta = PLATFORM_META[instance.platform];
-                const Icon = meta.Icon;
-                const loaded = loadedById[instance.id];
+              {registeredItems.map((item) => {
+                const { Icon, color } = getConnectorVisualMeta(item.entry.connectorId);
+                const mounted = item.renderSelection?.mounted === true;
+                const canToggleMounted = Boolean(item.instance) && (mounted || item.facade?.authState === 'authorized');
+                const itemLabel = item.definition?.labelKey
+                  ? t(item.definition.labelKey)
+                  : item.facade?.displayName ?? item.entry.connectorId;
 
                 return (
                   <button
-                    key={instance.id}
+                    key={item.entry.connectorId}
                     type="button"
-                    onClick={() => setLoadedById((prev) => ({ ...prev, [instance.id]: !prev[instance.id] }))}
-                    title={`${getPlatformName(t, instance.platform)} / ${instance.accountUid}`}
-                    aria-pressed={loaded}
-                    className="platform-preview-launcher-item group relative inline-flex items-center justify-center"
+                    onClick={() => {
+                      if (!canToggleMounted) return;
+                      handleToggleMounted(item);
+                    }}
+                    aria-pressed={mounted}
+                    disabled={!canToggleMounted}
+                    className={cx(
+                      'platform-preview-launcher-item group relative inline-flex items-center justify-center',
+                      !canToggleMounted && 'cursor-not-allowed opacity-45'
+                    )}
+                    title={itemLabel}
                   >
                     <Icon
                       className={cx(
                         'platform-preview-launcher-item-icon h-6 w-6 transition-all duration-200',
-                        loaded ? 'opacity-100' : 'opacity-78'
+                        mounted ? 'opacity-100' : 'opacity-78'
                       )}
-                      style={{ color: meta.accent }}
+                      style={{ color }}
                     />
                     <span
                       className={cx(
                         'platform-preview-launcher-status',
-                        loaded ? 'platform-preview-launcher-status-on' : 'platform-preview-launcher-status-off'
+                        mounted ? 'platform-preview-launcher-status-on' : 'platform-preview-launcher-status-off'
                       )}
                     />
                   </button>
@@ -1670,15 +1681,15 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             </div>
           </div>
 
-          <div className="mx-auto flex w-full max-w-[560px] items-center justify-center gap-2">
-            <div className="relative">
+          <div className="mx-auto flex min-w-0 items-center gap-3">
+            <div ref={navRef} className="relative">
               <button
                 type="button"
-                onClick={() => {
-                  setNavOpen((prev) => !prev);
-                  setLauncherOpen(false);
-                  setFilterOpen(false);
-                }}
+              onClick={() => {
+                setNavOpen((current) => !current);
+                setLauncherOpen(false);
+                setFilterOpen(false);
+              }}
                 className={cx(
                   'platform-preview-soft-ring inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors',
                   navOpen || activePage !== 'daily' ? 'bg-white/10 text-white' : 'bg-white/4 text-white/62'
@@ -1688,77 +1699,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                 <Compass className="h-4 w-4" />
               </button>
 
-              <div
-                className={cx(
-                  'platform-preview-popover platform-preview-nav-panel absolute left-0 top-12 z-20 w-[244px] rounded-[22px] p-2.5 transition-all duration-150',
-                  navOpen ? 'translate-y-0 opacity-100' : 'pointer-events-none -translate-y-2 opacity-0'
-                )}
-              >
-                <div className="platform-preview-nav-section">
-                  {primaryNavItems.map(({ id, label, Icon }) => (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => {
-                        setActivePage(id);
-                        setSubmittedQuery('');
-                        setNavOpen(false);
-                      }}
-                      className={cx(
-                        'platform-preview-nav-entry flex w-full items-center gap-3 rounded-[16px] px-3.5 py-3 text-left text-sm transition-colors',
-                        activePage === id
-                          ? 'platform-preview-nav-entry-active text-white'
-                          : 'text-white/62 hover:text-white/88'
-                      )}
-                    >
-                      <Icon className="h-4 w-4 shrink-0" />
-                      <span className="truncate">{label}</span>
-                    </button>
-                  ))}
-                </div>
-
-                {loadedInstances.length > 0 ? (
-                  <>
-                    <div className="platform-preview-nav-divider" />
-                    <div className="platform-preview-nav-caption px-2">
-                      {t('magnet.platform.mock.nav.loaded')}
-                    </div>
-                    <div className="platform-preview-nav-section">
-                      {loadedInstances.map((instance) => {
-                        const meta = PLATFORM_META[instance.platform];
-                        const Icon = meta.Icon;
-
-                        return (
-                          <button
-                            key={instance.id}
-                            type="button"
-                            onClick={() => {
-                              setActivePage(instance.id);
-                              setSubmittedQuery('');
-                              setNavOpen(false);
-                            }}
-                            className={cx(
-                              'platform-preview-nav-instance flex w-full items-center justify-between gap-3 rounded-full px-4 py-3 text-left text-sm transition-colors',
-                              activeInstance?.id === instance.id
-                                ? 'platform-preview-nav-instance-active text-white'
-                                : 'text-white/64 hover:text-white/88'
-                            )}
-                          >
-                            <div className="flex min-w-0 items-center gap-3">
-                              <Icon className="h-4 w-4 shrink-0" style={{ color: meta.accent }} />
-                              <span className="truncate">{instance.accountUid}</span>
-                            </div>
-                            <span
-                              className="platform-preview-nav-instance-status inline-flex h-2.5 w-2.5 shrink-0 rounded-full"
-                              style={{ background: meta.accent }}
-                            />
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </>
-                ) : null}
-              </div>
+              {renderNavPopover()}
             </div>
 
             <form
@@ -1767,10 +1708,20 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             >
               <Search className="h-4 w-4 shrink-0 text-white/35" />
               <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                value={shellSearchValue}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  if (activeWorkspaceShellSearch) {
+                    setSubmittedQuery('');
+                    activeWorkspaceShellSearch.onChange(nextValue);
+                    return;
+                  }
+                  setQuery(nextValue);
+                }}
+                placeholder={shellSearchPlaceholder}
                 aria-label={t('magnet.platform.nav.search')}
-                className="h-8 min-w-0 flex-1 bg-transparent text-sm text-white outline-none"
+                disabled={shellSearchDisabled}
+                className="h-8 min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/28"
               />
               <div
                 className={cx(
@@ -1782,7 +1733,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                   type="button"
                   onClick={() => {
                     if (!showDailyFilter) return;
-                    setFilterOpen((prev) => !prev);
+                    setFilterOpen((current) => !current);
                     setLauncherOpen(false);
                     setNavOpen(false);
                   }}
@@ -1808,32 +1759,36 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                     {t('magnet.platform.search.filterPanelTitle')}
                   </div>
                   <div className="p-2">
-                    {searchPlatformOptions.map((platform) => {
-                      const selected = selectedSearchPlatforms.includes(platform);
-                      const meta = PLATFORM_META[platform];
-                      const Icon = meta.Icon;
+                    {registeredItems.map((item) => {
+                      const selected = selectedFilterConnectorIds.includes(item.entry.connectorId);
+                      const label = item.definition?.labelKey
+                        ? t(item.definition.labelKey)
+                        : item.facade?.displayName ?? item.entry.connectorId;
+                      const { Icon, color } = getConnectorVisualMeta(item.entry.connectorId);
 
                       return (
                         <button
-                          key={platform}
+                          key={item.entry.connectorId}
                           type="button"
                           onClick={() => {
-                            setSelectedSearchPlatforms((prev) => {
-                              if (selected && prev.length === 1) return prev;
-                              return selected ? prev.filter((item) => item !== platform) : [...prev, platform];
+                            setSelectedFilterConnectorIds((current) => {
+                              if (selected && current.length === 1) return current;
+                              return selected
+                                ? current.filter((connectorId) => connectorId !== item.entry.connectorId)
+                                : [...current, item.entry.connectorId];
                             });
                           }}
                           className="flex w-full items-center justify-between rounded-[14px] px-3 py-3 text-left transition-colors hover:bg-white/6"
                         >
                           <div className="flex min-w-0 items-center gap-3">
-                            <Icon className="h-4 w-4 shrink-0" style={{ color: meta.accent }} />
-                            <span className="truncate text-sm text-white/78">{getPlatformName(t, platform)}</span>
+                            <Icon className="h-4 w-4 shrink-0" style={{ color }} />
+                            <span className="truncate text-sm text-white/78">{label}</span>
                           </div>
                           <span
                             className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border"
                             style={{
-                              background: selected ? meta.accent : 'transparent',
-                              borderColor: selected ? meta.accent : 'rgba(255,255,255,0.16)',
+                              background: selected ? color : 'transparent',
+                              borderColor: selected ? color : 'rgba(255,255,255,0.16)',
                             }}
                           >
                             {selected ? <Check className="h-3 w-3 text-white" /> : null}
@@ -1857,16 +1812,18 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
           <div className="justify-self-end">
             <button
-            type="button"
-            onClick={() => {
-              setSettingsOpen(true);
-              closeMenus();
-            }}
-            className="platform-preview-soft-ring inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/4 text-white/62"
-            title={t('magnet.platform.mock.action.openSettings')}
-          >
-            <Settings className="h-4 w-4" />
-          </button>
+              type="button"
+              onClick={() => {
+                setSettingsOpen(true);
+                setDrawerOpen(false);
+                closeCreateDialog();
+                closeTopMenus();
+              }}
+              className="platform-preview-soft-ring inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/4 text-white/62"
+              title={t('magnet.platform.mock.action.openSettings')}
+            >
+              <Settings className="h-4 w-4" />
+            </button>
           </div>
         </header>
 
@@ -1876,7 +1833,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
               type="button"
               className="absolute inset-0 z-10"
               aria-label={t('common.action.close')}
-              onClick={closeMenus}
+              onClick={closeTopMenus}
             />
           ) : null}
 
@@ -1903,22 +1860,35 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                   : 'platform-preview-page-stage-entered'
             )}
           >
-            {renderedContent}
+            {renderMainPanel()}
           </div>
 
-          <button
-            type="button"
-            onClick={() => setDrawerOpen(true)}
+            <button
+              type="button"
+              onClick={() => {
+                if (activeWorkspacePlaylistOpener) {
+                  setDrawerOpen(false);
+                  setSettingsOpen(false);
+                  closeCreateDialog();
+                  activeWorkspacePlaylistOpener();
+                  return;
+                }
+                setDrawerOpen(true);
+                setSettingsOpen(false);
+                closeCreateDialog();
+              }}
             className="platform-preview-fab platform-preview-fab-left absolute bottom-4 left-4 z-20 inline-flex h-11 shrink-0 items-center rounded-full text-white/72"
-            title={t('magnet.platform.mock.action.openDrawer')}
+            title={activeWorkspacePrimaryActionTitle}
           >
             <Library className="h-5 w-5 shrink-0" />
-            <span className="platform-preview-fab-label">{t('magnet.platform.mock.fab.playlists')}</span>
+            <span className="platform-preview-fab-label">{activeWorkspacePrimaryActionLabel}</span>
           </button>
 
           <button
             type="button"
             onClick={() => {
+              setDrawerOpen(false);
+              setSettingsOpen(false);
               openCreateDialog();
             }}
             className="platform-preview-fab platform-preview-fab-right absolute bottom-4 right-4 z-20 inline-flex h-11 shrink-0 items-center rounded-full text-white/72"
@@ -1954,26 +1924,116 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
               </button>
             </div>
             <div className="platform-preview-scroll flex-1 space-y-4 overflow-y-auto pr-1">
-              {drawerGroups.map((group) => (
-                <div key={group.id} className="space-y-2">
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-white/28">{group.label}</div>
-                  {group.playlists.map((playlist) => (
-                    <button
-                      key={playlist.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedPlaylistByScope((prev) => ({ ...prev, [group.scopeId]: playlist.id }));
-                        setActivePage(group.scopeId === 'local' ? 'local' : group.scopeId);
-                        setDrawerOpen(false);
-                      }}
-                      className="platform-preview-card flex w-full items-center gap-3 rounded-[16px] px-3 py-3 text-left text-sm text-white/68"
-                    >
-                      {group.platform ? <PlatformGlyph platform={group.platform} compact /> : <Library className="h-4 w-4" />}
-                      <span className="truncate">{playlist.name}</span>
-                    </button>
-                  ))}
+              {drawerGroups.length > 0 ? (
+                drawerGroups.map((group) => (
+                  <div key={group.id} className="space-y-2">
+                    <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-white/28">
+                      {group.connectorId ? (
+                        <ConnectorGlyph connectorId={group.connectorId} compact />
+                      ) : (
+                        <span className="platform-preview-soft-ring inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/4 text-white/58">
+                          <Library className="h-4 w-4" />
+                        </span>
+                      )}
+                      <span className="truncate">{group.label}</span>
+                    </div>
+                    {group.bilibiliFolders && group.bilibiliFolders.length > 0 ? (
+                      <div className="space-y-2">
+                        <div className="px-1 text-[10px] uppercase tracking-[0.18em] text-white/24">
+                          {t('magnet.platform.bilibili.folder.title')}
+                        </div>
+                        {group.bilibiliFolders.map((folder) => {
+                          const selected =
+                            activeConnectorId === group.connectorId &&
+                            bilibiliController.bilibiliPreviewFolders.selectedFolderId === folder.folderId;
+                          return (
+                            <button
+                              key={`${group.id}:folder:${folder.folderId ?? 'recommended'}`}
+                              type="button"
+                              onClick={() => handleSelectBilibiliDrawerFolder(folder.folderId)}
+                              className={cx(
+                                'platform-preview-card flex w-full items-center gap-3 rounded-[16px] px-3 py-3 text-left text-sm transition-colors',
+                                selected ? 'platform-preview-card-active text-white' : 'text-white/68'
+                              )}
+                            >
+                              <span className="platform-preview-soft-ring inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/4 text-white/58">
+                                {folder.folderId ? (
+                                  <Library className="h-4 w-4" />
+                                ) : (
+                                  <Compass className="h-4 w-4" />
+                                )}
+                              </span>
+                              <span className="min-w-0 flex-1 truncate">{folder.title}</span>
+                              {typeof folder.count === 'number' ? (
+                                <span className="text-xs text-white/34">{folder.count}</span>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                    {group.folderLoading ? (
+                      <div className="rounded-[16px] border border-dashed border-white/10 bg-white/3 px-3 py-4 text-center text-xs text-white/42">
+                        {t('common.state.loading')}
+                      </div>
+                    ) : null}
+                    {group.folderError ? (
+                      <div className="rounded-[16px] border border-dashed border-rose-400/20 bg-rose-400/5 px-3 py-4 text-center text-xs text-rose-200/80">
+                        {group.folderError}
+                      </div>
+                    ) : null}
+                    {group.playlists.length > 0 ? (
+                      <div className="space-y-2">
+                        {group.bilibiliFolders && group.bilibiliFolders.length > 0 ? (
+                          <div className="px-1 text-[10px] uppercase tracking-[0.18em] text-white/24">
+                            {t('magnet.platform.bilibili.drawer.playlists.open')}
+                          </div>
+                        ) : null}
+                        {group.playlists.map((playlist) => {
+                          const selected =
+                            group.connectorId !== null
+                              ? selectedPlaylistIdsByConnector[group.connectorId] === playlist.id &&
+                                activeConnectorId === group.connectorId
+                              : activeConnectorId !== null &&
+                                selectedLocalPlaylistIdsByConnector[activeConnectorId] === playlist.id;
+
+                          return (
+                            <button
+                              key={`${group.id}:${playlist.id}`}
+                              type="button"
+                              onClick={() => handleSelectDrawerPlaylist(group.connectorId, playlist.id)}
+                              className={cx(
+                                'platform-preview-card flex w-full items-center gap-3 rounded-[16px] px-3 py-3 text-left text-sm transition-colors',
+                                selected ? 'platform-preview-card-active text-white' : 'text-white/68'
+                              )}
+                            >
+                              {group.connectorId ? (
+                                <ConnectorGlyph connectorId={group.connectorId} compact active={selected} />
+                              ) : (
+                                <span className="platform-preview-soft-ring inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/4 text-white/58">
+                                  <Library className="h-4 w-4" />
+                                </span>
+                              )}
+                              <span className="min-w-0 flex-1 truncate">{playlist.name}</span>
+                              <span className="text-xs text-white/34">
+                                {playlist.trackCount ?? playlist.tracks.length}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : !group.bilibiliFolders || group.bilibiliFolders.length === 0 ? (
+                      <div className="rounded-[16px] border border-dashed border-white/10 bg-white/3 px-3 py-5 text-center text-xs text-white/42">
+                        {t('magnet.platform.mock.create.existingEmpty')}
+                      </div>
+                    ) : null}
+                  </div>
+                ))
+              ) : (
+                <div className="flex min-h-[220px] items-center justify-center rounded-[20px] border border-dashed border-white/10 bg-white/3 px-6 text-center text-sm text-white/42">
+                  {t('magnet.platform.empty.noRegistered')}
                 </div>
-              ))}
+              )}
             </div>
           </aside>
 
@@ -1993,32 +2053,33 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                 )}
               >
                 <Settings className="h-4 w-4" />
-                Host
+                <span>{t('magnet.platform.mock.settings.titleHost')}</span>
               </button>
-              {MOCK_INSTANCES.map((instance) => (
-                <button
-                  key={instance.id}
-                  type="button"
-                  onClick={() => setSettingsTab(instance.id)}
-                  className={cx(
-                    'mt-2 flex w-full items-center gap-3 rounded-[16px] px-3 py-3 text-left text-sm transition-colors',
-                    settingsTab === instance.id ? 'bg-white/10 text-white' : 'text-white/62 hover:bg-white/6'
-                  )}
-                >
-                  <PlatformGlyph platform={instance.platform} compact active={settingsTab === instance.id} />
-                  <span className="truncate">{instance.accountUid}</span>
-                </button>
-              ))}
+              {registeredItems.map((item) => {
+                const label = item.facade?.accountUid ??
+                  (item.definition?.labelKey ? t(item.definition.labelKey) : item.entry.connectorId);
+
+                return (
+                  <button
+                    key={item.entry.connectorId}
+                    type="button"
+                    onClick={() => setSettingsTab(item.entry.connectorId)}
+                    className={cx(
+                      'mt-2 flex w-full items-center gap-3 rounded-[16px] px-3 py-3 text-left text-sm transition-colors',
+                      settingsTab === item.entry.connectorId ? 'bg-white/10 text-white' : 'text-white/62 hover:bg-white/6'
+                    )}
+                  >
+                    <ConnectorGlyph connectorId={item.entry.connectorId} compact active={settingsTab === item.entry.connectorId} />
+                    <span className="truncate">{label}</span>
+                  </button>
+                );
+              })}
             </div>
 
             <div className="platform-preview-scroll flex-1 overflow-y-auto p-5">
               <div className="mb-4 flex items-center justify-between">
                 <div className="text-sm text-white/72">
-                  {settingsTab === 'host'
-                    ? t('magnet.platform.mock.settings.titleHost')
-                    : instancesById[settingsTab]
-                      ? getPlatformName(t, instancesById[settingsTab].platform)
-                      : ''}
+                  {settingsTab === 'host' ? t('magnet.platform.mock.settings.titleHost') : settingsLabel}
                 </div>
                 <button type="button" onClick={() => setSettingsOpen(false)} className="text-white/52">
                   <X className="h-4 w-4" />
@@ -2027,10 +2088,30 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
               {settingsTab === 'host' ? (
                 <div className="space-y-4">
+                  <div className="flex items-center justify-between gap-3 rounded-[18px] border border-white/8 bg-black/10 px-4 py-3">
+                    <div>
+                      <div className="text-sm text-white">{t('magnet.platform.mock.config.title')}</div>
+                      <div className="mt-1 text-xs text-white/42">
+                        {t('magnet.platform.mock.config.subtitle', { count: loadedCount })}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleRefreshAll();
+                      }}
+                      className="platform-preview-detail-ghost inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs text-white/76"
+                      disabled={refreshing}
+                    >
+                      <RefreshCw className={cx('h-3.5 w-3.5', refreshing && 'animate-spin')} />
+                      <span>{refreshing ? t('common.state.loading') : t('magnet.platform.action.refresh')}</span>
+                    </button>
+                  </div>
+
                   <div>
                     <div className="mb-2 text-xs text-white/32">{t('magnet.platform.mock.settings.groupAggregation')}</div>
                     <div className="flex flex-wrap gap-2">
-                      {HOST_SETTINGS.aggregation.map((item, index) => (
+                      {[String(loadedCount), String(authorizedCount), String(registeredCount)].map((item, index) => (
                         <span key={item} className={cx('rounded-full border px-3 py-1.5 text-xs', index === 0 ? 'border-white/18 bg-white/10 text-white' : 'border-white/10 text-white/48')}>
                           {item}
                         </span>
@@ -2040,7 +2121,17 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                   <div>
                     <div className="mb-2 text-xs text-white/32">{t('magnet.platform.mock.settings.groupSearch')}</div>
                     <div className="flex flex-wrap gap-2">
-                      {HOST_SETTINGS.search.map((item, index) => (
+                      {[String(searchReadyCount), t('magnet.platform.search.filterTitle')].map((item, index) => (
+                        <span key={item} className={cx('rounded-full border px-3 py-1.5 text-xs', index === 0 ? 'border-white/18 bg-white/10 text-white' : 'border-white/10 text-white/48')}>
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-2 text-xs text-white/32">{t('magnet.platform.mock.settings.groupIdentify')}</div>
+                    <div className="flex flex-wrap gap-2">
+                      {HOST_SETTINGS.identify.map((item, index) => (
                         <span key={item} className={cx('rounded-full border px-3 py-1.5 text-xs', index === 0 ? 'border-white/18 bg-white/10 text-white' : 'border-white/10 text-white/48')}>
                           {item}
                         </span>
@@ -2048,16 +2139,66 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                     </div>
                   </div>
                 </div>
-              ) : instancesById[settingsTab] ? (
+              ) : settingsItem ? (
                 <div className="space-y-4">
-                  <div className="mb-2 text-xs text-white/32">{t('magnet.platform.mock.settings.groupQuality')}</div>
-                  <div className="flex flex-wrap gap-2">
-                    {instancesById[settingsTab].qualityOptions.map((item, index) => (
-                      <span key={item} className={cx('rounded-full border px-3 py-1.5 text-xs', index === 0 ? 'border-white/18 bg-white/10 text-white' : 'border-white/10 text-white/48')}>
-                        {item}
-                      </span>
-                    ))}
+                  <div className="rounded-[18px] border border-white/8 bg-black/10 px-4 py-4">
+                    <div className="flex items-center gap-3">
+                      <ConnectorGlyph connectorId={settingsItem.entry.connectorId} active />
+                      <div className="min-w-0">
+                        <div className="truncate text-base font-medium text-white">{settingsLabel}</div>
+                        <div className="mt-1 text-xs text-white/42">
+                          {settingsItem.facade?.accountUid ?? activeAccountValue}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2 text-xs text-white/58">
+                      <span>{t('magnet.platform.instance.auth', { state: t(toAuthLabelKey(settingsItem.facade?.authState)) })}</span>
+                      <span>{t('magnet.platform.card.connectorId', { connectorId: settingsItem.entry.connectorId })}</span>
+                    </div>
                   </div>
+
+                  {settingsWorkspaceKind === 'bilibili' ? (
+                    <div className="rounded-[18px] border border-white/8 bg-black/10 px-4 py-4">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm text-white">{t('magnet.platform.bilibili.settings.title')}</div>
+                          <div className="mt-1 text-xs text-white/42">
+                            {t('magnet.platform.mock.settings.titleInstance', { platform: settingsLabel })}
+                          </div>
+                        </div>
+                        <span className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/48">
+                          {t(toAuthLabelKey(settingsItem.facade?.authState))}
+                        </span>
+                      </div>
+
+                      <BilibiliPlaybackSettingsContent {...bilibiliController.bilibiliSettingsProps} />
+                    </div>
+                  ) : null}
+
+                  {(settingsItem.contractRecord || listCapabilityLabelKeys(settingsContract).length > 0) ? (
+                    <div>
+                      <div className="mb-2 text-xs text-white/32">{t('magnet.platform.instance.registered')}</div>
+                      <div className="flex flex-wrap gap-2">
+                        {settingsItem.contractRecord ? (
+                          <span className="rounded-full border border-white/18 bg-white/10 px-3 py-1.5 text-xs text-white">
+                            {t('magnet.platform.contract.version', {
+                              version: settingsItem.contractRecord.contract.contractVersion,
+                            })}
+                          </span>
+                        ) : null}
+                        {listCapabilityLabelKeys(settingsContract).map((labelKey) => (
+                          <span key={labelKey} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/48">
+                            {t(labelKey)}
+                          </span>
+                        ))}
+                        {listApiBindingKeys(settingsContract).map((bindingKey) => (
+                          <span key={bindingKey} className="rounded-full border border-white/10 px-3 py-1.5 text-xs uppercase tracking-[0.12em] text-white/48">
+                            {bindingKey}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -2067,16 +2208,14 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             className={cx(
               'platform-preview-dialog platform-preview-create-dialog absolute left-1/2 top-1/2 z-40 flex max-h-[calc(100%-1.5rem)] max-w-[calc(100%-1.5rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[24px] border border-white/10 p-5',
               createOpen ? 'scale-100 opacity-100' : 'pointer-events-none scale-[0.96] opacity-0',
-              createView === 'create'
-                ? 'platform-preview-create-dialog-create'
-                : 'platform-preview-create-dialog-existing'
+              createView === 'create' ? 'platform-preview-create-dialog-create' : 'platform-preview-create-dialog-existing'
             )}
           >
             <div className="mb-4 flex items-center gap-3">
               <button
                 type="button"
                 onClick={() => {
-                  setCreateView((prev) => (prev === 'create' ? 'existing' : 'create'));
+                  setCreateView((current) => (current === 'create' ? 'existing' : 'create'));
                   setCreateNameEditing(false);
                 }}
                 className="platform-preview-create-toggle platform-preview-soft-ring inline-flex h-9 shrink-0 items-center rounded-full bg-white/4 text-white/62"
@@ -2146,33 +2285,15 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             <div className="platform-preview-scroll min-h-0 flex-1">
               {createView === 'create' ? (
                 <div className="flex h-full min-h-0 flex-col gap-3">
-                  <div className="platform-preview-create-canvas platform-preview-scroll min-h-0 flex-1 rounded-[20px] px-3 py-3">
-                    {stagedCreateTracks.length > 0 ? (
-                      <div className="space-y-2">
-                        {stagedCreateTracks.map((track) => (
-                          <div
-                            key={track.id}
-                            className="platform-preview-card grid grid-cols-[auto,minmax(0,1fr),auto] items-center gap-3 rounded-[18px] px-3 py-3"
-                          >
-                            <PlatformGlyph platform={track.platform} compact />
-                            <div className="min-w-0">
-                              <div className="truncate text-sm text-white">{track.title}</div>
-                              <div className="truncate text-xs text-white/42">{track.artist}</div>
-                            </div>
-                            <div className="text-xs text-white/36">{track.duration}</div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="flex h-full min-h-[180px] items-center justify-center text-xs text-white/36">
-                        {t('magnet.platform.mock.create.itemsEmpty')}
-                      </div>
-                    )}
+                  <div className="platform-preview-create-canvas flex min-h-0 flex-1 items-center justify-center rounded-[20px] px-3 py-3">
+                    <div className="text-center text-xs text-white/36">
+                      {t('magnet.platform.mock.create.itemsEmpty')}
+                    </div>
                   </div>
                   <div className="flex justify-end">
                     <button
                       type="button"
-                      onClick={handleCreateLocal}
+                      onClick={handleCreateLocalPlaylist}
                       className="rounded-full border border-white bg-white px-4 py-2 text-sm text-black"
                     >
                       {t('common.action.create')}
@@ -2181,14 +2302,16 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                 </div>
               ) : (
                 <div className="space-y-2 pr-1">
-                  {audioLocalPlaylists.length > 0 ? (
-                    audioLocalPlaylists.map((playlist) => (
+                  {workspacePlaylists.length > 0 ? (
+                    workspacePlaylists.map((playlist) => (
                       <button
                         key={playlist.id}
                         type="button"
                         onClick={() => {
-                          setSelectedPlaylistByScope((prev) => ({ ...prev, local: playlist.id }));
-                          setActivePage('local');
+                          const targetConnectorId = activeConnectorId ?? registeredItems[0]?.entry.connectorId ?? null;
+                          if (targetConnectorId) {
+                            handleSelectDrawerPlaylist(targetConnectorId, playlist.id);
+                          }
                           closeCreateDialog();
                         }}
                         className="platform-preview-card flex w-full items-center gap-3 rounded-[18px] px-3 py-3 text-left text-white/72 transition-colors hover:text-white"
@@ -2217,6 +2340,307 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       </div>
     </div>
   );
+  /*
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] bg-[#0b1016] text-white">
+      <div className="flex h-full min-h-0 flex-col gap-4 p-4">
+        <header className="rounded-[24px] border border-white/8 bg-white/[0.03] px-5 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-[11px] uppercase tracking-[0.22em] text-white/36">
+                {t('magnet.platform.hero.kicker')}
+              </div>
+              <h3 className="mt-2 text-[22px] font-semibold text-white">{t('magnet.platform.title')}</h3>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-white/62">
+                {t('magnet.platform.subtitle')}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              {skinProps.showSummary ? (
+                <>
+                  <div className="rounded-[18px] border border-white/8 bg-black/20 px-3 py-2 text-xs text-white/62">
+                    {t('magnet.platform.summary.connectors', {
+                      total: registeredCount,
+                      authorized: authorizedCount,
+                    })}
+                  </div>
+                  <div className="rounded-[18px] border border-white/8 bg-black/20 px-3 py-2 text-xs text-white/62">
+                    {t('magnet.platform.summary.loaded', {
+                      count: loadedCount,
+                    })}
+                  </div>
+                </>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={() => {
+                  void handleRefreshAll();
+                }}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-sm text-white/82 transition hover:bg-white/[0.1]"
+                disabled={refreshing}
+              >
+                <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+                <span>{refreshing ? t('common.state.loading') : t('magnet.platform.action.refresh')}</span>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[320px,minmax(0,1fr)]">
+          <aside className="flex min-h-0 flex-col rounded-[24px] border border-white/8 bg-white/[0.03]">
+            <div className="border-b border-white/8 px-4 py-4">
+              <div className="text-sm font-semibold text-white">{t('magnet.platform.launcher.title')}</div>
+              <p className="mt-1 text-xs leading-5 text-white/54">
+                {t('magnet.platform.launcher.subtitle')}
+              </p>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto px-3 py-3">
+              {registeredItems.length === 0 ? (
+                <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-3 rounded-[18px] border border-dashed border-white/10 bg-black/10 px-5 text-center">
+                  <LayoutGrid className="h-8 w-8 text-white/28" />
+                  <div className="text-sm font-medium text-white">
+                    {t('magnet.platform.empty.noRegistered')}
+                  </div>
+                  <p className="max-w-[220px] text-xs leading-5 text-white/54">
+                    {t('magnet.platform.empty.noRegisteredHint')}
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {registeredItems.map((item) => {
+                    const { Icon, color } = getConnectorVisualMeta(item.entry.connectorId);
+                    const mounted = item.renderSelection?.mounted === true;
+                    const selected = item.entry.connectorId === activeConnectorId;
+                    const canToggleMounted =
+                      item.facade?.authState === 'authorized' && Boolean(item.instance);
+
+                    return (
+                      <div
+                        key={item.entry.connectorId}
+                        className={`rounded-[20px] border p-3 transition ${
+                          selected
+                            ? 'border-white/16 bg-white/[0.09]'
+                            : 'border-white/8 bg-black/10 hover:bg-white/[0.05]'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <button
+                            type="button"
+                            className="min-w-0 flex-1 text-left"
+                            onClick={() => setSelectedConnectorId(item.entry.connectorId)}
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/20">
+                                <Icon className="h-5 w-5" style={{ color }} />
+                              </span>
+                              <span className="min-w-0">
+                                <span className="block truncate text-sm font-medium text-white">
+                                  {item.definition?.labelKey
+                                    ? t(item.definition.labelKey)
+                                    : item.facade?.displayName ?? item.entry.connectorId}
+                                </span>
+                                <span className="mt-1 block truncate text-xs text-white/52">
+                                  {item.facade?.accountUid ?? t(toAuthLabelKey(item.facade?.authState))}
+                                </span>
+                              </span>
+                            </div>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleToggleMounted(item)}
+                            disabled={!canToggleMounted}
+                            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
+                              mounted
+                                ? 'border-emerald-400/20 bg-emerald-400/12 text-emerald-200'
+                                : 'border-white/10 bg-white/[0.05] text-white/72'
+                            } disabled:cursor-not-allowed disabled:opacity-50`}
+                          >
+                            <Power className="h-3.5 w-3.5" />
+                            <span>
+                              {t(
+                                mounted
+                                  ? 'magnet.platform-login.action.deactivate'
+                                  : 'magnet.platform-login.action.activate'
+                              )}
+                            </span>
+                          </button>
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <span
+                            className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] ${
+                              mounted
+                                ? 'bg-emerald-400/12 text-emerald-200'
+                                : 'bg-white/[0.06] text-white/62'
+                            }`}
+                          >
+                            {t(
+                              mounted
+                                ? 'magnet.platform.instance.loaded'
+                                : 'magnet.platform.instance.unloaded'
+                            )}
+                          </span>
+                          <span className="inline-flex items-center rounded-full bg-white/[0.06] px-2.5 py-1 text-[11px] text-white/62">
+                            {t('magnet.platform.instance.auth', {
+                              state: t(toAuthLabelKey(item.facade?.authState)),
+                            })}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </aside>
+
+          <section className="flex min-h-0 flex-col rounded-[24px] border border-white/8 bg-white/[0.03]">
+            {activeItem ? (
+              <>
+                <div className="border-b border-white/8 px-5 py-4">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-xs uppercase tracking-[0.18em] text-white/34">
+                        {t('magnet.platform.instance.registered')}
+                      </div>
+                      <h4 className="mt-2 truncate text-xl font-semibold text-white">
+                        {activeConnectorLabel}
+                      </h4>
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-white/58">
+                        <span>
+                          {t('magnet.platform.instance.account', {
+                            account: activeAccountValue,
+                          })}
+                        </span>
+                        <span>
+                          {t('magnet.platform.instance.auth', {
+                            state: activeAuthLabel,
+                          })}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {activeInstance ? (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleMounted(activeItem)}
+                          disabled={activeFacade?.authState !== 'authorized'}
+                          className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm transition ${
+                            activeRenderSelection?.mounted
+                              ? 'border-emerald-400/20 bg-emerald-400/12 text-emerald-200'
+                              : 'border-white/10 bg-white/[0.06] text-white/78'
+                          } disabled:cursor-not-allowed disabled:opacity-50`}
+                        >
+                          <Power className="h-4 w-4" />
+                          <span>
+                            {t(
+                              activeRenderSelection?.mounted
+                                ? 'magnet.platform-login.action.deactivate'
+                                : 'magnet.platform.instance.activateWorkspace'
+                            )}
+                          </span>
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {(activeContractRecord || capabilityLabelKeys.length > 0 || apiBindingKeys.length > 0) ? (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {activeContractRecord ? (
+                        <span className="rounded-full bg-white/[0.06] px-2.5 py-1 text-[11px] text-white/68">
+                          {t('magnet.platform.contract.version', {
+                            version: activeContractRecord.contract.contractVersion,
+                          })}
+                        </span>
+                      ) : null}
+                      {capabilityLabelKeys.map((labelKey) => (
+                        <span
+                          key={labelKey}
+                          className="rounded-full bg-white/[0.06] px-2.5 py-1 text-[11px] text-white/68"
+                        >
+                          {t(labelKey)}
+                        </span>
+                      ))}
+                      {apiBindingKeys.map((bindingKey) => (
+                        <span
+                          key={bindingKey}
+                          className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] uppercase tracking-[0.12em] text-white/54"
+                        >
+                          {bindingKey}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="min-h-0 flex-1 px-4 py-4">
+                  {!activeContractRecord || !activeDefinition ? (
+                    <div className="flex h-full min-h-[360px] flex-col items-center justify-center gap-3 rounded-[20px] border border-dashed border-white/10 bg-black/10 px-6 text-center">
+                      <LayoutGrid className="h-8 w-8 text-white/28" />
+                      <div className="text-base font-medium text-white">
+                        {t('magnet.platform-login.status.comingSoon')}
+                      </div>
+                      <p className="max-w-md text-sm leading-6 text-white/56">
+                        {t('magnet.platform.empty.noMountedHint')}
+                      </p>
+                    </div>
+                  ) : activeRenderSelection?.mounted !== true ? (
+                    <div className="flex h-full min-h-[360px] flex-col items-center justify-center gap-4 rounded-[20px] border border-dashed border-white/10 bg-black/10 px-6 text-center">
+                      <LayoutGrid className="h-8 w-8 text-white/28" />
+                      <div className="text-base font-medium text-white">
+                        {t('magnet.platform.empty.noMounted')}
+                      </div>
+                      <p className="max-w-md text-sm leading-6 text-white/56">
+                        {t('magnet.platform.empty.noMountedHint')}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleMounted(activeItem)}
+                        disabled={activeFacade?.authState !== 'authorized'}
+                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-sm text-white/82 transition hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Power className="h-4 w-4" />
+                        <span>{t('magnet.platform.instance.activateWorkspace')}</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex h-full min-h-0 flex-col gap-4">
+                      <div className="rounded-[18px] border border-white/8 bg-black/10 px-3 py-3">
+                        {renderWorkspaceToolbar()}
+                      </div>
+                      <div className="min-h-0 flex-1 overflow-hidden rounded-[20px] border border-white/8 bg-black/10 p-2">
+                        {connectorViewsLoading && !activeFacade ? (
+                          <div className="flex h-full min-h-[320px] items-center justify-center text-sm text-white/48">
+                            {t('common.state.loading')}
+                          </div>
+                        ) : (
+                          renderWorkspaceBody()
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="flex h-full min-h-[360px] flex-col items-center justify-center gap-3 px-6 text-center">
+                <LayoutGrid className="h-8 w-8 text-white/28" />
+                <div className="text-base font-medium text-white">
+                  {t('magnet.platform.empty.noRegistered')}
+                </div>
+                <p className="max-w-md text-sm leading-6 text-white/56">
+                  {t('magnet.platform.empty.noRegisteredHint')}
+                </p>
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
+    </div>
+  */
 };
 
 const PLATFORM_MAGNET_RENDERERS = {

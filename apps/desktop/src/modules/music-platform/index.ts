@@ -1,4 +1,37 @@
 export {
+  getPlatformCompatContract,
+  getPlatformCompatRegistryRecord,
+  getPlatformCompatRuntimeApi,
+  listPlatformCompatContracts,
+  listPlatformCompatRegistryRecords,
+  reconcileBuiltinPlatformCompatRegistrations,
+  registerPlatformCompatContract,
+  subscribePlatformCompatContracts,
+  subscribePlatformCompatRegistry,
+  unregisterPlatformCompatContract,
+  type PlatformCompatRegistryRecord,
+  type RegisterPlatformCompatContractInput,
+} from './contractRegistry';
+
+export {
+  getPlatformInstance,
+  listPlatformInstances,
+  refreshPlatformInstance,
+  removePlatformInstance,
+  subscribePlatformInstances,
+  upsertPlatformInstance,
+} from './instanceRegistry';
+
+export {
+  getPlatformRenderSelection,
+  listPlatformRenderSelections,
+  removePlatformRenderSelection,
+  setPlatformRenderSelectionMounted,
+  subscribePlatformRenderSelections,
+  upsertPlatformRenderSelection,
+} from './renderSelectionRegistry';
+
+export {
   beginPlatformQrLogin,
   beginBilibiliQrLogin,
   clearPlatformConnectorCookies,
@@ -16,8 +49,11 @@ export {
   refreshAndEmitPlatformConnectorAuthSnapshot,
   refreshAndEmitBilibiliConnectorAuthSnapshot,
   registerPlatformConnectorAdapter,
+  getBuiltinPlatformCompatContractRegistration,
+  listBuiltinPlatformCompatRegistrations,
   subscribePlatformConnectorAuthChanged,
   PLATFORM_CONNECTOR_AUTH_CHANGED_EVENT,
+  type BuiltinPlatformCompatRegistration,
   type PlatformConnectorAdapter,
   type PlatformConnectorDefinition,
   type PlatformConnectorAvailability,
@@ -33,6 +69,18 @@ export {
   type PlatformConnectorAuthState,
   type PlatformConnectorId,
 } from './connectorAuth';
+
+export {
+  createDefaultPlatformLoginRegistry,
+  persistPlatformLoginRegistry,
+  readPlatformLoginRegistry,
+  removePlatformLoginRegistryEntry,
+  sanitizePlatformLoginRegistry,
+  setPlatformLoginRegistryEntryEnabled,
+  subscribePlatformLoginRegistry,
+  upsertPlatformLoginRegistryEntry,
+  type PlatformLoginRegistryEntry,
+} from './platformLoginRegistry';
 
 export {
   getBilibiliPlaybackCacheSettings,
@@ -78,3 +126,11 @@ export {
   type PlatformTrackSearchOptions,
   type PlatformTrackSearchResult,
 } from './platformFacade';
+
+export type {
+  PlatformApiResult,
+  PlatformCompatContractFile,
+  PlatformCompatRuntimeApi,
+  PlatformInstanceRecord,
+  PlatformRenderSelectionRecord,
+} from '@pixel-matrix/plugin-platform-contracts';

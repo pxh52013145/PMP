@@ -5,7 +5,9 @@ import type {
   NeteaseSongPage,
   NeteaseUserPlaylistItem,
 } from '../../../modules/music-platform';
+import { Disc3 } from 'lucide-react';
 import { PmpButton, PmpDrawer } from '../../primitives';
+import { PlatformResourceCard } from './PlatformResourceCard';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
 
@@ -86,9 +88,6 @@ export function NeteaseWorkspace(props: NeteaseWorkspaceProps) {
     onRefreshResources,
     onLoadMoreResources,
     onPlaySong,
-    onQueueSong,
-    onAddSongToPlaylist,
-    onOpenSong,
     onCloseDrawers,
     onToggleCollectionDrawer,
     onTogglePlaylistDrawer,
@@ -292,73 +291,34 @@ export function NeteaseWorkspace(props: NeteaseWorkspaceProps) {
                 {resourcePage.items.map((item) => {
                   const preparing = preparingSongId === item.songId;
                   return (
-                    <article
+                    <PlatformResourceCard
                       key={item.songId}
-                      className={`platform-magnet-bilibili-resource-card ${
-                        preparing ? 'platform-magnet-bilibili-resource-card--preparing' : ''
-                      }`}
-                    >
-                      <div className="platform-magnet-bilibili-resource-cover" aria-hidden="true">
-                        {item.coverUrl ? (
-                          <img src={item.coverUrl} alt={item.title} loading="lazy" />
-                        ) : (
-                          <span>N</span>
-                        )}
-                      </div>
-
-                      <div className="platform-magnet-bilibili-resource-main">
-                        <p className="platform-magnet-bilibili-resource-title">{item.title}</p>
-                        <p className="platform-magnet-bilibili-resource-meta">
-                          {t('magnet.platform.netease.resource.meta', {
-                            artist: item.artistNames,
-                            album: item.albumName ?? '-',
-                            duration: formatDuration(item.durationSeconds),
-                          })}
-                        </p>
-                        <p className="platform-magnet-bilibili-resource-bvid">
-                          {t('magnet.platform.netease.resource.songId', {
-                            songId: item.songId,
-                          })}
-                        </p>
-                        <div className="platform-magnet-bilibili-playlist-action-btns">
-                          <PmpButton
-                            type="button"
-                            className="platform-magnet-mini-btn"
-                            variant="primary"
-                            disabled={preparing}
-                            onClick={() => onPlaySong(item)}
-                          >
-                            {t('magnet.platform.netease.resource.actionPlay')}
-                          </PmpButton>
-                          <PmpButton
-                            type="button"
-                            className="platform-magnet-mini-btn"
-                            variant="default"
-                            disabled={preparing}
-                            onClick={() => onQueueSong(item)}
-                          >
-                            {t('magnet.platform.netease.resource.actionQueue')}
-                          </PmpButton>
-                          <PmpButton
-                            type="button"
-                            className="platform-magnet-mini-btn"
-                            variant="default"
-                            disabled={preparing}
-                            onClick={() => onAddSongToPlaylist(item)}
-                          >
-                            {t('magnet.platform.netease.resource.actionAddToPlaylist')}
-                          </PmpButton>
-                          <PmpButton
-                            type="button"
-                            className="platform-magnet-mini-btn"
-                            variant="ghost"
-                            onClick={() => onOpenSong(item)}
-                          >
-                            {t('magnet.platform.netease.resource.actionOpen')}
-                          </PmpButton>
-                        </div>
-                      </div>
-                    </article>
+                      accentColor="#ff6b87"
+                      coverUrl={item.coverUrl}
+                      coverAlt={item.title}
+                      coverFallbackLabel="N"
+                      title={item.title}
+                      subtitle={item.artistNames}
+                      detail={item.albumName ?? null}
+                      durationLabel={formatDuration(item.durationSeconds)}
+                      badges={
+                        [
+                          {
+                            id: `${item.songId}:platform`,
+                            label: 'Netease',
+                            tone: 'default' as const,
+                            compact: true,
+                            icon: <Disc3 className="h-3.5 w-3.5" />,
+                          },
+                        ]
+                      }
+                      preparing={preparing}
+                      titleHint={t('magnet.platform.netease.resource.actionPlay')}
+                      onClick={() => {
+                        if (preparing) return;
+                        onPlaySong(item);
+                      }}
+                    />
                   );
                 })}
               </div>

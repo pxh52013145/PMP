@@ -33,9 +33,9 @@ function toErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function normalizeBilibiliLookupInput(value: string): string {
+function normalizeBilibiliLookupInput(value: string): string | null {
   const trimmed = value.trim();
-  if (!trimmed) return '';
+  if (!trimmed) return null;
 
   const normalizeBvidToken = (token: string): string | null => {
     const normalized = token.trim();
@@ -60,7 +60,7 @@ function normalizeBilibiliLookupInput(value: string): string {
   }
 
   const matchedToken = trimmed.match(/(BV[0-9A-Za-z]{10})/i);
-  if (!matchedToken) return trimmed;
+  if (!matchedToken) return null;
   return `BV${matchedToken[1].slice(2)}`;
 }
 
@@ -112,7 +112,6 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
   const [resourcePage, setResourcePage] = useState<BilibiliFavoriteResourcePage | null>(null);
   const [resourceFilterQuery, setResourceFilterQuery] = useState('');
 
-  const [bvidQuery, setBvidQuery] = useState('');
   const [bvidSearching, setBvidSearching] = useState(false);
   const [bvidSearchError, setBvidSearchError] = useState<string | null>(null);
   const [bvidSearchResult, setBvidSearchResult] = useState<BilibiliFavoriteResourceItem | null>(null);
@@ -329,33 +328,41 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     [bilibiliAuthorized, resourceLoading, resourceLoadingMore, resourcePage, t]
   );
 
-  const handleBvSearch = useCallback(async () => {
-    const normalizedQuery = normalizeBilibiliLookupInput(bvidQuery);
+  const searchBilibiliResourceByLookupInput = useCallback(async (lookupInput: string): Promise<boolean> => {
+    const normalizedQuery = normalizeBilibiliLookupInput(lookupInput);
     if (!normalizedQuery) {
-      setBvidSearchResult(null);
-      setBvidSearchError(null);
-      return;
+      return false;
     }
 
-    setBvidQuery(normalizedQuery);
     setBvidSearching(true);
     setBvidSearchError(null);
+    setResourceError(null);
+    setResourceFilterQuery(normalizedQuery);
     try {
       const result = await searchBilibiliResourceByBvid(normalizedQuery);
       if (!result) {
         setBvidSearchResult(null);
         setBvidSearchError(t('magnet.platform.bilibili.resource.bvSearchNotFound'));
-        return;
+        return true;
       }
 
       setBvidSearchResult(result);
+      return true;
     } catch (err) {
       setBvidSearchResult(null);
       setBvidSearchError(toErrorMessage(err, t('magnet.platform.bilibili.resource.error')));
+      return true;
     } finally {
       setBvidSearching(false);
     }
-  }, [bvidQuery, t]);
+  }, [t]);
+
+  useEffect(() => {
+    if (normalizeBilibiliLookupInput(resourceFilterQuery)) return;
+    if (!bvidSearchResult && !bvidSearchError) return;
+    setBvidSearchResult(null);
+    setBvidSearchError(null);
+  }, [bvidSearchError, bvidSearchResult, resourceFilterQuery]);
 
   useEffect(() => {
     void refreshBilibiliFolders();
@@ -382,8 +389,6 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     resourcePage,
     resourceFilterQuery,
     setResourceFilterQuery,
-    bvidQuery,
-    setBvidQuery,
     bvidSearching,
     bvidSearchError,
     bvidSearchResult,
@@ -394,6 +399,6 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     searchBilibiliHomepageResources,
     refreshBilibiliResources,
     loadMoreBilibiliResources,
-    handleBvSearch,
+    searchBilibiliResourceByLookupInput,
   };
 }

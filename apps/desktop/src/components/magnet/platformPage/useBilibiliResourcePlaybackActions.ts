@@ -95,7 +95,7 @@ type UseBilibiliResourcePlaybackActionsParams = {
   audioService: IAudioService;
   normalizedPlaybackQualityHint: string;
   preferredQualityLabel: string;
-  selectedPlaylistId: string | null;
+  targetPlaylistId: string | null;
   t: Translator;
   setResourceError: (value: string | null) => void;
   setPlaylistError: (value: string | null) => void;
@@ -111,7 +111,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
     audioService,
     normalizedPlaybackQualityHint,
     preferredQualityLabel,
-    selectedPlaylistId,
+    targetPlaylistId,
     t,
     setResourceError,
     setPlaylistError,
@@ -253,20 +253,20 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
 
   const handleAddToPlaylist = useCallback(
     async (item: BilibiliFavoriteResourceItem) => {
-      if (!selectedPlaylistId) {
+      if (!targetPlaylistId) {
         setPlaylistError(t('magnet.platform.bilibili.playlist.addHintNoSelection'));
         return;
       }
 
       try {
         const track = await ensurePreparedTrack(item);
-        audioService.addTrackToPlaylist(selectedPlaylistId, track);
+        audioService.addTrackToPlaylist(targetPlaylistId, track);
         setPlaylistError(null);
       } catch (error) {
         setPlaylistError(toErrorMessage(error, t('magnet.platform.bilibili.playlist.error.addTrackFailed')));
       }
     },
-    [audioService, ensurePreparedTrack, selectedPlaylistId, setPlaylistError, t]
+    [audioService, ensurePreparedTrack, setPlaylistError, t, targetPlaylistId]
   );
 
   const handleOpenBilibiliResource = useCallback(
@@ -294,4 +294,3 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
     handleOpenBilibiliResource,
   };
 }
-
