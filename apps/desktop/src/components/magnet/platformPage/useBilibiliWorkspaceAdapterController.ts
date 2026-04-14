@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { Track } from '../../../services/audio';
 import type { IAudioService } from '../../../services/audio/types';
@@ -270,7 +270,7 @@ export function useBilibiliWorkspaceAdapterController(
     handleResetPlaybackCachePath,
   } = useBilibiliPlaybackCacheSettings(t);
 
-  const resourceGridRef = useRef<HTMLDivElement>(null);
+  const resourceViewportRef = useRef<HTMLDivElement>(null);
   const resourceLoadMoreSentinelRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -284,6 +284,7 @@ export function useBilibiliWorkspaceAdapterController(
     resourceError,
     setResourceError,
     resourcePage,
+    resourceSourceKey,
     resourceFilterQuery,
     setResourceFilterQuery,
     bvidSearching,
@@ -394,13 +395,15 @@ export function useBilibiliWorkspaceAdapterController(
 
   useEffect(() => {
     if (!selectedFolderId || !resourcePage?.hasMore) return;
-    const rootElement = resourceGridRef.current;
+    const rootElement = resourceViewportRef.current;
     const sentinelElement = resourceLoadMoreSentinelRef.current;
     if (!rootElement || !sentinelElement) return;
+    if (rootElement.scrollHeight <= rootElement.clientHeight + 1) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
         if (!entries.some((entry) => entry.isIntersecting)) return;
+        if (resourceLoading || resourceLoadingMore) return;
         void loadMoreBilibiliResources(selectedFolderId);
       },
       {
@@ -415,10 +418,19 @@ export function useBilibiliWorkspaceAdapterController(
   }, [
     filteredBilibiliResources.length,
     loadMoreBilibiliResources,
+    resourceLoading,
     resourceLoadingMore,
     resourcePage?.hasMore,
     selectedFolderId,
   ]);
+
+  useLayoutEffect(() => {
+    if (!resourceSourceKey) return;
+    const viewportElement = resourceViewportRef.current;
+    if (!viewportElement) return;
+    viewportElement.scrollTop = 0;
+    viewportElement.scrollLeft = 0;
+  }, [resourceSourceKey]);
 
   useEffect(() => {
     if (!qualityProbeSourceLocator) {
@@ -584,7 +596,7 @@ export function useBilibiliWorkspaceAdapterController(
     normalizedPlaybackQualityHint,
     resourceCoverUrlMap,
     resourceQualityTagMap,
-    resourceGridRef,
+    resourceViewportRef,
     resourceLoadMoreSentinelRef,
     playlistError,
     resolvedLyric,

@@ -12,6 +12,7 @@ import {
 } from '../../../modules/music-platform';
 
 const BILIBILI_RESOURCE_PAGE_SIZE = 40;
+const BILIBILI_FAVORITE_RESOURCE_EMPTY_PAGE_PROBE_LIMIT = 6;
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
 
@@ -110,6 +111,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
   const [resourceLoadingMore, setResourceLoadingMore] = useState(false);
   const [resourceError, setResourceError] = useState<string | null>(null);
   const [resourcePage, setResourcePage] = useState<BilibiliFavoriteResourcePage | null>(null);
+  const [resourceSourceKey, setResourceSourceKey] = useState<string | null>(null);
   const [resourceFilterQuery, setResourceFilterQuery] = useState('');
 
   const [bvidSearching, setBvidSearching] = useState(false);
@@ -139,6 +141,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       setSelectedFolderId(null);
       setFolderError(null);
       setResourcePage(null);
+      setResourceSourceKey(null);
       setResourceLoadingMore(false);
       return;
     }
@@ -152,6 +155,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       if (folders.length === 0) {
         setSelectedFolderId(null);
         setResourcePage(null);
+        setResourceSourceKey(null);
         setResourceLoadingMore(false);
         return;
       }
@@ -170,12 +174,14 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
   const refreshBilibiliRecommendedResources = useCallback(async () => {
     if (!bilibiliAuthorized) {
       setResourcePage(null);
+      setResourceSourceKey(null);
       setResourceLoadingMore(false);
       return;
     }
 
     setResourceLoading(true);
     try {
+      setResourceSourceKey('recommended');
       const page = await listBilibiliRecommendedResources();
       setResourcePage(
         page
@@ -198,6 +204,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     async (keyword: string) => {
       if (!bilibiliAuthorized) {
         setResourcePage(null);
+        setResourceSourceKey(null);
         setResourceLoadingMore(false);
         return;
       }
@@ -210,6 +217,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
 
       setResourceLoading(true);
       try {
+        setResourceSourceKey(`search:${normalizedKeyword.toLowerCase()}`);
         const page = await searchBilibiliResources({
           keyword: normalizedKeyword,
           pageNum: 1,
@@ -238,6 +246,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     async (folderId: string) => {
       if (!bilibiliAuthorized) {
         setResourcePage(null);
+        setResourceSourceKey(null);
         setResourceLoadingMore(false);
         return;
       }
@@ -245,17 +254,59 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       const normalizedFolderId = folderId.trim();
       if (!normalizedFolderId) {
         setResourcePage(null);
+        setResourceSourceKey(null);
         setResourceLoadingMore(false);
         return;
       }
 
       setResourceLoading(true);
       try {
-        const page = await listBilibiliFavoriteResources({
-          folderId: normalizedFolderId,
-          pageNum: 1,
-          pageSize: BILIBILI_RESOURCE_PAGE_SIZE,
-        });
+        setResourceSourceKey(`folder:${normalizedFolderId}`);
+        const requestFolderPage = async (pageNum: number, pageSize: number) =>
+          listBilibiliFavoriteResources({
+            folderId: normalizedFolderId,
+            pageNum,
+            pageSize,
+          });
+
+        let page = await requestFolderPage(1, BILIBILI_RESOURCE_PAGE_SIZE);
+        const expectedFolderCount =
+          bilibiliFolders.find((folder) => folder.folderId === normalizedFolderId)?.mediaCount ?? 0;
+
+        if (page && page.items.length === 0 && expectedFolderCount > 0) {
+          const candidateRequests: Array<{ pageNum: number; pageSize: number }> = [
+            { pageNum: 1, pageSize: 80 },
+          ];
+          const maxProbePageNum = Math.max(
+            2,
+            Math.min(
+              BILIBILI_FAVORITE_RESOURCE_EMPTY_PAGE_PROBE_LIMIT,
+              Math.ceil(expectedFolderCount / BILIBILI_RESOURCE_PAGE_SIZE)
+            )
+          );
+          for (let pageNum = 2; pageNum <= maxProbePageNum; pageNum += 1) {
+            candidateRequests.push({ pageNum, pageSize: BILIBILI_RESOURCE_PAGE_SIZE });
+          }
+
+          let bestFallback = page;
+          for (const candidate of candidateRequests) {
+            if (candidate.pageNum === 1 && candidate.pageSize === BILIBILI_RESOURCE_PAGE_SIZE) {
+              continue;
+            }
+            const candidatePage = await requestFolderPage(candidate.pageNum, candidate.pageSize);
+            if (!candidatePage) continue;
+            bestFallback = candidatePage;
+            if (candidatePage.items.length > 0 || !candidatePage.hasMore) {
+              page = candidatePage;
+              break;
+            }
+          }
+
+          if (page.items.length === 0) {
+            page = bestFallback;
+          }
+        }
+
         setResourcePage(
           page
             ? {
@@ -272,7 +323,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         setResourceLoading(false);
       }
     },
-    [bilibiliAuthorized, t]
+    [bilibiliAuthorized, bilibiliFolders, t]
   );
 
   const loadMoreBilibiliResources = useCallback(
@@ -289,11 +340,28 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       const nextPageNum = Math.max(2, currentPage.pageNum + 1);
       setResourceLoadingMore(true);
       try {
-        const nextPage = await listBilibiliFavoriteResources({
-          folderId: normalizedFolderId,
-          pageNum: nextPageNum,
-          pageSize: currentPage.pageSize || BILIBILI_RESOURCE_PAGE_SIZE,
-        });
+        const requestFolderPage = async (pageNum: number) =>
+          listBilibiliFavoriteResources({
+            folderId: normalizedFolderId,
+            pageNum,
+            pageSize: currentPage.pageSize || BILIBILI_RESOURCE_PAGE_SIZE,
+          });
+
+        let nextPage = await requestFolderPage(nextPageNum);
+        let probePageNum = nextPageNum;
+        let probeCount = 0;
+        while (
+          nextPage &&
+          nextPage.items.length === 0 &&
+          nextPage.hasMore &&
+          probeCount < BILIBILI_FAVORITE_RESOURCE_EMPTY_PAGE_PROBE_LIMIT
+        ) {
+          probeCount += 1;
+          probePageNum += 1;
+          const candidatePage = await requestFolderPage(probePageNum);
+          if (!candidatePage) break;
+          nextPage = candidatePage;
+        }
 
         if (!nextPage) {
           setResourcePage((prev) =>
@@ -387,6 +455,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     resourceError,
     setResourceError,
     resourcePage,
+    resourceSourceKey,
     resourceFilterQuery,
     setResourceFilterQuery,
     bvidSearching,

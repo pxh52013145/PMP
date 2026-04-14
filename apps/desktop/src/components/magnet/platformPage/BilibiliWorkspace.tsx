@@ -29,7 +29,7 @@ export type BilibiliWorkspaceProps = {
   normalizedPlaybackQualityHint: string;
   resourceCoverUrlMap: Record<string, string>;
   resourceQualityTagMap: Record<string, BilibiliQualityBadge[]>;
-  resourceGridRef: React.RefObject<HTMLDivElement>;
+  resourceViewportRef: React.RefObject<HTMLDivElement>;
   resourceLoadMoreSentinelRef: React.RefObject<HTMLDivElement>;
   playlistError: string | null;
   resolvedLyric: BilibiliLyricLocatorResolved | null;
@@ -62,7 +62,7 @@ export function BilibiliWorkspace(props: BilibiliWorkspaceProps) {
     normalizedPlaybackQualityHint,
     resourceCoverUrlMap,
     resourceQualityTagMap,
-    resourceGridRef,
+    resourceViewportRef,
     resourceLoadMoreSentinelRef,
     playlistError,
     resolvedLyric,
@@ -85,8 +85,8 @@ export function BilibiliWorkspace(props: BilibiliWorkspaceProps) {
           <p className="platform-magnet-note">{t('magnet.platform.bilibili.status.waiting')}</p>
         ) : null}
 
-        <div className="platform-magnet-bilibili-layout platform-magnet-bilibili-layout--drawers">
-          <section className="platform-magnet-panel platform-magnet-bilibili-resources platform-magnet-bilibili-resources--main">
+        <div className="platform-magnet-bilibili-layout platform-magnet-bilibili-layout--drawers platform-workspace-stage">
+          <section className="platform-magnet-resource-viewport">
             {bilibiliAuthorized ? (
               <div className="platform-magnet-bilibili-resource-meta-row">
                 {selectedBilibiliFolder ? (
@@ -128,64 +128,73 @@ export function BilibiliWorkspace(props: BilibiliWorkspaceProps) {
             {playlistError ? <p className="platform-magnet-error">{playlistError}</p> : null}
             {bvidSearchError ? <p className="platform-magnet-error">{bvidSearchError}</p> : null}
 
-            {resourceLoading ? (
-              <p className="platform-magnet-panel-empty">{t('magnet.platform.bilibili.resource.loading')}</p>
-            ) : filteredBilibiliResources.length === 0 ? (
-              <p className="platform-magnet-panel-empty">
-                {resourceFilterQuery.trim().length > 0
-                  ? t('magnet.platform.bilibili.resource.emptyFiltered')
-                  : selectedFolderId
-                    ? t('magnet.platform.bilibili.resource.empty')
-                    : t('magnet.platform.bilibili.resource.recommendedEmpty')}
-              </p>
-            ) : (
-              <BilibiliResourceGrid
-                items={filteredBilibiliResources}
-                resourcePageHasMore={Boolean(resourcePage?.hasMore)}
-                resourcePageAvailable={Boolean(resourcePage)}
-                resourceLoadingMore={resourceLoadingMore}
-                preparingResourceId={preparingResourceId}
-                normalizedPlaybackQualityHint={normalizedPlaybackQualityHint}
-                resourceCoverUrlMap={resourceCoverUrlMap}
-                resourceQualityTagMap={resourceQualityTagMap}
-                resourceGridRef={resourceGridRef}
-                resourceLoadMoreSentinelRef={resourceLoadMoreSentinelRef}
-                t={t}
-                getResourceCacheKey={getResourceCacheKey}
-                getQualityBadgeLabel={getQualityBadgeLabel}
-                formatDuration={formatDuration}
-                onContextMenu={onOpenResourceContextMenu}
-              />
-            )}
+            <div className="platform-magnet-resource-scroll-shell" ref={resourceViewportRef}>
+              {resourceLoading ? (
+                <p className="platform-magnet-panel-empty">{t('magnet.platform.bilibili.resource.loading')}</p>
+              ) : filteredBilibiliResources.length === 0 ? (
+                <>
+                  <p className="platform-magnet-panel-empty">
+                    {resourceFilterQuery.trim().length > 0
+                      ? t('magnet.platform.bilibili.resource.emptyFiltered')
+                      : selectedFolderId
+                        ? t('magnet.platform.bilibili.resource.empty')
+                        : t('magnet.platform.bilibili.resource.recommendedEmpty')}
+                  </p>
+                  {resourcePage?.hasMore ? (
+                    <p className="platform-magnet-note">
+                      {t('magnet.platform.bilibili.resource.actionLoadMoreHint')}
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <BilibiliResourceGrid
+                  items={filteredBilibiliResources}
+                  resourcePageHasMore={Boolean(resourcePage?.hasMore)}
+                  resourcePageAvailable={Boolean(resourcePage)}
+                  resourceLoadingMore={resourceLoadingMore}
+                  preparingResourceId={preparingResourceId}
+                  normalizedPlaybackQualityHint={normalizedPlaybackQualityHint}
+                  resourceCoverUrlMap={resourceCoverUrlMap}
+                  resourceQualityTagMap={resourceQualityTagMap}
+                  resourceViewportRef={resourceViewportRef}
+                  resourceLoadMoreSentinelRef={resourceLoadMoreSentinelRef}
+                  t={t}
+                  getResourceCacheKey={getResourceCacheKey}
+                  getQualityBadgeLabel={getQualityBadgeLabel}
+                  formatDuration={formatDuration}
+                  onContextMenu={onOpenResourceContextMenu}
+                />
+              )}
 
-            {resourcePage?.hasMore && !resourceLoading ? (
-              <div className="platform-magnet-bilibili-resource-load-more-actions">
-                <button
-                  type="button"
-                  className="platform-magnet-mini-btn"
-                  disabled={resourceLoadingMore || !selectedFolderId}
-                  onClick={onLoadMoreResources}
-                >
-                  {resourceLoadingMore
-                    ? t('magnet.platform.bilibili.resource.actionLoadingMore')
-                    : t('magnet.platform.bilibili.resource.actionLoadMore')}
-                </button>
-              </div>
-            ) : null}
+              {resourcePage?.hasMore && !resourceLoading ? (
+                <div className="platform-magnet-bilibili-resource-load-more-actions">
+                  <button
+                    type="button"
+                    className="platform-magnet-mini-btn"
+                    disabled={resourceLoadingMore || !selectedFolderId}
+                    onClick={onLoadMoreResources}
+                  >
+                    {resourceLoadingMore
+                      ? t('magnet.platform.bilibili.resource.actionLoadingMore')
+                      : t('magnet.platform.bilibili.resource.actionLoadMore')}
+                  </button>
+                </div>
+              ) : null}
 
-            {resolvedLyric ? (
-              <div className="platform-magnet-bilibili-lyric-card">
-                <p>
-                  {t('magnet.platform.bilibili.lyric.resolved', {
-                    format: resolvedLyric.format,
-                    source: resolvedLyric.sourceKind,
-                  })}
-                </p>
-                <p className="platform-magnet-bilibili-lyric-locator">{resolvedLyric.locator}</p>
-              </div>
-            ) : null}
+              {resolvedLyric ? (
+                <div className="platform-magnet-bilibili-lyric-card">
+                  <p>
+                    {t('magnet.platform.bilibili.lyric.resolved', {
+                      format: resolvedLyric.format,
+                      source: resolvedLyric.sourceKind,
+                    })}
+                  </p>
+                  <p className="platform-magnet-bilibili-lyric-locator">{resolvedLyric.locator}</p>
+                </div>
+              ) : null}
 
-            {lyricError ? <p className="platform-magnet-error">{lyricError}</p> : null}
+              {lyricError ? <p className="platform-magnet-error">{lyricError}</p> : null}
+            </div>
           </section>
         </div>
       </div>

@@ -293,6 +293,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const telemetry = useMemo(() => getTelemetryLogger('magnet.platform', 'PlatformMagnet'), []);
   const launcherRef = useRef<HTMLDivElement | null>(null);
   const navRef = useRef<HTMLDivElement | null>(null);
+  const pageStageScrollRef = useRef<HTMLDivElement | null>(null);
   const localPlaylistHydrationRef = useRef<Set<string>>(new Set());
   const connectorViewsRequestIdRef = useRef(0);
 
@@ -708,6 +709,19 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     activeWorkspaceDescriptor,
     t,
   });
+
+  useEffect(() => {
+    if (activePage !== 'instance') return;
+    if (activeDefinition?.workspaceKind !== 'bilibili') return;
+    const pageStageElement = pageStageScrollRef.current;
+    if (!pageStageElement) return;
+    pageStageElement.scrollTop = 0;
+    pageStageElement.scrollLeft = 0;
+  }, [
+    activeDefinition?.workspaceKind,
+    activePage,
+    bilibiliController.bilibiliPreviewFolders.selectedFolderId,
+  ]);
 
   const closeTopMenus = useCallback(() => {
     setLauncherOpen(false);
@@ -1205,12 +1219,10 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
     return (
       <>
-        {workspaceToolbar ? (
-          <div className="mt-3 rounded-[20px] bg-black/15 px-3 py-3">{workspaceToolbar}</div>
-        ) : null}
-        <div className="mt-3 min-h-0 flex-1 overflow-hidden rounded-[24px] bg-black/10 p-2">
+        {workspaceToolbar ? <div className="mt-3">{workspaceToolbar}</div> : null}
+        <div className="mt-3 min-h-0 flex-1">
           {connectorViewsLoading && !activeFacade ? (
-            <div className="flex h-full min-h-[320px] items-center justify-center text-sm text-white/48">
+            <div className="platform-workspace-loading flex h-full min-h-[320px] items-center justify-center text-sm text-white/48">
               {t('common.state.loading')}
             </div>
           ) : (
@@ -1595,15 +1607,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
     return (
       <div className="min-h-full">
-        <section className="platform-preview-soft-ring flex min-h-[620px] flex-col rounded-[24px] bg-black/10 p-3">
-          <div className="px-2 pt-1">
-            <div>
-              <div className="text-sm font-semibold text-white">{t('magnet.platform.workspace.toolbarTitle')}</div>
-              <p className="mt-1 text-xs leading-5 text-white/46">{t('magnet.platform.workspace.toolbarDesc')}</p>
-            </div>
-          </div>
-          {renderWorkspacePanel()}
-        </section>
+        <section className="flex min-h-[620px] flex-col">{renderWorkspacePanel()}</section>
       </div>
     );
   };
@@ -1851,6 +1855,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
           ) : null}
 
           <div
+            ref={pageStageScrollRef}
             className={cx(
               'platform-preview-scroll platform-preview-page-stage relative z-[1] h-full overflow-y-auto px-5 pb-24 pt-5',
               contentTransitionPhase === 'exiting'
