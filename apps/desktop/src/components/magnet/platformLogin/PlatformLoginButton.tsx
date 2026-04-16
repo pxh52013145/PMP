@@ -18,6 +18,7 @@ import {
   beginPlatformQrLogin,
   clearPlatformConnectorCookies,
   getPlatformConnectorAuthSnapshot,
+  installPlatformPackFromFile,
   listBuiltinPlatformCompatRegistrations,
   listPlatformConnectorAuthSnapshots,
   listPlatformConnectorDefinitions,
@@ -26,8 +27,11 @@ import {
   logoutPlatformConnector,
   pollPlatformQrLogin,
   reconcileBuiltinPlatformCompatRegistrations,
+  resolvePlatformConnectorTemplate,
   setPlatformRenderSelectionMounted,
   subscribePlatformConnectorAuthChanged,
+  subscribePlatformConnectorCompatRegistrations,
+  subscribePlatformConnectorDefinitions,
   subscribePlatformInstances,
   subscribePlatformRenderSelections,
   type PlatformConnectorAuthSnapshot,
@@ -63,6 +67,7 @@ type ManagedConnectorState = 'active' | 'inactive' | 'pending' | 'unauthorized' 
 type ConnectorVisualMeta = {
   Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
   color: string;
+  iconAssetUrl?: string;
 };
 
 type ContextMenuState = {
@@ -71,10 +76,10 @@ type ContextMenuState = {
   y: number;
 } | null;
 
-const CONNECTOR_VISUAL_META: Partial<Record<PlatformConnectorId, ConnectorVisualMeta>> = {
-  'connector.platform.netease': { Icon: Disc3, color: '#ff6b87' },
-  'connector.platform.bilibili': { Icon: Tv, color: '#67c7ff' },
-  'connector.platform.qqmusic': { Icon: Music, color: '#56db8d' },
+const CONNECTOR_VISUAL_META_BY_ICON_KEY: Record<string, Omit<ConnectorVisualMeta, 'iconAssetUrl'>> = {
+  netease: { Icon: Disc3, color: '#ff6b87' },
+  bilibili: { Icon: Tv, color: '#67c7ff' },
+  qqmusic: { Icon: Music, color: '#56db8d' },
 };
 
 function toAuthLabelKey(authState: string): string {
@@ -139,7 +144,17 @@ function updateConnectorScopedValue<TRecord extends Record<string, unknown>>(
 }
 
 function getConnectorVisualMeta(definition: PlatformConnectorDefinition): ConnectorVisualMeta {
-  return CONNECTOR_VISUAL_META[definition.connectorId] ?? { Icon: Music, color: '#a1a1aa' };
+  const template = resolvePlatformConnectorTemplate(definition);
+  const fallbackIcon = template === 'video' ? Tv : template === 'music' ? Disc3 : Music;
+  const builtinByIconKey = CONNECTOR_VISUAL_META_BY_ICON_KEY[definition.iconKey?.trim().toLowerCase() ?? ''];
+  const builtinByConnectorId =
+    CONNECTOR_VISUAL_META_BY_ICON_KEY[definition.connectorId.replace('connector.platform.', '')];
+  const builtin = builtinByIconKey ?? builtinByConnectorId;
+  return {
+    Icon: builtin?.Icon ?? fallbackIcon,
+    color: definition.accentColor || builtin?.color || '#a1a1aa',
+    iconAssetUrl: definition.iconAssetUrl,
+  };
 }
 
 function resolveManagedConnectorState(
@@ -204,8 +219,12 @@ function ConnectorGlyph({
   definition: PlatformConnectorDefinition;
   compact?: boolean;
 }): JSX.Element {
-  const { Icon, color } = getConnectorVisualMeta(definition);
-  return <Icon className={compact ? 'platform-login-glyph platform-login-glyph--compact' : 'platform-login-glyph'} style={{ color }} />;
+  const { Icon, color, iconAssetUrl } = getConnectorVisualMeta(definition);
+  const className = compact ? 'platform-login-glyph platform-login-glyph--compact' : 'platform-login-glyph';
+  if (iconAssetUrl) {
+    return <img src={iconAssetUrl} alt="" aria-hidden className={className} style={{ objectFit: 'contain' }} />;
+  }
+  return <Icon className={className} style={{ color }} />;
 }
 
 const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererProps> = ({
@@ -223,6 +242,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   const contextPopupRef = useRef<HTMLDivElement | null>(null);
   const contextAnchorRef = useRef<HTMLDivElement | null>(null);
   const connectorButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const platformPackInputRef = useRef<HTMLInputElement | null>(null);
 
   const [stripOpen, setStripOpen] = useState(false);
   const [registerMenuOpen, setRegisterMenuOpen] = useState(false);
@@ -230,9 +250,14 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   const [selectedConnectorId, setSelectedConnectorId] = useState<PlatformConnectorId | null>(null);
   const [contextMenuState, setContextMenuState] = useState<ContextMenuState>(null);
   const [busyConnectorId, setBusyConnectorId] = useState<string | null>(null);
-
-  const platformDefinitions = useMemo(() => listPlatformConnectorDefinitions(), []);
-  const builtinCompatRegistrations = useMemo(() => listBuiltinPlatformCompatRegistrations(), []);
+  const [platformPackInstalling, setPlatformPackInstalling] = useState(false);
+  const [platformPackInstallMessage, setPlatformPackInstallMessage] = useState<string | null>(null);
+  const [platformDefinitions, setPlatformDefinitions] = useState<PlatformConnectorDefinition[]>(() =>
+    listPlatformConnectorDefinitions()
+  );
+  const [compatRegistrations, setCompatRegistrations] = useState(() =>
+    listBuiltinPlatformCompatRegistrations()
+  );
   const preferredConnectorId = useMemo(
     () => resolvePreferredConnectorId(skinProps.defaultConnectorId, platformDefinitions),
     [platformDefinitions, skinProps.defaultConnectorId]
@@ -242,8 +267,8 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     [platformDefinitions]
   );
   const builtinCompatByConnectorId = useMemo(
-    () => new Map(builtinCompatRegistrations.map((registration) => [registration.connectorId, registration])),
-    [builtinCompatRegistrations]
+    () => new Map(compatRegistrations.map((registration) => [registration.connectorId, registration])),
+    [compatRegistrations]
   );
 
   const [registryEntries, setRegistryEntries] = useState<PlatformLoginRegistryEntry[]>(() =>
@@ -261,6 +286,20 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   const [pollResultsByConnectorId, setPollResultsByConnectorId] = useState<Record<string, PlatformQrLoginPollResult | null>>({});
   const [errorsByConnectorId, setErrorsByConnectorId] = useState<Record<string, string | null>>({});
   const [statusMessagesByConnectorId, setStatusMessagesByConnectorId] = useState<Record<string, string | null>>({});
+
+  useEffect(() => {
+    setPlatformDefinitions(listPlatformConnectorDefinitions());
+    return subscribePlatformConnectorDefinitions((definitions) => {
+      setPlatformDefinitions(definitions);
+    });
+  }, []);
+
+  useEffect(() => {
+    setCompatRegistrations(listBuiltinPlatformCompatRegistrations());
+    return subscribePlatformConnectorCompatRegistrations((registrations) => {
+      setCompatRegistrations(registrations);
+    });
+  }, []);
 
   const syncRegisteredContracts = useCallback((entries: PlatformLoginRegistryEntry[]) => {
     reconcileBuiltinPlatformCompatRegistrations(
@@ -399,7 +438,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
             snapshot: PlatformConnectorAuthSnapshot | null;
             instance: PlatformInstanceRecord | null;
             renderSelection: PlatformRenderSelectionRecord | null;
-            builtinCompat: (typeof builtinCompatRegistrations)[number] | null;
+            builtinCompat: (typeof compatRegistrations)[number] | null;
           } => Boolean(item)
         ),
     [
@@ -643,6 +682,46 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
       setConnectorRegistered,
       t,
     ]
+  );
+
+  const handlePlatformPackFileChange = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const input = event.currentTarget;
+      const file = input.files?.[0] ?? null;
+      input.value = '';
+      if (!file) return;
+
+      setPlatformPackInstalling(true);
+      setPlatformPackInstallMessage(null);
+
+      try {
+        const registration = await installPlatformPackFromFile(file);
+        setConnectorRegistered(registration.connectorId, true);
+        setPlatformPackInstallMessage(
+          t('magnet.platform-login.pack.import.success', {
+            name: registration.definition.displayName,
+          })
+        );
+        setSelectedConnectorId(registration.connectorId);
+        setRegisterMenuOpen(false);
+
+        const snapshot = await refreshAuthSnapshot(registration.connectorId);
+        if (snapshot?.authState === 'authorized') {
+          setBuiltinConnectorMounted(registration.connectorId, true);
+        } else {
+          openAuthPopup(registration.connectorId);
+        }
+      } catch (error) {
+        setPlatformPackInstallMessage(
+          t('magnet.platform-login.pack.import.failed', {
+            message: error instanceof Error ? error.message : String(error),
+          })
+        );
+      } finally {
+        setPlatformPackInstalling(false);
+      }
+    },
+    [openAuthPopup, refreshAuthSnapshot, setBuiltinConnectorMounted, setConnectorRegistered, t]
   );
 
   const runPoll = useCallback(
@@ -996,6 +1075,29 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
         ) : (
           <div className="platform-login-empty-state">{t('magnet.platform-login.add.empty')}</div>
         )}
+
+        <div className="platform-login-pack-import">
+          <input
+            ref={platformPackInputRef}
+            type="file"
+            accept=".pmpp,.zip,application/zip"
+            onChange={handlePlatformPackFileChange}
+            className="platform-login-pack-input"
+          />
+          <button
+            type="button"
+            className="platform-login-pack-trigger"
+            onClick={() => platformPackInputRef.current?.click()}
+            disabled={platformPackInstalling}
+          >
+            {platformPackInstalling
+              ? t('common.state.loading')
+              : t('magnet.platform-login.pack.import.action')}
+          </button>
+          {platformPackInstallMessage ? (
+            <div className="platform-login-pack-message">{platformPackInstallMessage}</div>
+          ) : null}
+        </div>
       </CollisionAwarePopup>
 
       <CollisionAwarePopup

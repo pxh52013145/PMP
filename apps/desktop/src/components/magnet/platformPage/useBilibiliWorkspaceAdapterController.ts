@@ -394,7 +394,8 @@ export function useBilibiliWorkspaceAdapterController(
   }, [bilibiliAuthorized, refreshPlaybackCacheSettings, settingsVisible]);
 
   useEffect(() => {
-    if (!selectedFolderId || !resourcePage?.hasMore) return;
+    const supportsResourceAutoLoad = Boolean(selectedFolderId) || resourceSourceKey?.startsWith('search:');
+    if (!supportsResourceAutoLoad || !resourcePage?.hasMore) return;
     const rootElement = resourceViewportRef.current;
     const sentinelElement = resourceLoadMoreSentinelRef.current;
     if (!rootElement || !sentinelElement) return;
@@ -404,7 +405,7 @@ export function useBilibiliWorkspaceAdapterController(
       (entries) => {
         if (!entries.some((entry) => entry.isIntersecting)) return;
         if (resourceLoading || resourceLoadingMore) return;
-        void loadMoreBilibiliResources(selectedFolderId);
+        void loadMoreBilibiliResources();
       },
       {
         root: rootElement,
@@ -421,6 +422,7 @@ export function useBilibiliWorkspaceAdapterController(
     resourceLoading,
     resourceLoadingMore,
     resourcePage?.hasMore,
+    resourceSourceKey,
     selectedFolderId,
   ]);
 
@@ -620,8 +622,7 @@ export function useBilibiliWorkspaceAdapterController(
     },
     onOpenResourceContextMenu: openResourceContextMenu,
     onLoadMoreResources: () => {
-      if (!selectedFolderId) return;
-      void loadMoreBilibiliResources(selectedFolderId);
+      void loadMoreBilibiliResources();
     },
     onCloseResourceContextMenu: () => {
       setResourceContextMenu(null);

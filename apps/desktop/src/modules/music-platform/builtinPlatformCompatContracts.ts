@@ -1,5 +1,11 @@
 import type { PlatformCompatContractFile } from '@pixel-matrix/plugin-platform-contracts';
 import type { PlatformConnectorId } from './connectorAuth';
+import bilibiliPlatformCompatContractJson from '../../../../../resource/music-platform/contracts/builtin/bilibili.platform-compat.contract.json';
+import neteasePlatformCompatContractJson from '../../../../../resource/music-platform/contracts/builtin/netease.platform-compat.contract.json';
+import {
+  parsePlatformCompatContractFromJson,
+  validatePlatformCompatContract,
+} from './platformCompatContractSchema';
 
 export interface BuiltinPlatformCompatContractRegistration {
   connectorId: PlatformConnectorId;
@@ -7,89 +13,37 @@ export interface BuiltinPlatformCompatContractRegistration {
   contract: PlatformCompatContractFile;
 }
 
-const BILIBILI_PLATFORM_COMPAT_CONTRACT: PlatformCompatContractFile = {
-  contractVersion: '1.0',
-  platform: {
-    platformId: 'bilibili',
-    displayName: 'Bilibili',
-    staticIcon: 'bilibili',
-    vendor: 'Bilibili',
-    supportsMultiInstance: false,
-  },
-  auth: {
-    loginMode: 'qr',
-    requiresCookie: false,
-    requiresAccountId: false,
-    supportsRefresh: true,
-  },
-  capabilities: {
-    playlists: false,
-    favorites: true,
-    dailyRecommendations: true,
-    search: true,
-    quality: true,
-    navigation: false,
-    settings: true,
-    pages: true,
-  },
-  apiBindings: {
-    auth: 'host.pmp.connector-auth',
-    library: 'host.pmp.music-platform.bilibili.library',
-    recommendations: 'host.pmp.music-platform.bilibili.recommendations',
-    search: 'host.pmp.music-platform.bilibili.search',
-    quality: 'host.pmp.music-platform.bilibili.quality',
-    settings: 'host.pmp.music-platform.bilibili.settings',
-    pages: 'host.pmp.music-platform.bilibili.workspace',
-  },
-  extension: {
+const BILIBILI_PLATFORM_COMPAT_CONTRACT: PlatformCompatContractFile =
+  parsePlatformCompatContractFromJson(
+    bilibiliPlatformCompatContractJson,
+    'resource/music-platform/contracts/builtin/bilibili.platform-compat.contract.json'
+  );
+
+validatePlatformCompatContract(
+  BILIBILI_PLATFORM_COMPAT_CONTRACT,
+  'resource/music-platform/contracts/builtin/bilibili.platform-compat.contract.json',
+  {
     connectorId: 'connector.platform.bilibili',
     workspaceKind: 'bilibili',
     workspaceMode: 'dedicated',
-    runtimeAdapter: 'connectorAuth',
-    source: 'builtin',
-  },
-};
+  }
+);
 
-const NETEASE_PLATFORM_COMPAT_CONTRACT: PlatformCompatContractFile = {
-  contractVersion: '1.0',
-  platform: {
-    platformId: 'netease',
-    displayName: 'Netease',
-    staticIcon: 'netease',
-    vendor: 'NetEase Cloud Music',
-    supportsMultiInstance: false,
-  },
-  auth: {
-    loginMode: 'qr',
-    requiresCookie: false,
-    requiresAccountId: false,
-    supportsRefresh: true,
-  },
-  capabilities: {
-    playlists: true,
-    favorites: false,
-    dailyRecommendations: true,
-    search: true,
-    quality: false,
-    navigation: false,
-    settings: false,
-    pages: true,
-  },
-  apiBindings: {
-    auth: 'host.pmp.connector-auth',
-    library: 'host.pmp.music-platform.netease.library',
-    recommendations: 'host.pmp.music-platform.netease.recommendations',
-    search: 'host.pmp.music-platform.netease.search',
-    pages: 'host.pmp.music-platform.netease.workspace',
-  },
-  extension: {
+const NETEASE_PLATFORM_COMPAT_CONTRACT: PlatformCompatContractFile =
+  parsePlatformCompatContractFromJson(
+    neteasePlatformCompatContractJson,
+    'resource/music-platform/contracts/builtin/netease.platform-compat.contract.json'
+  );
+
+validatePlatformCompatContract(
+  NETEASE_PLATFORM_COMPAT_CONTRACT,
+  'resource/music-platform/contracts/builtin/netease.platform-compat.contract.json',
+  {
     connectorId: 'connector.platform.netease',
     workspaceKind: 'netease',
     workspaceMode: 'dedicated',
-    runtimeAdapter: 'connectorAuth',
-    source: 'builtin',
-  },
-};
+  }
+);
 
 const BUILTIN_PLATFORM_COMPAT_CONTRACTS: BuiltinPlatformCompatContractRegistration[] = [
   {

@@ -65,6 +65,14 @@ function normalizeBilibiliLookupInput(value: string): string | null {
   return `BV${matchedToken[1].slice(2)}`;
 }
 
+function parseSearchKeywordFromResourceFolderId(folderId: string): string | null {
+  const normalizedFolderId = folderId.trim();
+  const prefix = 'bilibili:search:';
+  if (!normalizedFolderId.startsWith(prefix)) return null;
+  const keyword = normalizedFolderId.slice(prefix.length).trim();
+  return keyword.length > 0 ? keyword : null;
+}
+
 function mergeResourcePageItems(
   previous: BilibiliFavoriteResourceItem[],
   incoming: BilibiliFavoriteResourceItem[]
@@ -326,28 +334,38 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     [bilibiliAuthorized, bilibiliFolders, t]
   );
 
-  const loadMoreBilibiliResources = useCallback(
-    async (folderId: string) => {
-      if (!bilibiliAuthorized || resourceLoading || resourceLoadingMore) return;
+  const loadMoreBilibiliResources = useCallback(async () => {
+    if (!bilibiliAuthorized || resourceLoading || resourceLoadingMore) return;
 
-      const normalizedFolderId = folderId.trim();
-      if (!normalizedFolderId) return;
+    const currentPage = resourcePage;
+    if (!currentPage || !currentPage.hasMore) return;
 
-      const currentPage = resourcePage;
-      if (!currentPage || !currentPage.hasMore) return;
-      if (currentPage.folderId !== normalizedFolderId) return;
+    const normalizedFolderId = currentPage.folderId.trim();
+    if (!normalizedFolderId) return;
 
-      const nextPageNum = Math.max(2, currentPage.pageNum + 1);
-      setResourceLoadingMore(true);
-      try {
+    const nextPageNum = Math.max(2, currentPage.pageNum + 1);
+    const pageSize = currentPage.pageSize || BILIBILI_RESOURCE_PAGE_SIZE;
+    const searchKeyword = parseSearchKeywordFromResourceFolderId(normalizedFolderId);
+
+    setResourceLoadingMore(true);
+    try {
+      let nextPage: BilibiliFavoriteResourcePage | null = null;
+
+      if (searchKeyword) {
+        nextPage = await searchBilibiliResources({
+          keyword: searchKeyword,
+          pageNum: nextPageNum,
+          pageSize,
+        });
+      } else {
         const requestFolderPage = async (pageNum: number) =>
           listBilibiliFavoriteResources({
             folderId: normalizedFolderId,
             pageNum,
-            pageSize: currentPage.pageSize || BILIBILI_RESOURCE_PAGE_SIZE,
+            pageSize,
           });
 
-        let nextPage = await requestFolderPage(nextPageNum);
+        nextPage = await requestFolderPage(nextPageNum);
         let probePageNum = nextPageNum;
         let probeCount = 0;
         while (
@@ -362,39 +380,40 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
           if (!candidatePage) break;
           nextPage = candidatePage;
         }
-
-        if (!nextPage) {
-          setResourcePage((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  hasMore: false,
-                }
-              : prev
-          );
-          return;
-        }
-
-        setResourcePage((prev) => {
-          if (!prev || prev.folderId !== normalizedFolderId) return nextPage;
-
-          const mergedItems = mergeResourcePageItems(prev.items, nextPage.items);
-          const estimatedHasMore = nextPage.hasMore && mergedItems.length < nextPage.total;
-          return {
-            ...nextPage,
-            items: mergedItems,
-            hasMore: estimatedHasMore,
-          };
-        });
-        setResourceError(null);
-      } catch (err) {
-        setResourceError(toErrorMessage(err, t('magnet.platform.bilibili.resource.error')));
-      } finally {
-        setResourceLoadingMore(false);
       }
-    },
-    [bilibiliAuthorized, resourceLoading, resourceLoadingMore, resourcePage, t]
-  );
+
+      if (!nextPage) {
+        setResourcePage((prev) =>
+          prev && prev.folderId === currentPage.folderId
+            ? {
+                ...prev,
+                hasMore: false,
+              }
+            : prev
+        );
+        return;
+      }
+
+      setResourcePage((prev) => {
+        if (!prev || prev.folderId !== currentPage.folderId) return prev;
+
+        const mergedItems = mergeResourcePageItems(prev.items, nextPage.items);
+        const estimatedHasMore =
+          nextPage.hasMore || (nextPage.items.length > 0 && mergedItems.length < nextPage.total);
+
+        return {
+          ...nextPage,
+          items: mergedItems,
+          hasMore: estimatedHasMore,
+        };
+      });
+      setResourceError(null);
+    } catch (err) {
+      setResourceError(toErrorMessage(err, t('magnet.platform.bilibili.resource.error')));
+    } finally {
+      setResourceLoadingMore(false);
+    }
+  }, [bilibiliAuthorized, resourceLoading, resourceLoadingMore, resourcePage, t]);
 
   const searchBilibiliResourceByLookupInput = useCallback(async (lookupInput: string): Promise<boolean> => {
     const normalizedQuery = normalizeBilibiliLookupInput(lookupInput);

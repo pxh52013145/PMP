@@ -49,14 +49,23 @@ export {
   refreshAndEmitPlatformConnectorAuthSnapshot,
   refreshAndEmitBilibiliConnectorAuthSnapshot,
   registerPlatformConnectorAdapter,
+  unregisterPlatformConnectorAdapter,
+  resolvePlatformConnectorTemplate,
+  createPassivePlatformConnectorAdapter,
+  createPlatformCompatRuntimeFromConnectorAdapter,
+  registerPlatformCompatRegistrationForConnector,
+  unregisterPlatformCompatRegistrationForConnector,
   getBuiltinPlatformCompatContractRegistration,
   listBuiltinPlatformCompatRegistrations,
+  subscribePlatformConnectorDefinitions,
+  subscribePlatformConnectorCompatRegistrations,
   subscribePlatformConnectorAuthChanged,
   PLATFORM_CONNECTOR_AUTH_CHANGED_EVENT,
   type BuiltinPlatformCompatRegistration,
   type PlatformConnectorAdapter,
   type PlatformConnectorDefinition,
   type PlatformConnectorAvailability,
+  type PlatformConnectorTemplate,
   type PlatformConnectorWorkspaceKind,
   type PlatformConnectorWorkspaceMode,
   type PlatformQrLoginPollResult,
@@ -69,6 +78,15 @@ export {
   type PlatformConnectorAuthState,
   type PlatformConnectorId,
 } from './connectorAuth';
+
+export {
+  installPlatformPackFromFile,
+  installPlatformPackFromZipBytes,
+  listPlatformPackRegistrations,
+  removePlatformPackRegistration,
+  subscribePlatformPackRegistrations,
+  type PlatformPackRegistrationRecord,
+} from './platformPackRegistry';
 
 export {
   createDefaultPlatformLoginRegistry,

@@ -2,6 +2,7 @@ import React from 'react';
 
 import type {
   PlatformConnectorId,
+  PlatformConnectorTemplate,
   PlatformConnectorWorkspaceKind,
 } from '../../../modules/music-platform';
 import {
@@ -40,9 +41,10 @@ export interface PlatformWorkspaceAdapterPayloadMap {
 
 export interface PlatformWorkspaceAdapter<K extends keyof PlatformWorkspaceAdapterPayloadMap> {
   workspaceKind: K;
+  settingsController: 'none' | 'bilibili';
   renderToolbar: (
     payload: PlatformWorkspaceAdapterPayloadMap[K]['toolbar']
-  ) => React.ReactElement;
+  ) => React.ReactElement | null;
   renderWorkspace: (
     payload: PlatformWorkspaceAdapterPayloadMap[K]['workspace']
   ) => React.ReactElement;
@@ -54,18 +56,21 @@ export type AnyPlatformWorkspaceAdapter = {
 
 const bilibiliWorkspaceAdapter: PlatformWorkspaceAdapter<'bilibili'> = {
   workspaceKind: 'bilibili',
+  settingsController: 'bilibili',
   renderToolbar: (payload) => <BilibiliWorkspaceToolbar {...payload} />,
   renderWorkspace: (payload) => <BilibiliWorkspaceAdapter {...payload} />,
 };
 
 const neteaseWorkspaceAdapter: PlatformWorkspaceAdapter<'netease'> = {
   workspaceKind: 'netease',
+  settingsController: 'none',
   renderToolbar: (payload) => <NeteaseWorkspaceToolbar {...payload} />,
   renderWorkspace: (payload) => <NeteaseWorkspaceAdapter {...payload} />,
 };
 
 const qqmusicWorkspaceAdapter: PlatformWorkspaceAdapter<'qqmusic'> = {
   workspaceKind: 'qqmusic',
+  settingsController: 'none',
   renderToolbar: (payload) => <DedicatedWorkspacePlaceholderToolbar {...payload} />,
   renderWorkspace: (payload) => <DedicatedWorkspacePlaceholderAdapter {...payload} />,
 };
@@ -96,7 +101,23 @@ function normalizeConnectorId(connectorId: string | null | undefined): PlatformC
 export interface PlatformWorkspaceAdapterResolveOptions {
   connectorId?: string | null;
   workspaceKind: PlatformConnectorWorkspaceKind;
+  platformTemplate?: PlatformConnectorTemplate;
 }
+
+export type PlatformWorkspaceDefaultMode = 'generic' | 'bilibili' | 'netease';
+
+const DEFAULT_CONNECTOR_ID_BY_MODE: Partial<
+  Record<PlatformWorkspaceDefaultMode, PlatformConnectorId>
+> = {
+  bilibili: 'connector.platform.bilibili',
+  netease: 'connector.platform.netease',
+};
+
+const DAILY_SUBTITLE_KEY_BY_CONNECTOR_ID: Partial<Record<PlatformConnectorId, string>> = {
+  'connector.platform.bilibili': 'magnet.platform.daily.bilibili.subtitle',
+  'connector.platform.netease': 'magnet.platform.daily.netease.subtitle',
+  'connector.platform.qqmusic': 'magnet.platform.daily.qqmusic.subtitle',
+};
 
 export function resolvePlatformWorkspaceAdapter(
   options: PlatformWorkspaceAdapterResolveOptions
@@ -113,6 +134,16 @@ export function resolvePlatformWorkspaceAdapter(
     ];
   }
 
+  if (options.platformTemplate === 'video') {
+    return bilibiliWorkspaceAdapter;
+  }
+  if (options.platformTemplate === 'music') {
+    return neteaseWorkspaceAdapter;
+  }
+  if (options.platformTemplate === 'generic') {
+    return qqmusicWorkspaceAdapter;
+  }
+
   return null;
 }
 
@@ -120,4 +151,40 @@ export function getPlatformWorkspaceAdapter(
   workspaceKind: PlatformConnectorWorkspaceKind
 ): AnyPlatformWorkspaceAdapter | null {
   return resolvePlatformWorkspaceAdapter({ workspaceKind });
+}
+
+export function resolveDefaultConnectorIdByWorkspaceDefaultMode(
+  defaultMode: PlatformWorkspaceDefaultMode
+): PlatformConnectorId | null {
+  return DEFAULT_CONNECTOR_ID_BY_MODE[defaultMode] ?? null;
+}
+
+export function resolveDailySubtitleKeyByConnectorId(
+  connectorId: string | null | undefined
+): string {
+  const normalizedConnectorId = normalizeConnectorId(connectorId);
+  if (!normalizedConnectorId) return 'magnet.platform.daily.defaultSubtitle';
+  return DAILY_SUBTITLE_KEY_BY_CONNECTOR_ID[normalizedConnectorId] ?? 'magnet.platform.daily.defaultSubtitle';
+}
+
+export function resolveWorkspaceSettingsController(
+  options: PlatformWorkspaceAdapterResolveOptions
+): AnyPlatformWorkspaceAdapter['settingsController'] {
+  return resolvePlatformWorkspaceAdapter(options)?.settingsController ?? 'none';
+}
+
+export function renderPlatformWorkspaceAdapterToolbar(
+  adapter: AnyPlatformWorkspaceAdapter,
+  payloads: PlatformWorkspaceAdapterPayloadMap
+): React.ReactElement | null {
+  const payload = payloads[adapter.workspaceKind];
+  return adapter.renderToolbar(payload.toolbar as never);
+}
+
+export function renderPlatformWorkspaceAdapterWorkspace(
+  adapter: AnyPlatformWorkspaceAdapter,
+  payloads: PlatformWorkspaceAdapterPayloadMap
+): React.ReactElement {
+  const payload = payloads[adapter.workspaceKind];
+  return adapter.renderWorkspace(payload.workspace as never);
 }

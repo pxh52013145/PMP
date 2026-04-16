@@ -95,7 +95,10 @@ function emitPlatformCompatRegistryChanged(): void {
 function isBuiltinConnectorAuthRecord(
   record: PlatformCompatRegistryRecord | undefined
 ): boolean {
-  return record?.metadata?.runtimeAdapter === 'connectorAuth';
+  return (
+    record?.metadata?.autoCreateDefaultInstance === true &&
+    typeof record.metadata?.connectorId === 'string'
+  );
 }
 
 function readRegisteredConnectorIdsFromStorage(): PlatformConnectorId[] {
@@ -114,27 +117,36 @@ export function reconcileBuiltinPlatformCompatRegistrations(
       .filter((connectorId): connectorId is PlatformConnectorId => Boolean(connectorId))
   );
 
-  for (const builtin of listBuiltinPlatformCompatRegistrations()) {
-    const existing = platformCompatRegistry.get(builtin.platformId);
-    const shouldRegister = registeredConnectorIdSet.has(builtin.connectorId);
+  for (const registration of listBuiltinPlatformCompatRegistrations()) {
+    const existing = platformCompatRegistry.get(registration.platformId);
+    const shouldRegister = registeredConnectorIdSet.has(registration.connectorId);
 
     if (shouldRegister) {
       registerPlatformCompatContract({
-        contract: builtin.contract,
-        runtime: builtin.runtime,
-        source: 'builtin.connector-auth',
+        contract: registration.contract,
+        runtime: registration.runtime,
+        source:
+          registration.source === 'pack'
+            ? 'platform-pack'
+            : registration.source === 'runtime'
+              ? 'runtime.connector-auth'
+              : 'builtin.connector-auth',
         metadata: {
-          connectorId: builtin.connectorId,
-          enabled: builtin.enabled,
+          ...(registration.metadata ?? {}),
+          connectorId: registration.connectorId,
+          enabled: registration.enabled,
           autoCreateDefaultInstance: true,
-          runtimeAdapter: 'connectorAuth',
+          runtimeAdapter:
+            typeof registration.metadata?.runtimeAdapter === 'string'
+              ? registration.metadata.runtimeAdapter
+              : 'connectorAuth',
         },
       });
       continue;
     }
 
     if (isBuiltinConnectorAuthRecord(existing)) {
-      unregisterPlatformCompatContract(builtin.platformId);
+      unregisterPlatformCompatContract(registration.platformId);
     }
   }
 }

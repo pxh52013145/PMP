@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { IAudioService, Playlist, Track } from '../../../services/audio';
 import {
@@ -181,9 +181,11 @@ export function useNeteaseWorkspaceAdapterController(
   const [resourceError, setResourceError] = useState<string | null>(null);
   const [resourceInfo, setResourceInfo] = useState<string | null>(null);
   const [resourcePage, setResourcePage] = useState<NeteaseSongPage | null>(null);
+  const [resourceSourceKey, setResourceSourceKey] = useState<string | null>(null);
   const [preparingSongId, setPreparingSongId] = useState<string | null>(null);
 
   const preparedTrackMapRef = useRef<Map<string, Track>>(new Map());
+  const resourceViewportRef = useRef<HTMLDivElement>(null);
 
   const selectedUserPlaylist = useMemo(
     () => userPlaylists.find((item) => item.playlistId === selectedUserPlaylistId) ?? null,
@@ -216,9 +218,11 @@ export function useNeteaseWorkspaceAdapterController(
   const loadRecommendedResources = useCallback(async (forceRefresh = false) => {
     if (!neteaseAuthorized) {
       setResourcePage(null);
+      setResourceSourceKey(null);
       return;
     }
 
+    setResourceSourceKey('recommended');
     setResourceLoading(true);
     setResourceError(null);
     setResourceInfo(null);
@@ -243,9 +247,11 @@ export function useNeteaseWorkspaceAdapterController(
       }
       if (!neteaseAuthorized) {
         setResourcePage(null);
+        setResourceSourceKey(null);
         return;
       }
 
+      setResourceSourceKey(`user-playlist:${normalizedPlaylistId}`);
       setResourceLoading(true);
       setResourceError(null);
       setResourceInfo(null);
@@ -272,9 +278,11 @@ export function useNeteaseWorkspaceAdapterController(
       }
       if (!neteaseAuthorized) {
         setResourcePage(null);
+        setResourceSourceKey(null);
         return;
       }
 
+      setResourceSourceKey(`search:${normalizedKeyword.toLowerCase()}`);
       setResourceLoading(true);
       setResourceError(null);
       setResourceInfo(null);
@@ -324,6 +332,7 @@ export function useNeteaseWorkspaceAdapterController(
         setRecommendedPlaylists([]);
         setSelectedUserPlaylistId(null);
         setResourcePage(null);
+        setResourceSourceKey(null);
         preparedTrackMapRef.current.clear();
       }
       return;
@@ -346,6 +355,14 @@ export function useNeteaseWorkspaceAdapterController(
     if (userPlaylists.some((item) => item.playlistId === selectedUserPlaylistId)) return;
     setSelectedUserPlaylistId(null);
   }, [selectedUserPlaylistId, userPlaylists]);
+
+  useLayoutEffect(() => {
+    if (!resourceSourceKey) return;
+    const viewportElement = resourceViewportRef.current;
+    if (!viewportElement) return;
+    viewportElement.scrollTop = 0;
+    viewportElement.scrollLeft = 0;
+  }, [resourceSourceKey]);
 
   const ensurePreparedTrack = useCallback(
     async (item: NeteaseSongItem): Promise<Track> => {
@@ -482,6 +499,7 @@ export function useNeteaseWorkspaceAdapterController(
     resourceError,
     resourceInfo,
     resourcePage,
+    resourceViewportRef,
     preparingSongId,
     selectedPlatformPlaylist: selectedPlaylist,
     selectedPlatformPlaylistId: selectedPlaylistId,

@@ -171,7 +171,7 @@ export function BilibiliWorkspace(props: BilibiliWorkspaceProps) {
                   <button
                     type="button"
                     className="platform-magnet-mini-btn"
-                    disabled={resourceLoadingMore || !selectedFolderId}
+                    disabled={resourceLoadingMore}
                     onClick={onLoadMoreResources}
                   >
                     {resourceLoadingMore

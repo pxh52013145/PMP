@@ -3802,13 +3802,18 @@ pub fn search_resources(
     }
 
     let total = to_u64(data.get("numResults")).unwrap_or(items.len() as u64);
+    let has_more = to_u64(data.get("numPages"))
+        .map(|num_pages| u64::from(normalized_page_num) < num_pages)
+        .unwrap_or_else(|| {
+            (normalized_page_num as u64).saturating_mul(normalized_page_size as u64) < total
+        });
 
     Ok(BilibiliFavoriteResourcePage {
         folder_id: format!("bilibili:search:{normalized_keyword}"),
         page_num: normalized_page_num,
         page_size: normalized_page_size,
         total,
-        has_more: false,
+        has_more,
         items,
     })
 }

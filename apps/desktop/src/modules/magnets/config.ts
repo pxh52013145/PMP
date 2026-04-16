@@ -12,6 +12,7 @@ import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import {
   STANDARD_PANEL_CHROME_INSET,
+  TOP_DOCKED_PANEL_CHROME_INSET,
   createBoundsReference,
   createControlBleedOffsets,
   createControlBleedOutset,
@@ -328,7 +329,7 @@ const TRANSITIONAL_BUILTIN_CHROME_INSET_CANDIDATES_BY_MAGNET_ID: Partial<
 > = {
   'process-perf-monitor': [STANDARD_PANEL_CHROME_INSET],
   'navigation-page': [STANDARD_PANEL_CHROME_INSET],
-  'platform-magnet': [STANDARD_PANEL_CHROME_INSET],
+  'platform-magnet': [STANDARD_PANEL_CHROME_INSET, TOP_DOCKED_PANEL_CHROME_INSET],
   navigator: [STANDARD_PANEL_CHROME_INSET],
 };
 

@@ -105,6 +105,7 @@ tmp/
 
 # Local references (do not commit)
 reference/
+resource/
 
 # Windows reserved / accidental files (can break tooling)
 NUL

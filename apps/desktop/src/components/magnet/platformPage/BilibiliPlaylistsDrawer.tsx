@@ -1,4 +1,5 @@
 import type { Playlist } from '../../../services/audio';
+import { useConfirmDialog } from '../../core/ConfirmDialog';
 import { PmpButton, PmpDrawer } from '../../primitives';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
@@ -39,6 +40,44 @@ export function BilibiliPlaylistsDrawer(props: BilibiliPlaylistsDrawerProps) {
     onDeleteSelected,
     onRemoveTrack,
   } = props;
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
+
+  const handleDeleteSelected = () => {
+    void (async () => {
+      if (!selectedPlaylist) return;
+      const ok = await confirm({
+        title: t('magnet.platform.confirm.platform.deletePlaylist.title'),
+        message: t('magnet.platform.confirm.platform.deletePlaylist.message', {
+          name: selectedPlaylist.name,
+        }),
+        confirmText: t('common.action.delete'),
+        cancelText: t('common.action.cancel'),
+        danger: true,
+      });
+      if (!ok) return;
+      onDeleteSelected();
+    })();
+  };
+
+  const handleRemoveTrack = (trackIndex: number) => {
+    void (async () => {
+      if (!selectedPlaylist) return;
+      const track = selectedPlaylist.tracks[trackIndex];
+      const trackLabel = track?.title?.trim() || `${trackIndex + 1}`;
+      const ok = await confirm({
+        title: t('magnet.platform.confirm.platform.removeTrack.title'),
+        message: t('magnet.platform.confirm.platform.removeTrack.message', {
+          track: trackLabel,
+          playlist: selectedPlaylist.name,
+        }),
+        confirmText: t('common.action.remove'),
+        cancelText: t('common.action.cancel'),
+        danger: true,
+      });
+      if (!ok) return;
+      onRemoveTrack(trackIndex);
+    })();
+  };
 
   return (
     <PmpDrawer
@@ -108,7 +147,7 @@ export function BilibiliPlaylistsDrawer(props: BilibiliPlaylistsDrawerProps) {
             className="platform-magnet-mini-btn"
             variant="danger"
             disabled={!selectedPlaylistId}
-            onClick={onDeleteSelected}
+            onClick={handleDeleteSelected}
           >
             {t('magnet.platform.bilibili.playlist.deleteAction')}
           </PmpButton>
@@ -135,7 +174,7 @@ export function BilibiliPlaylistsDrawer(props: BilibiliPlaylistsDrawerProps) {
                 type="button"
                 className="platform-magnet-mini-btn"
                 variant="ghost"
-                onClick={() => onRemoveTrack(trackIndex)}
+                onClick={() => handleRemoveTrack(trackIndex)}
               >
                 {t('magnet.platform.bilibili.playlist.removeTrack')}
               </PmpButton>
@@ -143,6 +182,7 @@ export function BilibiliPlaylistsDrawer(props: BilibiliPlaylistsDrawerProps) {
           ))}
         </div>
       )}
+      {confirmDialog}
     </PmpDrawer>
   );
 }

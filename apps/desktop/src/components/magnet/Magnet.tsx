@@ -47,6 +47,7 @@ interface MagnetProps {
   joinEdges?: MagnetJoinEdges;
   sceneAnimation?: MagnetSceneAnimation;
   layoutMotionChannel?: ThemeMotionChannelSpec;
+  disableMotion?: boolean;
 }
 
 type MagnetShellStyle = React.CSSProperties & {
@@ -63,6 +64,7 @@ function MagnetComponentImpl({
   joinEdges,
   sceneAnimation,
   layoutMotionChannel,
+  disableMotion = false,
 }: MagnetProps) {
   const lowRenderMode = import.meta.env.VITE_PERF_NEXT_LOW_RENDER === '1';
   const magnetBindingId = `magnet.${magnet.id}` as ThemeBindingId;
@@ -201,13 +203,21 @@ function MagnetComponentImpl({
   );
 
   const motionRuntime = useMemo(
-    () => resolveMagnetMotionRuntime(lowRenderMode, magnetSkin.motion, undefined, layoutMotionChannel),
-    [layoutMotionChannel, lowRenderMode, magnetSkin.motion]
+    () =>
+      disableMotion
+        ? {
+            mode: 'off' as const,
+            layoutStrategy: 'none' as const,
+            largeChange: 'snap' as const,
+          }
+        : resolveMagnetMotionRuntime(lowRenderMode, magnetSkin.motion, undefined, layoutMotionChannel),
+    [disableMotion, layoutMotionChannel, lowRenderMode, magnetSkin.motion]
   );
 
   useLayoutEffect(() => {
-    if (motionRuntime.mode === 'off') {
+    if (disableMotion || motionRuntime.mode === 'off') {
       clearLayoutCompensationFrame();
+      isFirstRenderRef.current = true;
       setDisableTransition(true);
       setLayoutCompensationTransform(null);
       lastBoundsRef.current = layoutBounds;
@@ -273,7 +283,7 @@ function MagnetComponentImpl({
     return () => {
       clearLayoutCompensationFrame();
     };
-  }, [layoutBounds, clearLayoutCompensationFrame, motionRuntime]);
+  }, [disableMotion, layoutBounds, clearLayoutCompensationFrame, motionRuntime]);
 
   useEffect(
     () => () => {

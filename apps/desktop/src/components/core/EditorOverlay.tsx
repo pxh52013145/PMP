@@ -11,6 +11,7 @@ import { Magnet, PixelAnchor } from '../../types/pixel';
 import { MATRIX_CONFIG } from '../../constants/config';
 import {
   alignMagnetBounds,
+  computeMagnetBounds,
   computeChromeBoundsFromLayoutBounds,
   type MagnetBounds,
 } from '../../modules/magnets/geometry';
@@ -79,6 +80,10 @@ function createPreviewMagnet(magnet: Magnet, anchors: PixelAnchor[]): Magnet {
   };
 }
 
+function buildMagnetsById(magnets: Magnet[]): Record<string, Magnet> {
+  return Object.fromEntries(magnets.map((magnet) => [magnet.id, magnet])) as Record<string, Magnet>;
+}
+
 interface OverlayMagnetPreviewProps {
   magnet: Magnet;
   pixelPositions: Map<string, { x: number; y: number }>;
@@ -123,6 +128,7 @@ function OverlayMagnetPreview({
           pixelPositions={pixelPositions}
           layoutBoundsOverride={alignedLayoutBounds}
           joinEdges={joinEdges}
+          disableMotion
         />
       </div>
       <div className={`magnet-preview-outline magnet-preview-outline--${outlineTone}`} style={outlineStyle} />
@@ -248,14 +254,16 @@ export function EditorOverlay({
 
     const previewMagnet = createPreviewMagnet(draggingMagnet.magnet, draggingMagnet.previewAnchors);
     const previewMagnets = magnets.map((magnet) => (magnet.id === previewMagnet.id ? previewMagnet : magnet));
-    const previewLayout = buildAdaptiveMagnetLayout(previewMagnets, pixelPositions, viewportSize);
-    const layoutBounds = previewLayout.layoutBoundsByMagnetId[previewMagnet.id];
+    const layoutBounds = computeMagnetBounds(previewMagnet, pixelPositions, {
+      magnetsById: buildMagnetsById(previewMagnets),
+      viewport: viewportSize,
+    });
     if (!layoutBounds) return null;
 
     return {
       magnet: previewMagnet,
-      layoutBounds,
-      joinEdges: previewLayout.joinsByMagnetId[previewMagnet.id],
+      layoutBounds: alignMagnetBounds(layoutBounds),
+      joinEdges: undefined,
       outlineTone: draggingMagnet.hasCollision ? ('collision' as const) : ('drag' as const),
     };
   }, [draggingMagnet, magnets, pixelPositions, viewportSize]);
@@ -286,14 +294,17 @@ export function EditorOverlay({
     if (!anchors) return null;
 
     const previewMagnet = createPreviewMagnet(placementMagnet, anchors);
-    const previewLayout = buildAdaptiveMagnetLayout([...magnets, previewMagnet], pixelPositions, viewportSize);
-    const layoutBounds = previewLayout.layoutBoundsByMagnetId[previewMagnet.id];
+    const previewLayoutMagnets = [...magnets, previewMagnet];
+    const layoutBounds = computeMagnetBounds(previewMagnet, pixelPositions, {
+      magnetsById: buildMagnetsById(previewLayoutMagnets),
+      viewport: viewportSize,
+    });
     if (!layoutBounds) return null;
 
     return {
       magnet: previewMagnet,
-      layoutBounds,
-      joinEdges: previewLayout.joinsByMagnetId[previewMagnet.id],
+      layoutBounds: alignMagnetBounds(layoutBounds),
+      joinEdges: undefined,
     };
   }, [editorState.hoverPixel, magnets, occupancyMap, placementMagnet, pixelPositions, viewportSize]);
 

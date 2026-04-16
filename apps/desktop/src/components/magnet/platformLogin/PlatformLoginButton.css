@@ -227,6 +227,44 @@
   gap: 4px;
 }
 
+.platform-login-pack-import {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: grid;
+  gap: 6px;
+}
+
+.platform-login-pack-input {
+  display: none;
+}
+
+.platform-login-pack-trigger {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.platform-login-pack-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.platform-login-pack-message {
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.56);
+}
+
 .platform-login-register-item,
 .platform-login-menu-action {
   width: 100%;

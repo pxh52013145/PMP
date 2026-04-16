@@ -14,7 +14,7 @@ export function DedicatedWorkspacePlaceholderToolbar(
 ): JSX.Element {
   const { t } = props;
   return (
-    <div className="platform-magnet-bv-top-search">
+    <div className="platform-workspace-toolbar">
       <span className="platform-magnet-panel-tag">{t('magnet.platform-login.status.comingSoon')}</span>
     </div>
   );

@@ -25,7 +25,7 @@ export function NeteaseWorkspaceToolbar(props: NeteaseWorkspaceToolbarProps): JS
   } = props;
 
   return (
-    <div className="platform-magnet-bv-top-search">
+    <div className="platform-workspace-toolbar">
       <button
         type="button"
         className="platform-magnet-mini-btn"

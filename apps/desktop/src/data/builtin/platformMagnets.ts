@@ -2,7 +2,7 @@ import { Magnet } from '../../types/pixel';
 import { createControlChromePreset, createPanelChromePreset } from '../../modules/magnets/chromePresets';
 import {
   createCenteredSingleControlLayoutPreset,
-  TOP_DOCKED_PANEL_CHROME_INSET,
+  STANDARD_PANEL_CHROME_INSET,
   createPanelLayoutPreset,
 } from '../../modules/magnets/layoutPresets';
 
@@ -10,6 +10,7 @@ const PLATFORM_MAGNET_CHROME = createPanelChromePreset({
   style: {
     backgroundColor: 'rgba(0, 0, 0, 0.82)',
     border: '1px solid rgba(255, 255, 255, 0.12)',
+    borderRadius: '24px',
     boxShadow: '0 6px 28px rgba(0, 0, 0, 0.45)',
   },
   hoverStyle: {
@@ -35,7 +36,7 @@ const PLATFORM_LOGIN_CHROME = createControlChromePreset({
   },
 });
 const PLATFORM_MAGNET_LAYOUT = createPanelLayoutPreset({
-  chromeInset: TOP_DOCKED_PANEL_CHROME_INSET,
+  chromeInset: STANDARD_PANEL_CHROME_INSET,
 });
 const PLATFORM_LOGIN_LAYOUT = createCenteredSingleControlLayoutPreset();
 
