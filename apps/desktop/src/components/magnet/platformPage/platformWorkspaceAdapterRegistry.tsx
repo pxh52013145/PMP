@@ -12,11 +12,11 @@ import {
 } from './BilibiliWorkspaceAdapter';
 import type { BilibiliWorkspaceProps } from './BilibiliWorkspace';
 import {
-  NeteaseWorkspaceAdapter,
-  NeteaseWorkspaceToolbar,
-  type NeteaseWorkspaceToolbarProps,
-} from './NeteaseWorkspaceAdapter';
-import type { NeteaseWorkspaceProps } from './NeteaseWorkspace';
+  MusicTemplateWorkspaceAdapter,
+  MusicTemplateWorkspaceToolbar,
+  type MusicTemplateWorkspaceToolbarProps,
+} from './MusicTemplateWorkspaceAdapter';
+import type { MusicTemplateWorkspaceProps } from './MusicTemplateWorkspace';
 import {
   DedicatedWorkspacePlaceholderAdapter,
   DedicatedWorkspacePlaceholderToolbar,
@@ -29,9 +29,9 @@ export interface PlatformWorkspaceAdapterPayloadMap {
     toolbar: BilibiliWorkspaceToolbarProps;
     workspace: BilibiliWorkspaceProps;
   };
-  netease: {
-    toolbar: NeteaseWorkspaceToolbarProps;
-    workspace: NeteaseWorkspaceProps;
+  music: {
+    toolbar: MusicTemplateWorkspaceToolbarProps;
+    workspace: MusicTemplateWorkspaceProps;
   };
   qqmusic: {
     toolbar: DedicatedWorkspacePlaceholderToolbarProps;
@@ -39,8 +39,10 @@ export interface PlatformWorkspaceAdapterPayloadMap {
   };
 }
 
-export interface PlatformWorkspaceAdapter<K extends keyof PlatformWorkspaceAdapterPayloadMap> {
-  workspaceKind: K;
+export type PlatformWorkspaceAdapterKind = keyof PlatformWorkspaceAdapterPayloadMap;
+
+export interface PlatformWorkspaceAdapter<K extends PlatformWorkspaceAdapterKind> {
+  adapterKind: K;
   settingsController: 'none' | 'bilibili';
   renderToolbar: (
     payload: PlatformWorkspaceAdapterPayloadMap[K]['toolbar']
@@ -51,35 +53,35 @@ export interface PlatformWorkspaceAdapter<K extends keyof PlatformWorkspaceAdapt
 }
 
 export type AnyPlatformWorkspaceAdapter = {
-  [K in keyof PlatformWorkspaceAdapterPayloadMap]: PlatformWorkspaceAdapter<K>;
-}[keyof PlatformWorkspaceAdapterPayloadMap];
+  [K in PlatformWorkspaceAdapterKind]: PlatformWorkspaceAdapter<K>;
+}[PlatformWorkspaceAdapterKind];
 
 const bilibiliWorkspaceAdapter: PlatformWorkspaceAdapter<'bilibili'> = {
-  workspaceKind: 'bilibili',
+  adapterKind: 'bilibili',
   settingsController: 'bilibili',
   renderToolbar: (payload) => <BilibiliWorkspaceToolbar {...payload} />,
   renderWorkspace: (payload) => <BilibiliWorkspaceAdapter {...payload} />,
 };
 
-const neteaseWorkspaceAdapter: PlatformWorkspaceAdapter<'netease'> = {
-  workspaceKind: 'netease',
+const musicTemplateWorkspaceAdapter: PlatformWorkspaceAdapter<'music'> = {
+  adapterKind: 'music',
   settingsController: 'none',
-  renderToolbar: (payload) => <NeteaseWorkspaceToolbar {...payload} />,
-  renderWorkspace: (payload) => <NeteaseWorkspaceAdapter {...payload} />,
+  renderToolbar: (payload) => <MusicTemplateWorkspaceToolbar {...payload} />,
+  renderWorkspace: (payload) => <MusicTemplateWorkspaceAdapter {...payload} />,
 };
 
 const qqmusicWorkspaceAdapter: PlatformWorkspaceAdapter<'qqmusic'> = {
-  workspaceKind: 'qqmusic',
+  adapterKind: 'qqmusic',
   settingsController: 'none',
   renderToolbar: (payload) => <DedicatedWorkspacePlaceholderToolbar {...payload} />,
   renderWorkspace: (payload) => <DedicatedWorkspacePlaceholderAdapter {...payload} />,
 };
 
-const platformWorkspaceKindAdapterRegistry: {
-  [K in keyof PlatformWorkspaceAdapterPayloadMap]: PlatformWorkspaceAdapter<K>;
-} = {
+const platformWorkspaceKindAdapterRegistry: Partial<
+  Record<PlatformConnectorWorkspaceKind, AnyPlatformWorkspaceAdapter>
+> = {
   bilibili: bilibiliWorkspaceAdapter,
-  netease: neteaseWorkspaceAdapter,
+  netease: musicTemplateWorkspaceAdapter,
   qqmusic: qqmusicWorkspaceAdapter,
 };
 
@@ -87,7 +89,7 @@ const platformWorkspaceConnectorAdapterRegistry: Partial<
   Record<PlatformConnectorId, AnyPlatformWorkspaceAdapter>
 > = {
   'connector.platform.bilibili': bilibiliWorkspaceAdapter,
-  'connector.platform.netease': neteaseWorkspaceAdapter,
+  'connector.platform.netease': musicTemplateWorkspaceAdapter,
   'connector.platform.qqmusic': qqmusicWorkspaceAdapter,
 };
 
@@ -104,18 +106,24 @@ export interface PlatformWorkspaceAdapterResolveOptions {
   platformTemplate?: PlatformConnectorTemplate;
 }
 
-export type PlatformWorkspaceDefaultMode = 'generic' | 'bilibili' | 'netease';
+export type PlatformWorkspaceDefaultMode = 'generic' | 'video' | 'music';
 
-const DEFAULT_CONNECTOR_ID_BY_MODE: Partial<
-  Record<PlatformWorkspaceDefaultMode, PlatformConnectorId>
-> = {
-  bilibili: 'connector.platform.bilibili',
-  netease: 'connector.platform.netease',
-};
+export function resolveDefaultWorkspaceAdapterKindByWorkspaceDefaultMode(
+  defaultMode: PlatformWorkspaceDefaultMode
+): PlatformWorkspaceAdapterKind | null {
+  switch (defaultMode) {
+    case 'video':
+      return 'bilibili';
+    case 'music':
+      return 'music';
+    default:
+      return null;
+  }
+}
 
 const DAILY_SUBTITLE_KEY_BY_CONNECTOR_ID: Partial<Record<PlatformConnectorId, string>> = {
   'connector.platform.bilibili': 'magnet.platform.daily.bilibili.subtitle',
-  'connector.platform.netease': 'magnet.platform.daily.netease.subtitle',
+  'connector.platform.netease': 'magnet.platform.daily.music-template.subtitle',
   'connector.platform.qqmusic': 'magnet.platform.daily.qqmusic.subtitle',
 };
 
@@ -128,17 +136,16 @@ export function resolvePlatformWorkspaceAdapter(
     if (connectorAdapter) return connectorAdapter;
   }
 
-  if (options.workspaceKind in platformWorkspaceKindAdapterRegistry) {
-    return platformWorkspaceKindAdapterRegistry[
-      options.workspaceKind as keyof PlatformWorkspaceAdapterPayloadMap
-    ];
+  const workspaceKindAdapter = platformWorkspaceKindAdapterRegistry[options.workspaceKind];
+  if (workspaceKindAdapter) {
+    return workspaceKindAdapter;
   }
 
   if (options.platformTemplate === 'video') {
     return bilibiliWorkspaceAdapter;
   }
   if (options.platformTemplate === 'music') {
-    return neteaseWorkspaceAdapter;
+    return musicTemplateWorkspaceAdapter;
   }
   if (options.platformTemplate === 'generic') {
     return qqmusicWorkspaceAdapter;
@@ -147,16 +154,16 @@ export function resolvePlatformWorkspaceAdapter(
   return null;
 }
 
+export function resolvePlatformWorkspaceAdapterKind(
+  options: PlatformWorkspaceAdapterResolveOptions
+): PlatformWorkspaceAdapterKind | null {
+  return resolvePlatformWorkspaceAdapter(options)?.adapterKind ?? null;
+}
+
 export function getPlatformWorkspaceAdapter(
   workspaceKind: PlatformConnectorWorkspaceKind
 ): AnyPlatformWorkspaceAdapter | null {
   return resolvePlatformWorkspaceAdapter({ workspaceKind });
-}
-
-export function resolveDefaultConnectorIdByWorkspaceDefaultMode(
-  defaultMode: PlatformWorkspaceDefaultMode
-): PlatformConnectorId | null {
-  return DEFAULT_CONNECTOR_ID_BY_MODE[defaultMode] ?? null;
 }
 
 export function resolveDailySubtitleKeyByConnectorId(
@@ -177,7 +184,7 @@ export function renderPlatformWorkspaceAdapterToolbar(
   adapter: AnyPlatformWorkspaceAdapter,
   payloads: PlatformWorkspaceAdapterPayloadMap
 ): React.ReactElement | null {
-  const payload = payloads[adapter.workspaceKind];
+  const payload = payloads[adapter.adapterKind];
   return adapter.renderToolbar(payload.toolbar as never);
 }
 
@@ -185,6 +192,6 @@ export function renderPlatformWorkspaceAdapterWorkspace(
   adapter: AnyPlatformWorkspaceAdapter,
   payloads: PlatformWorkspaceAdapterPayloadMap
 ): React.ReactElement {
-  const payload = payloads[adapter.workspaceKind];
+  const payload = payloads[adapter.adapterKind];
   return adapter.renderWorkspace(payload.workspace as never);
 }

@@ -2,6 +2,7 @@ import type { PlatformCompatRuntimeApi } from '@pixel-matrix/plugin-platform-con
 import {
   createPassivePlatformConnectorAdapter,
   createPlatformCompatRuntimeFromConnectorAdapter,
+  listPlatformConnectorAdapters,
   registerPlatformCompatRegistrationForConnector,
   registerPlatformConnectorAdapter,
   unregisterPlatformCompatRegistrationForConnector,
@@ -18,6 +19,10 @@ import {
   type ParsedPlatformPack,
   type PlatformPackConnectorTemplate,
 } from './platformPack';
+import {
+  createPlatformCompatRuntimeFromBindingContract,
+  invokePlatformRuntimeBinding,
+} from './bindingRuntime';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -37,6 +42,12 @@ interface PlatformPackRuntimeContext {
   definition: PlatformConnectorDefinition;
   contract: ParsedPlatformPack['contract'];
   pack: ParsedPlatformPack;
+  invokeBinding: (
+    bindingKey: keyof ParsedPlatformPack['contract']['apiBindings'],
+    method: string,
+    payload?: Record<string, unknown>
+  ) => Promise<{ ok: boolean; data?: unknown; error?: unknown }>;
+  createDefaultRuntimeApi: () => PlatformCompatRuntimeApi;
 }
 
 type PlatformPackRuntimeModuleShape = {
@@ -280,15 +291,42 @@ async function resolveAdapterAndRuntime(
     definition,
     contract: pack.contract,
     pack,
+    invokeBinding: (bindingKey, method, payload = {}) => {
+      const bindingId = pack.contract.apiBindings[bindingKey];
+      if (typeof bindingId !== 'string' || bindingId.trim().length < 1) {
+        return Promise.resolve({
+          ok: false,
+          error: {
+            code: 'UNSUPPORTED_CAPABILITY',
+            message: `Platform pack binding "${String(bindingKey)}" is not configured`,
+          },
+        });
+      }
+
+      return invokePlatformRuntimeBinding({
+        bindingId,
+        connectorId: definition.connectorId,
+        displayName: definition.displayName,
+        method,
+        payload,
+      });
+    },
+    createDefaultRuntimeApi: () =>
+      createPlatformCompatRuntimeFromBindingContract(definition, pack.contract),
   };
 
+  const existingAdapter =
+    listPlatformConnectorAdapters().find((item) => item.definition.connectorId === definition.connectorId) ??
+    null;
   const passiveAdapter = createPassivePlatformConnectorAdapter(definition);
   const runtimeModuleAdapter = runtimeModule?.createConnectorAdapter
     ? await runtimeModule.createConnectorAdapter(runtimeContext)
     : runtimeModule?.connectorAdapter;
   const normalizedAdapter = runtimeModuleAdapter
     ? ensureAdapterShape(runtimeModuleAdapter, definition)
-    : passiveAdapter;
+    : existingAdapter
+      ? ensureAdapterShape(existingAdapter, definition)
+      : passiveAdapter;
 
   const runtimeFromModule = runtimeModule?.createRuntimeApi
     ? await runtimeModule.createRuntimeApi(runtimeContext)

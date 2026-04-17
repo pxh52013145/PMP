@@ -35,14 +35,17 @@ import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService
 import { useSkinSurfaceModel } from '../../../themes/skinSurface';
 import { useConfirmDialog } from '../../core/ConfirmDialog';
 import {
+  getMusicPlatformGlobalCacheSettings,
   listPlatformCompatRegistryRecords,
   listPlatformConnectorDefinitions,
   listPlatformConnectorFacadeItems,
   listPlatformInstances,
   listPlatformRenderSelections,
+  pickMusicPlatformGlobalCacheDirectory,
   readPlatformLoginRegistry,
   refreshAndEmitPlatformConnectorAuthSnapshot,
   resolvePlatformConnectorTemplate,
+  setMusicPlatformGlobalCacheSettings,
   setPlatformRenderSelectionMounted,
   subscribePlatformCompatRegistry,
   subscribePlatformConnectorAuthChanged,
@@ -55,6 +58,7 @@ import {
   type PlatformConnectorFacadeItem,
   type PlatformConnectorId,
   type PlatformLoginRegistryEntry,
+  type MusicPlatformGlobalCacheSettings,
 } from '../../../modules/music-platform';
 import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
@@ -64,6 +68,7 @@ import {
   type PlatformMagnetDefaultMode,
 } from './platformMagnetSkin';
 import { BilibiliPlaybackSettingsContent } from './BilibiliPlaybackSettingsModal';
+import { MusicTemplatePlaybackSettingsContent } from './MusicTemplatePlaybackSettings';
 import {
   DedicatedWorkspacePlaceholderAdapter,
   DedicatedWorkspacePlaceholderToolbar,
@@ -72,9 +77,11 @@ import {
   renderPlatformWorkspaceAdapterToolbar,
   renderPlatformWorkspaceAdapterWorkspace,
   resolveDailySubtitleKeyByConnectorId,
-  resolveDefaultConnectorIdByWorkspaceDefaultMode,
   resolvePlatformWorkspaceAdapter,
+  resolvePlatformWorkspaceAdapterKind,
+  resolveDefaultWorkspaceAdapterKindByWorkspaceDefaultMode,
   resolveWorkspaceSettingsController,
+  type PlatformWorkspaceAdapterKind,
   type PlatformWorkspaceAdapterPayloadMap,
 } from './platformWorkspaceAdapterRegistry';
 import {
@@ -83,7 +90,7 @@ import {
 } from './platformWorkspaceModes';
 import { useBilibiliWorkspaceAdapterController } from './useBilibiliWorkspaceAdapterController';
 import { useDedicatedWorkspacePlaceholderController } from './useDedicatedWorkspacePlaceholderController';
-import { useNeteaseWorkspaceAdapterController } from './useNeteaseWorkspaceAdapterController';
+import { useMusicTemplateWorkspaceAdapterController } from './useMusicTemplateWorkspaceAdapterController';
 
 import './PlatformMagnet.css';
 
@@ -93,8 +100,8 @@ type PlatformMagnetRendererProps = {
   skinProps?: Record<string, unknown>;
 };
 
-type PlatformPageView = 'daily' | 'config' | 'instance' | 'local';
-type SettingsTabId = 'host' | string;
+type PlatformPageView = 'daily' | 'overview' | 'instance' | 'local';
+type SettingsTabId = 'global' | string;
 type CreateView = 'create' | 'existing';
 type ContentTransitionPhase = 'entered' | 'entering' | 'exiting';
 
@@ -112,16 +119,16 @@ type PlaylistDrawerGroup = {
   connectorId: string | null;
   label: string;
   playlists: AudioPlaylist[];
-  bilibiliFolders?: Array<{
-    folderId: string | null;
+  collections?: Array<{
+    collectionId: string | null;
     title: string;
     count: number | null;
   }>;
-  selectedFolderId?: string | null;
-  folderSectionLabelKey?: string;
+  selectedCollectionId?: string | null;
+  collectionSectionLabelKey?: string;
   playlistSectionLabelKey?: string;
-  folderLoading?: boolean;
-  folderError?: string | null;
+  collectionLoading?: boolean;
+  collectionError?: string | null;
 };
 
 type WorkspaceShellSearchState = {
@@ -134,9 +141,8 @@ type WorkspaceShellSearchState = {
 };
 
 type WorkspaceSettingsPanelRenderContext = {
-  settingsItem: RegisteredPlatformItem;
   settingsLabel: string;
-  activeAccountValue: string;
+  settingsItems: RegisteredPlatformItem[];
 };
 
 type WorkspaceRuntimeAdapter = {
@@ -147,7 +153,9 @@ type WorkspaceRuntimeAdapter = {
   scrollResetToken?: string | null;
   buildDrawerGroup?: () => PlaylistDrawerGroup | null;
   selectDrawerFolder?: (folderId: string | null) => void;
+  selectDrawerPlaylist?: (playlistId: string) => void;
   resolveDrawerConnectorId?: () => string | null;
+  handleBackAction?: () => boolean;
   renderSettingsPanel?: (context: WorkspaceSettingsPanelRenderContext) => JSX.Element | null;
 };
 
@@ -156,12 +164,6 @@ const CONNECTOR_VISUAL_META_BY_ICON_KEY: Record<string, { Icon: IconComponent; c
   netease: { Icon: Disc3, color: '#ff6b87' },
   qqmusic: { Icon: Music, color: '#56db8d' },
 };
-
-const HOST_SETTINGS = {
-  aggregation: ['Loaded', 'Daily', 'Pinned'],
-  search: ['All', 'Loaded', 'Scoped'],
-  identify: ['Slot', 'Mic'],
-} as const;
 
 function cx(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(' ');
@@ -236,6 +238,16 @@ function toAuthLabelKey(authState: string | undefined): string {
   }
 }
 
+function resolveRegisteredItemAccountValue(item: RegisteredPlatformItem | null): string {
+  if (!item) return '-';
+  return (
+    item.facade?.accountUid ??
+    item.instance?.account.accountId ??
+    item.instance?.account.accountName ??
+    '-'
+  );
+}
+
 function listCapabilityLabelKeys(contract: PlatformCompatContractFile | null): string[] {
   if (!contract) return [];
 
@@ -280,11 +292,21 @@ function resolvePreferredConnectorId(
     return selectedConnectorId;
   }
 
-  const preferredConnectorId = resolveDefaultConnectorIdByWorkspaceDefaultMode(defaultMode);
+  const preferredAdapterKind = resolveDefaultWorkspaceAdapterKindByWorkspaceDefaultMode(defaultMode);
+  const matchesPreferredAdapter = (item: RegisteredPlatformItem): boolean => {
+    if (!preferredAdapterKind || !item.definition) return false;
+    return (
+      resolvePlatformWorkspaceAdapterKind({
+        connectorId: item.entry.connectorId,
+        workspaceKind: item.definition.workspaceKind,
+        platformTemplate: resolvePlatformConnectorTemplate(item.definition),
+      }) === preferredAdapterKind
+    );
+  };
 
   const mountedItems = items.filter((item) => item.renderSelection?.mounted === true);
-  if (preferredConnectorId) {
-    const preferredMounted = mountedItems.find((item) => item.entry.connectorId === preferredConnectorId);
+  if (preferredAdapterKind) {
+    const preferredMounted = mountedItems.find(matchesPreferredAdapter);
     if (preferredMounted) return preferredMounted.entry.connectorId;
   }
 
@@ -292,8 +314,8 @@ function resolvePreferredConnectorId(
     return mountedItems[0].entry.connectorId;
   }
 
-  if (preferredConnectorId) {
-    const preferredRegistered = items.find((item) => item.entry.connectorId === preferredConnectorId);
+  if (preferredAdapterKind) {
+    const preferredRegistered = items.find(matchesPreferredAdapter);
     if (preferredRegistered) return preferredRegistered.entry.connectorId;
   }
 
@@ -429,7 +451,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createView, setCreateView] = useState<CreateView>('create');
-  const [settingsTab, setSettingsTab] = useState<SettingsTabId>('host');
+  const [settingsTab, setSettingsTab] = useState<SettingsTabId>('global');
   const [createName, setCreateName] = useState('');
   const [createNameEditing, setCreateNameEditing] = useState(false);
   const [query, setQuery] = useState('');
@@ -437,6 +459,14 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const [submittedQuery, setSubmittedQuery] = useState('');
   const [, setLastRefreshAt] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [globalCacheSettings, setGlobalCacheSettings] = useState<MusicPlatformGlobalCacheSettings | null>(
+    null
+  );
+  const [globalCachePathDraft, setGlobalCachePathDraft] = useState('');
+  const [globalCacheSettingsLoading, setGlobalCacheSettingsLoading] = useState(false);
+  const [globalCacheSettingsSaving, setGlobalCacheSettingsSaving] = useState(false);
+  const [globalCacheSettingsInfo, setGlobalCacheSettingsInfo] = useState<string | null>(null);
+  const [globalCacheSettingsError, setGlobalCacheSettingsError] = useState<string | null>(null);
   const [selectedFilterConnectorIds, setSelectedFilterConnectorIds] = useState<string[]>([]);
   const [contentTransitionPhase, setContentTransitionPhase] = useState<ContentTransitionPhase>('entered');
   const [allPlaylists, setAllPlaylists] = useState<AudioPlaylist[]>(() => audioService.getPlaylists());
@@ -445,7 +475,6 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   );
   const [selectedPlaylistIdsByConnector, setSelectedPlaylistIdsByConnector] = useState<Record<string, string>>({});
   const [selectedLocalPlaylistId, setSelectedLocalPlaylistId] = useState<string | null>(null);
-  const [newPlaylistName, setNewPlaylistName] = useState('');
   const [playlistError, setPlaylistError] = useState<string | null>(null);
   const createNameInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -667,6 +696,34 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       labelKey: activeDefinition.labelKey,
     };
   }, [activeDefinition]);
+  const activeWorkspaceAdapterKind = useMemo<PlatformWorkspaceAdapterKind | null>(() => {
+    if (!activeDefinition) return null;
+    return resolvePlatformWorkspaceAdapterKind({
+      connectorId: activeConnectorId,
+      workspaceKind: activeDefinition.workspaceKind,
+      platformTemplate: resolvePlatformConnectorTemplate(activeDefinition),
+    });
+  }, [activeConnectorId, activeDefinition]);
+  const activeMusicItem = useMemo<RegisteredPlatformItem | null>(
+    () => (activeWorkspaceAdapterKind === 'music' ? activeItem : null),
+    [activeItem, activeWorkspaceAdapterKind]
+  );
+  const activeMusicConnectorId = activeMusicItem?.entry.connectorId ?? null;
+  const activeMusicDefinition = activeMusicItem?.definition ?? null;
+  const activeMusicContractRecord = activeMusicItem?.contractRecord ?? null;
+  const activeMusicInstanceId = activeMusicItem?.instance?.instanceId ?? null;
+  const activeMusicAuthState = activeMusicItem?.facade?.authState ?? null;
+  const activeMusicDisplayName = useMemo(() => {
+    if (!activeMusicItem) return null;
+    if (activeMusicDefinition?.labelKey) {
+      return t(activeMusicDefinition.labelKey);
+    }
+    return (
+      activeMusicItem.facade?.displayName ??
+      activeMusicDefinition?.displayName ??
+      activeMusicConnectorId
+    );
+  }, [activeMusicConnectorId, activeMusicDefinition, activeMusicItem, t]);
 
   const platformPlaylistsByConnectorId = useMemo(() => {
     const next = new Map<string, AudioPlaylist[]>();
@@ -687,8 +744,6 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const selectedPlaylistId = activeConnectorId
     ? selectedPlaylistIdsByConnector[activeConnectorId] ?? activePlatformPlaylists[0]?.id ?? null
     : null;
-  const selectedPlaylist =
-    activePlatformPlaylists.find((playlist) => playlist.id === selectedPlaylistId) ?? null;
   const localPlaylists = workspacePlaylists;
   const resolvedSelectedLocalPlaylistId =
     selectedLocalPlaylistId && localPlaylists.some((playlist) => playlist.id === selectedLocalPlaylistId)
@@ -736,7 +791,6 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   }, [localPlaylists, selectedLocalPlaylistId]);
 
   useEffect(() => {
-    setNewPlaylistName('');
     setPlaylistError(null);
   }, [activeConnectorId]);
 
@@ -753,11 +807,6 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   }, [registeredItems]);
 
   useEffect(() => {
-    if (!settingsOpen) return;
-    setSettingsTab(activeConnectorId ?? 'host');
-  }, [activeConnectorId, settingsOpen]);
-
-  useEffect(() => {
     if (!createOpen || !createNameEditing || createView !== 'create') return;
 
     const frameId = window.requestAnimationFrame(() => {
@@ -766,17 +815,6 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     });
     return () => window.cancelAnimationFrame(frameId);
   }, [createNameEditing, createOpen, createView]);
-
-  const handleSetSelectedPlaylistId = useCallback(
-    (playlistId: string | null) => {
-      if (!activeConnectorId) return;
-      setSelectedPlaylistIdsByConnector((prev) => ({
-        ...prev,
-        [activeConnectorId]: playlistId ?? '',
-      }));
-    },
-    [activeConnectorId]
-  );
 
   const handleSelectLocalPlaylist = useCallback(
     (playlistId: string) => {
@@ -843,30 +881,18 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     [audioService, confirm, selectedLocalPlaylist, t]
   );
 
-  const handleCreatePlaylist = useCallback(() => {
-    if (!activeConnectorId) return;
-
-    const nextPlaylist = audioService.createPlaylist(
-      newPlaylistName.trim() || t('magnet.platform.playlist.defaultName'),
-      '',
-      {
-        kind: 'platform',
-        sourceConnectorId: activeConnectorId,
-      }
-    );
-
-    setSelectedPlaylistIdsByConnector((prev) => ({
-      ...prev,
-      [activeConnectorId]: nextPlaylist.id,
-    }));
-    setNewPlaylistName('');
-    setPlaylistError(null);
-  }, [activeConnectorId, audioService, newPlaylistName, t]);
-
   const settingsConnectorDefinition = useMemo<PlatformConnectorDefinition | null>(() => {
-    if (settingsTab === 'host') return null;
+    if (settingsTab === 'global') return null;
     return platformDefinitionsById.get(settingsTab as PlatformConnectorId) ?? null;
   }, [platformDefinitionsById, settingsTab]);
+  const settingsWorkspaceAdapterKind = useMemo(() => {
+    if (!settingsConnectorDefinition) return null;
+    return resolvePlatformWorkspaceAdapterKind({
+      connectorId: settingsConnectorDefinition.connectorId,
+      workspaceKind: settingsConnectorDefinition.workspaceKind,
+      platformTemplate: resolvePlatformConnectorTemplate(settingsConnectorDefinition),
+    });
+  }, [settingsConnectorDefinition]);
   const settingsWorkspaceSettingsController = useMemo(() => {
     if (!settingsConnectorDefinition) return 'none' as const;
     return resolveWorkspaceSettingsController({
@@ -875,11 +901,43 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       platformTemplate: resolvePlatformConnectorTemplate(settingsConnectorDefinition),
     });
   }, [settingsConnectorDefinition]);
+  const settingsItems = useMemo(
+    () =>
+      settingsTab === 'global'
+        ? []
+        : registeredItems.filter((item) => item.entry.connectorId === settingsTab),
+    [registeredItems, settingsTab]
+  );
+  const settingsItem = settingsItems[0] ?? null;
+  const settingsMusicItem = useMemo<RegisteredPlatformItem | null>(
+    () => (settingsWorkspaceAdapterKind === 'music' ? settingsItem : null),
+    [settingsItem, settingsWorkspaceAdapterKind]
+  );
+  const settingsMusicConnectorId = settingsMusicItem?.entry.connectorId ?? null;
+  const settingsMusicDefinition = settingsMusicItem?.definition ?? null;
+  const settingsMusicContractRecord = settingsMusicItem?.contractRecord ?? null;
+  const settingsMusicInstanceId = settingsMusicItem?.instance?.instanceId ?? null;
+  const settingsMusicAuthState = settingsMusicItem?.facade?.authState ?? null;
+  const settingsMusicDisplayName = useMemo(() => {
+    if (!settingsMusicItem) return null;
+    if (settingsMusicDefinition?.labelKey) {
+      return t(settingsMusicDefinition.labelKey);
+    }
+    return (
+      settingsMusicItem.facade?.displayName ??
+      settingsMusicDefinition?.displayName ??
+      settingsMusicConnectorId
+    );
+  }, [settingsMusicConnectorId, settingsMusicDefinition, settingsMusicItem, t]);
 
   const bilibiliController = useBilibiliWorkspaceAdapterController({
     activeWorkspaceConnectorId,
-    settingsVisible: settingsOpen && settingsWorkspaceSettingsController === 'bilibili',
-    prefersDarkMode: true,
+    activeBilibiliInstanceId:
+      settingsWorkspaceSettingsController === 'bilibili'
+        ? settingsItem?.instance?.instanceId ?? null
+        : activeItem?.definition?.connectorId === 'connector.platform.bilibili'
+          ? activeItem.instance?.instanceId ?? null
+          : null,
     items: connectorViews,
     audioService,
     t,
@@ -888,108 +946,85 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     setPlaylistError,
   });
 
-  const neteaseController = useNeteaseWorkspaceAdapterController({
+  const musicTemplateController = useMusicTemplateWorkspaceAdapterController({
     activeWorkspaceConnectorId,
+    activeMusicConnectorId,
+    activeMusicDisplayName,
+    activeMusicContractRecord,
+    activeMusicInstanceId,
+    activeMusicAuthState,
     prefersDarkMode: true,
-    items: connectorViews,
     audioService,
     t,
-    platformPlaylists: activePlatformPlaylists,
-    selectedPlaylist,
     selectedPlaylistId,
-    newPlaylistName,
     playlistError,
-    onCreatePlaylist: handleCreatePlaylist,
-    setSelectedPlaylistId: handleSetSelectedPlaylistId,
-    setNewPlaylistName,
     setPlaylistError,
   });
-  const neteaseWorkspaceProps = useMemo(
-    () => ({
-      ...neteaseController.neteaseWorkspaceProps,
-      onDeleteSelectedPlaylist: () => {
-        void (async () => {
-          const targetPlaylist = selectedPlaylist;
-          if (!targetPlaylist) return;
-
-          const ok = await confirm({
-            title: t('magnet.platform.confirm.platform.deletePlaylist.title'),
-            message: t('magnet.platform.confirm.platform.deletePlaylist.message', {
-              name: targetPlaylist.name,
-            }),
-            confirmText: t('common.action.delete'),
-            cancelText: t('common.action.cancel'),
-            danger: true,
-          });
-          if (!ok) return;
-          neteaseController.neteaseWorkspaceProps.onDeleteSelectedPlaylist();
-        })();
-      },
-      onRemoveTrackFromSelectedPlaylist: (trackIndex: number) => {
-        void (async () => {
-          const targetPlaylist = selectedPlaylist;
-          if (!targetPlaylist) return;
-          const track = targetPlaylist.tracks[trackIndex];
-          const trackLabel = track?.title?.trim() || `${trackIndex + 1}`;
-
-          const ok = await confirm({
-            title: t('magnet.platform.confirm.platform.removeTrack.title'),
-            message: t('magnet.platform.confirm.platform.removeTrack.message', {
-              track: trackLabel,
-              playlist: targetPlaylist.name,
-            }),
-            confirmText: t('common.action.remove'),
-            cancelText: t('common.action.cancel'),
-            danger: true,
-          });
-          if (!ok) return;
-          neteaseController.neteaseWorkspaceProps.onRemoveTrackFromSelectedPlaylist(trackIndex);
-        })();
-      },
-    }),
-    [confirm, neteaseController.neteaseWorkspaceProps, selectedPlaylist, t]
-  );
+  const settingsMusicTemplateController = useMusicTemplateWorkspaceAdapterController({
+    activeWorkspaceConnectorId: settingsMusicConnectorId,
+    activeMusicConnectorId: settingsMusicConnectorId,
+    activeMusicDisplayName: settingsMusicDisplayName,
+    activeMusicContractRecord: settingsMusicContractRecord,
+    activeMusicInstanceId: settingsMusicInstanceId,
+    activeMusicAuthState: settingsMusicAuthState,
+    prefersDarkMode: true,
+    audioService,
+    t,
+    selectedPlaylistId: null,
+    playlistError,
+    setPlaylistError,
+  });
+  const musicTemplatePlatformLabel =
+    activeMusicDisplayName ?? musicTemplateController.musicTemplateWorkspaceProps.platformLabel;
+  const musicTemplatePlatformAccentColor = getConnectorVisualMeta(
+    activeMusicConnectorId,
+    activeMusicDefinition
+  ).color;
+  const musicTemplatePlatformFallbackLabel =
+    musicTemplatePlatformLabel.trim().charAt(0).toUpperCase() || 'M';
+  const musicTemplateWorkspaceProps = {
+    ...musicTemplateController.musicTemplateWorkspaceProps,
+    platformLabel: musicTemplatePlatformLabel,
+    platformAccentColor: musicTemplatePlatformAccentColor,
+    platformFallbackLabel: musicTemplatePlatformFallbackLabel,
+  };
 
   const placeholderController = useDedicatedWorkspacePlaceholderController({
     activeWorkspaceDescriptor,
     t,
   });
 
-  const connectorIdsByWorkspaceKind = useMemo(() => {
-    const next = new Map<string, string[]>();
+  const connectorIdsByAdapterKind = useMemo(() => {
+    const next = new Map<PlatformWorkspaceAdapterKind, string[]>();
     for (const item of registeredItems) {
-      const workspaceKind = item.definition?.workspaceKind?.trim();
-      if (!workspaceKind) continue;
-      const bucket = next.get(workspaceKind) ?? [];
+      if (!item.definition) continue;
+      const adapterKind = resolvePlatformWorkspaceAdapterKind({
+        connectorId: item.entry.connectorId,
+        workspaceKind: item.definition.workspaceKind,
+        platformTemplate: resolvePlatformConnectorTemplate(item.definition),
+      });
+      if (!adapterKind) continue;
+      const bucket = next.get(adapterKind) ?? [];
       bucket.push(item.entry.connectorId);
-      next.set(workspaceKind, bucket);
+      next.set(adapterKind, bucket);
     }
     return next;
   }, [registeredItems]);
 
-  const workspaceTemplateAdapterPayloads = useMemo<PlatformWorkspaceAdapterPayloadMap>(
-    () => ({
-      bilibili: {
-        toolbar: {},
-        workspace: bilibiliController.bilibiliWorkspaceProps,
-      },
-      netease: {
-        toolbar: neteaseController.neteaseToolbarProps,
-        workspace: neteaseWorkspaceProps,
-      },
-      qqmusic: {
-        toolbar: placeholderController.placeholderToolbarProps,
-        workspace: placeholderController.placeholderWorkspaceProps,
-      },
-    }),
-    [
-      bilibiliController.bilibiliWorkspaceProps,
-      neteaseController.neteaseToolbarProps,
-      neteaseWorkspaceProps,
-      placeholderController.placeholderToolbarProps,
-      placeholderController.placeholderWorkspaceProps,
-    ]
-  );
+  const workspaceTemplateAdapterPayloads: PlatformWorkspaceAdapterPayloadMap = {
+    bilibili: {
+      toolbar: {},
+      workspace: bilibiliController.bilibiliWorkspaceProps,
+    },
+    music: {
+      toolbar: musicTemplateController.musicTemplateToolbarProps,
+      workspace: musicTemplateWorkspaceProps,
+    },
+    qqmusic: {
+      toolbar: placeholderController.placeholderToolbarProps,
+      workspace: placeholderController.placeholderWorkspaceProps,
+    },
+  };
 
   const activeWorkspaceTemplateAdapter = useMemo(() => {
     if (!activeDefinition) return null;
@@ -1000,14 +1035,14 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     });
   }, [activeConnectorId, activeDefinition]);
 
-  const workspaceRuntimeAdapterRegistry = useMemo<Record<string, WorkspaceRuntimeAdapter>>(
+  const workspaceRuntimeAdapterRegistry = useMemo<Record<PlatformWorkspaceAdapterKind, WorkspaceRuntimeAdapter>>(
     () => ({
       bilibili: {
         shellSearch: bilibiliController.bilibiliShellSearch,
         shouldResetPageStageScroll: true,
         scrollResetToken: bilibiliController.bilibiliPreviewFolders.selectedFolderId,
         resolveDrawerConnectorId: () =>
-          activeConnectorId ?? connectorIdsByWorkspaceKind.get('bilibili')?.[0] ?? null,
+          activeConnectorId ?? connectorIdsByAdapterKind.get('bilibili')?.[0] ?? null,
         selectDrawerFolder: (folderId) => {
           if (folderId) {
             bilibiliController.bilibiliPreviewFolders.onSelectFolder(folderId);
@@ -1019,15 +1054,15 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
           if (activePage !== 'instance' || !activeConnectorId) return null;
           const bilibiliItem =
             registeredItems.find((item) => item.entry.connectorId === activeConnectorId) ?? null;
-          const bilibiliFolders = bilibiliController.bilibiliPreviewFolders.authorized
+          const bilibiliCollections = bilibiliController.bilibiliPreviewFolders.authorized
             ? [
                 {
-                  folderId: null,
+                  collectionId: null,
                   title: t('magnet.platform.bilibili.folder.recommendedEntry'),
                   count: null,
                 },
                 ...bilibiliController.bilibiliPreviewFolders.folders.map((folder) => ({
-                  folderId: folder.folderId,
+                  collectionId: folder.folderId,
                   title: folder.title,
                   count: folder.mediaCount,
                 })),
@@ -1041,49 +1076,75 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
               ? t(bilibiliItem.definition.labelKey)
               : bilibiliItem?.facade?.displayName ?? activeConnectorId,
             playlists: platformPlaylistsByConnectorId.get(activeConnectorId) ?? [],
-            bilibiliFolders,
-            selectedFolderId: bilibiliController.bilibiliPreviewFolders.selectedFolderId,
-            folderSectionLabelKey: 'magnet.platform.bilibili.folder.title',
+            collections: bilibiliCollections,
+            selectedCollectionId: bilibiliController.bilibiliPreviewFolders.selectedFolderId,
+            collectionSectionLabelKey: 'magnet.platform.bilibili.folder.title',
             playlistSectionLabelKey: 'magnet.platform.bilibili.drawer.playlists.open',
-            folderLoading: bilibiliController.bilibiliPreviewFolders.loading,
-            folderError: bilibiliController.bilibiliPreviewFolders.error,
+            collectionLoading: bilibiliController.bilibiliPreviewFolders.loading,
+            collectionError: bilibiliController.bilibiliPreviewFolders.error,
           };
         },
-        renderSettingsPanel: ({ settingsItem, settingsLabel }) => (
-          <div className="rounded-[18px] border border-white/8 bg-black/10 px-4 py-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm text-white">{t('magnet.platform.bilibili.settings.title')}</div>
-                <div className="mt-1 text-xs text-white/42">
-                  {t('magnet.platform.mock.settings.titleInstance', { platform: settingsLabel })}
-                </div>
-              </div>
-              <span className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/48">
-                {t(toAuthLabelKey(settingsItem.facade?.authState))}
-              </span>
-            </div>
-            <BilibiliPlaybackSettingsContent {...bilibiliController.bilibiliSettingsProps} />
-          </div>
+        renderSettingsPanel: () => (
+          <BilibiliPlaybackSettingsContent {...bilibiliController.bilibiliSettingsProps} />
         ),
       },
-      netease: {
-        shellSearch: neteaseController.neteaseShellSearch,
-        playlistOpener: activeContractRecord?.contract.capabilities.playlists
-          ? neteaseController.openNeteasePlaylistDrawer
-          : null,
-        playlistActionLabelKey: 'magnet.platform.netease.playlist.open',
+      music: {
+        shellSearch: musicTemplateController.musicTemplateShellSearch,
+        resolveDrawerConnectorId: () =>
+          activeMusicConnectorId ?? connectorIdsByAdapterKind.get('music')?.[0] ?? null,
+        selectDrawerPlaylist: (playlistId) => {
+          const targetPlaylist =
+            musicTemplateController.musicTemplateDrawerPlaylists.find(
+              (playlist) => playlist.id === playlistId
+            ) ?? null;
+          const collectionId = targetPlaylist?.sourcePlaylistId?.trim() || targetPlaylist?.id?.trim() || '';
+          if (!collectionId) return;
+          musicTemplateController.musicTemplateOpenDrawerPlaylist(collectionId);
+        },
+        handleBackAction: () => {
+          if (!musicTemplateController.musicTemplateCanGoBack) {
+            return false;
+          }
+          return musicTemplateController.musicTemplateHandleBackAction();
+        },
+        buildDrawerGroup: () => {
+          const connectorId =
+            activeMusicConnectorId ?? connectorIdsByAdapterKind.get('music')?.[0] ?? null;
+          if (activePage !== 'instance' || !connectorId) return null;
+          const musicItem =
+            registeredItems.find((item) => item.entry.connectorId === connectorId) ?? null;
+
+          return {
+            id: connectorId,
+            connectorId,
+            label: musicItem?.definition?.labelKey
+              ? t(musicItem.definition.labelKey)
+              : musicItem?.facade?.displayName ?? connectorId,
+            playlists: musicTemplateController.musicTemplateDrawerPlaylists,
+            playlistSectionLabelKey: 'magnet.platform.music-template.playlist.title',
+            collectionLoading: musicTemplateController.musicTemplateWorkspaceProps.collectionLoading,
+            collectionError: musicTemplateController.musicTemplateWorkspaceProps.collectionError,
+          };
+        },
+        renderSettingsPanel: () =>
+          settingsMusicTemplateController.musicTemplateSettingsSupported ? (
+            <MusicTemplatePlaybackSettingsContent
+              {...settingsMusicTemplateController.musicTemplateSettingsProps}
+            />
+          ) : null,
       },
+      qqmusic: {},
     }),
     [
       activeConnectorId,
-      activeContractRecord?.contract.capabilities.playlists,
+      activeMusicConnectorId,
       activePage,
       bilibiliController.bilibiliPreviewFolders,
       bilibiliController.bilibiliSettingsProps,
       bilibiliController.bilibiliShellSearch,
-      connectorIdsByWorkspaceKind,
-      neteaseController.neteaseShellSearch,
-      neteaseController.openNeteasePlaylistDrawer,
+      connectorIdsByAdapterKind,
+      musicTemplateController,
+      settingsMusicTemplateController,
       platformPlaylistsByConnectorId,
       registeredItems,
       t,
@@ -1091,9 +1152,9 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   );
 
   const activeWorkspaceRuntimeAdapter = useMemo<WorkspaceRuntimeAdapter | null>(() => {
-    if (!activeDefinition) return null;
-    return workspaceRuntimeAdapterRegistry[activeDefinition.workspaceKind] ?? null;
-  }, [activeDefinition, workspaceRuntimeAdapterRegistry]);
+    if (!activeWorkspaceAdapterKind) return null;
+    return workspaceRuntimeAdapterRegistry[activeWorkspaceAdapterKind] ?? null;
+  }, [activeWorkspaceAdapterKind, workspaceRuntimeAdapterRegistry]);
 
   const activeWorkspaceShellSearch =
     activePage === 'instance' ? activeWorkspaceRuntimeAdapter?.shellSearch ?? null : null;
@@ -1190,6 +1251,15 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
         [targetConnectorId]: playlistId,
       }));
 
+      const runtimeDrawerConnectorId = activeWorkspaceRuntimeAdapter?.resolveDrawerConnectorId?.() ?? null;
+      if (
+        activePage === 'instance' &&
+        runtimeDrawerConnectorId === targetConnectorId &&
+        activeWorkspaceRuntimeAdapter?.selectDrawerPlaylist
+      ) {
+        activeWorkspaceRuntimeAdapter.selectDrawerPlaylist(playlistId);
+      }
+
       // Local playlists should still land in a renderable workspace context.
       // If the resolved connector is authorized but not mounted yet, auto-mount it.
       const targetItem = registeredItems.find((item) => item.entry.connectorId === targetConnectorId) ?? null;
@@ -1207,7 +1277,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       setSubmittedQuery('');
       setDrawerOpen(false);
     },
-    [activeConnectorId, registeredItems]
+    [activeConnectorId, activePage, activeWorkspaceRuntimeAdapter, registeredItems]
   );
 
   const handleSelectWorkspaceDrawerFolder = useCallback(
@@ -1236,7 +1306,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
   const handleCreateLocalPlaylist = useCallback(() => {
     const nextPlaylist = audioService.createPlaylist(
-      createName.trim() || t('magnet.platform.mock.create.defaultName'),
+      createName.trim() || t('magnet.platform.local.create.defaultName'),
       '',
       { kind: 'manual' }
     );
@@ -1275,6 +1345,76 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     }
   }, [refreshConnectorViews, registeredItems, telemetry]);
 
+  const refreshGlobalCacheSettings = useCallback(async () => {
+    setGlobalCacheSettingsLoading(true);
+    setGlobalCacheSettingsError(null);
+    setGlobalCacheSettingsInfo(null);
+    try {
+      const settings = await getMusicPlatformGlobalCacheSettings();
+      setGlobalCacheSettings(settings);
+      setGlobalCachePathDraft(settings?.customRootPath ?? '');
+    } catch (error) {
+      setGlobalCacheSettingsError(
+        error instanceof Error
+          ? error.message
+          : t('magnet.platform.global.cache.errorLoad')
+      );
+    } finally {
+      setGlobalCacheSettingsLoading(false);
+    }
+  }, [t]);
+
+  const handleBrowseGlobalCachePath = useCallback(async () => {
+    const selected = await pickMusicPlatformGlobalCacheDirectory();
+    if (!selected) return;
+    setGlobalCachePathDraft(selected);
+    setGlobalCacheSettingsInfo(null);
+  }, []);
+
+  const handleSaveGlobalCachePath = useCallback(async () => {
+    if (globalCacheSettingsSaving) return;
+
+    setGlobalCacheSettingsSaving(true);
+    setGlobalCacheSettingsError(null);
+    setGlobalCacheSettingsInfo(null);
+    try {
+      const settings = await setMusicPlatformGlobalCacheSettings(globalCachePathDraft);
+      setGlobalCacheSettings(settings);
+      setGlobalCachePathDraft(settings?.customRootPath ?? '');
+      setGlobalCacheSettingsInfo(t('magnet.platform.global.cache.stateSaved'));
+    } catch (error) {
+      setGlobalCacheSettingsError(
+        error instanceof Error
+          ? error.message
+          : t('magnet.platform.global.cache.errorSave')
+      );
+    } finally {
+      setGlobalCacheSettingsSaving(false);
+    }
+  }, [globalCachePathDraft, globalCacheSettingsSaving, t]);
+
+  const handleResetGlobalCachePath = useCallback(async () => {
+    if (globalCacheSettingsSaving) return;
+
+    setGlobalCacheSettingsSaving(true);
+    setGlobalCacheSettingsError(null);
+    setGlobalCacheSettingsInfo(null);
+    try {
+      const settings = await setMusicPlatformGlobalCacheSettings(undefined);
+      setGlobalCacheSettings(settings);
+      setGlobalCachePathDraft('');
+      setGlobalCacheSettingsInfo(t('magnet.platform.global.cache.stateReset'));
+    } catch (error) {
+      setGlobalCacheSettingsError(
+        error instanceof Error
+          ? error.message
+          : t('magnet.platform.global.cache.errorSave')
+      );
+    } finally {
+      setGlobalCacheSettingsSaving(false);
+    }
+  }, [globalCacheSettingsSaving, t]);
+
   const registeredCount = registeredItems.length;
   const loadedCount = registeredItems.filter((item) => item.renderSelection?.mounted === true).length;
   const authorizedCount = registeredItems.filter((item) => item.facade?.authState === 'authorized').length;
@@ -1282,11 +1422,6 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     activeDefinition?.labelKey
       ? t(activeDefinition.labelKey)
       : activeFacade?.displayName ?? activeInstance?.displayName ?? '';
-  const activeAccountValue =
-    activeFacade?.accountUid ??
-    activeInstance?.account.accountId ??
-    activeInstance?.account.accountName ??
-    '-';
   const activeAuthLabel = t(toAuthLabelKey(activeFacade?.authState));
   const activeVisualMeta = resolveConnectorVisualMeta(activeConnectorId, activeDefinition);
   const activeMounted = activeRenderSelection?.mounted === true;
@@ -1298,9 +1433,9 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const activeWorkspacePrimaryActionLabel =
     activeWorkspacePlaylistOpener && activeWorkspaceRuntimeAdapter?.playlistActionLabelKey
       ? t(activeWorkspaceRuntimeAdapter.playlistActionLabelKey)
-      : t('magnet.platform.mock.fab.playlists');
+      : t('magnet.platform.fab.playlists');
   const activeWorkspacePrimaryActionTitle =
-    activeWorkspacePlaylistOpener ? activeWorkspacePrimaryActionLabel : t('magnet.platform.mock.action.openDrawer');
+    activeWorkspacePlaylistOpener ? activeWorkspacePrimaryActionLabel : t('magnet.platform.action.openDrawer');
   const shellSearchValue = activeWorkspaceShellSearch?.value ?? (activePage === 'local' ? localQuery : query);
   const shellSearchPlaceholder = activeWorkspaceShellSearch?.placeholder ??
     (activePage === 'local'
@@ -1366,7 +1501,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   );
   const showBackButton = Boolean(submittedQuery) || activePage !== 'daily';
   const showDailyFilter = activePage === 'daily';
-  const defaultCreateName = t('magnet.platform.mock.create.defaultName');
+  const defaultCreateName = t('magnet.platform.local.create.defaultName');
   const filterableRegisteredItems = useMemo(
     () => registeredItems.filter((item) => isSearchFilterableConnector(item.definition)),
     [registeredItems]
@@ -1378,11 +1513,11 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       groups.push(workspaceGroup);
     }
 
-    if (localPlaylists.length > 0) {
+    if (localPlaylists.length > 0 && activePage !== 'instance') {
       groups.push({
         id: 'local',
         connectorId: null,
-        label: t('magnet.platform.mock.drawer.local'),
+        label: t('magnet.platform.drawer.local'),
         playlists: localPlaylists,
       });
     }
@@ -1391,35 +1526,53 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       (group) =>
         group.connectorId === null ||
         group.playlists.length > 0 ||
-        (group.bilibiliFolders?.length ?? 0) > 0 ||
-        Boolean(group.folderLoading) ||
-        Boolean(group.folderError)
+        (group.collections?.length ?? 0) > 0 ||
+        Boolean(group.collectionLoading) ||
+        Boolean(group.collectionError)
     );
   }, [
+    activePage,
     activeWorkspaceRuntimeAdapter,
     localPlaylists,
     t
   ]);
-  const settingsItem =
-    settingsTab === 'host'
-      ? null
-      : registeredItems.find((item) => item.entry.connectorId === settingsTab) ?? null;
-  const settingsLabel = settingsItem?.definition?.labelKey
-    ? t(settingsItem.definition.labelKey)
-    : settingsItem?.facade?.displayName ?? settingsItem?.entry.connectorId ?? '';
+  const settingsNavItems = useMemo(
+    () => Array.from(new Map(registeredItems.map((item) => [item.entry.connectorId, item])).values()),
+    [registeredItems]
+  );
+  const settingsNavConnectorIdSet = useMemo(
+    () => new Set(settingsNavItems.map((item) => item.entry.connectorId)),
+    [settingsNavItems]
+  );
+  const preferredSettingsTab: SettingsTabId =
+    activePage === 'instance' && activeConnectorId && settingsNavConnectorIdSet.has(activeConnectorId)
+      ? activeConnectorId
+      : 'global';
+  const settingsLabel =
+    settingsConnectorDefinition?.labelKey
+      ? t(settingsConnectorDefinition.labelKey)
+      : settingsConnectorDefinition?.displayName ?? settingsItem?.entry.connectorId ?? '';
   const settingsContract = settingsItem?.contractRecord?.contract ?? null;
   const settingsWorkspaceRuntimeAdapter =
-    settingsItem?.definition?.workspaceKind
-      ? workspaceRuntimeAdapterRegistry[settingsItem.definition.workspaceKind] ?? null
-      : null;
+    settingsWorkspaceAdapterKind ? workspaceRuntimeAdapterRegistry[settingsWorkspaceAdapterKind] ?? null : null;
   const settingsWorkspacePanel =
-    settingsItem && settingsWorkspaceRuntimeAdapter?.renderSettingsPanel
+    settingsItems.length > 0 && settingsWorkspaceRuntimeAdapter?.renderSettingsPanel
       ? settingsWorkspaceRuntimeAdapter.renderSettingsPanel({
-          settingsItem,
           settingsLabel,
-          activeAccountValue,
+          settingsItems,
         })
       : null;
+
+  useEffect(() => {
+    if (!settingsOpen || settingsTab !== 'global') return;
+    void refreshGlobalCacheSettings();
+  }, [refreshGlobalCacheSettings, settingsOpen, settingsTab]);
+
+  useEffect(() => {
+    if (!settingsOpen || settingsTab === 'global') return;
+    if (settingsNavItems.some((item) => item.entry.connectorId === settingsTab)) return;
+    setSettingsTab('global');
+  }, [settingsNavItems, settingsOpen, settingsTab]);
 
   useEffect(() => {
     if (!showDailyFilter && filterOpen) {
@@ -1512,24 +1665,24 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             )}
           >
             <Library className="h-4 w-4 shrink-0" />
-            <span className="truncate">{t('magnet.platform.mock.nav.local')}</span>
+            <span className="truncate">{t('magnet.platform.nav.local')}</span>
           </button>
           <button
             type="button"
             onClick={() => {
-              setActivePage('config');
+              setActivePage('overview');
               setSubmittedQuery('');
               setNavOpen(false);
             }}
             className={cx(
               'platform-preview-nav-entry flex w-full items-center gap-3 rounded-[16px] px-3.5 py-3 text-left text-sm transition-colors',
-              activePage === 'config'
+              activePage === 'overview'
                 ? 'platform-preview-nav-entry-active text-white'
                 : 'text-white/62 hover:text-white/88'
             )}
           >
             <LayoutGrid className="h-4 w-4 shrink-0" />
-            <span className="truncate">{t('magnet.platform.nav.config')}</span>
+            <span className="truncate">{t('magnet.platform.nav.overview')}</span>
           </button>
         </div>
 
@@ -1658,11 +1811,16 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       return;
     }
 
+    if (activePage === 'instance' && activeWorkspaceRuntimeAdapter?.handleBackAction?.()) {
+      closeTopMenus();
+      return;
+    }
+
     if (activePage !== 'daily') {
       setActivePage('daily');
       closeTopMenus();
     }
-  }, [activePage, closeTopMenus, submittedQuery]);
+  }, [activePage, activeWorkspaceRuntimeAdapter, closeTopMenus, submittedQuery]);
 
   const renderSearchPanel = () => (
     <div className="mx-auto max-w-5xl space-y-3">
@@ -1731,25 +1889,35 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     </div>
   );
 
-  const renderConfigPanel = () => {
-    const configGroups = [
+  const renderOverviewPanel = () => {
+    const overviewGroups = [
       {
-        id: 'aggregation',
-        label: t('magnet.platform.mock.settings.groupAggregation'),
-        values: [String(loadedCount), String(authorizedCount), String(registeredCount)],
+        id: 'registered',
+        label: t('magnet.platform.runtime.statRegistered'),
+        value: String(registeredCount),
+        hint: t('magnet.platform.overview.statRegisteredHint'),
+        Icon: Library,
+      },
+      {
+        id: 'loaded',
+        label: t('magnet.platform.runtime.statLoaded'),
+        value: String(loadedCount),
+        hint: t('magnet.platform.overview.statLoadedHint'),
         Icon: Disc3,
       },
       {
-        id: 'search',
-        label: t('magnet.platform.mock.settings.groupSearch'),
-        values: [String(searchReadyCount), t('magnet.platform.search.filterTitle')],
-        Icon: Search,
+        id: 'authorized',
+        label: t('magnet.platform.runtime.statAuthorized'),
+        value: String(authorizedCount),
+        hint: t('magnet.platform.overview.statAuthorizedHint'),
+        Icon: Check,
       },
       {
-        id: 'identify',
-        label: t('magnet.platform.mock.settings.groupIdentify'),
-        values: [...HOST_SETTINGS.identify],
-        Icon: Mic,
+        id: 'searchable',
+        label: t('magnet.platform.runtime.statSearchable'),
+        value: String(searchReadyCount),
+        hint: t('magnet.platform.overview.statSearchableHint'),
+        Icon: Search,
       },
     ] as const;
 
@@ -1757,13 +1925,16 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       <div className="mx-auto max-w-5xl space-y-4">
         <div className="flex items-center gap-3">
           <span className="platform-preview-soft-ring inline-flex h-11 w-11 items-center justify-center rounded-full bg-white/4 text-white/72">
-            <SlidersHorizontal className="h-5 w-5" />
+            <LayoutGrid className="h-5 w-5" />
           </span>
           <div className="min-w-0">
-            <div className="text-sm font-medium text-white">{t('magnet.platform.mock.config.title')}</div>
-            <div className="text-xs text-white/42">
-              {t('magnet.platform.mock.config.subtitle', { count: loadedCount })}
+            <div className="text-[11px] uppercase tracking-[0.18em] text-white/34">
+              {t('magnet.platform.nav.overview')}
             </div>
+            <div className="mt-2 text-sm font-medium text-white">
+              {t('magnet.platform.overview.statusTitle')}
+            </div>
+            <div className="text-xs text-white/42">{t('magnet.platform.overview.statusDesc')}</div>
           </div>
         </div>
 
@@ -1869,8 +2040,8 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
           </section>
         ) : null}
 
-        <div className="grid gap-3 xl:grid-cols-3">
-          {configGroups.map(({ id, label, values, Icon }) => (
+        <div className="grid gap-3 xl:grid-cols-4">
+          {overviewGroups.map(({ id, label, value, hint, Icon }) => (
             <section key={id} className="platform-preview-card rounded-[22px] p-4">
               <div className="mb-4 flex items-center gap-3">
                 <span className="platform-preview-soft-ring inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/4 text-white/62">
@@ -1878,26 +2049,11 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                 </span>
                 <div className="text-sm text-white/72">{label}</div>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {values.map((item, index) => (
-                  <span
-                    key={`${id}-${item}`}
-                    className={cx(
-                      'rounded-full border px-3 py-1.5 text-xs',
-                      index === 0 ? 'border-white/18 bg-white/10 text-white' : 'border-white/10 text-white/48'
-                    )}
-                  >
-                    {item}
-                  </span>
-                ))}
-              </div>
+              <div className="text-[28px] font-semibold tracking-[-0.04em] text-white">{value}</div>
+              <div className="mt-2 text-xs text-white/48">{hint}</div>
             </section>
           ))}
         </div>
-
-        <section className="platform-preview-card rounded-[22px] px-4 py-4 text-sm text-white/52">
-          {t('magnet.platform.mock.settings.mockNote')}
-        </section>
       </div>
     );
   };
@@ -2028,8 +2184,8 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       return (
         <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 px-6 py-10 text-center">
           <Library className="h-8 w-8 text-white/24" />
-          <div className="text-base font-medium text-white">{t('magnet.platform.mock.local.empty')}</div>
-          <p className="max-w-md text-sm leading-6 text-white/54">{t('magnet.platform.mock.local.subtitle')}</p>
+          <div className="text-base font-medium text-white">{t('magnet.platform.local.empty')}</div>
+          <p className="max-w-md text-sm leading-6 text-white/54">{t('magnet.platform.local.subtitle')}</p>
         </div>
       );
     }
@@ -2085,7 +2241,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             {localPlaylists.length > 1 ? (
               <div className="space-y-3">
                 <div className="text-[11px] uppercase tracking-[0.2em] text-white/34">
-                  {t('magnet.platform.mock.local.title')}
+                  {t('magnet.platform.local.title')}
                 </div>
                 <div className="platform-preview-scroll flex gap-3 overflow-x-auto pb-1">
                   {localPlaylists.map((playlist) => {
@@ -2146,7 +2302,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
               <div className="min-w-0 md:max-w-[520px] lg:max-w-[680px]">
                 <div className="text-[11px] uppercase tracking-[0.28em] text-white/52">
-                  {t('magnet.platform.mock.nav.local')}
+                  {t('magnet.platform.nav.local')}
                 </div>
                 <h2 className="mt-3 break-words text-4xl font-semibold leading-none text-white sm:text-5xl">
                   {targetPlaylist?.name ?? '-'}
@@ -2180,7 +2336,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                       closeTopMenus();
                     }}
                     className="platform-preview-local-secondary-action inline-flex h-12 w-12 items-center justify-center rounded-full transition-colors hover:text-white"
-                    title={t('magnet.platform.mock.fab.playlists')}
+                    title={t('magnet.platform.fab.playlists')}
                   >
                     <Library className="h-5 w-5" />
                   </button>
@@ -2207,16 +2363,16 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
         <section className="platform-preview-local-table overflow-hidden rounded-[26px] shadow-[0_18px_48px_rgba(0,0,0,0.18)]">
           <div className="platform-preview-local-table-head grid grid-cols-[44px,minmax(0,1fr),68px,40px] items-center gap-3 px-4 py-3 text-[11px] uppercase tracking-[0.18em] text-white/30 md:grid-cols-[52px,minmax(0,1.45fr),minmax(0,0.9fr),76px,44px] md:px-6">
-            <span>{t('magnet.platform.mock.detail.column.index')}</span>
-            <span>{t('magnet.platform.mock.detail.column.title')}</span>
-            <span className="hidden md:block">{t('magnet.platform.mock.detail.column.album')}</span>
-            <span className="text-right">{t('magnet.platform.mock.detail.column.duration')}</span>
+            <span>{t('magnet.platform.detail.column.index')}</span>
+            <span>{t('magnet.platform.detail.column.title')}</span>
+            <span className="hidden md:block">{t('magnet.platform.detail.column.album')}</span>
+            <span className="text-right">{t('magnet.platform.detail.column.duration')}</span>
             <span />
           </div>
 
           {localTracks.length === 0 ? (
             <div className="flex min-h-[280px] items-center justify-center px-6 text-center text-sm text-white/42">
-              {t('magnet.platform.mock.emptyNoLocalTracks')}
+              {t('magnet.platform.local.emptyTracks')}
             </div>
           ) : filteredLocalTrackEntries.length === 0 ? (
             <div className="flex min-h-[280px] items-center justify-center px-6 text-center text-sm text-white/42">
@@ -2299,8 +2455,8 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       return renderDailyPanel();
     }
 
-    if (activePage === 'config') {
-      return renderConfigPanel();
+    if (activePage === 'overview') {
+      return renderOverviewPanel();
     }
 
     if (activePage === 'local') {
@@ -2323,6 +2479,13 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       </div>
     );
   };
+
+  const settingsTriggerTitle =
+    activePage === 'instance' && activeConnectorLabel
+      ? t('magnet.platform.settings.action.openPlatform', {
+          platform: activeConnectorLabel,
+        })
+      : t('magnet.platform.settings.action.openGlobal');
 
   return (
     <div className="platform-preview-magnet relative h-full w-full overflow-hidden rounded-[24px] text-white">
@@ -2546,7 +2709,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             <button
               type="button"
               className="platform-preview-soft-ring inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/4 text-white/62"
-              title={t('magnet.platform.mock.search.identify')}
+              title={t('magnet.platform.identify.placeholder')}
             >
               <Mic className="h-4 w-4" />
             </button>
@@ -2555,14 +2718,16 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
           <div className="justify-self-end">
             <button
               type="button"
-              onClick={() => {
+            onClick={() => {
+                setSettingsTab(preferredSettingsTab);
                 setSettingsOpen(true);
                 setDrawerOpen(false);
                 closeCreateDialog();
                 closeTopMenus();
               }}
               className="platform-preview-soft-ring inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/4 text-white/62"
-              title={t('magnet.platform.mock.action.openSettings')}
+              aria-label={settingsTriggerTitle}
+              title={settingsTriggerTitle}
             >
               <Settings className="h-4 w-4" />
             </button>
@@ -2585,7 +2750,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                 type="button"
                 onClick={handleGoBack}
                 className="platform-preview-back-button platform-preview-soft-ring inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#131922] text-white/72"
-                title={t('magnet.platform.mock.action.goBack')}
+                title={t('magnet.platform.action.goBack')}
               >
                 <ChevronLeft className="h-5 w-5" />
               </button>
@@ -2635,9 +2800,9 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
               openCreateDialog();
             }}
             className="platform-preview-fab platform-preview-fab-right absolute bottom-4 right-4 z-20 inline-flex h-11 shrink-0 items-center rounded-full text-white/72"
-            title={t('magnet.platform.mock.action.createLocal')}
+            title={t('magnet.platform.action.createLocal')}
           >
-            <span className="platform-preview-fab-label">{t('magnet.platform.mock.fab.create')}</span>
+            <span className="platform-preview-fab-label">{t('magnet.platform.fab.create')}</span>
             <Plus className="h-5 w-5 shrink-0" />
           </button>
 
@@ -2661,7 +2826,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             )}
           >
             <div className="mb-4 flex items-center justify-between">
-              <div className="text-sm text-white/72">{t('magnet.platform.mock.drawer.title')}</div>
+              <div className="text-sm text-white/72">{t('magnet.platform.drawer.title')}</div>
               <button type="button" onClick={() => setDrawerOpen(false)} className="text-white/52">
                 <X className="h-4 w-4" />
               </button>
@@ -2688,56 +2853,56 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                       )}
                       <span className="truncate">{group.label}</span>
                     </div>
-                    {group.bilibiliFolders && group.bilibiliFolders.length > 0 ? (
+                    {group.collections && group.collections.length > 0 ? (
                       <div className="space-y-2">
                         <div className="px-1 text-[10px] uppercase tracking-[0.18em] text-white/24">
-                          {group.folderSectionLabelKey
-                            ? t(group.folderSectionLabelKey)
+                          {group.collectionSectionLabelKey
+                            ? t(group.collectionSectionLabelKey)
                             : t('magnet.platform.bilibili.folder.title')}
                         </div>
-                        {group.bilibiliFolders.map((folder) => {
+                        {group.collections.map((collection) => {
                           const selected =
                             activeConnectorId === group.connectorId &&
-                            group.selectedFolderId === folder.folderId;
+                            group.selectedCollectionId === collection.collectionId;
                           return (
                             <button
-                              key={`${group.id}:folder:${folder.folderId ?? 'recommended'}`}
+                              key={`${group.id}:folder:${collection.collectionId ?? 'recommended'}`}
                               type="button"
-                              onClick={() => handleSelectWorkspaceDrawerFolder(folder.folderId)}
+                              onClick={() => handleSelectWorkspaceDrawerFolder(collection.collectionId)}
                               className={cx(
                                 'platform-preview-card flex w-full items-center gap-3 rounded-[16px] px-3 py-3 text-left text-sm transition-colors',
                                 selected ? 'platform-preview-card-active text-white' : 'text-white/68'
                               )}
                             >
                               <span className="platform-preview-soft-ring inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/4 text-white/58">
-                                {folder.folderId ? (
+                                {collection.collectionId ? (
                                   <Library className="h-4 w-4" />
                                 ) : (
                                   <Compass className="h-4 w-4" />
                                 )}
                               </span>
-                              <span className="min-w-0 flex-1 truncate">{folder.title}</span>
-                              {typeof folder.count === 'number' ? (
-                                <span className="text-xs text-white/34">{folder.count}</span>
+                              <span className="min-w-0 flex-1 truncate">{collection.title}</span>
+                              {typeof collection.count === 'number' ? (
+                                <span className="text-xs text-white/34">{collection.count}</span>
                               ) : null}
                             </button>
                           );
                         })}
                       </div>
                     ) : null}
-                    {group.folderLoading ? (
+                    {group.collectionLoading ? (
                       <div className="rounded-[16px] border border-dashed border-white/10 bg-white/3 px-3 py-4 text-center text-xs text-white/42">
                         {t('common.state.loading')}
                       </div>
                     ) : null}
-                    {group.folderError ? (
+                    {group.collectionError ? (
                       <div className="rounded-[16px] border border-dashed border-rose-400/20 bg-rose-400/5 px-3 py-4 text-center text-xs text-rose-200/80">
-                        {group.folderError}
+                        {group.collectionError}
                       </div>
                     ) : null}
                     {group.playlists.length > 0 ? (
                       <div className="space-y-2">
-                        {group.bilibiliFolders && group.bilibiliFolders.length > 0 ? (
+                        {group.playlistSectionLabelKey ? (
                           <div className="px-1 text-[10px] uppercase tracking-[0.18em] text-white/24">
                             {group.playlistSectionLabelKey
                               ? t(group.playlistSectionLabelKey)
@@ -2785,16 +2950,16 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                           );
                         })}
                       </div>
-                    ) : !group.bilibiliFolders || group.bilibiliFolders.length === 0 ? (
+                    ) : !group.collections || group.collections.length === 0 ? (
                       <div className="rounded-[16px] border border-dashed border-white/10 bg-white/3 px-3 py-5 text-center text-xs text-white/42">
-                        {t('magnet.platform.mock.create.existingEmpty')}
+                        {t('magnet.platform.drawer.empty')}
                       </div>
                     ) : null}
                   </div>
                 ))
               ) : (
                 <div className="flex min-h-[220px] items-center justify-center rounded-[20px] border border-dashed border-white/10 bg-white/3 px-6 text-center text-sm text-white/42">
-                  {t('magnet.platform.mock.create.existingEmpty')}
+                  {t('magnet.platform.drawer.empty')}
                 </div>
               )}
             </div>
@@ -2809,18 +2974,19 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             <div className="w-[210px] border-r border-white/10 bg-white/2 p-3">
               <button
                 type="button"
-                onClick={() => setSettingsTab('host')}
+                onClick={() => setSettingsTab('global')}
                 className={cx(
                   'flex w-full items-center gap-3 rounded-[16px] px-3 py-3 text-left text-sm transition-colors',
-                  settingsTab === 'host' ? 'bg-white/10 text-white' : 'text-white/62 hover:bg-white/6'
+                  settingsTab === 'global' ? 'bg-white/10 text-white' : 'text-white/62 hover:bg-white/6'
                 )}
               >
                 <Settings className="h-4 w-4" />
-                <span>{t('magnet.platform.mock.settings.titleHost')}</span>
+                <span>{t('magnet.platform.global.title')}</span>
               </button>
-              {registeredItems.map((item) => {
-                const label = item.facade?.accountUid ??
-                  (item.definition?.labelKey ? t(item.definition.labelKey) : item.entry.connectorId);
+              {settingsNavItems.map((item) => {
+                const label = item.definition?.labelKey
+                  ? t(item.definition.labelKey)
+                  : item.definition?.displayName ?? item.entry.connectorId;
 
                 return (
                   <button
@@ -2845,71 +3011,212 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             </div>
 
             <div className="platform-preview-scroll flex-1 overflow-y-auto p-5">
-              <div className="mb-4 flex items-center justify-between">
-                <div className="text-sm text-white/72">
-                  {settingsTab === 'host' ? t('magnet.platform.mock.settings.titleHost') : settingsLabel}
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-white/34">
+                    {t('magnet.platform.settings.panelTitle')}
+                  </div>
+                  <div className="mt-2 truncate text-sm font-medium text-white">
+                    {settingsTab === 'global' ? t('magnet.platform.global.title') : settingsLabel}
+                  </div>
+                  <div className="mt-1 text-xs text-white/42">
+                    {settingsTab === 'global'
+                      ? t('magnet.platform.settings.panelScopeGlobal')
+                      : t('magnet.platform.settings.panelScopePlatform', { platform: settingsLabel })}
+                  </div>
                 </div>
                 <button type="button" onClick={() => setSettingsOpen(false)} className="text-white/52">
                   <X className="h-4 w-4" />
                 </button>
               </div>
 
-              {settingsTab === 'host' ? (
+              {settingsTab === 'global' ? (
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between gap-3 rounded-[18px] border border-white/8 bg-black/10 px-4 py-3">
-                    <div>
-                      <div className="text-sm text-white">{t('magnet.platform.mock.config.title')}</div>
-                      <div className="mt-1 text-xs text-white/42">
-                        {t('magnet.platform.mock.config.subtitle', { count: loadedCount })}
+                  <div className="rounded-[18px] border border-white/8 bg-black/10 px-5 py-5">
+                    <div className="flex items-center gap-3">
+                      <span className="platform-preview-soft-ring inline-flex h-11 w-11 items-center justify-center rounded-full bg-white/4 text-white/72">
+                        <SlidersHorizontal className="h-5 w-5" />
+                      </span>
+                      <div className="min-w-0">
+                        <div className="text-base font-medium text-white">
+                          {t('magnet.platform.global.title')}
+                        </div>
+                        <div className="mt-1 text-xs text-white/42">
+                          {t('magnet.platform.global.subtitle')}
+                        </div>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void handleRefreshAll();
-                      }}
-                      className="platform-preview-detail-ghost inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs text-white/76"
-                      disabled={refreshing}
-                    >
-                      <RefreshCw className={cx('h-3.5 w-3.5', refreshing && 'animate-spin')} />
-                      <span>{refreshing ? t('common.state.loading') : t('magnet.platform.action.refresh')}</span>
-                    </button>
                   </div>
 
-                  <div>
-                    <div className="mb-2 text-xs text-white/32">{t('magnet.platform.mock.settings.groupAggregation')}</div>
-                    <div className="flex flex-wrap gap-2">
-                      {[String(loadedCount), String(authorizedCount), String(registeredCount)].map((item, index) => (
-                        <span key={`aggregation-${index}-${item}`} className={cx('rounded-full border px-3 py-1.5 text-xs', index === 0 ? 'border-white/18 bg-white/10 text-white' : 'border-white/10 text-white/48')}>
-                          {item}
-                        </span>
-                      ))}
+                  <div className="rounded-[18px] border border-white/8 bg-black/10 px-5 py-5">
+                    <div className="mb-4">
+                      <div className="text-sm font-medium text-white">
+                        {t('magnet.platform.global.cache.title')}
+                      </div>
+                      <div className="mt-1 text-xs text-white/42">
+                        {t('magnet.platform.global.cache.subtitle')}
+                      </div>
                     </div>
-                  </div>
-                  <div>
-                    <div className="mb-2 text-xs text-white/32">{t('magnet.platform.mock.settings.groupSearch')}</div>
-                    <div className="flex flex-wrap gap-2">
-                      {[String(searchReadyCount), t('magnet.platform.search.filterTitle')].map((item, index) => (
-                        <span key={`search-${index}-${item}`} className={cx('rounded-full border px-3 py-1.5 text-xs', index === 0 ? 'border-white/18 bg-white/10 text-white' : 'border-white/10 text-white/48')}>
-                          {item}
-                        </span>
-                      ))}
+
+                    <div className="platform-magnet-settings-path-item">
+                      <span className="platform-magnet-settings-path-label">
+                        {t('magnet.platform.global.cache.effectivePath')}
+                      </span>
+                      <p className="platform-magnet-settings-path-value">
+                        {globalCacheSettings?.effectiveRootPath || '-'}
+                      </p>
                     </div>
+
+                    <div className="platform-magnet-settings-path-item">
+                      <span className="platform-magnet-settings-path-label">
+                        {t('magnet.platform.global.cache.defaultPath')}
+                      </span>
+                      <p className="platform-magnet-settings-path-value">
+                        {globalCacheSettings?.defaultRootPath || '-'}
+                      </p>
+                    </div>
+
+                    <div className="platform-magnet-settings-path-item">
+                      <span className="platform-magnet-settings-path-label">
+                        {t('magnet.platform.global.cache.customPath')}
+                      </span>
+                    </div>
+
+                    <div className="platform-magnet-settings-row">
+                      <input
+                        type="text"
+                        className="platform-magnet-settings-input"
+                        value={globalCachePathDraft}
+                        placeholder={t('magnet.platform.global.cache.customPathPlaceholder')}
+                        onChange={(event) => {
+                          setGlobalCachePathDraft(event.target.value);
+                          setGlobalCacheSettingsInfo(null);
+                        }}
+                        disabled={globalCacheSettingsLoading || globalCacheSettingsSaving}
+                        spellCheck={false}
+                      />
+
+                      <button
+                        type="button"
+                        className="platform-magnet-mini-btn"
+                        onClick={() => {
+                          void handleBrowseGlobalCachePath();
+                        }}
+                        disabled={globalCacheSettingsLoading || globalCacheSettingsSaving}
+                      >
+                        {t('magnet.platform.global.cache.actionBrowse')}
+                      </button>
+                    </div>
+
+                    <div className="platform-magnet-settings-actions">
+                      <button
+                        type="button"
+                        className="platform-magnet-mini-btn"
+                        onClick={() => {
+                          void handleSaveGlobalCachePath();
+                        }}
+                        disabled={globalCacheSettingsLoading || globalCacheSettingsSaving}
+                      >
+                        {globalCacheSettingsSaving
+                          ? t('magnet.platform.global.cache.stateSaving')
+                          : t('magnet.platform.global.cache.actionSave')}
+                      </button>
+                      <button
+                        type="button"
+                        className="platform-magnet-mini-btn"
+                        onClick={() => {
+                          void handleResetGlobalCachePath();
+                        }}
+                        disabled={globalCacheSettingsLoading || globalCacheSettingsSaving}
+                      >
+                        {t('magnet.platform.global.cache.actionReset')}
+                      </button>
+                    </div>
+
+                    <p className="platform-magnet-note">
+                      {t('magnet.platform.global.cache.scopeHint')}
+                    </p>
+                    <p className="platform-magnet-note">
+                      {t('magnet.platform.global.cache.overrideHint')}
+                    </p>
+
+                    {globalCacheSettingsLoading ? (
+                      <p className="platform-magnet-note">
+                        {t('magnet.platform.global.cache.stateLoading')}
+                      </p>
+                    ) : null}
+                    {globalCacheSettingsInfo ? (
+                      <p className="platform-magnet-note">{globalCacheSettingsInfo}</p>
+                    ) : null}
+                    {globalCacheSettingsError ? (
+                      <p className="platform-magnet-error">{globalCacheSettingsError}</p>
+                    ) : null}
                   </div>
-                  <div>
-                    <div className="mb-2 text-xs text-white/32">{t('magnet.platform.mock.settings.groupIdentify')}</div>
-                    <div className="flex flex-wrap gap-2">
-                      {HOST_SETTINGS.identify.map((item, index) => (
-                        <span key={`identify-${index}-${item}`} className={cx('rounded-full border px-3 py-1.5 text-xs', index === 0 ? 'border-white/18 bg-white/10 text-white' : 'border-white/10 text-white/48')}>
-                          {item}
+
+                  <div className="rounded-[18px] border border-white/8 bg-black/10 px-5 py-5">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-white">
+                          {t('magnet.platform.runtime.title')}
+                        </div>
+                        <div className="mt-1 text-xs text-white/42">
+                          {t('magnet.platform.runtime.desc')}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleRefreshAll();
+                        }}
+                        className="platform-preview-detail-ghost inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs text-white/76"
+                        disabled={refreshing}
+                      >
+                        <RefreshCw className={cx('h-3.5 w-3.5', refreshing && 'animate-spin')} />
+                        <span>
+                          {refreshing ? t('common.state.loading') : t('magnet.platform.action.refresh')}
                         </span>
+                      </button>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      {[
+                        {
+                          key: 'loaded',
+                          label: t('magnet.platform.runtime.statLoaded'),
+                          value: String(loadedCount),
+                        },
+                        {
+                          key: 'authorized',
+                          label: t('magnet.platform.runtime.statAuthorized'),
+                          value: String(authorizedCount),
+                        },
+                        {
+                          key: 'registered',
+                          label: t('magnet.platform.runtime.statRegistered'),
+                          value: String(registeredCount),
+                        },
+                        {
+                          key: 'searchable',
+                          label: t('magnet.platform.runtime.statSearchable'),
+                          value: String(searchReadyCount),
+                        },
+                      ].map((item) => (
+                        <div
+                          key={item.key}
+                          className="rounded-[14px] border border-white/8 bg-white/[0.03] px-3 py-3"
+                        >
+                          <div className="text-[11px] uppercase tracking-[0.18em] text-white/34">
+                            {item.label}
+                          </div>
+                          <div className="mt-2 text-lg font-semibold text-white">{item.value}</div>
+                        </div>
                       ))}
                     </div>
                   </div>
                 </div>
               ) : settingsItem ? (
                 <div className="space-y-4">
-                  <div className="rounded-[18px] border border-white/8 bg-black/10 px-4 py-4">
+                  <div className="rounded-[18px] border border-white/8 bg-black/10 px-5 py-5">
                     <div className="flex items-center gap-3">
                       <ConnectorGlyph
                         connectorId={settingsItem.entry.connectorId}
@@ -2918,22 +3225,104 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                       />
                       <div className="min-w-0">
                         <div className="truncate text-base font-medium text-white">{settingsLabel}</div>
-                        <div className="mt-1 text-xs text-white/42">
-                          {settingsItem.facade?.accountUid ?? activeAccountValue}
+                        <div className="mt-1 text-xs text-white/42">{settingsItem.entry.connectorId}</div>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-[14px] border border-white/8 bg-white/[0.03] px-3 py-3">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-white/34">
+                          {t('magnet.platform.card.connectorId', {
+                            connectorId: settingsItem.entry.connectorId,
+                          })}
+                        </div>
+                        <div className="mt-2 text-sm text-white/72">{settingsLabel}</div>
+                      </div>
+                      <div className="rounded-[14px] border border-white/8 bg-white/[0.03] px-3 py-3">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-white/34">
+                          {t('magnet.platform.settings.instancesTitle')}
+                        </div>
+                        <div className="mt-2 text-sm text-white/72">
+                          {t('magnet.platform.settings.instancesCount', {
+                            count: settingsItems.length,
+                          })}
                         </div>
                       </div>
                     </div>
-                    <div className="mt-4 flex flex-wrap gap-2 text-xs text-white/58">
-                      <span>{t('magnet.platform.instance.auth', { state: t(toAuthLabelKey(settingsItem.facade?.authState)) })}</span>
-                      <span>{t('magnet.platform.card.connectorId', { connectorId: settingsItem.entry.connectorId })}</span>
-                    </div>
                   </div>
 
-                  {settingsWorkspacePanel}
+                  <div className="rounded-[18px] border border-white/8 bg-black/10 px-5 py-5">
+                    <div className="mb-4">
+                      <div className="text-sm font-medium text-white">
+                        {t('magnet.platform.settings.sharedTitle')}
+                      </div>
+                      <div className="mt-1 text-xs text-white/42">
+                        {t('magnet.platform.settings.subtitleShared', { platform: settingsLabel })}
+                      </div>
+                    </div>
+                    {settingsWorkspacePanel ? (
+                      settingsWorkspacePanel
+                    ) : (
+                      <div className="rounded-[14px] border border-dashed border-white/10 bg-white/[0.02] px-4 py-4 text-sm text-white/52">
+                        {t('magnet.platform.settings.sharedEmpty')}
+                      </div>
+                    )}
+                  </div>
+
+                  {settingsItems.length > 0 ? (
+                    <div className="rounded-[18px] border border-white/8 bg-black/10 px-5 py-5">
+                      <div className="mb-4">
+                        <div className="text-sm font-medium text-white">
+                          {t('magnet.platform.settings.instancesTitle')}
+                        </div>
+                        <div className="mt-1 text-xs text-white/42">
+                          {t('magnet.platform.settings.instancesDesc')}
+                        </div>
+                      </div>
+                      <div className="space-y-3">
+                        {settingsItems.map((item) => {
+                          const accountValue = resolveRegisteredItemAccountValue(item);
+                          return (
+                            <div
+                              key={`${item.entry.connectorId}:${item.instance?.instanceId ?? 'instance'}`}
+                              className="rounded-[18px] border border-white/8 bg-black/10 px-4 py-4"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium text-white">
+                                    {accountValue}
+                                  </div>
+                                  <div className="mt-1 text-xs text-white/42">
+                                    {item.instance?.instanceId ?? item.entry.connectorId}
+                                  </div>
+                                </div>
+                                <span className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/48">
+                                  {t(toAuthLabelKey(item.facade?.authState))}
+                                </span>
+                              </div>
+                              <div className="mt-4 flex flex-wrap gap-2 text-xs text-white/58">
+                                <span>
+                                  {t('magnet.platform.instance.account', {
+                                    account: accountValue,
+                                  })}
+                                </span>
+                                <span>
+                                  {t('magnet.platform.card.connectorId', {
+                                    connectorId: item.entry.connectorId,
+                                  })}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
 
                   {(settingsItem.contractRecord || listCapabilityLabelKeys(settingsContract).length > 0) ? (
-                    <div>
-                      <div className="mb-2 text-xs text-white/32">{t('magnet.platform.instance.registered')}</div>
+                    <div className="rounded-[18px] border border-white/8 bg-black/10 px-5 py-5">
+                      <div className="mb-3 text-sm font-medium text-white">
+                        {t('magnet.platform.settings.contractTitle')}
+                      </div>
                       <div className="flex flex-wrap gap-2">
                         {settingsItem.contractRecord ? (
                           <span className="rounded-full border border-white/18 bg-white/10 px-3 py-1.5 text-xs text-white">
@@ -2977,19 +3366,19 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                 className="platform-preview-create-toggle platform-preview-soft-ring inline-flex h-9 shrink-0 items-center rounded-full bg-white/4 text-white/62"
                 title={
                   createView === 'create'
-                    ? t('magnet.platform.mock.create.selectExisting')
-                    : t('magnet.platform.mock.create.backToCreate')
+                    ? t('magnet.platform.local.create.selectExisting')
+                    : t('magnet.platform.local.create.backToCreate')
                 }
               >
                 {createView === 'create' ? (
                   <>
                     <Library className="h-4 w-4" />
-                    <span className="text-xs">{t('magnet.platform.mock.fab.playlists')}</span>
+                    <span className="text-xs">{t('magnet.platform.fab.playlists')}</span>
                   </>
                 ) : (
                   <>
                     <ChevronLeft className="h-4 w-4" />
-                    <span className="text-xs">{t('magnet.platform.mock.fab.create')}</span>
+                    <span className="text-xs">{t('magnet.platform.fab.create')}</span>
                   </>
                 )}
               </button>
@@ -3019,14 +3408,14 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                       type="button"
                       onClick={() => setCreateNameEditing(true)}
                       className="platform-preview-create-title-button max-w-full truncate rounded-full px-4 py-2 text-sm text-white"
-                      title={t('magnet.platform.mock.create.nameLabel')}
+                      title={t('magnet.platform.local.create.nameLabel')}
                     >
                       {createName.trim() || defaultCreateName}
                     </button>
                   )
                 ) : (
                   <div className="truncate text-sm text-white/72">
-                    {t('magnet.platform.mock.create.existingTitle')}
+                    {t('magnet.platform.local.create.existingTitle')}
                   </div>
                 )}
               </div>
@@ -3043,7 +3432,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                 <div className="flex h-full min-h-0 flex-col gap-3">
                   <div className="platform-preview-create-canvas flex min-h-0 flex-1 items-center justify-center rounded-[20px] px-3 py-3">
                     <div className="text-center text-xs text-white/36">
-                      {t('magnet.platform.mock.create.itemsEmpty')}
+                      {t('magnet.platform.local.create.itemsEmpty')}
                     </div>
                   </div>
                   <div className="flex justify-end">
@@ -3082,7 +3471,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                     ))
                   ) : (
                     <div className="flex min-h-[220px] items-center justify-center rounded-[20px] border border-dashed border-white/10 bg-white/3 px-6 text-center text-sm text-white/42">
-                      {t('magnet.platform.mock.create.existingEmpty')}
+                      {t('magnet.platform.local.create.existingEmpty')}
                     </div>
                   )}
                 </div>
@@ -3278,7 +3667,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                       <div className="mt-2 flex flex-wrap gap-2 text-xs text-white/58">
                         <span>
                           {t('magnet.platform.instance.account', {
-                            account: activeAccountValue,
+                            account: resolveRegisteredItemAccountValue(activeItem),
                           })}
                         </span>
                         <span>

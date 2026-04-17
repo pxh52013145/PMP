@@ -3,9 +3,23 @@ import { readBooleanProp, readEnumProp, readIntegerProp } from '../shared/skinPr
 
 export const PLATFORM_MAGNET_DEFAULT_SEARCH_LIMIT = 30;
 
-const PLATFORM_MAGNET_DEFAULT_MODES = ['generic', 'bilibili', 'netease'] as const;
+const PLATFORM_MAGNET_DEFAULT_MODE_INPUTS = ['generic', 'video', 'music', 'bilibili', 'netease'] as const;
+type PlatformMagnetDefaultModeInput = (typeof PLATFORM_MAGNET_DEFAULT_MODE_INPUTS)[number];
 
-export type PlatformMagnetDefaultMode = (typeof PLATFORM_MAGNET_DEFAULT_MODES)[number];
+export type PlatformMagnetDefaultMode = 'generic' | 'video' | 'music';
+
+function normalizePlatformMagnetDefaultMode(
+  mode: PlatformMagnetDefaultModeInput
+): PlatformMagnetDefaultMode {
+  switch (mode) {
+    case 'bilibili':
+      return 'video';
+    case 'netease':
+      return 'music';
+    default:
+      return mode;
+  }
+}
 
 export interface PlatformMagnetSkinProps {
   defaultMode: PlatformMagnetDefaultMode;
@@ -15,7 +29,9 @@ export interface PlatformMagnetSkinProps {
 
 export function parsePlatformMagnetSkinProps(value: unknown): PlatformMagnetSkinProps {
   return {
-    defaultMode: readEnumProp(value, 'defaultMode', PLATFORM_MAGNET_DEFAULT_MODES, 'generic'),
+    defaultMode: normalizePlatformMagnetDefaultMode(
+      readEnumProp(value, 'defaultMode', PLATFORM_MAGNET_DEFAULT_MODE_INPUTS, 'generic')
+    ),
     searchLimit: readIntegerProp(value, 'searchLimit', PLATFORM_MAGNET_DEFAULT_SEARCH_LIMIT, {
       min: 1,
       max: 100,
@@ -45,7 +61,7 @@ export const PLATFORM_MAGNET_VARIANT_PRESETS = [
     labelKey: 'magnet.variants.platform-magnet.workspace-bilibili.label',
     descriptionKey: 'magnet.variants.platform-magnet.workspace-bilibili.description',
     props: {
-      defaultMode: 'bilibili',
+      defaultMode: 'video',
       showSummary: false,
     },
   },

@@ -75,6 +75,10 @@ const NETEASE_SONG_URL_API: &str = "/api/song/enhance/player/url";
 const QR_SESSION_TTL_MS: i64 = 180_000;
 const NETEASE_PLAYBACK_CACHE_DIR_NAME: &str = "playback-cache";
 const NETEASE_PLAYBACK_CACHE_BR: i64 = 320_000;
+const NETEASE_PLAYBACK_STANDARD_BR: i64 = 128_000;
+const NETEASE_PLAYBACK_HIGHER_BR: i64 = 192_000;
+const NETEASE_PLAYBACK_EXHIGH_BR: i64 = 320_000;
+const NETEASE_PLAYBACK_LOSSLESS_BR: i64 = 999_000;
 const NETEASE_QR_PLATFORM: &str = "pc";
 const NETEASE_ANONYMOUS_ID_XOR_KEY: &str = "3go8&$8*3*3h0k(2)2";
 
@@ -172,6 +176,8 @@ pub struct NeteasePlaybackPrepared {
     pub mime_type: Option<String>,
     pub duration_seconds: Option<u32>,
     pub song_id: String,
+    pub selected_quality_key: String,
+    pub selected_quality_label: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1524,19 +1530,50 @@ fn map_song_item(song: &Value) -> Option<NeteaseSongItem> {
     })
 }
 
-fn ensure_playback_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let root = app
-        .path_resolver()
-        .app_cache_dir()
-        .ok_or_else(|| {
-            "Failed to resolve app cache directory for Netease playback cache".to_string()
-        })?
-        .join("music-platform")
-        .join("netease")
-        .join(NETEASE_PLAYBACK_CACHE_DIR_NAME);
-    fs::create_dir_all(&root)
+fn resolve_default_playback_cache_root(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(
+        crate::music_platform_settings::resolve_effective_platform_cache_root(app, "netease")?
+            .join(NETEASE_PLAYBACK_CACHE_DIR_NAME),
+    )
+}
+
+fn resolve_effective_playback_cache_root(app: &AppHandle) -> Result<PathBuf, String> {
+    resolve_default_playback_cache_root(app)
+}
+
+fn sanitize_cache_scope_key(scope_key: Option<&str>) -> String {
+    let normalized = scope_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default");
+
+    let mut sanitized = String::with_capacity(normalized.len());
+    for ch in normalized.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+
+    let collapsed = sanitized.trim_matches('_');
+    if collapsed.is_empty() {
+        "default".to_string()
+    } else {
+        collapsed.to_ascii_lowercase()
+    }
+}
+
+fn resolve_playback_cache_scope_dir(root: &Path, scope_key: Option<&str>) -> PathBuf {
+    root.join(sanitize_cache_scope_key(scope_key))
+}
+
+fn ensure_playback_cache_dir(app: &AppHandle, scope_key: Option<&str>) -> Result<PathBuf, String> {
+    let root = resolve_effective_playback_cache_root(app)?;
+    let scoped_dir = resolve_playback_cache_scope_dir(&root, scope_key);
+    fs::create_dir_all(&scoped_dir)
         .map_err(|error| format!("Failed to create Netease playback cache directory: {error}"))?;
-    Ok(root)
+    Ok(scoped_dir)
 }
 
 fn infer_file_extension(download_url: &str, content_type: Option<&str>) -> String {
@@ -1574,11 +1611,12 @@ fn infer_file_extension(download_url: &str, content_type: Option<&str>) -> Strin
 fn download_song_to_cache(
     client: &Client,
     app: &AppHandle,
+    cache_scope_key: Option<&str>,
     song_id: &str,
     bitrate: i64,
     download_url: &str,
 ) -> Result<(PathBuf, Option<String>), String> {
-    let cache_dir = ensure_playback_cache_dir(app)?;
+    let cache_dir = ensure_playback_cache_dir(app, cache_scope_key)?;
     let response = client
         .get(download_url)
         .header(USER_AGENT, NETEASE_WEAPI_USER_AGENT)
@@ -1618,6 +1656,52 @@ fn download_song_to_cache(
     fs::rename(&temp_path, &final_path)
         .map_err(|error| format!("Failed to finalize Netease playback cache file: {error}"))?;
     Ok((final_path, content_type))
+}
+
+fn normalize_playback_quality_hint(value: Option<&str>) -> &'static str {
+    match value.map(|item| item.trim().to_ascii_lowercase()) {
+        Some(value) if value == "standard" || value == "128k" => "standard",
+        Some(value) if value == "higher" || value == "192k" => "higher",
+        Some(value) if value == "exhigh" || value == "320k" => "exhigh",
+        Some(value) if value == "lossless" || value == "999k" => "lossless",
+        _ => "auto",
+    }
+}
+
+fn requested_bitrate_for_quality_key(quality_key: &str) -> i64 {
+    match quality_key {
+        "standard" => NETEASE_PLAYBACK_STANDARD_BR,
+        "higher" => NETEASE_PLAYBACK_HIGHER_BR,
+        "exhigh" => NETEASE_PLAYBACK_EXHIGH_BR,
+        "lossless" => NETEASE_PLAYBACK_LOSSLESS_BR,
+        _ => NETEASE_PLAYBACK_CACHE_BR,
+    }
+}
+
+fn quality_label_by_key(quality_key: &str) -> &'static str {
+    match quality_key {
+        "standard" => "Standard",
+        "higher" => "Higher",
+        "exhigh" => "ExHigh",
+        "lossless" => "Lossless",
+        _ => "Auto",
+    }
+}
+
+fn quality_key_from_bitrate(bitrate: i64) -> &'static str {
+    if bitrate >= NETEASE_PLAYBACK_LOSSLESS_BR {
+        return "lossless";
+    }
+    if bitrate >= NETEASE_PLAYBACK_EXHIGH_BR {
+        return "exhigh";
+    }
+    if bitrate >= NETEASE_PLAYBACK_HIGHER_BR {
+        return "higher";
+    }
+    if bitrate >= NETEASE_PLAYBACK_STANDARD_BR {
+        return "standard";
+    }
+    "auto"
 }
 
 pub fn init(app: &AppHandle) -> Result<(), String> {
@@ -2275,7 +2359,10 @@ pub fn clear_auth_cookies(app: &AppHandle) -> Result<NeteaseAuthStatus, String> 
         sessions.clear();
     }
     clear_auth_cookie_state();
-    netease_log("clear_auth_cookies", "cleared in-memory auth and qr sessions");
+    netease_log(
+        "clear_auth_cookies",
+        "cleared in-memory auth and qr sessions",
+    );
 
     get_auth_status(app)
 }
@@ -2557,11 +2644,15 @@ pub fn search_songs(
 pub fn prepare_cached_playback(
     app: &AppHandle,
     source_locator: &str,
+    quality_hint: Option<&str>,
+    cache_scope_key: Option<&str>,
 ) -> Result<NeteasePlaybackPrepared, String> {
     ensure_connector(app)?;
     let auth_context = ensure_auth_context(app)?;
     let song_id = parse_song_id_from_source_locator(source_locator)
         .ok_or_else(|| "Failed to resolve Netease song id from source locator".to_string())?;
+    let requested_quality_key = normalize_playback_quality_hint(quality_hint);
+    let requested_bitrate = requested_bitrate_for_quality_key(requested_quality_key);
 
     let client = build_http_client()?;
     let payload = request_netease_eapi_json(
@@ -2570,7 +2661,7 @@ pub fn prepare_cached_playback(
         json!({
             "ids": serde_json::to_string(&vec![song_id.clone()])
                 .map_err(|error| format!("Failed to encode Netease song id list: {error}"))?,
-            "br": NETEASE_PLAYBACK_CACHE_BR,
+            "br": requested_bitrate,
         }),
         Some(&auth_context.cookie_header),
         "song url",
@@ -2585,9 +2676,17 @@ pub fn prepare_cached_playback(
     let stream_url = to_non_empty_string(stream.get("url"))
         .ok_or_else(|| "Netease song url response missing playable url".to_string())?;
     let bitrate = to_i64(stream.get("br")).unwrap_or(NETEASE_PLAYBACK_CACHE_BR);
+    let selected_quality_key = quality_key_from_bitrate(bitrate).to_string();
+    let selected_quality_label = quality_label_by_key(&selected_quality_key).to_string();
     let duration_seconds = to_u64(stream.get("time")).map(|value| (value / 1000) as u32);
-    let (cache_path, mime_type) =
-        download_song_to_cache(&client, app, &song_id, bitrate, &stream_url)?;
+    let (cache_path, mime_type) = download_song_to_cache(
+        &client,
+        app,
+        cache_scope_key,
+        &song_id,
+        bitrate,
+        &stream_url,
+    )?;
 
     Ok(NeteasePlaybackPrepared {
         source_locator: build_song_source_locator(&song_id),
@@ -2596,6 +2695,8 @@ pub fn prepare_cached_playback(
         mime_type,
         duration_seconds,
         song_id,
+        selected_quality_key,
+        selected_quality_label,
     })
 }
 

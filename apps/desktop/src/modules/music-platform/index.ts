@@ -101,19 +101,25 @@ export {
 } from './platformLoginRegistry';
 
 export {
-  getBilibiliPlaybackCacheSettings,
+  pickMusicPlatformGlobalCacheDirectory,
+} from './cacheDirectoryPicker';
+
+export {
+  getMusicPlatformGlobalCacheSettings,
+  setMusicPlatformGlobalCacheSettings,
+  type MusicPlatformGlobalCacheSettings,
+} from './globalSettings';
+
+export {
   listBilibiliFavoriteFolders,
   listBilibiliFavoriteResources,
   listBilibiliRecommendedResources,
   searchBilibiliResources,
   listBilibiliPlaybackQualities,
-  pickBilibiliCacheDirectory,
   prepareBilibiliCachedPlayback,
   resolveBilibiliCoverAssetUrl,
   resolveBilibiliLyricLocator,
-  setBilibiliPlaybackCacheSettings,
   searchBilibiliResourceByBvid,
-  type BilibiliPlaybackCacheSettings,
   type BilibiliFavoriteFolderItem,
   type BilibiliFavoriteResourceItem,
   type BilibiliFavoriteResourcePage,

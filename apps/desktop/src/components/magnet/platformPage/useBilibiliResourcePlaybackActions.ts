@@ -92,6 +92,7 @@ function setPreparedTrackWithBoundedLru(cache: Map<string, Track>, cacheKey: str
 }
 
 type UseBilibiliResourcePlaybackActionsParams = {
+  activeBilibiliInstanceId: string | null;
   audioService: IAudioService;
   normalizedPlaybackQualityHint: string;
   preferredQualityLabel: string;
@@ -108,6 +109,7 @@ type UseBilibiliResourcePlaybackActionsParams = {
 
 export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePlaybackActionsParams) {
   const {
+    activeBilibiliInstanceId,
     audioService,
     normalizedPlaybackQualityHint,
     preferredQualityLabel,
@@ -172,12 +174,19 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
 
       setPreparingResourceId(cacheKey);
       try {
-        const prepared = await prepareBilibiliCachedPlayback(item.sourceLocator, normalizedPlaybackQualityHint);
+        const prepared = await prepareBilibiliCachedPlayback(
+          item.sourceLocator,
+          normalizedPlaybackQualityHint,
+          activeBilibiliInstanceId
+        );
         if (!prepared) {
           throw new Error(t('magnet.platform.bilibili.player.error.prepareFailed'));
         }
 
-        let resolvedCoverUrl = await resolveBilibiliCoverAssetUrl(item.coverUrl);
+        let resolvedCoverUrl = await resolveBilibiliCoverAssetUrl(
+          item.coverUrl,
+          activeBilibiliInstanceId
+        );
         if (!resolvedCoverUrl) {
           const bvid =
             extractBvidFromText(item.bvid) ||
@@ -189,7 +198,10 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
               typeof matched?.coverUrl === 'string' ? matched.coverUrl.trim() : '';
             if (discoveredCoverUrl) {
               resolvedCoverUrl =
-                (await resolveBilibiliCoverAssetUrl(discoveredCoverUrl)) || discoveredCoverUrl;
+                (await resolveBilibiliCoverAssetUrl(
+                  discoveredCoverUrl,
+                  activeBilibiliInstanceId
+                )) || discoveredCoverUrl;
             }
           }
         }
@@ -215,6 +227,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
     },
     [
       buildTrackFromPreparedPlayback,
+      activeBilibiliInstanceId,
       normalizedPlaybackQualityHint,
       preferredQualityLabel,
       setResourceError,

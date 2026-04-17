@@ -13,7 +13,6 @@ import {
 import { usePersistentSetting } from '../../../modules/storage';
 import type { BilibiliWorkspaceProps } from './BilibiliWorkspace';
 import type { BilibiliPlaybackSettingsContentProps } from './BilibiliPlaybackSettingsModal';
-import { useBilibiliPlaybackCacheSettings } from './useBilibiliPlaybackCacheSettings';
 import { useBilibiliResourceBrowser } from './useBilibiliResourceBrowser';
 import { useBilibiliResourceContextMenu } from './useBilibiliResourceContextMenu';
 import {
@@ -27,10 +26,8 @@ type Translator = (key: string, params?: Record<string, string | number>) => str
 const BILIBILI_CONNECTOR_ID = 'connector.platform.bilibili' as const;
 const BILIBILI_PLAYBACK_QUALITY_PREFERENCE_KEY =
   'music-platform.bilibili.playback-quality-preference';
-const BILIBILI_UI_THEME_PREFERENCE_KEY = 'music-platform.bilibili.ui-theme-preference';
 
 type BilibiliPlaybackQualityKey = 'auto' | '64k' | '132k' | '192k' | 'dolby' | 'hires';
-type BilibiliThemePreference = 'auto' | 'light' | 'dark';
 
 const BILIBILI_QUALITY_OPTION_ORDER: BilibiliPlaybackQualityKey[] = [
   'auto',
@@ -75,13 +72,6 @@ function normalizeBilibiliQualityHint(value: string): BilibiliPlaybackQualityKey
   if (normalized === '192k') return '192k';
   if (normalized === 'dolby') return 'dolby';
   if (normalized === 'hires') return 'hires';
-  return 'auto';
-}
-
-function normalizeBilibiliThemePreference(value: string): BilibiliThemePreference {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'light') return 'light';
-  if (normalized === 'dark') return 'dark';
   return 'auto';
 }
 
@@ -184,8 +174,7 @@ function buildTrackFromPreparedPlayback(
 
 export interface UseBilibiliWorkspaceAdapterControllerParams {
   activeWorkspaceConnectorId: string | null;
-  settingsVisible: boolean;
-  prefersDarkMode: boolean;
+  activeBilibiliInstanceId: string | null;
   items: PlatformConnectorFacadeItem[];
   audioService: IAudioService;
   t: Translator;
@@ -196,7 +185,6 @@ export interface UseBilibiliWorkspaceAdapterControllerParams {
 
 export interface BilibiliWorkspaceAdapterControllerResult {
   bilibiliWorkspaceActive: boolean;
-  bilibiliUseDarkMode: boolean;
   bilibiliShellSearch: {
     value: string;
     placeholder: string;
@@ -223,8 +211,7 @@ export function useBilibiliWorkspaceAdapterController(
 ): BilibiliWorkspaceAdapterControllerResult {
   const {
     activeWorkspaceConnectorId,
-    settingsVisible,
-    prefersDarkMode,
+    activeBilibiliInstanceId,
     items,
     audioService,
     t,
@@ -245,30 +232,11 @@ export function useBilibiliWorkspaceAdapterController(
     'auto',
     { format: 'string' }
   );
-  const [bilibiliThemePreference, setBilibiliThemePreference] = usePersistentSetting<string>(
-    BILIBILI_UI_THEME_PREFERENCE_KEY,
-    'auto',
-    { format: 'string' }
-  );
   const [playbackQualityLoading, setPlaybackQualityLoading] = useState(false);
   const [playbackQualityProbeLocator, setPlaybackQualityProbeLocator] = useState<string | null>(null);
   const [playbackQualityOptions, setPlaybackQualityOptions] = useState<BilibiliPlaybackQualityOption[]>(
     DEFAULT_BILIBILI_QUALITY_OPTIONS
   );
-
-  const {
-    playbackCacheSettingsLoading,
-    playbackCacheSettingsSaving,
-    playbackCacheSettingsError,
-    playbackCacheSettingsInfo,
-    playbackCacheSettings,
-    playbackCachePathDraft,
-    setPlaybackCachePathDraft,
-    refreshPlaybackCacheSettings,
-    handleBrowsePlaybackCachePath,
-    handleSavePlaybackCachePath,
-    handleResetPlaybackCachePath,
-  } = useBilibiliPlaybackCacheSettings(t);
 
   const resourceViewportRef = useRef<HTMLDivElement>(null);
   const resourceLoadMoreSentinelRef = useRef<HTMLDivElement>(null);
@@ -312,11 +280,6 @@ export function useBilibiliWorkspaceAdapterController(
     [playbackQualityHint]
   );
 
-  const normalizedBilibiliThemePreference = useMemo(
-    () => normalizeBilibiliThemePreference(bilibiliThemePreference),
-    [bilibiliThemePreference]
-  );
-
   const qualityProbeSourceLocator = useMemo(() => {
     if (!bilibiliAuthorized) return null;
     const bvidLocator = bvidSearchResult?.sourceLocator?.trim();
@@ -342,6 +305,7 @@ export function useBilibiliWorkspaceAdapterController(
   );
 
   const { resourceCoverUrlMap, resourceQualityTagMap } = useBilibiliResourceEnhancer({
+    activeBilibiliInstanceId,
     bilibiliAuthorized,
     selectedFolderId,
     bilibiliResources,
@@ -362,6 +326,7 @@ export function useBilibiliWorkspaceAdapterController(
     handleAddToPlaylist,
     handleOpenBilibiliResource,
   } = useBilibiliResourcePlaybackActions({
+    activeBilibiliInstanceId,
     audioService,
     normalizedPlaybackQualityHint,
     preferredQualityLabel: preferredPlaybackQualityLabel,
@@ -387,11 +352,6 @@ export function useBilibiliWorkspaceAdapterController(
       setPlaybackQualityLoading(false);
     }
   }, []);
-
-  useEffect(() => {
-    if (!settingsVisible || !bilibiliAuthorized) return;
-    void refreshPlaybackCacheSettings();
-  }, [bilibiliAuthorized, refreshPlaybackCacheSettings, settingsVisible]);
 
   useEffect(() => {
     const supportsResourceAutoLoad = Boolean(selectedFolderId) || resourceSourceKey?.startsWith('search:');
@@ -480,11 +440,6 @@ export function useBilibiliWorkspaceAdapterController(
     }
   }, [bilibiliAuthorized, bilibiliWorkspaceActive, setResourceContextMenu]);
 
-  const bilibiliUseDarkMode =
-    bilibiliWorkspaceActive &&
-    (normalizedBilibiliThemePreference === 'dark' ||
-      (normalizedBilibiliThemePreference === 'auto' && prefersDarkMode));
-
   const handleBilibiliResourceSearchSubmit = useCallback(() => {
     void (async () => {
       const lookupHandled = await searchBilibiliResourceByLookupInput(resourceFilterQuery);
@@ -548,7 +503,6 @@ export function useBilibiliWorkspaceAdapterController(
     t,
     bilibiliAuthorized,
     normalizedPlaybackQualityHint,
-    normalizedBilibiliThemePreference,
     playbackQualityOptions,
     playbackQualityLoading,
     qualityProbeSourceLocator,
@@ -557,28 +511,9 @@ export function useBilibiliWorkspaceAdapterController(
     onQualityHintChange: (qualityKey) => {
       setPlaybackQualityHint(normalizeBilibiliQualityHint(qualityKey));
     },
-    onBilibiliThemePreferenceChange: (themePreference) => {
-      setBilibiliThemePreference(normalizeBilibiliThemePreference(themePreference));
-    },
     onRefreshQualityOptions: () => {
       if (!qualityProbeSourceLocator) return;
       void refreshPlaybackQualityOptions(qualityProbeSourceLocator);
-    },
-    playbackCacheSettingsLoading,
-    playbackCacheSettingsSaving,
-    playbackCacheSettingsInfo,
-    playbackCacheSettingsError,
-    playbackCacheSettings,
-    playbackCachePathDraft,
-    onPlaybackCachePathDraftChange: setPlaybackCachePathDraft,
-    onBrowsePlaybackCachePath: () => {
-      void handleBrowsePlaybackCachePath();
-    },
-    onSavePlaybackCachePath: () => {
-      void handleSavePlaybackCachePath();
-    },
-    onResetPlaybackCachePath: () => {
-      void handleResetPlaybackCachePath();
     },
   };
 
@@ -631,7 +566,6 @@ export function useBilibiliWorkspaceAdapterController(
 
   return {
     bilibiliWorkspaceActive,
-    bilibiliUseDarkMode,
     bilibiliShellSearch,
     bilibiliPreviewFolders,
     bilibiliSettingsProps,

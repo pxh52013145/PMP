@@ -58,6 +58,7 @@ function toBilibiliResourceQualityBadgesFromOptions(
 }
 
 type UseBilibiliResourceEnhancerParams = {
+  activeBilibiliInstanceId: string | null;
   bilibiliAuthorized: boolean;
   selectedFolderId: string | null;
   bilibiliResources: BilibiliFavoriteResourceItem[];
@@ -68,6 +69,7 @@ type UseBilibiliResourceEnhancerParams = {
 
 export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerParams) {
   const {
+    activeBilibiliInstanceId,
     bilibiliAuthorized,
     selectedFolderId,
     bilibiliResources,
@@ -89,7 +91,7 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
     setResourceQualityTagMap({});
     qualityBadgesByLocatorRef.current.clear();
     qualityProbeBackoffUntilRef.current.clear();
-  }, [selectedFolderId]);
+  }, [activeBilibiliInstanceId, selectedFolderId]);
 
   useEffect(() => {
     setResourceQualityTagMap({});
@@ -146,7 +148,10 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
         if (cancelled) return;
         const normalizedCoverUrl = item.coverUrl?.trim();
         if (!normalizedCoverUrl) continue;
-        const resolvedCoverUrl = await resolveBilibiliCoverAssetUrl(normalizedCoverUrl);
+        const resolvedCoverUrl = await resolveBilibiliCoverAssetUrl(
+          normalizedCoverUrl,
+          activeBilibiliInstanceId
+        );
         if (!resolvedCoverUrl || cancelled) continue;
 
         setResourceCoverUrlMap((prev) => {
@@ -159,7 +164,7 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
     return () => {
       cancelled = true;
     };
-  }, [filteredBilibiliResources, getResourceCacheKey, resourceCoverUrlMap]);
+  }, [activeBilibiliInstanceId, filteredBilibiliResources, getResourceCacheKey, resourceCoverUrlMap]);
 
   useEffect(() => {
     if (!selectedFolderId) return;
@@ -238,4 +243,3 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
     resourceQualityTagMap,
   };
 }
-

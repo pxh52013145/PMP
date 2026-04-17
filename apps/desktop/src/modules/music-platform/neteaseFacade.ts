@@ -55,6 +55,8 @@ export interface NeteasePreparedPlayback {
   mimeType?: string;
   durationSeconds?: number;
   songId: string;
+  selectedQualityKey?: string;
+  selectedQualityLabel?: string;
 }
 
 const NETEASE_CONNECTOR_ID = 'connector.platform.netease';
@@ -72,6 +74,11 @@ const NETEASE_SONG_PAGE_CACHE = new ConnectorScopedLruTtlCache<NeteaseSongPage |
   maxEntriesPerConnector: 64,
   defaultTtlMs: 75 * 1000,
 });
+
+function resolveNeteaseCacheScopeKey(instanceId?: string | null): string {
+  const normalizedInstanceId = normalizeString(instanceId);
+  return normalizedInstanceId || NETEASE_CONNECTOR_ID;
+}
 
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -147,20 +154,20 @@ function cloneRecommendedPlaylists(
   }));
 }
 
-export function clearNeteaseFacadeCaches(): void {
-  NETEASE_USER_PLAYLISTS_CACHE.clearConnector(NETEASE_CONNECTOR_ID);
-  NETEASE_RECOMMENDED_PLAYLISTS_CACHE.clearConnector(NETEASE_CONNECTOR_ID);
-  NETEASE_SONG_PAGE_CACHE.clearConnector(NETEASE_CONNECTOR_ID);
+export function clearNeteaseFacadeCaches(instanceId?: string | null): void {
+  const scopeKey = resolveNeteaseCacheScopeKey(instanceId);
+  NETEASE_USER_PLAYLISTS_CACHE.clearConnector(scopeKey);
+  NETEASE_RECOMMENDED_PLAYLISTS_CACHE.clearConnector(scopeKey);
+  NETEASE_SONG_PAGE_CACHE.clearConnector(scopeKey);
 }
 
 export async function listNeteaseRecommendedPlaylists(options?: {
   forceRefresh?: boolean;
+  instanceId?: string | null;
 }): Promise<NeteaseRecommendedPlaylistItem[]> {
+  const scopeKey = resolveNeteaseCacheScopeKey(options?.instanceId);
   if (!options?.forceRefresh) {
-    const cached = NETEASE_RECOMMENDED_PLAYLISTS_CACHE.get(
-      NETEASE_CONNECTOR_ID,
-      'recommended-playlists'
-    );
+    const cached = NETEASE_RECOMMENDED_PLAYLISTS_CACHE.get(scopeKey, 'recommended-playlists');
     if (cached) return cloneRecommendedPlaylists(cached);
   }
 
@@ -171,25 +178,23 @@ export async function listNeteaseRecommendedPlaylists(options?: {
     trackCount: normalizePositiveInt(item.trackCount),
     coverUrl: normalizeString(item.coverUrl) || undefined,
   }));
-  NETEASE_RECOMMENDED_PLAYLISTS_CACHE.set(
-    NETEASE_CONNECTOR_ID,
-    'recommended-playlists',
-    mapped
-  );
+  NETEASE_RECOMMENDED_PLAYLISTS_CACHE.set(scopeKey, 'recommended-playlists', mapped);
   return cloneRecommendedPlaylists(mapped);
 }
 
 export async function listNeteaseRecommendedSongs(options?: {
   forceRefresh?: boolean;
+  instanceId?: string | null;
 }): Promise<NeteaseSongPage | null> {
+  const scopeKey = resolveNeteaseCacheScopeKey(options?.instanceId);
   if (!options?.forceRefresh) {
-    const cached = NETEASE_SONG_PAGE_CACHE.get(NETEASE_CONNECTOR_ID, 'recommended-songs');
+    const cached = NETEASE_SONG_PAGE_CACHE.get(scopeKey, 'recommended-songs');
     if (cached !== undefined) return cloneSongPage(cached);
   }
 
   const page = await listNativeNeteaseRecommendedSongs();
   if (!page) {
-    NETEASE_SONG_PAGE_CACHE.set(NETEASE_CONNECTOR_ID, 'recommended-songs', null, 20 * 1000);
+    NETEASE_SONG_PAGE_CACHE.set(scopeKey, 'recommended-songs', null, 20 * 1000);
     return null;
   }
 
@@ -202,15 +207,17 @@ export async function listNeteaseRecommendedSongs(options?: {
     hasMore: page.hasMore,
     items: page.items.map(mapSongItem),
   };
-  NETEASE_SONG_PAGE_CACHE.set(NETEASE_CONNECTOR_ID, 'recommended-songs', mapped);
+  NETEASE_SONG_PAGE_CACHE.set(scopeKey, 'recommended-songs', mapped);
   return cloneSongPage(mapped);
 }
 
 export async function listNeteaseUserPlaylists(options?: {
   forceRefresh?: boolean;
+  instanceId?: string | null;
 }): Promise<NeteaseUserPlaylistItem[]> {
+  const scopeKey = resolveNeteaseCacheScopeKey(options?.instanceId);
   if (!options?.forceRefresh) {
-    const cached = NETEASE_USER_PLAYLISTS_CACHE.get(NETEASE_CONNECTOR_ID, 'user-playlists');
+    const cached = NETEASE_USER_PLAYLISTS_CACHE.get(scopeKey, 'user-playlists');
     if (cached) return cloneUserPlaylists(cached);
   }
 
@@ -222,7 +229,7 @@ export async function listNeteaseUserPlaylists(options?: {
     coverUrl: normalizeString(item.coverUrl) || undefined,
     updatedAtMs: item.updatedAtMs,
   }));
-  NETEASE_USER_PLAYLISTS_CACHE.set(NETEASE_CONNECTOR_ID, 'user-playlists', mapped);
+  NETEASE_USER_PLAYLISTS_CACHE.set(scopeKey, 'user-playlists', mapped);
   return cloneUserPlaylists(mapped);
 }
 
@@ -230,20 +237,22 @@ export async function listNeteasePlaylistTracks(
   playlistId: string,
   options?: {
     forceRefresh?: boolean;
+    instanceId?: string | null;
   }
 ): Promise<NeteaseSongPage | null> {
   const normalizedPlaylistId = normalizeString(playlistId);
   if (!normalizedPlaylistId) return null;
+  const scopeKey = resolveNeteaseCacheScopeKey(options?.instanceId);
 
   const cacheKey = `playlist:${normalizedPlaylistId}`;
   if (!options?.forceRefresh) {
-    const cached = NETEASE_SONG_PAGE_CACHE.get(NETEASE_CONNECTOR_ID, cacheKey);
+    const cached = NETEASE_SONG_PAGE_CACHE.get(scopeKey, cacheKey);
     if (cached !== undefined) return cloneSongPage(cached);
   }
 
   const page = await listNativeNeteasePlaylistTracks(normalizedPlaylistId);
   if (!page) {
-    NETEASE_SONG_PAGE_CACHE.set(NETEASE_CONNECTOR_ID, cacheKey, null, 20 * 1000);
+    NETEASE_SONG_PAGE_CACHE.set(scopeKey, cacheKey, null, 20 * 1000);
     return null;
   }
 
@@ -256,7 +265,7 @@ export async function listNeteasePlaylistTracks(
     hasMore: page.hasMore,
     items: page.items.map(mapSongItem),
   };
-  NETEASE_SONG_PAGE_CACHE.set(NETEASE_CONNECTOR_ID, cacheKey, mapped, 90 * 1000);
+  NETEASE_SONG_PAGE_CACHE.set(scopeKey, cacheKey, mapped, 90 * 1000);
   return cloneSongPage(mapped);
 }
 
@@ -265,15 +274,17 @@ export async function searchNeteaseSongs(options: {
   pageNum?: number;
   pageSize?: number;
   forceRefresh?: boolean;
+  instanceId?: string | null;
 }): Promise<NeteaseSongPage | null> {
   const keyword = normalizeString(options.keyword);
   if (!keyword) return null;
+  const scopeKey = resolveNeteaseCacheScopeKey(options.instanceId);
 
   const pageNum = normalizePositiveInt(options.pageNum ?? 1) || 1;
   const pageSize = normalizePositiveInt(options.pageSize ?? 40) || 40;
   const cacheKey = `search:${keyword.toLowerCase()}|page=${pageNum}|size=${pageSize}`;
   if (!options.forceRefresh) {
-    const cached = NETEASE_SONG_PAGE_CACHE.get(NETEASE_CONNECTOR_ID, cacheKey);
+    const cached = NETEASE_SONG_PAGE_CACHE.get(scopeKey, cacheKey);
     if (cached !== undefined) return cloneSongPage(cached);
   }
 
@@ -283,7 +294,7 @@ export async function searchNeteaseSongs(options: {
     pageSize,
   });
   if (!page) {
-    NETEASE_SONG_PAGE_CACHE.set(NETEASE_CONNECTOR_ID, cacheKey, null, 15 * 1000);
+    NETEASE_SONG_PAGE_CACHE.set(scopeKey, cacheKey, null, 15 * 1000);
     return null;
   }
 
@@ -296,17 +307,25 @@ export async function searchNeteaseSongs(options: {
     hasMore: page.hasMore,
     items: page.items.map(mapSongItem),
   };
-  NETEASE_SONG_PAGE_CACHE.set(NETEASE_CONNECTOR_ID, cacheKey, mapped, 30 * 1000);
+  NETEASE_SONG_PAGE_CACHE.set(scopeKey, cacheKey, mapped, 30 * 1000);
   return cloneSongPage(mapped);
 }
 
 export async function prepareNeteaseCachedPlayback(
-  sourceLocator: string
+  sourceLocator: string,
+  qualityHint?: string,
+  instanceId?: string | null
 ): Promise<NeteasePreparedPlayback | null> {
   const normalizedSourceLocator = normalizeString(sourceLocator);
   if (!normalizedSourceLocator) return null;
+  const normalizedQualityHint = normalizeString(qualityHint) || undefined;
+  const normalizedInstanceId = normalizeString(instanceId) || undefined;
 
-  const prepared = await prepareNativeNeteaseCachedPlayback(normalizedSourceLocator);
+  const prepared = await prepareNativeNeteaseCachedPlayback(
+    normalizedSourceLocator,
+    normalizedQualityHint,
+    normalizedInstanceId
+  );
   if (!prepared) return null;
 
   return {
@@ -316,6 +335,8 @@ export async function prepareNeteaseCachedPlayback(
     mimeType: normalizeString(prepared.mimeType) || undefined,
     durationSeconds: prepared.durationSeconds,
     songId: prepared.songId,
+    selectedQualityKey: normalizeString(prepared.selectedQualityKey) || undefined,
+    selectedQualityLabel: normalizeString(prepared.selectedQualityLabel) || undefined,
   };
 }
 

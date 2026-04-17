@@ -1,6 +1,6 @@
 use crate::{
     lyrics, music_library, music_library_db, music_library_sync, music_platform_bilibili,
-    music_platform_netease,
+    music_platform_netease, music_platform_settings,
 };
 
 #[tauri::command(rename_all = "camelCase")]
@@ -204,26 +204,26 @@ pub async fn music_library_bilibili_qr_generate(
 }
 
 #[tauri::command]
-pub async fn music_library_bilibili_get_playback_cache_settings(
+pub async fn music_library_music_platform_global_get_cache_settings(
     app: tauri::AppHandle,
-) -> Result<music_platform_bilibili::BilibiliPlaybackCacheSettings, String> {
+) -> Result<music_platform_settings::MusicPlatformGlobalCacheSettings, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        music_platform_bilibili::get_playback_cache_settings(&app)
+        music_platform_settings::get_global_cache_settings(&app)
     })
     .await
-    .map_err(|e| format!("Bilibili get playback cache settings task failed: {e}"))?
+    .map_err(|e| format!("Music platform global get cache settings task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_bilibili_set_playback_cache_settings(
+pub async fn music_library_music_platform_global_set_cache_settings(
     app: tauri::AppHandle,
     custom_root_path: Option<String>,
-) -> Result<music_platform_bilibili::BilibiliPlaybackCacheSettings, String> {
+) -> Result<music_platform_settings::MusicPlatformGlobalCacheSettings, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        music_platform_bilibili::set_playback_cache_settings(&app, custom_root_path)
+        music_platform_settings::set_global_cache_settings(&app, custom_root_path)
     })
     .await
-    .map_err(|e| format!("Bilibili set playback cache settings task failed: {e}"))?
+    .map_err(|e| format!("Music platform global set cache settings task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -331,9 +331,10 @@ pub async fn music_library_bilibili_search_resource_by_bvid(
 pub async fn music_library_bilibili_prepare_cover_cache(
     app: tauri::AppHandle,
     cover_url: String,
+    instance_id: Option<String>,
 ) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        music_platform_bilibili::prepare_cover_cache(&app, &cover_url)
+        music_platform_bilibili::prepare_cover_cache(&app, &cover_url, instance_id.as_deref())
     })
     .await
     .map_err(|e| format!("Bilibili prepare cover cache task failed: {e}"))?
@@ -356,12 +357,14 @@ pub async fn music_library_bilibili_prepare_cached_playback(
     app: tauri::AppHandle,
     source_locator: String,
     quality_hint: Option<String>,
+    instance_id: Option<String>,
 ) -> Result<music_platform_bilibili::BilibiliPlaybackPrepared, String> {
     tauri::async_runtime::spawn_blocking(move || {
         music_platform_bilibili::prepare_cached_playback(
             &app,
             &source_locator,
             quality_hint.as_deref(),
+            instance_id.as_deref(),
         )
     })
     .await
@@ -487,9 +490,16 @@ pub async fn music_library_netease_search_songs(
 pub async fn music_library_netease_prepare_cached_playback(
     app: tauri::AppHandle,
     source_locator: String,
+    quality_hint: Option<String>,
+    instance_id: Option<String>,
 ) -> Result<music_platform_netease::NeteasePlaybackPrepared, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        music_platform_netease::prepare_cached_playback(&app, &source_locator)
+        music_platform_netease::prepare_cached_playback(
+            &app,
+            &source_locator,
+            quality_hint.as_deref(),
+            instance_id.as_deref(),
+        )
     })
     .await
     .map_err(|e| format!("Netease prepare cached playback task failed: {e}"))?

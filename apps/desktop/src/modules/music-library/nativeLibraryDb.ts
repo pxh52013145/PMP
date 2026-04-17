@@ -79,7 +79,7 @@ export interface NativeBilibiliAuthStatus {
   availabilityMessage?: string;
 }
 
-export interface NativeBilibiliPlaybackCacheSettings {
+export interface NativeMusicPlatformGlobalCacheSettings {
   customRootPath?: string;
   effectiveRootPath: string;
   defaultRootPath: string;
@@ -294,6 +294,8 @@ export interface NativeNeteasePlaybackPrepared {
   mimeType?: string;
   durationSeconds?: number;
   songId: string;
+  selectedQualityKey?: string;
+  selectedQualityLabel?: string;
 }
 
 export interface NativeLibraryTrackUpsertInput {
@@ -1215,9 +1217,9 @@ function ensureBilibiliAuthStatus(value: unknown): NativeBilibiliAuthStatus | nu
   };
 }
 
-function ensureBilibiliPlaybackCacheSettings(
+function ensureMusicPlatformGlobalCacheSettings(
   value: unknown
-): NativeBilibiliPlaybackCacheSettings | null {
+): NativeMusicPlatformGlobalCacheSettings | null {
   if (!isRecord(value)) return null;
 
   const effectiveRootPath = asTrimmedString(
@@ -1793,6 +1795,12 @@ function ensureNeteasePlaybackPrepared(
     durationSeconds:
       durationSeconds === undefined ? undefined : Math.max(0, Math.floor(durationSeconds)),
     songId,
+    selectedQualityKey: asOptionalString(
+      readRecordField(value, 'selectedQualityKey', 'selected_quality_key')
+    ),
+    selectedQualityLabel: asOptionalString(
+      readRecordField(value, 'selectedQualityLabel', 'selected_quality_label')
+    ),
   };
 }
 
@@ -2810,17 +2818,18 @@ export async function getNativeBilibiliAuthStatus(): Promise<NativeBilibiliAuthS
   return ensureBilibiliAuthStatus(raw);
 }
 
-export async function getNativeBilibiliPlaybackCacheSettings(): Promise<NativeBilibiliPlaybackCacheSettings | null> {
+export async function getNativeMusicPlatformGlobalCacheSettings(): Promise<NativeMusicPlatformGlobalCacheSettings | null> {
   if (!isTauriRuntime()) return null;
-  const raw = await invoke<unknown>('music_library_bilibili_get_playback_cache_settings').catch(
+
+  const raw = await invoke<unknown>('music_library_music_platform_global_get_cache_settings').catch(
     () => null
   );
-  return ensureBilibiliPlaybackCacheSettings(raw);
+  return ensureMusicPlatformGlobalCacheSettings(raw);
 }
 
-export async function setNativeBilibiliPlaybackCacheSettings(
+export async function setNativeMusicPlatformGlobalCacheSettings(
   customRootPath?: string | null
-): Promise<NativeBilibiliPlaybackCacheSettings | null> {
+): Promise<NativeMusicPlatformGlobalCacheSettings | null> {
   if (!isTauriRuntime()) return null;
 
   const normalizedCustomRootPath =
@@ -2828,11 +2837,10 @@ export async function setNativeBilibiliPlaybackCacheSettings(
       ? customRootPath.trim()
       : undefined;
 
-  const raw = await invoke<unknown>('music_library_bilibili_set_playback_cache_settings', {
+  const raw = await invoke<unknown>('music_library_music_platform_global_set_cache_settings', {
     customRootPath: normalizedCustomRootPath,
   }).catch(() => null);
-
-  return ensureBilibiliPlaybackCacheSettings(raw);
+  return ensureMusicPlatformGlobalCacheSettings(raw);
 }
 
 export async function logoutNativeBilibili(): Promise<NativeBilibiliAuthStatus | null> {
@@ -2950,14 +2958,20 @@ export async function searchNativeBilibiliResourceByBvid(
   return ensureBilibiliFavoriteResourceItem(raw);
 }
 
-export async function prepareNativeBilibiliCoverCache(coverUrl: string): Promise<string | null> {
+export async function prepareNativeBilibiliCoverCache(
+  coverUrl: string,
+  instanceId?: string | null
+): Promise<string | null> {
   if (!isTauriRuntime()) return null;
 
   const normalizedCoverUrl = coverUrl.trim();
   if (!normalizedCoverUrl) return null;
+  const normalizedInstanceId =
+    typeof instanceId === 'string' && instanceId.trim().length > 0 ? instanceId.trim() : undefined;
 
   const raw = await invoke<unknown>('music_library_bilibili_prepare_cover_cache', {
     coverUrl: normalizedCoverUrl,
+    instanceId: normalizedInstanceId,
   });
 
   const cachePath = asTrimmedString(raw);
@@ -2987,7 +3001,8 @@ export async function listNativeBilibiliPlaybackQualities(
 
 export async function prepareNativeBilibiliCachedPlayback(
   sourceLocator: string,
-  qualityHint?: string
+  qualityHint?: string,
+  instanceId?: string | null
 ): Promise<NativeBilibiliPlaybackPrepared | null> {
   if (!isTauriRuntime()) return null;
 
@@ -2998,10 +3013,13 @@ export async function prepareNativeBilibiliCachedPlayback(
     typeof qualityHint === 'string' && qualityHint.trim().length > 0
       ? qualityHint.trim().toLowerCase()
       : undefined;
+  const normalizedInstanceId =
+    typeof instanceId === 'string' && instanceId.trim().length > 0 ? instanceId.trim() : undefined;
 
   const raw = await invoke<unknown>('music_library_bilibili_prepare_cached_playback', {
     sourceLocator: normalizedSourceLocator,
     qualityHint: normalizedQualityHint,
+    instanceId: normalizedInstanceId,
   });
 
   return ensureBilibiliPlaybackPrepared(raw);
@@ -3176,14 +3194,21 @@ export async function searchNativeNeteaseSongs(options: {
 }
 
 export async function prepareNativeNeteaseCachedPlayback(
-  sourceLocator: string
+  sourceLocator: string,
+  qualityHint?: string,
+  instanceId?: string | null
 ): Promise<NativeNeteasePlaybackPrepared | null> {
   if (!isTauriRuntime()) return null;
   const normalizedSourceLocator = sourceLocator.trim();
   if (!normalizedSourceLocator) return null;
+  const normalizedQualityHint = qualityHint?.trim();
+  const normalizedInstanceId =
+    typeof instanceId === 'string' && instanceId.trim().length > 0 ? instanceId.trim() : undefined;
 
   const raw = await invoke<unknown>('music_library_netease_prepare_cached_playback', {
     sourceLocator: normalizedSourceLocator,
+    qualityHint: normalizedQualityHint || undefined,
+    instanceId: normalizedInstanceId,
   });
   return ensureNeteasePlaybackPrepared(raw);
 }

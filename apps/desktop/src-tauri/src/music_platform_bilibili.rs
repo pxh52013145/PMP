@@ -75,7 +75,6 @@ const BILIBILI_PLAYBACK_CACHE_PROBE_RETRY_WAIT_MS: u64 = 800;
 const BILIBILI_PLAYBACK_CACHE_PROBE_STEP_BYTES: u64 = 512 * 1024;
 const BILIBILI_PLAYBACK_CACHE_MAX_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 const BILIBILI_PLAYBACK_CACHE_STALE_FILE_TTL_MS: i64 = 12 * 60 * 60 * 1000;
-const BILIBILI_PLAYBACK_CACHE_SETTINGS_FILE: &str = "playback-cache-settings.json";
 const BILIBILI_WBI_MIXIN_KEY_TTL_MS: i64 = 60 * 60 * 1000;
 const BILIBILI_WBI_MIXIN_KEY_INDEX: [usize; 64] = [
     46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29,
@@ -239,21 +238,6 @@ struct BilibiliPlaybackCacheDirs {
     cover_dir: PathBuf,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BilibiliPlaybackCacheSettings {
-    pub custom_root_path: Option<String>,
-    pub effective_root_path: String,
-    pub default_root_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct BilibiliPlaybackCacheSettingsState {
-    #[serde(default)]
-    custom_root_path: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 struct BilibiliPlaybackDownloadState {
     bytes_written: u64,
@@ -295,9 +279,6 @@ static WBI_SIGNING_STATE: Lazy<Mutex<Option<WbiSigningState>>> = Lazy::new(|| Mu
 static PLAYBACK_DOWNLOAD_JOBS: Lazy<Mutex<HashMap<String, Arc<BilibiliPlaybackDownloadJob>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static PLAYBACK_ASSET_SCOPE_DIR: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
-static PLAYBACK_CACHE_SETTINGS_STATE: Lazy<Mutex<Option<BilibiliPlaybackCacheSettingsState>>> =
-    Lazy::new(|| Mutex::new(None));
-
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -350,149 +331,42 @@ fn update_playback_download_job_state(
     }
 }
 
-fn lock_playback_cache_settings_state(
-) -> Result<MutexGuard<'static, Option<BilibiliPlaybackCacheSettingsState>>, String> {
-    PLAYBACK_CACHE_SETTINGS_STATE
-        .lock()
-        .map_err(|_| "Bilibili playback cache settings state is locked".to_string())
-}
-
-fn playback_cache_settings_file_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let app_data_dir = app.path_resolver().app_data_dir().ok_or_else(|| {
-        "Failed to resolve app data directory for Bilibili cache settings".to_string()
-    })?;
-
-    let dir = app_data_dir.join("music-platform").join("bilibili");
-    fs::create_dir_all(&dir)
-        .map_err(|error| format!("Failed to create Bilibili settings directory: {error}"))?;
-    Ok(dir.join(BILIBILI_PLAYBACK_CACHE_SETTINGS_FILE))
-}
-
-fn normalize_optional_path(value: Option<String>) -> Option<String> {
-    value.and_then(|raw| {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
-}
-
-fn normalize_cache_settings_state(
-    mut state: BilibiliPlaybackCacheSettingsState,
-) -> BilibiliPlaybackCacheSettingsState {
-    state.custom_root_path = normalize_optional_path(state.custom_root_path);
-    state
-}
-
-fn parse_absolute_cache_root(path: &str) -> Result<PathBuf, String> {
-    let parsed = PathBuf::from(path);
-    if !parsed.is_absolute() {
-        return Err("Bilibili playback cache path must be an absolute directory path".to_string());
-    }
-    Ok(parsed)
-}
-
-fn read_playback_cache_settings_from_disk(
-    app: &AppHandle,
-) -> Result<BilibiliPlaybackCacheSettingsState, String> {
-    let path = playback_cache_settings_file_path(app)?;
-    let payload = match fs::read(&path) {
-        Ok(value) => value,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(BilibiliPlaybackCacheSettingsState::default())
-        }
-        Err(error) => {
-            return Err(format!(
-                "Failed to read Bilibili playback cache settings: {error}"
-            ))
-        }
-    };
-
-    let parsed = serde_json::from_slice::<BilibiliPlaybackCacheSettingsState>(&payload)
-        .map_err(|error| format!("Failed to parse Bilibili playback cache settings: {error}"))?;
-    Ok(normalize_cache_settings_state(parsed))
-}
-
-fn write_playback_cache_settings_to_disk(
-    app: &AppHandle,
-    settings: &BilibiliPlaybackCacheSettingsState,
-) -> Result<(), String> {
-    let path = playback_cache_settings_file_path(app)?;
-    let payload = serde_json::to_vec_pretty(settings)
-        .map_err(|error| format!("Failed to encode Bilibili playback cache settings: {error}"))?;
-    fs::write(&path, payload)
-        .map_err(|error| format!("Failed to write Bilibili playback cache settings: {error}"))
-}
-
-fn get_playback_cache_settings_state(
-    app: &AppHandle,
-) -> Result<BilibiliPlaybackCacheSettingsState, String> {
-    let mut guard = lock_playback_cache_settings_state()?;
-    if let Some(state) = guard.as_ref() {
-        return Ok(state.clone());
-    }
-
-    let loaded = read_playback_cache_settings_from_disk(app).unwrap_or_default();
-    *guard = Some(loaded.clone());
-    Ok(loaded)
-}
-
-fn persist_playback_cache_settings_state(
-    app: &AppHandle,
-    settings: BilibiliPlaybackCacheSettingsState,
-) -> Result<BilibiliPlaybackCacheSettingsState, String> {
-    let normalized = normalize_cache_settings_state(settings);
-    if let Some(custom_root_path) = normalized.custom_root_path.as_deref() {
-        let custom_root = parse_absolute_cache_root(custom_root_path)?;
-        fs::create_dir_all(&custom_root).map_err(|error| {
-            format!("Failed to create custom Bilibili playback cache directory: {error}")
-        })?;
-    }
-
-    {
-        let mut guard = lock_playback_cache_settings_state()?;
-        *guard = Some(normalized.clone());
-    }
-    write_playback_cache_settings_to_disk(app, &normalized)?;
-    Ok(normalized)
-}
-
 fn resolve_default_playback_cache_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let resolver = app.path_resolver();
-    let root = resolver
-        .app_cache_dir()
-        .or_else(|| resolver.app_data_dir())
-        .ok_or_else(|| {
-            "Failed to resolve app cache directory for Bilibili playback cache".to_string()
-        })?;
-    Ok(root
-        .join("music-platform")
-        .join("bilibili")
-        .join("playback-cache"))
+    Ok(
+        crate::music_platform_settings::resolve_effective_platform_cache_root(app, "bilibili")?
+            .join("playback-cache"),
+    )
 }
 
 fn resolve_effective_playback_cache_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let settings = get_playback_cache_settings_state(app)?;
-    if let Some(custom_root_path) = settings.custom_root_path.as_deref() {
-        match parse_absolute_cache_root(custom_root_path) {
-            Ok(path) => return Ok(path),
-            Err(error) => {
-                eprintln!(
-                    "[music_platform_bilibili] invalid custom cache root '{}': {error}",
-                    custom_root_path
-                );
-            }
-        }
-    }
-
     resolve_default_playback_cache_root(app)
 }
 
-fn resolve_session_cover_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let root_dir = resolve_effective_playback_cache_root(app)?;
-    Ok(root_dir.join("session-covers"))
+fn sanitize_cache_scope_key(scope_key: Option<&str>) -> String {
+    let normalized = scope_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default");
+
+    let mut sanitized = String::with_capacity(normalized.len());
+    for ch in normalized.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+
+    let collapsed = sanitized.trim_matches('_');
+    if collapsed.is_empty() {
+        "default".to_string()
+    } else {
+        collapsed.to_ascii_lowercase()
+    }
+}
+
+fn resolve_playback_cache_scope_dir(root_dir: &Path, scope_key: Option<&str>) -> PathBuf {
+    root_dir.join(sanitize_cache_scope_key(scope_key))
 }
 
 fn paths_equivalent(a: &Path, b: &Path) -> bool {
@@ -511,10 +385,15 @@ fn cleanup_legacy_playback_cache_dirs(app: &AppHandle) -> Result<(), String> {
     let effective_root = resolve_effective_playback_cache_root(app)?;
     let mut dirs_to_prune: Vec<PathBuf> = Vec::new();
 
-    let active_cover_dir = effective_root.join("session-covers");
-    let legacy_cover_dir = effective_root.join("covers");
-    if !paths_equivalent(&legacy_cover_dir, &active_cover_dir) && legacy_cover_dir.exists() {
-        dirs_to_prune.push(legacy_cover_dir);
+    for legacy_dir in [
+        effective_root.join("covers"),
+        effective_root.join("objects"),
+        effective_root.join("markers"),
+        effective_root.join("session-covers"),
+    ] {
+        if legacy_dir.exists() {
+            dirs_to_prune.push(legacy_dir);
+        }
     }
 
     if let Some(app_data_root) = resolver.app_data_dir() {
@@ -546,25 +425,33 @@ fn cleanup_legacy_playback_cache_dirs(app: &AppHandle) -> Result<(), String> {
 }
 
 fn cleanup_session_cover_cache_internal(app: &AppHandle) -> Result<(), String> {
-    let session_cover_dir = resolve_session_cover_cache_dir(app)?;
-    match fs::remove_dir_all(&session_cover_dir) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(format!(
-                "Failed to remove Bilibili session cover cache directory: {error}"
-            ))
+    let root_dir = resolve_effective_playback_cache_root(app)?;
+    let mut dirs_to_remove = vec![root_dir.join("session-covers")];
+
+    if let Ok(entries) = fs::read_dir(&root_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            dirs_to_remove.push(path.join("session-covers"));
+        }
+    }
+
+    for session_cover_dir in dirs_to_remove {
+        match fs::remove_dir_all(&session_cover_dir) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "Failed to remove Bilibili session cover cache directory: {error}"
+                ))
+            }
         }
     }
 
     if let Ok(mut guard) = PLAYBACK_ASSET_SCOPE_DIR.lock() {
-        if guard
-            .as_ref()
-            .map(|value| value == &session_cover_dir)
-            .unwrap_or(false)
-        {
-            *guard = None;
-        }
+        *guard = None;
     }
 
     Ok(())
@@ -593,10 +480,12 @@ fn allow_playback_cover_dir_in_asset_scope(app: &AppHandle, cover_dir: &Path) {
 fn ensure_playback_cache_dirs_for_root(
     app: &AppHandle,
     root_dir: PathBuf,
+    scope_key: Option<&str>,
 ) -> Result<BilibiliPlaybackCacheDirs, String> {
-    let object_dir = root_dir.join("objects");
-    let marker_dir = root_dir.join("markers");
-    let cover_dir = root_dir.join("session-covers");
+    let scope_dir = resolve_playback_cache_scope_dir(&root_dir, scope_key);
+    let object_dir = scope_dir.join("objects");
+    let marker_dir = scope_dir.join("markers");
+    let cover_dir = scope_dir.join("session-covers");
 
     fs::create_dir_all(&object_dir).map_err(|error| {
         format!("Failed to create Bilibili playback cache object directory: {error}")
@@ -617,9 +506,12 @@ fn ensure_playback_cache_dirs_for_root(
     })
 }
 
-fn ensure_playback_cache_dirs(app: &AppHandle) -> Result<BilibiliPlaybackCacheDirs, String> {
+fn ensure_playback_cache_dirs(
+    app: &AppHandle,
+    scope_key: Option<&str>,
+) -> Result<BilibiliPlaybackCacheDirs, String> {
     let root_dir = resolve_effective_playback_cache_root(app)?;
-    ensure_playback_cache_dirs_for_root(app, root_dir)
+    ensure_playback_cache_dirs_for_root(app, root_dir, scope_key)
 }
 
 fn build_playback_cache_key(bvid: &str, cid: &str, quality_key: &str) -> String {
@@ -3004,40 +2896,6 @@ pub fn cleanup_session_cover_cache(app: &AppHandle) -> Result<(), String> {
     cleanup_session_cover_cache_internal(app)
 }
 
-pub fn get_playback_cache_settings(
-    app: &AppHandle,
-) -> Result<BilibiliPlaybackCacheSettings, String> {
-    let state = get_playback_cache_settings_state(app)?;
-    let effective_root_path = resolve_effective_playback_cache_root(app)?;
-    let default_root_path = resolve_default_playback_cache_root(app)?;
-
-    Ok(BilibiliPlaybackCacheSettings {
-        custom_root_path: state.custom_root_path,
-        effective_root_path: effective_root_path.to_string_lossy().to_string(),
-        default_root_path: default_root_path.to_string_lossy().to_string(),
-    })
-}
-
-pub fn set_playback_cache_settings(
-    app: &AppHandle,
-    custom_root_path: Option<String>,
-) -> Result<BilibiliPlaybackCacheSettings, String> {
-    let state = persist_playback_cache_settings_state(
-        app,
-        BilibiliPlaybackCacheSettingsState { custom_root_path },
-    )?;
-
-    let effective_root_path = resolve_effective_playback_cache_root(app)?;
-    let _ = ensure_playback_cache_dirs_for_root(app, effective_root_path.clone());
-    let default_root_path = resolve_default_playback_cache_root(app)?;
-
-    Ok(BilibiliPlaybackCacheSettings {
-        custom_root_path: state.custom_root_path,
-        effective_root_path: effective_root_path.to_string_lossy().to_string(),
-        default_root_path: default_root_path.to_string_lossy().to_string(),
-    })
-}
-
 pub fn qr_generate(app: &AppHandle) -> Result<BilibiliQrCodeSession, String> {
     ensure_connector(app)?;
     cleanup_expired_qr_sessions(now_ms());
@@ -3882,7 +3740,11 @@ pub fn search_resource_by_bvid(
     }))
 }
 
-pub fn prepare_cover_cache(app: &AppHandle, cover_url: &str) -> Result<Option<String>, String> {
+pub fn prepare_cover_cache(
+    app: &AppHandle,
+    cover_url: &str,
+    cache_scope_key: Option<&str>,
+) -> Result<Option<String>, String> {
     ensure_connector(app)?;
 
     let normalized_cover_url = normalize_url(cover_url);
@@ -3890,7 +3752,7 @@ pub fn prepare_cover_cache(app: &AppHandle, cover_url: &str) -> Result<Option<St
         return Ok(None);
     }
 
-    let cache_dirs = ensure_playback_cache_dirs(app)?;
+    let cache_dirs = ensure_playback_cache_dirs(app, cache_scope_key)?;
     let cache_key = build_cover_cache_key(&normalized_cover_url);
     if let Some(existing_path) = find_existing_cover_cache_path(&cache_dirs, &cache_key) {
         return Ok(Some(existing_path.to_string_lossy().to_string()));
@@ -3976,6 +3838,7 @@ pub fn prepare_cached_playback(
     app: &AppHandle,
     source_locator: &str,
     quality_hint: Option<&str>,
+    cache_scope_key: Option<&str>,
 ) -> Result<BilibiliPlaybackPrepared, String> {
     ensure_connector(app)?;
     let auth_context = ensure_auth_context(app)?;
@@ -4005,7 +3868,7 @@ pub fn prepare_cached_playback(
     let selected_quality_label = selected_stream.quality_label.clone();
     let referer = format!("https://www.bilibili.com/video/{bvid}");
 
-    let cache_dirs = ensure_playback_cache_dirs(app)?;
+    let cache_dirs = ensure_playback_cache_dirs(app, cache_scope_key)?;
     let _ = cleanup_stale_incomplete_playback_cache(&cache_dirs, now_ms());
     let _ = prune_completed_playback_cache(&cache_dirs, BILIBILI_PLAYBACK_CACHE_MAX_BYTES);
 

@@ -1,5 +1,4 @@
 import {
-  getNativeBilibiliPlaybackCacheSettings,
   listNativeBilibiliFavoriteFolders,
   listNativeBilibiliFavoriteResources,
   listNativeBilibiliRecommendedResources,
@@ -8,11 +7,10 @@ import {
   prepareNativeBilibiliCoverCache,
   prepareNativeBilibiliCachedPlayback,
   resolveNativeBilibiliLyricLocator,
-  setNativeBilibiliPlaybackCacheSettings,
   searchNativeBilibiliResourceByBvid,
 } from '../music-library';
-import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { ConnectorScopedLruTtlCache } from './connectorScopedCache';
+import { isTauriRuntime } from '../../utils/tauriRuntime';
 
 export interface BilibiliFavoriteFolderItem {
   folderId: string;
@@ -68,12 +66,6 @@ export interface BilibiliPlaybackQualityOption {
   available: boolean;
 }
 
-export interface BilibiliPlaybackCacheSettings {
-  customRootPath?: string;
-  effectiveRootPath: string;
-  defaultRootPath: string;
-}
-
 const BILIBILI_CONNECTOR_ID = 'connector.platform.bilibili';
 const BILIBILI_RESOURCE_BY_BVID_CACHE =
   new ConnectorScopedLruTtlCache<BilibiliFavoriteResourceItem>({
@@ -113,22 +105,6 @@ function clonePlaybackQualityOptions(
     label: item.label,
     available: item.available,
   }));
-}
-
-export async function pickBilibiliCacheDirectory(): Promise<string | null> {
-  if (!isTauriRuntime()) return null;
-
-  try {
-    const dialog = await import('@tauri-apps/api/dialog');
-    const selected = await dialog.open({ directory: true, multiple: false });
-    if (typeof selected === 'string' && selected.trim().length > 0) {
-      return selected.trim();
-    }
-  } catch {
-    // user cancel or dialog unavailable
-  }
-
-  return null;
 }
 
 function normalizeString(value: unknown): string {
@@ -282,16 +258,19 @@ export async function searchBilibiliResourceByBvid(
 
 export async function prepareBilibiliCachedPlayback(
   sourceLocator: string,
-  qualityHint?: string
+  qualityHint?: string,
+  instanceId?: string | null
 ): Promise<BilibiliPreparedPlayback | null> {
   const normalizedSourceLocator = normalizeString(sourceLocator);
   if (!normalizedSourceLocator) return null;
 
   const normalizedQualityHint = normalizeString(qualityHint);
+  const normalizedInstanceId = normalizeString(instanceId) || undefined;
 
   const prepared = await prepareNativeBilibiliCachedPlayback(
     normalizedSourceLocator,
-    normalizedQualityHint || undefined
+    normalizedQualityHint || undefined,
+    normalizedInstanceId
   );
   if (!prepared) return null;
 
@@ -354,62 +333,39 @@ export async function resolveBilibiliLyricLocator(
 }
 
 export async function resolveBilibiliCoverAssetUrl(
-  coverUrl: string | undefined
+  coverUrl: string | undefined,
+  instanceId?: string | null
 ): Promise<string | undefined> {
   const normalizedCoverUrl = normalizeString(coverUrl);
   if (!normalizedCoverUrl) return undefined;
+  const cacheScopeKey = normalizeString(instanceId) || BILIBILI_CONNECTOR_ID;
 
-  const cached = BILIBILI_COVER_ASSET_CACHE.get(BILIBILI_CONNECTOR_ID, normalizedCoverUrl);
+  const cached = BILIBILI_COVER_ASSET_CACHE.get(cacheScopeKey, normalizedCoverUrl);
   if (cached) return cached;
 
   if (!isTauriRuntime()) {
-    BILIBILI_COVER_ASSET_CACHE.set(BILIBILI_CONNECTOR_ID, normalizedCoverUrl, normalizedCoverUrl);
+    BILIBILI_COVER_ASSET_CACHE.set(cacheScopeKey, normalizedCoverUrl, normalizedCoverUrl);
     return normalizedCoverUrl;
   }
 
   try {
-    const cachePath = await prepareNativeBilibiliCoverCache(normalizedCoverUrl);
+    const cachePath = await prepareNativeBilibiliCoverCache(normalizedCoverUrl, instanceId);
     if (!cachePath) {
-      BILIBILI_COVER_ASSET_CACHE.set(BILIBILI_CONNECTOR_ID, normalizedCoverUrl, normalizedCoverUrl);
+      BILIBILI_COVER_ASSET_CACHE.set(cacheScopeKey, normalizedCoverUrl, normalizedCoverUrl);
       return normalizedCoverUrl;
     }
 
     const tauriApi = await import('@tauri-apps/api/tauri');
     if (typeof tauriApi.convertFileSrc === 'function') {
       const converted = tauriApi.convertFileSrc(cachePath);
-      BILIBILI_COVER_ASSET_CACHE.set(BILIBILI_CONNECTOR_ID, normalizedCoverUrl, converted);
+      BILIBILI_COVER_ASSET_CACHE.set(cacheScopeKey, normalizedCoverUrl, converted);
       return converted;
     }
 
-    BILIBILI_COVER_ASSET_CACHE.set(BILIBILI_CONNECTOR_ID, normalizedCoverUrl, normalizedCoverUrl);
+    BILIBILI_COVER_ASSET_CACHE.set(cacheScopeKey, normalizedCoverUrl, normalizedCoverUrl);
     return normalizedCoverUrl;
   } catch {
-    BILIBILI_COVER_ASSET_CACHE.set(BILIBILI_CONNECTOR_ID, normalizedCoverUrl, normalizedCoverUrl);
+    BILIBILI_COVER_ASSET_CACHE.set(cacheScopeKey, normalizedCoverUrl, normalizedCoverUrl);
     return normalizedCoverUrl;
   }
-}
-
-export async function getBilibiliPlaybackCacheSettings(): Promise<BilibiliPlaybackCacheSettings | null> {
-  const settings = await getNativeBilibiliPlaybackCacheSettings();
-  if (!settings) return null;
-
-  return {
-    customRootPath: normalizeString(settings.customRootPath) || undefined,
-    effectiveRootPath: normalizeString(settings.effectiveRootPath),
-    defaultRootPath: normalizeString(settings.defaultRootPath),
-  };
-}
-
-export async function setBilibiliPlaybackCacheSettings(
-  customRootPath?: string | null
-): Promise<BilibiliPlaybackCacheSettings | null> {
-  const normalizedCustomRootPath = normalizeString(customRootPath);
-  const settings = await setNativeBilibiliPlaybackCacheSettings(normalizedCustomRootPath || undefined);
-  if (!settings) return null;
-
-  return {
-    customRootPath: normalizeString(settings.customRootPath) || undefined,
-    effectiveRootPath: normalizeString(settings.effectiveRootPath),
-    defaultRootPath: normalizeString(settings.defaultRootPath),
-  };
 }

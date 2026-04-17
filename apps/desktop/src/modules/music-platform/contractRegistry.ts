@@ -4,6 +4,7 @@ import type {
 } from '@pixel-matrix/plugin-platform-contracts';
 import {
   listBuiltinPlatformCompatRegistrations,
+  getPlatformConnectorDefinition,
   listPlatformConnectorDefinitions,
   type PlatformConnectorId,
 } from './connectorAuth';
@@ -11,6 +12,7 @@ import {
   readPlatformLoginRegistry,
   subscribePlatformLoginRegistry,
 } from './platformLoginRegistry';
+import { createPlatformCompatRuntimeFromBindingContract } from './bindingRuntime';
 
 export interface PlatformCompatRegistryRecord {
   platformId: string;
@@ -122,9 +124,23 @@ export function reconcileBuiltinPlatformCompatRegistrations(
     const shouldRegister = registeredConnectorIdSet.has(registration.connectorId);
 
     if (shouldRegister) {
+      const builtinDefinition =
+        registration.source === 'builtin'
+          ? getPlatformConnectorDefinition(registration.connectorId)
+          : null;
+      const runtime =
+        registration.source === 'builtin' &&
+        registration.connectorId === 'connector.platform.netease' &&
+        builtinDefinition
+          ? createPlatformCompatRuntimeFromBindingContract(
+              builtinDefinition,
+              registration.contract
+            )
+          : registration.runtime;
+
       registerPlatformCompatContract({
         contract: registration.contract,
-        runtime: registration.runtime,
+        runtime,
         source:
           registration.source === 'pack'
             ? 'platform-pack'
@@ -137,9 +153,12 @@ export function reconcileBuiltinPlatformCompatRegistrations(
           enabled: registration.enabled,
           autoCreateDefaultInstance: true,
           runtimeAdapter:
-            typeof registration.metadata?.runtimeAdapter === 'string'
-              ? registration.metadata.runtimeAdapter
-              : 'connectorAuth',
+            registration.source === 'builtin' &&
+            registration.connectorId === 'connector.platform.netease'
+              ? 'bindingContract'
+              : typeof registration.metadata?.runtimeAdapter === 'string'
+                ? registration.metadata.runtimeAdapter
+                : 'connectorAuth',
         },
       });
       continue;
