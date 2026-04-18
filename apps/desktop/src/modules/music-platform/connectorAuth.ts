@@ -123,7 +123,6 @@ type PlatformConnectorAuthChangedEvent = CustomEvent<PlatformConnectorAuthSnapsh
 
 const BILIBILI_CONNECTOR_ID: PlatformConnectorId = 'connector.platform.bilibili';
 const NETEASE_CONNECTOR_ID: PlatformConnectorId = 'connector.platform.netease';
-const QQMUSIC_CONNECTOR_ID: PlatformConnectorId = 'connector.platform.qqmusic';
 
 const BUILTIN_CONNECTOR_DEFINITIONS: PlatformConnectorDefinition[] = [
   {
@@ -155,21 +154,6 @@ const BUILTIN_CONNECTOR_DEFINITIONS: PlatformConnectorDefinition[] = [
     sortOrder: 20,
     source: 'builtin',
     sourceId: 'builtin:netease',
-  },
-  {
-    connectorId: QQMUSIC_CONNECTOR_ID,
-    displayName: 'QQ Music',
-    labelKey: 'magnet.platform-login.platform.qqmusic',
-    iconKey: 'qqmusic',
-    accentColor: '#56db8d',
-    platformTemplate: 'music',
-    enabled: false,
-    authFlow: 'none',
-    workspaceKind: 'qqmusic',
-    workspaceMode: 'dedicated',
-    sortOrder: 30,
-    source: 'builtin',
-    sourceId: 'builtin:qqmusic',
   },
 ];
 

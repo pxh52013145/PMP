@@ -256,6 +256,7 @@ export function useMusicTemplateWorkspaceAdapterController(
 
   const [searchQuery, setSearchQuery] = useState('');
   const [resourceLoading, setResourceLoading] = useState(false);
+  const [resourceLoadingMore, setResourceLoadingMore] = useState(false);
   const [resourceError, setResourceError] = useState<string | null>(null);
   const [resourceInfo, setResourceInfo] = useState<string | null>(null);
   const [resourcePage, setResourcePage] = useState<MusicTemplateResourcePage | null>(null);
@@ -456,6 +457,7 @@ export function useMusicTemplateWorkspaceAdapterController(
   const runSearch = useCallback(
     async (keyword: string, pageNum = 1, append = false, forceRefresh = false) => {
       const normalizedKeyword = keyword.trim();
+      if (append && resourceLoadingMore) return;
       if (!normalizedKeyword) {
         setShowCollectionBrowser(true);
         setResourceError(null);
@@ -480,7 +482,11 @@ export function useMusicTemplateWorkspaceAdapterController(
       setSelectedCollectionId(null);
       setSelectedCollection(null);
       setResourceSourceKey(`search:${normalizedKeyword.toLowerCase()}`);
-      setResourceLoading(true);
+      if (append) {
+        setResourceLoadingMore(true);
+      } else {
+        setResourceLoading(true);
+      }
       setResourceError(null);
       setResourceInfo(null);
 
@@ -495,10 +501,14 @@ export function useMusicTemplateWorkspaceAdapterController(
       } catch (error) {
         setResourceError(toErrorMessage(error, t('magnet.platform.music-template.resource.errorSearch')));
       } finally {
-        setResourceLoading(false);
+        if (append) {
+          setResourceLoadingMore(false);
+        } else {
+          setResourceLoading(false);
+        }
       }
     },
-    [authorized, loadCollectionBrowserData, musicRuntimeTarget, supportsSearch, t]
+    [authorized, loadCollectionBrowserData, musicRuntimeTarget, resourceLoadingMore, supportsSearch, t]
   );
 
   const refreshPlaybackQualityState = useCallback(
@@ -566,6 +576,7 @@ export function useMusicTemplateWorkspaceAdapterController(
     setSelectedCollection(null);
     setSearchQuery('');
     setResourceLoading(false);
+    setResourceLoadingMore(false);
     setResourceError(null);
     setResourceInfo(null);
     setResourcePage(null);
@@ -593,6 +604,7 @@ export function useMusicTemplateWorkspaceAdapterController(
         setSelectedCollection(null);
         setResourcePage(null);
         setResourceSourceKey(null);
+        setResourceLoadingMore(false);
         setPlaybackQualityState(null);
         setPlaybackQualityError(null);
         preparedTrackMapRef.current.clear();
@@ -841,6 +853,12 @@ export function useMusicTemplateWorkspaceAdapterController(
     [activeMusicConnectorId, userPlaylists]
   );
 
+  const selectedDrawerPlaylist = useMemo(
+    () =>
+      musicTemplateDrawerPlaylists.find((playlist) => playlist.id === selectedPlaylistId) ?? null,
+    [musicTemplateDrawerPlaylists, selectedPlaylistId]
+  );
+
   const musicTemplateShellSearch = useMemo(
     () => ({
       value: searchQuery,
@@ -848,13 +866,13 @@ export function useMusicTemplateWorkspaceAdapterController(
         ? t('magnet.platform.music-template.resource.searchPlaceholder')
         : t('magnet.platform.music-template.resource.searchUnavailable'),
       disabled: !authorized || !supportsSearch,
-      loading: resourceLoading,
+      loading: resourceLoading || resourceLoadingMore,
       onChange: setSearchQuery,
       onSubmit: () => {
         void runSearch(searchQuery, 1, false, false);
       },
     }),
-    [authorized, resourceLoading, runSearch, searchQuery, supportsSearch, t]
+    [authorized, resourceLoading, resourceLoadingMore, runSearch, searchQuery, supportsSearch, t]
   );
 
   const musicTemplateToolbarProps: MusicTemplateWorkspaceToolbarProps = {};
@@ -882,6 +900,7 @@ export function useMusicTemplateWorkspaceAdapterController(
     platformLabel: musicRuntimeTarget?.displayName ?? t('magnet.platform.title'),
     platformAccentColor: '#8aa6ff',
     platformFallbackLabel: 'M',
+    platformIconAssetUrl: null,
     collectionLoading,
     collectionError,
     collectionBrowserSections,
@@ -889,12 +908,20 @@ export function useMusicTemplateWorkspaceAdapterController(
     selectedCollection,
     showCollectionBrowser,
     resourceLoading,
+    resourceLoadingMore,
     resourceError,
     resourceInfo,
     resourcePage,
     resourceViewportRef,
     preparingResourceId,
     selectedPlatformPlaylistId: selectedPlaylistId,
+    selectedPlatformPlaylistTitle: selectedDrawerPlaylist?.name ?? null,
+    selectedPlatformPlaylistCoverUrl: selectedDrawerPlaylist?.coverUrl ?? null,
+    selectedPlatformPlaylistTrackCount:
+      typeof selectedDrawerPlaylist?.trackCount === 'number' &&
+      Number.isFinite(selectedDrawerPlaylist.trackCount)
+        ? selectedDrawerPlaylist.trackCount
+        : null,
     playlistError,
     t,
     formatDuration,

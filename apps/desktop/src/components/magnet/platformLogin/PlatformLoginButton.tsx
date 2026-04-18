@@ -79,7 +79,6 @@ type ContextMenuState = {
 const CONNECTOR_VISUAL_META_BY_ICON_KEY: Record<string, Omit<ConnectorVisualMeta, 'iconAssetUrl'>> = {
   netease: { Icon: Disc3, color: '#ff6b87' },
   bilibili: { Icon: Tv, color: '#67c7ff' },
-  qqmusic: { Icon: Music, color: '#56db8d' },
 };
 
 function toAuthLabelKey(authState: string): string {

@@ -162,7 +162,6 @@ type WorkspaceRuntimeAdapter = {
 const CONNECTOR_VISUAL_META_BY_ICON_KEY: Record<string, { Icon: IconComponent; color: string }> = {
   bilibili: { Icon: Tv, color: '#67c7ff' },
   netease: { Icon: Disc3, color: '#ff6b87' },
-  qqmusic: { Icon: Music, color: '#56db8d' },
 };
 
 function cx(...values: Array<string | false | null | undefined>): string {
@@ -976,10 +975,11 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   });
   const musicTemplatePlatformLabel =
     activeMusicDisplayName ?? musicTemplateController.musicTemplateWorkspaceProps.platformLabel;
-  const musicTemplatePlatformAccentColor = getConnectorVisualMeta(
+  const musicTemplateVisualMeta = getConnectorVisualMeta(
     activeMusicConnectorId,
     activeMusicDefinition
-  ).color;
+  );
+  const musicTemplatePlatformAccentColor = musicTemplateVisualMeta.color;
   const musicTemplatePlatformFallbackLabel =
     musicTemplatePlatformLabel.trim().charAt(0).toUpperCase() || 'M';
   const musicTemplateWorkspaceProps = {
@@ -987,6 +987,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     platformLabel: musicTemplatePlatformLabel,
     platformAccentColor: musicTemplatePlatformAccentColor,
     platformFallbackLabel: musicTemplatePlatformFallbackLabel,
+    platformIconAssetUrl: musicTemplateVisualMeta.iconAssetUrl ?? null,
   };
 
   const placeholderController = useDedicatedWorkspacePlaceholderController({
@@ -1020,7 +1021,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       toolbar: musicTemplateController.musicTemplateToolbarProps,
       workspace: musicTemplateWorkspaceProps,
     },
-    qqmusic: {
+    generic: {
       toolbar: placeholderController.placeholderToolbarProps,
       workspace: placeholderController.placeholderWorkspaceProps,
     },
@@ -1133,7 +1134,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             />
           ) : null,
       },
-      qqmusic: {},
+      generic: {},
     }),
     [
       activeConnectorId,

@@ -33,7 +33,7 @@ export interface PlatformWorkspaceAdapterPayloadMap {
     toolbar: MusicTemplateWorkspaceToolbarProps;
     workspace: MusicTemplateWorkspaceProps;
   };
-  qqmusic: {
+  generic: {
     toolbar: DedicatedWorkspacePlaceholderToolbarProps;
     workspace: DedicatedWorkspacePlaceholderProps;
   };
@@ -70,8 +70,8 @@ const musicTemplateWorkspaceAdapter: PlatformWorkspaceAdapter<'music'> = {
   renderWorkspace: (payload) => <MusicTemplateWorkspaceAdapter {...payload} />,
 };
 
-const qqmusicWorkspaceAdapter: PlatformWorkspaceAdapter<'qqmusic'> = {
-  adapterKind: 'qqmusic',
+const genericWorkspaceAdapter: PlatformWorkspaceAdapter<'generic'> = {
+  adapterKind: 'generic',
   settingsController: 'none',
   renderToolbar: (payload) => <DedicatedWorkspacePlaceholderToolbar {...payload} />,
   renderWorkspace: (payload) => <DedicatedWorkspacePlaceholderAdapter {...payload} />,
@@ -82,7 +82,7 @@ const platformWorkspaceKindAdapterRegistry: Partial<
 > = {
   bilibili: bilibiliWorkspaceAdapter,
   netease: musicTemplateWorkspaceAdapter,
-  qqmusic: qqmusicWorkspaceAdapter,
+  generic: genericWorkspaceAdapter,
 };
 
 const platformWorkspaceConnectorAdapterRegistry: Partial<
@@ -90,7 +90,6 @@ const platformWorkspaceConnectorAdapterRegistry: Partial<
 > = {
   'connector.platform.bilibili': bilibiliWorkspaceAdapter,
   'connector.platform.netease': musicTemplateWorkspaceAdapter,
-  'connector.platform.qqmusic': qqmusicWorkspaceAdapter,
 };
 
 function normalizeConnectorId(connectorId: string | null | undefined): PlatformConnectorId | null {
@@ -116,6 +115,8 @@ export function resolveDefaultWorkspaceAdapterKindByWorkspaceDefaultMode(
       return 'bilibili';
     case 'music':
       return 'music';
+    case 'generic':
+      return 'generic';
     default:
       return null;
   }
@@ -124,7 +125,6 @@ export function resolveDefaultWorkspaceAdapterKindByWorkspaceDefaultMode(
 const DAILY_SUBTITLE_KEY_BY_CONNECTOR_ID: Partial<Record<PlatformConnectorId, string>> = {
   'connector.platform.bilibili': 'magnet.platform.daily.bilibili.subtitle',
   'connector.platform.netease': 'magnet.platform.daily.music-template.subtitle',
-  'connector.platform.qqmusic': 'magnet.platform.daily.qqmusic.subtitle',
 };
 
 export function resolvePlatformWorkspaceAdapter(
@@ -148,7 +148,7 @@ export function resolvePlatformWorkspaceAdapter(
     return musicTemplateWorkspaceAdapter;
   }
   if (options.platformTemplate === 'generic') {
-    return qqmusicWorkspaceAdapter;
+    return genericWorkspaceAdapter;
   }
 
   return null;

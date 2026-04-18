@@ -17,6 +17,11 @@ export interface MusicTemplateResourceItem {
   albumName?: string;
   durationSeconds?: number;
   coverUrl?: string;
+  vipRequired?: boolean;
+  vipLabel?: string;
+  qualityKey?: string;
+  qualityLabel?: string;
+  tagLabels?: string[];
   sourceLocator: string;
   webUrl: string;
 }
@@ -84,6 +89,19 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function mapRuntimeTagLabel(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+    return normalized || null;
+  }
+
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const label = normalizeString(record.label ?? record.title ?? record.name ?? record.text);
+  return label || null;
+}
+
 function shouldUseRuntime(target: MusicTemplateRuntimeTarget): boolean {
   return Boolean(target.instanceId && target.contractRecord?.runtime);
 }
@@ -129,6 +147,27 @@ function mapRuntimeResourceItem(value: unknown): MusicTemplateResourceItem | nul
   const sourceLocator = normalizeString(record.sourceLocator ?? record.locator ?? record.source);
   if (!resourceId || !title || !sourceLocator) return null;
 
+  const qualityKey =
+    normalizeString(
+      record.qualityKey ??
+        record.selectedQualityKey ??
+        record.audioQualityKey ??
+        record.soundQualityKey
+    ) || undefined;
+  const qualityLabel =
+    normalizeString(
+      record.qualityLabel ??
+        record.selectedQualityLabel ??
+        record.audioQualityLabel ??
+        record.soundQualityLabel
+    ) || undefined;
+  const vipLabel =
+    normalizeString(record.vipLabel ?? record.vipBadge ?? record.membershipLabel ?? record.accessLabel) ||
+    undefined;
+  const tagLabels = asArray(record.tagLabels ?? record.tags ?? record.badges ?? record.labels)
+    .map(mapRuntimeTagLabel)
+    .filter((item, index, array): item is string => Boolean(item) && array.indexOf(item) === index);
+
   return {
     resourceId,
     title,
@@ -139,6 +178,16 @@ function mapRuntimeResourceItem(value: unknown): MusicTemplateResourceItem | nul
         ? record.durationSeconds
         : undefined,
     coverUrl: normalizeString(record.coverUrl ?? record.imageUrl ?? record.cover) || undefined,
+    vipRequired:
+      record.vipRequired === true ||
+      record.requiresVip === true ||
+      record.needVip === true ||
+      record.vip === true ||
+      record.membersOnly === true,
+    vipLabel,
+    qualityKey,
+    qualityLabel,
+    tagLabels: tagLabels.length > 0 ? tagLabels : undefined,
     sourceLocator,
     webUrl: normalizeString(record.webUrl ?? record.url),
   };

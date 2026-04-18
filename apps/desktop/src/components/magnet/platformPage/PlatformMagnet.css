@@ -1096,6 +1096,20 @@
   justify-content: center;
 }
 
+.platform-magnet-resource-card__tag--inline {
+  min-height: 16px;
+  padding-inline: 6px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0;
+  backdrop-filter: blur(6px);
+}
+
+.platform-magnet-resource-card__tag--inline.platform-magnet-resource-card__tag--compact {
+  min-width: 16px;
+  padding-inline: 4px;
+}
+
 .platform-magnet-resource-card__tag-icon {
   display: inline-flex;
   align-items: center;
@@ -1105,6 +1119,17 @@
 
 .platform-magnet-resource-card__tag:not(.platform-magnet-resource-card__tag--compact) {
   gap: 4px;
+}
+
+.platform-magnet-template-resource-inline-tags {
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(46%, 220px);
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .platform-magnet-resource-card__tag--accent {
