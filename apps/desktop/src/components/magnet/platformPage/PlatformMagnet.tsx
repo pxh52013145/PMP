@@ -79,7 +79,6 @@ import {
   resolvePlatformWorkspaceAdapter,
   resolvePlatformWorkspaceAdapterKind,
   resolveDefaultWorkspaceAdapterKindByWorkspaceDefaultMode,
-  resolveWorkspaceSettingsController,
   type PlatformWorkspaceAdapterKind,
   type PlatformWorkspaceAdapterPayloadMap,
 } from './platformWorkspaceAdapterRegistry';
@@ -738,6 +737,10 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       platformTemplate: resolvePlatformConnectorTemplate(activeDefinition),
     });
   }, [activeConnectorId, activeDefinition]);
+  const activeVideoItem = useMemo<RegisteredPlatformItem | null>(
+    () => (activeWorkspaceAdapterKind === 'bilibili' ? activeItem : null),
+    [activeItem, activeWorkspaceAdapterKind]
+  );
   const activeMusicItem = useMemo<RegisteredPlatformItem | null>(
     () => (activeWorkspaceAdapterKind === 'music' ? activeItem : null),
     [activeItem, activeWorkspaceAdapterKind]
@@ -927,14 +930,6 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       platformTemplate: resolvePlatformConnectorTemplate(settingsConnectorDefinition),
     });
   }, [settingsConnectorDefinition]);
-  const settingsWorkspaceSettingsController = useMemo(() => {
-    if (!settingsConnectorDefinition) return 'none' as const;
-    return resolveWorkspaceSettingsController({
-      connectorId: settingsConnectorDefinition.connectorId,
-      workspaceKind: settingsConnectorDefinition.workspaceKind,
-      platformTemplate: resolvePlatformConnectorTemplate(settingsConnectorDefinition),
-    });
-  }, [settingsConnectorDefinition]);
   const settingsItems = useMemo(
     () =>
       settingsTab === 'global'
@@ -945,6 +940,10 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const settingsItem = settingsItems[0] ?? null;
   const settingsMusicItem = useMemo<RegisteredPlatformItem | null>(
     () => (settingsWorkspaceAdapterKind === 'music' ? settingsItem : null),
+    [settingsItem, settingsWorkspaceAdapterKind]
+  );
+  const settingsVideoItem = useMemo<RegisteredPlatformItem | null>(
+    () => (settingsWorkspaceAdapterKind === 'bilibili' ? settingsItem : null),
     [settingsItem, settingsWorkspaceAdapterKind]
   );
   const settingsMusicConnectorId = settingsMusicItem?.entry.connectorId ?? null;
@@ -963,16 +962,14 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       settingsMusicConnectorId
     );
   }, [settingsMusicConnectorId, settingsMusicDefinition, settingsMusicItem, t]);
+  const controllerVideoItem =
+    (settingsOpen && settingsVideoItem ? settingsVideoItem : activeVideoItem) ?? null;
 
   const bilibiliController = useBilibiliWorkspaceAdapterController({
     activeWorkspaceConnectorId,
-    activeBilibiliInstanceId:
-      settingsWorkspaceSettingsController === 'bilibili'
-        ? settingsItem?.instance?.instanceId ?? null
-        : activeItem?.definition?.connectorId === 'connector.platform.bilibili'
-          ? activeItem.instance?.instanceId ?? null
-          : null,
-    items: connectorViews,
+    activeVideoConnectorId: controllerVideoItem?.entry.connectorId ?? null,
+    activeVideoInstanceId: controllerVideoItem?.instance?.instanceId ?? null,
+    activeVideoAuthState: controllerVideoItem?.facade?.authState ?? null,
     audioService,
     t,
     selectedLocalPlaylistId: resolvedSelectedLocalPlaylistId,

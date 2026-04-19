@@ -4,6 +4,7 @@ import {
   BILIBILI_CONNECTOR_ID,
   listPlatformWorkspaceQualityOptions,
   resolvePlatformWorkspaceCoverAssetUrl,
+  type PlatformConnectorId,
   type BilibiliFavoriteResourceItem,
 } from '../../../modules/music-platform';
 
@@ -58,7 +59,17 @@ function toBilibiliResourceQualityBadgesFromOptions(
   return badges;
 }
 
+function normalizeWorkspaceConnectorId(
+  value: string | null | undefined
+): PlatformConnectorId | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized.startsWith('connector.platform.')) return null;
+  return normalized as PlatformConnectorId;
+}
+
 type UseBilibiliResourceEnhancerParams = {
+  workspaceConnectorId: string | null;
   activeBilibiliInstanceId: string | null;
   bilibiliAuthorized: boolean;
   selectedFolderId: string | null;
@@ -70,6 +81,7 @@ type UseBilibiliResourceEnhancerParams = {
 
 export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerParams) {
   const {
+    workspaceConnectorId,
     activeBilibiliInstanceId,
     bilibiliAuthorized,
     selectedFolderId,
@@ -78,6 +90,8 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
     isVideoSourceLocator,
     getResourceCacheKey,
   } = params;
+  const resolvedWorkspaceConnectorId =
+    normalizeWorkspaceConnectorId(workspaceConnectorId) ?? BILIBILI_CONNECTOR_ID;
 
   const [resourceCoverUrlMap, setResourceCoverUrlMap] = useState<Record<string, string>>({});
   const [resourceQualityTagMap, setResourceQualityTagMap] = useState<
@@ -150,7 +164,7 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
         const normalizedCoverUrl = item.coverUrl?.trim();
         if (!normalizedCoverUrl) continue;
         const resolvedCoverUrl = await resolvePlatformWorkspaceCoverAssetUrl({
-          connectorId: BILIBILI_CONNECTOR_ID,
+          connectorId: resolvedWorkspaceConnectorId,
           coverUrl: normalizedCoverUrl,
           instanceId: activeBilibiliInstanceId,
         });
@@ -166,7 +180,13 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
     return () => {
       cancelled = true;
     };
-  }, [activeBilibiliInstanceId, filteredBilibiliResources, getResourceCacheKey, resourceCoverUrlMap]);
+  }, [
+    activeBilibiliInstanceId,
+    filteredBilibiliResources,
+    getResourceCacheKey,
+    resolvedWorkspaceConnectorId,
+    resourceCoverUrlMap,
+  ]);
 
   useEffect(() => {
     if (!selectedFolderId) return;
@@ -204,7 +224,7 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
 
         try {
           const options = await listPlatformWorkspaceQualityOptions({
-            connectorId: BILIBILI_CONNECTOR_ID,
+            connectorId: resolvedWorkspaceConnectorId,
             sourceLocator: locator,
             instanceId: activeBilibiliInstanceId,
           });
@@ -241,6 +261,7 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
     filteredBilibiliResources,
     getResourceCacheKey,
     isVideoSourceLocator,
+    resolvedWorkspaceConnectorId,
     resourceQualityTagMap,
     selectedFolderId,
   ]);

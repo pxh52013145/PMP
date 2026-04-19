@@ -10,6 +10,7 @@ import {
   type BilibiliFavoriteFolderItem,
   type BilibiliFavoriteResourceItem,
   type BilibiliFavoriteResourcePage,
+  type PlatformConnectorId,
   type PlatformWorkspaceCollectionItem,
   type PlatformWorkspaceResourceItem,
   type PlatformWorkspaceResourcePage,
@@ -75,6 +76,15 @@ function parseSearchKeywordFromResourceFolderId(folderId: string): string | null
   if (!normalizedFolderId.startsWith(prefix)) return null;
   const keyword = normalizedFolderId.slice(prefix.length).trim();
   return keyword.length > 0 ? keyword : null;
+}
+
+function normalizeWorkspaceConnectorId(
+  value: string | null | undefined
+): PlatformConnectorId | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized.startsWith('connector.platform.')) return null;
+  return normalized as PlatformConnectorId;
 }
 
 function mapWorkspaceCollectionToBilibiliFolder(
@@ -152,13 +162,16 @@ function mergeResourcePageItems(
 }
 
 type UseBilibiliResourceBrowserParams = {
+  workspaceConnectorId: string | null;
   bilibiliInstanceId: string | null;
   bilibiliAuthorized: boolean;
   t: Translator;
 };
 
 export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserParams) {
-  const { bilibiliAuthorized, bilibiliInstanceId, t } = params;
+  const { workspaceConnectorId, bilibiliAuthorized, bilibiliInstanceId, t } = params;
+  const resolvedWorkspaceConnectorId =
+    normalizeWorkspaceConnectorId(workspaceConnectorId) ?? BILIBILI_CONNECTOR_ID;
 
   const [folderLoading, setFolderLoading] = useState(false);
   const [folderError, setFolderError] = useState<string | null>(null);
@@ -208,7 +221,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     try {
       const folders = (
         await listPlatformWorkspaceCollections({
-          connectorId: BILIBILI_CONNECTOR_ID,
+          connectorId: resolvedWorkspaceConnectorId,
           instanceId: bilibiliInstanceId,
         })
       ).map(mapWorkspaceCollectionToBilibiliFolder);
@@ -232,7 +245,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     } finally {
       setFolderLoading(false);
     }
-  }, [bilibiliAuthorized, bilibiliInstanceId, t]);
+  }, [bilibiliAuthorized, bilibiliInstanceId, resolvedWorkspaceConnectorId, t]);
 
   const refreshBilibiliRecommendedResources = useCallback(async () => {
     if (!bilibiliAuthorized) {
@@ -247,7 +260,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       setResourceSourceKey('recommended');
       const page = mapWorkspacePageToBilibiliPage(
         await listPlatformWorkspaceRecommendedResources({
-          connectorId: BILIBILI_CONNECTOR_ID,
+          connectorId: resolvedWorkspaceConnectorId,
           instanceId: bilibiliInstanceId,
         }),
         'recommended'
@@ -267,7 +280,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     } finally {
       setResourceLoading(false);
     }
-  }, [bilibiliAuthorized, bilibiliInstanceId, t]);
+  }, [bilibiliAuthorized, bilibiliInstanceId, resolvedWorkspaceConnectorId, t]);
 
   const searchBilibiliHomepageResources = useCallback(
     async (keyword: string) => {
@@ -289,7 +302,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         setResourceSourceKey(`search:${normalizedKeyword.toLowerCase()}`);
         const page = mapWorkspacePageToBilibiliPage(
           await searchPlatformWorkspaceResources({
-            connectorId: BILIBILI_CONNECTOR_ID,
+            connectorId: resolvedWorkspaceConnectorId,
             keyword: normalizedKeyword,
             pageNum: 1,
             pageSize: BILIBILI_RESOURCE_PAGE_SIZE,
@@ -313,7 +326,13 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         setResourceLoading(false);
       }
     },
-    [bilibiliAuthorized, bilibiliInstanceId, refreshBilibiliRecommendedResources, t]
+    [
+      bilibiliAuthorized,
+      bilibiliInstanceId,
+      refreshBilibiliRecommendedResources,
+      resolvedWorkspaceConnectorId,
+      t,
+    ]
   );
 
   const refreshBilibiliResources = useCallback(
@@ -339,7 +358,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         const requestFolderPage = async (pageNum: number, pageSize: number) =>
           mapWorkspacePageToBilibiliPage(
             await listPlatformWorkspaceCollectionResources({
-              connectorId: BILIBILI_CONNECTOR_ID,
+              connectorId: resolvedWorkspaceConnectorId,
               collectionId: normalizedFolderId,
               pageNum,
               pageSize,
@@ -402,7 +421,13 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         setResourceLoading(false);
       }
     },
-    [bilibiliAuthorized, bilibiliFolders, bilibiliInstanceId, t]
+    [
+      bilibiliAuthorized,
+      bilibiliFolders,
+      bilibiliInstanceId,
+      resolvedWorkspaceConnectorId,
+      t,
+    ]
   );
 
   const loadMoreBilibiliResources = useCallback(async () => {
@@ -425,7 +450,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       if (searchKeyword) {
         nextPage = mapWorkspacePageToBilibiliPage(
           await searchPlatformWorkspaceResources({
-            connectorId: BILIBILI_CONNECTOR_ID,
+            connectorId: resolvedWorkspaceConnectorId,
             keyword: searchKeyword,
             pageNum: nextPageNum,
             pageSize,
@@ -437,7 +462,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         const requestFolderPage = async (pageNum: number) =>
           mapWorkspacePageToBilibiliPage(
             await listPlatformWorkspaceCollectionResources({
-              connectorId: BILIBILI_CONNECTOR_ID,
+              connectorId: resolvedWorkspaceConnectorId,
               collectionId: normalizedFolderId,
               pageNum,
               pageSize,
@@ -497,6 +522,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
   }, [
     bilibiliAuthorized,
     bilibiliInstanceId,
+    resolvedWorkspaceConnectorId,
     resourceLoading,
     resourceLoadingMore,
     resourcePage,
@@ -515,7 +541,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     setResourceFilterQuery(normalizedQuery);
     try {
       const result = await resolvePlatformWorkspaceResource({
-        connectorId: BILIBILI_CONNECTOR_ID,
+        connectorId: resolvedWorkspaceConnectorId,
         query: normalizedQuery,
         instanceId: bilibiliInstanceId,
       });
@@ -534,7 +560,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     } finally {
       setBvidSearching(false);
     }
-  }, [bilibiliInstanceId, t]);
+  }, [bilibiliInstanceId, resolvedWorkspaceConnectorId, t]);
 
   useEffect(() => {
     if (normalizeBilibiliLookupInput(resourceFilterQuery)) return;

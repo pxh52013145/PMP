@@ -10,6 +10,7 @@ import {
   type BilibiliFavoriteResourceItem,
   type BilibiliLyricLocatorResolved,
   type BilibiliPreparedPlayback,
+  type PlatformConnectorId,
   type PlatformWorkspacePreparedPlayback,
 } from '../../../modules/music-platform';
 
@@ -50,6 +51,15 @@ function extractBvidFromText(value: string | null | undefined): string | null {
   const matched = normalized.match(BILIBILI_BVID_PATTERN);
   if (!matched || !matched[0]) return null;
   return matched[0].toUpperCase();
+}
+
+function normalizeWorkspaceConnectorId(
+  value: string | null | undefined
+): PlatformConnectorId | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized.startsWith('connector.platform.')) return null;
+  return normalized as PlatformConnectorId;
 }
 
 function buildStableBilibiliResourceIdentity(item: BilibiliFavoriteResourceItem): string {
@@ -110,6 +120,7 @@ function toBilibiliPreparedPlayback(
 }
 
 type UseBilibiliResourcePlaybackActionsParams = {
+  workspaceConnectorId: string | null;
   activeBilibiliInstanceId: string | null;
   audioService: IAudioService;
   normalizedPlaybackQualityHint: string;
@@ -127,6 +138,7 @@ type UseBilibiliResourcePlaybackActionsParams = {
 
 export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePlaybackActionsParams) {
   const {
+    workspaceConnectorId,
     activeBilibiliInstanceId,
     audioService,
     normalizedPlaybackQualityHint,
@@ -137,6 +149,8 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
     setPlaylistError,
     buildTrackFromPreparedPlayback,
   } = params;
+  const resolvedWorkspaceConnectorId =
+    normalizeWorkspaceConnectorId(workspaceConnectorId) ?? BILIBILI_CONNECTOR_ID;
 
   const [resourceInfo, setResourceInfo] = useState<string | null>(null);
   const [preparingResourceId, setPreparingResourceId] = useState<string | null>(null);
@@ -167,7 +181,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
       setLyricError(null);
       try {
         const resolved = await resolvePlatformWorkspaceLyricLocator({
-          connectorId: BILIBILI_CONNECTOR_ID,
+          connectorId: resolvedWorkspaceConnectorId,
           lyricLocator: locator,
           instanceId: activeBilibiliInstanceId,
         });
@@ -184,7 +198,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
         setLyricResolvingId(null);
       }
     },
-    [activeBilibiliInstanceId, t]
+    [activeBilibiliInstanceId, resolvedWorkspaceConnectorId, t]
   );
 
   const ensurePreparedTrack = useCallback(
@@ -197,7 +211,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
       setPreparingResourceId(cacheKey);
       try {
         const prepared = await preparePlatformWorkspacePlayback({
-          connectorId: BILIBILI_CONNECTOR_ID,
+          connectorId: resolvedWorkspaceConnectorId,
           sourceLocator: item.sourceLocator,
           qualityHint: normalizedPlaybackQualityHint,
           instanceId: activeBilibiliInstanceId,
@@ -208,7 +222,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
         const bilibiliPrepared = toBilibiliPreparedPlayback(prepared);
 
         let resolvedCoverUrl = await resolvePlatformWorkspaceCoverAssetUrl({
-          connectorId: BILIBILI_CONNECTOR_ID,
+          connectorId: resolvedWorkspaceConnectorId,
           coverUrl: item.coverUrl,
           instanceId: activeBilibiliInstanceId,
         });
@@ -219,7 +233,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
             extractBvidFromText(item.lyricLocator);
           if (bvid) {
             const matched = await resolvePlatformWorkspaceResource({
-              connectorId: BILIBILI_CONNECTOR_ID,
+              connectorId: resolvedWorkspaceConnectorId,
               query: bvid,
               instanceId: activeBilibiliInstanceId,
             }).catch(() => null);
@@ -228,7 +242,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
             if (discoveredCoverUrl) {
               resolvedCoverUrl =
                 (await resolvePlatformWorkspaceCoverAssetUrl({
-                  connectorId: BILIBILI_CONNECTOR_ID,
+                  connectorId: resolvedWorkspaceConnectorId,
                   coverUrl: discoveredCoverUrl,
                   instanceId: activeBilibiliInstanceId,
                 })) || discoveredCoverUrl;
@@ -261,6 +275,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
       activeBilibiliInstanceId,
       normalizedPlaybackQualityHint,
       preferredQualityLabel,
+      resolvedWorkspaceConnectorId,
       setResourceError,
       t,
     ]
