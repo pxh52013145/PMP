@@ -1,3 +1,5 @@
+import type { PlatformCompatContractFile } from '@pixel-matrix/plugin-platform-contracts';
+
 import {
   listNativeLibraryConnectors,
   listNativeLibrarySources,
@@ -6,6 +8,7 @@ import {
   type NativeLibrarySourceRecord,
   type NativeLibraryTrackRecord,
 } from '../../modules/music-library';
+import { listBuiltinPlatformCompatContractRegistrations } from '../../modules/music-platform/connectorAuth';
 
 export type MusicSourceKind = 'local' | 'nas' | 'platform';
 export type MusicSourceStatus = 'active' | 'offline' | 'error';
@@ -79,42 +82,70 @@ function inferConnectorId(kind: MusicSourceKind, connectors: NativeLibraryConnec
   return 'connector.platform.default';
 }
 
-function buildCapabilities(kind: MusicSourceKind, driver: string): MusicSourceCapabilityFlags {
+function listPlatformCompatContractsByConnectorId(): Map<string, PlatformCompatContractFile> {
+  const contracts = new Map<string, PlatformCompatContractFile>();
+
+  try {
+    for (const registration of listBuiltinPlatformCompatContractRegistrations()) {
+      const connectorId = normalizeString(registration.connectorId).toLowerCase();
+      if (!connectorId) continue;
+      contracts.set(connectorId, registration.contract);
+    }
+  } catch {
+    // Keep the source facade usable even before the platform registry bootstrap finishes.
+  }
+
+  return contracts;
+}
+
+function resolvePlatformCapabilitiesFromContract(
+  contract: PlatformCompatContractFile | null
+): MusicSourceCapabilityFlags | null {
+  if (!contract) return null;
+
+  const hasCollections =
+    contract.capabilities.playlists ||
+    contract.capabilities.favorites ||
+    contract.capabilities.dailyRecommendations ||
+    contract.capabilities.pages;
+  const hasPreparePlaybackBinding =
+    normalizeString(contract.apiBindings.library).length > 0 ||
+    normalizeString(contract.apiBindings.search).length > 0;
+
+  return {
+    canSearchTracks: contract.capabilities.search,
+    canSearchAlbums: contract.capabilities.search,
+    canListPlaylists: hasCollections,
+    canEditPlaylists: contract.capabilities.playlists,
+    canFetchLyrics: hasPreparePlaybackBinding,
+    canFetchCovers: hasCollections || contract.capabilities.search || hasPreparePlaybackBinding,
+    canResolveStream: hasPreparePlaybackBinding,
+    canRunIncrementalSync: false,
+  };
+}
+
+function buildCapabilities(
+  kind: MusicSourceKind,
+  driver: string,
+  options?: {
+    connectorId?: string;
+    platformContracts?: Map<string, PlatformCompatContractFile>;
+  }
+): MusicSourceCapabilityFlags {
   const normalizedDriver = normalizeString(driver).toLowerCase();
   const isRemote = kind === 'platform';
   const isNas = kind === 'nas';
 
-  if (isRemote && (normalizedDriver === 'bilibili-web' || normalizedDriver === 'bilibili')) {
-    return {
-      canSearchTracks: true,
-      canSearchAlbums: false,
-      canListPlaylists: true,
-      canEditPlaylists: false,
-      canFetchLyrics: true,
-      canFetchCovers: true,
-      canResolveStream: false,
-      canRunIncrementalSync: false,
-    };
-  }
-
-  if (
-    isRemote &&
-    (
-      normalizedDriver === 'netease-web' ||
-      normalizedDriver === 'netease-api-enhanced' ||
-      normalizedDriver === 'netease-api'
-    )
-  ) {
-    return {
-      canSearchTracks: true,
-      canSearchAlbums: false,
-      canListPlaylists: true,
-      canEditPlaylists: false,
-      canFetchLyrics: false,
-      canFetchCovers: true,
-      canResolveStream: true,
-      canRunIncrementalSync: false,
-    };
+  if (isRemote) {
+    const connectorId = normalizeString(options?.connectorId).toLowerCase();
+    const contract =
+      connectorId && options?.platformContracts
+        ? options.platformContracts.get(connectorId) ?? null
+        : null;
+    const resolved = resolvePlatformCapabilitiesFromContract(contract);
+    if (resolved) {
+      return resolved;
+    }
   }
 
   return {
@@ -131,7 +162,8 @@ function buildCapabilities(kind: MusicSourceKind, driver: string): MusicSourceCa
 
 function mapSourceToFacade(
   source: NativeLibrarySourceRecord,
-  connectors: NativeLibraryConnectorRecord[]
+  connectors: NativeLibraryConnectorRecord[],
+  platformContracts: Map<string, PlatformCompatContractFile>
 ): MusicSourceFacadeItem {
   const kind = detectSourceKind(source);
   const connectorId = inferConnectorId(kind, connectors);
@@ -149,7 +181,10 @@ function mapSourceToFacade(
     displayName: source.displayName || source.path,
     status,
     pathLocator: source.path,
-    capabilities: buildCapabilities(kind, driver),
+    capabilities: buildCapabilities(kind, driver, {
+      connectorId,
+      platformContracts,
+    }),
   };
 }
 
@@ -164,8 +199,11 @@ export async function listMusicSourceFacadeItems(): Promise<MusicSourceFacadeIte
     listNativeLibrarySources(),
     listNativeLibraryConnectors(),
   ]);
+  const platformContracts = listPlatformCompatContractsByConnectorId();
 
-  const sourceItems = sources.map((source) => mapSourceToFacade(source, connectors));
+  const sourceItems = sources.map((source) =>
+    mapSourceToFacade(source, connectors, platformContracts)
+  );
   const sourceIds = new Set(sourceItems.map((item) => item.sourceId));
 
   const virtualPlatformItems: MusicSourceFacadeItem[] = [];
@@ -188,7 +226,10 @@ export async function listMusicSourceFacadeItems(): Promise<MusicSourceFacadeIte
           : normalizeString(connector.status).toLowerCase() === 'offline'
             ? 'offline'
             : 'active',
-      capabilities: buildCapabilities('platform', connector.driver),
+      capabilities: buildCapabilities('platform', connector.driver, {
+        connectorId: connector.id,
+        platformContracts,
+      }),
     });
   }
 

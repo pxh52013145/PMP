@@ -1,3 +1,9 @@
+use super::{
+    first_payload_string, optional_payload_u32, required_payload_string, serialize_response,
+    PLATFORM_LIBRARY_BINDING_ID, PLATFORM_PAGES_BINDING_ID, PLATFORM_RECOMMENDATIONS_BINDING_ID,
+    PLATFORM_SEARCH_BINDING_ID,
+};
+use crate::music_platform_runtime::MusicPlatformRuntimeHost as AppHandle;
 use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyInit, KeyIvInit};
 use aes::Aes128;
 use base64::{
@@ -24,14 +30,18 @@ use std::{
     sync::{Mutex, MutexGuard},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::AppHandle;
 use url::{form_urlencoded::byte_serialize, Url};
 
 const NETEASE_CONNECTOR_ID: &str = "connector.platform.netease";
+const NETEASE_PLATFORM_ID: &str = "netease";
+const NETEASE_DEFAULT_INSTANCE_ID: &str = "netease:builtin";
 const NETEASE_CONNECTOR_KIND: &str = "platform";
 const NETEASE_CONNECTOR_DRIVER: &str = "netease-web";
 const NETEASE_CONNECTOR_DISPLAY_NAME: &str = "Netease Cloud Music";
 const NETEASE_CONNECTOR_STATUS_ACTIVE: &str = "active";
+
+pub const CONNECTOR_ID: &str = NETEASE_CONNECTOR_ID;
+pub const DISPLAY_NAME: &str = NETEASE_CONNECTOR_DISPLAY_NAME;
 
 const NETEASE_DOMAIN: &str = "https://music.163.com";
 const NETEASE_API_DOMAIN: &str = "https://interface.music.163.com";
@@ -182,6 +192,7 @@ pub struct NeteasePlaybackPrepared {
 
 #[derive(Debug, Clone)]
 struct QrSessionState {
+    instance_id: String,
     qr_key: String,
     expires_at_ms: i64,
     cookie_header: Option<String>,
@@ -194,7 +205,8 @@ struct AuthCookieState {
 
 #[derive(Debug, Clone)]
 struct AuthContext {
-    account: crate::music_library_db::LibraryConnectorAccountRecord,
+    instance_id: String,
+    account: crate::music_library_db::PlatformInstanceAuthRecord,
     cookie_header: String,
 }
 
@@ -206,7 +218,8 @@ struct NeteaseApiResponse {
 
 static QR_SESSIONS: Lazy<Mutex<HashMap<String, QrSessionState>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
-static AUTH_COOKIE_STATE: Lazy<Mutex<Option<AuthCookieState>>> = Lazy::new(|| Mutex::new(None));
+static AUTH_COOKIE_STATE: Lazy<Mutex<HashMap<String, AuthCookieState>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 static ANONYMOUS_COOKIE_STATE: Lazy<Mutex<Option<AuthCookieState>>> =
     Lazy::new(|| Mutex::new(None));
 static NETEASE_DEBUG_LOG_PATH: OnceCell<PathBuf> = OnceCell::new();
@@ -290,7 +303,8 @@ fn lock_qr_sessions() -> Result<MutexGuard<'static, HashMap<String, QrSessionSta
         .map_err(|_| "Netease QR session store is locked".to_string())
 }
 
-fn lock_auth_cookie_state() -> Result<MutexGuard<'static, Option<AuthCookieState>>, String> {
+fn lock_auth_cookie_state() -> Result<MutexGuard<'static, HashMap<String, AuthCookieState>>, String>
+{
     AUTH_COOKIE_STATE
         .lock()
         .map_err(|_| "Netease auth cookie store is locked".to_string())
@@ -308,22 +322,55 @@ fn cleanup_expired_qr_sessions(now: i64) {
     }
 }
 
-fn set_auth_cookie_state(cookie_header: String) {
+fn normalize_instance_id(instance_id: Option<&str>) -> String {
+    instance_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(NETEASE_DEFAULT_INSTANCE_ID)
+        .to_string()
+}
+
+fn migrate_default_instance_auth_if_needed(
+    app: &AppHandle,
+    instance_id: &str,
+) -> Result<(), String> {
+    if instance_id != NETEASE_DEFAULT_INSTANCE_ID {
+        return Ok(());
+    }
+
+    let _ =
+        crate::music_library_db::migrate_legacy_connector_account_to_platform_instance_auth_for_runtime_host(
+            app,
+            NETEASE_PLATFORM_ID,
+            NETEASE_DEFAULT_INSTANCE_ID,
+            NETEASE_CONNECTOR_ID,
+        )?;
+    Ok(())
+}
+
+fn set_auth_cookie_state(instance_id: &str, cookie_header: String) {
     if let Ok(mut state) = lock_auth_cookie_state() {
-        *state = Some(AuthCookieState { cookie_header });
+        state.insert(instance_id.to_string(), AuthCookieState { cookie_header });
     }
 }
 
-fn clear_auth_cookie_state() {
+fn clear_auth_cookie_state(instance_id: Option<&str>) {
     if let Ok(mut state) = lock_auth_cookie_state() {
-        *state = None;
+        if let Some(instance_id) = instance_id.map(str::trim).filter(|value| !value.is_empty()) {
+            state.remove(instance_id);
+        } else {
+            state.clear();
+        }
     }
 }
 
-fn get_auth_cookie_header() -> Option<String> {
-    lock_auth_cookie_state()
-        .ok()
-        .and_then(|state| state.as_ref().map(|cookie| cookie.cookie_header.clone()))
+fn get_auth_cookie_header(instance_id: Option<&str>) -> Option<String> {
+    let normalized_instance_id = normalize_instance_id(instance_id);
+    lock_auth_cookie_state().ok().and_then(|state| {
+        state
+            .get(normalized_instance_id.as_str())
+            .map(|cookie| cookie.cookie_header.clone())
+    })
 }
 
 fn set_anonymous_cookie_state(cookie_header: String) {
@@ -358,7 +405,7 @@ fn build_http_client() -> Result<Client, String> {
 }
 
 fn ensure_connector(app: &AppHandle) -> Result<(), String> {
-    crate::music_library_db::ensure_connector(
+    crate::music_library_db::ensure_connector_for_runtime_host(
         app,
         NETEASE_CONNECTOR_ID,
         NETEASE_CONNECTOR_KIND,
@@ -1376,7 +1423,8 @@ fn fetch_login_status_payload(client: &Client, cookie_header: &str) -> Result<Va
 
 fn fetch_account_uid_and_persist(
     app: &AppHandle,
-    account: &crate::music_library_db::LibraryConnectorAccountRecord,
+    instance_id: &str,
+    account: &crate::music_library_db::PlatformInstanceAuthRecord,
     cookie_header: &str,
 ) -> Result<String, String> {
     if let Some(account_uid) = account
@@ -1393,16 +1441,18 @@ fn fetch_account_uid_and_persist(
     let account_uid = extract_account_uid_from_login_status(&payload)
         .ok_or_else(|| "Netease login status did not expose account uid".to_string())?;
 
-    let _ = crate::music_library_db::upsert_connector_account(
+    let _ = crate::music_library_db::upsert_platform_instance_auth_for_runtime_host(
         app,
-        crate::music_library_db::LibraryConnectorAccountUpsertInput {
-            id: account.id.clone(),
-            connector_id: NETEASE_CONNECTOR_ID.to_string(),
+        crate::music_library_db::PlatformInstanceAuthUpsertInput {
+            instance_id: instance_id.to_string(),
+            platform_id: NETEASE_PLATFORM_ID.to_string(),
+            connector_id: Some(NETEASE_CONNECTOR_ID.to_string()),
             account_uid: Some(account_uid.clone()),
             auth_state: "authorized".to_string(),
             token_ref: account.token_ref.clone(),
             refresh_token_ref: account.refresh_token_ref.clone(),
             expires_at_ms: account.expires_at_ms,
+            legacy_connector_account_id: account.legacy_connector_account_id.clone(),
             created_at_ms: Some(account.created_at_ms),
             updated_at_ms: Some(now_ms()),
         },
@@ -1411,18 +1461,24 @@ fn fetch_account_uid_and_persist(
     Ok(account_uid)
 }
 
-fn ensure_auth_context(app: &AppHandle) -> Result<AuthContext, String> {
-    let account = crate::music_library_db::get_latest_connector_account_by_connector_id(
-        app,
-        NETEASE_CONNECTOR_ID,
-    )?
-    .ok_or_else(|| "Netease connector is not authorized".to_string())?;
+fn ensure_auth_context(app: &AppHandle, instance_id: Option<&str>) -> Result<AuthContext, String> {
+    let normalized_instance_id = normalize_instance_id(instance_id);
+    migrate_default_instance_auth_if_needed(app, &normalized_instance_id)?;
+
+    let account =
+        crate::music_library_db::get_platform_instance_auth_by_instance_id_for_runtime_host(
+            app,
+            &normalized_instance_id,
+        )?
+        .ok_or_else(|| "Netease connector is not authorized".to_string())?;
 
     if !account.auth_state.eq_ignore_ascii_case("authorized") {
         return Err("Netease connector is not authorized".to_string());
     }
 
-    let cookie_header = if let Some(cookie_header) = get_auth_cookie_header() {
+    let cookie_header = if let Some(cookie_header) =
+        get_auth_cookie_header(Some(normalized_instance_id.as_str()))
+    {
         cookie_header
     } else {
         restore_cookie_header_from_token_ref(account.token_ref.as_deref(), "ensure_auth_context")?
@@ -1432,9 +1488,10 @@ fn ensure_auth_context(app: &AppHandle) -> Result<AuthContext, String> {
         })?
     };
 
-    set_auth_cookie_state(cookie_header.clone());
+    set_auth_cookie_state(normalized_instance_id.as_str(), cookie_header.clone());
 
     Ok(AuthContext {
+        instance_id: normalized_instance_id,
         account,
         cookie_header,
     })
@@ -1532,8 +1589,10 @@ fn map_song_item(song: &Value) -> Option<NeteaseSongItem> {
 
 fn resolve_default_playback_cache_root(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(
-        crate::music_platform_settings::resolve_effective_platform_cache_root(app, "netease")?
-            .join(NETEASE_PLAYBACK_CACHE_DIR_NAME),
+        crate::music_platform_settings::resolve_effective_platform_cache_root_for_runtime_host(
+            app, "netease",
+        )?
+        .join(NETEASE_PLAYBACK_CACHE_DIR_NAME),
     )
 }
 
@@ -1709,15 +1768,19 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     ensure_connector(app)?;
     netease_log("init", "starting connector init");
 
-    if let Some(account) = crate::music_library_db::get_latest_connector_account_by_connector_id(
-        app,
-        NETEASE_CONNECTOR_ID,
-    )? {
+    migrate_default_instance_auth_if_needed(app, NETEASE_DEFAULT_INSTANCE_ID)?;
+
+    if let Some(account) =
+        crate::music_library_db::get_platform_instance_auth_by_instance_id_for_runtime_host(
+            app,
+            NETEASE_DEFAULT_INSTANCE_ID,
+        )?
+    {
         netease_log(
             "init",
             format!(
                 "found connector account id={} auth_state={} token_ref={}",
-                redact_identifier(&account.id),
+                redact_identifier(&account.instance_id),
                 account.auth_state,
                 summarize_token_ref(account.token_ref.as_deref())
             ),
@@ -1725,7 +1788,7 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         if account.auth_state.eq_ignore_ascii_case("authorized") {
             match restore_cookie_header_from_token_ref(account.token_ref.as_deref(), "init") {
                 Ok(Some(cookie_header)) => {
-                    set_auth_cookie_state(cookie_header);
+                    set_auth_cookie_state(NETEASE_DEFAULT_INSTANCE_ID, cookie_header);
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -1743,10 +1806,15 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-pub fn qr_generate(app: &AppHandle) -> Result<NeteaseQrCodeSession, String> {
+pub fn qr_generate(
+    app: &AppHandle,
+    instance_id: Option<&str>,
+) -> Result<NeteaseQrCodeSession, String> {
     init_netease_debug_logging(app);
     ensure_connector(app)?;
     cleanup_expired_qr_sessions(now_ms());
+    let normalized_instance_id = normalize_instance_id(instance_id);
+    migrate_default_instance_auth_if_needed(app, &normalized_instance_id)?;
     netease_log("qr_generate", "starting qr session generation");
 
     let client = build_http_client()?;
@@ -1790,6 +1858,7 @@ pub fn qr_generate(app: &AppHandle) -> Result<NeteaseQrCodeSession, String> {
         sessions.insert(
             session_id.clone(),
             QrSessionState {
+                instance_id: normalized_instance_id,
                 qr_key: qr_key.clone(),
                 expires_at_ms,
                 cookie_header: key_response.cookie_header.clone(),
@@ -1984,50 +2053,46 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
                     None
                 }
             };
-            let account_id = format!(
-                "{}::{}",
-                NETEASE_CONNECTOR_ID,
-                account_uid
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or(normalized_session_id)
-            );
-            let token_ref =
-                match write_cookie_header_to_keyring(&account_id, &persisted_cookie_header) {
-                    Ok(token_ref) => token_ref,
-                    Err(error) => {
-                        netease_log(
-                            "qr_poll",
-                            format!(
-                                "failed to persist auth cookie account_id={} error={error}",
-                                redact_identifier(&account_id)
-                            ),
-                        );
-                        return Err(error);
-                    }
-                };
+            let token_ref = match write_cookie_header_to_keyring(
+                session.instance_id.as_str(),
+                &persisted_cookie_header,
+            ) {
+                Ok(token_ref) => token_ref,
+                Err(error) => {
+                    netease_log(
+                        "qr_poll",
+                        format!(
+                            "failed to persist auth cookie account_id={} error={error}",
+                            redact_identifier(session.instance_id.as_str())
+                        ),
+                    );
+                    return Err(error);
+                }
+            };
             netease_log(
                 "qr_poll",
                 format!(
                     "stored auth cookie account_id={} token_ref={} account_uid={} cookie={}",
-                    redact_identifier(&account_id),
+                    redact_identifier(session.instance_id.as_str()),
                     summarize_token_ref(Some(token_ref.as_str())),
                     account_uid.as_deref().unwrap_or("-"),
                     summarize_cookie_header(Some(persisted_cookie_header.as_str()))
                 ),
             );
-            set_auth_cookie_state(persisted_cookie_header);
+            set_auth_cookie_state(session.instance_id.as_str(), persisted_cookie_header);
 
-            let _ = crate::music_library_db::upsert_connector_account(
+            let _ = crate::music_library_db::upsert_platform_instance_auth_for_runtime_host(
                 app,
-                crate::music_library_db::LibraryConnectorAccountUpsertInput {
-                    id: account_id,
-                    connector_id: NETEASE_CONNECTOR_ID.to_string(),
+                crate::music_library_db::PlatformInstanceAuthUpsertInput {
+                    instance_id: session.instance_id.clone(),
+                    platform_id: NETEASE_PLATFORM_ID.to_string(),
+                    connector_id: Some(NETEASE_CONNECTOR_ID.to_string()),
                     account_uid: account_uid.clone(),
                     auth_state: "authorized".to_string(),
                     token_ref: Some(token_ref),
                     refresh_token_ref: None,
                     expires_at_ms: None,
+                    legacy_connector_account_id: None,
                     created_at_ms: None,
                     updated_at_ms: Some(now_ms()),
                 },
@@ -2075,15 +2140,21 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
     })
 }
 
-pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
+pub fn get_auth_status(
+    app: &AppHandle,
+    instance_id: Option<&str>,
+) -> Result<NeteaseAuthStatus, String> {
     init_netease_debug_logging(app);
     ensure_connector(app)?;
+    let normalized_instance_id = normalize_instance_id(instance_id);
+    migrate_default_instance_auth_if_needed(app, &normalized_instance_id)?;
     netease_log("get_auth_status", "reading current auth status");
 
-    let account = crate::music_library_db::get_latest_connector_account_by_connector_id(
-        app,
-        NETEASE_CONNECTOR_ID,
-    )?;
+    let account =
+        crate::music_library_db::get_platform_instance_auth_by_instance_id_for_runtime_host(
+            app,
+            &normalized_instance_id,
+        )?;
     let Some(account) = account else {
         netease_log("get_auth_status", "no connector account found");
         return Ok(NeteaseAuthStatus {
@@ -2111,16 +2182,20 @@ pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
         "get_auth_status",
         format!(
             "account id={} auth_state={} in_memory_cookie={} token_ref={}",
-            redact_identifier(&account.id),
+            redact_identifier(&account.instance_id),
             auth_state,
-            summarize_cookie_header(get_auth_cookie_header().as_deref()),
+            summarize_cookie_header(
+                get_auth_cookie_header(Some(normalized_instance_id.as_str())).as_deref()
+            ),
             summarize_token_ref(account.token_ref.as_deref())
         ),
     );
 
     if auth_state == "authorized" {
         let mut keyring_restore_failed = false;
-        let cookie_header = if let Some(cookie_header) = get_auth_cookie_header() {
+        let cookie_header = if let Some(cookie_header) =
+            get_auth_cookie_header(Some(normalized_instance_id.as_str()))
+        {
             Some(cookie_header)
         } else {
             match restore_cookie_header_from_token_ref(
@@ -2136,7 +2211,7 @@ pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
                         "get_auth_status",
                         format!(
                             "degrading availability because keyring restore failed id={} error={error}",
-                            redact_identifier(&account.id)
+                            redact_identifier(&account.instance_id)
                         ),
                     );
                     None
@@ -2145,7 +2220,7 @@ pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
         };
 
         if let Some(cookie_header) = cookie_header {
-            set_auth_cookie_state(cookie_header.clone());
+            set_auth_cookie_state(normalized_instance_id.as_str(), cookie_header.clone());
             let client = build_http_client()?;
             match fetch_login_status_payload(&client, &cookie_header) {
                 Ok(payload) => {
@@ -2160,7 +2235,7 @@ pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
                             "get_auth_status",
                             format!(
                                 "login status ok id={} status_code={} cookie={}",
-                                redact_identifier(&account.id),
+                                redact_identifier(&account.instance_id),
                                 status_code,
                                 summarize_cookie_header(Some(cookie_header.as_str()))
                             ),
@@ -2168,16 +2243,20 @@ pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
                         if let Some(next_uid) = extract_account_uid_from_login_status(&payload) {
                             if account_uid.as_deref() != Some(next_uid.as_str()) {
                                 account_uid = Some(next_uid.clone());
-                                let _ = crate::music_library_db::upsert_connector_account(
+                                let _ = crate::music_library_db::upsert_platform_instance_auth_for_runtime_host(
                                     app,
-                                    crate::music_library_db::LibraryConnectorAccountUpsertInput {
-                                        id: account.id.clone(),
-                                        connector_id: NETEASE_CONNECTOR_ID.to_string(),
+                                    crate::music_library_db::PlatformInstanceAuthUpsertInput {
+                                        instance_id: normalized_instance_id.clone(),
+                                        platform_id: NETEASE_PLATFORM_ID.to_string(),
+                                        connector_id: Some(NETEASE_CONNECTOR_ID.to_string()),
                                         account_uid: Some(next_uid),
                                         auth_state: "authorized".to_string(),
                                         token_ref: account.token_ref.clone(),
                                         refresh_token_ref: account.refresh_token_ref.clone(),
                                         expires_at_ms: account.expires_at_ms,
+                                        legacy_connector_account_id: account
+                                            .legacy_connector_account_id
+                                            .clone(),
                                         created_at_ms: Some(account.created_at_ms),
                                         updated_at_ms: Some(now_ms()),
                                     },
@@ -2198,7 +2277,7 @@ pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
                             "get_auth_status",
                             format!(
                                 "login status reported unavailable id={} status_code={} message={}",
-                                redact_identifier(&account.id),
+                                redact_identifier(&account.instance_id),
                                 status_code,
                                 availability_message.as_deref().unwrap_or("-")
                             ),
@@ -2212,7 +2291,7 @@ pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
                         "get_auth_status",
                         format!(
                             "login status request degraded id={} error={error}",
-                            redact_identifier(&account.id)
+                            redact_identifier(&account.instance_id)
                         ),
                     );
                 }
@@ -2228,7 +2307,7 @@ pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
                 "get_auth_status",
                 format!(
                     "authorized account missing cookie id={}",
-                    redact_identifier(&account.id)
+                    redact_identifier(&account.instance_id)
                 ),
             );
         }
@@ -2254,22 +2333,26 @@ pub fn get_auth_status(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
     })
 }
 
-pub fn logout(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
+pub fn logout(app: &AppHandle, instance_id: Option<&str>) -> Result<NeteaseAuthStatus, String> {
     init_netease_debug_logging(app);
     ensure_connector(app)?;
+    let normalized_instance_id = normalize_instance_id(instance_id);
+    migrate_default_instance_auth_if_needed(app, &normalized_instance_id)?;
     netease_log("logout", "starting logout");
 
-    if let Some(account) = crate::music_library_db::get_latest_connector_account_by_connector_id(
-        app,
-        NETEASE_CONNECTOR_ID,
-    )? {
+    if let Some(account) =
+        crate::music_library_db::get_platform_instance_auth_by_instance_id_for_runtime_host(
+            app,
+            &normalized_instance_id,
+        )?
+    {
         if let Some(token_ref) = account.token_ref.as_deref() {
             match delete_cookie_header_from_keyring_token_ref(token_ref) {
                 Ok(_) => netease_log(
                     "logout",
                     format!(
                         "deleted keyring credential id={} token_ref={}",
-                        redact_identifier(&account.id),
+                        redact_identifier(&account.instance_id),
                         summarize_token_ref(Some(token_ref))
                     ),
                 ),
@@ -2277,23 +2360,25 @@ pub fn logout(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
                     "logout",
                     format!(
                         "failed to delete keyring credential id={} token_ref={} error={error}",
-                        redact_identifier(&account.id),
+                        redact_identifier(&account.instance_id),
                         summarize_token_ref(Some(token_ref))
                     ),
                 ),
             }
         }
 
-        let _ = crate::music_library_db::upsert_connector_account(
+        let _ = crate::music_library_db::upsert_platform_instance_auth_for_runtime_host(
             app,
-            crate::music_library_db::LibraryConnectorAccountUpsertInput {
-                id: account.id,
-                connector_id: NETEASE_CONNECTOR_ID.to_string(),
+            crate::music_library_db::PlatformInstanceAuthUpsertInput {
+                instance_id: normalized_instance_id.clone(),
+                platform_id: NETEASE_PLATFORM_ID.to_string(),
+                connector_id: Some(NETEASE_CONNECTOR_ID.to_string()),
                 account_uid: account.account_uid,
                 auth_state: "revoked".to_string(),
                 token_ref: None,
                 refresh_token_ref: None,
                 expires_at_ms: None,
+                legacy_connector_account_id: account.legacy_connector_account_id,
                 created_at_ms: Some(account.created_at_ms),
                 updated_at_ms: Some(now_ms()),
             },
@@ -2303,28 +2388,35 @@ pub fn logout(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
     if let Ok(mut sessions) = lock_qr_sessions() {
         sessions.clear();
     }
-    clear_auth_cookie_state();
+    clear_auth_cookie_state(Some(normalized_instance_id.as_str()));
     netease_log("logout", "cleared in-memory auth and qr sessions");
 
-    get_auth_status(app)
+    get_auth_status(app, Some(normalized_instance_id.as_str()))
 }
 
-pub fn clear_auth_cookies(app: &AppHandle) -> Result<NeteaseAuthStatus, String> {
+pub fn clear_auth_cookies(
+    app: &AppHandle,
+    instance_id: Option<&str>,
+) -> Result<NeteaseAuthStatus, String> {
     init_netease_debug_logging(app);
     ensure_connector(app)?;
+    let normalized_instance_id = normalize_instance_id(instance_id);
+    migrate_default_instance_auth_if_needed(app, &normalized_instance_id)?;
     netease_log("clear_auth_cookies", "starting clear auth cookies");
 
-    if let Some(account) = crate::music_library_db::get_latest_connector_account_by_connector_id(
-        app,
-        NETEASE_CONNECTOR_ID,
-    )? {
+    if let Some(account) =
+        crate::music_library_db::get_platform_instance_auth_by_instance_id_for_runtime_host(
+            app,
+            &normalized_instance_id,
+        )?
+    {
         if let Some(token_ref) = account.token_ref.as_deref() {
             match delete_cookie_header_from_keyring_token_ref(token_ref) {
                 Ok(_) => netease_log(
                     "clear_auth_cookies",
                     format!(
                         "deleted keyring credential id={} token_ref={}",
-                        redact_identifier(&account.id),
+                        redact_identifier(&account.instance_id),
                         summarize_token_ref(Some(token_ref))
                     ),
                 ),
@@ -2332,23 +2424,25 @@ pub fn clear_auth_cookies(app: &AppHandle) -> Result<NeteaseAuthStatus, String> 
                     "clear_auth_cookies",
                     format!(
                         "failed to delete keyring credential id={} token_ref={} error={error}",
-                        redact_identifier(&account.id),
+                        redact_identifier(&account.instance_id),
                         summarize_token_ref(Some(token_ref))
                     ),
                 ),
             }
         }
 
-        let _ = crate::music_library_db::upsert_connector_account(
+        let _ = crate::music_library_db::upsert_platform_instance_auth_for_runtime_host(
             app,
-            crate::music_library_db::LibraryConnectorAccountUpsertInput {
-                id: account.id,
-                connector_id: NETEASE_CONNECTOR_ID.to_string(),
+            crate::music_library_db::PlatformInstanceAuthUpsertInput {
+                instance_id: normalized_instance_id.clone(),
+                platform_id: NETEASE_PLATFORM_ID.to_string(),
+                connector_id: Some(NETEASE_CONNECTOR_ID.to_string()),
                 account_uid: account.account_uid,
                 auth_state: "expired".to_string(),
                 token_ref: None,
                 refresh_token_ref: None,
                 expires_at_ms: None,
+                legacy_connector_account_id: account.legacy_connector_account_id,
                 created_at_ms: Some(account.created_at_ms),
                 updated_at_ms: Some(now_ms()),
             },
@@ -2358,20 +2452,168 @@ pub fn clear_auth_cookies(app: &AppHandle) -> Result<NeteaseAuthStatus, String> 
     if let Ok(mut sessions) = lock_qr_sessions() {
         sessions.clear();
     }
-    clear_auth_cookie_state();
+    clear_auth_cookie_state(Some(normalized_instance_id.as_str()));
     netease_log(
         "clear_auth_cookies",
         "cleared in-memory auth and qr sessions",
     );
 
-    get_auth_status(app)
+    get_auth_status(app, Some(normalized_instance_id.as_str()))
 }
 
-pub fn list_user_playlists(app: &AppHandle) -> Result<Vec<NeteaseUserPlaylist>, String> {
+pub fn dispatch_auth(
+    app: &AppHandle,
+    method: &str,
+    instance_id: Option<&str>,
+    payload: &Option<Value>,
+) -> Result<Value, String> {
+    match method {
+        "beginQrLogin" => serialize_response(qr_generate(app, instance_id)?),
+        "pollQrLogin" => {
+            let session_id = required_payload_string(payload, &["sessionId"], "payload.sessionId")?;
+            serialize_response(qr_poll(app, &session_id)?)
+        }
+        "getSnapshot" | "refreshSnapshot" => serialize_response(get_auth_status(app, instance_id)?),
+        "logout" => serialize_response(logout(app, instance_id)?),
+        "clearAuthCookies" => serialize_response(clear_auth_cookies(app, instance_id)?),
+        _ => Err(format!("Unsupported {DISPLAY_NAME} auth method: {method}")),
+    }
+}
+
+pub fn dispatch_api(
+    app: &AppHandle,
+    binding_id: &str,
+    method: &str,
+    instance_id: Option<&str>,
+    payload: &Option<Value>,
+) -> Result<Value, String> {
+    match binding_id {
+        PLATFORM_LIBRARY_BINDING_ID => match method {
+            "listCollections" | "listUserPlaylists" => {
+                serialize_response(list_user_playlists(app, instance_id)?)
+            }
+            "listPlaylistTracks" => {
+                let playlist_id = required_payload_string(
+                    payload,
+                    &["playlistId", "collectionId"],
+                    "payload.playlistId or payload.collectionId",
+                )?;
+                serialize_response(list_playlist_tracks(app, &playlist_id, instance_id)?)
+            }
+            "preparePlayback" | "prepareCachedPlayback" => {
+                let source_locator =
+                    required_payload_string(payload, &["sourceLocator"], "payload.sourceLocator")?;
+                let quality_hint =
+                    first_payload_string(payload, &["qualityHint", "qualityKey", "key"]);
+                serialize_response(prepare_cached_playback(
+                    app,
+                    &source_locator,
+                    quality_hint.as_deref(),
+                    instance_id,
+                    instance_id,
+                )?)
+            }
+            _ => Err(format!(
+                "Unsupported {DISPLAY_NAME} library method: {method}"
+            )),
+        },
+        PLATFORM_RECOMMENDATIONS_BINDING_ID => match method {
+            "listDaily" | "listRecommendedSongs" => {
+                serialize_response(list_recommended_songs(app, instance_id)?)
+            }
+            "listRecommendedPlaylists" => {
+                serialize_response(list_recommended_playlists(app, instance_id)?)
+            }
+            _ => Err(format!(
+                "Unsupported {DISPLAY_NAME} recommendations method: {method}"
+            )),
+        },
+        PLATFORM_SEARCH_BINDING_ID => match method {
+            "query" | "searchSongs" => {
+                let keyword = required_payload_string(
+                    payload,
+                    &["keyword", "query"],
+                    "payload.keyword or payload.query",
+                )?;
+                let page_num = optional_payload_u32(payload, "pageNum");
+                let page_size = optional_payload_u32(payload, "pageSize");
+                serialize_response(search_songs(
+                    app,
+                    &keyword,
+                    page_num,
+                    page_size,
+                    instance_id,
+                )?)
+            }
+            "preparePlayback" | "prepareCachedPlayback" => {
+                let source_locator =
+                    required_payload_string(payload, &["sourceLocator"], "payload.sourceLocator")?;
+                let quality_hint =
+                    first_payload_string(payload, &["qualityHint", "qualityKey", "key"]);
+                serialize_response(prepare_cached_playback(
+                    app,
+                    &source_locator,
+                    quality_hint.as_deref(),
+                    instance_id,
+                    instance_id,
+                )?)
+            }
+            _ => Err(format!(
+                "Unsupported {DISPLAY_NAME} search method: {method}"
+            )),
+        },
+        PLATFORM_PAGES_BINDING_ID => match method {
+            "getWorkspaceModel" => serialize_response(json!({
+                "workspaceKind": "netease",
+                "template": "music",
+                "defaultPageId": "instance",
+                "capabilities": {
+                    "collections": true,
+                    "search": true,
+                    "recommendations": true,
+                    "quality": true,
+                }
+            })),
+            "listPages" => serialize_response(json!({
+                "items": [
+                    {
+                        "pageId": "instance",
+                        "title": DISPLAY_NAME,
+                        "kind": "workspace",
+                        "default": true
+                    },
+                    {
+                        "pageId": "search",
+                        "title": "Search",
+                        "kind": "search"
+                    },
+                    {
+                        "pageId": "recommended",
+                        "title": "Recommended",
+                        "kind": "recommended"
+                    }
+                ]
+            })),
+            _ => Err(format!("Unsupported {DISPLAY_NAME} pages method: {method}")),
+        },
+        _ => Err(format!(
+            "Unsupported {DISPLAY_NAME} binding id: {binding_id}"
+        )),
+    }
+}
+
+pub fn list_user_playlists(
+    app: &AppHandle,
+    instance_id: Option<&str>,
+) -> Result<Vec<NeteaseUserPlaylist>, String> {
     ensure_connector(app)?;
-    let auth_context = ensure_auth_context(app)?;
-    let account_uid =
-        fetch_account_uid_and_persist(app, &auth_context.account, &auth_context.cookie_header)?;
+    let auth_context = ensure_auth_context(app, instance_id)?;
+    let account_uid = fetch_account_uid_and_persist(
+        app,
+        &auth_context.instance_id,
+        &auth_context.account,
+        &auth_context.cookie_header,
+    )?;
     let client = build_http_client()?;
     let payload = request_netease_weapi_json(
         &client,
@@ -2420,9 +2662,10 @@ pub fn list_user_playlists(app: &AppHandle) -> Result<Vec<NeteaseUserPlaylist>, 
 
 pub fn list_recommended_playlists(
     app: &AppHandle,
+    instance_id: Option<&str>,
 ) -> Result<Vec<NeteaseRecommendedPlaylist>, String> {
     ensure_connector(app)?;
-    let auth_context = ensure_auth_context(app)?;
+    let auth_context = ensure_auth_context(app, instance_id)?;
     let client = build_http_client()?;
     let payload = request_netease_weapi_json(
         &client,
@@ -2465,9 +2708,12 @@ pub fn list_recommended_playlists(
     Ok(playlists)
 }
 
-pub fn list_recommended_songs(app: &AppHandle) -> Result<NeteaseSongPage, String> {
+pub fn list_recommended_songs(
+    app: &AppHandle,
+    instance_id: Option<&str>,
+) -> Result<NeteaseSongPage, String> {
     ensure_connector(app)?;
-    let auth_context = ensure_auth_context(app)?;
+    let auth_context = ensure_auth_context(app, instance_id)?;
     let client = build_http_client()?;
     let payload = request_netease_weapi_json(
         &client,
@@ -2499,9 +2745,13 @@ pub fn list_recommended_songs(app: &AppHandle) -> Result<NeteaseSongPage, String
     })
 }
 
-pub fn list_playlist_tracks(app: &AppHandle, playlist_id: &str) -> Result<NeteaseSongPage, String> {
+pub fn list_playlist_tracks(
+    app: &AppHandle,
+    playlist_id: &str,
+    instance_id: Option<&str>,
+) -> Result<NeteaseSongPage, String> {
     ensure_connector(app)?;
-    let auth_context = ensure_auth_context(app)?;
+    let auth_context = ensure_auth_context(app, instance_id)?;
     let normalized_playlist_id = playlist_id.trim();
     if normalized_playlist_id.is_empty() {
         return Err("playlistId is required".to_string());
@@ -2592,9 +2842,10 @@ pub fn search_songs(
     keyword: &str,
     page_num: Option<u32>,
     page_size: Option<u32>,
+    instance_id: Option<&str>,
 ) -> Result<NeteaseSongPage, String> {
     ensure_connector(app)?;
-    let auth_context = ensure_auth_context(app)?;
+    let auth_context = ensure_auth_context(app, instance_id)?;
     let normalized_keyword = keyword.trim();
     if normalized_keyword.is_empty() {
         return Err("keyword is required".to_string());
@@ -2646,9 +2897,10 @@ pub fn prepare_cached_playback(
     source_locator: &str,
     quality_hint: Option<&str>,
     cache_scope_key: Option<&str>,
+    instance_id: Option<&str>,
 ) -> Result<NeteasePlaybackPrepared, String> {
     ensure_connector(app)?;
-    let auth_context = ensure_auth_context(app)?;
+    let auth_context = ensure_auth_context(app, instance_id)?;
     let song_id = parse_song_id_from_source_locator(source_locator)
         .ok_or_else(|| "Failed to resolve Netease song id from source locator".to_string())?;
     let requested_quality_key = normalize_playback_quality_hint(quality_hint);

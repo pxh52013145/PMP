@@ -521,7 +521,9 @@ pub fn close_all_plugin_shell_surfaces(app: &AppHandle) {
 mod tests {
     use super::*;
     #[cfg(target_os = "windows")]
-    use crate::{app_runtime::ExitFlag, telemetry::TelemetryCore, telemetry_contract::TelemetryPolicy};
+    use crate::{
+        app_runtime::ExitFlag, telemetry::TelemetryCore, telemetry_contract::TelemetryPolicy,
+    };
     #[cfg(target_os = "windows")]
     use std::path::PathBuf;
     #[cfg(target_os = "windows")]
@@ -572,7 +574,7 @@ mod tests {
                 "demo-plugin",
                 "shell-main"
             )
-                .unwrap_err(),
+            .unwrap_err(),
             "Invalid surfaceType: floating-panel"
         );
     }
@@ -739,11 +741,7 @@ mod tests {
     }
 
     #[cfg(target_os = "windows")]
-    fn wait_for_condition<F>(
-        app: &mut tauri::App<Wry>,
-        timeout: Duration,
-        predicate: F,
-    ) -> bool
+    fn wait_for_condition<F>(app: &mut tauri::App<Wry>, timeout: Duration, predicate: F) -> bool
     where
         F: Fn(&tauri::App<Wry>) -> bool,
     {
@@ -823,9 +821,7 @@ mod tests {
         let exit_flag = app.state::<ExitFlag>().0.clone();
         let telemetry_core = app.state::<Arc<TelemetryCore>>().inner().clone();
 
-        assert!(app
-            .get_window(crate::windows::MAIN_WINDOW_LABEL)
-            .is_some());
+        assert!(app.get_window(crate::windows::MAIN_WINDOW_LABEL).is_some());
 
         let overlay_label = plugin_shell_surface_label(
             Some("extv2"),
@@ -864,11 +860,15 @@ mod tests {
         )
         .unwrap();
 
-        assert!(wait_for_condition(&mut app, Duration::from_secs(2), |app| {
-            app.get_window(overlay_label.as_str())
-                .and_then(|window| window.is_visible().ok())
-                == Some(true)
-        }));
+        assert!(wait_for_condition(
+            &mut app,
+            Duration::from_secs(2),
+            |app| {
+                app.get_window(overlay_label.as_str())
+                    .and_then(|window| window.is_visible().ok())
+                    == Some(true)
+            }
+        ));
         assert_eq!(app.windows().len(), 2);
 
         open_plugin_shell_surface(
@@ -893,9 +893,11 @@ mod tests {
         )
         .unwrap();
 
-        assert!(wait_for_condition(&mut app, Duration::from_secs(2), |app| {
-            window_matches_geometry(app, overlay_label.as_str(), 240, 180, 500, 340)
-        }));
+        assert!(wait_for_condition(
+            &mut app,
+            Duration::from_secs(2),
+            |app| { window_matches_geometry(app, overlay_label.as_str(), 240, 180, 500, 340) }
+        ));
         assert_eq!(app.windows().len(), 2);
 
         open_plugin_shell_surface(
@@ -920,11 +922,15 @@ mod tests {
         )
         .unwrap();
 
-        assert!(wait_for_condition(&mut app, Duration::from_secs(2), |app| {
-            app.get_window(widget_label.as_str())
-                .and_then(|window| window.is_visible().ok())
-                == Some(true)
-        }));
+        assert!(wait_for_condition(
+            &mut app,
+            Duration::from_secs(2),
+            |app| {
+                app.get_window(widget_label.as_str())
+                    .and_then(|window| window.is_visible().ok())
+                    == Some(true)
+            }
+        ));
         assert_eq!(app.windows().len(), 3);
 
         open_plugin_shell_surface(
@@ -949,9 +955,11 @@ mod tests {
         )
         .unwrap();
 
-        assert!(wait_for_condition(&mut app, Duration::from_secs(2), |app| {
-            window_matches_geometry(app, widget_label.as_str(), 880, 540, 360, 240)
-        }));
+        assert!(wait_for_condition(
+            &mut app,
+            Duration::from_secs(2),
+            |app| { window_matches_geometry(app, widget_label.as_str(), 880, 540, 360, 240) }
+        ));
         assert_eq!(app.windows().len(), 3);
 
         dismiss_plugin_shell_surface(
@@ -963,11 +971,15 @@ mod tests {
         )
         .unwrap();
 
-        assert!(wait_for_condition(&mut app, Duration::from_secs(2), |app| {
-            app.get_window(overlay_label.as_str())
-                .and_then(|window| window.is_visible().ok())
-                == Some(false)
-        }));
+        assert!(wait_for_condition(
+            &mut app,
+            Duration::from_secs(2),
+            |app| {
+                app.get_window(overlay_label.as_str())
+                    .and_then(|window| window.is_visible().ok())
+                    == Some(false)
+            }
+        ));
         assert!(app.get_window(overlay_label.as_str()).is_some());
 
         destroy_plugin_shell_surface(
@@ -980,9 +992,11 @@ mod tests {
         )
         .unwrap();
 
-        assert!(wait_for_condition(&mut app, Duration::from_secs(2), |app| {
-            app.get_window(overlay_label.as_str()).is_none()
-        }));
+        assert!(wait_for_condition(
+            &mut app,
+            Duration::from_secs(2),
+            |app| { app.get_window(overlay_label.as_str()).is_none() }
+        ));
 
         destroy_plugin_shell_surface(
             &app_handle,
@@ -994,16 +1008,22 @@ mod tests {
         )
         .unwrap();
 
-        assert!(wait_for_condition(&mut app, Duration::from_secs(2), |app| {
-            app.get_window(widget_label.as_str()).is_none()
-        }));
+        assert!(wait_for_condition(
+            &mut app,
+            Duration::from_secs(2),
+            |app| { app.get_window(widget_label.as_str()).is_none() }
+        ));
         assert_eq!(app.windows().len(), 1);
 
         let telemetry = telemetry_core.read_current_session();
         let shell_events = telemetry
             .records
             .into_iter()
-            .filter(|record| record.event.starts_with("window.plugin-shell-surface.native"))
+            .filter(|record| {
+                record
+                    .event
+                    .starts_with("window.plugin-shell-surface.native")
+            })
             .collect::<Vec<_>>();
         let shell_event_names = shell_events
             .iter()
@@ -1026,31 +1046,52 @@ mod tests {
         );
 
         assert_eq!(
-            shell_events[0].fields.as_ref().and_then(|fields| fields.get("surfaceId")),
+            shell_events[0]
+                .fields
+                .as_ref()
+                .and_then(|fields| fields.get("surfaceId")),
             Some(&json!("demo-overlay"))
         );
         assert_eq!(
-            shell_events[1].fields.as_ref().and_then(|fields| fields.get("surfaceId")),
+            shell_events[1]
+                .fields
+                .as_ref()
+                .and_then(|fields| fields.get("surfaceId")),
             Some(&json!("demo-overlay"))
         );
         assert_eq!(
-            shell_events[1].fields.as_ref().and_then(|fields| fields.get("trigger")),
+            shell_events[1]
+                .fields
+                .as_ref()
+                .and_then(|fields| fields.get("trigger")),
             Some(&json!("open-command"))
         );
         assert_eq!(
-            shell_events[4].fields.as_ref().and_then(|fields| fields.get("trigger")),
+            shell_events[4]
+                .fields
+                .as_ref()
+                .and_then(|fields| fields.get("trigger")),
             Some(&json!("dismiss-command"))
         );
         assert_eq!(
-            shell_events[5].fields.as_ref().and_then(|fields| fields.get("reason")),
+            shell_events[5]
+                .fields
+                .as_ref()
+                .and_then(|fields| fields.get("reason")),
             Some(&json!("capability-revoke"))
         );
         assert_eq!(
-            shell_events[7].fields.as_ref().and_then(|fields| fields.get("surfaceId")),
+            shell_events[7]
+                .fields
+                .as_ref()
+                .and_then(|fields| fields.get("surfaceId")),
             Some(&json!("demo-widget"))
         );
         assert_eq!(
-            shell_events[7].fields.as_ref().and_then(|fields| fields.get("reason")),
+            shell_events[7]
+                .fields
+                .as_ref()
+                .and_then(|fields| fields.get("reason")),
             Some(&json!("capability-revoke"))
         );
 

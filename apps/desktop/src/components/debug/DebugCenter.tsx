@@ -31,13 +31,25 @@ import {
 } from '../../modules/debug';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import {
-  type BilibiliAuthStatus,
-  type BilibiliQrCodeSession,
-  type BilibiliQrPollResult,
   MusicLibraryService,
   type UnifiedMusicSource,
   type UnifiedTrackCandidate,
 } from '../../services/audio/MusicLibraryService';
+import {
+  beginPlatformInstanceQrLogin,
+  getPlatformInstanceAuthSnapshot,
+  listPlatformConnectorDefinitions,
+  logoutPlatformInstance,
+  pollPlatformInstanceQrLogin,
+  refreshPlatformInstanceAuthSnapshot,
+  resolvePlatformInstanceId,
+  subscribePlatformConnectorDefinitions,
+  type PlatformConnectorDefinition,
+  type PlatformConnectorId,
+  type PlatformInstanceAuthSnapshot,
+  type PlatformInstanceQrLoginPollResult,
+  type PlatformInstanceQrLoginSession,
+} from '../../modules/music-platform';
 import {
   type NativeLibrarySyncFailureOverview,
   type NativeLibrarySyncFailureSourceSummary,
@@ -446,6 +458,27 @@ function SettingsCard({
   );
 }
 
+function resolvePreferredDebugConnectorId(
+  requestedConnectorId: string | null | undefined,
+  definitions: PlatformConnectorDefinition[]
+): PlatformConnectorId | null {
+  if (definitions.length === 0) return null;
+
+  const normalizedRequested =
+    typeof requestedConnectorId === 'string' ? requestedConnectorId.trim().toLowerCase() : '';
+  if (!normalizedRequested) {
+    return definitions[0]?.connectorId ?? null;
+  }
+
+  return (
+    definitions.find(
+      (definition) => definition.connectorId.trim().toLowerCase() === normalizedRequested
+    )?.connectorId ??
+    definitions[0]?.connectorId ??
+    null
+  );
+}
+
 function buildMemoryBaselineExportPayload(samples: MemoryBaselineSample[]): MemoryBaselineExportPayload {
   return {
     exportedAtMs: Date.now(),
@@ -592,10 +625,17 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [unifiedSearchQuery, setUnifiedSearchQuery] = useState('');
   const [unifiedSearchResults, setUnifiedSearchResults] = useState<UnifiedTrackCandidate[]>([]);
   const [unifiedBusy, setUnifiedBusy] = useState(false);
-  const [bilibiliAuthStatus, setBilibiliAuthStatus] = useState<BilibiliAuthStatus | null>(null);
-  const [bilibiliQrSession, setBilibiliQrSession] = useState<BilibiliQrCodeSession | null>(null);
-  const [bilibiliQrPollResult, setBilibiliQrPollResult] = useState<BilibiliQrPollResult | null>(null);
-  const [bilibiliBusy, setBilibiliBusy] = useState(false);
+  const [platformConnectorDefinitions, setPlatformConnectorDefinitions] = useState<
+    PlatformConnectorDefinition[]
+  >(() => listPlatformConnectorDefinitions());
+  const [selectedAuthConnectorId, setSelectedAuthConnectorId] = useState<PlatformConnectorId | null>(
+    null
+  );
+  const [platformAuthStatus, setPlatformAuthStatus] = useState<PlatformInstanceAuthSnapshot | null>(null);
+  const [platformQrSession, setPlatformQrSession] = useState<PlatformInstanceQrLoginSession | null>(null);
+  const [platformQrPollResult, setPlatformQrPollResult] =
+    useState<PlatformInstanceQrLoginPollResult | null>(null);
+  const [platformAuthBusy, setPlatformAuthBusy] = useState(false);
   const [memoryBaselines, setMemoryBaselines] = useState<MemoryBaselineSample[]>(() =>
     readJson<MemoryBaselineSample[]>(STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1, [])
   );
@@ -630,6 +670,39 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       ] satisfies Array<{ id: TelemetryAiContextPresetId; label: string }>,
     [t]
   );
+  const qrAuthConnectorDefinitions = useMemo(
+    () =>
+      platformConnectorDefinitions.filter(
+        (definition) => definition.enabled !== false && definition.authFlow === 'qr'
+      ),
+    [platformConnectorDefinitions]
+  );
+  const selectedAuthConnectorDefinition = useMemo(
+    () =>
+      qrAuthConnectorDefinitions.find(
+        (definition) => definition.connectorId === selectedAuthConnectorId
+      ) ??
+      qrAuthConnectorDefinitions[0] ??
+      null,
+    [qrAuthConnectorDefinitions, selectedAuthConnectorId]
+  );
+  const selectedAuthConnectorDisplayName = useMemo(() => {
+    const snapshotDisplayName = platformAuthStatus?.displayName?.trim();
+    if (snapshotDisplayName) return snapshotDisplayName;
+    const definitionDisplayName = selectedAuthConnectorDefinition?.displayName?.trim();
+    if (definitionDisplayName) return definitionDisplayName;
+    const connectorId = selectedAuthConnectorDefinition?.connectorId?.trim() ?? '';
+    return connectorId.replace(/^connector\.platform\./, '') || 'Platform';
+  }, [platformAuthStatus?.displayName, selectedAuthConnectorDefinition]);
+  const selectedAuthInstanceId = useMemo(
+    () =>
+      selectedAuthConnectorDefinition
+        ? resolvePlatformInstanceId({
+            connectorId: selectedAuthConnectorDefinition.connectorId,
+          }) ?? null
+        : null,
+    [selectedAuthConnectorDefinition]
+  );
 
   useEffect(() => {
     setTelemetrySnapshot(telemetryService.getSnapshot());
@@ -637,6 +710,19 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       setTelemetrySnapshot(snapshot);
     });
   }, [telemetryService]);
+
+  useEffect(() => {
+    setPlatformConnectorDefinitions(listPlatformConnectorDefinitions());
+    return subscribePlatformConnectorDefinitions((definitions) => {
+      setPlatformConnectorDefinitions(definitions);
+    });
+  }, []);
+
+  useEffect(() => {
+    setSelectedAuthConnectorId((current) =>
+      resolvePreferredDebugConnectorId(current, qrAuthConnectorDefinitions)
+    );
+  }, [qrAuthConnectorDefinitions]);
 
   const navigationHistoryStats = useMemo(() => {
     let bytes = 0;
@@ -954,46 +1040,75 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     }
   }, [isTauri, unifiedBusy, unifiedSearchQuery]);
 
-  const refreshBilibiliAuthStatus = useCallback(async () => {
-    if (!isTauri) {
-      setBilibiliAuthStatus(null);
+  const resolveSelectedPlatformInstanceId = useCallback(
+    (preferredInstanceId?: string | null) => {
+      const connectorId = selectedAuthConnectorDefinition?.connectorId ?? null;
+      if (!connectorId) return null;
+
+      const explicitInstanceId =
+        typeof preferredInstanceId === 'string' ? preferredInstanceId.trim() : '';
+      return (
+        resolvePlatformInstanceId({
+          instanceId: explicitInstanceId || null,
+          connectorId,
+        }) ?? null
+      );
+    },
+    [selectedAuthConnectorDefinition?.connectorId]
+  );
+
+  const refreshSelectedPlatformAuthStatus = useCallback(async () => {
+    if (!isTauri || !selectedAuthConnectorDefinition) {
+      setPlatformAuthStatus(null);
+      return;
+    }
+
+    const instanceId = resolveSelectedPlatformInstanceId();
+    if (!instanceId) {
+      setPlatformAuthStatus(null);
       return;
     }
 
     try {
-      const service = MusicLibraryService.getInstance();
-      const status = await service.getBilibiliAuthStatus();
-      setBilibiliAuthStatus(status);
+      const status =
+        (await refreshPlatformInstanceAuthSnapshot(instanceId)) ??
+        getPlatformInstanceAuthSnapshot(instanceId);
+      setPlatformAuthStatus(status);
     } catch {
-      setBilibiliAuthStatus(null);
+      setPlatformAuthStatus(getPlatformInstanceAuthSnapshot(instanceId));
     }
-  }, [isTauri]);
+  }, [isTauri, resolveSelectedPlatformInstanceId, selectedAuthConnectorDefinition]);
 
-  const pollBilibiliQrSession = useCallback(
+  const pollSelectedPlatformQrSession = useCallback(
     async (sessionId?: string) => {
-      if (!isTauri || bilibiliBusy) return;
+      if (!isTauri || platformAuthBusy) return;
 
-      const targetSessionId = (sessionId ?? bilibiliQrSession?.sessionId ?? '').trim();
-      if (!targetSessionId) return;
+      const targetSessionId = (sessionId ?? platformQrSession?.sessionId ?? '').trim();
+      const targetInstanceId = resolveSelectedPlatformInstanceId(platformQrSession?.instanceId);
+      if (!targetSessionId || !targetInstanceId) return;
 
-      setBilibiliBusy(true);
+      setPlatformAuthBusy(true);
       try {
-        const service = MusicLibraryService.getInstance();
-        const result = await service.pollBilibiliQrCodeSession(targetSessionId);
-        setBilibiliQrPollResult(result);
+        const result = await pollPlatformInstanceQrLogin(targetInstanceId, targetSessionId);
+        setPlatformQrPollResult(result);
 
         if (!result) {
-          setError(t('debug.center.sourceFacade.bilibili.pollFailed'));
+          setError(
+            t('debug.center.sourceFacade.auth.pollFailed', {
+              platform: selectedAuthConnectorDisplayName,
+            })
+          );
           return;
         }
 
         if (result.state === 'authorized') {
           setStatusMessage(
-            t('debug.center.sourceFacade.bilibili.authorized', {
+            t('debug.center.sourceFacade.auth.authorized', {
+              platform: selectedAuthConnectorDisplayName,
               accountUid: result.accountUid ?? '-',
             })
           );
-          setBilibiliQrSession(null);
+          setPlatformQrSession(null);
           await refreshUnifiedSources();
         }
 
@@ -1002,66 +1117,133 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
           result.state === 'expired' ||
           result.state === 'failed'
         ) {
-          setBilibiliQrSession(null);
+          setPlatformQrSession(null);
         }
 
-        await refreshBilibiliAuthStatus();
+        await refreshSelectedPlatformAuthStatus();
       } catch (err) {
-        setError(err instanceof Error ? err.message : t('debug.center.sourceFacade.bilibili.pollFailed'));
+        setError(
+          err instanceof Error
+            ? err.message
+            : t('debug.center.sourceFacade.auth.pollFailed', {
+                platform: selectedAuthConnectorDisplayName,
+              })
+        );
       } finally {
-        setBilibiliBusy(false);
+        setPlatformAuthBusy(false);
       }
     },
     [
-      bilibiliBusy,
-      bilibiliQrSession?.sessionId,
       isTauri,
-      refreshBilibiliAuthStatus,
+      platformAuthBusy,
+      platformQrSession?.instanceId,
+      platformQrSession?.sessionId,
+      refreshSelectedPlatformAuthStatus,
       refreshUnifiedSources,
+      resolveSelectedPlatformInstanceId,
+      selectedAuthConnectorDisplayName,
       t,
     ]
   );
 
-  const generateBilibiliQrSession = useCallback(async () => {
-    if (!isTauri || bilibiliBusy) return;
+  const generateSelectedPlatformQrSession = useCallback(async () => {
+    if (!isTauri || platformAuthBusy) return;
 
-    setBilibiliBusy(true);
+    setPlatformAuthBusy(true);
     try {
-      const service = MusicLibraryService.getInstance();
-      const session = await service.generateBilibiliQrCodeSession();
-      if (!session) {
-        setError(t('debug.center.sourceFacade.bilibili.generateFailed'));
+      const instanceId = resolveSelectedPlatformInstanceId();
+      if (!instanceId) {
+        setError(
+          t('debug.center.sourceFacade.auth.generateFailed', {
+            platform: selectedAuthConnectorDisplayName,
+          })
+        );
         return;
       }
 
-      setBilibiliQrSession(session);
-      setBilibiliQrPollResult(null);
-      setStatusMessage(t('debug.center.sourceFacade.bilibili.generated'));
-      await refreshBilibiliAuthStatus();
+      const session = await beginPlatformInstanceQrLogin(instanceId);
+      if (!session) {
+        setError(
+          t('debug.center.sourceFacade.auth.generateFailed', {
+            platform: selectedAuthConnectorDisplayName,
+          })
+        );
+        return;
+      }
+
+      setPlatformQrSession(session);
+      setPlatformQrPollResult(null);
+      setStatusMessage(
+        t('debug.center.sourceFacade.auth.generated', {
+          platform: selectedAuthConnectorDisplayName,
+        })
+      );
+      await refreshSelectedPlatformAuthStatus();
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('debug.center.sourceFacade.bilibili.generateFailed'));
+      setError(
+        err instanceof Error
+          ? err.message
+          : t('debug.center.sourceFacade.auth.generateFailed', {
+              platform: selectedAuthConnectorDisplayName,
+            })
+      );
     } finally {
-      setBilibiliBusy(false);
+      setPlatformAuthBusy(false);
     }
-  }, [bilibiliBusy, isTauri, refreshBilibiliAuthStatus, t]);
+  }, [
+    isTauri,
+    platformAuthBusy,
+    refreshSelectedPlatformAuthStatus,
+    resolveSelectedPlatformInstanceId,
+    selectedAuthConnectorDisplayName,
+    t,
+  ]);
 
-  const logoutBilibiliAuth = useCallback(async () => {
-    if (!isTauri || bilibiliBusy) return;
+  const logoutSelectedPlatformAuth = useCallback(async () => {
+    if (!isTauri || platformAuthBusy) return;
 
-    setBilibiliBusy(true);
+    setPlatformAuthBusy(true);
     try {
-      const service = MusicLibraryService.getInstance();
-      const status = await service.logoutBilibili();
-      setBilibiliAuthStatus(status);
-      setBilibiliQrSession(null);
-      setBilibiliQrPollResult(null);
-      setStatusMessage(t('debug.center.sourceFacade.bilibili.loggedOut'));
+      const instanceId = resolveSelectedPlatformInstanceId();
+      if (!instanceId) {
+        setPlatformAuthStatus(null);
+        setPlatformQrSession(null);
+        setPlatformQrPollResult(null);
+        setStatusMessage(
+          t('debug.center.sourceFacade.auth.loggedOut', {
+            platform: selectedAuthConnectorDisplayName,
+          })
+        );
+        return;
+      }
+
+      const status = await logoutPlatformInstance(instanceId);
+      setPlatformAuthStatus(status);
+      setPlatformQrSession(null);
+      setPlatformQrPollResult(null);
+      setStatusMessage(
+        t('debug.center.sourceFacade.auth.loggedOut', {
+          platform: selectedAuthConnectorDisplayName,
+        })
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('debug.center.sourceFacade.bilibili.logoutFailed'));
+      setError(
+        err instanceof Error
+          ? err.message
+          : t('debug.center.sourceFacade.auth.logoutFailed', {
+              platform: selectedAuthConnectorDisplayName,
+            })
+      );
     } finally {
-      setBilibiliBusy(false);
+      setPlatformAuthBusy(false);
     }
-  }, [bilibiliBusy, isTauri, t]);
+  }, [
+    isTauri,
+    platformAuthBusy,
+    resolveSelectedPlatformInstanceId,
+    selectedAuthConnectorDisplayName,
+    t,
+  ]);
 
   const clearThreeStageCaptureTimers = useCallback(() => {
     if (threeStageCaptureTimersRef.current.length === 0) return;
@@ -1218,31 +1400,37 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   }, [isTauri, refreshUnifiedSources]);
 
   useEffect(() => {
-    void refreshBilibiliAuthStatus();
+    setPlatformAuthStatus(null);
+    setPlatformQrSession(null);
+    setPlatformQrPollResult(null);
+  }, [selectedAuthConnectorDefinition?.connectorId]);
+
+  useEffect(() => {
+    void refreshSelectedPlatformAuthStatus();
     if (!isTauri) return;
 
     const timer = window.setInterval(() => {
-      void refreshBilibiliAuthStatus();
+      void refreshSelectedPlatformAuthStatus();
     }, 20_000);
 
     return () => {
       window.clearInterval(timer);
     };
-  }, [isTauri, refreshBilibiliAuthStatus]);
+  }, [isTauri, refreshSelectedPlatformAuthStatus]);
 
   useEffect(() => {
     if (!isTauri) return;
-    const sessionId = bilibiliQrSession?.sessionId;
+    const sessionId = platformQrSession?.sessionId;
     if (!sessionId) return;
 
     const timer = window.setInterval(() => {
-      void pollBilibiliQrSession(sessionId);
+      void pollSelectedPlatformQrSession(sessionId);
     }, 1_800);
 
     return () => {
       window.clearInterval(timer);
     };
-  }, [bilibiliQrSession?.sessionId, isTauri, pollBilibiliQrSession]);
+  }, [platformQrSession?.sessionId, isTauri, pollSelectedPlatformQrSession]);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -2060,69 +2248,101 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                 background: 'rgba(0,0,0,0.18)',
               }}
             >
-              <p className="settings-card-note">{t('debug.center.sourceFacade.bilibili.title')}</p>
-              <p className="settings-card-note">
-                {t('debug.center.sourceFacade.bilibili.authStatus', {
-                  authState: bilibiliAuthStatus?.authState ?? 'unauthorized',
-                  accountUid: bilibiliAuthStatus?.accountUid ?? '-',
-                })}
-              </p>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <SettingsActionButton
-                  type="button"
-                  onClick={() => {
-                    void generateBilibiliQrSession();
-                  }}
-                  disabled={bilibiliBusy}
-                >
-                  {t('debug.center.sourceFacade.bilibili.generateAction')}
-                </SettingsActionButton>
-                <SettingsActionButton
-                  type="button"
-                  onClick={() => {
-                    void pollBilibiliQrSession();
-                  }}
-                  disabled={bilibiliBusy || !bilibiliQrSession}
-                >
-                  {t('debug.center.sourceFacade.bilibili.pollAction')}
-                </SettingsActionButton>
-                <SettingsActionButton
-                  type="button"
-                  onClick={() => {
-                    void logoutBilibiliAuth();
-                  }}
-                  disabled={bilibiliBusy}
-                >
-                  {t('debug.center.sourceFacade.bilibili.logoutAction')}
-                </SettingsActionButton>
-              </div>
-              {bilibiliQrSession ? (
-                <div style={{ display: 'grid', gap: 6 }}>
-                  <img
-                    src={bilibiliQrSession.qrImageDataUrl}
-                    alt={t('debug.center.sourceFacade.bilibili.qrAlt')}
-                    style={{ width: 180, height: 180, borderRadius: 8, background: '#fff' }}
-                  />
+              <p className="settings-card-note">{t('debug.center.sourceFacade.auth.title')}</p>
+              {qrAuthConnectorDefinitions.length > 1 ? (
+                <SettingsToggleGroup>
+                  {qrAuthConnectorDefinitions.map((definition) => (
+                    <SettingsToggleButton
+                      key={definition.connectorId}
+                      active={definition.connectorId === selectedAuthConnectorDefinition?.connectorId}
+                      onClick={() => setSelectedAuthConnectorId(definition.connectorId)}
+                    >
+                      {definition.displayName}
+                    </SettingsToggleButton>
+                  ))}
+                </SettingsToggleGroup>
+              ) : null}
+              {selectedAuthConnectorDefinition ? (
+                <>
                   <p className="settings-card-note">
-                    {t('debug.center.sourceFacade.bilibili.qrExpires', {
-                      expiresAt: new Date(bilibiliQrSession.expiresAtMs).toLocaleString(),
+                    {t('debug.center.sourceFacade.auth.authStatus', {
+                      platform: selectedAuthConnectorDisplayName,
+                      authState: platformAuthStatus?.authState ?? 'unauthorized',
+                      accountUid: platformAuthStatus?.accountUid ?? '-',
+                      instanceId: platformAuthStatus?.instanceId ?? selectedAuthInstanceId ?? '-',
                     })}
                   </p>
-                  <p className="settings-card-note">
-                    {t('debug.center.sourceFacade.bilibili.qrHint')}
-                  </p>
-                </div>
+                  {!selectedAuthInstanceId ? (
+                    <p className="settings-card-note">
+                      {t('debug.center.sourceFacade.auth.noInstance', {
+                        platform: selectedAuthConnectorDisplayName,
+                      })}
+                    </p>
+                  ) : null}
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <SettingsActionButton
+                      type="button"
+                      onClick={() => {
+                        void generateSelectedPlatformQrSession();
+                      }}
+                      disabled={platformAuthBusy || !selectedAuthInstanceId}
+                    >
+                      {t('debug.center.sourceFacade.auth.generateAction')}
+                    </SettingsActionButton>
+                    <SettingsActionButton
+                      type="button"
+                      onClick={() => {
+                        void pollSelectedPlatformQrSession();
+                      }}
+                      disabled={platformAuthBusy || !platformQrSession}
+                    >
+                      {t('debug.center.sourceFacade.auth.pollAction')}
+                    </SettingsActionButton>
+                    <SettingsActionButton
+                      type="button"
+                      onClick={() => {
+                        void logoutSelectedPlatformAuth();
+                      }}
+                      disabled={platformAuthBusy || !selectedAuthInstanceId}
+                    >
+                      {t('debug.center.sourceFacade.auth.logoutAction')}
+                    </SettingsActionButton>
+                  </div>
+                  {platformQrSession ? (
+                    <div style={{ display: 'grid', gap: 6 }}>
+                      <img
+                        src={platformQrSession.qrImageDataUrl}
+                        alt={t('debug.center.sourceFacade.auth.qrAlt', {
+                          platform: selectedAuthConnectorDisplayName,
+                        })}
+                        style={{ width: 180, height: 180, borderRadius: 8, background: '#fff' }}
+                      />
+                      <p className="settings-card-note">
+                        {t('debug.center.sourceFacade.auth.qrExpires', {
+                          expiresAt: new Date(platformQrSession.expiresAtMs).toLocaleString(),
+                        })}
+                      </p>
+                      <p className="settings-card-note">
+                        {t('debug.center.sourceFacade.auth.qrHint', {
+                          platform: selectedAuthConnectorDisplayName,
+                        })}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="settings-card-note">{t('debug.center.sourceFacade.auth.noQr')}</p>
+                  )}
+                  {platformQrPollResult ? (
+                    <p className="settings-card-note">
+                      {t('debug.center.sourceFacade.auth.pollState', {
+                        state: platformQrPollResult.state,
+                        message: platformQrPollResult.stateMessage,
+                      })}
+                    </p>
+                  ) : null}
+                </>
               ) : (
-                <p className="settings-card-note">{t('debug.center.sourceFacade.bilibili.noQr')}</p>
+                <p className="settings-card-note">{t('debug.center.sourceFacade.auth.noConnectors')}</p>
               )}
-              {bilibiliQrPollResult ? (
-                <p className="settings-card-note">
-                  {t('debug.center.sourceFacade.bilibili.pollState', {
-                    state: bilibiliQrPollResult.state,
-                    message: bilibiliQrPollResult.stateMessage,
-                  })}
-                </p>
-              ) : null}
             </div>
 
             {unifiedSources.length > 0 ? (

@@ -12,8 +12,6 @@ import {
   clearNativeLibraryTracks,
   deleteNativeLibraryUserEntry,
   deleteNativeLibraryTracks,
-  generateNativeBilibiliQrCodeSession,
-  getNativeBilibiliAuthStatus,
   getNativeLibrarySyncFailureOverview,
   getNativeLibrarySyncSchedulerStatus,
   getNativeLibrarySyncStatus,
@@ -39,8 +37,6 @@ import {
   syncNativeLibraryTracks,
   startNativeLibrarySyncScheduler,
   stopNativeLibrarySyncScheduler,
-  pollNativeBilibiliQrCodeSession,
-  logoutNativeBilibili,
   updateNativeLibraryCloudHashJobStatus,
   updateNativeLibraryFallbackTaskStatus,
   upsertNativeLibraryCloudHashJob,
@@ -48,9 +44,6 @@ import {
   upsertNativeLibrarySource,
   upsertNativeLibraryUserEntry,
   type NativeLibraryAlbumRecord,
-  type NativeBilibiliAuthStatus,
-  type NativeBilibiliQrCodeSession,
-  type NativeBilibiliQrPollResult,
   type NativeLibraryCloudHashJobQuery,
   type NativeLibraryCloudHashJobRecord,
   type NativeLibrarySyncSchedulerStatus,
@@ -200,9 +193,6 @@ export interface CloudLibraryPlaybackPlan {
 
 export type UnifiedMusicSource = MusicSourceFacadeItem;
 export type UnifiedTrackCandidate = MusicSourceTrackCandidate;
-export type BilibiliAuthStatus = NativeBilibiliAuthStatus;
-export type BilibiliQrCodeSession = NativeBilibiliQrCodeSession;
-export type BilibiliQrPollResult = NativeBilibiliQrPollResult;
 
 export type CloudFallbackTaskStatus =
   | 'queued'
@@ -5519,50 +5509,6 @@ export class MusicLibraryService {
         sourceCount: options.sourceIds?.length ?? 0,
       });
       return [];
-    }
-  }
-
-  async getBilibiliAuthStatus(): Promise<BilibiliAuthStatus | null> {
-    if (!isTauriRuntime()) return null;
-    try {
-      return await getNativeBilibiliAuthStatus();
-    } catch (error) {
-      this.logTelemetryWarn('music-library.bilibili.auth-status.read.failed', error);
-      return null;
-    }
-  }
-
-  async generateBilibiliQrCodeSession(): Promise<BilibiliQrCodeSession | null> {
-    if (!isTauriRuntime()) return null;
-    try {
-      return await generateNativeBilibiliQrCodeSession();
-    } catch (error) {
-      this.logTelemetryWarn('music-library.bilibili.qr-session.generate.failed', error);
-      return null;
-    }
-  }
-
-  async pollBilibiliQrCodeSession(sessionId: string): Promise<BilibiliQrPollResult | null> {
-    if (!isTauriRuntime()) return null;
-    const normalizedSessionId = String(sessionId || '').trim();
-    if (!normalizedSessionId) return null;
-    try {
-      return await pollNativeBilibiliQrCodeSession(normalizedSessionId);
-    } catch (error) {
-      this.logTelemetryWarn('music-library.bilibili.qr-session.poll.failed', error, {
-        sessionId: normalizedSessionId,
-      });
-      return null;
-    }
-  }
-
-  async logoutBilibili(): Promise<BilibiliAuthStatus | null> {
-    if (!isTauriRuntime()) return null;
-    try {
-      return await logoutNativeBilibili();
-    } catch (error) {
-      this.logTelemetryWarn('music-library.bilibili.logout.failed', error);
-      return null;
     }
   }
 

@@ -240,6 +240,7 @@ export const STORAGE_KEYS = {
   MUSIC_LIBRARY_FIELD_CAPABILITIES_V1:
     'pixel-matrix-music-library-field-capabilities-v1', // MusicLibraryExtensionFieldCapabilityInput[]
   PLATFORM_LOGIN_REGISTRY_V1: 'pixel-matrix-platform-login-registry-v1', // Registered platform login launcher entries
+  PLATFORM_PACKS_V1: 'pixel-matrix-platform-packs-v1', // Installed platform packs (manifest + contract + unpacked artifacts)
 
   // === Memory Governance ===
   MEMORY_GOVERNANCE_AUTO_ENABLED: 'pixel-matrix-memory-governance-auto-enabled', // boolean
@@ -350,6 +351,7 @@ export const TAURI_EVENTS = {
 
   // Platform Login
   PLATFORM_LOGIN_REGISTRY_UPDATED: 'platform-login-registry-updated',
+  PLATFORM_PACKS_UPDATED: 'platform-packs-updated',
 
   // Extensions
   EXTENSIONS_V2_UPDATED: 'extensions-v2-updated',

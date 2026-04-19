@@ -38,7 +38,6 @@ import {
   prependTrackWithDedup,
 } from './trackIdentity';
 import {
-  BILIBILI_PLATFORM_CONNECTOR_ID,
   resolvePlatformPlaybackIdentity,
 } from './platformPlaybackResolver';
 import {
@@ -91,7 +90,6 @@ import {
   markNativeLibraryUserEntryPlayed,
   listNativeLibraryPlaylistItems,
   listNativeLibraryPlaylists,
-  prepareNativeBilibiliCachedPlayback,
   prependNativeLibraryPlaylistItem,
   queryNativeLibraryPlaylistTracksPage,
   queryNativeLibraryTracks,
@@ -103,6 +101,7 @@ import {
   type NativeLibraryPlaylistItemRecord,
   type NativeLibraryPlaylistRecord,
 } from '../../modules/music-library';
+import { preparePlatformPlayback } from '../../modules/music-platform/platformFacade';
 import { resolvePlaylistTrackIndexes } from '../../modules/playlists/runtimeProjection';
 import { readString, removeKey } from '../../modules/storage';
 import {
@@ -536,10 +535,13 @@ export class NativeAudioService implements IAudioService {
     });
   }
 
-  private markPlatformTrackPlayedBestEffort(track: Track, playedAtMs: number): void {
+  private markPlatformTrackPlayedBestEffort(
+    track: Track,
+    playedAtMs: number,
+    identity = resolvePlatformPlaybackIdentity(track)
+  ): void {
     if (!isTauriRuntime()) return;
 
-    const identity = resolvePlatformPlaybackIdentity(track);
     if (!identity) return;
 
     const { sourceLocator, sourceKey, entryId } = identity;
@@ -574,14 +576,18 @@ export class NativeAudioService implements IAudioService {
     if (!isTauriRuntime()) return track;
 
     const identity = resolvePlatformPlaybackIdentity(track);
-    if (!identity || identity.connectorId !== BILIBILI_PLATFORM_CONNECTOR_ID || !identity.sourceLocator) {
+    if (!identity?.sourceLocator) {
       return track;
     }
 
     const sourceLocator = identity.sourceLocator;
 
     try {
-      const prepared = await prepareNativeBilibiliCachedPlayback(sourceLocator);
+      const preparedResult = await preparePlatformPlayback({
+        connectorId: identity.connectorId,
+        sourceLocator,
+      });
+      const prepared = preparedResult?.prepared;
       const cachePath = typeof prepared?.cachePath === 'string' ? prepared.cachePath.trim() : '';
       if (!cachePath || !this.isProbablyAbsolutePath(cachePath)) {
         return track;
@@ -608,11 +614,12 @@ export class NativeAudioService implements IAudioService {
 
   private markTrackPlayedBestEffort(track: Track): void {
     const playedAtMs = Date.now();
+    const platformIdentity = resolvePlatformPlaybackIdentity(track);
     this.enqueueRecentSmartPlaylistTrackBestEffort(track, playedAtMs);
-    this.markPlatformTrackPlayedBestEffort(track, playedAtMs);
+    this.markPlatformTrackPlayedBestEffort(track, playedAtMs, platformIdentity);
 
     const trackId = typeof track?.id === 'string' ? track.id.trim() : '';
-    if (!trackId || trackId.startsWith('bilibili:')) return;
+    if (!trackId || platformIdentity) return;
 
     void this.invokeCommand<boolean>('music_library_db_mark_track_played', {
       trackId,

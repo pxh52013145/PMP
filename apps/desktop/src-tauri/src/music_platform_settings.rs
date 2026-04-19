@@ -1,3 +1,4 @@
+use crate::music_platform_runtime::MusicPlatformRuntimeHost;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -36,14 +37,14 @@ fn lock_global_cache_settings_state(
         .map_err(|_| "Music platform global cache settings state is locked".to_string())
 }
 
-fn resolve_music_platform_app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path_resolver().app_data_dir().ok_or_else(|| {
+fn resolve_music_platform_app_data_dir(host: &MusicPlatformRuntimeHost) -> Result<PathBuf, String> {
+    host.path_resolver().app_data_dir().ok_or_else(|| {
         "Failed to resolve app data directory for music platform settings".to_string()
     })
 }
 
-fn resolve_global_settings_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = resolve_music_platform_app_data_dir(app)?
+fn resolve_global_settings_dir(host: &MusicPlatformRuntimeHost) -> Result<PathBuf, String> {
+    let dir = resolve_music_platform_app_data_dir(host)?
         .join("music-platform")
         .join("global");
     fs::create_dir_all(&dir).map_err(|error| {
@@ -52,18 +53,22 @@ fn resolve_global_settings_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn resolve_legacy_host_settings_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(resolve_music_platform_app_data_dir(app)?
+fn resolve_legacy_host_settings_dir(host: &MusicPlatformRuntimeHost) -> Result<PathBuf, String> {
+    Ok(resolve_music_platform_app_data_dir(host)?
         .join("music-platform")
         .join("host"))
 }
 
-fn resolve_global_cache_settings_file_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(resolve_global_settings_dir(app)?.join(GLOBAL_CACHE_SETTINGS_FILE))
+fn resolve_global_cache_settings_file_path(
+    host: &MusicPlatformRuntimeHost,
+) -> Result<PathBuf, String> {
+    Ok(resolve_global_settings_dir(host)?.join(GLOBAL_CACHE_SETTINGS_FILE))
 }
 
-fn resolve_legacy_host_cache_settings_file_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(resolve_legacy_host_settings_dir(app)?.join(LEGACY_HOST_CACHE_SETTINGS_FILE))
+fn resolve_legacy_host_cache_settings_file_path(
+    host: &MusicPlatformRuntimeHost,
+) -> Result<PathBuf, String> {
+    Ok(resolve_legacy_host_settings_dir(host)?.join(LEGACY_HOST_CACHE_SETTINGS_FILE))
 }
 
 fn normalize_optional_path(value: Option<String>) -> Option<String> {
@@ -106,10 +111,10 @@ fn read_global_cache_settings_from_file(
 }
 
 fn write_global_cache_settings_to_disk(
-    app: &AppHandle,
+    host: &MusicPlatformRuntimeHost,
     settings: &MusicPlatformGlobalCacheSettingsState,
 ) -> Result<(), String> {
-    let path = resolve_global_cache_settings_file_path(app)?;
+    let path = resolve_global_cache_settings_file_path(host)?;
     let payload = serde_json::to_vec_pretty(settings).map_err(|error| {
         format!("Failed to encode music platform global cache settings: {error}")
     })?;
@@ -118,27 +123,21 @@ fn write_global_cache_settings_to_disk(
 }
 
 fn read_global_cache_settings_from_disk(
-    app: &AppHandle,
+    host: &MusicPlatformRuntimeHost,
 ) -> Result<MusicPlatformGlobalCacheSettingsState, String> {
-    let primary_path = resolve_global_cache_settings_file_path(app)?;
+    let primary_path = resolve_global_cache_settings_file_path(host)?;
     if primary_path.exists() {
-        return read_global_cache_settings_from_file(
-            &primary_path,
-            "global cache settings",
-        );
+        return read_global_cache_settings_from_file(&primary_path, "global cache settings");
     }
 
-    let legacy_path = resolve_legacy_host_cache_settings_file_path(app)?;
+    let legacy_path = resolve_legacy_host_cache_settings_file_path(host)?;
     if !legacy_path.exists() {
         return Ok(MusicPlatformGlobalCacheSettingsState::default());
     }
 
-    let parsed = read_global_cache_settings_from_file(
-        &legacy_path,
-        "legacy host cache settings",
-    )?;
+    let parsed = read_global_cache_settings_from_file(&legacy_path, "legacy host cache settings")?;
 
-    if let Err(error) = write_global_cache_settings_to_disk(app, &parsed) {
+    if let Err(error) = write_global_cache_settings_to_disk(host, &parsed) {
         eprintln!(
             "[music_platform_settings] failed to migrate legacy host cache settings: {error}"
         );
@@ -148,20 +147,20 @@ fn read_global_cache_settings_from_disk(
 }
 
 fn get_global_cache_settings_state(
-    app: &AppHandle,
+    host: &MusicPlatformRuntimeHost,
 ) -> Result<MusicPlatformGlobalCacheSettingsState, String> {
     let mut guard = lock_global_cache_settings_state()?;
     if let Some(state) = guard.as_ref() {
         return Ok(state.clone());
     }
 
-    let loaded = read_global_cache_settings_from_disk(app).unwrap_or_default();
+    let loaded = read_global_cache_settings_from_disk(host).unwrap_or_default();
     *guard = Some(loaded.clone());
     Ok(loaded)
 }
 
 fn persist_global_cache_settings_state(
-    app: &AppHandle,
+    host: &MusicPlatformRuntimeHost,
     settings: MusicPlatformGlobalCacheSettingsState,
 ) -> Result<MusicPlatformGlobalCacheSettingsState, String> {
     let normalized = normalize_global_cache_settings_state(settings);
@@ -177,23 +176,33 @@ fn persist_global_cache_settings_state(
         *guard = Some(normalized.clone());
     }
 
-    write_global_cache_settings_to_disk(app, &normalized)?;
+    write_global_cache_settings_to_disk(host, &normalized)?;
     Ok(normalized)
 }
 
-pub fn resolve_default_global_cache_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let resolver = app.path_resolver();
-    let root = resolver
+pub(crate) fn resolve_default_global_cache_root_for_runtime_host(
+    host: &MusicPlatformRuntimeHost,
+) -> Result<PathBuf, String> {
+    let root = host
+        .path_resolver()
         .app_cache_dir()
-        .or_else(|| resolver.app_data_dir())
+        .or_else(|| host.path_resolver().app_data_dir())
         .ok_or_else(|| {
             "Failed to resolve app cache directory for music platform global cache".to_string()
         })?;
     Ok(root.join("music-platform").join("cache"))
 }
 
-pub fn resolve_effective_global_cache_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let settings = get_global_cache_settings_state(app)?;
+pub fn resolve_default_global_cache_root(app: &AppHandle) -> Result<PathBuf, String> {
+    resolve_default_global_cache_root_for_runtime_host(&MusicPlatformRuntimeHost::from_app_handle(
+        app,
+    ))
+}
+
+pub(crate) fn resolve_effective_global_cache_root_for_runtime_host(
+    host: &MusicPlatformRuntimeHost,
+) -> Result<PathBuf, String> {
+    let settings = get_global_cache_settings_state(host)?;
     if let Some(custom_root_path) = settings.custom_root_path.as_deref() {
         match parse_absolute_cache_root(custom_root_path) {
             Ok(path) => return Ok(path),
@@ -206,22 +215,39 @@ pub fn resolve_effective_global_cache_root(app: &AppHandle) -> Result<PathBuf, S
         }
     }
 
-    resolve_default_global_cache_root(app)
+    resolve_default_global_cache_root_for_runtime_host(host)
+}
+
+pub fn resolve_effective_global_cache_root(app: &AppHandle) -> Result<PathBuf, String> {
+    resolve_effective_global_cache_root_for_runtime_host(
+        &MusicPlatformRuntimeHost::from_app_handle(app),
+    )
+}
+
+pub(crate) fn resolve_effective_platform_cache_root_for_runtime_host(
+    host: &MusicPlatformRuntimeHost,
+    platform_key: &str,
+) -> Result<PathBuf, String> {
+    Ok(resolve_effective_global_cache_root_for_runtime_host(host)?.join(platform_key))
 }
 
 pub fn resolve_effective_platform_cache_root(
     app: &AppHandle,
     platform_key: &str,
 ) -> Result<PathBuf, String> {
-    Ok(resolve_effective_global_cache_root(app)?.join(platform_key))
+    resolve_effective_platform_cache_root_for_runtime_host(
+        &MusicPlatformRuntimeHost::from_app_handle(app),
+        platform_key,
+    )
 }
 
 pub fn get_global_cache_settings(
     app: &AppHandle,
 ) -> Result<MusicPlatformGlobalCacheSettings, String> {
-    let state = get_global_cache_settings_state(app)?;
-    let effective_root_path = resolve_effective_global_cache_root(app)?;
-    let default_root_path = resolve_default_global_cache_root(app)?;
+    let host = MusicPlatformRuntimeHost::from_app_handle(app);
+    let state = get_global_cache_settings_state(&host)?;
+    let effective_root_path = resolve_effective_global_cache_root_for_runtime_host(&host)?;
+    let default_root_path = resolve_default_global_cache_root_for_runtime_host(&host)?;
 
     Ok(MusicPlatformGlobalCacheSettings {
         custom_root_path: state.custom_root_path,
@@ -234,16 +260,17 @@ pub fn set_global_cache_settings(
     app: &AppHandle,
     custom_root_path: Option<String>,
 ) -> Result<MusicPlatformGlobalCacheSettings, String> {
+    let host = MusicPlatformRuntimeHost::from_app_handle(app);
     let state = persist_global_cache_settings_state(
-        app,
+        &host,
         MusicPlatformGlobalCacheSettingsState { custom_root_path },
     )?;
 
-    let effective_root_path = resolve_effective_global_cache_root(app)?;
+    let effective_root_path = resolve_effective_global_cache_root_for_runtime_host(&host)?;
     fs::create_dir_all(&effective_root_path).map_err(|error| {
         format!("Failed to create effective music platform global cache directory: {error}")
     })?;
-    let default_root_path = resolve_default_global_cache_root(app)?;
+    let default_root_path = resolve_default_global_cache_root_for_runtime_host(&host)?;
 
     Ok(MusicPlatformGlobalCacheSettings {
         custom_root_path: state.custom_root_path,

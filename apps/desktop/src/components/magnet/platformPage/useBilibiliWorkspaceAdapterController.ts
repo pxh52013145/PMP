@@ -266,6 +266,7 @@ export function useBilibiliWorkspaceAdapterController(
     loadMoreBilibiliResources,
     searchBilibiliResourceByLookupInput,
   } = useBilibiliResourceBrowser({
+    bilibiliInstanceId: activeBilibiliInstanceId,
     bilibiliAuthorized,
     t,
   });
@@ -343,7 +344,10 @@ export function useBilibiliWorkspaceAdapterController(
 
     setPlaybackQualityLoading(true);
     try {
-      const options = await listBilibiliPlaybackQualities(normalizedSourceLocator);
+      const options = await listBilibiliPlaybackQualities(
+        normalizedSourceLocator,
+        activeBilibiliInstanceId
+      );
       setPlaybackQualityOptions(mergePlaybackQualityOptions(options));
       setPlaybackQualityProbeLocator(normalizedSourceLocator);
     } catch {
@@ -351,7 +355,7 @@ export function useBilibiliWorkspaceAdapterController(
     } finally {
       setPlaybackQualityLoading(false);
     }
-  }, []);
+  }, [activeBilibiliInstanceId]);
 
   useEffect(() => {
     const supportsResourceAutoLoad = Boolean(selectedFolderId) || resourceSourceKey?.startsWith('search:');

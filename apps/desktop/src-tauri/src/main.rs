@@ -1,56 +1,16 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use pixel_matrix_player::app_runtime::{EditorEffectsState, ExitFlag, HostFileOpenState};
 use std::sync::Arc;
 
-mod app_builder;
-mod app_runtime;
-mod asio_diag;
-mod audio;
-mod audio_smoke;
-mod backend_telemetry;
-mod background_media;
-mod commands;
-mod debug_config;
-mod dsp_graph;
-mod lyrics;
-mod magnet_layout_store;
-mod modules;
-mod music_library;
-mod music_library_db;
-mod music_library_sync;
-mod music_platform_bilibili;
-mod music_platform_netease;
-mod music_platform_settings;
-mod native_audio;
-mod ornament_media;
-mod perf_monitor;
-mod sidecar_bridge;
-mod telemetry;
-mod telemetry_contract;
-mod telemetry_policy;
-mod telemetry_store;
-mod vst_audit;
-mod vst_bridge;
-mod vst_compat;
-mod vst_dsp;
-mod vst_governance;
-mod vst_instance_manager;
-mod vst_library;
-mod vst_presets;
-mod vst_runtime;
-mod vst_scanner;
-mod vst_settings;
-mod vst_shm;
-mod windows;
-
-use crate::app_runtime::{EditorEffectsState, ExitFlag, HostFileOpenState};
+pub use pixel_matrix_player::{commands, magnet_layout_store};
 
 #[cfg(test)]
 mod tests {
     #[test]
     fn greet_returns_expected_message() {
-        let message = crate::commands::app::greet("Tester");
+        let message = pixel_matrix_player::commands::app::greet("Tester");
         assert_eq!(message, "Hello, Tester! Welcome to Pixel Matrix Player!");
     }
 }
@@ -79,36 +39,40 @@ fn main() {
     if is_minimal_boot_enabled() || is_blank_baseline_profile(&context) {
         tauri::Builder::default()
             .register_uri_scheme_protocol("pmp", |app, request| {
-                crate::music_library::handle_pmp_protocol_request(app, request)
+                pixel_matrix_player::music_library::handle_pmp_protocol_request(app, request)
             })
             .run(context)
             .expect("error while running tauri application");
         return;
     }
 
-    if let Some(exit_code) = asio_diag::maybe_run_from_cli() {
+    if let Some(exit_code) = pixel_matrix_player::asio_diag::maybe_run_from_cli() {
         std::process::exit(exit_code);
     }
-    if let Some(exit_code) = audio_smoke::maybe_run_from_cli() {
+    if let Some(exit_code) = pixel_matrix_player::audio_smoke::maybe_run_from_cli() {
         std::process::exit(exit_code);
     }
-    if crate::app_runtime::forward_live_host_file_open_to_running_instance_if_any() {
+    if pixel_matrix_player::app_runtime::forward_live_host_file_open_to_running_instance_if_any() {
         return;
     }
 
     tauri::Builder::default()
         .register_uri_scheme_protocol("pmp", |app, request| {
-            crate::music_library::handle_pmp_protocol_request(app, request)
+            pixel_matrix_player::music_library::handle_pmp_protocol_request(app, request)
         })
         .manage(ExitFlag::new())
         .manage(EditorEffectsState::new(true))
         .manage(HostFileOpenState::new())
-        .manage(Arc::new(perf_monitor::PerfMonitor::new()))
-        .manage(sidecar_bridge::SidecarBridgeRegistry::new())
-        .system_tray(app_builder::create_system_tray())
-        .on_system_tray_event(|app, event| app_builder::handle_system_tray_event(app, event))
-        .setup(app_builder::setup_app)
-        .invoke_handler(crate::pmp_generate_handler!())
+        .manage(Arc::new(
+            pixel_matrix_player::perf_monitor::PerfMonitor::new(),
+        ))
+        .manage(pixel_matrix_player::sidecar_bridge::SidecarBridgeRegistry::new())
+        .system_tray(pixel_matrix_player::app_builder::create_system_tray())
+        .on_system_tray_event(|app, event| {
+            pixel_matrix_player::app_builder::handle_system_tray_event(app, event)
+        })
+        .setup(pixel_matrix_player::app_builder::setup_app)
+        .invoke_handler(pixel_matrix_player::pmp_generate_handler!())
         .run(context)
         .expect("error while running tauri application");
 }

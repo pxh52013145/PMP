@@ -1,3 +1,5 @@
+import type { PlatformCompatRuntimeAuthState } from '@pixel-matrix/plugin-platform-contracts';
+
 import {
   listMusicSourceFacadeItems,
   searchMusicSourceTracks,
@@ -6,15 +8,25 @@ import {
   type MusicSourceTrackCandidate,
 } from '../../services/audio/musicSourceFacade';
 import {
-  listPlatformConnectorAuthSnapshots,
-  type PlatformConnectorAuthSnapshot,
-  type PlatformConnectorAuthState,
-} from './connectorAuth';
+  listPlatformInstanceAuthSnapshots,
+  type PlatformInstanceAuthSnapshot,
+} from './platformInstanceAuth';
+import { listPlatformConnectorDefinitions } from './connectorAuth';
+import { invokePlatformRuntimeBinding } from './bindingRuntime';
+import {
+  PLATFORM_LIBRARY_BINDING_ID,
+  PLATFORM_SEARCH_BINDING_ID,
+} from './platformInstanceApiBinding';
+import {
+  normalizePlatformConnectorId,
+  type PlatformConnectorId,
+} from './platformConnectorModel';
 
 export interface PlatformConnectorFacadeItem {
   connectorId: string;
+  instanceId?: string;
   displayName: string;
-  authState: PlatformConnectorAuthState;
+  authState: PlatformCompatRuntimeAuthState;
   accountUid?: string;
   updatedAtMs?: number;
   expiresAtMs?: number;
@@ -36,8 +48,183 @@ export interface PlatformTrackSearchResult {
   tracks: MusicSourceTrackCandidate[];
 }
 
+export interface PlatformPreparedPlayback {
+  sourceLocator: string;
+  streamUrl: string;
+  cachePath: string;
+  mimeType?: string;
+  durationSeconds?: number;
+  resourceId?: string;
+  songId?: string;
+  contentKind?: string;
+  selectedQualityKey?: string;
+  selectedQualityLabel?: string;
+}
+
+export interface PreparePlatformPlaybackOptions {
+  sourceLocator: string;
+  connectorId?: string;
+  qualityHint?: string;
+  instanceId?: string | null;
+}
+
+export interface PreparePlatformPlaybackResult {
+  connectorId: string;
+  prepared: PlatformPreparedPlayback;
+}
+
+export interface ListPlatformConnectorFacadeItemsOptions {
+  refresh?: boolean;
+}
+
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function readConnectorSuffix(connectorId: string): string {
+  return normalizeString(connectorId).replace(/^connector\.platform\./, '');
+}
+
+function extractSourceLocatorScheme(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  const match = /^([a-z][a-z0-9+.-]*):\/\//.exec(normalized);
+  if (!match) return '';
+  const scheme = match[1] ?? '';
+  return scheme === 'http' || scheme === 'https' || scheme === 'file' ? '' : scheme;
+}
+
+function mapPreparedPlayback(value: unknown): PlatformPreparedPlayback | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const sourceLocator = normalizeString(record.sourceLocator);
+  const streamUrl = normalizeString(record.streamUrl);
+  const cachePath = normalizeString(record.cachePath);
+  if (!sourceLocator || !streamUrl || !cachePath) {
+    return null;
+  }
+
+  return {
+    sourceLocator,
+    streamUrl,
+    cachePath,
+    mimeType: normalizeString(record.mimeType) || undefined,
+    durationSeconds: readFiniteNumber(record.durationSeconds),
+    resourceId: normalizeString(record.resourceId) || undefined,
+    songId: normalizeString(record.songId) || undefined,
+    contentKind: normalizeString(record.contentKind) || undefined,
+    selectedQualityKey: normalizeString(record.selectedQualityKey) || undefined,
+    selectedQualityLabel: normalizeString(record.selectedQualityLabel) || undefined,
+  };
+}
+
+type PlatformPrepareCandidate = {
+  connectorId: PlatformConnectorId;
+  displayName: string;
+  workspaceKind?: string;
+  authState?: PlatformCompatRuntimeAuthState;
+  canResolveStream?: boolean;
+};
+
+function scorePrepareCandidate(
+  candidate: PlatformPrepareCandidate,
+  normalizedSourceLocator: string,
+  scheme: string
+): number {
+  let score = 0;
+  const tokens = new Set<string>([
+    readConnectorSuffix(candidate.connectorId),
+    normalizeString(candidate.workspaceKind).toLowerCase(),
+  ]);
+
+  for (const token of tokens) {
+    if (!token) continue;
+    if (scheme && token === scheme) {
+      score += 100;
+    }
+    if (normalizedSourceLocator.includes(token)) {
+      score += 24;
+    }
+  }
+
+  if (candidate.authState === 'authorized') {
+    score += 8;
+  } else if (candidate.authState === 'pending') {
+    score += 4;
+  }
+
+  if (candidate.canResolveStream) {
+    score += 3;
+  }
+
+  return score;
+}
+
+async function resolvePrepareCandidates(
+  options: PreparePlatformPlaybackOptions
+): Promise<PlatformPrepareCandidate[]> {
+  const explicitConnectorId = normalizePlatformConnectorId(options.connectorId);
+  if (explicitConnectorId) {
+    const definition = listPlatformConnectorDefinitions().find(
+      (item) => item.connectorId === explicitConnectorId
+    );
+    return [
+      {
+        connectorId: explicitConnectorId,
+        displayName:
+          normalizeString(definition?.displayName) || readConnectorSuffix(explicitConnectorId),
+        workspaceKind: definition?.workspaceKind,
+      },
+    ];
+  }
+
+  const definitions = listPlatformConnectorDefinitions().filter((item) => item.enabled !== false);
+  const connectorViews = await listPlatformConnectorFacadeItems();
+  const candidates = new Map<PlatformConnectorId, PlatformPrepareCandidate>();
+
+  for (const definition of definitions) {
+    candidates.set(definition.connectorId, {
+      connectorId: definition.connectorId,
+      displayName: normalizeString(definition.displayName) || readConnectorSuffix(definition.connectorId),
+      workspaceKind: definition.workspaceKind,
+    });
+  }
+
+  for (const view of connectorViews) {
+    const connectorId = normalizePlatformConnectorId(view.connectorId);
+    if (!connectorId) continue;
+    const current = candidates.get(connectorId);
+    candidates.set(connectorId, {
+      connectorId,
+      displayName:
+        normalizeString(view.displayName) ||
+        current?.displayName ||
+        readConnectorSuffix(connectorId),
+      workspaceKind: current?.workspaceKind,
+      authState: view.authState,
+      canResolveStream: view.capabilities.canResolveStream,
+    });
+  }
+
+  const normalizedSourceLocator = normalizeString(options.sourceLocator).toLowerCase();
+  const scheme = extractSourceLocatorScheme(options.sourceLocator);
+
+  return Array.from(candidates.values()).sort((left, right) => {
+    const scoreDelta =
+      scorePrepareCandidate(right, normalizedSourceLocator, scheme) -
+      scorePrepareCandidate(left, normalizedSourceLocator, scheme);
+    if (scoreDelta !== 0) return scoreDelta;
+    return left.displayName.localeCompare(right.displayName, 'zh-CN');
+  });
 }
 
 function mergeCapabilities(items: MusicSourceFacadeItem[]): MusicSourceCapabilityFlags {
@@ -67,19 +254,66 @@ function mergeCapabilities(items: MusicSourceFacadeItem[]): MusicSourceCapabilit
 }
 
 function byConnectorId(
-  item: PlatformConnectorAuthSnapshot | MusicSourceFacadeItem
+  item: PlatformInstanceAuthSnapshot | MusicSourceFacadeItem
 ): string {
   return normalizeString(item.connectorId);
 }
 
+function readAuthPriority(authState: PlatformCompatRuntimeAuthState): number {
+  switch (authState) {
+    case 'authorized':
+      return 5;
+    case 'pending':
+      return 4;
+    case 'expired':
+      return 3;
+    case 'error':
+      return 2;
+    case 'revoked':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function pickPreferredInstanceSnapshot(
+  snapshots: PlatformInstanceAuthSnapshot[]
+): PlatformInstanceAuthSnapshot | null {
+  if (snapshots.length === 0) return null;
+
+  return snapshots.reduce<PlatformInstanceAuthSnapshot | null>((best, current) => {
+    if (!best) return current;
+
+    const authPriorityDelta = readAuthPriority(current.authState) - readAuthPriority(best.authState);
+    if (authPriorityDelta !== 0) {
+      return authPriorityDelta > 0 ? current : best;
+    }
+
+    const currentBuiltin = current.instanceId.endsWith(':builtin') ? 1 : 0;
+    const bestBuiltin = best.instanceId.endsWith(':builtin') ? 1 : 0;
+    if (currentBuiltin !== bestBuiltin) {
+      return currentBuiltin > bestBuiltin ? current : best;
+    }
+
+    const currentUpdatedAt = current.updatedAtMs ?? 0;
+    const bestUpdatedAt = best.updatedAtMs ?? 0;
+    if (currentUpdatedAt !== bestUpdatedAt) {
+      return currentUpdatedAt > bestUpdatedAt ? current : best;
+    }
+
+    return current.instanceId.localeCompare(best.instanceId, 'zh-CN') < 0 ? current : best;
+  }, null);
+}
+
 function mapToConnectorFacade(
   connectorId: string,
-  authSnapshot: PlatformConnectorAuthSnapshot | null,
+  authSnapshot: PlatformInstanceAuthSnapshot | null,
   sourceItems: MusicSourceFacadeItem[]
 ): PlatformConnectorFacadeItem {
   const fallbackDisplayName = connectorId.replace('connector.platform.', '') || connectorId;
   return {
     connectorId,
+    instanceId: authSnapshot?.instanceId,
     displayName:
       normalizeString(authSnapshot?.displayName) ||
       normalizeString(sourceItems[0]?.displayName) ||
@@ -96,15 +330,33 @@ function mapToConnectorFacade(
   };
 }
 
-export async function listPlatformConnectorFacadeItems(): Promise<PlatformConnectorFacadeItem[]> {
+export async function listPlatformConnectorFacadeItems(
+  options?: ListPlatformConnectorFacadeItemsOptions
+): Promise<PlatformConnectorFacadeItem[]> {
   const [authSnapshots, sourceItems] = await Promise.all([
-    listPlatformConnectorAuthSnapshots(),
+    listPlatformInstanceAuthSnapshots({ refresh: options?.refresh === true }),
     listMusicSourceFacadeItems(),
   ]);
 
   const platformSourceItems = sourceItems.filter((item) => item.kind === 'platform');
-  const authByConnectorId = new Map(authSnapshots.map((item) => [byConnectorId(item), item]));
+  const authByConnectorId = new Map<string, PlatformInstanceAuthSnapshot>();
+  const authBucketsByConnectorId = new Map<string, PlatformInstanceAuthSnapshot[]>();
   const sourceByConnectorId = new Map<string, MusicSourceFacadeItem[]>();
+
+  for (const snapshot of authSnapshots) {
+    const connectorId = byConnectorId(snapshot);
+    if (!connectorId) continue;
+    const bucket = authBucketsByConnectorId.get(connectorId) ?? [];
+    bucket.push(snapshot);
+    authBucketsByConnectorId.set(connectorId, bucket);
+  }
+
+  for (const [connectorId, snapshots] of authBucketsByConnectorId.entries()) {
+    const preferredSnapshot = pickPreferredInstanceSnapshot(snapshots);
+    if (preferredSnapshot) {
+      authByConnectorId.set(connectorId, preferredSnapshot);
+    }
+  }
 
   for (const source of platformSourceItems) {
     const connectorId = byConnectorId(source);
@@ -172,4 +424,58 @@ export async function searchPlatformTracks(
     connectorViews,
     tracks,
   };
+}
+
+export async function preparePlatformPlayback(
+  options: PreparePlatformPlaybackOptions
+): Promise<PreparePlatformPlaybackResult | null> {
+  const sourceLocator = normalizeString(options.sourceLocator);
+  if (!sourceLocator) return null;
+
+  const candidates = await resolvePrepareCandidates({
+    ...options,
+    sourceLocator,
+  });
+  if (candidates.length < 1) {
+    return null;
+  }
+
+  const payload: Record<string, unknown> = {
+    sourceLocator,
+  };
+  const qualityHint = normalizeString(options.qualityHint);
+  if (qualityHint) {
+    payload.qualityHint = qualityHint;
+  }
+  const instanceId = normalizeString(options.instanceId);
+  if (instanceId) {
+    payload.instanceId = instanceId;
+  }
+
+  for (const candidate of candidates) {
+    for (const bindingId of [PLATFORM_LIBRARY_BINDING_ID, PLATFORM_SEARCH_BINDING_ID]) {
+      const result = await invokePlatformRuntimeBinding({
+        bindingId,
+        connectorId: candidate.connectorId,
+        displayName: candidate.displayName,
+        method: 'preparePlayback',
+        payload,
+      });
+      if (!result.ok) {
+        continue;
+      }
+
+      const prepared = mapPreparedPlayback(result.data);
+      if (!prepared) {
+        continue;
+      }
+
+      return {
+        connectorId: candidate.connectorId,
+        prepared,
+      };
+    }
+  }
+
+  return null;
 }

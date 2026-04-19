@@ -11,7 +11,7 @@ const RECENT_DEFAULT_LIMIT: usize = 24;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct AudioDiagnosticEvent {
+pub struct AudioDiagnosticEvent {
     pub seq: u64,
     pub timestamp_ms: u64,
     pub kind: &'static str,

@@ -23,6 +23,20 @@ export {
 } from './instanceRegistry';
 
 export {
+  beginPlatformInstanceQrLogin,
+  clearPlatformInstanceAuthCookies,
+  getPlatformInstanceAuthSnapshot,
+  listPlatformInstanceAuthSnapshots,
+  logoutPlatformInstance,
+  pollPlatformInstanceQrLogin,
+  refreshPlatformInstanceAuthSnapshot,
+  resolvePlatformInstanceId,
+  type PlatformInstanceAuthSnapshot,
+  type PlatformInstanceQrLoginPollResult,
+  type PlatformInstanceQrLoginSession,
+} from './platformInstanceAuth';
+
+export {
   getPlatformRenderSelection,
   listPlatformRenderSelections,
   removePlatformRenderSelection,
@@ -33,21 +47,15 @@ export {
 
 export {
   beginPlatformQrLogin,
-  beginBilibiliQrLogin,
   clearPlatformConnectorCookies,
-  emitPlatformConnectorAuthChanged,
   getPlatformConnectorAuthSnapshot,
-  getBilibiliConnectorAuthSnapshot,
   getPlatformConnectorDefinition,
   listPlatformConnectorAdapters,
   listPlatformConnectorDefinitions,
   listPlatformConnectorAuthSnapshots,
   logoutPlatformConnector,
-  logoutBilibiliConnector,
   pollPlatformQrLogin,
-  pollBilibiliQrLogin,
   refreshAndEmitPlatformConnectorAuthSnapshot,
-  refreshAndEmitBilibiliConnectorAuthSnapshot,
   registerPlatformConnectorAdapter,
   unregisterPlatformConnectorAdapter,
   resolvePlatformConnectorTemplate,
@@ -59,8 +67,6 @@ export {
   listBuiltinPlatformCompatRegistrations,
   subscribePlatformConnectorDefinitions,
   subscribePlatformConnectorCompatRegistrations,
-  subscribePlatformConnectorAuthChanged,
-  PLATFORM_CONNECTOR_AUTH_CHANGED_EVENT,
   type BuiltinPlatformCompatRegistration,
   type PlatformConnectorAdapter,
   type PlatformConnectorDefinition,
@@ -70,10 +76,6 @@ export {
   type PlatformConnectorWorkspaceMode,
   type PlatformQrLoginPollResult,
   type PlatformQrLoginSession,
-  type BilibiliQrLoginPollResult,
-  type BilibiliQrLoginSession,
-  type NeteaseQrLoginPollResult,
-  type NeteaseQrLoginSession,
   type PlatformConnectorAuthSnapshot,
   type PlatformConnectorAuthState,
   type PlatformConnectorId,
@@ -145,8 +147,12 @@ export {
 
 export {
   listPlatformConnectorFacadeItems,
+  preparePlatformPlayback,
   searchPlatformTracks,
+  type PlatformPreparedPlayback,
   type PlatformConnectorFacadeItem,
+  type PreparePlatformPlaybackOptions,
+  type PreparePlatformPlaybackResult,
   type PlatformTrackSearchOptions,
   type PlatformTrackSearchResult,
 } from './platformFacade';

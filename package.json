@@ -34,6 +34,7 @@
     "plugin:sidecar:smoke": "node scripts/sidecar-smoke.mjs",
     "plugin:shell-surface:smoke": "node scripts/shell-surface-smoke.mjs",
     "plugin:platform:smoke": "node scripts/plugin-platform-smoke.mjs",
+    "pack:platform": "node scripts/package-platform-pack.mjs",
     "test": "pnpm --filter @pixel-matrix/desktop test",
     "test:tauri:asio": "pnpm --filter @pixel-matrix/desktop test:tauri:asio",
     "hooks:install": "git config core.hooksPath .githooks",

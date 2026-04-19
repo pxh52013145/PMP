@@ -39,6 +39,7 @@ export interface PlatformPackManifestV1 {
     contract: string;
     runtime: string;
     icon: string;
+    sidecar?: string;
   };
 }
 
@@ -48,10 +49,16 @@ export interface ParsedPlatformPack {
   contract: PlatformCompatContractFile;
   runtimePath: string;
   runtimeCode: string;
+  runtimeImportUrl?: string;
   iconPath: string;
   iconBytes: Uint8Array;
-  iconDataUrl: string;
+  iconAssetUrl: string;
   iconMimeType: string;
+  sidecarPath?: string;
+  files: Array<{
+    relativePath: string;
+    bytes: Uint8Array;
+  }>;
 }
 
 async function unzipAsync(bytes: Uint8Array): Promise<Unzipped> {
@@ -72,23 +79,66 @@ function assertObject(value: unknown, path: string): asserts value is Record<str
   }
 }
 
-function normalizeZipPath(path: string): string {
-  return path.replace(/^\.?\//, '').replace(/\\/g, '/');
+function normalizePackRelativePath(path: string, label = 'path'): string {
+  const normalized = path
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.\/+/, '')
+    .replace(/\/+/g, '/');
+  if (!normalized) {
+    throw new Error(`${label} is required`);
+  }
+  if (normalized.startsWith('/') || /^[a-zA-Z]:\//.test(normalized)) {
+    throw new Error(`${label} must be relative`);
+  }
+
+  const segments = normalized.split('/');
+  if (
+    segments.some(
+      (segment) => segment.length < 1 || segment === '.' || segment === '..'
+    )
+  ) {
+    throw new Error(`${label} contains invalid segments`);
+  }
+
+  return normalized;
 }
 
-function findZipEntry(files: Record<string, Uint8Array>, filename: string): Uint8Array | undefined {
-  const direct = files[filename];
-  if (typeof direct !== 'undefined') return direct;
+function findZipEntry(
+  files: Record<string, Uint8Array>,
+  filename: string,
+  rootPrefix = ''
+): { relativePath: string; bytes: Uint8Array } | null {
+  const target = normalizePackRelativePath(filename, 'platform pack entry').toLowerCase();
+  const normalizedRootPrefix = rootPrefix
+    ? `${normalizePackRelativePath(
+        rootPrefix.replace(/\/+$/, ''),
+        'platform pack root prefix'
+      ).toLowerCase()}/`
+    : '';
 
-  const target = normalizeZipPath(filename).toLowerCase();
   for (const [key, value] of Object.entries(files)) {
-    const normalized = normalizeZipPath(key).toLowerCase();
-    if (normalized === target || normalized.endsWith(`/${target}`)) {
-      return value;
+    let normalized: string;
+    try {
+      normalized = normalizePackRelativePath(key, `platform pack archive entry (${key})`);
+    } catch {
+      continue;
+    }
+
+    const candidate = normalized.toLowerCase();
+    if (
+      (normalizedRootPrefix
+        ? candidate === `${normalizedRootPrefix}${target}`
+        : candidate === target || candidate.endsWith(`/${target}`))
+    ) {
+      return {
+        relativePath: normalized,
+        bytes: value,
+      };
     }
   }
 
-  return undefined;
+  return null;
 }
 
 function readOptionalTrimmedString(value: unknown): string | undefined {
@@ -221,9 +271,24 @@ function validatePlatformPackManifestV1(manifest: unknown): asserts manifest is 
   }
 
   assertObject(manifest.entry, 'manifest.entry');
-  manifest.entry.contract = toNonEmptyString(manifest.entry.contract, 'manifest.entry.contract');
-  manifest.entry.runtime = toNonEmptyString(manifest.entry.runtime, 'manifest.entry.runtime');
-  manifest.entry.icon = toNonEmptyString(manifest.entry.icon, 'manifest.entry.icon');
+  manifest.entry.contract = normalizePackRelativePath(
+    toNonEmptyString(manifest.entry.contract, 'manifest.entry.contract'),
+    'manifest.entry.contract'
+  );
+  manifest.entry.runtime = normalizePackRelativePath(
+    toNonEmptyString(manifest.entry.runtime, 'manifest.entry.runtime'),
+    'manifest.entry.runtime'
+  );
+  manifest.entry.icon = normalizePackRelativePath(
+    toNonEmptyString(manifest.entry.icon, 'manifest.entry.icon'),
+    'manifest.entry.icon'
+  );
+  if (typeof manifest.entry.sidecar !== 'undefined') {
+    manifest.entry.sidecar = normalizePackRelativePath(
+      toNonEmptyString(manifest.entry.sidecar, 'manifest.entry.sidecar'),
+      'manifest.entry.sidecar'
+    );
+  }
 }
 
 function guessIconMimeType(path: string | undefined): string | undefined {
@@ -259,29 +324,36 @@ function toDataUrl(bytes: Uint8Array, mimeType: string): string {
 export async function parsePlatformPackFromZipBytes(bytes: Uint8Array): Promise<ParsedPlatformPack> {
   const files = await unzipAsync(bytes);
 
-  const manifestBytes = findZipEntry(files, 'manifest.json');
-  if (!manifestBytes) {
+  const manifestEntry = findZipEntry(files, 'manifest.json');
+  if (!manifestEntry) {
     throw new Error('Invalid platform pack: missing manifest.json');
   }
+  const manifestRootPrefix =
+    manifestEntry.relativePath === 'manifest.json'
+      ? ''
+      : manifestEntry.relativePath.slice(
+          0,
+          Math.max(0, manifestEntry.relativePath.lastIndexOf('/')) + 1
+        );
 
-  const manifestRaw = strFromU8(manifestBytes);
+  const manifestRaw = strFromU8(manifestEntry.bytes);
   const manifestUnknown = JSON.parse(manifestRaw) as unknown;
   validatePlatformPackManifestV1(manifestUnknown);
 
   const contractPath = manifestUnknown.entry.contract;
-  const contractBytes = findZipEntry(files, contractPath);
-  if (!contractBytes) {
-    throw new Error(`Invalid platform pack: missing contract entry (${normalizeZipPath(contractPath)})`);
+  const contractEntry = findZipEntry(files, contractPath, manifestRootPrefix);
+  if (!contractEntry) {
+    throw new Error(`Invalid platform pack: missing contract entry (${contractPath})`);
   }
 
-  const contractUnknown = JSON.parse(strFromU8(contractBytes)) as unknown;
+  const contractUnknown = JSON.parse(strFromU8(contractEntry.bytes)) as unknown;
   const contract = parsePlatformCompatContractFromJson(
     contractUnknown,
-    `platform-pack:${manifestUnknown.metadata.id}:${normalizeZipPath(contractPath)}`
+    `platform-pack:${manifestUnknown.metadata.id}:${contractPath}`
   );
   validatePlatformCompatContract(
     contract,
-    `platform-pack:${manifestUnknown.metadata.id}:${normalizeZipPath(contractPath)}`,
+    `platform-pack:${manifestUnknown.metadata.id}:${contractPath}`,
     {
       connectorId: manifestUnknown.connector.connectorId,
       workspaceKind: manifestUnknown.connector.workspaceKind,
@@ -290,37 +362,82 @@ export async function parsePlatformPackFromZipBytes(bytes: Uint8Array): Promise<
   );
 
   const runtimePath = manifestUnknown.entry.runtime;
-  const runtimeBytes = findZipEntry(files, runtimePath);
-  if (!runtimeBytes) {
-    throw new Error(`Invalid platform pack: missing runtime entry (${normalizeZipPath(runtimePath)})`);
+  const runtimeEntry = findZipEntry(files, runtimePath, manifestRootPrefix);
+  if (!runtimeEntry) {
+    throw new Error(`Invalid platform pack: missing runtime entry (${runtimePath})`);
   }
-  const runtimeCode = strFromU8(runtimeBytes);
+  const runtimeCode = strFromU8(runtimeEntry.bytes);
   if (!runtimeCode.trim()) {
-    throw new Error(`Invalid platform pack: runtime entry is empty (${normalizeZipPath(runtimePath)})`);
+    throw new Error(`Invalid platform pack: runtime entry is empty (${runtimePath})`);
   }
 
   const iconPath = manifestUnknown.entry.icon;
-  const iconBytes = findZipEntry(files, iconPath);
-  if (!iconBytes) {
-    throw new Error(`Invalid platform pack: missing icon entry (${normalizeZipPath(iconPath)})`);
+  const iconEntry = findZipEntry(files, iconPath, manifestRootPrefix);
+  if (!iconEntry) {
+    throw new Error(`Invalid platform pack: missing icon entry (${iconPath})`);
   }
   const iconMimeType = guessIconMimeType(iconPath);
   if (!iconMimeType) {
     throw new Error(
-      `Invalid platform pack: unsupported icon type (${normalizeZipPath(iconPath)}), expected .svg/.png/.jpg/.jpeg/.webp/.gif/.ico`
+      `Invalid platform pack: unsupported icon type (${iconPath}), expected .svg/.png/.jpg/.jpeg/.webp/.gif/.ico`
     );
   }
-  const iconDataUrl = toDataUrl(iconBytes, iconMimeType);
+  const iconAssetUrl = toDataUrl(iconEntry.bytes, iconMimeType);
+  const sidecarPath = manifestUnknown.entry.sidecar;
+  if (typeof sidecarPath !== 'undefined') {
+    const sidecarEntry = findZipEntry(files, sidecarPath, manifestRootPrefix);
+    if (!sidecarEntry) {
+      throw new Error(`Invalid platform pack: missing sidecar entry (${sidecarPath})`);
+    }
+  }
+  const archiveFiles = Object.entries(files)
+    .flatMap(([relativePath, fileBytes]) => {
+      let normalizedPath: string;
+      try {
+        normalizedPath = normalizePackRelativePath(
+          relativePath,
+          `platform pack archive entry (${relativePath})`
+        );
+      } catch {
+        return [];
+      }
+
+      if (manifestRootPrefix && !normalizedPath.startsWith(manifestRootPrefix)) {
+        return [];
+      }
+
+      const trimmedPath = manifestRootPrefix
+        ? normalizedPath.startsWith(manifestRootPrefix)
+          ? normalizedPath.slice(manifestRootPrefix.length)
+          : normalizedPath
+        : normalizedPath;
+      if (!trimmedPath) {
+        return [];
+      }
+
+      return [
+        {
+          relativePath: normalizePackRelativePath(
+            trimmedPath,
+            `platform pack archive entry (${relativePath})`
+          ),
+          bytes: fileBytes,
+        },
+      ];
+    })
+    .sort((left, right) => left.relativePath.localeCompare(right.relativePath, 'en'));
 
   return {
     manifest: manifestUnknown,
-    contractPath: normalizeZipPath(contractPath),
+    contractPath,
     contract,
-    runtimePath: normalizeZipPath(runtimePath),
+    runtimePath,
     runtimeCode,
-    iconPath: normalizeZipPath(iconPath),
-    iconBytes,
-    iconDataUrl,
+    iconPath,
+    iconBytes: iconEntry.bytes,
+    iconAssetUrl,
     iconMimeType,
+    sidecarPath,
+    files: archiveFiles,
   };
 }

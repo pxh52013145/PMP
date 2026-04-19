@@ -55,6 +55,82 @@
     0 10px 24px rgba(0, 0, 0, 0.18);
 }
 
+.platform-preview-launcher-trigger-preview {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 18px;
+}
+
+.platform-preview-launcher-trigger-preview-item {
+  position: absolute;
+  top: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  transform: translateY(-50%);
+  background: rgba(7, 11, 17, 0.94);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 4px 10px rgba(0, 0, 0, 0.22);
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    filter 180ms ease;
+}
+
+.platform-preview-launcher-trigger:hover .platform-preview-launcher-trigger-preview-item,
+.platform-preview-launcher-trigger:focus-visible .platform-preview-launcher-trigger-preview-item {
+  transform: translateY(calc(-50% - 1px));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 6px 12px rgba(0, 0, 0, 0.26);
+}
+
+.platform-preview-launcher-trigger-preview-item--0 {
+  left: 0;
+}
+
+.platform-preview-launcher-trigger-preview-item--1 {
+  left: 7px;
+}
+
+.platform-preview-launcher-trigger-preview-item--2 {
+  left: 14px;
+}
+
+.platform-preview-launcher-trigger-preview-item-emphasized {
+  filter: saturate(1) brightness(1);
+}
+
+.platform-preview-launcher-trigger-preview-item-muted {
+  filter: grayscale(0.32) saturate(0.62) brightness(0.94);
+}
+
+.platform-preview-launcher-trigger-preview-badge {
+  position: absolute;
+  right: -7px;
+  bottom: -7px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.9);
+  color: #0a1017;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+}
+
 .platform-preview-launcher-strip {
   gap: 22px;
   transition:

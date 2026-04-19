@@ -12,33 +12,12 @@ import type {
   PlatformConnectorDefinition,
   PlatformConnectorId,
   PlatformQrLoginPollResult,
-  PlatformQrLoginSession,
 } from './connectorAuth';
-import {
-  beginPlatformQrLogin,
-  clearPlatformConnectorCookies,
-  getPlatformConnectorAuthSnapshot,
-  logoutPlatformConnector,
-  pollPlatformQrLogin,
-  refreshAndEmitPlatformConnectorAuthSnapshot,
-} from './connectorAuth';
-import { readString, writeString } from '../storage';
-import {
-  listNeteasePlaylistTracks,
-  listNeteaseRecommendedPlaylists,
-  listNeteaseRecommendedSongs,
-  listNeteaseUserPlaylists,
-  prepareNeteaseCachedPlayback,
-  searchNeteaseSongs,
-} from './neteaseFacade';
+import { invokePlatformInstanceAuthBinding } from './platformInstanceAuthBinding';
+import { invokePlatformInstanceApiBinding } from './platformInstanceApiBinding';
 
+const CONNECTOR_PLATFORM_PREFIX = 'connector.platform.';
 const CONNECTOR_AUTH_BINDING_ID = 'host.pmp.connector-auth';
-const NETEASE_LIBRARY_BINDING_ID = 'host.pmp.music-platform.netease.library';
-const NETEASE_RECOMMENDATIONS_BINDING_ID = 'host.pmp.music-platform.netease.recommendations';
-const NETEASE_SEARCH_BINDING_ID = 'host.pmp.music-platform.netease.search';
-const NETEASE_QUALITY_BINDING_ID = 'host.pmp.music-platform.netease.quality';
-const NETEASE_PLAYBACK_QUALITY_PREFERENCE_KEY =
-  'music-platform.netease.playback-quality-preference';
 
 type BindingInvokeOptions = {
   bindingId: string;
@@ -58,6 +37,7 @@ type RuntimeAuthSnapshotData = {
   availabilityMessage?: string;
   metadata?: Record<string, unknown>;
 };
+
 type RuntimeQrSessionData = {
   sessionId: string;
   qrcodeKey: string;
@@ -66,6 +46,7 @@ type RuntimeQrSessionData = {
   generatedAtMs: number;
   expiresAtMs: number;
 };
+
 type RuntimeQrPollData = {
   sessionId: string;
   state: string;
@@ -76,15 +57,6 @@ type RuntimeQrPollData = {
   expiresAtMs?: number;
   metadata?: Record<string, unknown>;
 };
-type NeteasePlaybackQualityKey = 'auto' | 'standard' | 'higher' | 'exhigh' | 'lossless';
-
-const NETEASE_PLAYBACK_QUALITY_KEYS: NeteasePlaybackQualityKey[] = [
-  'auto',
-  'standard',
-  'higher',
-  'exhigh',
-  'lossless',
-];
 
 function ok<T>(data: T): PlatformApiResult<T> {
   return { ok: true, data };
@@ -105,6 +77,28 @@ function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function resolvePlatformIdFromConnectorId(connectorId: string): string {
+  const normalizedConnectorId = normalizeString(connectorId).toLowerCase();
+  if (!normalizedConnectorId.startsWith(CONNECTOR_PLATFORM_PREFIX)) return '';
+  return normalizedConnectorId.slice(CONNECTOR_PLATFORM_PREFIX.length);
+}
+
+function toDefaultInstanceIdForPlatform(platformId: string): string | undefined {
+  const normalizedPlatformId = normalizeString(platformId).toLowerCase();
+  return normalizedPlatformId ? `${normalizedPlatformId}:builtin` : undefined;
+}
+
+function toDefaultInstanceIdForConnector(connectorId: string): string | undefined {
+  return toDefaultInstanceIdForPlatform(resolvePlatformIdFromConnectorId(connectorId));
+}
+
+function resolveBindingInstanceId(options: BindingInvokeOptions): string | undefined {
+  return (
+    normalizeString(options.payload?.instanceId) ||
+    toDefaultInstanceIdForConnector(options.connectorId)
+  );
+}
+
 function normalizePositiveInt(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
   return Math.max(0, Math.floor(value));
@@ -113,44 +107,6 @@ function normalizePositiveInt(value: unknown): number {
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
-}
-
-function readBoolean(value: unknown): boolean {
-  return value === true;
-}
-
-function normalizeNeteaseQualityKey(value: unknown): NeteasePlaybackQualityKey {
-  const normalized = normalizeString(value).toLowerCase();
-  if (normalized === 'standard' || normalized === '128k') return 'standard';
-  if (normalized === 'higher' || normalized === '192k') return 'higher';
-  if (normalized === 'exhigh' || normalized === '320k') return 'exhigh';
-  if (normalized === 'lossless' || normalized === '999k') return 'lossless';
-  return 'auto';
-}
-
-function readNeteasePreferredQualityKey(): NeteasePlaybackQualityKey {
-  return normalizeNeteaseQualityKey(readString(NETEASE_PLAYBACK_QUALITY_PREFERENCE_KEY));
-}
-
-function writeNeteasePreferredQualityKey(qualityKey: NeteasePlaybackQualityKey): void {
-  writeString(NETEASE_PLAYBACK_QUALITY_PREFERENCE_KEY, qualityKey);
-}
-
-function toNeteasePlaybackQualityOption(qualityKey: NeteasePlaybackQualityKey) {
-  return {
-    key: qualityKey,
-    label: qualityKey,
-    available: true,
-  };
-}
-
-function toNeteasePlaybackQualityState(
-  qualityKey: NeteasePlaybackQualityKey = readNeteasePreferredQualityKey()
-) {
-  return {
-    current: toNeteasePlaybackQualityOption(qualityKey),
-    options: NETEASE_PLAYBACK_QUALITY_KEYS.map(toNeteasePlaybackQualityOption),
-  };
 }
 
 function normalizeAuthState(
@@ -172,23 +128,6 @@ function normalizeAvailability(
   return value === 'available' || value === 'degraded' || value === 'unavailable'
     ? value
     : undefined;
-}
-
-function mapAuthSnapshotToRuntimeData(
-  snapshot: PlatformConnectorAuthSnapshot
-): RuntimeAuthSnapshotData {
-  return {
-    authState: snapshot.authState,
-    accountId: snapshot.accountUid,
-    updatedAtMs: snapshot.updatedAtMs,
-    expiresAtMs: snapshot.expiresAtMs,
-    availability: snapshot.availability,
-    availabilityMessage: snapshot.availabilityMessage,
-    metadata: {
-      connectorId: snapshot.connectorId,
-      displayName: snapshot.displayName,
-    },
-  };
 }
 
 function mapRuntimeAuthToSnapshot(
@@ -237,17 +176,6 @@ function mapRuntimeAuthData(value: unknown): RuntimeAuthSnapshotData | null {
   };
 }
 
-function mapQrSessionToRuntimeData(session: PlatformQrLoginSession): RuntimeQrSessionData {
-  return {
-    sessionId: session.sessionId,
-    qrcodeKey: session.qrcodeKey,
-    qrUrl: session.qrUrl,
-    qrImageDataUrl: session.qrImageDataUrl,
-    generatedAtMs: session.generatedAtMs,
-    expiresAtMs: session.expiresAtMs,
-  };
-}
-
 function mapRuntimeQrSessionData(value: unknown): RuntimeQrSessionData | null {
   const record = asRecord(value);
   if (!record) return null;
@@ -259,7 +187,14 @@ function mapRuntimeQrSessionData(value: unknown): RuntimeQrSessionData | null {
   const generatedAtMs = normalizePositiveInt(record.generatedAtMs);
   const expiresAtMs = normalizePositiveInt(record.expiresAtMs);
 
-  if (!sessionId || !qrcodeKey || !qrUrl || !qrImageDataUrl || generatedAtMs < 1 || expiresAtMs < 1) {
+  if (
+    !sessionId ||
+    !qrcodeKey ||
+    !qrUrl ||
+    !qrImageDataUrl ||
+    generatedAtMs < 1 ||
+    expiresAtMs < 1
+  ) {
     return null;
   }
 
@@ -270,21 +205,6 @@ function mapRuntimeQrSessionData(value: unknown): RuntimeQrSessionData | null {
     qrImageDataUrl,
     generatedAtMs,
     expiresAtMs,
-  };
-}
-
-function mapQrPollResultToRuntimeData(result: PlatformQrLoginPollResult): RuntimeQrPollData {
-  return {
-    sessionId: result.sessionId,
-    state: result.state,
-    stateCode: result.stateCode,
-    stateMessage: result.stateMessage,
-    authState: result.authState,
-    accountId: result.accountUid,
-    expiresAtMs: result.expiresAtMs,
-    metadata: {
-      connectorId: result.connectorId,
-    },
   };
 }
 
@@ -314,303 +234,33 @@ function mapRuntimeQrPollData(value: unknown): RuntimeQrPollData | null {
   };
 }
 
-function mapNeteaseCollection(item: {
-  playlistId: string;
-  title: string;
-  trackCount: number;
-  coverUrl?: string;
-  updatedAtMs?: number;
-}) {
-  return {
-    collectionId: item.playlistId,
-    title: item.title,
-    trackCount: item.trackCount,
-    coverUrl: item.coverUrl,
-    updatedAtMs: item.updatedAtMs,
-  };
-}
-
-function mapNeteasePage(
-  page: {
-    sourceKind: string;
-    sourceId: string;
-    pageNum: number;
-    pageSize: number;
-    total: number;
-    hasMore: boolean;
-    items: Array<{
-      songId: string;
-      title: string;
-      artistNames: string;
-      albumName?: string;
-      durationSeconds?: number;
-      coverUrl?: string;
-      sourceLocator: string;
-      webUrl: string;
-    }>;
-  } | null
-) {
-  if (!page) return null;
-  return {
-    sourceKind: page.sourceKind,
-    sourceId: page.sourceId,
-    pageNum: page.pageNum,
-    pageSize: page.pageSize,
-    total: page.total,
-    hasMore: page.hasMore,
-    items: page.items.map((item) => ({
-      resourceId: item.songId,
-      title: item.title,
-      artistNames: item.artistNames,
-      albumName: item.albumName,
-      durationSeconds: item.durationSeconds,
-      coverUrl: item.coverUrl,
-      sourceLocator: item.sourceLocator,
-      webUrl: item.webUrl,
-    })),
-  };
-}
-
 async function invokeConnectorAuthBinding(
   options: BindingInvokeOptions
 ): Promise<PlatformApiResult<unknown>> {
-  switch (options.method) {
-    case 'getSnapshot': {
-      const snapshot = await getPlatformConnectorAuthSnapshot(options.connectorId);
-      if (!snapshot) {
-        return err('API_UNAVAILABLE', `${options.displayName} auth snapshot is unavailable`);
-      }
-      return ok(mapAuthSnapshotToRuntimeData(snapshot));
-    }
-    case 'refreshSnapshot': {
-      const snapshot = await refreshAndEmitPlatformConnectorAuthSnapshot(options.connectorId);
-      if (!snapshot) {
-        return err('API_UNAVAILABLE', `${options.displayName} auth snapshot refresh is unavailable`);
-      }
-      return ok(mapAuthSnapshotToRuntimeData(snapshot));
-    }
-    case 'beginQrLogin': {
-      const session = await beginPlatformQrLogin(options.connectorId);
-      if (!session) {
-        return err('API_UNAVAILABLE', `${options.displayName} QR login session is unavailable`);
-      }
-      return ok(mapQrSessionToRuntimeData(session));
-    }
-    case 'pollQrLogin': {
-      const sessionId = normalizeString(options.payload?.sessionId);
-      if (!sessionId) {
-        return err('INVALID_PAYLOAD', 'payload.sessionId is required');
-      }
-      const result = await pollPlatformQrLogin(options.connectorId, sessionId);
-      if (!result) {
-        return err('API_UNAVAILABLE', `${options.displayName} QR login poll result is unavailable`);
-      }
-      return ok(mapQrPollResultToRuntimeData(result));
-    }
-    case 'logout': {
-      const snapshot = await logoutPlatformConnector(options.connectorId);
-      if (!snapshot) {
-        return err('API_UNAVAILABLE', `${options.displayName} logout snapshot is unavailable`);
-      }
-      return ok(mapAuthSnapshotToRuntimeData(snapshot));
-    }
-    case 'clearAuthCookies': {
-      const snapshot = await clearPlatformConnectorCookies(options.connectorId);
-      if (!snapshot) {
-        return err('API_UNAVAILABLE', `${options.displayName} auth cookie clearing is unavailable`);
-      }
-      return ok(mapAuthSnapshotToRuntimeData(snapshot));
-    }
-    default:
-      return err(
-        'UNSUPPORTED_CAPABILITY',
-        `${options.displayName} runtime binding ${options.bindingId}.${options.method} is not implemented`
-      );
+  const instanceId = resolveBindingInstanceId(options);
+  if (!instanceId) {
+    return err('INVALID_PAYLOAD', 'payload.instanceId is required');
   }
+  return invokePlatformInstanceAuthBinding(options, instanceId);
 }
 
-async function invokeNeteaseLibraryBinding(
+async function invokePlatformApiBinding(
   options: BindingInvokeOptions
 ): Promise<PlatformApiResult<unknown>> {
-  const instanceId = normalizeString(options.payload?.instanceId) || undefined;
-  switch (options.method) {
-    case 'listCollections': {
-      const items = await listNeteaseUserPlaylists({
-        forceRefresh: readBoolean(options.payload?.forceRefresh),
-        instanceId,
-      });
-      return ok({
-        items: items.map(mapNeteaseCollection),
-      });
-    }
-    case 'listPlaylistTracks':
-    case 'listResources': {
-      const collectionId =
-        normalizeString(options.payload?.collectionId) ||
-        normalizeString(options.payload?.playlistId);
-      if (!collectionId) {
-        return err('INVALID_PAYLOAD', 'payload.collectionId or payload.playlistId is required');
-      }
-      const page = await listNeteasePlaylistTracks(collectionId, {
-        forceRefresh: readBoolean(options.payload?.forceRefresh),
-        instanceId,
-      });
-      return ok(page ? mapNeteasePage(page) : null);
-    }
-    default:
-      return err(
-        'UNSUPPORTED_CAPABILITY',
-        `${options.displayName} runtime binding ${options.bindingId}.${options.method} is not implemented`
-      );
+  const instanceId = resolveBindingInstanceId(options);
+  if (!instanceId) {
+    return err('INVALID_PAYLOAD', 'payload.instanceId is required');
   }
-}
-
-async function invokeNeteaseRecommendationsBinding(
-  options: BindingInvokeOptions
-): Promise<PlatformApiResult<unknown>> {
-  const instanceId = normalizeString(options.payload?.instanceId) || undefined;
-  switch (options.method) {
-    case 'listDaily': {
-      const [collections, page] = await Promise.all([
-        listNeteaseRecommendedPlaylists({
-          forceRefresh: readBoolean(options.payload?.forceRefresh),
-          instanceId,
-        }),
-        listNeteaseRecommendedSongs({
-          forceRefresh: readBoolean(options.payload?.forceRefresh),
-          instanceId,
-        }),
-      ]);
-      const normalizedPage = mapNeteasePage(page);
-      return ok({
-        collections: collections.map(mapNeteaseCollection),
-        items: normalizedPage?.items ?? [],
-        total: normalizedPage?.total ?? 0,
-        hasMore: normalizedPage?.hasMore ?? false,
-        pageNum: normalizedPage?.pageNum ?? 1,
-        pageSize: normalizedPage?.pageSize ?? Math.max(1, normalizedPage?.items.length ?? 0),
-        sourceKind: normalizedPage?.sourceKind ?? 'recommended',
-        sourceId: normalizedPage?.sourceId ?? 'recommended',
-      });
-    }
-    default:
-      return err(
-        'UNSUPPORTED_CAPABILITY',
-        `${options.displayName} runtime binding ${options.bindingId}.${options.method} is not implemented`
-      );
-  }
-}
-
-async function invokeNeteaseSearchBinding(
-  options: BindingInvokeOptions
-): Promise<PlatformApiResult<unknown>> {
-  const instanceId = normalizeString(options.payload?.instanceId) || undefined;
-  switch (options.method) {
-    case 'query': {
-      const keyword =
-        normalizeString(options.payload?.keyword) || normalizeString(options.payload?.query);
-      if (!keyword) {
-        return err('INVALID_PAYLOAD', 'payload.keyword or payload.query is required');
-      }
-      const page = await searchNeteaseSongs({
-        keyword,
-        pageNum: normalizePositiveInt(options.payload?.pageNum) || 1,
-        pageSize: normalizePositiveInt(options.payload?.pageSize) || 40,
-        forceRefresh: readBoolean(options.payload?.forceRefresh),
-        instanceId,
-      });
-      return ok(page ? mapNeteasePage(page) : null);
-    }
-    case 'resolveLocator':
-      return ok({ item: null });
-    default:
-      return err(
-        'UNSUPPORTED_CAPABILITY',
-        `${options.displayName} runtime binding ${options.bindingId}.${options.method} is not implemented`
-      );
-  }
-}
-
-async function invokeNeteaseQualityBinding(
-  options: BindingInvokeOptions
-): Promise<PlatformApiResult<unknown>> {
-  switch (options.method) {
-    case 'listOptions':
-      return ok(toNeteasePlaybackQualityState());
-    case 'getCurrent':
-      return ok(toNeteasePlaybackQualityState().current);
-    case 'setPreferred': {
-      const qualityKey = normalizeNeteaseQualityKey(
-        options.payload?.qualityKey ?? options.payload?.key ?? options.payload?.qualityHint
-      );
-      writeNeteasePreferredQualityKey(qualityKey);
-      return ok({
-        saved: true,
-        ...toNeteasePlaybackQualityState(qualityKey),
-      });
-    }
-    default:
-      return err(
-        'UNSUPPORTED_CAPABILITY',
-        `${options.displayName} runtime binding ${options.bindingId}.${options.method} is not implemented`
-      );
-  }
-}
-
-function createPreparePlaybackInvoker(connectorId: string, displayName: string) {
-  return async (input: Record<string, unknown>) => {
-    const sourceLocator = normalizeString(input.sourceLocator);
-    if (!sourceLocator) {
-      return err('INVALID_PAYLOAD', 'payload.sourceLocator is required');
-    }
-
-    if (connectorId === 'connector.platform.netease') {
-      const qualityHint =
-        normalizeString(input.qualityHint) || readNeteasePreferredQualityKey();
-      const instanceId = normalizeString(input.instanceId) || undefined;
-      const prepared = await prepareNeteaseCachedPlayback(sourceLocator, qualityHint, instanceId);
-      if (!prepared) {
-        return err('API_UNAVAILABLE', `${displayName} playback preparation is unavailable`);
-      }
-      return ok({
-        sourceLocator: prepared.sourceLocator,
-        streamUrl: prepared.streamUrl,
-        cachePath: prepared.cachePath,
-        mimeType: prepared.mimeType,
-        durationSeconds: prepared.durationSeconds,
-        resourceId: prepared.songId,
-        selectedQualityKey: normalizeString(prepared.selectedQualityKey) || undefined,
-        selectedQualityLabel: normalizeString(prepared.selectedQualityLabel) || undefined,
-      });
-    }
-
-    return err(
-      'UNSUPPORTED_CAPABILITY',
-      `${displayName} playback preparation is not implemented for ${connectorId}`
-    );
-  };
+  return invokePlatformInstanceApiBinding(options, instanceId);
 }
 
 export async function invokePlatformRuntimeBinding(
   options: BindingInvokeOptions
 ): Promise<PlatformApiResult<unknown>> {
-  switch (options.bindingId) {
-    case CONNECTOR_AUTH_BINDING_ID:
-      return invokeConnectorAuthBinding(options);
-    case NETEASE_LIBRARY_BINDING_ID:
-      return invokeNeteaseLibraryBinding(options);
-    case NETEASE_RECOMMENDATIONS_BINDING_ID:
-      return invokeNeteaseRecommendationsBinding(options);
-    case NETEASE_SEARCH_BINDING_ID:
-      return invokeNeteaseSearchBinding(options);
-    case NETEASE_QUALITY_BINDING_ID:
-      return invokeNeteaseQualityBinding(options);
-    default:
-      return err(
-        'UNSUPPORTED_CAPABILITY',
-        `${options.displayName} runtime binding ${options.bindingId}.${options.method} is not registered`
-      );
+  if (options.bindingId === CONNECTOR_AUTH_BINDING_ID) {
+    return invokeConnectorAuthBinding(options);
   }
+  return invokePlatformApiBinding(options);
 }
 
 export function createPlatformCompatRuntimeFromBindingContract(
@@ -661,11 +311,6 @@ export function createPlatformCompatRuntimeFromBindingContract(
     return ok(normalized);
   };
 
-  const preparePlayback = createPreparePlaybackInvoker(
-    definition.connectorId,
-    definition.displayName
-  );
-
   return {
     auth: {
       getSnapshot: async (input) =>
@@ -696,7 +341,8 @@ export function createPlatformCompatRuntimeFromBindingContract(
             invokeBinding(contract.apiBindings.library, 'addTrackToPlaylist', input),
           removeTrackFromPlaylist: async (input: Record<string, unknown>) =>
             invokeBinding(contract.apiBindings.library, 'removeTrackFromPlaylist', input),
-          preparePlayback,
+          preparePlayback: async (input: Record<string, unknown>) =>
+            invokeBinding(contract.apiBindings.library, 'preparePlayback', input),
         }
       : undefined,
     recommendations: contract.apiBindings.recommendations
@@ -711,7 +357,8 @@ export function createPlatformCompatRuntimeFromBindingContract(
             invokeBinding(contract.apiBindings.search, 'query', input),
           resolveLocator: async (input: Record<string, unknown>) =>
             invokeBinding(contract.apiBindings.search, 'resolveLocator', input),
-          preparePlayback,
+          preparePlayback: async (input: Record<string, unknown>) =>
+            invokeBinding(contract.apiBindings.search, 'preparePlayback', input),
         }
       : undefined,
     quality: contract.apiBindings.quality
@@ -755,6 +402,15 @@ export function createPlatformConnectorAdapterFromBindingContract(
   contract: PlatformCompatContractFile
 ): PlatformConnectorAdapter {
   const runtime = createPlatformCompatRuntimeFromBindingContract(definition, contract);
+  const defaultInstanceId =
+    toDefaultInstanceIdForPlatform(contract.platform.platformId) ??
+    toDefaultInstanceIdForConnector(definition.connectorId);
+  if (!defaultInstanceId) {
+    throw new Error(
+      `Platform connector ${definition.connectorId} requires a stable default instance id`
+    );
+  }
+
   const readSnapshot = async (
     method: 'getSnapshot' | 'refreshSnapshot' | 'logout' | 'clearAuthCookies'
   ): Promise<PlatformConnectorAuthSnapshot> => {
@@ -766,7 +422,7 @@ export function createPlatformConnectorAdapterFromBindingContract(
         availabilityMessage: `${definition.displayName} auth runtime is unavailable`,
       });
     }
-    const result = await bucket({ instanceId: definition.connectorId });
+    const result = await bucket({ instanceId: defaultInstanceId });
     if (!result.ok) {
       return mapRuntimeAuthToSnapshot(definition.connectorId, definition.displayName, {
         authState: 'error',
@@ -784,7 +440,7 @@ export function createPlatformConnectorAdapterFromBindingContract(
     beginQrLogin: async () => {
       const begin = runtime.auth?.beginQrLogin;
       if (typeof begin !== 'function') return null;
-      const result = await begin({ instanceId: definition.connectorId });
+      const result = await begin({ instanceId: defaultInstanceId });
       if (!result.ok) return null;
       return {
         connectorId: definition.connectorId,
@@ -800,7 +456,7 @@ export function createPlatformConnectorAdapterFromBindingContract(
       const poll = runtime.auth?.pollQrLogin;
       if (typeof poll !== 'function') return null;
       const result = await poll({
-        instanceId: definition.connectorId,
+        instanceId: defaultInstanceId,
         sessionId,
       });
       if (!result.ok) return null;

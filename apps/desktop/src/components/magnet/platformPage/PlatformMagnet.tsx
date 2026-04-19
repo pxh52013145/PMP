@@ -48,7 +48,6 @@ import {
   setMusicPlatformGlobalCacheSettings,
   setPlatformRenderSelectionMounted,
   subscribePlatformCompatRegistry,
-  subscribePlatformConnectorAuthChanged,
   subscribePlatformConnectorDefinitions,
   subscribePlatformInstances,
   subscribePlatformLoginRegistry,
@@ -374,18 +373,51 @@ function ConnectorGlyph({
           : 'inset 0 0 0 1px rgba(255,255,255,0.06)',
       }}
     >
-      {iconAssetUrl ? (
-        <img
-          src={iconAssetUrl}
-          alt=""
-          aria-hidden
-          className={compact ? 'h-4 w-4 object-contain' : 'h-5 w-5 object-contain'}
-        />
-      ) : (
-        <Icon className={compact ? 'h-4 w-4' : 'h-5 w-5'} />
-      )}
+      <ConnectorVisualIcon
+        Icon={Icon}
+        color={color}
+        iconAssetUrl={iconAssetUrl}
+        className={compact ? 'h-4 w-4 object-contain' : 'h-5 w-5 object-contain'}
+      />
     </span>
   );
+}
+
+function ConnectorVisualIcon({
+  Icon,
+  color,
+  iconAssetUrl,
+  className,
+  style,
+}: {
+  Icon: IconComponent;
+  color: string;
+  iconAssetUrl?: string;
+  className: string;
+  style?: React.CSSProperties;
+}): JSX.Element {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [iconAssetUrl]);
+
+  if (iconAssetUrl && !imageFailed) {
+    return (
+      <img
+        src={iconAssetUrl}
+        alt=""
+        aria-hidden
+        className={className}
+        style={style}
+        onError={() => {
+          setImageFailed(true);
+        }}
+      />
+    );
+  }
+
+  return <Icon className={className} style={{ ...style, color }} />;
 }
 
 const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ skinProps: rawSkinProps }) => {
@@ -484,12 +516,14 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     });
   }, []);
 
-  const refreshConnectorViews = useCallback(async () => {
+  const refreshConnectorViews = useCallback(async (options?: { refreshAuth?: boolean }) => {
     const requestId = ++connectorViewsRequestIdRef.current;
     setConnectorViewsLoading(true);
 
     try {
-      const nextViews = await listPlatformConnectorFacadeItems();
+      const nextViews = await listPlatformConnectorFacadeItems({
+        refresh: options?.refreshAuth === true,
+      });
       if (connectorViewsRequestIdRef.current !== requestId) return;
       setConnectorViews(nextViews);
       setLastRefreshAt(Date.now());
@@ -581,11 +615,12 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   }, []);
 
   useEffect(() => {
-    void refreshConnectorViews();
-    return subscribePlatformConnectorAuthChanged(() => {
-      void refreshConnectorViews();
-    });
+    void refreshConnectorViews({ refreshAuth: true });
   }, [refreshConnectorViews]);
+
+  useEffect(() => {
+    void refreshConnectorViews();
+  }, [platformInstances, refreshConnectorViews]);
 
   useEffect(() => {
     if (!launcherOpen && !navOpen) return undefined;
@@ -1419,6 +1454,34 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const registeredCount = registeredItems.length;
   const loadedCount = registeredItems.filter((item) => item.renderSelection?.mounted === true).length;
   const authorizedCount = registeredItems.filter((item) => item.facade?.authState === 'authorized').length;
+  const launcherPreviewItems = useMemo(
+    () =>
+      [...registeredItems]
+        .sort((left, right) => {
+          const leftActive = left.entry.connectorId === activeConnectorId ? 1 : 0;
+          const rightActive = right.entry.connectorId === activeConnectorId ? 1 : 0;
+          if (leftActive !== rightActive) {
+            return rightActive - leftActive;
+          }
+
+          const leftMounted = left.renderSelection?.mounted === true ? 1 : 0;
+          const rightMounted = right.renderSelection?.mounted === true ? 1 : 0;
+          if (leftMounted !== rightMounted) {
+            return rightMounted - leftMounted;
+          }
+
+          const leftAuthorized = left.facade?.authState === 'authorized' ? 1 : 0;
+          const rightAuthorized = right.facade?.authState === 'authorized' ? 1 : 0;
+          if (leftAuthorized !== rightAuthorized) {
+            return rightAuthorized - leftAuthorized;
+          }
+
+          return left.entry.connectorId.localeCompare(right.entry.connectorId, 'zh-CN');
+        })
+        .slice(0, 3),
+    [activeConnectorId, registeredItems]
+  );
+  const launcherPreviewOverflowCount = Math.max(0, registeredCount - launcherPreviewItems.length);
   const activeConnectorLabel =
     activeDefinition?.labelKey
       ? t(activeDefinition.labelKey)
@@ -2507,7 +2570,46 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
               title={t('magnet.platform.launcher.title')}
               aria-pressed={launcherOpen}
             >
-              <LayoutGrid className="h-5 w-5" />
+              {launcherPreviewItems.length > 0 ? (
+                <span className="platform-preview-launcher-trigger-preview" aria-hidden>
+                  {launcherPreviewItems.map((item, index) => {
+                    const { Icon, color, iconAssetUrl } = resolveConnectorVisualMeta(
+                      item.entry.connectorId,
+                      item.definition
+                    );
+                    const emphasized =
+                      item.renderSelection?.mounted === true || item.facade?.authState === 'authorized';
+
+                    return (
+                      <span
+                        key={item.entry.connectorId}
+                        className={cx(
+                          'platform-preview-launcher-trigger-preview-item',
+                          `platform-preview-launcher-trigger-preview-item--${index}`,
+                          emphasized
+                            ? 'platform-preview-launcher-trigger-preview-item-emphasized'
+                            : 'platform-preview-launcher-trigger-preview-item-muted'
+                        )}
+                      >
+                        <ConnectorVisualIcon
+                          Icon={Icon}
+                          color={emphasized ? color : 'rgba(170, 182, 198, 0.8)'}
+                          iconAssetUrl={iconAssetUrl}
+                          className="h-3.5 w-3.5 object-contain"
+                          style={{ opacity: emphasized ? 1 : 0.82 }}
+                        />
+                      </span>
+                    );
+                  })}
+                  {launcherPreviewOverflowCount > 0 ? (
+                    <span className="platform-preview-launcher-trigger-preview-badge">
+                      +{Math.min(launcherPreviewOverflowCount, 9)}
+                    </span>
+                  ) : null}
+                </span>
+              ) : (
+                <LayoutGrid className="h-5 w-5" />
+              )}
             </button>
 
             <div
@@ -2547,20 +2649,13 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                     )}
                     title={itemLabel}
                   >
-                    {iconAssetUrl ? (
-                      <img
-                        src={iconAssetUrl}
-                        alt=""
-                        aria-hidden
-                        className="platform-preview-launcher-item-icon h-6 w-6 object-contain transition-all duration-200"
-                        style={{ opacity: mounted ? 1 : 0.62 }}
-                      />
-                    ) : (
-                      <Icon
-                        className="platform-preview-launcher-item-icon h-6 w-6 transition-all duration-200"
-                        style={{ color: iconColor }}
-                      />
-                    )}
+                    <ConnectorVisualIcon
+                      Icon={Icon}
+                      color={iconColor}
+                      iconAssetUrl={iconAssetUrl}
+                      className="platform-preview-launcher-item-icon h-6 w-6 object-contain transition-all duration-200"
+                      style={{ opacity: mounted ? 1 : 0.62 }}
+                    />
                   </button>
                 );
               })}

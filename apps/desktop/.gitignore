@@ -27,3 +27,7 @@ dist-ssr
 src-tauri/target
 src-tauri/crates/**/target
 
+# Generated builtin music platform packs
+public/resource/music-platform/packs/builtin/
+public/resource/music-platform/packs/dist/
+

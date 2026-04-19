@@ -6,8 +6,6 @@ import type {
   PlatformInstanceAuthState,
   PlatformInstanceRecord,
 } from '@pixel-matrix/plugin-platform-contracts';
-import type { PlatformConnectorAuthSnapshot } from './connectorAuth';
-import { subscribePlatformConnectorAuthChanged } from './connectorAuth';
 import {
   getPlatformCompatRegistryRecord,
   getPlatformCompatRuntimeApi,
@@ -20,11 +18,22 @@ type PlatformInstanceRegistryListener = (instances: PlatformInstanceRecord[]) =>
 
 const platformInstanceRegistry = new Map<string, PlatformInstanceRecord>();
 const platformInstanceRegistryListeners = new Set<PlatformInstanceRegistryListener>();
+const platformInstanceAuthRefreshRegistry = new Map<
+  string,
+  Promise<PlatformInstanceRecord | null>
+>();
 
 let platformInstanceRegistryInitialized = false;
 
 function normalizeInstanceId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function readRuntimeErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
 }
 
 function toBuiltinPlatformInstanceId(platformId: string): string {
@@ -220,42 +229,56 @@ async function refreshPlatformInstanceAuthState(
   const normalizedInstanceId = normalizeInstanceId(instanceId);
   if (!normalizedInstanceId) return null;
 
-  const currentRecord = platformInstanceRegistry.get(normalizedInstanceId);
-  if (!currentRecord) return null;
-
-  const runtime = runtimeOverride ?? getPlatformCompatRuntimeApi(currentRecord.platformId);
-  const readAuthSnapshot = runtime?.auth?.refreshSnapshot ?? runtime?.auth?.getSnapshot;
-  if (!readAuthSnapshot) {
-    return clonePlatformInstanceRecord(currentRecord);
+  const existingRefresh = platformInstanceAuthRefreshRegistry.get(normalizedInstanceId);
+  if (existingRefresh) {
+    return await existingRefresh;
   }
 
-  const result = await readAuthSnapshot({ instanceId: normalizedInstanceId });
-  const nextRecord = result.ok
-    ? applyPlatformAuthSuccessToRecord(currentRecord, result.data)
-    : applyPlatformAuthErrorToRecord(currentRecord, result);
+  const refreshPromise = (async () => {
+    const currentRecord = platformInstanceRegistry.get(normalizedInstanceId);
+    if (!currentRecord) return null;
 
-  platformInstanceRegistry.set(normalizedInstanceId, nextRecord);
-  emitPlatformInstancesChanged();
-  return clonePlatformInstanceRecord(nextRecord);
-}
+    const runtime = runtimeOverride ?? getPlatformCompatRuntimeApi(currentRecord.platformId);
+    const readAuthSnapshot = runtime?.auth?.refreshSnapshot ?? runtime?.auth?.getSnapshot;
+    if (!readAuthSnapshot) {
+      return clonePlatformInstanceRecord(currentRecord);
+    }
 
-function updatePlatformInstanceFromConnectorSnapshot(snapshot: PlatformConnectorAuthSnapshot): void {
-  for (const [instanceId, record] of platformInstanceRegistry.entries()) {
-    if (record.metadata?.connectorId !== snapshot.connectorId) continue;
+    let nextRecord: PlatformInstanceRecord;
+    try {
+      const result = await readAuthSnapshot({ instanceId: normalizedInstanceId });
+      if (!result.ok && result.error.code === 'RUNTIME_RELOADING') {
+        return clonePlatformInstanceRecord(currentRecord);
+      }
+      nextRecord = result.ok
+        ? applyPlatformAuthSuccessToRecord(currentRecord, result.data)
+        : applyPlatformAuthErrorToRecord(currentRecord, result);
+    } catch (error) {
+      nextRecord = {
+        ...currentRecord,
+        auth: {
+          ...currentRecord.auth,
+          status: 'error',
+        },
+        availability: 'unavailable',
+        availabilityMessage: readRuntimeErrorMessage(error),
+      };
+    }
 
-    const nextRecord = applyPlatformAuthSuccessToRecord(record, {
-      authState: snapshot.authState,
-      accountId: snapshot.accountUid,
-      updatedAtMs: snapshot.updatedAtMs,
-      expiresAtMs: snapshot.expiresAtMs,
-      availability: snapshot.availability,
-      availabilityMessage: snapshot.availabilityMessage,
-    });
-
-    platformInstanceRegistry.set(instanceId, nextRecord);
+    platformInstanceRegistry.set(normalizedInstanceId, nextRecord);
     emitPlatformInstancesChanged();
-    return;
-  }
+    return clonePlatformInstanceRecord(nextRecord);
+  })();
+
+  const trackedRefreshPromise = refreshPromise.finally(() => {
+    const pending = platformInstanceAuthRefreshRegistry.get(normalizedInstanceId);
+    if (pending === trackedRefreshPromise) {
+      platformInstanceAuthRefreshRegistry.delete(normalizedInstanceId);
+    }
+  });
+
+  platformInstanceAuthRefreshRegistry.set(normalizedInstanceId, trackedRefreshPromise);
+  return await trackedRefreshPromise;
 }
 
 function initializePlatformInstanceRegistry(): void {
@@ -273,21 +296,7 @@ function initializePlatformInstanceRegistry(): void {
     if (nextChanged) {
       emitPlatformInstancesChanged();
     }
-
-    for (const record of listPlatformCompatRegistryRecords()) {
-      if (!shouldAutoCreateDefaultInstance(record)) continue;
-      void refreshPlatformInstanceAuthState(toBuiltinPlatformInstanceId(record.platformId), record.runtime);
-    }
   });
-
-  subscribePlatformConnectorAuthChanged((snapshot) => {
-    updatePlatformInstanceFromConnectorSnapshot(snapshot);
-  });
-
-  for (const record of listPlatformCompatRegistryRecords()) {
-    if (!shouldAutoCreateDefaultInstance(record)) continue;
-    void refreshPlatformInstanceAuthState(toBuiltinPlatformInstanceId(record.platformId), record.runtime);
-  }
 }
 
 export function listPlatformInstances(): PlatformInstanceRecord[] {

@@ -15,31 +15,32 @@ import {
 import { CollisionAwarePopup } from '../../core/CollisionAwarePopup';
 import { useT } from '../../../i18n';
 import {
-  beginPlatformQrLogin,
-  clearPlatformConnectorCookies,
-  getPlatformConnectorAuthSnapshot,
+  beginPlatformInstanceQrLogin,
+  clearPlatformInstanceAuthCookies,
+  getPlatformInstanceAuthSnapshot,
   installPlatformPackFromFile,
   listBuiltinPlatformCompatRegistrations,
-  listPlatformConnectorAuthSnapshots,
+  listPlatformInstanceAuthSnapshots,
   listPlatformConnectorDefinitions,
   listPlatformInstances,
   listPlatformRenderSelections,
-  logoutPlatformConnector,
-  pollPlatformQrLogin,
+  logoutPlatformInstance,
+  pollPlatformInstanceQrLogin,
+  refreshPlatformInstanceAuthSnapshot,
   reconcileBuiltinPlatformCompatRegistrations,
+  resolvePlatformInstanceId,
   resolvePlatformConnectorTemplate,
   setPlatformRenderSelectionMounted,
-  subscribePlatformConnectorAuthChanged,
   subscribePlatformConnectorCompatRegistrations,
   subscribePlatformConnectorDefinitions,
   subscribePlatformInstances,
   subscribePlatformRenderSelections,
-  type PlatformConnectorAuthSnapshot,
+  type PlatformInstanceAuthSnapshot,
   type PlatformConnectorDefinition,
   type PlatformConnectorId,
   type PlatformInstanceRecord,
-  type PlatformQrLoginPollResult,
-  type PlatformQrLoginSession,
+  type PlatformInstanceQrLoginPollResult,
+  type PlatformInstanceQrLoginSession,
   type PlatformRenderSelectionRecord,
   type PlatformCompatContractFile,
   persistPlatformLoginRegistry,
@@ -107,7 +108,7 @@ function toAvailabilityLabelKey(availability: string): string {
   }
 }
 
-function isTerminalPollState(result: PlatformQrLoginPollResult | null): boolean {
+function isTerminalPollState(result: PlatformInstanceQrLoginPollResult | null): boolean {
   if (!result) return false;
   const normalized = result.state.trim().toLowerCase();
   return normalized === 'authorized' || normalized === 'expired' || normalized === 'failed';
@@ -142,6 +143,19 @@ function updateConnectorScopedValue<TRecord extends Record<string, unknown>>(
   } as TRecord));
 }
 
+function buildAuthSnapshotMapByConnectorId(
+  instances: PlatformInstanceRecord[]
+): Record<string, PlatformInstanceAuthSnapshot | null> {
+  const next: Record<string, PlatformInstanceAuthSnapshot | null> = {};
+  for (const instance of instances) {
+    const connectorId =
+      typeof instance.metadata?.connectorId === 'string' ? instance.metadata.connectorId : '';
+    if (!connectorId) continue;
+    next[connectorId] = getPlatformInstanceAuthSnapshot(instance.instanceId);
+  }
+  return next;
+}
+
 function getConnectorVisualMeta(definition: PlatformConnectorDefinition): ConnectorVisualMeta {
   const template = resolvePlatformConnectorTemplate(definition);
   const fallbackIcon = template === 'video' ? Tv : template === 'music' ? Disc3 : Music;
@@ -158,7 +172,7 @@ function getConnectorVisualMeta(definition: PlatformConnectorDefinition): Connec
 
 function resolveManagedConnectorState(
   definition: PlatformConnectorDefinition,
-  snapshot: PlatformConnectorAuthSnapshot | null | undefined,
+  snapshot: PlatformInstanceAuthSnapshot | null | undefined,
   renderSelection?: PlatformRenderSelectionRecord | null
 ): ManagedConnectorState {
   if (!definition.enabled || definition.authFlow !== 'qr') return 'disabled';
@@ -220,10 +234,52 @@ function ConnectorGlyph({
 }): JSX.Element {
   const { Icon, color, iconAssetUrl } = getConnectorVisualMeta(definition);
   const className = compact ? 'platform-login-glyph platform-login-glyph--compact' : 'platform-login-glyph';
-  if (iconAssetUrl) {
-    return <img src={iconAssetUrl} alt="" aria-hidden className={className} style={{ objectFit: 'contain' }} />;
+  return (
+    <ConnectorVisualIcon
+      Icon={Icon}
+      color={color}
+      iconAssetUrl={iconAssetUrl}
+      className={className}
+      style={{ objectFit: 'contain' }}
+    />
+  );
+}
+
+function ConnectorVisualIcon({
+  Icon,
+  color,
+  iconAssetUrl,
+  className,
+  style,
+}: {
+  Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
+  color: string;
+  iconAssetUrl?: string;
+  className: string;
+  style?: React.CSSProperties;
+}): JSX.Element {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [iconAssetUrl]);
+
+  if (iconAssetUrl && !imageFailed) {
+    return (
+      <img
+        src={iconAssetUrl}
+        alt=""
+        aria-hidden
+        className={className}
+        style={style}
+        onError={() => {
+          setImageFailed(true);
+        }}
+      />
+    );
   }
-  return <Icon className={className} style={{ color }} />;
+
+  return <Icon className={className} style={{ ...style, color }} />;
 }
 
 const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererProps> = ({
@@ -280,9 +336,9 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     listPlatformRenderSelections()
   );
 
-  const [authSnapshotsByConnectorId, setAuthSnapshotsByConnectorId] = useState<Record<string, PlatformConnectorAuthSnapshot | null>>({});
-  const [qrSessionsByConnectorId, setQrSessionsByConnectorId] = useState<Record<string, PlatformQrLoginSession | null>>({});
-  const [pollResultsByConnectorId, setPollResultsByConnectorId] = useState<Record<string, PlatformQrLoginPollResult | null>>({});
+  const [authSnapshotsByConnectorId, setAuthSnapshotsByConnectorId] = useState<Record<string, PlatformInstanceAuthSnapshot | null>>({});
+  const [qrSessionsByConnectorId, setQrSessionsByConnectorId] = useState<Record<string, PlatformInstanceQrLoginSession | null>>({});
+  const [pollResultsByConnectorId, setPollResultsByConnectorId] = useState<Record<string, PlatformInstanceQrLoginPollResult | null>>({});
   const [errorsByConnectorId, setErrorsByConnectorId] = useState<Record<string, string | null>>({});
   const [statusMessagesByConnectorId, setStatusMessagesByConnectorId] = useState<Record<string, string | null>>({});
 
@@ -351,16 +407,18 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   }, [refreshRegistryState]);
 
   const refreshAuthSnapshot = useCallback(async (connectorId: PlatformConnectorId) => {
-    const snapshot = await getPlatformConnectorAuthSnapshot(connectorId);
+    const instanceId = resolvePlatformInstanceId({ connectorId });
+    const snapshot = instanceId ? await refreshPlatformInstanceAuthSnapshot(instanceId) : null;
     updateConnectorScopedValue(setAuthSnapshotsByConnectorId, connectorId, snapshot);
     return snapshot;
   }, []);
 
   const refreshAllAuthSnapshots = useCallback(async () => {
-    const snapshots = await listPlatformConnectorAuthSnapshots();
+    const snapshots = await listPlatformInstanceAuthSnapshots({ refresh: true });
     setAuthSnapshotsByConnectorId((prev) => {
       const next = { ...prev };
       for (const snapshot of snapshots) {
+        if (!snapshot.connectorId) continue;
         next[snapshot.connectorId] = snapshot;
       }
       return next;
@@ -369,14 +427,6 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
 
   useEffect(() => {
     void refreshAllAuthSnapshots();
-
-    const unsubscribe = subscribePlatformConnectorAuthChanged((snapshot) => {
-      updateConnectorScopedValue(setAuthSnapshotsByConnectorId, snapshot.connectorId, snapshot);
-    });
-
-    return () => {
-      unsubscribe();
-    };
   }, [refreshAllAuthSnapshots]);
 
   useEffect(() => {
@@ -385,6 +435,10 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
       setPlatformInstances(instances);
     });
   }, []);
+
+  useEffect(() => {
+    setAuthSnapshotsByConnectorId(buildAuthSnapshotMapByConnectorId(platformInstances));
+  }, [platformInstances]);
 
   useEffect(() => {
     setRenderSelections(listPlatformRenderSelections());
@@ -434,7 +488,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
           ): item is {
             entry: PlatformLoginRegistryEntry;
             definition: PlatformConnectorDefinition;
-            snapshot: PlatformConnectorAuthSnapshot | null;
+            snapshot: PlatformInstanceAuthSnapshot | null;
             instance: PlatformInstanceRecord | null;
             renderSelection: PlatformRenderSelectionRecord | null;
             builtinCompat: (typeof compatRegistrations)[number] | null;
@@ -727,10 +781,12 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     async (connectorId: PlatformConnectorId, sessionId?: string) => {
       const targetSessionId = (sessionId ?? qrSessionsByConnectorId[connectorId]?.sessionId ?? '').trim();
       if (!targetSessionId || busyConnectorId) return;
+      const instanceId = resolvePlatformInstanceId({ connectorId });
+      if (!instanceId) return;
 
       setBusyConnectorId(connectorId);
       try {
-        const result = await pollPlatformQrLogin(connectorId, targetSessionId);
+        const result = await pollPlatformInstanceQrLogin(instanceId, targetSessionId);
         updateConnectorScopedValue(setPollResultsByConnectorId, connectorId, result);
         updateConnectorScopedValue(setErrorsByConnectorId, connectorId, null);
 
@@ -807,7 +863,17 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     setBusyConnectorId(selectedConnectorId);
 
     try {
-      const session = await beginPlatformQrLogin(selectedConnectorId);
+      const instanceId = resolvePlatformInstanceId({ connectorId: selectedConnectorId });
+      if (!instanceId) {
+        updateConnectorScopedValue(
+          setErrorsByConnectorId,
+          selectedConnectorId,
+          t('magnet.platform-login.error.generateFailed')
+        );
+        return;
+      }
+
+      const session = await beginPlatformInstanceQrLogin(instanceId);
       if (!session) {
         updateConnectorScopedValue(
           setErrorsByConnectorId,
@@ -867,7 +933,17 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
       setBusyConnectorId(connectorId);
 
       try {
-        const snapshot = await logoutPlatformConnector(connectorId);
+        const instanceId = resolvePlatformInstanceId({ connectorId });
+        if (!instanceId) {
+          updateConnectorScopedValue(
+            setErrorsByConnectorId,
+            connectorId,
+            t('magnet.platform-login.error.logoutFailed')
+          );
+          return;
+        }
+
+        const snapshot = await logoutPlatformInstance(instanceId);
         updateConnectorScopedValue(setAuthSnapshotsByConnectorId, connectorId, snapshot);
         updateConnectorScopedValue(setQrSessionsByConnectorId, connectorId, null);
         updateConnectorScopedValue(setPollResultsByConnectorId, connectorId, null);
@@ -896,7 +972,17 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
       setBusyConnectorId(connectorId);
 
       try {
-        const snapshot = await clearPlatformConnectorCookies(connectorId);
+        const instanceId = resolvePlatformInstanceId({ connectorId });
+        if (!instanceId) {
+          updateConnectorScopedValue(
+            setErrorsByConnectorId,
+            connectorId,
+            t('magnet.platform-login.error.clearCookiesFailed')
+          );
+          return;
+        }
+
+        const snapshot = await clearPlatformInstanceAuthCookies(instanceId);
         updateConnectorScopedValue(setAuthSnapshotsByConnectorId, connectorId, snapshot);
         updateConnectorScopedValue(setQrSessionsByConnectorId, connectorId, null);
         updateConnectorScopedValue(setPollResultsByConnectorId, connectorId, null);

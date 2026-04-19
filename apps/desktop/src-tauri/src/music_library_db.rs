@@ -1,8 +1,9 @@
+use crate::music_platform_runtime::MusicPlatformRuntimeHost;
 use once_cell::sync::{Lazy, OnceCell};
 use rusqlite::{
     params, params_from_iter,
     types::{Value, ValueRef},
-    Connection, Transaction,
+    Connection, OptionalExtension, Transaction,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -15,7 +16,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-const DB_VERSION: i32 = 9;
+const DB_VERSION: i32 = 10;
 pub const EVENT_MUSIC_LIBRARY_SCHEMA_CHANGED: &str = "music-library-schema-changed";
 
 static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
@@ -143,6 +144,38 @@ pub struct LibraryConnectorAccountRecord {
     pub token_ref: Option<String>,
     pub refresh_token_ref: Option<String>,
     pub expires_at_ms: Option<i64>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformInstanceAuthUpsertInput {
+    pub instance_id: String,
+    pub platform_id: String,
+    pub connector_id: Option<String>,
+    pub account_uid: Option<String>,
+    pub auth_state: String,
+    pub token_ref: Option<String>,
+    pub refresh_token_ref: Option<String>,
+    pub expires_at_ms: Option<i64>,
+    pub legacy_connector_account_id: Option<String>,
+    pub created_at_ms: Option<i64>,
+    pub updated_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformInstanceAuthRecord {
+    pub instance_id: String,
+    pub platform_id: String,
+    pub connector_id: Option<String>,
+    pub account_uid: Option<String>,
+    pub auth_state: String,
+    pub token_ref: Option<String>,
+    pub refresh_token_ref: Option<String>,
+    pub expires_at_ms: Option<i64>,
+    pub legacy_connector_account_id: Option<String>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }
@@ -817,8 +850,8 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn db_file_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let app_data_dir = app
+fn db_file_path_for_runtime_host(host: &MusicPlatformRuntimeHost) -> Result<PathBuf, String> {
+    let app_data_dir = host
         .path_resolver()
         .app_data_dir()
         .ok_or_else(|| "Unable to resolve app data directory".to_string())?;
@@ -1161,6 +1194,38 @@ fn ensure_sangreal_v8_playlist_cover_schema(conn: &Connection) -> Result<(), Str
     .map_err(|error| format!("Failed to ensure music library schema v8 playlist cover: {error}"))
 }
 
+fn ensure_sangreal_v10_platform_instance_auth_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS platform_instance_auth (
+          instance_id TEXT PRIMARY KEY NOT NULL,
+          platform_id TEXT NOT NULL,
+          connector_id TEXT,
+          account_uid TEXT,
+          auth_state TEXT NOT NULL,
+          token_ref TEXT,
+          refresh_token_ref TEXT,
+          expires_at_ms INTEGER,
+          legacy_connector_account_id TEXT,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS platform_instance_auth_platform_id_idx
+          ON platform_instance_auth(platform_id);
+        CREATE INDEX IF NOT EXISTS platform_instance_auth_connector_id_idx
+          ON platform_instance_auth(connector_id);
+        CREATE INDEX IF NOT EXISTS platform_instance_auth_auth_state_idx
+          ON platform_instance_auth(auth_state);
+        CREATE INDEX IF NOT EXISTS platform_instance_auth_legacy_connector_account_id_idx
+          ON platform_instance_auth(legacy_connector_account_id);
+        "#,
+    )
+    .map_err(|error| {
+        format!("Failed to ensure music library schema v10 platform instance auth: {error}")
+    })
+}
+
 fn migrate(conn: &Connection) -> Result<(), String> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|error| format!("Failed to enable foreign keys: {error}"))?;
@@ -1443,6 +1508,13 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         version = 9;
     }
 
+    if version == 9 {
+        ensure_sangreal_v10_platform_instance_auth_schema(conn)?;
+        conn.execute_batch("PRAGMA user_version = 10;")
+            .map_err(|error| format!("Failed to migrate music library schema to v10: {error}"))?;
+        version = 10;
+    }
+
     if version != DB_VERSION {
         return Err(format!(
             "Unsupported music library DB schema version: {version} (expected {DB_VERSION})"
@@ -1463,7 +1535,7 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-pub fn init(app: &AppHandle) -> Result<(), String> {
+pub(crate) fn init_for_runtime_host(host: &MusicPlatformRuntimeHost) -> Result<(), String> {
     {
         let guard = conn()?;
         if guard.is_some() {
@@ -1473,7 +1545,7 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
 
     invalidate_track_query_count_cache();
 
-    let path = db_file_path(app)?;
+    let path = db_file_path_for_runtime_host(host)?;
     let _ = DB_PATH.set(path.clone());
     let connection = Connection::open(&path)
         .map_err(|error| format!("Failed to open music library DB: {error}"))?;
@@ -1488,7 +1560,11 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_initialized(app: &AppHandle) -> Result<(), String> {
+pub fn init(app: &AppHandle) -> Result<(), String> {
+    init_for_runtime_host(&MusicPlatformRuntimeHost::from_app_handle(app))
+}
+
+fn ensure_initialized_for_runtime_host(host: &MusicPlatformRuntimeHost) -> Result<(), String> {
     let ready = {
         let guard = conn()?;
         guard.is_some()
@@ -1496,8 +1572,12 @@ fn ensure_initialized(app: &AppHandle) -> Result<(), String> {
     if ready {
         Ok(())
     } else {
-        init(app)
+        init_for_runtime_host(host)
     }
+}
+
+fn ensure_initialized(app: &AppHandle) -> Result<(), String> {
+    ensure_initialized_for_runtime_host(&MusicPlatformRuntimeHost::from_app_handle(app))
 }
 
 fn normalize_bool_flag(value: Option<bool>, fallback: bool) -> i64 {
@@ -1903,6 +1983,165 @@ fn connector_account_record_by_id(
     .map_err(|error| format!("Failed to load connector account record: {error}"))
 }
 
+fn latest_connector_account_record_by_connector_id(
+    conn: &Connection,
+    connector_id: &str,
+) -> Result<Option<LibraryConnectorAccountRecord>, String> {
+    conn.query_row(
+        r#"
+        SELECT
+          id,
+          connector_id,
+          account_uid,
+          auth_state,
+          token_ref,
+          refresh_token_ref,
+          expires_at_ms,
+          created_at_ms,
+          updated_at_ms
+        FROM connector_accounts
+        WHERE connector_id = ?1
+        ORDER BY updated_at_ms DESC, created_at_ms DESC, id ASC
+        LIMIT 1
+        "#,
+        params![connector_id],
+        |row| {
+            Ok(LibraryConnectorAccountRecord {
+                id: row.get(0)?,
+                connector_id: row.get(1)?,
+                account_uid: row.get(2)?,
+                auth_state: row.get(3)?,
+                token_ref: row.get(4)?,
+                refresh_token_ref: row.get(5)?,
+                expires_at_ms: row.get(6)?,
+                created_at_ms: row.get(7)?,
+                updated_at_ms: row.get(8)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|error| format!("Failed to load latest connector account record: {error}"))
+}
+
+fn platform_instance_auth_record_by_instance_id(
+    conn: &Connection,
+    instance_id: &str,
+) -> Result<Option<PlatformInstanceAuthRecord>, String> {
+    conn.query_row(
+        r#"
+        SELECT
+          instance_id,
+          platform_id,
+          connector_id,
+          account_uid,
+          auth_state,
+          token_ref,
+          refresh_token_ref,
+          expires_at_ms,
+          legacy_connector_account_id,
+          created_at_ms,
+          updated_at_ms
+        FROM platform_instance_auth
+        WHERE instance_id = ?1
+        LIMIT 1
+        "#,
+        params![instance_id],
+        |row| {
+            Ok(PlatformInstanceAuthRecord {
+                instance_id: row.get(0)?,
+                platform_id: row.get(1)?,
+                connector_id: row.get(2)?,
+                account_uid: row.get(3)?,
+                auth_state: row.get(4)?,
+                token_ref: row.get(5)?,
+                refresh_token_ref: row.get(6)?,
+                expires_at_ms: row.get(7)?,
+                legacy_connector_account_id: row.get(8)?,
+                created_at_ms: row.get(9)?,
+                updated_at_ms: row.get(10)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|error| format!("Failed to load platform instance auth record: {error}"))
+}
+
+fn migrate_legacy_connector_account_to_platform_instance_auth_in_conn(
+    conn: &Connection,
+    platform_id: &str,
+    instance_id: &str,
+    connector_id: &str,
+) -> Result<Option<PlatformInstanceAuthRecord>, String> {
+    let normalized_instance_id = instance_id.trim();
+    if normalized_instance_id.is_empty() {
+        return Err("Platform instance auth migration requires a non-empty instanceId".to_string());
+    }
+
+    if let Some(existing) =
+        platform_instance_auth_record_by_instance_id(conn, normalized_instance_id)?
+    {
+        return Ok(Some(existing));
+    }
+
+    let normalized_platform_id = platform_id.trim().to_ascii_lowercase();
+    if normalized_platform_id.is_empty() {
+        return Err("Platform instance auth migration requires a non-empty platformId".to_string());
+    }
+
+    let normalized_connector_id = connector_id.trim();
+    if normalized_connector_id.is_empty() {
+        return Err(
+            "Platform instance auth migration requires a non-empty connectorId".to_string(),
+        );
+    }
+
+    let Some(legacy_account) =
+        latest_connector_account_record_by_connector_id(conn, normalized_connector_id)?
+    else {
+        return Ok(None);
+    };
+
+    conn.execute(
+        r#"
+        INSERT INTO platform_instance_auth(
+          instance_id,
+          platform_id,
+          connector_id,
+          account_uid,
+          auth_state,
+          token_ref,
+          refresh_token_ref,
+          expires_at_ms,
+          legacy_connector_account_id,
+          created_at_ms,
+          updated_at_ms
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+        ON CONFLICT(instance_id) DO NOTHING
+        "#,
+        params![
+            normalized_instance_id,
+            normalized_platform_id,
+            legacy_account.connector_id,
+            legacy_account.account_uid,
+            normalize_text(Some(legacy_account.auth_state.as_str()))
+                .unwrap_or_else(|| "unauthorized".to_string())
+                .to_ascii_lowercase(),
+            legacy_account.token_ref,
+            legacy_account.refresh_token_ref,
+            legacy_account.expires_at_ms,
+            Some(legacy_account.id),
+            legacy_account.created_at_ms,
+            legacy_account.updated_at_ms,
+        ],
+    )
+    .map_err(|error| {
+        format!("Failed to migrate legacy connector auth to platform instance auth: {error}")
+    })?;
+
+    platform_instance_auth_record_by_instance_id(conn, normalized_instance_id)
+}
+
 fn source_record_by_id(conn: &Connection, source_id: &str) -> Result<LibrarySourceRecord, String> {
     conn.query_row(
         r#"
@@ -2130,7 +2369,25 @@ pub fn ensure_connector(
     display_name: Option<&str>,
     status: Option<&str>,
 ) -> Result<(), String> {
-    ensure_initialized(app)?;
+    ensure_connector_for_runtime_host(
+        &MusicPlatformRuntimeHost::from_app_handle(app),
+        connector_id,
+        kind,
+        driver,
+        display_name,
+        status,
+    )
+}
+
+pub(crate) fn ensure_connector_for_runtime_host(
+    host: &MusicPlatformRuntimeHost,
+    connector_id: &str,
+    kind: &str,
+    driver: &str,
+    display_name: Option<&str>,
+    status: Option<&str>,
+) -> Result<(), String> {
+    ensure_initialized_for_runtime_host(host)?;
     with_conn(|conn| {
         let id = connector_id.trim();
         if id.is_empty() {
@@ -2252,6 +2509,154 @@ pub fn upsert_connector_account(
     })
 }
 
+pub fn upsert_platform_instance_auth(
+    app: &AppHandle,
+    input: PlatformInstanceAuthUpsertInput,
+) -> Result<PlatformInstanceAuthRecord, String> {
+    upsert_platform_instance_auth_for_runtime_host(
+        &MusicPlatformRuntimeHost::from_app_handle(app),
+        input,
+    )
+}
+
+pub(crate) fn upsert_platform_instance_auth_for_runtime_host(
+    host: &MusicPlatformRuntimeHost,
+    input: PlatformInstanceAuthUpsertInput,
+) -> Result<PlatformInstanceAuthRecord, String> {
+    ensure_initialized_for_runtime_host(host)?;
+    with_conn(|conn| {
+        let instance_id = input.instance_id.trim();
+        if instance_id.is_empty() {
+            return Err("Platform instance auth requires a non-empty instanceId".to_string());
+        }
+
+        let platform_id = input.platform_id.trim().to_ascii_lowercase();
+        if platform_id.is_empty() {
+            return Err("Platform instance auth requires a non-empty platformId".to_string());
+        }
+
+        let connector_id = normalize_text(input.connector_id.as_deref());
+        let account_uid = normalize_text(input.account_uid.as_deref());
+        let auth_state = normalize_text(Some(input.auth_state.as_str()))
+            .unwrap_or_else(|| "unauthorized".to_string())
+            .to_ascii_lowercase();
+        let token_ref = normalize_text(input.token_ref.as_deref());
+        let refresh_token_ref = normalize_text(input.refresh_token_ref.as_deref());
+        let legacy_connector_account_id =
+            normalize_text(input.legacy_connector_account_id.as_deref());
+
+        let now = now_ms();
+        let created_at_ms = input.created_at_ms.unwrap_or(now);
+        let updated_at_ms = input.updated_at_ms.unwrap_or(now);
+
+        conn.execute(
+            r#"
+            INSERT INTO platform_instance_auth(
+              instance_id,
+              platform_id,
+              connector_id,
+              account_uid,
+              auth_state,
+              token_ref,
+              refresh_token_ref,
+              expires_at_ms,
+              legacy_connector_account_id,
+              created_at_ms,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            ON CONFLICT(instance_id) DO UPDATE SET
+              platform_id = excluded.platform_id,
+              connector_id = excluded.connector_id,
+              account_uid = excluded.account_uid,
+              auth_state = excluded.auth_state,
+              token_ref = excluded.token_ref,
+              refresh_token_ref = excluded.refresh_token_ref,
+              expires_at_ms = excluded.expires_at_ms,
+              legacy_connector_account_id = COALESCE(
+                excluded.legacy_connector_account_id,
+                platform_instance_auth.legacy_connector_account_id
+              ),
+              created_at_ms = platform_instance_auth.created_at_ms,
+              updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                instance_id,
+                platform_id,
+                connector_id,
+                account_uid,
+                auth_state,
+                token_ref,
+                refresh_token_ref,
+                input.expires_at_ms,
+                legacy_connector_account_id,
+                created_at_ms,
+                updated_at_ms,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert platform instance auth: {error}"))?;
+
+        platform_instance_auth_record_by_instance_id(conn, instance_id)?
+            .ok_or_else(|| "Platform instance auth record disappeared after upsert".to_string())
+    })
+}
+
+pub fn get_platform_instance_auth_by_instance_id(
+    app: &AppHandle,
+    instance_id: &str,
+) -> Result<Option<PlatformInstanceAuthRecord>, String> {
+    get_platform_instance_auth_by_instance_id_for_runtime_host(
+        &MusicPlatformRuntimeHost::from_app_handle(app),
+        instance_id,
+    )
+}
+
+pub(crate) fn get_platform_instance_auth_by_instance_id_for_runtime_host(
+    host: &MusicPlatformRuntimeHost,
+    instance_id: &str,
+) -> Result<Option<PlatformInstanceAuthRecord>, String> {
+    ensure_initialized_for_runtime_host(host)?;
+    with_conn(|conn| {
+        let normalized_instance_id = instance_id.trim();
+        if normalized_instance_id.is_empty() {
+            return Ok(None);
+        }
+
+        platform_instance_auth_record_by_instance_id(conn, normalized_instance_id)
+    })
+}
+
+pub fn migrate_legacy_connector_account_to_platform_instance_auth(
+    app: &AppHandle,
+    platform_id: &str,
+    instance_id: &str,
+    connector_id: &str,
+) -> Result<Option<PlatformInstanceAuthRecord>, String> {
+    migrate_legacy_connector_account_to_platform_instance_auth_for_runtime_host(
+        &MusicPlatformRuntimeHost::from_app_handle(app),
+        platform_id,
+        instance_id,
+        connector_id,
+    )
+}
+
+pub(crate) fn migrate_legacy_connector_account_to_platform_instance_auth_for_runtime_host(
+    host: &MusicPlatformRuntimeHost,
+    platform_id: &str,
+    instance_id: &str,
+    connector_id: &str,
+) -> Result<Option<PlatformInstanceAuthRecord>, String> {
+    ensure_initialized_for_runtime_host(host)?;
+    with_conn(|conn| {
+        migrate_legacy_connector_account_to_platform_instance_auth_in_conn(
+            conn,
+            platform_id,
+            instance_id,
+            connector_id,
+        )
+    })
+}
+
 pub fn list_connector_accounts(
     app: &AppHandle,
     connector_id: Option<&str>,
@@ -2367,69 +2772,7 @@ pub fn get_latest_connector_account_by_connector_id(
             return Ok(None);
         }
 
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT
-                  id,
-                  connector_id,
-                  account_uid,
-                  auth_state,
-                  token_ref,
-                  refresh_token_ref,
-                  expires_at_ms,
-                  created_at_ms,
-                  updated_at_ms
-                FROM connector_accounts
-                WHERE connector_id = ?1
-                ORDER BY updated_at_ms DESC, created_at_ms DESC, id ASC
-                LIMIT 1
-                "#,
-            )
-            .map_err(|error| {
-                format!("Failed to prepare latest connector account query: {error}")
-            })?;
-
-        let mut rows = stmt
-            .query(params![connector_id])
-            .map_err(|error| format!("Failed to query latest connector account: {error}"))?;
-
-        let Some(row) = rows
-            .next()
-            .map_err(|error| format!("Failed to parse latest connector account row: {error}"))?
-        else {
-            return Ok(None);
-        };
-
-        Ok(Some(LibraryConnectorAccountRecord {
-            id: row.get(0).map_err(|error| {
-                format!("Failed to read latest connector account id column: {error}")
-            })?,
-            connector_id: row.get(1).map_err(|error| {
-                format!("Failed to read latest connector account connector_id column: {error}")
-            })?,
-            account_uid: row.get(2).map_err(|error| {
-                format!("Failed to read latest connector account account_uid column: {error}")
-            })?,
-            auth_state: row.get(3).map_err(|error| {
-                format!("Failed to read latest connector account auth_state column: {error}")
-            })?,
-            token_ref: row.get(4).map_err(|error| {
-                format!("Failed to read latest connector account token_ref column: {error}")
-            })?,
-            refresh_token_ref: row.get(5).map_err(|error| {
-                format!("Failed to read latest connector account refresh_token_ref column: {error}")
-            })?,
-            expires_at_ms: row.get(6).map_err(|error| {
-                format!("Failed to read latest connector account expires_at_ms column: {error}")
-            })?,
-            created_at_ms: row.get(7).map_err(|error| {
-                format!("Failed to read latest connector account created_at_ms column: {error}")
-            })?,
-            updated_at_ms: row.get(8).map_err(|error| {
-                format!("Failed to read latest connector account updated_at_ms column: {error}")
-            })?,
-        }))
+        latest_connector_account_record_by_connector_id(conn, connector_id)
     })
 }
 
@@ -7555,12 +7898,13 @@ mod tests {
     }
 
     #[test]
-    fn migrate_empty_db_to_v9_schema() {
+    fn migrate_empty_db_to_v10_schema() {
         let (conn, path) = open_temp_db("music-library-migrate-empty");
         migrate(&conn).expect("migrate empty db");
 
-        assert_eq!(read_user_version(&conn), 9);
+        assert_eq!(read_user_version(&conn), 10);
         assert!(has_table(&conn, "connectors"));
+        assert!(has_table(&conn, "platform_instance_auth"));
         assert!(has_table(&conn, "source_sync_state"));
         assert!(has_table(&conn, "source_fingerprint_state"));
         assert!(has_table(&conn, "track_provider_refs"));
@@ -7587,7 +7931,7 @@ mod tests {
     }
 
     #[test]
-    fn migrate_v4_db_to_v9_schema() {
+    fn migrate_v4_db_to_v10_schema() {
         let (conn, path) = open_temp_db("music-library-migrate-v4");
         conn.execute_batch(
             r#"
@@ -7622,8 +7966,9 @@ mod tests {
 
         migrate(&conn).expect("migrate v4 db");
 
-        assert_eq!(read_user_version(&conn), 9);
+        assert_eq!(read_user_version(&conn), 10);
         assert!(has_table(&conn, "connector_accounts"));
+        assert!(has_table(&conn, "platform_instance_auth"));
         assert!(has_table(&conn, "cover_refs"));
         assert!(has_table(&conn, "lyric_refs"));
         assert!(has_table(&conn, "lyric_documents"));
@@ -7641,6 +7986,107 @@ mod tests {
             list_table_columns(&conn, "local_tracks").expect("read local_tracks columns");
         assert!(local_track_columns.iter().any(|column| column == "year"));
         assert!(local_track_columns.iter().any(|column| column == "format"));
+
+        drop(conn);
+        cleanup_temp_db(&path);
+    }
+
+    #[test]
+    fn migrates_latest_legacy_connector_auth_to_platform_instance_auth_without_deleting_legacy_rows(
+    ) {
+        let (conn, path) = open_temp_db("music-library-platform-instance-auth-migrate");
+        migrate(&conn).expect("migrate empty db");
+
+        conn.execute(
+            r#"
+            INSERT INTO connectors(id, kind, driver, display_name, status, created_at_ms, updated_at_ms)
+            VALUES (?1, 'platform', 'bilibili-web', 'Bilibili', 'active', ?2, ?3)
+            "#,
+            params!["connector.platform.bilibili", 100_i64, 200_i64],
+        )
+        .expect("insert connector");
+        conn.execute(
+            r#"
+            INSERT INTO connector_accounts(
+              id,
+              connector_id,
+              account_uid,
+              auth_state,
+              token_ref,
+              refresh_token_ref,
+              expires_at_ms,
+              created_at_ms,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "#,
+            params![
+                "connector.platform.bilibili::12345",
+                "connector.platform.bilibili",
+                "12345",
+                "authorized",
+                "keyring://bilibili-cookie/legacy-account",
+                "volatile://bilibili-refresh/session-1",
+                Value::Null,
+                123_i64,
+                456_i64,
+            ],
+        )
+        .expect("insert legacy connector account");
+
+        let migrated = migrate_legacy_connector_account_to_platform_instance_auth_in_conn(
+            &conn,
+            "bilibili",
+            "bilibili:builtin",
+            "connector.platform.bilibili",
+        )
+        .expect("migrate legacy connector auth")
+        .expect("migrated record");
+
+        assert_eq!(migrated.instance_id, "bilibili:builtin");
+        assert_eq!(migrated.platform_id, "bilibili");
+        assert_eq!(
+            migrated.connector_id.as_deref(),
+            Some("connector.platform.bilibili")
+        );
+        assert_eq!(migrated.account_uid.as_deref(), Some("12345"));
+        assert_eq!(migrated.auth_state, "authorized");
+        assert_eq!(
+            migrated.token_ref.as_deref(),
+            Some("keyring://bilibili-cookie/legacy-account")
+        );
+        assert_eq!(
+            migrated.refresh_token_ref.as_deref(),
+            Some("volatile://bilibili-refresh/session-1")
+        );
+        assert_eq!(
+            migrated.legacy_connector_account_id.as_deref(),
+            Some("connector.platform.bilibili::12345")
+        );
+
+        let legacy_count = conn
+            .query_row("SELECT COUNT(*) FROM connector_accounts", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("count legacy connector accounts");
+        let instance_count = conn
+            .query_row("SELECT COUNT(*) FROM platform_instance_auth", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("count platform instance auth rows");
+
+        assert_eq!(legacy_count, 1);
+        assert_eq!(instance_count, 1);
+
+        let migrated_again = migrate_legacy_connector_account_to_platform_instance_auth_in_conn(
+            &conn,
+            "bilibili",
+            "bilibili:builtin",
+            "connector.platform.bilibili",
+        )
+        .expect("repeat migration")
+        .expect("existing migrated record");
+        assert_eq!(migrated_again.instance_id, "bilibili:builtin");
 
         drop(conn);
         cleanup_temp_db(&path);

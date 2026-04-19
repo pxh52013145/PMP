@@ -1,0 +1,41 @@
+{
+  "contractVersion": "1.0",
+  "platform": {
+    "platformId": "bilibili",
+    "displayName": "Bilibili",
+    "staticIcon": "icon.svg",
+    "vendor": "Bilibili",
+    "supportsMultiInstance": false
+  },
+  "auth": {
+    "loginMode": "qr",
+    "requiresCookie": false,
+    "requiresAccountId": false,
+    "supportsRefresh": true
+  },
+  "capabilities": {
+    "playlists": false,
+    "favorites": true,
+    "dailyRecommendations": true,
+    "search": true,
+    "quality": true,
+    "navigation": false,
+    "settings": false,
+    "pages": true
+  },
+  "apiBindings": {
+    "auth": "host.pmp.connector-auth",
+    "library": "host.pmp.platform-instance.library",
+    "recommendations": "host.pmp.platform-instance.recommendations",
+    "search": "host.pmp.platform-instance.search",
+    "quality": "host.pmp.platform-instance.quality",
+    "pages": "host.pmp.platform-instance.pages"
+  },
+  "extension": {
+    "connectorId": "connector.platform.bilibili",
+    "workspaceKind": "bilibili",
+    "workspaceMode": "dedicated",
+    "runtimeAdapter": "platformPackRuntime",
+    "source": "pack"
+  }
+}

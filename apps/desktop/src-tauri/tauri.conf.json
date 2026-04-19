@@ -1,7 +1,7 @@
 {
   "build": {
-    "beforeDevCommand": "pnpm run dev:vite",
-    "beforeBuildCommand": "pnpm run build:vite",
+    "beforeDevCommand": "pnpm run dev:vite:tauri",
+    "beforeBuildCommand": "pnpm run build:vite:tauri",
     "devPath": "http://localhost:1420",
     "distDir": "../dist",
     "withGlobalTauri": false
@@ -21,6 +21,8 @@
             "$APPDATA/background-media/**",
             "$APPDATA/music-covers/*",
             "$APPDATA/music-covers/**",
+            "$APPDATA/pmp-durable/music-platform-packs/*",
+            "$APPDATA/pmp-durable/music-platform-packs/**",
             "$APPDATA/pmp-durable/extensions-v2/*",
             "$APPDATA/pmp-durable/extensions-v2/**",
             "$APPLOCALDATA/music-covers/*",

@@ -4,15 +4,15 @@ import type {
 } from '@pixel-matrix/plugin-platform-contracts';
 import {
   listBuiltinPlatformCompatRegistrations,
-  getPlatformConnectorDefinition,
   listPlatformConnectorDefinitions,
+  subscribePlatformConnectorCompatRegistrations,
   type PlatformConnectorId,
 } from './connectorAuth';
 import {
   readPlatformLoginRegistry,
   subscribePlatformLoginRegistry,
 } from './platformLoginRegistry';
-import { createPlatformCompatRuntimeFromBindingContract } from './bindingRuntime';
+import { ensureBuiltinPlatformPackRegistrationsInitialized } from './platformPackRegistry';
 
 export interface PlatformCompatRegistryRecord {
   platformId: string;
@@ -94,7 +94,7 @@ function emitPlatformCompatRegistryChanged(): void {
   }
 }
 
-function isBuiltinConnectorAuthRecord(
+function isAutoManagedConnectorAuthRecord(
   record: PlatformCompatRegistryRecord | undefined
 ): boolean {
   return (
@@ -124,23 +124,9 @@ export function reconcileBuiltinPlatformCompatRegistrations(
     const shouldRegister = registeredConnectorIdSet.has(registration.connectorId);
 
     if (shouldRegister) {
-      const builtinDefinition =
-        registration.source === 'builtin'
-          ? getPlatformConnectorDefinition(registration.connectorId)
-          : null;
-      const runtime =
-        registration.source === 'builtin' &&
-        registration.connectorId === 'connector.platform.netease' &&
-        builtinDefinition
-          ? createPlatformCompatRuntimeFromBindingContract(
-              builtinDefinition,
-              registration.contract
-            )
-          : registration.runtime;
-
       registerPlatformCompatContract({
         contract: registration.contract,
-        runtime,
+        runtime: registration.runtime,
         source:
           registration.source === 'pack'
             ? 'platform-pack'
@@ -153,18 +139,17 @@ export function reconcileBuiltinPlatformCompatRegistrations(
           enabled: registration.enabled,
           autoCreateDefaultInstance: true,
           runtimeAdapter:
-            registration.source === 'builtin' &&
-            registration.connectorId === 'connector.platform.netease'
-              ? 'bindingContract'
-              : typeof registration.metadata?.runtimeAdapter === 'string'
-                ? registration.metadata.runtimeAdapter
+            typeof registration.metadata?.runtimeAdapter === 'string'
+              ? registration.metadata.runtimeAdapter
+              : registration.source === 'pack'
+                ? 'platformPackRuntime'
                 : 'connectorAuth',
         },
       });
       continue;
     }
 
-    if (isBuiltinConnectorAuthRecord(existing)) {
+    if (isAutoManagedConnectorAuthRecord(existing)) {
       unregisterPlatformCompatContract(registration.platformId);
     }
   }
@@ -176,7 +161,13 @@ function ensureBuiltinPlatformCompatRegistryInitialized(): void {
 
   if (typeof window === 'undefined') return;
 
+  ensureBuiltinPlatformPackRegistrationsInitialized();
+
   reconcileBuiltinPlatformCompatRegistrations(readRegisteredConnectorIdsFromStorage());
+
+  subscribePlatformConnectorCompatRegistrations(() => {
+    reconcileBuiltinPlatformCompatRegistrations(readRegisteredConnectorIdsFromStorage());
+  });
 
   void subscribePlatformLoginRegistry(() => {
     reconcileBuiltinPlatformCompatRegistrations(readRegisteredConnectorIdsFromStorage());

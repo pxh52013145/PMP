@@ -1,3 +1,9 @@
+use super::{
+    first_payload_string, optional_payload_u32, required_payload_string, serialize_response,
+    PLATFORM_LIBRARY_BINDING_ID, PLATFORM_PAGES_BINDING_ID, PLATFORM_QUALITY_BINDING_ID,
+    PLATFORM_RECOMMENDATIONS_BINDING_ID, PLATFORM_SEARCH_BINDING_ID,
+};
+use crate::music_platform_runtime::MusicPlatformRuntimeHost as AppHandle;
 use base64::{
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
     Engine as _,
@@ -11,7 +17,7 @@ use reqwest::{
     header::{HeaderMap, HeaderValue, CONTENT_TYPE, COOKIE, ORIGIN, REFERER, USER_AGENT},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     collections::hash_map::DefaultHasher,
     collections::{HashMap, HashSet},
@@ -28,14 +34,18 @@ use symphonia::core::{
     meta::MetadataOptions,
     probe::Hint,
 };
-use tauri::{AppHandle, Manager};
 use url::Url;
 
 const BILIBILI_CONNECTOR_ID: &str = "connector.platform.bilibili";
+const BILIBILI_PLATFORM_ID: &str = "bilibili";
+const BILIBILI_DEFAULT_INSTANCE_ID: &str = "bilibili:builtin";
 const BILIBILI_CONNECTOR_KIND: &str = "platform";
 const BILIBILI_CONNECTOR_DRIVER: &str = "bilibili-web";
 const BILIBILI_CONNECTOR_DISPLAY_NAME: &str = "Bilibili";
 const BILIBILI_CONNECTOR_STATUS_ACTIVE: &str = "active";
+
+pub const CONNECTOR_ID: &str = BILIBILI_CONNECTOR_ID;
+pub const DISPLAY_NAME: &str = BILIBILI_CONNECTOR_DISPLAY_NAME;
 
 const BILIBILI_QR_GENERATE_ENDPOINT: &str =
     "https://passport.bilibili.com/x/passport-login/web/qrcode/generate";
@@ -202,6 +212,7 @@ struct BilibiliPlaybackStreamCandidate {
 
 #[derive(Debug, Clone)]
 struct QrSessionState {
+    instance_id: String,
     qrcode_key: String,
     expires_at_ms: i64,
 }
@@ -219,7 +230,8 @@ struct WbiSigningState {
 
 #[derive(Debug, Clone)]
 struct AuthContext {
-    account: crate::music_library_db::LibraryConnectorAccountRecord,
+    instance_id: String,
+    account: crate::music_library_db::PlatformInstanceAuthRecord,
     cookie_header: String,
 }
 
@@ -274,7 +286,8 @@ struct BilibiliQrPollData {
 
 static QR_SESSIONS: Lazy<Mutex<HashMap<String, QrSessionState>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
-static AUTH_COOKIE_STATE: Lazy<Mutex<Option<AuthCookieState>>> = Lazy::new(|| Mutex::new(None));
+static AUTH_COOKIE_STATE: Lazy<Mutex<HashMap<String, AuthCookieState>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 static WBI_SIGNING_STATE: Lazy<Mutex<Option<WbiSigningState>>> = Lazy::new(|| Mutex::new(None));
 static PLAYBACK_DOWNLOAD_JOBS: Lazy<Mutex<HashMap<String, Arc<BilibiliPlaybackDownloadJob>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -292,7 +305,8 @@ fn lock_qr_sessions() -> Result<MutexGuard<'static, HashMap<String, QrSessionSta
         .map_err(|_| "Bilibili QR session store is locked".to_string())
 }
 
-fn lock_auth_cookie_state() -> Result<MutexGuard<'static, Option<AuthCookieState>>, String> {
+fn lock_auth_cookie_state() -> Result<MutexGuard<'static, HashMap<String, AuthCookieState>>, String>
+{
     AUTH_COOKIE_STATE
         .lock()
         .map_err(|_| "Bilibili auth cookie store is locked".to_string())
@@ -333,8 +347,10 @@ fn update_playback_download_job_state(
 
 fn resolve_default_playback_cache_root(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(
-        crate::music_platform_settings::resolve_effective_platform_cache_root(app, "bilibili")?
-            .join("playback-cache"),
+        crate::music_platform_settings::resolve_effective_platform_cache_root_for_runtime_host(
+            app, "bilibili",
+        )?
+        .join("playback-cache"),
     )
 }
 
@@ -954,7 +970,7 @@ fn normalize_url(raw: &str) -> String {
 }
 
 fn ensure_connector(app: &AppHandle) -> Result<(), String> {
-    crate::music_library_db::ensure_connector(
+    crate::music_library_db::ensure_connector_for_runtime_host(
         app,
         BILIBILI_CONNECTOR_ID,
         BILIBILI_CONNECTOR_KIND,
@@ -1280,36 +1296,73 @@ fn delete_cookie_header_by_token_ref(token_ref: &str) {
     delete_cookie_header_from_keyring_token_ref(token_ref);
 }
 
-fn set_auth_cookie_state(cookie_header: String) {
+fn normalize_instance_id(instance_id: Option<&str>) -> String {
+    instance_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(BILIBILI_DEFAULT_INSTANCE_ID)
+        .to_string()
+}
+
+fn migrate_default_instance_auth_if_needed(
+    app: &AppHandle,
+    instance_id: &str,
+) -> Result<(), String> {
+    if instance_id != BILIBILI_DEFAULT_INSTANCE_ID {
+        return Ok(());
+    }
+
+    let _ =
+        crate::music_library_db::migrate_legacy_connector_account_to_platform_instance_auth_for_runtime_host(
+            app,
+            BILIBILI_PLATFORM_ID,
+            BILIBILI_DEFAULT_INSTANCE_ID,
+            BILIBILI_CONNECTOR_ID,
+        )?;
+    Ok(())
+}
+
+fn set_auth_cookie_state(instance_id: &str, cookie_header: String) {
     if let Ok(mut state) = lock_auth_cookie_state() {
-        *state = Some(AuthCookieState { cookie_header });
+        state.insert(instance_id.to_string(), AuthCookieState { cookie_header });
     }
 }
 
-fn clear_auth_cookie_state() {
+fn clear_auth_cookie_state(instance_id: Option<&str>) {
     if let Ok(mut state) = lock_auth_cookie_state() {
-        *state = None;
+        if let Some(instance_id) = instance_id.map(str::trim).filter(|value| !value.is_empty()) {
+            state.remove(instance_id);
+        } else {
+            state.clear();
+        }
     }
 }
 
-fn get_auth_cookie_header() -> Option<String> {
-    lock_auth_cookie_state()
-        .ok()
-        .and_then(|state| state.as_ref().map(|cookie| cookie.cookie_header.clone()))
+fn get_auth_cookie_header(instance_id: Option<&str>) -> Option<String> {
+    let normalized_instance_id = normalize_instance_id(instance_id);
+    lock_auth_cookie_state().ok().and_then(|state| {
+        state
+            .get(normalized_instance_id.as_str())
+            .map(|cookie| cookie.cookie_header.clone())
+    })
 }
 
-fn ensure_auth_context(app: &AppHandle) -> Result<AuthContext, String> {
-    let account = crate::music_library_db::get_latest_connector_account_by_connector_id(
-        app,
-        BILIBILI_CONNECTOR_ID,
-    )?
-    .ok_or_else(|| "Bilibili connector is not authorized".to_string())?;
+fn ensure_auth_context(app: &AppHandle, instance_id: Option<&str>) -> Result<AuthContext, String> {
+    let normalized_instance_id = normalize_instance_id(instance_id);
+    migrate_default_instance_auth_if_needed(app, &normalized_instance_id)?;
+
+    let account =
+        crate::music_library_db::get_platform_instance_auth_by_instance_id_for_runtime_host(
+            app,
+            &normalized_instance_id,
+        )?
+        .ok_or_else(|| "Bilibili connector is not authorized".to_string())?;
 
     if !account.auth_state.eq_ignore_ascii_case("authorized") {
         return Err("Bilibili connector is not authorized".to_string());
     }
 
-    let cookie_header = get_auth_cookie_header()
+    let cookie_header = get_auth_cookie_header(Some(normalized_instance_id.as_str()))
         .or_else(|| {
             account
                 .token_ref
@@ -1321,9 +1374,10 @@ fn ensure_auth_context(app: &AppHandle) -> Result<AuthContext, String> {
                 .to_string()
         })?;
 
-    set_auth_cookie_state(cookie_header.clone());
+    set_auth_cookie_state(normalized_instance_id.as_str(), cookie_header.clone());
 
     Ok(AuthContext {
+        instance_id: normalized_instance_id,
         account,
         cookie_header,
     })
@@ -1815,22 +1869,25 @@ fn request_video_playurl_data_wbi(
     )
 }
 
-fn persist_connector_account_auth_state(
+fn persist_platform_instance_auth_state(
     app: &AppHandle,
-    account: &crate::music_library_db::LibraryConnectorAccountRecord,
+    instance_id: &str,
+    account: &crate::music_library_db::PlatformInstanceAuthRecord,
     auth_state: &str,
     account_uid: Option<String>,
 ) {
-    let _ = crate::music_library_db::upsert_connector_account(
+    let _ = crate::music_library_db::upsert_platform_instance_auth_for_runtime_host(
         app,
-        crate::music_library_db::LibraryConnectorAccountUpsertInput {
-            id: account.id.clone(),
-            connector_id: BILIBILI_CONNECTOR_ID.to_string(),
+        crate::music_library_db::PlatformInstanceAuthUpsertInput {
+            instance_id: instance_id.to_string(),
+            platform_id: BILIBILI_PLATFORM_ID.to_string(),
+            connector_id: Some(BILIBILI_CONNECTOR_ID.to_string()),
             account_uid,
             auth_state: auth_state.to_string(),
             token_ref: account.token_ref.clone(),
             refresh_token_ref: account.refresh_token_ref.clone(),
             expires_at_ms: account.expires_at_ms,
+            legacy_connector_account_id: account.legacy_connector_account_id.clone(),
             created_at_ms: Some(account.created_at_ms),
             updated_at_ms: Some(now_ms()),
         },
@@ -1975,16 +2032,18 @@ fn resolve_account_uid(
         .ok_or_else(|| "Bilibili nav response missing mid".to_string())?
         .to_string();
 
-    let _ = crate::music_library_db::upsert_connector_account(
+    let _ = crate::music_library_db::upsert_platform_instance_auth_for_runtime_host(
         app,
-        crate::music_library_db::LibraryConnectorAccountUpsertInput {
-            id: context.account.id.clone(),
-            connector_id: BILIBILI_CONNECTOR_ID.to_string(),
+        crate::music_library_db::PlatformInstanceAuthUpsertInput {
+            instance_id: context.instance_id.clone(),
+            platform_id: BILIBILI_PLATFORM_ID.to_string(),
+            connector_id: Some(BILIBILI_CONNECTOR_ID.to_string()),
             account_uid: Some(mid.clone()),
             auth_state: "authorized".to_string(),
             token_ref: context.account.token_ref.clone(),
             refresh_token_ref: context.account.refresh_token_ref.clone(),
             expires_at_ms: context.account.expires_at_ms,
+            legacy_connector_account_id: context.account.legacy_connector_account_id.clone(),
             created_at_ms: Some(context.account.created_at_ms),
             updated_at_ms: Some(now_ms()),
         },
@@ -2874,17 +2933,21 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         eprintln!("[music_platform_bilibili] Failed to cleanup legacy cache directories: {error}");
     }
 
-    if let Some(account) = crate::music_library_db::get_latest_connector_account_by_connector_id(
-        app,
-        BILIBILI_CONNECTOR_ID,
-    )? {
+    migrate_default_instance_auth_if_needed(app, BILIBILI_DEFAULT_INSTANCE_ID)?;
+
+    if let Some(account) =
+        crate::music_library_db::get_platform_instance_auth_by_instance_id_for_runtime_host(
+            app,
+            BILIBILI_DEFAULT_INSTANCE_ID,
+        )?
+    {
         if account.auth_state.eq_ignore_ascii_case("authorized") {
             if let Some(cookie_header) = account
                 .token_ref
                 .as_deref()
                 .and_then(read_cookie_header_from_token_ref)
             {
-                set_auth_cookie_state(cookie_header);
+                set_auth_cookie_state(BILIBILI_DEFAULT_INSTANCE_ID, cookie_header);
             }
         }
     }
@@ -2896,9 +2959,18 @@ pub fn cleanup_session_cover_cache(app: &AppHandle) -> Result<(), String> {
     cleanup_session_cover_cache_internal(app)
 }
 
-pub fn qr_generate(app: &AppHandle) -> Result<BilibiliQrCodeSession, String> {
+pub fn cleanup(app: &AppHandle) -> Result<(), String> {
+    cleanup_session_cover_cache(app)
+}
+
+pub fn qr_generate(
+    app: &AppHandle,
+    instance_id: Option<&str>,
+) -> Result<BilibiliQrCodeSession, String> {
     ensure_connector(app)?;
     cleanup_expired_qr_sessions(now_ms());
+    let normalized_instance_id = normalize_instance_id(instance_id);
+    migrate_default_instance_auth_if_needed(app, &normalized_instance_id)?;
 
     let client = build_http_client()?;
     let response = client
@@ -2944,6 +3016,7 @@ pub fn qr_generate(app: &AppHandle) -> Result<BilibiliQrCodeSession, String> {
         sessions.insert(
             session_id.clone(),
             QrSessionState {
+                instance_id: normalized_instance_id,
                 qrcode_key: session_id.clone(),
                 expires_at_ms,
             },
@@ -3038,22 +3111,13 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<BilibiliQrPollResult
         .and_then(|value| extract_query_param(value, "DedeUserID"));
 
     if auth_state == "authorized" {
-        let account_id = format!(
-            "{}::{}",
-            BILIBILI_CONNECTOR_ID,
-            account_uid
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or(normalized_session_id)
-        );
-
         let cookie_header = data
             .url
             .as_deref()
             .and_then(build_cookie_header_from_auth_callback_url);
 
         let token_ref = if let Some(cookie_header) = cookie_header.as_deref() {
-            match write_cookie_header_to_keyring(&account_id, cookie_header) {
+            match write_cookie_header_to_keyring(session.instance_id.as_str(), cookie_header) {
                 Ok(token_ref) => Some(token_ref),
                 Err(error) => {
                     eprintln!(
@@ -3072,19 +3136,21 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<BilibiliQrPollResult
             .map(|_| format!("volatile://bilibili-refresh/{normalized_session_id}"));
 
         if let Some(cookie_header) = cookie_header {
-            set_auth_cookie_state(cookie_header);
+            set_auth_cookie_state(session.instance_id.as_str(), cookie_header);
         }
 
-        let _ = crate::music_library_db::upsert_connector_account(
+        let _ = crate::music_library_db::upsert_platform_instance_auth_for_runtime_host(
             app,
-            crate::music_library_db::LibraryConnectorAccountUpsertInput {
-                id: account_id,
-                connector_id: BILIBILI_CONNECTOR_ID.to_string(),
+            crate::music_library_db::PlatformInstanceAuthUpsertInput {
+                instance_id: session.instance_id.clone(),
+                platform_id: BILIBILI_PLATFORM_ID.to_string(),
+                connector_id: Some(BILIBILI_CONNECTOR_ID.to_string()),
                 account_uid: account_uid.clone(),
                 auth_state: "authorized".to_string(),
                 token_ref,
                 refresh_token_ref,
                 expires_at_ms: None,
+                legacy_connector_account_id: None,
                 created_at_ms: None,
                 updated_at_ms: Some(now_ms()),
             },
@@ -3108,13 +3174,19 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<BilibiliQrPollResult
     })
 }
 
-pub fn get_auth_status(app: &AppHandle) -> Result<BilibiliAuthStatus, String> {
+pub fn get_auth_status(
+    app: &AppHandle,
+    instance_id: Option<&str>,
+) -> Result<BilibiliAuthStatus, String> {
     ensure_connector(app)?;
+    let normalized_instance_id = normalize_instance_id(instance_id);
+    migrate_default_instance_auth_if_needed(app, &normalized_instance_id)?;
     let now = now_ms();
-    let account = crate::music_library_db::get_latest_connector_account_by_connector_id(
-        app,
-        BILIBILI_CONNECTOR_ID,
-    )?;
+    let account =
+        crate::music_library_db::get_platform_instance_auth_by_instance_id_for_runtime_host(
+            app,
+            &normalized_instance_id,
+        )?;
 
     let (
         mut auth_state,
@@ -3160,15 +3232,16 @@ pub fn get_auth_status(app: &AppHandle) -> Result<BilibiliAuthStatus, String> {
 
     if let Some(account) = account.as_ref() {
         if auth_state.eq_ignore_ascii_case("authorized") {
-            let cookie_header = get_auth_cookie_header().or_else(|| {
-                account
-                    .token_ref
-                    .as_deref()
-                    .and_then(read_cookie_header_from_token_ref)
-            });
+            let cookie_header = get_auth_cookie_header(Some(normalized_instance_id.as_str()))
+                .or_else(|| {
+                    account
+                        .token_ref
+                        .as_deref()
+                        .and_then(read_cookie_header_from_token_ref)
+                });
 
             if let Some(cookie_header) = cookie_header {
-                set_auth_cookie_state(cookie_header.clone());
+                set_auth_cookie_state(normalized_instance_id.as_str(), cookie_header.clone());
                 let client = build_http_client()?;
                 let probe = probe_auth_availability(&client, &cookie_header);
                 availability = Some(probe.availability.clone());
@@ -3182,8 +3255,9 @@ pub fn get_auth_status(app: &AppHandle) -> Result<BilibiliAuthStatus, String> {
                         != Some(probe_uid.as_str());
                     if should_update_uid {
                         account_uid = Some(probe_uid.clone());
-                        persist_connector_account_auth_state(
+                        persist_platform_instance_auth_state(
                             app,
+                            normalized_instance_id.as_str(),
                             account,
                             "authorized",
                             Some(probe_uid),
@@ -3195,8 +3269,9 @@ pub fn get_auth_status(app: &AppHandle) -> Result<BilibiliAuthStatus, String> {
                 if probe.should_mark_expired {
                     auth_state = "expired".to_string();
                     availability = Some(AUTH_AVAILABILITY_UNAVAILABLE.to_string());
-                    persist_connector_account_auth_state(
+                    persist_platform_instance_auth_state(
                         app,
+                        normalized_instance_id.as_str(),
                         account,
                         "expired",
                         account_uid.clone(),
@@ -3210,7 +3285,13 @@ pub fn get_auth_status(app: &AppHandle) -> Result<BilibiliAuthStatus, String> {
                     "Bilibili login token is unavailable in current session, please scan QR again"
                         .to_string(),
                 );
-                persist_connector_account_auth_state(app, account, "expired", account_uid.clone());
+                persist_platform_instance_auth_state(
+                    app,
+                    normalized_instance_id.as_str(),
+                    account,
+                    "expired",
+                    account_uid.clone(),
+                );
                 updated_at_ms = Some(now_ms());
             }
         } else if auth_state.eq_ignore_ascii_case("pending") {
@@ -3236,27 +3317,33 @@ pub fn get_auth_status(app: &AppHandle) -> Result<BilibiliAuthStatus, String> {
     })
 }
 
-pub fn logout(app: &AppHandle) -> Result<BilibiliAuthStatus, String> {
+pub fn logout(app: &AppHandle, instance_id: Option<&str>) -> Result<BilibiliAuthStatus, String> {
     ensure_connector(app)?;
+    let normalized_instance_id = normalize_instance_id(instance_id);
+    migrate_default_instance_auth_if_needed(app, &normalized_instance_id)?;
 
-    if let Some(account) = crate::music_library_db::get_latest_connector_account_by_connector_id(
-        app,
-        BILIBILI_CONNECTOR_ID,
-    )? {
+    if let Some(account) =
+        crate::music_library_db::get_platform_instance_auth_by_instance_id_for_runtime_host(
+            app,
+            &normalized_instance_id,
+        )?
+    {
         if let Some(token_ref) = account.token_ref.as_deref() {
             delete_cookie_header_by_token_ref(token_ref);
         }
 
-        let _ = crate::music_library_db::upsert_connector_account(
+        let _ = crate::music_library_db::upsert_platform_instance_auth_for_runtime_host(
             app,
-            crate::music_library_db::LibraryConnectorAccountUpsertInput {
-                id: account.id,
-                connector_id: BILIBILI_CONNECTOR_ID.to_string(),
+            crate::music_library_db::PlatformInstanceAuthUpsertInput {
+                instance_id: normalized_instance_id.clone(),
+                platform_id: BILIBILI_PLATFORM_ID.to_string(),
+                connector_id: Some(BILIBILI_CONNECTOR_ID.to_string()),
                 account_uid: account.account_uid,
                 auth_state: "revoked".to_string(),
                 token_ref: None,
                 refresh_token_ref: None,
                 expires_at_ms: None,
+                legacy_connector_account_id: account.legacy_connector_account_id,
                 created_at_ms: Some(account.created_at_ms),
                 updated_at_ms: Some(now_ms()),
             },
@@ -3266,32 +3353,41 @@ pub fn logout(app: &AppHandle) -> Result<BilibiliAuthStatus, String> {
     if let Ok(mut sessions) = lock_qr_sessions() {
         sessions.clear();
     }
-    clear_auth_cookie_state();
+    clear_auth_cookie_state(Some(normalized_instance_id.as_str()));
 
-    get_auth_status(app)
+    get_auth_status(app, Some(normalized_instance_id.as_str()))
 }
 
-pub fn clear_auth_cookies(app: &AppHandle) -> Result<BilibiliAuthStatus, String> {
+pub fn clear_auth_cookies(
+    app: &AppHandle,
+    instance_id: Option<&str>,
+) -> Result<BilibiliAuthStatus, String> {
     ensure_connector(app)?;
+    let normalized_instance_id = normalize_instance_id(instance_id);
+    migrate_default_instance_auth_if_needed(app, &normalized_instance_id)?;
 
-    if let Some(account) = crate::music_library_db::get_latest_connector_account_by_connector_id(
-        app,
-        BILIBILI_CONNECTOR_ID,
-    )? {
+    if let Some(account) =
+        crate::music_library_db::get_platform_instance_auth_by_instance_id_for_runtime_host(
+            app,
+            &normalized_instance_id,
+        )?
+    {
         if let Some(token_ref) = account.token_ref.as_deref() {
             delete_cookie_header_by_token_ref(token_ref);
         }
 
-        let _ = crate::music_library_db::upsert_connector_account(
+        let _ = crate::music_library_db::upsert_platform_instance_auth_for_runtime_host(
             app,
-            crate::music_library_db::LibraryConnectorAccountUpsertInput {
-                id: account.id,
-                connector_id: BILIBILI_CONNECTOR_ID.to_string(),
+            crate::music_library_db::PlatformInstanceAuthUpsertInput {
+                instance_id: normalized_instance_id.clone(),
+                platform_id: BILIBILI_PLATFORM_ID.to_string(),
+                connector_id: Some(BILIBILI_CONNECTOR_ID.to_string()),
                 account_uid: account.account_uid,
                 auth_state: "expired".to_string(),
                 token_ref: None,
                 refresh_token_ref: None,
                 expires_at_ms: None,
+                legacy_connector_account_id: account.legacy_connector_account_id,
                 created_at_ms: Some(account.created_at_ms),
                 updated_at_ms: Some(now_ms()),
             },
@@ -3301,14 +3397,196 @@ pub fn clear_auth_cookies(app: &AppHandle) -> Result<BilibiliAuthStatus, String>
     if let Ok(mut sessions) = lock_qr_sessions() {
         sessions.clear();
     }
-    clear_auth_cookie_state();
+    clear_auth_cookie_state(Some(normalized_instance_id.as_str()));
 
-    get_auth_status(app)
+    get_auth_status(app, Some(normalized_instance_id.as_str()))
 }
 
-pub fn list_favorite_folders(app: &AppHandle) -> Result<Vec<BilibiliFavoriteFolder>, String> {
+pub fn dispatch_auth(
+    app: &AppHandle,
+    method: &str,
+    instance_id: Option<&str>,
+    payload: &Option<Value>,
+) -> Result<Value, String> {
+    match method {
+        "beginQrLogin" => serialize_response(qr_generate(app, instance_id)?),
+        "pollQrLogin" => {
+            let session_id = required_payload_string(payload, &["sessionId"], "payload.sessionId")?;
+            serialize_response(qr_poll(app, &session_id)?)
+        }
+        "getSnapshot" | "refreshSnapshot" => serialize_response(get_auth_status(app, instance_id)?),
+        "logout" => serialize_response(logout(app, instance_id)?),
+        "clearAuthCookies" => serialize_response(clear_auth_cookies(app, instance_id)?),
+        _ => Err(format!("Unsupported {DISPLAY_NAME} auth method: {method}")),
+    }
+}
+
+pub fn dispatch_api(
+    app: &AppHandle,
+    binding_id: &str,
+    method: &str,
+    instance_id: Option<&str>,
+    payload: &Option<Value>,
+) -> Result<Value, String> {
+    match binding_id {
+        PLATFORM_LIBRARY_BINDING_ID => match method {
+            "listCollections" | "listFavoriteFolders" => {
+                serialize_response(list_favorite_folders(app, instance_id)?)
+            }
+            "listPlaylistTracks" | "listResources" | "listFavoriteResources" => {
+                let folder_id = required_payload_string(
+                    payload,
+                    &["folderId", "collectionId", "playlistId"],
+                    "payload.folderId or payload.collectionId",
+                )?;
+                let page_num = optional_payload_u32(payload, "pageNum");
+                let page_size = optional_payload_u32(payload, "pageSize");
+                serialize_response(list_favorite_resources(
+                    app,
+                    &folder_id,
+                    page_num,
+                    page_size,
+                    instance_id,
+                )?)
+            }
+            "resolveLyricLocator" => {
+                let lyric_locator =
+                    required_payload_string(payload, &["lyricLocator"], "payload.lyricLocator")?;
+                serialize_response(resolve_lyric_locator(app, &lyric_locator, instance_id)?)
+            }
+            "resolveCoverAssetUrl" | "prepareCoverCache" => {
+                let cover_url =
+                    required_payload_string(payload, &["coverUrl"], "payload.coverUrl")?;
+                serialize_response(prepare_cover_cache(
+                    app,
+                    &cover_url,
+                    instance_id,
+                    instance_id,
+                )?)
+            }
+            "preparePlayback" | "prepareCachedPlayback" => {
+                let source_locator =
+                    required_payload_string(payload, &["sourceLocator"], "payload.sourceLocator")?;
+                let quality_hint =
+                    first_payload_string(payload, &["qualityHint", "qualityKey", "key"]);
+                serialize_response(prepare_cached_playback(
+                    app,
+                    &source_locator,
+                    quality_hint.as_deref(),
+                    instance_id,
+                    instance_id,
+                )?)
+            }
+            _ => Err(format!(
+                "Unsupported {DISPLAY_NAME} library method: {method}"
+            )),
+        },
+        PLATFORM_RECOMMENDATIONS_BINDING_ID => match method {
+            "listDaily" | "listRecommendedResources" => {
+                serialize_response(list_recommended_resources(app, instance_id)?)
+            }
+            _ => Err(format!(
+                "Unsupported {DISPLAY_NAME} recommendations method: {method}"
+            )),
+        },
+        PLATFORM_SEARCH_BINDING_ID => match method {
+            "query" | "searchResources" => {
+                let keyword = required_payload_string(
+                    payload,
+                    &["keyword", "query"],
+                    "payload.keyword or payload.query",
+                )?;
+                let page_num = optional_payload_u32(payload, "pageNum");
+                let page_size = optional_payload_u32(payload, "pageSize");
+                serialize_response(search_resources(
+                    app,
+                    &keyword,
+                    page_num,
+                    page_size,
+                    instance_id,
+                )?)
+            }
+            "resolveLocator" | "searchResourceByBvid" => {
+                let bvid = required_payload_string(
+                    payload,
+                    &["bvid", "resourceId", "query", "keyword"],
+                    "payload.bvid or payload.resourceId",
+                )?;
+                serialize_response(search_resource_by_bvid(app, &bvid, instance_id)?)
+            }
+            "preparePlayback" | "prepareCachedPlayback" => {
+                let source_locator =
+                    required_payload_string(payload, &["sourceLocator"], "payload.sourceLocator")?;
+                let quality_hint =
+                    first_payload_string(payload, &["qualityHint", "qualityKey", "key"]);
+                serialize_response(prepare_cached_playback(
+                    app,
+                    &source_locator,
+                    quality_hint.as_deref(),
+                    instance_id,
+                    instance_id,
+                )?)
+            }
+            _ => Err(format!(
+                "Unsupported {DISPLAY_NAME} search method: {method}"
+            )),
+        },
+        PLATFORM_QUALITY_BINDING_ID => match method {
+            "listOptions" | "listPlaybackQualities" => {
+                let source_locator =
+                    required_payload_string(payload, &["sourceLocator"], "payload.sourceLocator")?;
+                serialize_response(list_playback_qualities(app, &source_locator, instance_id)?)
+            }
+            _ => Err(format!(
+                "Unsupported {DISPLAY_NAME} quality method: {method}"
+            )),
+        },
+        PLATFORM_PAGES_BINDING_ID => match method {
+            "getWorkspaceModel" => serialize_response(json!({
+                "workspaceKind": "bilibili",
+                "template": "video",
+                "defaultPageId": "instance",
+                "capabilities": {
+                    "collections": true,
+                    "search": true,
+                    "recommendations": true,
+                    "quality": true,
+                }
+            })),
+            "listPages" => serialize_response(json!({
+                "items": [
+                    {
+                        "pageId": "instance",
+                        "title": DISPLAY_NAME,
+                        "kind": "workspace",
+                        "default": true
+                    },
+                    {
+                        "pageId": "search",
+                        "title": "Search",
+                        "kind": "search"
+                    },
+                    {
+                        "pageId": "recommended",
+                        "title": "Recommended",
+                        "kind": "recommended"
+                    }
+                ]
+            })),
+            _ => Err(format!("Unsupported {DISPLAY_NAME} pages method: {method}")),
+        },
+        _ => Err(format!(
+            "Unsupported {DISPLAY_NAME} binding id: {binding_id}"
+        )),
+    }
+}
+
+pub fn list_favorite_folders(
+    app: &AppHandle,
+    instance_id: Option<&str>,
+) -> Result<Vec<BilibiliFavoriteFolder>, String> {
     ensure_connector(app)?;
-    let auth_context = ensure_auth_context(app)?;
+    let auth_context = ensure_auth_context(app, instance_id)?;
     let client = build_http_client()?;
     let account_uid = resolve_account_uid(app, &client, &auth_context)?;
 
@@ -3365,9 +3643,10 @@ pub fn list_favorite_resources(
     folder_id: &str,
     page_num: Option<u32>,
     page_size: Option<u32>,
+    instance_id: Option<&str>,
 ) -> Result<BilibiliFavoriteResourcePage, String> {
     ensure_connector(app)?;
-    let auth_context = ensure_auth_context(app)?;
+    let auth_context = ensure_auth_context(app, instance_id)?;
 
     let normalized_folder_id = folder_id.trim();
     if normalized_folder_id.is_empty() {
@@ -3457,9 +3736,15 @@ pub fn list_favorite_resources(
     })
 }
 
-pub fn list_recommended_resources(app: &AppHandle) -> Result<BilibiliFavoriteResourcePage, String> {
+pub fn list_recommended_resources(
+    app: &AppHandle,
+    instance_id: Option<&str>,
+) -> Result<BilibiliFavoriteResourcePage, String> {
     ensure_connector(app)?;
     let client = build_http_client()?;
+    let auth_cookie = ensure_auth_context(app, instance_id)
+        .ok()
+        .map(|context| context.cookie_header);
 
     let map_resource_to_item = |resource: &Value, index: usize| {
         let resource_id = to_u64(resource.get("id"))
@@ -3509,7 +3794,7 @@ pub fn list_recommended_resources(app: &AppHandle) -> Result<BilibiliFavoriteRes
         &client,
         BILIBILI_RECOMMENDED_FEED_ENDPOINT,
         &[("ps", "40".to_string()), ("fresh_type", "3".to_string())],
-        None,
+        auth_cookie.as_deref(),
         "recommended feed",
         Some("https://www.bilibili.com/"),
         Some("https://www.bilibili.com"),
@@ -3528,7 +3813,7 @@ pub fn list_recommended_resources(app: &AppHandle) -> Result<BilibiliFavoriteRes
             &client,
             BILIBILI_POPULAR_FEED_ENDPOINT,
             &[("pn", "1".to_string()), ("ps", "40".to_string())],
-            None,
+            auth_cookie.as_deref(),
             "popular feed",
             Some("https://www.bilibili.com/"),
             Some("https://www.bilibili.com"),
@@ -3563,6 +3848,7 @@ pub fn search_resources(
     keyword: &str,
     page_num: Option<u32>,
     page_size: Option<u32>,
+    instance_id: Option<&str>,
 ) -> Result<BilibiliFavoriteResourcePage, String> {
     ensure_connector(app)?;
 
@@ -3575,6 +3861,9 @@ pub fn search_resources(
     let normalized_page_size = page_size.unwrap_or(40).clamp(1, 50);
 
     let client = build_http_client()?;
+    let auth_cookie = ensure_auth_context(app, instance_id)
+        .ok()
+        .map(|context| context.cookie_header);
     let data = request_bilibili_data_with_optional_cookie_and_headers(
         &client,
         BILIBILI_SEARCH_ALL_ENDPOINT,
@@ -3583,7 +3872,7 @@ pub fn search_resources(
             ("page", normalized_page_num.to_string()),
             ("page_size", normalized_page_size.to_string()),
         ],
-        None,
+        auth_cookie.as_deref(),
         "search all",
         Some("https://www.bilibili.com/"),
         Some("https://www.bilibili.com"),
@@ -3679,9 +3968,10 @@ pub fn search_resources(
 pub fn search_resource_by_bvid(
     app: &AppHandle,
     bvid: &str,
+    instance_id: Option<&str>,
 ) -> Result<Option<BilibiliFavoriteResourceItem>, String> {
     ensure_connector(app)?;
-    let auth_cookie = ensure_auth_context(app)
+    let auth_cookie = ensure_auth_context(app, instance_id)
         .ok()
         .map(|context| context.cookie_header);
     let client = build_http_client()?;
@@ -3744,6 +4034,7 @@ pub fn prepare_cover_cache(
     app: &AppHandle,
     cover_url: &str,
     cache_scope_key: Option<&str>,
+    instance_id: Option<&str>,
 ) -> Result<Option<String>, String> {
     ensure_connector(app)?;
 
@@ -3758,7 +4049,7 @@ pub fn prepare_cover_cache(
         return Ok(Some(existing_path.to_string_lossy().to_string()));
     }
 
-    let auth_cookie = ensure_auth_context(app)
+    let auth_cookie = ensure_auth_context(app, instance_id)
         .ok()
         .map(|context| context.cookie_header);
     let client = build_http_client()?;
@@ -3805,9 +4096,10 @@ pub fn prepare_cover_cache(
 pub fn list_playback_qualities(
     app: &AppHandle,
     source_locator: &str,
+    instance_id: Option<&str>,
 ) -> Result<Vec<BilibiliPlaybackQualityOption>, String> {
     ensure_connector(app)?;
-    let auth_context = ensure_auth_context(app)?;
+    let auth_context = ensure_auth_context(app, instance_id)?;
     let client = build_http_client()?;
 
     let normalized_source_locator = source_locator.trim();
@@ -3839,9 +4131,10 @@ pub fn prepare_cached_playback(
     source_locator: &str,
     quality_hint: Option<&str>,
     cache_scope_key: Option<&str>,
+    instance_id: Option<&str>,
 ) -> Result<BilibiliPlaybackPrepared, String> {
     ensure_connector(app)?;
-    let auth_context = ensure_auth_context(app)?;
+    let auth_context = ensure_auth_context(app, instance_id)?;
     let client = build_http_client()?;
 
     let normalized_source_locator = source_locator.trim();
@@ -3933,9 +4226,10 @@ pub fn prepare_cached_playback(
 pub fn resolve_lyric_locator(
     app: &AppHandle,
     lyric_locator: &str,
+    instance_id: Option<&str>,
 ) -> Result<Option<BilibiliLyricLocatorRef>, String> {
     ensure_connector(app)?;
-    let auth_context = ensure_auth_context(app)?;
+    let auth_context = ensure_auth_context(app, instance_id)?;
     let client = build_http_client()?;
 
     let normalized_locator = lyric_locator.trim();

@@ -31,6 +31,36 @@ vi.mock('../../modules/music-platform', async () => {
         sortOrder: 10,
       },
     ]),
+    listPlatformInstanceAuthSnapshots: vi.fn(async () => [
+      {
+        instanceId: 'bilibili:builtin',
+        platformId: 'bilibili',
+        connectorId: 'connector.platform.bilibili',
+        displayName: 'Bilibili',
+        authState: 'authorized',
+        accountUid: 'uid-1',
+      },
+    ]),
+    refreshPlatformInstanceAuthSnapshot: vi.fn(async (instanceId: string) => ({
+      instanceId,
+      platformId: 'bilibili',
+      connectorId: 'connector.platform.bilibili',
+      displayName: 'Bilibili',
+      authState: 'authorized',
+      accountUid: 'uid-1',
+    })),
+    getPlatformInstanceAuthSnapshot: vi.fn((instanceId: string) => ({
+      instanceId,
+      platformId: 'bilibili',
+      connectorId: 'connector.platform.bilibili',
+      displayName: 'Bilibili',
+      authState: 'authorized',
+      accountUid: 'uid-1',
+    })),
+    resolvePlatformInstanceId: vi.fn(
+      ({ instanceId, connectorId }: { instanceId?: string; connectorId?: string }) =>
+        instanceId || (connectorId ? 'bilibili:builtin' : null)
+    ),
     listPlatformConnectorAuthSnapshots: vi.fn(async () => [
       {
         connectorId: 'connector.platform.bilibili',
@@ -65,6 +95,42 @@ vi.mock('../../modules/music-platform', async () => {
     })),
     logoutPlatformConnector: vi.fn(async (connectorId: string) => ({
       connectorId,
+      displayName: 'Bilibili',
+      authState: 'unauthorized',
+    })),
+    beginPlatformInstanceQrLogin: vi.fn(async (instanceId: string) => ({
+      instanceId,
+      platformId: 'bilibili',
+      connectorId: 'connector.platform.bilibili',
+      sessionId: 'session-1',
+      qrcodeKey: 'qr-key',
+      qrUrl: 'https://example.test/qr',
+      qrImageDataUrl: 'data:image/png;base64,xxx',
+      generatedAtMs: 1_710_000_000_000,
+      expiresAtMs: 1_710_000_060_000,
+    })),
+    pollPlatformInstanceQrLogin: vi.fn(async (instanceId: string, sessionId: string) => ({
+      instanceId,
+      platformId: 'bilibili',
+      connectorId: 'connector.platform.bilibili',
+      sessionId,
+      state: 'authorized',
+      stateCode: 0,
+      stateMessage: 'Authorized',
+      authState: 'authorized',
+      accountUid: 'uid-1',
+    })),
+    logoutPlatformInstance: vi.fn(async (instanceId: string) => ({
+      instanceId,
+      platformId: 'bilibili',
+      connectorId: 'connector.platform.bilibili',
+      displayName: 'Bilibili',
+      authState: 'unauthorized',
+    })),
+    clearPlatformInstanceAuthCookies: vi.fn(async (instanceId: string) => ({
+      instanceId,
+      platformId: 'bilibili',
+      connectorId: 'connector.platform.bilibili',
       displayName: 'Bilibili',
       authState: 'unauthorized',
     })),
@@ -121,20 +187,38 @@ vi.mock('../../modules/music-platform', async () => {
         },
       ],
     })),
-    prepareBilibiliCachedPlayback: vi.fn(async (sourceLocator: string, qualityHint?: string) => ({
-      sourceLocator,
-      streamUrl: 'https://example.test/bilibili-stream',
-      cachePath: '/cache/bilibili-track',
-      contentKind: 'video',
-      selectedQualityKey: qualityHint ?? 'auto',
-      selectedQualityLabel: qualityHint ?? 'Auto',
-    })),
-    prepareNeteaseCachedPlayback: vi.fn(async (sourceLocator: string) => ({
-      sourceLocator,
-      streamUrl: 'https://example.test/netease-stream',
-      cachePath: '/cache/netease-track',
-      songId: 'song-1',
-    })),
+    preparePlatformPlayback: vi.fn(
+      async (options: {
+        sourceLocator: string;
+        connectorId?: string;
+        qualityHint?: string;
+        instanceId?: string;
+      }) => {
+        if (options.connectorId === 'connector.platform.netease') {
+          return {
+            connectorId: 'connector.platform.netease',
+            prepared: {
+              sourceLocator: options.sourceLocator,
+              streamUrl: 'https://example.test/netease-stream',
+              cachePath: '/cache/netease-track',
+              songId: 'song-1',
+            },
+          };
+        }
+
+        return {
+          connectorId: options.connectorId ?? 'connector.platform.bilibili',
+          prepared: {
+            sourceLocator: options.sourceLocator,
+            streamUrl: 'https://example.test/bilibili-stream',
+            cachePath: '/cache/bilibili-track',
+            contentKind: 'video',
+            selectedQualityKey: options.qualityHint ?? 'auto',
+            selectedQualityLabel: options.qualityHint ?? 'Auto',
+          },
+        };
+      }
+    ),
   };
 });
 
@@ -1942,16 +2026,21 @@ describe('host.pmp capabilities', () => {
       limit: undefined,
       connectorIds: ['connector.platform.bilibili'],
     });
-    expect(musicPlatformModule.prepareBilibiliCachedPlayback).toHaveBeenCalledWith(
-      'bilibili://BV1-test',
-      '1080p'
-    );
-    expect(musicPlatformModule.prepareNeteaseCachedPlayback).toHaveBeenCalledWith(
-      'netease://song/1'
-    );
+    expect(musicPlatformModule.preparePlatformPlayback).toHaveBeenNthCalledWith(1, {
+      connectorId: 'connector.platform.bilibili',
+      sourceLocator: 'bilibili://BV1-test',
+      qualityHint: '1080p',
+      instanceId: undefined,
+    });
+    expect(musicPlatformModule.preparePlatformPlayback).toHaveBeenNthCalledWith(2, {
+      connectorId: 'connector.platform.netease',
+      sourceLocator: 'netease://song/1',
+      qualityHint: undefined,
+      instanceId: undefined,
+    });
   });
 
-  it('routes host.pmp.connector-auth through existing connector auth facades', async () => {
+  it('routes host.pmp.connector-auth through instance-aware auth runtime', async () => {
     const api = createMountApi({
       permissions: ['api:host', 'api:host-capability', 'api:connector-auth'],
     });
@@ -1991,52 +2080,72 @@ describe('host.pmp capabilities', () => {
     expect(snapshotsResult).toMatchObject({
       ok: true,
       data: {
-        snapshots: [{ connectorId: 'connector.platform.bilibili', authState: 'authorized' }],
+        snapshots: [
+          {
+            connectorId: 'connector.platform.bilibili',
+            instanceId: 'bilibili:builtin',
+            authState: 'authorized',
+          },
+        ],
       },
     });
     expect(snapshotResult).toMatchObject({
       ok: true,
       data: {
         connectorId: 'connector.platform.bilibili',
-        snapshot: { connectorId: 'connector.platform.bilibili', authState: 'authorized' },
+        instanceId: 'bilibili:builtin',
+        snapshot: {
+          connectorId: 'connector.platform.bilibili',
+          instanceId: 'bilibili:builtin',
+          authState: 'authorized',
+        },
       },
     });
     expect(beginResult).toMatchObject({
       ok: true,
       data: {
         connectorId: 'connector.platform.bilibili',
-        session: { sessionId: 'session-1' },
+        instanceId: 'bilibili:builtin',
+        session: { instanceId: 'bilibili:builtin', sessionId: 'session-1' },
       },
     });
     expect(pollResult).toMatchObject({
       ok: true,
       data: {
         connectorId: 'connector.platform.bilibili',
+        instanceId: 'bilibili:builtin',
         sessionId: 'session-1',
-        result: { authState: 'authorized' },
+        result: { instanceId: 'bilibili:builtin', authState: 'authorized' },
       },
     });
     expect(logoutResult).toMatchObject({
       ok: true,
       data: {
         connectorId: 'connector.platform.bilibili',
-        snapshot: { authState: 'unauthorized' },
+        instanceId: 'bilibili:builtin',
+        snapshot: { instanceId: 'bilibili:builtin', authState: 'unauthorized' },
       },
     });
     expect(musicPlatformModule.listPlatformConnectorDefinitions).toHaveBeenCalledTimes(1);
-    expect(musicPlatformModule.listPlatformConnectorAuthSnapshots).toHaveBeenCalledTimes(1);
-    expect(musicPlatformModule.getPlatformConnectorAuthSnapshot).toHaveBeenCalledWith(
-      'connector.platform.bilibili'
+    expect(musicPlatformModule.listPlatformInstanceAuthSnapshots).toHaveBeenCalledWith({
+      refresh: true,
+    });
+    expect(musicPlatformModule.resolvePlatformInstanceId).toHaveBeenCalledWith({
+      instanceId: null,
+      connectorId: 'connector.platform.bilibili',
+    });
+    expect(musicPlatformModule.refreshPlatformInstanceAuthSnapshot).toHaveBeenCalledWith(
+      'bilibili:builtin'
     );
-    expect(musicPlatformModule.beginPlatformQrLogin).toHaveBeenCalledWith(
-      'connector.platform.bilibili'
+    expect(musicPlatformModule.beginPlatformInstanceQrLogin).toHaveBeenCalledWith(
+      'bilibili:builtin'
     );
-    expect(musicPlatformModule.pollPlatformQrLogin).toHaveBeenCalledWith(
-      'connector.platform.bilibili',
+    expect(musicPlatformModule.pollPlatformInstanceQrLogin).toHaveBeenCalledWith(
+      'bilibili:builtin',
       'session-1'
     );
-    expect(musicPlatformModule.logoutPlatformConnector).toHaveBeenCalledWith(
-      'connector.platform.bilibili'
+    expect(musicPlatformModule.logoutPlatformInstance).toHaveBeenCalledWith(
+      'bilibili:builtin'
     );
   });
 
@@ -2261,7 +2370,7 @@ describe('host.pmp capabilities', () => {
       ok: true,
       data: {
         acceptedCount: 1,
-          moduleId: 'extension-plugin',
+        moduleId: 'extensions-plugin',
         pluginId: TEST_PLUGIN_ID,
         loggerId: 'plugin.ui',
         event: 'plugin.render.failed',
@@ -2271,7 +2380,7 @@ describe('host.pmp capabilities', () => {
     });
     expect(telemetry.ingested).toHaveLength(1);
     expect(telemetry.ingested[0]).toEqual({
-      moduleId: 'extension-plugin',
+      moduleId: 'extensions-plugin',
       component: 'host-pmp-capability-test:plugin.ui',
       record: {
         level: 'warn',

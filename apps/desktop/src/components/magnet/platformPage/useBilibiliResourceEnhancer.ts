@@ -201,7 +201,7 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
         }
 
         try {
-          const options = await listBilibiliPlaybackQualities(locator);
+          const options = await listBilibiliPlaybackQualities(locator, activeBilibiliInstanceId);
           if (options.length === 0) {
             qualityProbeBackoffUntilRef.current.set(locator, Date.now() + 60_000);
             trimMapToMaxEntries(qualityProbeBackoffUntilRef.current, RESOURCE_BADGE_CACHE_LIMIT);
@@ -231,6 +231,7 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
       cancelled = true;
     };
   }, [
+    activeBilibiliInstanceId,
     filteredBilibiliResources,
     getResourceCacheKey,
     isVideoSourceLocator,

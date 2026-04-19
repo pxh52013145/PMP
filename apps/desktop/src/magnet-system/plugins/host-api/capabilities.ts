@@ -37,15 +37,17 @@ import {
   getSystemAnchorsByMagnetId,
 } from '../../../modules/magnets/systemLayouts';
 import {
-  beginPlatformQrLogin,
-  getPlatformConnectorAuthSnapshot,
-  listPlatformConnectorAuthSnapshots,
+  beginPlatformInstanceQrLogin,
+  clearPlatformInstanceAuthCookies,
+  getPlatformInstanceAuthSnapshot,
   listPlatformConnectorDefinitions,
+  listPlatformInstanceAuthSnapshots,
   listPlatformConnectorFacadeItems,
-  logoutPlatformConnector,
-  pollPlatformQrLogin,
-  prepareBilibiliCachedPlayback,
-  prepareNeteaseCachedPlayback,
+  logoutPlatformInstance,
+  pollPlatformInstanceQrLogin,
+  preparePlatformPlayback,
+  refreshPlatformInstanceAuthSnapshot,
+  resolvePlatformInstanceId,
   searchPlatformTracks,
 } from '../../../modules/music-platform';
 import {
@@ -178,8 +180,6 @@ const DESKTOP_PET_RUNTIME_CAPABILITY_ID = 'foundation.desktop-pet-runtime';
 const DESKTOP_PET_RUNTIME_CAPABILITY_VERSION = '0.3.0';
 const VOICE_TRAINING_RUNTIME_CAPABILITY_ID = 'foundation.voice-training-runtime';
 const VOICE_TRAINING_RUNTIME_CAPABILITY_VERSION = '0.3.0';
-const BILIBILI_PLATFORM_CONNECTOR_ID = 'connector.platform.bilibili';
-const NETEASE_PLATFORM_CONNECTOR_ID = 'connector.platform.netease';
 const AUDIO_INPUT_ADAPTER_PROVIDER_DEFAULT_TIMEOUT_MS = 2000;
 const AUDIO_INPUT_ADAPTER_PROVIDER_MAX_TIMEOUT_MS = 10_000;
 const AUDIO_INPUT_ADAPTER_MAX_OPEN_SESSIONS_PER_PLUGIN_DEFAULT = 24;
@@ -1086,32 +1086,6 @@ async function applyPmpMagnetLayoutPatches(options: {
       didCreate: false,
     },
   };
-}
-
-function inferPlatformPrepareConnectorId(
-  sourceLocator: string,
-  requestedConnectorId: string | null
-): string | null {
-  if (requestedConnectorId === BILIBILI_PLATFORM_CONNECTOR_ID) {
-    return BILIBILI_PLATFORM_CONNECTOR_ID;
-  }
-  if (requestedConnectorId === NETEASE_PLATFORM_CONNECTOR_ID) {
-    return NETEASE_PLATFORM_CONNECTOR_ID;
-  }
-
-  const normalized = sourceLocator.trim().toLowerCase();
-  if (
-    normalized.startsWith('bilibili://') ||
-    normalized.includes('bilibili.com/video/') ||
-    normalized.includes('bvid=')
-  ) {
-    return BILIBILI_PLATFORM_CONNECTOR_ID;
-  }
-  if (normalized.startsWith('netease://') || normalized.includes('music.163.com')) {
-    return NETEASE_PLATFORM_CONNECTOR_ID;
-  }
-
-  return null;
 }
 
 function readMethodPermissionError(
@@ -4160,7 +4134,9 @@ function createPmpMusicPlatformPrepareHandler(): PluginHostCapabilityHandler {
           stage: 'host-pack',
           implementation: 'platform-facade',
           methods: ['describe', 'preparePlayback'],
-          supportedConnectorIds: [BILIBILI_PLATFORM_CONNECTOR_ID, NETEASE_PLATFORM_CONNECTOR_ID],
+          supportedConnectorIds: listPlatformConnectorDefinitions().map(
+            (definition) => definition.connectorId
+          ),
         });
       case 'preparePlayback': {
         const payload = asObject(request.payload);
@@ -4169,49 +4145,26 @@ function createPmpMusicPlatformPrepareHandler(): PluginHostCapabilityHandler {
           return resultError('INVALID_PAYLOAD', 'payload.sourceLocator is required');
         }
 
-        const connectorId = inferPlatformPrepareConnectorId(
+        const prepared = await preparePlatformPlayback({
           sourceLocator,
-          asNonEmptyString(payload?.connectorId)
-        );
-        if (!connectorId) {
+          connectorId: asNonEmptyString(payload?.connectorId) ?? undefined,
+          qualityHint: asNonEmptyString(payload?.qualityHint) ?? undefined,
+          instanceId: asNonEmptyString(payload?.instanceId) ?? undefined,
+        });
+        if (!prepared) {
           return resultError(
-            'NOT_SUPPORTED',
-            'Unsupported platform connector for playback preparation',
+            'NOT_FOUND',
+            'Unable to prepare platform playback',
             {
               details: {
                 sourceLocator,
                 connectorId: asNonEmptyString(payload?.connectorId) ?? undefined,
+                instanceId: asNonEmptyString(payload?.instanceId) ?? undefined,
               },
             }
           );
         }
-
-        if (connectorId === BILIBILI_PLATFORM_CONNECTOR_ID) {
-          const prepared = await prepareBilibiliCachedPlayback(
-            sourceLocator,
-            asNonEmptyString(payload?.qualityHint) ?? undefined
-          );
-          if (!prepared) {
-            return resultError('NOT_FOUND', 'Unable to prepare Bilibili playback');
-          }
-          return resultOk({
-            connectorId,
-            prepared,
-          });
-        }
-
-        if (connectorId === NETEASE_PLATFORM_CONNECTOR_ID) {
-          const prepared = await prepareNeteaseCachedPlayback(sourceLocator);
-          if (!prepared) {
-            return resultError('NOT_FOUND', 'Unable to prepare Netease playback');
-          }
-          return resultOk({
-            connectorId,
-            prepared,
-          });
-        }
-
-        return resultError('NOT_SUPPORTED', `Unsupported platform connector: ${connectorId}`);
+        return resultOk(prepared);
       }
       default:
         return resultError(
@@ -4243,6 +4196,7 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
             'beginQrLogin',
             'pollQrLogin',
             'logout',
+            'clearAuthCookies',
           ],
         });
       case 'listDefinitions':
@@ -4251,55 +4205,98 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
         });
       case 'listAuthSnapshots':
         return resultOk({
-          snapshots: await listPlatformConnectorAuthSnapshots(),
+          snapshots: await listPlatformInstanceAuthSnapshots({ refresh: true }),
         });
       case 'getAuthSnapshot': {
         const payload = asObject(request.payload);
         const connectorId = asNonEmptyString(payload?.connectorId);
-        if (!connectorId) {
-          return resultError('INVALID_PAYLOAD', 'payload.connectorId is required');
+        const instanceId = resolvePlatformInstanceId({
+          instanceId: asNonEmptyString(payload?.instanceId),
+          connectorId,
+        });
+        if (!instanceId) {
+          return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
         }
+        const snapshot =
+          (await refreshPlatformInstanceAuthSnapshot(instanceId)) ??
+          getPlatformInstanceAuthSnapshot(instanceId);
         return resultOk({
           connectorId,
-          snapshot: await getPlatformConnectorAuthSnapshot(connectorId as never),
+          instanceId,
+          snapshot,
         });
       }
       case 'beginQrLogin': {
         const payload = asObject(request.payload);
         const connectorId = asNonEmptyString(payload?.connectorId);
-        if (!connectorId) {
-          return resultError('INVALID_PAYLOAD', 'payload.connectorId is required');
-        }
-        return resultOk({
+        const instanceId = resolvePlatformInstanceId({
+          instanceId: asNonEmptyString(payload?.instanceId),
           connectorId,
-          session: await beginPlatformQrLogin(connectorId as never),
+        });
+        if (!instanceId) {
+          return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
+        }
+        const session = await beginPlatformInstanceQrLogin(instanceId);
+        return resultOk({
+          connectorId: connectorId ?? session?.connectorId,
+          instanceId,
+          session,
         });
       }
       case 'pollQrLogin': {
         const payload = asObject(request.payload);
         const connectorId = asNonEmptyString(payload?.connectorId);
+        const instanceId = resolvePlatformInstanceId({
+          instanceId: asNonEmptyString(payload?.instanceId),
+          connectorId,
+        });
         const sessionId = asNonEmptyString(payload?.sessionId);
-        if (!connectorId) {
-          return resultError('INVALID_PAYLOAD', 'payload.connectorId is required');
+        if (!instanceId) {
+          return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
         }
         if (!sessionId) {
           return resultError('INVALID_PAYLOAD', 'payload.sessionId is required');
         }
+        const result = await pollPlatformInstanceQrLogin(instanceId, sessionId);
         return resultOk({
-          connectorId,
+          connectorId: connectorId ?? result?.connectorId,
+          instanceId,
           sessionId,
-          result: await pollPlatformQrLogin(connectorId as never, sessionId),
+          result,
         });
       }
       case 'logout': {
         const payload = asObject(request.payload);
         const connectorId = asNonEmptyString(payload?.connectorId);
-        if (!connectorId) {
-          return resultError('INVALID_PAYLOAD', 'payload.connectorId is required');
+        const instanceId = resolvePlatformInstanceId({
+          instanceId: asNonEmptyString(payload?.instanceId),
+          connectorId,
+        });
+        if (!instanceId) {
+          return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
         }
+        const snapshot = await logoutPlatformInstance(instanceId);
         return resultOk({
           connectorId,
-          snapshot: await logoutPlatformConnector(connectorId as never),
+          instanceId,
+          snapshot,
+        });
+      }
+      case 'clearAuthCookies': {
+        const payload = asObject(request.payload);
+        const connectorId = asNonEmptyString(payload?.connectorId);
+        const instanceId = resolvePlatformInstanceId({
+          instanceId: asNonEmptyString(payload?.instanceId),
+          connectorId,
+        });
+        if (!instanceId) {
+          return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
+        }
+        const snapshot = await clearPlatformInstanceAuthCookies(instanceId);
+        return resultOk({
+          connectorId,
+          instanceId,
+          snapshot,
         });
       }
       default:

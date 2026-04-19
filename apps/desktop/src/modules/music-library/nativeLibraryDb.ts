@@ -1,6 +1,9 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
-import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
+import {
+  invokeWithTelemetry,
+  type TauriInvokeTelemetryOptions,
+} from '../../services/telemetry/tauriInvokeTelemetry';
 
 export interface NativeLibrarySourceUpsertInput {
   id: string;
@@ -47,6 +50,16 @@ export interface NativeLibraryConnectorAccountRecord {
   createdAtMs: number;
   updatedAtMs: number;
 }
+
+const MUSIC_PLATFORM_AUTH_INVOKE_COMMAND = 'music_library_music_platform_auth_invoke';
+const MUSIC_PLATFORM_API_INVOKE_COMMAND = 'music_library_music_platform_api_invoke';
+const BILIBILI_CONNECTOR_ID = 'connector.platform.bilibili';
+const NETEASE_CONNECTOR_ID = 'connector.platform.netease';
+const PLATFORM_LIBRARY_BINDING_ID = 'host.pmp.platform-instance.library';
+const PLATFORM_RECOMMENDATIONS_BINDING_ID =
+  'host.pmp.platform-instance.recommendations';
+const PLATFORM_SEARCH_BINDING_ID = 'host.pmp.platform-instance.search';
+const PLATFORM_QUALITY_BINDING_ID = 'host.pmp.platform-instance.quality';
 
 export interface NativeBilibiliQrCodeSession {
   connectorId: string;
@@ -2793,29 +2806,398 @@ export async function listNativeLibraryConnectorAccounts(
   return result;
 }
 
-export async function generateNativeBilibiliQrCodeSession(): Promise<NativeBilibiliQrCodeSession | null> {
+function normalizeNativeMusicPlatformInstanceId(
+  instanceId?: string | null
+): string | undefined {
+  return typeof instanceId === 'string' && instanceId.trim().length > 0
+    ? instanceId.trim()
+    : undefined;
+}
+
+function normalizeNativeMusicPlatformPayload(
+  payload?: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  if (!payload) return undefined;
+
+  const normalizedEntries = Object.entries(payload).filter(([, value]) => value !== undefined);
+  if (normalizedEntries.length < 1) return undefined;
+  return Object.fromEntries(normalizedEntries);
+}
+
+async function invokeNativeMusicPlatformAuthCommand<TResult = unknown>(options: {
+  connectorId: string;
+  method: string;
+  instanceId?: string | null;
+  payload?: Record<string, unknown>;
+  telemetry?: TauriInvokeTelemetryOptions;
+}): Promise<TResult> {
+  const request = {
+    connectorId: options.connectorId,
+    method: options.method,
+    instanceId: normalizeNativeMusicPlatformInstanceId(options.instanceId),
+    payload: normalizeNativeMusicPlatformPayload(options.payload),
+  };
+
+  if (options.telemetry) {
+    return invokeWithTelemetry<TResult>(
+      MUSIC_PLATFORM_AUTH_INVOKE_COMMAND,
+      { request },
+      options.telemetry
+    );
+  }
+
+  return invoke<TResult>(MUSIC_PLATFORM_AUTH_INVOKE_COMMAND, { request });
+}
+
+async function invokeNativeMusicPlatformApiCommand<TResult = unknown>(options: {
+  connectorId: string;
+  bindingId: string;
+  method: string;
+  instanceId?: string | null;
+  payload?: Record<string, unknown>;
+  telemetry?: TauriInvokeTelemetryOptions;
+}): Promise<TResult> {
+  const request = {
+    connectorId: options.connectorId,
+    bindingId: options.bindingId,
+    method: options.method,
+    instanceId: normalizeNativeMusicPlatformInstanceId(options.instanceId),
+    payload: normalizeNativeMusicPlatformPayload(options.payload),
+  };
+
+  if (options.telemetry) {
+    return invokeWithTelemetry<TResult>(
+      MUSIC_PLATFORM_API_INVOKE_COMMAND,
+      { request },
+      options.telemetry
+    );
+  }
+
+  return invoke<TResult>(MUSIC_PLATFORM_API_INVOKE_COMMAND, { request });
+}
+
+type NativeMusicPlatformApiBucket = 'library' | 'recommendations' | 'search' | 'quality';
+type NativeMusicPlatformAuthMethod =
+  | 'beginQrLogin'
+  | 'pollQrLogin'
+  | 'getSnapshot'
+  | 'logout'
+  | 'clearAuthCookies';
+
+type NativeMusicPlatformAuthCompatDescriptor<TQrSession, TQrPoll, TStatus> = {
+  connectorId: string;
+  parseQrSession: (value: unknown) => TQrSession | null;
+  parseQrPollResult: (value: unknown) => TQrPoll | null;
+  parseStatus: (value: unknown) => TStatus | null;
+  telemetry?: Partial<Record<NativeMusicPlatformAuthMethod, TauriInvokeTelemetryOptions>>;
+};
+
+type NativeMusicPlatformApiCompatDescriptor = {
+  connectorId: string;
+  bindings: Partial<Record<NativeMusicPlatformApiBucket, string>>;
+};
+
+type NativeMusicPlatformInvokeParsedOptions<TResult> = {
+  method: string;
+  instanceId?: string | null;
+  payload?: Record<string, unknown>;
+  telemetry?: TauriInvokeTelemetryOptions;
+  suppressErrors?: boolean;
+  parse: (value: unknown) => TResult | null;
+};
+
+type NativeMusicPlatformInvokeArrayOptions<TResult> = {
+  method: string;
+  instanceId?: string | null;
+  payload?: Record<string, unknown>;
+  telemetry?: TauriInvokeTelemetryOptions;
+  suppressErrors?: boolean;
+  parseItem: (value: unknown) => TResult | null;
+};
+
+function parseNativeMusicPlatformArray<TResult>(
+  value: unknown,
+  parseItem: (value: unknown) => TResult | null
+): TResult[] {
+  if (!Array.isArray(value)) return [];
+
+  const result: TResult[] = [];
+  for (const item of value) {
+    const parsed = parseItem(item);
+    if (!parsed) continue;
+    result.push(parsed);
+  }
+  return result;
+}
+
+async function invokeNativeMusicPlatformAuthParsed<TResult>(
+  connectorId: string,
+  options: NativeMusicPlatformInvokeParsedOptions<TResult>
+): Promise<TResult | null> {
   if (!isTauriRuntime()) return null;
-  const raw = await invoke<unknown>('music_library_bilibili_qr_generate').catch(() => null);
-  return ensureBilibiliQrCodeSession(raw);
+
+  try {
+    const raw = await invokeNativeMusicPlatformAuthCommand<unknown>({
+      connectorId,
+      method: options.method,
+      instanceId: options.instanceId,
+      payload: options.payload,
+      telemetry: options.telemetry,
+    });
+    return options.parse(raw);
+  } catch (error) {
+    if (options.suppressErrors) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function invokeNativeMusicPlatformApiParsed<TResult>(
+  connectorId: string,
+  bindingId: string,
+  options: NativeMusicPlatformInvokeParsedOptions<TResult>
+): Promise<TResult | null> {
+  if (!isTauriRuntime()) return null;
+
+  try {
+    const raw = await invokeNativeMusicPlatformApiCommand<unknown>({
+      connectorId,
+      bindingId,
+      method: options.method,
+      instanceId: options.instanceId,
+      payload: options.payload,
+      telemetry: options.telemetry,
+    });
+    return options.parse(raw);
+  } catch (error) {
+    if (options.suppressErrors) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function invokeNativeMusicPlatformApiArray<TResult>(
+  connectorId: string,
+  bindingId: string,
+  options: NativeMusicPlatformInvokeArrayOptions<TResult>
+): Promise<TResult[]> {
+  if (!isTauriRuntime()) return [];
+
+  try {
+    const raw = await invokeNativeMusicPlatformApiCommand<unknown>({
+      connectorId,
+      bindingId,
+      method: options.method,
+      instanceId: options.instanceId,
+      payload: options.payload,
+      telemetry: options.telemetry,
+    });
+    return parseNativeMusicPlatformArray(raw, options.parseItem);
+  } catch (error) {
+    if (options.suppressErrors) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+function createNativeMusicPlatformAuthCompatBridge<TQrSession, TQrPoll, TStatus>(
+  descriptor: NativeMusicPlatformAuthCompatDescriptor<TQrSession, TQrPoll, TStatus>
+) {
+  return {
+    beginQrLogin: (
+      instanceId?: string | null,
+      options?: { suppressErrors?: boolean }
+    ): Promise<TQrSession | null> =>
+      invokeNativeMusicPlatformAuthParsed(descriptor.connectorId, {
+        method: 'beginQrLogin',
+        instanceId,
+        telemetry: descriptor.telemetry?.beginQrLogin,
+        suppressErrors: options?.suppressErrors,
+        parse: descriptor.parseQrSession,
+      }),
+    pollQrLogin: (
+      sessionId: string,
+      options?: { suppressErrors?: boolean }
+    ): Promise<TQrPoll | null> => {
+      const normalizedSessionId = sessionId.trim();
+      if (!normalizedSessionId) {
+        return Promise.resolve(null);
+      }
+      return invokeNativeMusicPlatformAuthParsed(descriptor.connectorId, {
+        method: 'pollQrLogin',
+        payload: {
+          sessionId: normalizedSessionId,
+        },
+        telemetry: descriptor.telemetry?.pollQrLogin,
+        suppressErrors: options?.suppressErrors,
+        parse: descriptor.parseQrPollResult,
+      });
+    },
+    getSnapshot: (
+      instanceId?: string | null,
+      options?: { suppressErrors?: boolean }
+    ): Promise<TStatus | null> =>
+      invokeNativeMusicPlatformAuthParsed(descriptor.connectorId, {
+        method: 'getSnapshot',
+        instanceId,
+        telemetry: descriptor.telemetry?.getSnapshot,
+        suppressErrors: options?.suppressErrors,
+        parse: descriptor.parseStatus,
+      }),
+    logout: (
+      instanceId?: string | null,
+      options?: { suppressErrors?: boolean }
+    ): Promise<TStatus | null> =>
+      invokeNativeMusicPlatformAuthParsed(descriptor.connectorId, {
+        method: 'logout',
+        instanceId,
+        telemetry: descriptor.telemetry?.logout,
+        suppressErrors: options?.suppressErrors,
+        parse: descriptor.parseStatus,
+      }),
+    clearAuthCookies: (
+      instanceId?: string | null,
+      options?: { suppressErrors?: boolean }
+    ): Promise<TStatus | null> =>
+      invokeNativeMusicPlatformAuthParsed(descriptor.connectorId, {
+        method: 'clearAuthCookies',
+        instanceId,
+        telemetry: descriptor.telemetry?.clearAuthCookies,
+        suppressErrors: options?.suppressErrors,
+        parse: descriptor.parseStatus,
+      }),
+  };
+}
+
+function createNativeMusicPlatformApiCompatBridge(
+  descriptor: NativeMusicPlatformApiCompatDescriptor
+) {
+  return {
+    invokeParsed<TResult>(
+      bucket: NativeMusicPlatformApiBucket,
+      options: NativeMusicPlatformInvokeParsedOptions<TResult>
+    ): Promise<TResult | null> {
+      const bindingId = descriptor.bindings[bucket];
+      if (!bindingId) {
+        return Promise.resolve(null);
+      }
+      return invokeNativeMusicPlatformApiParsed(descriptor.connectorId, bindingId, options);
+    },
+    invokeList<TResult>(
+      bucket: NativeMusicPlatformApiBucket,
+      options: NativeMusicPlatformInvokeArrayOptions<TResult>
+    ): Promise<TResult[]> {
+      const bindingId = descriptor.bindings[bucket];
+      if (!bindingId) {
+        return Promise.resolve([]);
+      }
+      return invokeNativeMusicPlatformApiArray(descriptor.connectorId, bindingId, options);
+    },
+  };
+}
+
+const bilibiliNativeAuthCompatBridge = createNativeMusicPlatformAuthCompatBridge({
+  connectorId: BILIBILI_CONNECTOR_ID,
+  parseQrSession: ensureBilibiliQrCodeSession,
+  parseQrPollResult: ensureBilibiliQrPollResult,
+  parseStatus: ensureBilibiliAuthStatus,
+  telemetry: {
+    clearAuthCookies: {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.bilibili.clear-auth-cookies',
+      includeResultSize: true,
+      failureLevel: 'warn',
+    },
+  },
+});
+
+const bilibiliNativeApiCompatBridge = createNativeMusicPlatformApiCompatBridge({
+  connectorId: BILIBILI_CONNECTOR_ID,
+  bindings: {
+    library: PLATFORM_LIBRARY_BINDING_ID,
+    recommendations: PLATFORM_RECOMMENDATIONS_BINDING_ID,
+    search: PLATFORM_SEARCH_BINDING_ID,
+    quality: PLATFORM_QUALITY_BINDING_ID,
+  },
+});
+
+const neteaseNativeAuthCompatBridge = createNativeMusicPlatformAuthCompatBridge({
+  connectorId: NETEASE_CONNECTOR_ID,
+  parseQrSession: ensureNeteaseQrCodeSession,
+  parseQrPollResult: ensureNeteaseQrPollResult,
+  parseStatus: ensureNeteaseAuthStatus,
+  telemetry: {
+    beginQrLogin: {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.netease.qr-generate',
+      includeResultSize: true,
+    },
+    pollQrLogin: {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.netease.qr-poll',
+      includeResultSize: true,
+    },
+    getSnapshot: {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.netease.get-auth-status',
+      includeResultSize: true,
+      failureLevel: 'warn',
+    },
+    logout: {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.netease.logout',
+      includeResultSize: true,
+      failureLevel: 'warn',
+    },
+    clearAuthCookies: {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.netease.clear-auth-cookies',
+      includeResultSize: true,
+      failureLevel: 'warn',
+    },
+  },
+});
+
+const neteaseNativeApiCompatBridge = createNativeMusicPlatformApiCompatBridge({
+  connectorId: NETEASE_CONNECTOR_ID,
+  bindings: {
+    library: PLATFORM_LIBRARY_BINDING_ID,
+    recommendations: PLATFORM_RECOMMENDATIONS_BINDING_ID,
+    search: PLATFORM_SEARCH_BINDING_ID,
+  },
+});
+
+export async function generateNativeBilibiliQrCodeSession(
+  instanceId?: string | null
+): Promise<NativeBilibiliQrCodeSession | null> {
+  return bilibiliNativeAuthCompatBridge.beginQrLogin(instanceId, {
+    suppressErrors: true,
+  });
 }
 
 export async function pollNativeBilibiliQrCodeSession(
   sessionId: string
 ): Promise<NativeBilibiliQrPollResult | null> {
-  if (!isTauriRuntime()) return null;
-  const normalizedSessionId = sessionId.trim();
-  if (!normalizedSessionId) return null;
-
-  const raw = await invoke<unknown>('music_library_bilibili_qr_poll', {
-    sessionId: normalizedSessionId,
-  }).catch(() => null);
-  return ensureBilibiliQrPollResult(raw);
+  return bilibiliNativeAuthCompatBridge.pollQrLogin(sessionId, {
+    suppressErrors: true,
+  });
 }
 
-export async function getNativeBilibiliAuthStatus(): Promise<NativeBilibiliAuthStatus | null> {
-  if (!isTauriRuntime()) return null;
-  const raw = await invoke<unknown>('music_library_bilibili_get_auth_status').catch(() => null);
-  return ensureBilibiliAuthStatus(raw);
+export async function getNativeBilibiliAuthStatus(
+  instanceId?: string | null
+): Promise<NativeBilibiliAuthStatus | null> {
+  return bilibiliNativeAuthCompatBridge.getSnapshot(instanceId, {
+    suppressErrors: true,
+  });
 }
 
 export async function getNativeMusicPlatformGlobalCacheSettings(): Promise<NativeMusicPlatformGlobalCacheSettings | null> {
@@ -2843,47 +3225,38 @@ export async function setNativeMusicPlatformGlobalCacheSettings(
   return ensureMusicPlatformGlobalCacheSettings(raw);
 }
 
-export async function logoutNativeBilibili(): Promise<NativeBilibiliAuthStatus | null> {
-  if (!isTauriRuntime()) return null;
-  const raw = await invoke<unknown>('music_library_bilibili_logout').catch(() => null);
-  return ensureBilibiliAuthStatus(raw);
+export async function logoutNativeBilibili(
+  instanceId?: string | null
+): Promise<NativeBilibiliAuthStatus | null> {
+  return bilibiliNativeAuthCompatBridge.logout(instanceId, {
+    suppressErrors: true,
+  });
 }
 
-export async function clearNativeBilibiliAuthCookies(): Promise<NativeBilibiliAuthStatus | null> {
-  if (!isTauriRuntime()) return null;
-  const raw = await invokeWithTelemetry<unknown>(
-    'music_library_bilibili_clear_auth_cookies',
-    undefined,
-    {
-      moduleId: 'music-library',
-      component: 'nativeLibraryDb',
-      event: 'music-library.bilibili.clear-auth-cookies',
-      includeResultSize: true,
-      failureLevel: 'warn',
-    }
-  ).catch(() => null);
-  return ensureBilibiliAuthStatus(raw);
+export async function clearNativeBilibiliAuthCookies(
+  instanceId?: string | null
+): Promise<NativeBilibiliAuthStatus | null> {
+  return bilibiliNativeAuthCompatBridge.clearAuthCookies(instanceId, {
+    suppressErrors: true,
+  });
 }
 
-export async function listNativeBilibiliFavoriteFolders(): Promise<NativeBilibiliFavoriteFolder[]> {
-  if (!isTauriRuntime()) return [];
-  const raw = await invoke<unknown>('music_library_bilibili_list_favorite_folders').catch(() => null);
-  if (!Array.isArray(raw)) return [];
-
-  const result: NativeBilibiliFavoriteFolder[] = [];
-  for (const item of raw) {
-    const parsed = ensureBilibiliFavoriteFolder(item);
-    if (!parsed) continue;
-    result.push(parsed);
-  }
-
-  return result;
+export async function listNativeBilibiliFavoriteFolders(
+  instanceId?: string | null
+): Promise<NativeBilibiliFavoriteFolder[]> {
+  return bilibiliNativeApiCompatBridge.invokeList('library', {
+    method: 'listCollections',
+    instanceId,
+    suppressErrors: true,
+    parseItem: ensureBilibiliFavoriteFolder,
+  });
 }
 
 export async function listNativeBilibiliFavoriteResources(options: {
   folderId: string;
   pageNum?: number;
   pageSize?: number;
+  instanceId?: string | null;
 }): Promise<NativeBilibiliFavoriteResourcePage | null> {
   if (!isTauriRuntime()) return null;
 
@@ -2899,27 +3272,36 @@ export async function listNativeBilibiliFavoriteResources(options: {
       ? Math.max(1, Math.floor(options.pageSize))
       : undefined;
 
-  const raw = await invoke<unknown>('music_library_bilibili_list_favorite_resources', {
-    folderId,
-    pageNum,
-    pageSize,
-  }).catch(() => null);
-  return ensureBilibiliFavoriteResourcePage(raw);
+  return bilibiliNativeApiCompatBridge.invokeParsed('library', {
+    method: 'listPlaylistTracks',
+    instanceId: options.instanceId,
+    payload: {
+      folderId,
+      pageNum,
+      pageSize,
+    },
+    suppressErrors: true,
+    parse: ensureBilibiliFavoriteResourcePage,
+  });
 }
 
-export async function listNativeBilibiliRecommendedResources(): Promise<
+export async function listNativeBilibiliRecommendedResources(
+  instanceId?: string | null
+): Promise<
   NativeBilibiliFavoriteResourcePage | null
 > {
-  if (!isTauriRuntime()) return null;
-
-  const raw = await invoke<unknown>('music_library_bilibili_list_recommended_resources');
-  return ensureBilibiliFavoriteResourcePage(raw);
+  return bilibiliNativeApiCompatBridge.invokeParsed('recommendations', {
+    method: 'listDaily',
+    instanceId,
+    parse: ensureBilibiliFavoriteResourcePage,
+  });
 }
 
 export async function listNativeBilibiliSearchResources(options: {
   keyword: string;
   pageNum?: number;
   pageSize?: number;
+  instanceId?: string | null;
 }): Promise<NativeBilibiliFavoriteResourcePage | null> {
   if (!isTauriRuntime()) return null;
 
@@ -2935,68 +3317,65 @@ export async function listNativeBilibiliSearchResources(options: {
       ? Math.max(1, Math.floor(options.pageSize))
       : undefined;
 
-  const raw = await invoke<unknown>('music_library_bilibili_search_resources', {
-    keyword,
-    pageNum,
-    pageSize,
+  return bilibiliNativeApiCompatBridge.invokeParsed('search', {
+    method: 'query',
+    instanceId: options.instanceId,
+    payload: {
+      keyword,
+      pageNum,
+      pageSize,
+    },
+    parse: ensureBilibiliFavoriteResourcePage,
   });
-  return ensureBilibiliFavoriteResourcePage(raw);
 }
 
 export async function searchNativeBilibiliResourceByBvid(
-  bvid: string
+  bvid: string,
+  instanceId?: string | null
 ): Promise<NativeBilibiliFavoriteResourceItem | null> {
-  if (!isTauriRuntime()) return null;
-
   const normalizedBvid = bvid.trim();
   if (!normalizedBvid) return null;
-
-  const raw = await invoke<unknown>('music_library_bilibili_search_resource_by_bvid', {
-    bvid: normalizedBvid,
-  }).catch(() => null);
-
-  return ensureBilibiliFavoriteResourceItem(raw);
+  return bilibiliNativeApiCompatBridge.invokeParsed('search', {
+    method: 'resolveLocator',
+    instanceId,
+    payload: {
+      bvid: normalizedBvid,
+    },
+    suppressErrors: true,
+    parse: ensureBilibiliFavoriteResourceItem,
+  });
 }
 
 export async function prepareNativeBilibiliCoverCache(
   coverUrl: string,
   instanceId?: string | null
 ): Promise<string | null> {
-  if (!isTauriRuntime()) return null;
-
   const normalizedCoverUrl = coverUrl.trim();
   if (!normalizedCoverUrl) return null;
-  const normalizedInstanceId =
-    typeof instanceId === 'string' && instanceId.trim().length > 0 ? instanceId.trim() : undefined;
-
-  const raw = await invoke<unknown>('music_library_bilibili_prepare_cover_cache', {
-    coverUrl: normalizedCoverUrl,
-    instanceId: normalizedInstanceId,
+  return bilibiliNativeApiCompatBridge.invokeParsed('library', {
+    method: 'prepareCoverCache',
+    instanceId,
+    payload: {
+      coverUrl: normalizedCoverUrl,
+    },
+    parse: (raw) => asTrimmedString(raw) || null,
   });
-
-  const cachePath = asTrimmedString(raw);
-  return cachePath || null;
 }
 
 export async function listNativeBilibiliPlaybackQualities(
-  sourceLocator: string
+  sourceLocator: string,
+  instanceId?: string | null
 ): Promise<NativeBilibiliPlaybackQualityOption[]> {
-  if (!isTauriRuntime()) return [];
-
   const normalizedSourceLocator = sourceLocator.trim();
   if (!normalizedSourceLocator) return [];
-
-  const raw = await invoke<unknown>('music_library_bilibili_list_playback_qualities', {
-    sourceLocator: normalizedSourceLocator,
+  return bilibiliNativeApiCompatBridge.invokeList('quality', {
+    method: 'listOptions',
+    instanceId,
+    payload: {
+      sourceLocator: normalizedSourceLocator,
+    },
+    parseItem: ensureBilibiliPlaybackQualityOption,
   });
-  if (!Array.isArray(raw)) return [];
-
-  const items: NativeBilibiliPlaybackQualityOption[] = [];
-  for (const item of raw) {
-    const parsed = ensureBilibiliPlaybackQualityOption(item);
-    if (parsed) items.push(parsed);
-  }
-  return items;
 }
 
 export async function prepareNativeBilibiliCachedPlayback(
@@ -3004,8 +3383,6 @@ export async function prepareNativeBilibiliCachedPlayback(
   qualityHint?: string,
   instanceId?: string | null
 ): Promise<NativeBilibiliPlaybackPrepared | null> {
-  if (!isTauriRuntime()) return null;
-
   const normalizedSourceLocator = sourceLocator.trim();
   if (!normalizedSourceLocator) return null;
 
@@ -3013,166 +3390,126 @@ export async function prepareNativeBilibiliCachedPlayback(
     typeof qualityHint === 'string' && qualityHint.trim().length > 0
       ? qualityHint.trim().toLowerCase()
       : undefined;
-  const normalizedInstanceId =
-    typeof instanceId === 'string' && instanceId.trim().length > 0 ? instanceId.trim() : undefined;
-
-  const raw = await invoke<unknown>('music_library_bilibili_prepare_cached_playback', {
-    sourceLocator: normalizedSourceLocator,
-    qualityHint: normalizedQualityHint,
-    instanceId: normalizedInstanceId,
+  return bilibiliNativeApiCompatBridge.invokeParsed('library', {
+    method: 'preparePlayback',
+    instanceId,
+    payload: {
+      sourceLocator: normalizedSourceLocator,
+      qualityHint: normalizedQualityHint,
+    },
+    parse: ensureBilibiliPlaybackPrepared,
   });
-
-  return ensureBilibiliPlaybackPrepared(raw);
 }
 
 export async function resolveNativeBilibiliLyricLocator(
-  lyricLocator: string
+  lyricLocator: string,
+  instanceId?: string | null
 ): Promise<NativeBilibiliLyricLocatorRef | null> {
-  if (!isTauriRuntime()) return null;
-
   const normalizedLocator = lyricLocator.trim();
   if (!normalizedLocator) return null;
-
-  const raw = await invoke<unknown>('music_library_bilibili_resolve_lyric_locator', {
-    lyricLocator: normalizedLocator,
-  }).catch(() => null);
-  return ensureBilibiliLyricLocatorRef(raw);
+  return bilibiliNativeApiCompatBridge.invokeParsed('library', {
+    method: 'resolveLyricLocator',
+    instanceId,
+    payload: {
+      lyricLocator: normalizedLocator,
+    },
+    suppressErrors: true,
+    parse: ensureBilibiliLyricLocatorRef,
+  });
 }
 
-export async function generateNativeNeteaseQrCodeSession(): Promise<NativeNeteaseQrCodeSession | null> {
-  if (!isTauriRuntime()) return null;
-  const raw = await invokeWithTelemetry<unknown>('music_library_netease_qr_generate', undefined, {
-    moduleId: 'music-library',
-    component: 'nativeLibraryDb',
-    event: 'music-library.netease.qr-generate',
-    includeResultSize: true,
+export async function generateNativeNeteaseQrCodeSession(
+  instanceId?: string | null
+): Promise<NativeNeteaseQrCodeSession | null> {
+  return neteaseNativeAuthCompatBridge.beginQrLogin(instanceId, {
+    suppressErrors: true,
   });
-  return ensureNeteaseQrCodeSession(raw);
 }
 
 export async function pollNativeNeteaseQrCodeSession(
   sessionId: string
 ): Promise<NativeNeteaseQrPollResult | null> {
-  if (!isTauriRuntime()) return null;
-  const normalizedSessionId = sessionId.trim();
-  if (!normalizedSessionId) return null;
-
-  const raw = await invokeWithTelemetry<unknown>(
-    'music_library_netease_qr_poll',
-    {
-      sessionId: normalizedSessionId,
-    },
-    {
-      moduleId: 'music-library',
-      component: 'nativeLibraryDb',
-      event: 'music-library.netease.qr-poll',
-      includeResultSize: true,
-    }
-  );
-  return ensureNeteaseQrPollResult(raw);
+  return neteaseNativeAuthCompatBridge.pollQrLogin(sessionId);
 }
 
-export async function getNativeNeteaseAuthStatus(): Promise<NativeNeteaseAuthStatus | null> {
-  if (!isTauriRuntime()) return null;
-  const raw = await invokeWithTelemetry<unknown>(
-    'music_library_netease_get_auth_status',
-    undefined,
-    {
-      moduleId: 'music-library',
-      component: 'nativeLibraryDb',
-      event: 'music-library.netease.get-auth-status',
-      includeResultSize: true,
-      failureLevel: 'warn',
-    }
-  ).catch(() => null);
-  return ensureNeteaseAuthStatus(raw);
+export async function getNativeNeteaseAuthStatus(
+  instanceId?: string | null
+): Promise<NativeNeteaseAuthStatus | null> {
+  return neteaseNativeAuthCompatBridge.getSnapshot(instanceId, {
+    suppressErrors: true,
+  });
 }
 
-export async function logoutNativeNetease(): Promise<NativeNeteaseAuthStatus | null> {
-  if (!isTauriRuntime()) return null;
-  const raw = await invokeWithTelemetry<unknown>('music_library_netease_logout', undefined, {
-    moduleId: 'music-library',
-    component: 'nativeLibraryDb',
-    event: 'music-library.netease.logout',
-    includeResultSize: true,
-    failureLevel: 'warn',
-  }).catch(() => null);
-  return ensureNeteaseAuthStatus(raw);
+export async function logoutNativeNetease(
+  instanceId?: string | null
+): Promise<NativeNeteaseAuthStatus | null> {
+  return neteaseNativeAuthCompatBridge.logout(instanceId, {
+    suppressErrors: true,
+  });
 }
 
-export async function clearNativeNeteaseAuthCookies(): Promise<NativeNeteaseAuthStatus | null> {
-  if (!isTauriRuntime()) return null;
-  const raw = await invokeWithTelemetry<unknown>(
-    'music_library_netease_clear_auth_cookies',
-    undefined,
-    {
-      moduleId: 'music-library',
-      component: 'nativeLibraryDb',
-      event: 'music-library.netease.clear-auth-cookies',
-      includeResultSize: true,
-      failureLevel: 'warn',
-    }
-  ).catch(() => null);
-  return ensureNeteaseAuthStatus(raw);
+export async function clearNativeNeteaseAuthCookies(
+  instanceId?: string | null
+): Promise<NativeNeteaseAuthStatus | null> {
+  return neteaseNativeAuthCompatBridge.clearAuthCookies(instanceId, {
+    suppressErrors: true,
+  });
 }
 
-export async function listNativeNeteaseRecommendedPlaylists(): Promise<
+export async function listNativeNeteaseRecommendedPlaylists(
+  instanceId?: string | null
+): Promise<
   NativeNeteaseRecommendedPlaylist[]
 > {
-  if (!isTauriRuntime()) return [];
-  const raw = await invoke<unknown>('music_library_netease_list_recommended_playlists');
-  if (!Array.isArray(raw)) return [];
-
-  const result: NativeNeteaseRecommendedPlaylist[] = [];
-  for (const item of raw) {
-    const parsed = ensureNeteaseRecommendedPlaylist(item);
-    if (!parsed) continue;
-    result.push(parsed);
-  }
-
-  return result;
+  return neteaseNativeApiCompatBridge.invokeList('recommendations', {
+    method: 'listRecommendedPlaylists',
+    instanceId,
+    parseItem: ensureNeteaseRecommendedPlaylist,
+  });
 }
 
-export async function listNativeNeteaseRecommendedSongs(): Promise<NativeNeteaseSongPage | null> {
-  if (!isTauriRuntime()) return null;
-  const raw = await invoke<unknown>('music_library_netease_list_recommended_songs');
-  return ensureNeteaseSongPage(raw);
+export async function listNativeNeteaseRecommendedSongs(
+  instanceId?: string | null
+): Promise<NativeNeteaseSongPage | null> {
+  return neteaseNativeApiCompatBridge.invokeParsed('recommendations', {
+    method: 'listDaily',
+    instanceId,
+    parse: ensureNeteaseSongPage,
+  });
 }
 
-export async function listNativeNeteaseUserPlaylists(): Promise<NativeNeteaseUserPlaylist[]> {
-  if (!isTauriRuntime()) return [];
-  const raw = await invoke<unknown>('music_library_netease_list_user_playlists');
-  if (!Array.isArray(raw)) return [];
-
-  const result: NativeNeteaseUserPlaylist[] = [];
-  for (const item of raw) {
-    const parsed = ensureNeteaseUserPlaylist(item);
-    if (!parsed) continue;
-    result.push(parsed);
-  }
-
-  return result;
+export async function listNativeNeteaseUserPlaylists(
+  instanceId?: string | null
+): Promise<NativeNeteaseUserPlaylist[]> {
+  return neteaseNativeApiCompatBridge.invokeList('library', {
+    method: 'listCollections',
+    instanceId,
+    parseItem: ensureNeteaseUserPlaylist,
+  });
 }
 
 export async function listNativeNeteasePlaylistTracks(
-  playlistId: string
+  playlistId: string,
+  instanceId?: string | null
 ): Promise<NativeNeteaseSongPage | null> {
-  if (!isTauriRuntime()) return null;
   const normalizedPlaylistId = playlistId.trim();
   if (!normalizedPlaylistId) return null;
-
-  const raw = await invoke<unknown>('music_library_netease_list_playlist_tracks', {
-    playlistId: normalizedPlaylistId,
+  return neteaseNativeApiCompatBridge.invokeParsed('library', {
+    method: 'listPlaylistTracks',
+    instanceId,
+    payload: {
+      playlistId: normalizedPlaylistId,
+    },
+    parse: ensureNeteaseSongPage,
   });
-  return ensureNeteaseSongPage(raw);
 }
 
 export async function searchNativeNeteaseSongs(options: {
   keyword: string;
   pageNum?: number;
   pageSize?: number;
+  instanceId?: string | null;
 }): Promise<NativeNeteaseSongPage | null> {
-  if (!isTauriRuntime()) return null;
   const keyword = options.keyword.trim();
   if (!keyword) return null;
 
@@ -3184,13 +3521,16 @@ export async function searchNativeNeteaseSongs(options: {
     typeof options.pageSize === 'number' && Number.isFinite(options.pageSize)
       ? Math.max(1, Math.floor(options.pageSize))
       : undefined;
-
-  const raw = await invoke<unknown>('music_library_netease_search_songs', {
-    keyword,
-    pageNum,
-    pageSize,
+  return neteaseNativeApiCompatBridge.invokeParsed('search', {
+    method: 'query',
+    instanceId: options.instanceId,
+    payload: {
+      keyword,
+      pageNum,
+      pageSize,
+    },
+    parse: ensureNeteaseSongPage,
   });
-  return ensureNeteaseSongPage(raw);
 }
 
 export async function prepareNativeNeteaseCachedPlayback(
@@ -3198,19 +3538,18 @@ export async function prepareNativeNeteaseCachedPlayback(
   qualityHint?: string,
   instanceId?: string | null
 ): Promise<NativeNeteasePlaybackPrepared | null> {
-  if (!isTauriRuntime()) return null;
   const normalizedSourceLocator = sourceLocator.trim();
   if (!normalizedSourceLocator) return null;
   const normalizedQualityHint = qualityHint?.trim();
-  const normalizedInstanceId =
-    typeof instanceId === 'string' && instanceId.trim().length > 0 ? instanceId.trim() : undefined;
-
-  const raw = await invoke<unknown>('music_library_netease_prepare_cached_playback', {
-    sourceLocator: normalizedSourceLocator,
-    qualityHint: normalizedQualityHint || undefined,
-    instanceId: normalizedInstanceId,
+  return neteaseNativeApiCompatBridge.invokeParsed('library', {
+    method: 'preparePlayback',
+    instanceId,
+    payload: {
+      sourceLocator: normalizedSourceLocator,
+      qualityHint: normalizedQualityHint || undefined,
+    },
+    parse: ensureNeteasePlaybackPrepared,
   });
-  return ensureNeteasePlaybackPrepared(raw);
 }
 
 export async function resolveNativeLibraryLyrics(

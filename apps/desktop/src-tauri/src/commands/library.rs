@@ -1,6 +1,6 @@
 use crate::{
-    lyrics, music_library, music_library_db, music_library_sync, music_platform_bilibili,
-    music_platform_netease, music_platform_settings,
+    lyrics, music_library, music_library_db, music_library_sync, music_platform_runtime,
+    music_platform_settings,
 };
 
 #[tauri::command(rename_all = "camelCase")]
@@ -195,12 +195,23 @@ pub async fn music_library_db_list_connector_accounts(
 }
 
 #[tauri::command]
-pub async fn music_library_bilibili_qr_generate(
+pub async fn music_library_music_platform_auth_invoke(
     app: tauri::AppHandle,
-) -> Result<music_platform_bilibili::BilibiliQrCodeSession, String> {
-    tauri::async_runtime::spawn_blocking(move || music_platform_bilibili::qr_generate(&app))
+    request: music_platform_runtime::MusicPlatformAuthInvokeRequest,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || music_platform_runtime::invoke_auth(&app, request))
         .await
-        .map_err(|e| format!("Bilibili QR generate task failed: {e}"))?
+        .map_err(|e| format!("Music platform auth invoke task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_music_platform_api_invoke(
+    app: tauri::AppHandle,
+    request: music_platform_runtime::MusicPlatformApiInvokeRequest,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || music_platform_runtime::invoke_api(&app, request))
+        .await
+        .map_err(|e| format!("Music platform API invoke task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -224,285 +235,6 @@ pub async fn music_library_music_platform_global_set_cache_settings(
     })
     .await
     .map_err(|e| format!("Music platform global set cache settings task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_bilibili_qr_poll(
-    app: tauri::AppHandle,
-    session_id: String,
-) -> Result<music_platform_bilibili::BilibiliQrPollResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_bilibili::qr_poll(&app, &session_id)
-    })
-    .await
-    .map_err(|e| format!("Bilibili QR poll task failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn music_library_bilibili_get_auth_status(
-    app: tauri::AppHandle,
-) -> Result<music_platform_bilibili::BilibiliAuthStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || music_platform_bilibili::get_auth_status(&app))
-        .await
-        .map_err(|e| format!("Bilibili auth status task failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn music_library_bilibili_logout(
-    app: tauri::AppHandle,
-) -> Result<music_platform_bilibili::BilibiliAuthStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || music_platform_bilibili::logout(&app))
-        .await
-        .map_err(|e| format!("Bilibili logout task failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn music_library_bilibili_clear_auth_cookies(
-    app: tauri::AppHandle,
-) -> Result<music_platform_bilibili::BilibiliAuthStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || music_platform_bilibili::clear_auth_cookies(&app))
-        .await
-        .map_err(|e| format!("Bilibili clear auth cookies task failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn music_library_bilibili_list_favorite_folders(
-    app: tauri::AppHandle,
-) -> Result<Vec<music_platform_bilibili::BilibiliFavoriteFolder>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_bilibili::list_favorite_folders(&app)
-    })
-    .await
-    .map_err(|e| format!("Bilibili favorite folder list task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_bilibili_list_favorite_resources(
-    app: tauri::AppHandle,
-    folder_id: String,
-    page_num: Option<u32>,
-    page_size: Option<u32>,
-) -> Result<music_platform_bilibili::BilibiliFavoriteResourcePage, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_bilibili::list_favorite_resources(&app, &folder_id, page_num, page_size)
-    })
-    .await
-    .map_err(|e| format!("Bilibili favorite resource list task failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn music_library_bilibili_list_recommended_resources(
-    app: tauri::AppHandle,
-) -> Result<music_platform_bilibili::BilibiliFavoriteResourcePage, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_bilibili::list_recommended_resources(&app)
-    })
-    .await
-    .map_err(|e| format!("Bilibili recommended resource list task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_bilibili_search_resources(
-    app: tauri::AppHandle,
-    keyword: String,
-    page_num: Option<u32>,
-    page_size: Option<u32>,
-) -> Result<music_platform_bilibili::BilibiliFavoriteResourcePage, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_bilibili::search_resources(&app, &keyword, page_num, page_size)
-    })
-    .await
-    .map_err(|e| format!("Bilibili search resource task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_bilibili_search_resource_by_bvid(
-    app: tauri::AppHandle,
-    bvid: String,
-) -> Result<Option<music_platform_bilibili::BilibiliFavoriteResourceItem>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_bilibili::search_resource_by_bvid(&app, &bvid)
-    })
-    .await
-    .map_err(|e| format!("Bilibili search resource by BV task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_bilibili_prepare_cover_cache(
-    app: tauri::AppHandle,
-    cover_url: String,
-    instance_id: Option<String>,
-) -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_bilibili::prepare_cover_cache(&app, &cover_url, instance_id.as_deref())
-    })
-    .await
-    .map_err(|e| format!("Bilibili prepare cover cache task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_bilibili_list_playback_qualities(
-    app: tauri::AppHandle,
-    source_locator: String,
-) -> Result<Vec<music_platform_bilibili::BilibiliPlaybackQualityOption>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_bilibili::list_playback_qualities(&app, &source_locator)
-    })
-    .await
-    .map_err(|e| format!("Bilibili list playback qualities task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_bilibili_prepare_cached_playback(
-    app: tauri::AppHandle,
-    source_locator: String,
-    quality_hint: Option<String>,
-    instance_id: Option<String>,
-) -> Result<music_platform_bilibili::BilibiliPlaybackPrepared, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_bilibili::prepare_cached_playback(
-            &app,
-            &source_locator,
-            quality_hint.as_deref(),
-            instance_id.as_deref(),
-        )
-    })
-    .await
-    .map_err(|e| format!("Bilibili prepare cached playback task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_bilibili_resolve_lyric_locator(
-    app: tauri::AppHandle,
-    lyric_locator: String,
-) -> Result<Option<music_platform_bilibili::BilibiliLyricLocatorRef>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_bilibili::resolve_lyric_locator(&app, &lyric_locator)
-    })
-    .await
-    .map_err(|e| format!("Bilibili lyric locator resolve task failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn music_library_netease_qr_generate(
-    app: tauri::AppHandle,
-) -> Result<music_platform_netease::NeteaseQrCodeSession, String> {
-    tauri::async_runtime::spawn_blocking(move || music_platform_netease::qr_generate(&app))
-        .await
-        .map_err(|e| format!("Netease QR generate task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_netease_qr_poll(
-    app: tauri::AppHandle,
-    session_id: String,
-) -> Result<music_platform_netease::NeteaseQrPollResult, String> {
-    tauri::async_runtime::spawn_blocking(move || music_platform_netease::qr_poll(&app, &session_id))
-        .await
-        .map_err(|e| format!("Netease QR poll task failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn music_library_netease_get_auth_status(
-    app: tauri::AppHandle,
-) -> Result<music_platform_netease::NeteaseAuthStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || music_platform_netease::get_auth_status(&app))
-        .await
-        .map_err(|e| format!("Netease auth status task failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn music_library_netease_logout(
-    app: tauri::AppHandle,
-) -> Result<music_platform_netease::NeteaseAuthStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || music_platform_netease::logout(&app))
-        .await
-        .map_err(|e| format!("Netease logout task failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn music_library_netease_clear_auth_cookies(
-    app: tauri::AppHandle,
-) -> Result<music_platform_netease::NeteaseAuthStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || music_platform_netease::clear_auth_cookies(&app))
-        .await
-        .map_err(|e| format!("Netease clear auth cookies task failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn music_library_netease_list_recommended_playlists(
-    app: tauri::AppHandle,
-) -> Result<Vec<music_platform_netease::NeteaseRecommendedPlaylist>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_netease::list_recommended_playlists(&app)
-    })
-    .await
-    .map_err(|e| format!("Netease recommended playlists task failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn music_library_netease_list_recommended_songs(
-    app: tauri::AppHandle,
-) -> Result<music_platform_netease::NeteaseSongPage, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_netease::list_recommended_songs(&app)
-    })
-    .await
-    .map_err(|e| format!("Netease recommended songs task failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn music_library_netease_list_user_playlists(
-    app: tauri::AppHandle,
-) -> Result<Vec<music_platform_netease::NeteaseUserPlaylist>, String> {
-    tauri::async_runtime::spawn_blocking(move || music_platform_netease::list_user_playlists(&app))
-        .await
-        .map_err(|e| format!("Netease user playlists task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_netease_list_playlist_tracks(
-    app: tauri::AppHandle,
-    playlist_id: String,
-) -> Result<music_platform_netease::NeteaseSongPage, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_netease::list_playlist_tracks(&app, &playlist_id)
-    })
-    .await
-    .map_err(|e| format!("Netease playlist tracks task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_netease_search_songs(
-    app: tauri::AppHandle,
-    keyword: String,
-    page_num: Option<u32>,
-    page_size: Option<u32>,
-) -> Result<music_platform_netease::NeteaseSongPage, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_netease::search_songs(&app, &keyword, page_num, page_size)
-    })
-    .await
-    .map_err(|e| format!("Netease search songs task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_netease_prepare_cached_playback(
-    app: tauri::AppHandle,
-    source_locator: String,
-    quality_hint: Option<String>,
-    instance_id: Option<String>,
-) -> Result<music_platform_netease::NeteasePlaybackPrepared, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_netease::prepare_cached_playback(
-            &app,
-            &source_locator,
-            quality_hint.as_deref(),
-            instance_id.as_deref(),
-        )
-    })
-    .await
-    .map_err(|e| format!("Netease prepare cached playback task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]

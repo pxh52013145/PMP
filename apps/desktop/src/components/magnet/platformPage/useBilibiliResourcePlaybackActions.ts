@@ -134,7 +134,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
     return () => {
       preparedTrackCache.clear();
     };
-  }, [normalizedPlaybackQualityHint]);
+  }, [activeBilibiliInstanceId, normalizedPlaybackQualityHint]);
 
   const handleResolveLyric = useCallback(
     async (item: BilibiliFavoriteResourceItem) => {
@@ -148,7 +148,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
       setLyricResolvingId(item.resourceId);
       setLyricError(null);
       try {
-        const resolved = await resolveBilibiliLyricLocator(locator);
+        const resolved = await resolveBilibiliLyricLocator(locator, activeBilibiliInstanceId);
         if (!resolved) {
           setLyricError(t('magnet.platform.bilibili.lyric.notFound'));
           setResolvedLyric(null);
@@ -162,7 +162,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
         setLyricResolvingId(null);
       }
     },
-    [t]
+    [activeBilibiliInstanceId, t]
   );
 
   const ensurePreparedTrack = useCallback(
@@ -193,7 +193,10 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
             extractBvidFromText(item.sourceLocator) ||
             extractBvidFromText(item.lyricLocator);
           if (bvid) {
-            const matched = await searchBilibiliResourceByBvid(bvid).catch(() => null);
+            const matched = await searchBilibiliResourceByBvid(
+              bvid,
+              activeBilibiliInstanceId
+            ).catch(() => null);
             const discoveredCoverUrl =
               typeof matched?.coverUrl === 'string' ? matched.coverUrl.trim() : '';
             if (discoveredCoverUrl) {

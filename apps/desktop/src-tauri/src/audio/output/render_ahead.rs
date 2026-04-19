@@ -991,6 +991,16 @@ impl Drop for RenderAheadSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use once_cell::sync::Lazy;
+    use std::sync::{Mutex, MutexGuard};
+
+    static SHARED_RENDER_AHEAD_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+    fn lock_shared_render_ahead_test_state() -> MutexGuard<'static, ()> {
+        SHARED_RENDER_AHEAD_TEST_LOCK
+            .lock()
+            .expect("shared render ahead test lock poisoned")
+    }
 
     #[derive(Clone)]
     struct TestSource {
@@ -1072,6 +1082,7 @@ mod tests {
 
     #[test]
     fn render_ahead_source_yields_samples() {
+        let _guard = lock_shared_render_ahead_test_state();
         reset_shared_render_ahead_metrics();
 
         let source: BoxedSource = Box::new(TestSource {
@@ -1180,6 +1191,7 @@ mod tests {
 
     #[test]
     fn shared_render_ahead_ready_wait_returns_true_without_active_wrapper() {
+        let _guard = lock_shared_render_ahead_test_state();
         reset_shared_render_ahead_metrics();
         assert!(wait_for_shared_render_ahead_ready(
             1,
@@ -1190,6 +1202,7 @@ mod tests {
 
     #[test]
     fn shared_render_ahead_ready_wait_requires_epoch_and_samples() {
+        let _guard = lock_shared_render_ahead_test_state();
         reset_shared_render_ahead_metrics();
         let wrapper_id = u64::MAX - 16;
         set_shared_render_ready_state_for_test(wrapper_id, wrapper_id, 3, 512, 256);
@@ -1207,6 +1220,7 @@ mod tests {
 
     #[test]
     fn jitter_anomaly_threshold_scales_with_interval() {
+        let _guard = lock_shared_render_ahead_test_state();
         reset_shared_render_ahead_metrics();
 
         let mut jitter_window = [0u32; 16];
@@ -1273,6 +1287,7 @@ mod tests {
 
     #[test]
     fn jitter_p99_window_produces_stable_values() {
+        let _guard = lock_shared_render_ahead_test_state();
         reset_shared_render_ahead_metrics();
 
         let mut jitter_window = [0u32; 16];

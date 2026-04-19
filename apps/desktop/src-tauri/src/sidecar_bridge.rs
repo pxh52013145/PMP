@@ -58,6 +58,7 @@ struct SidecarBridgeSession {
     process: Arc<Mutex<ManagedSidecarProcess>>,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     terminating: Arc<AtomicBool>,
+    ready: Arc<AtomicBool>,
     cleanup_strategy: &'static str,
     stderr_tail: Arc<Mutex<Vec<u8>>>,
 }
@@ -261,18 +262,37 @@ impl SidecarBridgeRegistry {
         let command_id = request.command_id.clone();
         let timeout_ms = request.timeout_ms;
 
-        {
-            let sessions = self
-                .inner
-                .sessions
-                .read()
-                .map_err(|_| "Sidecar bridge registry lock poisoned".to_string())?;
-            if sessions.contains_key(&session_id) {
-                return Err(format!(
-                    "Sidecar runtime bridge session already exists: {}",
-                    session_id
-                ));
+        if let Some(existing_session) = self.get_session(&session_id)? {
+            if sidecar_session_is_running(&existing_session)? {
+                crate::backend_telemetry::info(
+                    app,
+                    "plugin",
+                    "plugin.sidecar.bridge.reused",
+                    crate::backend_telemetry::BackendTelemetryOptions::new()
+                        .component("SidecarBridgeRegistry")
+                        .field("pluginId", json!(existing_session.plugin_id.as_str()))
+                        .field("runtimeId", json!(existing_session.runtime_id.as_str()))
+                        .field(
+                            "runtimeInstanceId",
+                            json!(existing_session.runtime_instance_id.as_str()),
+                        )
+                        .field(
+                            "sidecarSessionId",
+                            json!(existing_session.session_id.as_str()),
+                        )
+                        .field("commandId", json!(command_id))
+                        .field("timeoutMs", json!(timeout_ms))
+                        .field("cleanupStrategy", json!(existing_session.cleanup_strategy)),
+                );
+                if existing_session.ready.load(Ordering::Acquire) {
+                    emit_sidecar_bridge_message(app, &existing_session, json!({ "op": "ready" }));
+                }
+                return Ok(SidecarBridgeOpenResponse {
+                    session_id: existing_session.session_id.clone(),
+                });
             }
+
+            let _ = self.remove_session(&session_id);
         }
 
         let mut spawned = spawn_sidecar_process(&request)?;
@@ -305,6 +325,7 @@ impl SidecarBridgeRegistry {
             process: Arc::new(Mutex::new(spawned.process)),
             stdin: Arc::new(Mutex::new(Some(stdin))),
             terminating: Arc::new(AtomicBool::new(false)),
+            ready: Arc::new(AtomicBool::new(false)),
             cleanup_strategy,
             stderr_tail: Arc::new(Mutex::new(Vec::new())),
         });
@@ -450,6 +471,26 @@ impl SidecarBridgeRegistry {
     }
 }
 
+fn sidecar_session_is_running(session: &SidecarBridgeSession) -> Result<bool, String> {
+    let mut process = session
+        .process
+        .lock()
+        .map_err(|_| "Sidecar process lock poisoned".to_string())?;
+    match process.child.try_wait() {
+        Ok(Some(_)) => Ok(false),
+        Ok(None) => Ok(true),
+        Err(error) => Err(format!("Poll sidecar process failed: {error}")),
+    }
+}
+
+fn is_ready_message(value: &Value) -> bool {
+    value
+        .get("op")
+        .and_then(Value::as_str)
+        .map(|op| op == "ready")
+        .unwrap_or(false)
+}
+
 fn spawn_stdout_reader(
     app: tauri::AppHandle,
     session: Arc<SidecarBridgeSession>,
@@ -469,6 +510,9 @@ fn spawn_stdout_reader(
                         continue;
                     }
                     let message = decode_sidecar_stdout_message(&session, trimmed);
+                    if is_ready_message(&message) {
+                        session.ready.store(true, Ordering::Release);
+                    }
                     emit_sidecar_bridge_message(&app, &session, message);
                 }
                 Err(error) => {

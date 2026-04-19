@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:vite": "node ../../scripts/ensure-port-free.mjs 1420 && vite",
+    "dev:vite": "node ../../scripts/ensure-port-free.mjs 1420 && node ../../scripts/run-vite.mjs",
+    "dev:vite:tauri": "node ../../scripts/prepare-music-platform-packs.mjs && pnpm run dev:vite",
     "dev": "node ../../scripts/dev-tauri.mjs",
     "dev:asio": "node ../../scripts/require-env.mjs CPAL_ASIO_DIR && tauri dev --config src-tauri/tauri.dev.conf.json --features asio-sdk --no-watch",
     "dev:asio:watch": "node ../../scripts/require-env.mjs CPAL_ASIO_DIR && tauri dev --config src-tauri/tauri.dev.conf.json --features asio-sdk",
@@ -13,6 +14,7 @@
     "audio:score:gate:smoke": "node ../../scripts/audio-score-gate.mjs --with-smoke",
     "audio:score:gate:smoke:strict": "node ../../scripts/audio-score-gate.mjs --require-smoke",
     "build:vite": "vite build",
+    "build:vite:tauri": "node ../../scripts/prepare-music-platform-packs.mjs && pnpm run build:vite",
     "build": "tauri build",
     "build:asio": "node ../../scripts/require-env.mjs CPAL_ASIO_DIR && tauri build --features asio-sdk",
     "preview": "vite preview",
