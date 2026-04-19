@@ -43,17 +43,39 @@ export function resolvePlatformConnectorFacadeCacheScopeKey(
   return normalizedInstanceId || connectorId;
 }
 
+function isAbsoluteFileSystemPath(value: string): boolean {
+  return (
+    /^[a-zA-Z]:[\\/]/.test(value) ||
+    value.startsWith('/') ||
+    value.startsWith('\\\\')
+  );
+}
+
+function normalizePotentialEncodedFsPath(value: string): string {
+  if (!value.includes('%')) {
+    return value;
+  }
+
+  try {
+    const decoded = decodeURIComponent(value);
+    return isAbsoluteFileSystemPath(decoded) ? decoded : value;
+  } catch {
+    return value;
+  }
+}
+
 export async function normalizePlatformFacadeAssetUrl(
   value: unknown
 ): Promise<string | undefined> {
-  const normalized = normalizePlatformFacadeString(value);
+  const normalizedRaw = normalizePlatformFacadeString(value);
+  const normalized = normalizePotentialEncodedFsPath(normalizedRaw);
   if (!normalized) return undefined;
 
   if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(normalized) && !/^[a-zA-Z]:[\\/]/.test(normalized)) {
     return normalized;
   }
 
-  if (/^[a-zA-Z]:[\\/]/.test(normalized) || normalized.startsWith('/')) {
+  if (isAbsoluteFileSystemPath(normalized)) {
     if (isTauriRuntime()) {
       const tauriApi = await import('@tauri-apps/api/tauri');
       if (typeof tauriApi.convertFileSrc === 'function') {

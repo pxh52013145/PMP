@@ -100,6 +100,33 @@ function createWorkspaceCaller(connectorId: PlatformConnectorId) {
   });
 }
 
+function readArraySource(
+  value: unknown,
+  keys: string[]
+): unknown[] | null {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  const record = asPlatformFacadeRecord(value);
+  if (!record) return null;
+
+  for (const key of keys) {
+    const candidate = record[key];
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+  }
+
+  if (typeof record.data !== 'undefined') {
+    const nested = readArraySource(record.data, keys);
+    if (nested) {
+      return nested;
+    }
+  }
+
+  return null;
+}
+
 function mapCollectionItem(value: unknown): PlatformWorkspaceCollectionItem | null {
   const record = asPlatformFacadeRecord(value);
   if (!record) return null;
@@ -108,16 +135,21 @@ function mapCollectionItem(value: unknown): PlatformWorkspaceCollectionItem | nu
     normalizePlatformFacadeString(record.collectionId) ||
     normalizePlatformFacadeString(record.playlistId) ||
     normalizePlatformFacadeString(record.folderId);
-  const title = normalizePlatformFacadeString(record.title);
+  const title = normalizePlatformFacadeString(
+    record.title ?? record.name ?? record.label
+  );
   if (!collectionId || !title) return null;
 
   return {
     collectionId,
     title,
     trackCount: normalizePlatformFacadePositiveInt(
-      record.trackCount ?? record.mediaCount
+      record.trackCount ?? record.mediaCount ?? record.count ?? record.total
     ),
-    coverUrl: normalizePlatformFacadeString(record.coverUrl) || undefined,
+    coverUrl:
+      normalizePlatformFacadeString(
+        record.coverUrl ?? record.imageUrl ?? record.cover
+      ) || undefined,
     updatedAtMs: readPlatformFacadeFiniteNumber(record.updatedAtMs),
   };
 }
@@ -237,10 +269,41 @@ function mapResourceItem(value: unknown): PlatformWorkspaceResourceItem | null {
 function mapResourcePage(value: unknown): PlatformWorkspaceResourcePage | null | undefined {
   if (value === null) return null;
 
-  const record = asPlatformFacadeRecord(value);
-  if (!record || !Array.isArray(record.items)) return undefined;
+  if (Array.isArray(value)) {
+    const items = value
+      .map(mapResourceItem)
+      .filter((item): item is PlatformWorkspaceResourceItem => Boolean(item));
+    return {
+      sourceKind: 'unknown',
+      sourceId: 'unknown',
+      pageNum: 1,
+      pageSize: Math.max(1, items.length),
+      total: items.length,
+      hasMore: false,
+      items,
+    };
+  }
 
-  const items = record.items
+  const record = asPlatformFacadeRecord(value);
+  if (!record) return undefined;
+
+  if (typeof record.page !== 'undefined') {
+    const nested = mapResourcePage(record.page);
+    if (typeof nested !== 'undefined') {
+      return nested;
+    }
+  }
+  if (typeof record.data !== 'undefined') {
+    const nested = mapResourcePage(record.data);
+    if (typeof nested !== 'undefined') {
+      return nested;
+    }
+  }
+
+  const sourceItems = readArraySource(record, ['items', 'resources', 'tracks']);
+  if (!sourceItems) return undefined;
+
+  const items = sourceItems
     .map(mapResourceItem)
     .filter((item): item is PlatformWorkspaceResourceItem => Boolean(item));
 
@@ -268,6 +331,12 @@ function mapPreparedPlayback(
 
   const record = asPlatformFacadeRecord(value);
   if (!record) return undefined;
+  if (typeof record.data !== 'undefined') {
+    const nested = mapPreparedPlayback(record.data);
+    if (typeof nested !== 'undefined') {
+      return nested;
+    }
+  }
 
   const sourceLocator = normalizePlatformFacadeString(record.sourceLocator);
   const streamUrl = normalizePlatformFacadeString(record.streamUrl);
@@ -297,10 +366,10 @@ function mapPreparedPlayback(
 }
 
 function mapQualityOptions(value: unknown): PlatformWorkspaceQualityOption[] | undefined {
-  const record = asPlatformFacadeRecord(value);
-  if (!record || !Array.isArray(record.options)) return undefined;
+  const source = readArraySource(value, ['options', 'items']);
+  if (!source) return undefined;
 
-  return record.options
+  return source
     .map(mapQualityOption)
     .filter((item): item is PlatformWorkspaceQualityOption => Boolean(item));
 }
@@ -310,8 +379,26 @@ function mapQualityState(
 ): PlatformWorkspaceQualityState | null | undefined {
   if (value === null) return null;
 
+  if (Array.isArray(value)) {
+    const options = value
+      .map(mapQualityOption)
+      .filter((item): item is PlatformWorkspaceQualityOption => Boolean(item));
+    if (options.length < 1) return null;
+    return {
+      options,
+      currentKey: options[0]?.key || 'auto',
+      currentLabel: options[0]?.label || undefined,
+    };
+  }
+
   const record = asPlatformFacadeRecord(value);
   if (!record) return undefined;
+  if (typeof record.data !== 'undefined') {
+    const nested = mapQualityState(record.data);
+    if (typeof nested !== 'undefined') {
+      return nested;
+    }
+  }
 
   const options = (
     Array.isArray(record.options)
@@ -393,13 +480,12 @@ export async function listPlatformWorkspaceCollections(options: {
     },
     runtimeBucket: 'library',
     map: (value) => {
-      const record = asPlatformFacadeRecord(value);
-      const arrayValue =
-        record && Array.isArray(record.items)
-          ? record.items
-          : record && Array.isArray(record.collections)
-            ? record.collections
-            : null;
+      const arrayValue = readArraySource(value, [
+        'items',
+        'collections',
+        'playlists',
+        'folders',
+      ]);
       if (!arrayValue) return undefined;
       return arrayValue
         .map(mapCollectionItem)
@@ -453,13 +539,11 @@ export async function listPlatformWorkspaceRecommendedCollections(options: {
     },
     runtimeBucket: 'recommendations',
     map: (value) => {
-      const record = asPlatformFacadeRecord(value);
-      const arrayValue =
-        record && Array.isArray(record.collections)
-          ? record.collections
-          : record && Array.isArray(record.items)
-            ? record.items
-            : null;
+      const arrayValue = readArraySource(value, [
+        'collections',
+        'recommendedCollections',
+        'items',
+      ]);
       if (!arrayValue) return undefined;
       return arrayValue
         .map(mapCollectionItem)

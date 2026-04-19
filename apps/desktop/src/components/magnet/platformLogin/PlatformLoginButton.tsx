@@ -307,12 +307,8 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   const [busyConnectorId, setBusyConnectorId] = useState<string | null>(null);
   const [platformPackInstalling, setPlatformPackInstalling] = useState(false);
   const [platformPackInstallMessage, setPlatformPackInstallMessage] = useState<string | null>(null);
-  const [platformDefinitions, setPlatformDefinitions] = useState<PlatformConnectorDefinition[]>(() =>
-    listPlatformConnectorDefinitions()
-  );
-  const [compatRegistrations, setCompatRegistrations] = useState(() =>
-    listBuiltinPlatformCompatRegistrations()
-  );
+  const [platformDefinitions, setPlatformDefinitions] = useState<PlatformConnectorDefinition[]>([]);
+  const [compatRegistrations, setCompatRegistrations] = useState<ReturnType<typeof listBuiltinPlatformCompatRegistrations>>([]);
   const preferredConnectorId = useMemo(
     () => resolvePreferredConnectorId(skinProps.defaultConnectorId, platformDefinitions),
     [platformDefinitions, skinProps.defaultConnectorId]
@@ -326,15 +322,9 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     [compatRegistrations]
   );
 
-  const [registryEntries, setRegistryEntries] = useState<PlatformLoginRegistryEntry[]>(() =>
-    readPlatformLoginRegistry(platformDefinitions, preferredConnectorId)
-  );
-  const [platformInstances, setPlatformInstances] = useState<PlatformInstanceRecord[]>(() =>
-    listPlatformInstances()
-  );
-  const [renderSelections, setRenderSelections] = useState<PlatformRenderSelectionRecord[]>(() =>
-    listPlatformRenderSelections()
-  );
+  const [registryEntries, setRegistryEntries] = useState<PlatformLoginRegistryEntry[]>([]);
+  const [platformInstances, setPlatformInstances] = useState<PlatformInstanceRecord[]>([]);
+  const [renderSelections, setRenderSelections] = useState<PlatformRenderSelectionRecord[]>([]);
 
   const [authSnapshotsByConnectorId, setAuthSnapshotsByConnectorId] = useState<Record<string, PlatformInstanceAuthSnapshot | null>>({});
   const [qrSessionsByConnectorId, setQrSessionsByConnectorId] = useState<Record<string, PlatformInstanceQrLoginSession | null>>({});
