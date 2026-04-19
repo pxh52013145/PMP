@@ -22,8 +22,16 @@ const platformInstanceAuthRefreshRegistry = new Map<
   string,
   Promise<PlatformInstanceRecord | null>
 >();
+const platformInstanceAuthHydrationScheduled = new Set<string>();
 
 let platformInstanceRegistryInitialized = false;
+
+type IdleSchedulerWindow = Window & {
+  requestIdleCallback?: (
+    callback: (deadline: { didTimeout: boolean; timeRemaining(): number }) => void,
+    options?: { timeout?: number }
+  ) => number;
+};
 
 function normalizeInstanceId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -77,6 +85,32 @@ function emitPlatformInstancesChanged(): void {
   for (const listener of platformInstanceRegistryListeners) {
     listener(snapshot);
   }
+}
+
+function schedulePlatformInstanceAuthHydration(task: () => void): void {
+  if (typeof window === 'undefined') {
+    task();
+    return;
+  }
+
+  const run = () => {
+    const idleWindow = window as IdleSchedulerWindow;
+    if (typeof idleWindow.requestIdleCallback === 'function') {
+      idleWindow.requestIdleCallback(() => task(), { timeout: 1500 });
+      return;
+    }
+
+    window.setTimeout(task, 0);
+  };
+
+  if (typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(run);
+    });
+    return;
+  }
+
+  run();
 }
 
 function mapRuntimeAuthStateToInstanceAuthState(
@@ -216,10 +250,38 @@ function reconcileAutoManagedPlatformInstances(): boolean {
     if (record.metadata?.autoManaged !== true) continue;
     if (autoManagedPlatformIds.has(record.platformId)) continue;
     platformInstanceRegistry.delete(instanceId);
+    platformInstanceAuthHydrationScheduled.delete(instanceId);
     changed = true;
   }
 
   return changed;
+}
+
+function scheduleAutoManagedPlatformInstanceAuthRefresh(
+  instanceId: string,
+  runtimeOverride?: PlatformCompatRuntimeApi | null
+): void {
+  const normalizedInstanceId = normalizeInstanceId(instanceId);
+  if (!normalizedInstanceId) return;
+  if (platformInstanceAuthHydrationScheduled.has(normalizedInstanceId)) return;
+  if (platformInstanceAuthRefreshRegistry.has(normalizedInstanceId)) return;
+
+  platformInstanceAuthHydrationScheduled.add(normalizedInstanceId);
+  schedulePlatformInstanceAuthHydration(() => {
+    void refreshPlatformInstanceAuthState(normalizedInstanceId, runtimeOverride).finally(() => {
+      platformInstanceAuthHydrationScheduled.delete(normalizedInstanceId);
+    });
+  });
+}
+
+function scheduleAutoManagedPlatformInstanceAuthRefreshes(): void {
+  for (const record of listPlatformCompatRegistryRecords()) {
+    if (!shouldAutoCreateDefaultInstance(record)) continue;
+    scheduleAutoManagedPlatformInstanceAuthRefresh(
+      toBuiltinPlatformInstanceId(record.platformId),
+      record.runtime
+    );
+  }
 }
 
 async function refreshPlatformInstanceAuthState(
@@ -289,6 +351,7 @@ function initializePlatformInstanceRegistry(): void {
   if (changed) {
     emitPlatformInstancesChanged();
   }
+  scheduleAutoManagedPlatformInstanceAuthRefreshes();
 
   subscribePlatformCompatRegistry((records) => {
     void records;
@@ -296,6 +359,7 @@ function initializePlatformInstanceRegistry(): void {
     if (nextChanged) {
       emitPlatformInstancesChanged();
     }
+    scheduleAutoManagedPlatformInstanceAuthRefreshes();
   });
 }
 

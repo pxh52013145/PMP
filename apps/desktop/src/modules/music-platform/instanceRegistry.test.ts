@@ -1,0 +1,179 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type {
+  PlatformCompatContractFile,
+  PlatformCompatRuntimeApi,
+} from '@pixel-matrix/plugin-platform-contracts';
+
+type CompatListener = (records: unknown[]) => void;
+
+const compatListeners = new Set<CompatListener>();
+let compatRecords: Array<{
+  platformId: string;
+  contract: PlatformCompatContractFile;
+  runtime: PlatformCompatRuntimeApi;
+  source: string;
+  registeredAtMs: number;
+  metadata: Record<string, unknown>;
+}> = [];
+
+const listPlatformCompatRegistryRecordsMock = vi.fn(() => compatRecords);
+const getPlatformCompatRuntimeApiMock = vi.fn((platformId: string) => {
+  return compatRecords.find((record) => record.platformId === platformId)?.runtime ?? null;
+});
+const subscribePlatformCompatRegistryMock = vi.fn((listener: CompatListener) => {
+  compatListeners.add(listener);
+  return () => {
+    compatListeners.delete(listener);
+  };
+});
+
+type RuntimeRefreshSnapshot = NonNullable<
+  NonNullable<PlatformCompatRuntimeApi['auth']>['refreshSnapshot']
+>;
+
+vi.mock('./contractRegistry', () => ({
+  getPlatformCompatRuntimeApi: (platformId: string) => getPlatformCompatRuntimeApiMock(platformId),
+  listPlatformCompatRegistryRecords: () => listPlatformCompatRegistryRecordsMock(),
+  subscribePlatformCompatRegistry: (listener: CompatListener) =>
+    subscribePlatformCompatRegistryMock(listener),
+}));
+
+function createCompatRecord(
+  platformId: string,
+  connectorId: string,
+  refreshSnapshot: RuntimeRefreshSnapshot
+) {
+  return {
+    platformId,
+    contract: {
+      contractVersion: '1.0',
+      platform: {
+        platformId,
+        displayName: platformId,
+        staticIcon: '',
+        supportsMultiInstance: false,
+      },
+      auth: {
+        loginMode: 'cookie',
+        requiresCookie: true,
+        requiresAccountId: false,
+        supportsRefresh: true,
+      },
+      capabilities: {
+        playlists: false,
+        favorites: false,
+        dailyRecommendations: false,
+        search: false,
+        quality: false,
+        navigation: false,
+        settings: false,
+        pages: false,
+      },
+      apiBindings: {
+        auth: 'auth.binding',
+      },
+    } satisfies PlatformCompatContractFile,
+    runtime: {
+      auth: {
+        refreshSnapshot,
+      },
+    } satisfies PlatformCompatRuntimeApi,
+    source: 'platform-pack',
+    registeredAtMs: 1,
+    metadata: {
+      autoCreateDefaultInstance: true,
+      connectorId,
+      enabled: true,
+    },
+  };
+}
+
+async function flushAsyncWork(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe('instanceRegistry auth hydration', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    compatListeners.clear();
+    compatRecords = [];
+    listPlatformCompatRegistryRecordsMock.mockClear();
+    getPlatformCompatRuntimeApiMock.mockClear();
+    subscribePlatformCompatRegistryMock.mockClear();
+
+    Object.defineProperty(window, 'requestAnimationFrame', {
+      configurable: true,
+      writable: true,
+      value: (callback: FrameRequestCallback) => {
+        callback(0);
+        return 1;
+      },
+    });
+
+    Object.defineProperty(window, 'requestIdleCallback', {
+      configurable: true,
+      writable: true,
+      value: (callback: (deadline: { didTimeout: boolean; timeRemaining(): number }) => void) => {
+        callback({
+          didTimeout: false,
+          timeRemaining: () => 50,
+        });
+        return 1;
+      },
+    });
+  });
+
+  it('hydrates auth state for auto-managed instances during initial bootstrap', async () => {
+    const refreshSnapshot = vi.fn(async (_input: { instanceId: string }) => ({
+      ok: true as const,
+      data: {
+        authState: 'authorized' as const,
+        accountId: 'user-1',
+        updatedAtMs: 1710000000000,
+      },
+    }));
+
+    compatRecords = [
+      createCompatRecord('platform.bilibili', 'connector.platform.bilibili', refreshSnapshot),
+    ];
+
+    const registry = await import('./instanceRegistry');
+
+    expect(registry.listPlatformInstances()[0]?.auth.status).toBe('empty');
+
+    await vi.waitFor(() => {
+      expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+      expect(registry.getPlatformInstance('platform.bilibili:builtin')?.auth.status).toBe('authorized');
+    });
+  });
+
+  it('hydrates auth state when compat registrations arrive after registry initialization', async () => {
+    const registry = await import('./instanceRegistry');
+
+    expect(registry.listPlatformInstances()).toEqual([]);
+
+    const refreshSnapshot = vi.fn(async (_input: { instanceId: string }) => ({
+      ok: true as const,
+      data: {
+        authState: 'authorized' as const,
+        accountId: 'user-2',
+      },
+    }));
+
+    compatRecords = [
+      createCompatRecord('platform.netease', 'connector.platform.netease', refreshSnapshot),
+    ];
+    compatListeners.forEach((listener) => {
+      listener(compatRecords);
+    });
+
+    await flushAsyncWork();
+
+    await vi.waitFor(() => {
+      expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+      expect(registry.getPlatformInstance('platform.netease:builtin')?.auth.status).toBe('authorized');
+    });
+  });
+});

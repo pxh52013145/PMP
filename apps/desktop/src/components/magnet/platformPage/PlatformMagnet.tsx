@@ -44,7 +44,9 @@ import {
   pickMusicPlatformGlobalCacheDirectory,
   readPlatformLoginRegistry,
   refreshAndEmitPlatformConnectorAuthSnapshot,
+  refreshPlatformInstanceAuthSnapshot,
   resolvePlatformConnectorTemplate,
+  resolvePlatformInstanceId,
   setMusicPlatformGlobalCacheSettings,
   setPlatformRenderSelectionMounted,
   subscribePlatformCompatRegistry,
@@ -56,10 +58,16 @@ import {
   type PlatformConnectorDefinition,
   type PlatformConnectorFacadeItem,
   type PlatformConnectorId,
+  type PlatformInstanceAuthSnapshot,
   type PlatformLoginRegistryEntry,
   type MusicPlatformGlobalCacheSettings,
 } from '../../../modules/music-platform';
 import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
+import {
+  buildPlatformAuthSnapshotMapByConnectorId,
+  filterMountedPlatformRegistrationItems,
+  resolveActiveMountedPlatformRegistrationItem,
+} from '../shared/platformRegistrationState';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 import {
   PLATFORM_MAGNET_VARIANT_PRESETS,
@@ -109,6 +117,7 @@ type RegisteredPlatformItem = {
   contractRecord: PlatformCompatRegistryRecord | null;
   instance: PlatformInstanceRecord | null;
   renderSelection: PlatformRenderSelectionRecord | null;
+  snapshot: PlatformInstanceAuthSnapshot | null;
   facade: PlatformConnectorFacadeItem | null;
 };
 
@@ -470,6 +479,9 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const [contractRecords, setContractRecords] = useState<PlatformCompatRegistryRecord[]>(() =>
     listPlatformCompatRegistryRecords()
   );
+  const [authSnapshotsByConnectorId, setAuthSnapshotsByConnectorId] = useState<
+    Record<string, PlatformInstanceAuthSnapshot | null>
+  >({});
   const [connectorViews, setConnectorViews] = useState<PlatformConnectorFacadeItem[]>([]);
   const [connectorViewsLoading, setConnectorViewsLoading] = useState(true);
   const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
@@ -538,6 +550,16 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     }
   }, [telemetry]);
 
+  const refreshAuthSnapshot = useCallback(async (connectorId: PlatformConnectorId) => {
+    const instanceId = resolvePlatformInstanceId({ connectorId });
+    const snapshot = instanceId ? await refreshPlatformInstanceAuthSnapshot(instanceId) : null;
+    setAuthSnapshotsByConnectorId((prev) => ({
+      ...prev,
+      [connectorId]: snapshot,
+    }));
+    return snapshot;
+  }, []);
+
   useEffect(() => {
     const syncWorkspacePlaylists = (playlists: AudioPlaylist[]): void => {
       setAllPlaylists(playlists);
@@ -600,6 +622,10 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   }, []);
 
   useEffect(() => {
+    setAuthSnapshotsByConnectorId(buildPlatformAuthSnapshotMapByConnectorId(platformInstances));
+  }, [platformInstances]);
+
+  useEffect(() => {
     setRenderSelections(listPlatformRenderSelections());
     return subscribePlatformRenderSelections((records) => {
       setRenderSelections(records);
@@ -612,10 +638,6 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       setContractRecords(records);
     });
   }, []);
-
-  useEffect(() => {
-    void refreshConnectorViews({ refreshAuth: true });
-  }, [refreshConnectorViews]);
 
   useEffect(() => {
     void refreshConnectorViews();
@@ -675,6 +697,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
           const contractRecord = instance
             ? contractRecordsByPlatformId.get(instance.platformId) ?? null
             : null;
+          const snapshot = authSnapshotsByConnectorId[entry.connectorId] ?? null;
 
           return {
             entry,
@@ -682,10 +705,12 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             contractRecord,
             instance,
             renderSelection,
+            snapshot,
             facade: connectorViewsById.get(entry.connectorId) ?? null,
           };
         }),
     [
+      authSnapshotsByConnectorId,
       connectorViewsById,
       contractRecordsByPlatformId,
       platformDefinitionsById,
@@ -694,6 +719,18 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       renderSelectionsByInstanceId,
     ]
   );
+  const mountedRegisteredItems = useMemo(
+    () => filterMountedPlatformRegistrationItems(registeredItems),
+    [registeredItems]
+  );
+
+  useEffect(() => {
+    for (const item of registeredItems) {
+      if (!item.definition) continue;
+      if (authSnapshotsByConnectorId[item.entry.connectorId] !== undefined) continue;
+      void refreshAuthSnapshot(item.entry.connectorId);
+    }
+  }, [authSnapshotsByConnectorId, refreshAuthSnapshot, registeredItems]);
 
   useEffect(() => {
     const nextSelectedConnectorId = resolvePreferredConnectorId(
@@ -706,10 +743,10 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     }
   }, [registeredItems, selectedConnectorId, skinProps.defaultMode]);
 
-  const activeItem =
-    registeredItems.find((item) => item.entry.connectorId === selectedConnectorId) ??
-    registeredItems[0] ??
-    null;
+  const activeItem = useMemo(
+    () => resolveActiveMountedPlatformRegistrationItem(selectedConnectorId, mountedRegisteredItems),
+    [mountedRegisteredItems, selectedConnectorId]
+  );
   const activeDefinition = activeItem?.definition ?? null;
   const activeContractRecord = activeItem?.contractRecord ?? null;
   const activeInstance = activeItem?.instance ?? null;
@@ -832,7 +869,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   }, [activeConnectorId]);
 
   useEffect(() => {
-    const availableConnectorIds = registeredItems
+    const availableConnectorIds = mountedRegisteredItems
       .filter((item) => isSearchFilterableConnector(item.definition))
       .map((item) => item.entry.connectorId);
     const availableConnectorIdSet = new Set<string>(availableConnectorIds);
@@ -841,7 +878,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       if (availableConnectorIds.length === 0) return [];
       return next.length > 0 ? next : availableConnectorIds;
     });
-  }, [registeredItems]);
+  }, [mountedRegisteredItems]);
 
   useEffect(() => {
     if (!createOpen || !createNameEditing || createView !== 'create') return;
@@ -934,8 +971,8 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     () =>
       settingsTab === 'global'
         ? []
-        : registeredItems.filter((item) => item.entry.connectorId === settingsTab),
-    [registeredItems, settingsTab]
+        : mountedRegisteredItems.filter((item) => item.entry.connectorId === settingsTab),
+    [mountedRegisteredItems, settingsTab]
   );
   const settingsItem = settingsItems[0] ?? null;
   const settingsMusicItem = useMemo<RegisteredPlatformItem | null>(
@@ -1029,7 +1066,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
   const connectorIdsByAdapterKind = useMemo(() => {
     const next = new Map<PlatformWorkspaceAdapterKind, string[]>();
-    for (const item of registeredItems) {
+    for (const item of mountedRegisteredItems) {
       if (!item.definition) continue;
       const adapterKind = resolvePlatformWorkspaceAdapterKind({
         connectorId: item.entry.connectorId,
@@ -1042,7 +1079,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       next.set(adapterKind, bucket);
     }
     return next;
-  }, [registeredItems]);
+  }, [mountedRegisteredItems]);
 
   const workspaceTemplateAdapterPayloads: PlatformWorkspaceAdapterPayloadMap = {
     bilibili: {
@@ -1086,7 +1123,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
         buildDrawerGroup: () => {
           if (activePage !== 'instance' || !activeConnectorId) return null;
           const bilibiliItem =
-            registeredItems.find((item) => item.entry.connectorId === activeConnectorId) ?? null;
+            mountedRegisteredItems.find((item) => item.entry.connectorId === activeConnectorId) ?? null;
           const bilibiliCollections = bilibiliController.bilibiliPreviewFolders.authorized
             ? [
                 {
@@ -1145,7 +1182,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             activeMusicConnectorId ?? connectorIdsByAdapterKind.get('music')?.[0] ?? null;
           if (activePage !== 'instance' || !connectorId) return null;
           const musicItem =
-            registeredItems.find((item) => item.entry.connectorId === connectorId) ?? null;
+            mountedRegisteredItems.find((item) => item.entry.connectorId === connectorId) ?? null;
 
           return {
             id: connectorId,
@@ -1179,7 +1216,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       musicTemplateController,
       settingsMusicTemplateController,
       platformPlaylistsByConnectorId,
-      registeredItems,
+      mountedRegisteredItems,
       t,
     ]
   );
@@ -1271,7 +1308,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       }
 
       const mountedFallbackConnectorId =
-        registeredItems.find((item) => item.renderSelection?.mounted === true)?.entry.connectorId ?? null;
+        mountedRegisteredItems[0]?.entry.connectorId ?? null;
       const targetConnectorId =
         connectorId ?? activeConnectorId ?? mountedFallbackConnectorId ?? registeredItems[0]?.entry.connectorId ?? null;
       if (!targetConnectorId) {
@@ -1300,7 +1337,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
         connectorId === null &&
         Boolean(targetItem?.instance) &&
         targetItem?.renderSelection?.mounted !== true &&
-        targetItem?.facade?.authState === 'authorized';
+        (targetItem?.snapshot?.authState ?? targetItem?.facade?.authState) === 'authorized';
       if (canAutoMount && targetItem?.instance) {
         setPlatformRenderSelectionMounted(targetItem.instance.instanceId, true);
       }
@@ -1310,7 +1347,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       setSubmittedQuery('');
       setDrawerOpen(false);
     },
-    [activeConnectorId, activePage, activeWorkspaceRuntimeAdapter, registeredItems]
+    [activeConnectorId, activePage, activeWorkspaceRuntimeAdapter, mountedRegisteredItems, registeredItems]
   );
 
   const handleSelectWorkspaceDrawerFolder = useCallback(
@@ -1358,6 +1395,29 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       setSelectedConnectorId(item.entry.connectorId);
     }
   }, []);
+
+  const resolveItemAuthState = useCallback(
+    (item: RegisteredPlatformItem | null | undefined): string | undefined =>
+      item?.snapshot?.authState ?? item?.facade?.authState,
+    []
+  );
+  const isItemAuthorized = useCallback(
+    (item: RegisteredPlatformItem | null | undefined): boolean =>
+      resolveItemAuthState(item) === 'authorized',
+    [resolveItemAuthState]
+  );
+
+  const handleLauncherStripToggle = useCallback(
+    (item: RegisteredPlatformItem) => {
+      if (!item.instance) return;
+      const canToggleMounted = item.renderSelection?.mounted === true || isItemAuthorized(item);
+      if (!canToggleMounted) return;
+
+      const nextMounted = item.renderSelection?.mounted !== true;
+      setPlatformRenderSelectionMounted(item.instance.instanceId, nextMounted);
+    },
+    [isItemAuthorized]
+  );
 
   const handleRefreshAll = useCallback(async () => {
     setRefreshing(true);
@@ -1449,44 +1509,16 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   }, [globalCacheSettingsSaving, t]);
 
   const registeredCount = registeredItems.length;
-  const loadedCount = registeredItems.filter((item) => item.renderSelection?.mounted === true).length;
-  const authorizedCount = registeredItems.filter((item) => item.facade?.authState === 'authorized').length;
-  const launcherPreviewItems = useMemo(
-    () =>
-      [...registeredItems]
-        .sort((left, right) => {
-          const leftActive = left.entry.connectorId === activeConnectorId ? 1 : 0;
-          const rightActive = right.entry.connectorId === activeConnectorId ? 1 : 0;
-          if (leftActive !== rightActive) {
-            return rightActive - leftActive;
-          }
-
-          const leftMounted = left.renderSelection?.mounted === true ? 1 : 0;
-          const rightMounted = right.renderSelection?.mounted === true ? 1 : 0;
-          if (leftMounted !== rightMounted) {
-            return rightMounted - leftMounted;
-          }
-
-          const leftAuthorized = left.facade?.authState === 'authorized' ? 1 : 0;
-          const rightAuthorized = right.facade?.authState === 'authorized' ? 1 : 0;
-          if (leftAuthorized !== rightAuthorized) {
-            return rightAuthorized - leftAuthorized;
-          }
-
-          return left.entry.connectorId.localeCompare(right.entry.connectorId, 'zh-CN');
-        })
-        .slice(0, 3),
-    [activeConnectorId, registeredItems]
-  );
-  const launcherPreviewOverflowCount = Math.max(0, registeredCount - launcherPreviewItems.length);
+  const loadedCount = mountedRegisteredItems.length;
+  const authorizedCount = registeredItems.filter((item) => isItemAuthorized(item)).length;
   const activeConnectorLabel =
     activeDefinition?.labelKey
       ? t(activeDefinition.labelKey)
       : activeFacade?.displayName ?? activeInstance?.displayName ?? '';
-  const activeAuthLabel = t(toAuthLabelKey(activeFacade?.authState));
+  const activeAuthLabel = t(toAuthLabelKey(resolveItemAuthState(activeItem)));
   const activeVisualMeta = resolveConnectorVisualMeta(activeConnectorId, activeDefinition);
   const activeMounted = activeRenderSelection?.mounted === true;
-  const activeCanToggleMounted = Boolean(activeInstance) && (activeMounted || activeFacade?.authState === 'authorized');
+  const activeCanToggleMounted = Boolean(activeInstance) && (activeMounted || isItemAuthorized(activeItem));
   const activeWorkspacePlaylistOpener =
     activePage === 'instance' && activeMounted
       ? activeWorkspaceRuntimeAdapter?.playlistOpener ?? null
@@ -1503,13 +1535,10 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       ? t('pages.playlists.manage.search.placeholder')
       : t('magnet.platform.search.filterTitle'));
   const shellSearchDisabled = activeWorkspaceShellSearch?.disabled ?? false;
-  const searchReadyCount = registeredItems.filter(
-    (item) =>
-      item.facade?.authState === 'authorized' && item.contractRecord?.contract.capabilities.search === true
+  const searchReadyCount = mountedRegisteredItems.filter(
+    (item) => isItemAuthorized(item) && item.contractRecord?.contract.capabilities.search === true
   ).length;
-  const dailyItems = registeredItems.filter(
-    (item) => item.facade?.authState === 'authorized' || item.renderSelection?.mounted === true
-  );
+  const dailyItems = mountedRegisteredItems;
   const normalizedQuery = submittedQuery.trim().toLowerCase();
   const heroSubtitle = activeItem
     ? activeMounted
@@ -1548,10 +1577,10 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   );
   const filteredRegisteredItems = useMemo(
     () =>
-      registeredItems.filter(
+      mountedRegisteredItems.filter(
         (item) => matchesConnectorFilter(item) && matchesSearch(item)
       ),
-    [matchesConnectorFilter, matchesSearch, registeredItems]
+    [matchesConnectorFilter, matchesSearch, mountedRegisteredItems]
   );
   const filteredDailyItems = useMemo(
     () =>
@@ -1564,8 +1593,8 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const showDailyFilter = activePage === 'daily';
   const defaultCreateName = t('magnet.platform.local.create.defaultName');
   const filterableRegisteredItems = useMemo(
-    () => registeredItems.filter((item) => isSearchFilterableConnector(item.definition)),
-    [registeredItems]
+    () => mountedRegisteredItems.filter((item) => isSearchFilterableConnector(item.definition)),
+    [mountedRegisteredItems]
   );
   const drawerGroups = useMemo<PlaylistDrawerGroup[]>(() => {
     const groups: PlaylistDrawerGroup[] = [];
@@ -1598,8 +1627,8 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     t
   ]);
   const settingsNavItems = useMemo(
-    () => Array.from(new Map(registeredItems.map((item) => [item.entry.connectorId, item])).values()),
-    [registeredItems]
+    () => Array.from(new Map(mountedRegisteredItems.map((item) => [item.entry.connectorId, item])).values()),
+    [mountedRegisteredItems]
   );
   const settingsNavConnectorIdSet = useMemo(
     () => new Set(settingsNavItems.map((item) => item.entry.connectorId)),
@@ -1794,7 +1823,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                         background:
                           item.renderSelection?.mounted === true
                             ? '#22c55e'
-                            : item.facade?.authState === 'authorized'
+                            : isItemAuthorized(item)
                               ? color
                               : 'rgba(255,255,255,0.22)',
                       }}
@@ -1804,7 +1833,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
               })}
             </div>
           </>
-        ) : registeredItems.length > 0 ? (
+        ) : mountedRegisteredItems.length > 0 ? (
           <>
             <div className="platform-preview-nav-divider" />
             <div className="rounded-[18px] px-3 py-4 text-center text-xs text-white/46">{query.trim()}</div>
@@ -1935,16 +1964,32 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                 </span>
                 <span className="text-xs text-white/42">
                   {t('magnet.platform.instance.auth', {
-                    state: t(toAuthLabelKey(item.facade?.authState)),
+                    state: t(toAuthLabelKey(resolveItemAuthState(item))),
                   })}
                 </span>
               </button>
             );
           })}
         </div>
-      ) : (
+      ) : mountedRegisteredItems.length > 0 ? (
         <div className="flex min-h-[280px] items-center justify-center rounded-[24px] border border-dashed border-white/10 bg-white/3 text-sm text-white/42">
           {t('magnet.platform.empty')}
+        </div>
+      ) : registeredItems.length > 0 ? (
+        <div className="flex min-h-[280px] flex-col items-center justify-center gap-3 rounded-[24px] border border-dashed border-white/10 bg-white/3 px-6 text-center">
+          <LayoutGrid className="h-7 w-7 text-white/24" />
+          <div className="text-sm text-white/72">{t('magnet.platform.empty.noMounted')}</div>
+          <p className="max-w-sm text-xs leading-5 text-white/42">
+            {t('magnet.platform.empty.noMountedHint')}
+          </p>
+        </div>
+      ) : (
+        <div className="flex min-h-[280px] flex-col items-center justify-center gap-3 rounded-[24px] border border-dashed border-white/10 bg-white/3 px-6 text-center">
+          <LayoutGrid className="h-7 w-7 text-white/24" />
+          <div className="text-sm text-white/72">{t('magnet.platform.empty.noRegistered')}</div>
+          <p className="max-w-sm text-xs leading-5 text-white/42">
+            {t('magnet.platform.empty.noRegisteredHint')}
+          </p>
         </div>
       )}
     </div>
@@ -2134,8 +2179,8 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       return (
         <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 px-6 py-10 text-center">
           <Disc3 className="h-8 w-8 text-white/24" />
-          <div className="text-base font-medium text-white">{t('magnet.platform.daily.empty')}</div>
-          <p className="max-w-md text-sm leading-6 text-white/54">{t('magnet.platform.daily.emptyHint')}</p>
+          <div className="text-base font-medium text-white">{t('magnet.platform.empty.noMounted')}</div>
+          <p className="max-w-md text-sm leading-6 text-white/54">{t('magnet.platform.empty.noMountedHint')}</p>
         </div>
       );
     }
@@ -2171,7 +2216,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
               item.definition
             );
             const mounted = item.renderSelection?.mounted === true;
-            const canToggleMounted = item.facade?.authState === 'authorized' && Boolean(item.instance);
+            const canToggleMounted = isItemAuthorized(item) && Boolean(item.instance);
             const active = item.entry.connectorId === activeConnectorId && activePage === 'instance';
             const platformName = item.definition?.labelKey
               ? t(item.definition.labelKey)
@@ -2528,8 +2573,16 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       return (
         <div className="flex h-full min-h-[360px] flex-col items-center justify-center gap-3 px-6 text-center">
           <LayoutGrid className="h-8 w-8 text-white/24" />
-          <div className="text-base font-medium text-white">{t('magnet.platform.empty.noRegistered')}</div>
-          <p className="max-w-md text-sm leading-6 text-white/54">{t('magnet.platform.empty.noRegisteredHint')}</p>
+          <div className="text-base font-medium text-white">
+            {t(registeredItems.length > 0 ? 'magnet.platform.empty.noMounted' : 'magnet.platform.empty.noRegistered')}
+          </div>
+          <p className="max-w-md text-sm leading-6 text-white/54">
+            {t(
+              registeredItems.length > 0
+                ? 'magnet.platform.empty.noMountedHint'
+                : 'magnet.platform.empty.noRegisteredHint'
+            )}
+          </p>
         </div>
       );
     }
@@ -2567,96 +2620,61 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
               title={t('magnet.platform.launcher.title')}
               aria-pressed={launcherOpen}
             >
-              {launcherPreviewItems.length > 0 ? (
-                <span className="platform-preview-launcher-trigger-preview" aria-hidden>
-                  {launcherPreviewItems.map((item, index) => {
-                    const { Icon, color, iconAssetUrl } = resolveConnectorVisualMeta(
-                      item.entry.connectorId,
-                      item.definition
-                    );
-                    const emphasized =
-                      item.renderSelection?.mounted === true || item.facade?.authState === 'authorized';
-
-                    return (
-                      <span
-                        key={item.entry.connectorId}
-                        className={cx(
-                          'platform-preview-launcher-trigger-preview-item',
-                          `platform-preview-launcher-trigger-preview-item--${index}`,
-                          emphasized
-                            ? 'platform-preview-launcher-trigger-preview-item-emphasized'
-                            : 'platform-preview-launcher-trigger-preview-item-muted'
-                        )}
-                      >
-                        <ConnectorVisualIcon
-                          Icon={Icon}
-                          color={emphasized ? color : 'rgba(170, 182, 198, 0.8)'}
-                          iconAssetUrl={iconAssetUrl}
-                          className="h-3.5 w-3.5 object-contain"
-                          style={{ opacity: emphasized ? 1 : 0.82 }}
-                        />
-                      </span>
-                    );
-                  })}
-                  {launcherPreviewOverflowCount > 0 ? (
-                    <span className="platform-preview-launcher-trigger-preview-badge">
-                      +{Math.min(launcherPreviewOverflowCount, 9)}
-                    </span>
-                  ) : null}
-                </span>
-              ) : (
-                <LayoutGrid className="h-5 w-5" />
-              )}
+              <LayoutGrid className="h-5 w-5" />
             </button>
+            {registeredItems.length > 0 ? (
+              <div
+                className={cx(
+                  'platform-preview-launcher-strip absolute left-[3.4rem] top-1/2 flex -translate-y-1/2 items-center',
+                  launcherOpen
+                    ? 'translate-x-0 opacity-100 blur-0'
+                    : 'pointer-events-none -translate-x-3 opacity-0 blur-[4px]'
+                )}
+                role="toolbar"
+                aria-label={t('magnet.platform.launcher.title')}
+              >
+                {registeredItems.map((item) => {
+                  const { Icon, color, iconAssetUrl } = resolveConnectorVisualMeta(
+                    item.entry.connectorId,
+                    item.definition
+                  );
+                  const mounted = item.renderSelection?.mounted === true;
+                  const canToggleMounted = Boolean(item.instance) && (mounted || isItemAuthorized(item));
+                  const itemLabel = item.definition?.labelKey
+                    ? t(item.definition.labelKey)
+                    : item.facade?.displayName ?? item.entry.connectorId;
+                  const actionLabel = mounted
+                    ? t('magnet.platform-login.action.deactivate')
+                    : t('magnet.platform.instance.activateWorkspace');
+                  const stateLabel = t(toAuthLabelKey(resolveItemAuthState(item)));
 
-            <div
-              className={cx(
-                'platform-preview-launcher-strip absolute left-[3.4rem] top-1/2 flex -translate-y-1/2 items-center',
-                launcherOpen
-                  ? 'translate-x-0 opacity-100 blur-0'
-                  : 'pointer-events-none -translate-x-3 opacity-0 blur-[4px]'
-              )}
-            >
-              {registeredItems.map((item) => {
-                const { Icon, color, iconAssetUrl } = resolveConnectorVisualMeta(
-                  item.entry.connectorId,
-                  item.definition
-                );
-                const mounted = item.renderSelection?.mounted === true;
-                const canToggleMounted = Boolean(item.instance) && (mounted || item.facade?.authState === 'authorized');
-                const iconColor = mounted ? color : 'rgba(170, 182, 198, 0.52)';
-                const itemLabel = item.definition?.labelKey
-                  ? t(item.definition.labelKey)
-                  : item.facade?.displayName ?? item.entry.connectorId;
-
-                return (
-                  <button
-                    key={item.entry.connectorId}
-                    type="button"
-                    onClick={() => {
-                      if (!canToggleMounted) return;
-                      handleToggleMounted(item);
-                    }}
-                    aria-pressed={mounted}
-                    disabled={!canToggleMounted}
-                    className={cx(
-                      'platform-preview-launcher-item group relative inline-flex items-center justify-center',
-                      mounted ? 'platform-preview-launcher-item--mounted' : 'platform-preview-launcher-item--hidden',
-                      !canToggleMounted && 'cursor-not-allowed opacity-45'
-                    )}
-                    title={itemLabel}
-                  >
-                    <ConnectorVisualIcon
-                      Icon={Icon}
-                      color={iconColor}
-                      iconAssetUrl={iconAssetUrl}
-                      className="platform-preview-launcher-item-icon h-6 w-6 object-contain transition-all duration-200"
-                      style={{ opacity: mounted ? 1 : 0.62 }}
-                    />
-                  </button>
-                );
-              })}
-            </div>
+                  return (
+                    <button
+                      key={item.entry.connectorId}
+                      type="button"
+                      onClick={() => handleLauncherStripToggle(item)}
+                      aria-pressed={mounted}
+                      disabled={!canToggleMounted}
+                      className={cx(
+                        'platform-preview-launcher-item group relative inline-flex items-center justify-center',
+                        mounted ? 'platform-preview-launcher-item--mounted' : 'platform-preview-launcher-item--hidden',
+                        !canToggleMounted && 'platform-preview-launcher-item--disabled'
+                      )}
+                      title={`${itemLabel} · ${canToggleMounted ? actionLabel : stateLabel}`}
+                      aria-label={`${itemLabel} · ${canToggleMounted ? actionLabel : stateLabel}`}
+                    >
+                      <ConnectorVisualIcon
+                        Icon={Icon}
+                        color={mounted ? color : canToggleMounted ? 'rgba(170, 182, 198, 0.78)' : 'rgba(170, 182, 198, 0.48)'}
+                        iconAssetUrl={iconAssetUrl}
+                        className="platform-preview-launcher-item-icon h-6 w-6 object-contain transition-all duration-200"
+                        style={{ opacity: mounted ? 1 : canToggleMounted ? 0.72 : 0.4 }}
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
 
           <div className="mx-auto flex min-w-0 items-center gap-3">
@@ -3389,7 +3407,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                                   </div>
                                 </div>
                                 <span className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/48">
-                                  {t(toAuthLabelKey(item.facade?.authState))}
+                                  {t(toAuthLabelKey(resolveItemAuthState(item)))}
                                 </span>
                               </div>
                               <div className="mt-4 flex flex-wrap gap-2 text-xs text-white/58">
@@ -3653,7 +3671,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                     const mounted = item.renderSelection?.mounted === true;
                     const selected = item.entry.connectorId === activeConnectorId;
                     const canToggleMounted =
-                      item.facade?.authState === 'authorized' && Boolean(item.instance);
+                      isItemAuthorized(item) && Boolean(item.instance);
 
                     return (
                       <div
@@ -3690,7 +3708,9 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                                     : item.facade?.displayName ?? item.entry.connectorId}
                                 </span>
                                 <span className="mt-1 block truncate text-xs text-white/52">
-                                  {item.facade?.accountUid ?? t(toAuthLabelKey(item.facade?.authState))}
+                                  {item.snapshot?.accountUid ??
+                                    item.facade?.accountUid ??
+                                    t(toAuthLabelKey(resolveItemAuthState(item)))}
                                 </span>
                               </span>
                             </div>
@@ -3733,7 +3753,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                           </span>
                           <span className="inline-flex items-center rounded-full bg-white/[0.06] px-2.5 py-1 text-[11px] text-white/62">
                             {t('magnet.platform.instance.auth', {
-                              state: t(toAuthLabelKey(item.facade?.authState)),
+                              state: t(toAuthLabelKey(resolveItemAuthState(item))),
                             })}
                           </span>
                         </div>
@@ -3776,7 +3796,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                         <button
                           type="button"
                           onClick={() => handleToggleMounted(activeItem)}
-                          disabled={activeFacade?.authState !== 'authorized'}
+                          disabled={!isItemAuthorized(activeItem)}
                           className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm transition ${
                             activeRenderSelection?.mounted
                               ? 'border-emerald-400/20 bg-emerald-400/12 text-emerald-200'
@@ -3848,7 +3868,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                       <button
                         type="button"
                         onClick={() => handleToggleMounted(activeItem)}
-                        disabled={activeFacade?.authState !== 'authorized'}
+                        disabled={!isItemAuthorized(activeItem)}
                         className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-sm text-white/82 transition hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <Power className="h-4 w-4" />

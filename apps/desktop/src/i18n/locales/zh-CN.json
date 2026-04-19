@@ -194,6 +194,7 @@
   "magnet.platform.action.refresh": "刷新状态",
   "magnet.platform.launcher.title": "已注册实例",
   "magnet.platform.launcher.subtitle": "注册来源于 P-Login，启用决定实例是否真正挂载到平台工作台。",
+  "magnet.platform.launcher.action.hide": "隐藏功能区",
   "magnet.platform.empty.noRegistered": "还没有注册平台契约",
   "magnet.platform.empty.noRegisteredHint": "请先在 P-Login 中注册至少一个平台实例，随后这里才会挂载真实平台适配器。",
   "magnet.platform.empty.noMounted": "还没有载入平台实例",

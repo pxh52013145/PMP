@@ -17,10 +17,8 @@ import { useT } from '../../../i18n';
 import {
   beginPlatformInstanceQrLogin,
   clearPlatformInstanceAuthCookies,
-  getPlatformInstanceAuthSnapshot,
   installPlatformPackFromFile,
   listBuiltinPlatformCompatRegistrations,
-  listPlatformInstanceAuthSnapshots,
   listPlatformConnectorDefinitions,
   listPlatformInstances,
   listPlatformRenderSelections,
@@ -53,6 +51,11 @@ import {
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import {
+  buildPlatformAuthSnapshotMapByConnectorId,
+  resolvePlatformRegistrationState,
+  type PlatformRegistrationVisualState,
+} from '../shared/platformRegistrationState';
+import {
   PLATFORM_LOGIN_DEFAULT_QR_AUTO_POLL_INTERVAL_MS,
   PLATFORM_LOGIN_VARIANT_PRESETS,
   parsePlatformLoginSkinProps,
@@ -62,8 +65,6 @@ import './PlatformLoginButton.css';
 type PlatformLoginButtonRendererProps = {
   skinProps?: Record<string, unknown>;
 };
-
-type ManagedConnectorState = 'active' | 'inactive' | 'pending' | 'unauthorized' | 'disabled';
 
 type ConnectorVisualMeta = {
   Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
@@ -143,19 +144,6 @@ function updateConnectorScopedValue<TRecord extends Record<string, unknown>>(
   } as TRecord));
 }
 
-function buildAuthSnapshotMapByConnectorId(
-  instances: PlatformInstanceRecord[]
-): Record<string, PlatformInstanceAuthSnapshot | null> {
-  const next: Record<string, PlatformInstanceAuthSnapshot | null> = {};
-  for (const instance of instances) {
-    const connectorId =
-      typeof instance.metadata?.connectorId === 'string' ? instance.metadata.connectorId : '';
-    if (!connectorId) continue;
-    next[connectorId] = getPlatformInstanceAuthSnapshot(instance.instanceId);
-  }
-  return next;
-}
-
 function getConnectorVisualMeta(definition: PlatformConnectorDefinition): ConnectorVisualMeta {
   const template = resolvePlatformConnectorTemplate(definition);
   const fallbackIcon = template === 'video' ? Tv : template === 'music' ? Disc3 : Music;
@@ -170,21 +158,7 @@ function getConnectorVisualMeta(definition: PlatformConnectorDefinition): Connec
   };
 }
 
-function resolveManagedConnectorState(
-  definition: PlatformConnectorDefinition,
-  snapshot: PlatformInstanceAuthSnapshot | null | undefined,
-  renderSelection?: PlatformRenderSelectionRecord | null
-): ManagedConnectorState {
-  if (!definition.enabled || definition.authFlow !== 'qr') return 'disabled';
-  const normalized = snapshot?.authState?.trim().toLowerCase() ?? 'unauthorized';
-  if (normalized === 'pending') return 'pending';
-  if (normalized === 'authorized') {
-    return renderSelection?.mounted ? 'active' : 'inactive';
-  }
-  return 'unauthorized';
-}
-
-function resolveStateHintKey(state: ManagedConnectorState): string {
+function resolveStateHintKey(state: PlatformRegistrationVisualState): string {
   switch (state) {
     case 'active':
       return 'magnet.platform-login.tip.active';
@@ -403,22 +377,6 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     return snapshot;
   }, []);
 
-  const refreshAllAuthSnapshots = useCallback(async () => {
-    const snapshots = await listPlatformInstanceAuthSnapshots({ refresh: true });
-    setAuthSnapshotsByConnectorId((prev) => {
-      const next = { ...prev };
-      for (const snapshot of snapshots) {
-        if (!snapshot.connectorId) continue;
-        next[snapshot.connectorId] = snapshot;
-      }
-      return next;
-    });
-  }, []);
-
-  useEffect(() => {
-    void refreshAllAuthSnapshots();
-  }, [refreshAllAuthSnapshots]);
-
   useEffect(() => {
     setPlatformInstances(listPlatformInstances());
     return subscribePlatformInstances((instances) => {
@@ -427,7 +385,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   }, []);
 
   useEffect(() => {
-    setAuthSnapshotsByConnectorId(buildAuthSnapshotMapByConnectorId(platformInstances));
+    setAuthSnapshotsByConnectorId(buildPlatformAuthSnapshotMapByConnectorId(platformInstances));
   }, [platformInstances]);
 
   useEffect(() => {
@@ -642,7 +600,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
       const renderSelection = instance
         ? renderSelectionsByInstanceId.get(instance.instanceId) ?? null
         : null;
-      const state = resolveManagedConnectorState(definition, snapshot, renderSelection);
+      const state = resolvePlatformRegistrationState(definition, snapshot, renderSelection);
 
       if (state === 'disabled') {
         updateConnectorScopedValue(
@@ -1012,7 +970,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     : null;
   const contextMenuStateType =
     contextMenuConnector &&
-    resolveManagedConnectorState(
+    resolvePlatformRegistrationState(
       contextMenuConnector.definition,
       contextMenuConnector.snapshot,
       contextMenuConnector.renderSelection
@@ -1046,7 +1004,11 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
       >
         <div className="platform-login-strip">
           {registeredConnectors.map(({ definition, snapshot, renderSelection }) => {
-            const visualState = resolveManagedConnectorState(definition, snapshot, renderSelection);
+            const visualState = resolvePlatformRegistrationState(
+              definition,
+              snapshot,
+              renderSelection
+            );
             const tooltipTitle = `${t(definition.labelKey)}\n${t(resolveStateHintKey(visualState))}`;
 
             return (

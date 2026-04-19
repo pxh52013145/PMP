@@ -354,6 +354,7 @@
   "magnet.platform.action.refresh": "Refresh Status",
   "magnet.platform.launcher.title": "Registered Instances",
   "magnet.platform.launcher.subtitle": "Registration comes from P-Login. Activation controls whether an instance is mounted into the workspace.",
+  "magnet.platform.launcher.action.hide": "Hide Workspace",
   "magnet.platform.empty.noRegistered": "No platform contracts registered",
   "magnet.platform.empty.noRegisteredHint": "Open P-Login and register at least one platform instance first, then this workspace can mount the real platform adapters.",
   "magnet.platform.empty.noMounted": "No platform instance mounted",
