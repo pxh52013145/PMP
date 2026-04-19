@@ -18,7 +18,11 @@ import {
   type PlaylistCoverUrlKind,
 } from '../../modules/playlists/residencyTelemetry';
 import { musicLibraryService } from '../../services/audio/MusicLibraryService';
-import { resolveBilibiliCoverAssetUrl, searchBilibiliResourceByBvid } from '../../modules/music-platform';
+import {
+  BILIBILI_CONNECTOR_ID,
+  resolvePlatformWorkspaceCoverAssetUrl,
+  resolvePlatformWorkspaceResource,
+} from '../../modules/music-platform';
 import { scheduleProcessWorkingSetTrim } from '../../utils/processWorkingSetTrim';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { captureTelemetryScenarioSnapshot } from '../../services/telemetry/scenarioSnapshots';
@@ -1059,7 +1063,10 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
               )
               .find((value): value is string => Boolean(value));
             if (bvid) {
-              const resource = await searchBilibiliResourceByBvid(bvid).catch(() => null);
+              const resource = await resolvePlatformWorkspaceResource({
+                connectorId: BILIBILI_CONNECTOR_ID,
+                query: bvid,
+              }).catch(() => null);
               const discoveredCoverUrl =
                 typeof resource?.coverUrl === 'string' ? resource.coverUrl.trim() : '';
               if (discoveredCoverUrl) {
@@ -1069,7 +1076,10 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
           }
 
           if (resolvedCoverUrl && isBilibiliPlaylist) {
-            const cachedBilibiliCover = await resolveBilibiliCoverAssetUrl(resolvedCoverUrl);
+            const cachedBilibiliCover = await resolvePlatformWorkspaceCoverAssetUrl({
+              connectorId: BILIBILI_CONNECTOR_ID,
+              coverUrl: resolvedCoverUrl,
+            });
             if (typeof cachedBilibiliCover === 'string' && cachedBilibiliCover.trim().length > 0) {
               resolvedCoverUrl = sanitizeRenderablePlaylistCoverUrl(cachedBilibiliCover);
             }

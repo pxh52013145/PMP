@@ -1,18 +1,21 @@
 import { ConnectorScopedLruTtlCache } from './connectorScopedCache';
 import {
-  asPlatformFacadeRecord,
-  createPlatformConnectorFacadeCaller,
-  normalizePlatformFacadePositiveInt,
   normalizePlatformFacadeString,
-  readPlatformFacadeFiniteNumber,
   resolvePlatformConnectorFacadeCacheScopeKey,
 } from './platformConnectorFacadeCore';
-import {
-  PLATFORM_LIBRARY_BINDING_ID,
-  PLATFORM_RECOMMENDATIONS_BINDING_ID,
-  PLATFORM_SEARCH_BINDING_ID,
-} from './platformInstanceApiBinding';
 import { NETEASE_CONNECTOR_ID } from './platformConnectorModel';
+import {
+  listPlatformWorkspaceCollectionResources,
+  listPlatformWorkspaceCollections,
+  listPlatformWorkspaceRecommendedCollections,
+  listPlatformWorkspaceRecommendedResources,
+  preparePlatformWorkspacePlayback,
+  searchPlatformWorkspaceResources,
+  type PlatformWorkspaceCollectionItem,
+  type PlatformWorkspacePreparedPlayback,
+  type PlatformWorkspaceResourceItem,
+  type PlatformWorkspaceResourcePage,
+} from './platformWorkspaceFacade';
 
 export interface NeteaseUserPlaylistItem {
   playlistId: string;
@@ -65,8 +68,6 @@ type RuntimePreferenceOptions = {
   preferRuntime?: boolean;
 };
 
-const NETEASE_DISPLAY_NAME = 'Netease Cloud Music';
-
 const NETEASE_USER_PLAYLISTS_CACHE =
   new ConnectorScopedLruTtlCache<NeteaseUserPlaylistItem[]>({
     maxEntriesPerConnector: 4,
@@ -80,10 +81,6 @@ const NETEASE_RECOMMENDED_PLAYLISTS_CACHE =
 const NETEASE_SONG_PAGE_CACHE = new ConnectorScopedLruTtlCache<NeteaseSongPage | null>({
   maxEntriesPerConnector: 64,
   defaultTtlMs: 75 * 1000,
-});
-const callNeteaseBinding = createPlatformConnectorFacadeCaller({
-  connectorId: NETEASE_CONNECTOR_ID,
-  displayName: NETEASE_DISPLAY_NAME,
 });
 
 function resolveNeteaseCacheScopeKey(instanceId?: string | null): string {
@@ -136,102 +133,85 @@ function cloneRecommendedPlaylists(
   }));
 }
 
-function mapRuntimePlaylistItem(
-  value: unknown
-): NeteaseUserPlaylistItem | NeteaseRecommendedPlaylistItem | null {
-  const record = asPlatformFacadeRecord(value);
-  if (!record) return null;
-
-  const playlistId =
-    normalizePlatformFacadeString(record.playlistId) ||
-    normalizePlatformFacadeString(record.collectionId);
-  const title = normalizePlatformFacadeString(record.title);
-  if (!playlistId || !title) return null;
-
+function mapWorkspaceCollectionToUserPlaylist(
+  item: PlatformWorkspaceCollectionItem
+): NeteaseUserPlaylistItem {
   return {
-    playlistId,
-    title,
-    trackCount: normalizePlatformFacadePositiveInt(record.trackCount),
-    coverUrl: normalizePlatformFacadeString(record.coverUrl) || undefined,
-    updatedAtMs: readPlatformFacadeFiniteNumber(record.updatedAtMs),
+    playlistId: item.collectionId,
+    title: item.title,
+    trackCount: item.trackCount,
+    coverUrl: item.coverUrl,
+    updatedAtMs: item.updatedAtMs,
   };
 }
 
-function mapRuntimeSongItem(value: unknown): NeteaseSongItem | null {
-  const record = asPlatformFacadeRecord(value);
-  if (!record) return null;
-
-  const songId =
-    normalizePlatformFacadeString(record.songId) ||
-    normalizePlatformFacadeString(record.resourceId);
-  const title = normalizePlatformFacadeString(record.title);
-  const sourceLocator = normalizePlatformFacadeString(record.sourceLocator);
-  const webUrl = normalizePlatformFacadeString(record.webUrl) || sourceLocator;
-  if (!songId || !title || !sourceLocator || !webUrl) return null;
-
+function mapWorkspaceCollectionToRecommendedPlaylist(
+  item: PlatformWorkspaceCollectionItem
+): NeteaseRecommendedPlaylistItem {
   return {
-    songId,
-    title,
-    artistNames: normalizePlatformFacadeString(record.artistNames),
-    albumName: normalizePlatformFacadeString(record.albumName) || undefined,
-    durationSeconds: readPlatformFacadeFiniteNumber(record.durationSeconds),
-    coverUrl: normalizePlatformFacadeString(record.coverUrl) || undefined,
-    sourceLocator,
-    webUrl,
+    playlistId: item.collectionId,
+    title: item.title,
+    trackCount: item.trackCount,
+    coverUrl: item.coverUrl,
   };
 }
 
-function mapRuntimeSongPage(value: unknown): NeteaseSongPage | null | undefined {
-  if (value === null) return null;
-
-  const record = asPlatformFacadeRecord(value);
-  if (!record || !Array.isArray(record.items)) return undefined;
-
-  const items = record.items
-    .map(mapRuntimeSongItem)
-    .filter((item): item is NeteaseSongItem => Boolean(item));
-
+function mapWorkspaceResourceToSong(item: PlatformWorkspaceResourceItem): NeteaseSongItem {
   return {
-    sourceKind: normalizePlatformFacadeString(record.sourceKind) || 'unknown',
-    sourceId: normalizePlatformFacadeString(record.sourceId) || 'unknown',
-    pageNum: normalizePlatformFacadePositiveInt(record.pageNum) || 1,
-    pageSize:
-      normalizePlatformFacadePositiveInt(record.pageSize) ||
-      Math.max(
-        1,
-        items.length || normalizePlatformFacadePositiveInt(record.total)
-      ),
-    total: normalizePlatformFacadePositiveInt(record.total),
-    hasMore: record.hasMore === true,
-    items,
+    songId: item.resourceId,
+    title: item.title,
+    artistNames: item.artistNames || item.ownerName || '',
+    albumName: item.albumName,
+    durationSeconds: item.durationSeconds,
+    coverUrl: item.coverUrl,
+    sourceLocator: item.sourceLocator,
+    webUrl: item.webUrl || item.sourceLocator,
   };
 }
 
-function mapRuntimePreparedPlayback(value: unknown): NeteasePreparedPlayback | null | undefined {
-  if (value === null) return null;
+function mapWorkspacePageToSongPage(
+  page: PlatformWorkspaceResourcePage | null,
+  fallbackSourceId = 'unknown',
+  fallbackSourceKind = 'unknown'
+): NeteaseSongPage | null {
+  if (!page) return null;
 
-  const record = asPlatformFacadeRecord(value);
-  if (!record) return undefined;
-
-  const sourceLocator = normalizePlatformFacadeString(record.sourceLocator);
-  const streamUrl = normalizePlatformFacadeString(record.streamUrl);
-  const cachePath = normalizePlatformFacadeString(record.cachePath);
-  const songId =
-    normalizePlatformFacadeString(record.resourceId) ||
-    normalizePlatformFacadeString(record.songId);
-  if (!sourceLocator || !streamUrl || !cachePath || !songId) return undefined;
+  const sourceId =
+    normalizePlatformFacadeString(page.sourceId) &&
+    page.sourceId !== 'unknown'
+      ? page.sourceId
+      : fallbackSourceId;
+  const sourceKind =
+    normalizePlatformFacadeString(page.sourceKind) &&
+    page.sourceKind !== 'unknown'
+      ? page.sourceKind
+      : fallbackSourceKind;
 
   return {
-    sourceLocator,
-    streamUrl,
-    cachePath,
-    mimeType: normalizePlatformFacadeString(record.mimeType) || undefined,
-    durationSeconds: readPlatformFacadeFiniteNumber(record.durationSeconds),
-    songId,
-    selectedQualityKey:
-      normalizePlatformFacadeString(record.selectedQualityKey) || undefined,
-    selectedQualityLabel:
-      normalizePlatformFacadeString(record.selectedQualityLabel) || undefined,
+    sourceKind: sourceKind || fallbackSourceKind,
+    sourceId: sourceId || fallbackSourceId,
+    pageNum: page.pageNum,
+    pageSize: page.pageSize,
+    total: page.total,
+    hasMore: page.hasMore,
+    items: page.items.map(mapWorkspaceResourceToSong),
+  };
+}
+
+function mapWorkspacePreparedPlaybackToNetease(
+  prepared: PlatformWorkspacePreparedPlayback | null
+): NeteasePreparedPlayback | null {
+  if (!prepared || !prepared.resourceId) return null;
+
+  return {
+    sourceLocator: prepared.sourceLocator,
+    streamUrl: prepared.streamUrl,
+    cachePath: prepared.cachePath,
+    mimeType: prepared.mimeType,
+    durationSeconds: prepared.durationSeconds,
+    songId: prepared.resourceId,
+    selectedQualityKey: prepared.selectedQualityKey,
+    selectedQualityLabel: prepared.selectedQualityLabel,
   };
 }
 
@@ -254,22 +234,12 @@ export async function listNeteaseRecommendedPlaylists(options?: {
     if (cached) return cloneRecommendedPlaylists(cached);
   }
 
-  const playlists = await callNeteaseBinding<NeteaseRecommendedPlaylistItem[]>({
+  const collections = await listPlatformWorkspaceRecommendedCollections({
+    connectorId: NETEASE_CONNECTOR_ID,
     instanceId: options?.instanceId,
-    bindingId: PLATFORM_RECOMMENDATIONS_BINDING_ID,
-    method: 'listDaily',
-    payload: {
-      forceRefresh: options?.forceRefresh === true,
-    },
-    runtimeBucket: 'recommendations',
-    map: (value) => {
-      const record = asPlatformFacadeRecord(value);
-      if (!record || !Array.isArray(record.collections)) return undefined;
-      return record.collections
-        .map(mapRuntimePlaylistItem)
-        .filter((item): item is NeteaseRecommendedPlaylistItem => Boolean(item));
-    },
+    forceRefresh: options?.forceRefresh === true,
   });
+  const playlists = collections.map(mapWorkspaceCollectionToRecommendedPlaylist);
 
   NETEASE_RECOMMENDED_PLAYLISTS_CACHE.set(scopeKey, 'recommended-playlists', playlists);
   return cloneRecommendedPlaylists(playlists);
@@ -287,34 +257,15 @@ export async function listNeteaseRecommendedSongs(options?: {
     if (cached !== undefined) return cloneSongPage(cached);
   }
 
-  const page = await callNeteaseBinding<NeteaseSongPage | null>({
+  const page = await listPlatformWorkspaceRecommendedResources({
+    connectorId: NETEASE_CONNECTOR_ID,
     instanceId: options?.instanceId,
-    bindingId: PLATFORM_RECOMMENDATIONS_BINDING_ID,
-    method: 'listDaily',
-    payload: {
-      forceRefresh: options?.forceRefresh === true,
-    },
-    runtimeBucket: 'recommendations',
-    map: (value) => {
-      if (value === null) return null;
-      const record = asPlatformFacadeRecord(value);
-      if (!record) return undefined;
-      return mapRuntimeSongPage({
-        sourceKind: normalizePlatformFacadeString(record.sourceKind) || 'recommended',
-        sourceId: normalizePlatformFacadeString(record.sourceId) || 'recommended',
-        pageNum: normalizePlatformFacadePositiveInt(record.pageNum) || 1,
-        pageSize:
-          normalizePlatformFacadePositiveInt(record.pageSize) ||
-          Math.max(1, Array.isArray(record.items) ? record.items.length : 0),
-        total: normalizePlatformFacadePositiveInt(record.total),
-        hasMore: record.hasMore === true,
-        items: Array.isArray(record.items) ? record.items : [],
-      });
-    },
+    forceRefresh: options?.forceRefresh === true,
   });
+  const mapped = mapWorkspacePageToSongPage(page, 'recommended', 'recommended');
 
-  NETEASE_SONG_PAGE_CACHE.set(scopeKey, 'recommended-songs', page);
-  return cloneSongPage(page);
+  NETEASE_SONG_PAGE_CACHE.set(scopeKey, 'recommended-songs', mapped);
+  return cloneSongPage(mapped);
 }
 
 export async function listNeteaseUserPlaylists(options?: {
@@ -329,22 +280,12 @@ export async function listNeteaseUserPlaylists(options?: {
     if (cached) return cloneUserPlaylists(cached);
   }
 
-  const playlists = await callNeteaseBinding<NeteaseUserPlaylistItem[]>({
+  const collections = await listPlatformWorkspaceCollections({
+    connectorId: NETEASE_CONNECTOR_ID,
     instanceId: options?.instanceId,
-    bindingId: PLATFORM_LIBRARY_BINDING_ID,
-    method: 'listCollections',
-    payload: {
-      forceRefresh: options?.forceRefresh === true,
-    },
-    runtimeBucket: 'library',
-    map: (value) => {
-      const record = asPlatformFacadeRecord(value);
-      if (!record || !Array.isArray(record.items)) return undefined;
-      return record.items
-        .map(mapRuntimePlaylistItem)
-        .filter((item): item is NeteaseUserPlaylistItem => Boolean(item));
-    },
+    forceRefresh: options?.forceRefresh === true,
   });
+  const playlists = collections.map(mapWorkspaceCollectionToUserPlaylist);
 
   NETEASE_USER_PLAYLISTS_CACHE.set(scopeKey, 'user-playlists', playlists);
   return cloneUserPlaylists(playlists);
@@ -369,22 +310,16 @@ export async function listNeteasePlaylistTracks(
     if (cached !== undefined) return cloneSongPage(cached);
   }
 
-  const page = await callNeteaseBinding<NeteaseSongPage | null>({
+  const page = await listPlatformWorkspaceCollectionResources({
+    connectorId: NETEASE_CONNECTOR_ID,
+    collectionId: normalizedPlaylistId,
     instanceId: options?.instanceId,
-    bindingId: PLATFORM_LIBRARY_BINDING_ID,
-    method: 'listPlaylistTracks',
-    payload: {
-      collectionId: normalizedPlaylistId,
-      playlistId: normalizedPlaylistId,
-      forceRefresh: options?.forceRefresh === true,
-    },
-    runtimeBucket: 'library',
-    runtimeMethods: ['listPlaylistTracks', 'listResources'],
-    map: mapRuntimeSongPage,
+    forceRefresh: options?.forceRefresh === true,
   });
+  const mapped = mapWorkspacePageToSongPage(page, normalizedPlaylistId, 'playlist');
 
-  NETEASE_SONG_PAGE_CACHE.set(scopeKey, cacheKey, page, 90 * 1000);
-  return cloneSongPage(page);
+  NETEASE_SONG_PAGE_CACHE.set(scopeKey, cacheKey, mapped, 90 * 1000);
+  return cloneSongPage(mapped);
 }
 
 export async function searchNeteaseSongs(options: {
@@ -400,33 +335,26 @@ export async function searchNeteaseSongs(options: {
   if (!keyword) return null;
   const scopeKey = resolveNeteaseCacheScopeKey(options.instanceId);
 
-  const pageNum =
-    normalizePlatformFacadePositiveInt(options.pageNum ?? 1) || 1;
-  const pageSize =
-    normalizePlatformFacadePositiveInt(options.pageSize ?? 40) || 40;
+  const pageNum = options.pageNum && Number.isFinite(options.pageNum) ? options.pageNum : 1;
+  const pageSize = options.pageSize && Number.isFinite(options.pageSize) ? options.pageSize : 40;
   const cacheKey = `search:${keyword.toLowerCase()}|page=${pageNum}|size=${pageSize}`;
   if (!options.forceRefresh) {
     const cached = NETEASE_SONG_PAGE_CACHE.get(scopeKey, cacheKey);
     if (cached !== undefined) return cloneSongPage(cached);
   }
 
-  const page = await callNeteaseBinding<NeteaseSongPage | null>({
+  const page = await searchPlatformWorkspaceResources({
+    connectorId: NETEASE_CONNECTOR_ID,
+    keyword,
+    pageNum,
+    pageSize,
     instanceId: options.instanceId,
-    bindingId: PLATFORM_SEARCH_BINDING_ID,
-    method: 'query',
-    payload: {
-      keyword,
-      query: keyword,
-      pageNum,
-      pageSize,
-      forceRefresh: options.forceRefresh === true,
-    },
-    runtimeBucket: 'search',
-    map: mapRuntimeSongPage,
+    forceRefresh: options.forceRefresh === true,
   });
+  const mapped = mapWorkspacePageToSongPage(page, keyword, 'search');
 
-  NETEASE_SONG_PAGE_CACHE.set(scopeKey, cacheKey, page, 30 * 1000);
-  return cloneSongPage(page);
+  NETEASE_SONG_PAGE_CACHE.set(scopeKey, cacheKey, mapped, 30 * 1000);
+  return cloneSongPage(mapped);
 }
 
 export async function prepareNeteaseCachedPlayback(
@@ -438,18 +366,12 @@ export async function prepareNeteaseCachedPlayback(
   void runtimeOptions;
   const normalizedSourceLocator = normalizePlatformFacadeString(sourceLocator);
   if (!normalizedSourceLocator) return null;
-  const normalizedQualityHint =
-    normalizePlatformFacadeString(qualityHint) || undefined;
 
-  return callNeteaseBinding<NeteasePreparedPlayback | null>({
+  const prepared = await preparePlatformWorkspacePlayback({
+    connectorId: NETEASE_CONNECTOR_ID,
+    sourceLocator: normalizedSourceLocator,
+    qualityHint,
     instanceId,
-    bindingId: PLATFORM_LIBRARY_BINDING_ID,
-    method: 'preparePlayback',
-    payload: {
-      sourceLocator: normalizedSourceLocator,
-      qualityHint: normalizedQualityHint,
-    },
-    runtimeBucket: 'library',
-    map: mapRuntimePreparedPlayback,
   });
+  return mapWorkspacePreparedPlaybackToNetease(prepared);
 }

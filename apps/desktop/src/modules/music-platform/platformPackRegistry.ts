@@ -144,10 +144,22 @@ let installedPlatformPackRefreshPromise: Promise<void> | null = null;
 let builtinPlatformPackBootScheduled = false;
 let builtinPlatformPackBackgroundReconcileScheduled = false;
 let builtinPlatformPackBootPromise: Promise<void> | null = null;
+let platformPackRegistryBootstrapRegistered = false;
 
-registerPlatformConnectorRegistryInitializer(
-  ensureBuiltinPlatformPackRegistrationsInitialized
-);
+function ensurePlatformPackRegistryBootstrapRegistered(): void {
+  if (platformPackRegistryBootstrapRegistered) {
+    return;
+  }
+  if (typeof registerPlatformConnectorRegistryInitializer !== 'function') {
+    return;
+  }
+  platformPackRegistryBootstrapRegistered = true;
+  registerPlatformConnectorRegistryInitializer(
+    ensureBuiltinPlatformPackRegistrationsInitialized
+  );
+}
+
+ensurePlatformPackRegistryBootstrapRegistered();
 
 type IdleSchedulerWindow = Window & {
   requestIdleCallback?: (
@@ -1032,6 +1044,7 @@ function scheduleBuiltinPlatformPackBootInTauriRuntime(): void {
 }
 
 export function ensureBuiltinPlatformPackRegistrationsInitialized(): void {
+  ensurePlatformPackRegistryBootstrapRegistered();
   if (builtinPlatformPackRegistrationsInitialized) return;
   builtinPlatformPackRegistrationsInitialized = true;
 

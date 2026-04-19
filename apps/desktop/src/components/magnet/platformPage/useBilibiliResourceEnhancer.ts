@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 
 import {
-  listBilibiliPlaybackQualities,
-  resolveBilibiliCoverAssetUrl,
+  BILIBILI_CONNECTOR_ID,
+  listPlatformWorkspaceQualityOptions,
+  resolvePlatformWorkspaceCoverAssetUrl,
   type BilibiliFavoriteResourceItem,
 } from '../../../modules/music-platform';
 
@@ -148,10 +149,11 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
         if (cancelled) return;
         const normalizedCoverUrl = item.coverUrl?.trim();
         if (!normalizedCoverUrl) continue;
-        const resolvedCoverUrl = await resolveBilibiliCoverAssetUrl(
-          normalizedCoverUrl,
-          activeBilibiliInstanceId
-        );
+        const resolvedCoverUrl = await resolvePlatformWorkspaceCoverAssetUrl({
+          connectorId: BILIBILI_CONNECTOR_ID,
+          coverUrl: normalizedCoverUrl,
+          instanceId: activeBilibiliInstanceId,
+        });
         if (!resolvedCoverUrl || cancelled) continue;
 
         setResourceCoverUrlMap((prev) => {
@@ -201,7 +203,11 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
         }
 
         try {
-          const options = await listBilibiliPlaybackQualities(locator, activeBilibiliInstanceId);
+          const options = await listPlatformWorkspaceQualityOptions({
+            connectorId: BILIBILI_CONNECTOR_ID,
+            sourceLocator: locator,
+            instanceId: activeBilibiliInstanceId,
+          });
           if (options.length === 0) {
             qualityProbeBackoffUntilRef.current.set(locator, Date.now() + 60_000);
             trimMapToMaxEntries(qualityProbeBackoffUntilRef.current, RESOURCE_BADGE_CACHE_LIMIT);

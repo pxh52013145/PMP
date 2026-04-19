@@ -1,6 +1,19 @@
-import type { PlatformApiResult } from '@pixel-matrix/plugin-platform-contracts';
-
-import type { PlatformCompatRegistryRecord } from '../../../modules/music-platform';
+import type { PlatformConnectorId } from '../../../modules/music-platform';
+import {
+  listPlatformWorkspaceCollectionResources,
+  listPlatformWorkspaceCollections,
+  listPlatformWorkspaceQualityState,
+  listPlatformWorkspaceRecommendedCollections,
+  listPlatformWorkspaceRecommendedResources,
+  preparePlatformWorkspacePlayback,
+  searchPlatformWorkspaceResources,
+  setPlatformWorkspaceQualityPreference,
+  type PlatformWorkspaceCollectionItem,
+  type PlatformWorkspacePreparedPlayback,
+  type PlatformWorkspaceQualityState,
+  type PlatformWorkspaceResourceItem,
+  type PlatformWorkspaceResourcePage,
+} from '../../../modules/music-platform';
 
 export interface MusicTemplateCollectionItem {
   collectionId: string;
@@ -68,7 +81,6 @@ export interface MusicTemplateRuntimeTarget {
   connectorId: string;
   displayName: string;
   instanceId: string | null;
-  contractRecord: PlatformCompatRegistryRecord | null;
 }
 
 function normalizeString(value: unknown): string {
@@ -80,285 +92,220 @@ function normalizePositiveInt(value: unknown): number {
   return Math.max(0, Math.floor(value));
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
+function normalizeConnectorId(value: string): PlatformConnectorId | null {
+  const normalized = normalizeString(value).toLowerCase();
+  if (!normalized.startsWith('connector.platform.')) return null;
+  return normalized as PlatformConnectorId;
 }
 
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function mapRuntimeTagLabel(value: unknown): string | null {
-  if (typeof value === 'string') {
-    const normalized = value.trim();
-    return normalized || null;
-  }
-
-  const record = asRecord(value);
-  if (!record) return null;
-
-  const label = normalizeString(record.label ?? record.title ?? record.name ?? record.text);
-  return label || null;
-}
-
-function shouldUseRuntime(target: MusicTemplateRuntimeTarget): boolean {
-  return Boolean(target.instanceId && target.contractRecord?.runtime);
-}
-
-function readRuntimeBucketMethod<T extends (...args: unknown[]) => Promise<PlatformApiResult<unknown>>>(
-  target: MusicTemplateRuntimeTarget,
-  bucket: keyof NonNullable<PlatformCompatRegistryRecord['runtime']>,
-  method: string
-): T | null {
-  const runtime = target.contractRecord?.runtime;
-  const runtimeBucket = runtime?.[bucket];
-  const bucketRecord = asRecord(runtimeBucket);
-  const fn = bucketRecord?.[method];
-  return typeof fn === 'function' ? (fn as T) : null;
-}
-
-function mapRuntimeCollectionItem(value: unknown): MusicTemplateCollectionItem | null {
-  const record = asRecord(value);
-  if (!record) return null;
-
-  const collectionId = normalizeString(record.collectionId ?? record.playlistId ?? record.id);
-  const title = normalizeString(record.title ?? record.name ?? record.label);
-  if (!collectionId || !title) return null;
-
+function resolveWorkspaceTarget(
+  target: MusicTemplateRuntimeTarget
+): { connectorId: PlatformConnectorId; instanceId?: string | null } | null {
+  const connectorId = normalizeConnectorId(target.connectorId);
+  if (!connectorId) return null;
+  const instanceId = normalizeString(target.instanceId);
   return {
-    collectionId,
-    title,
-    trackCount: normalizePositiveInt(record.trackCount ?? record.count ?? record.total),
-    coverUrl: normalizeString(record.coverUrl ?? record.imageUrl ?? record.cover) || undefined,
-    updatedAtMs:
-      typeof record.updatedAtMs === 'number' && Number.isFinite(record.updatedAtMs)
-        ? record.updatedAtMs
-        : undefined,
+    connectorId,
+    instanceId: instanceId || undefined,
   };
 }
 
-function mapRuntimeResourceItem(value: unknown): MusicTemplateResourceItem | null {
-  const record = asRecord(value);
-  if (!record) return null;
+function mapTagLabels(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const mapped = value
+    .map((item) => normalizeString(item))
+    .filter(
+      (item, index, array): item is string =>
+        Boolean(item) && array.indexOf(item) === index
+    );
+  return mapped.length > 0 ? mapped : undefined;
+}
 
-  const resourceId = normalizeString(record.resourceId ?? record.songId ?? record.id);
-  const title = normalizeString(record.title ?? record.name);
-  const sourceLocator = normalizeString(record.sourceLocator ?? record.locator ?? record.source);
-  if (!resourceId || !title || !sourceLocator) return null;
-
-  const qualityKey =
-    normalizeString(
-      record.qualityKey ??
-        record.selectedQualityKey ??
-        record.audioQualityKey ??
-        record.soundQualityKey
-    ) || undefined;
-  const qualityLabel =
-    normalizeString(
-      record.qualityLabel ??
-        record.selectedQualityLabel ??
-        record.audioQualityLabel ??
-        record.soundQualityLabel
-    ) || undefined;
-  const vipLabel =
-    normalizeString(record.vipLabel ?? record.vipBadge ?? record.membershipLabel ?? record.accessLabel) ||
-    undefined;
-  const tagLabels = asArray(record.tagLabels ?? record.tags ?? record.badges ?? record.labels)
-    .map(mapRuntimeTagLabel)
-    .filter((item, index, array): item is string => Boolean(item) && array.indexOf(item) === index);
-
+function mapWorkspaceCollectionItem(
+  value: PlatformWorkspaceCollectionItem
+): MusicTemplateCollectionItem {
   return {
-    resourceId,
-    title,
-    artistNames: normalizeString(record.artistNames ?? record.artist ?? record.ownerName),
-    albumName: normalizeString(record.albumName ?? record.album) || undefined,
-    durationSeconds:
-      typeof record.durationSeconds === 'number' && Number.isFinite(record.durationSeconds)
-        ? record.durationSeconds
-        : undefined,
-    coverUrl: normalizeString(record.coverUrl ?? record.imageUrl ?? record.cover) || undefined,
-    vipRequired:
-      record.vipRequired === true ||
-      record.requiresVip === true ||
-      record.needVip === true ||
-      record.vip === true ||
-      record.membersOnly === true,
-    vipLabel,
-    qualityKey,
-    qualityLabel,
-    tagLabels: tagLabels.length > 0 ? tagLabels : undefined,
-    sourceLocator,
-    webUrl: normalizeString(record.webUrl ?? record.url),
+    collectionId: value.collectionId,
+    title: value.title,
+    trackCount: value.trackCount,
+    coverUrl: value.coverUrl,
+    updatedAtMs: value.updatedAtMs,
   };
 }
 
-function mapRuntimePage(
-  data: unknown,
-  fallback: Partial<Omit<MusicTemplateResourcePage, 'items'>> = {}
-): MusicTemplateResourcePage | null {
-  const record = asRecord(data);
-  if (!record) return null;
-
-  const itemsSource = record.items ?? record.resources ?? record.tracks;
-  const items = asArray(itemsSource)
-    .map(mapRuntimeResourceItem)
-    .filter((item): item is MusicTemplateResourceItem => Boolean(item));
-
-  if (items.length === 0 && !Array.isArray(itemsSource)) {
+function mapWorkspaceResourceItem(
+  value: PlatformWorkspaceResourceItem
+): MusicTemplateResourceItem | null {
+  const resourceId = normalizeString(value.resourceId);
+  const title = normalizeString(value.title);
+  const sourceLocator = normalizeString(value.sourceLocator);
+  if (!resourceId || !title || !sourceLocator) {
     return null;
   }
 
   return {
-    sourceKind: normalizeString(record.sourceKind ?? fallback.sourceKind) || 'runtime',
-    sourceId: normalizeString(record.sourceId ?? fallback.sourceId) || 'runtime',
-    pageNum: normalizePositiveInt(record.pageNum ?? fallback.pageNum) || 1,
-    pageSize: normalizePositiveInt(record.pageSize ?? fallback.pageSize) || items.length || 1,
-    total: normalizePositiveInt(record.total ?? fallback.total) || items.length,
+    resourceId,
+    title,
+    artistNames:
+      normalizeString(value.artistNames) ||
+      normalizeString(value.ownerName) ||
+      '',
+    albumName: normalizeString(value.albumName) || undefined,
+    durationSeconds:
+      typeof value.durationSeconds === 'number' &&
+      Number.isFinite(value.durationSeconds)
+        ? value.durationSeconds
+        : undefined,
+    coverUrl: normalizeString(value.coverUrl) || undefined,
+    vipRequired: value.vipRequired === true,
+    vipLabel: normalizeString(value.vipLabel) || undefined,
+    qualityKey: normalizeString(value.qualityKey) || undefined,
+    qualityLabel: normalizeString(value.qualityLabel) || undefined,
+    tagLabels: mapTagLabels(value.tagLabels),
+    sourceLocator,
+    webUrl: normalizeString(value.webUrl),
+  };
+}
+
+function mapWorkspaceResourcePage(
+  page: PlatformWorkspaceResourcePage | null,
+  fallback: Partial<Omit<MusicTemplateResourcePage, 'items'>> = {}
+): MusicTemplateResourcePage | null {
+  if (!page) return null;
+
+  const items = page.items
+    .map(mapWorkspaceResourceItem)
+    .filter((item): item is MusicTemplateResourceItem => Boolean(item));
+
+  return {
+    sourceKind: normalizeString(page.sourceKind || fallback.sourceKind) || 'runtime',
+    sourceId: normalizeString(page.sourceId || fallback.sourceId) || 'runtime',
+    pageNum:
+      normalizePositiveInt(page.pageNum) ||
+      normalizePositiveInt(fallback.pageNum) ||
+      1,
+    pageSize:
+      normalizePositiveInt(page.pageSize) ||
+      normalizePositiveInt(fallback.pageSize) ||
+      Math.max(1, items.length),
+    total:
+      normalizePositiveInt(page.total) ||
+      normalizePositiveInt(fallback.total) ||
+      items.length,
     hasMore:
-      typeof record.hasMore === 'boolean'
-        ? record.hasMore
-        : typeof fallback.hasMore === 'boolean'
-          ? fallback.hasMore
-          : false,
+      typeof page.hasMore === 'boolean'
+        ? page.hasMore
+        : fallback.hasMore === true,
     items,
   };
 }
 
-function mapRuntimeCollectionList(data: unknown): MusicTemplateCollectionItem[] {
-  const record = asRecord(data);
-  const source = record?.items ?? record?.collections;
-  return asArray(source)
-    .map(mapRuntimeCollectionItem)
-    .filter((item): item is MusicTemplateCollectionItem => Boolean(item));
-}
+function mapWorkspacePreparedPlayback(
+  prepared: PlatformWorkspacePreparedPlayback | null,
+  item: MusicTemplateResourceItem
+): MusicTemplatePreparedPlayback | null {
+  if (!prepared) return null;
 
-function mapRuntimeRecommendations(data: unknown): MusicTemplateRecommendationsResult {
-  const record = asRecord(data);
-  const collectionsSource = record?.collections ?? record?.recommendedCollections;
+  const streamUrl = normalizeString(prepared.streamUrl);
+  const cachePath = normalizeString(prepared.cachePath);
+  if (!streamUrl || !cachePath) {
+    return null;
+  }
 
   return {
-    page:
-      mapRuntimePage(data, {
-        sourceKind: 'recommended',
-        sourceId: 'recommended',
-      }) ??
-      (Array.isArray(record?.items)
-        ? {
-            sourceKind: 'recommended',
-            sourceId: 'recommended',
-            pageNum: 1,
-            pageSize: asArray(record?.items).length || 1,
-            total: asArray(record?.items).length,
-            hasMore: false,
-            items: asArray(record?.items)
-              .map(mapRuntimeResourceItem)
-              .filter((item): item is MusicTemplateResourceItem => Boolean(item)),
-          }
-        : null),
-    collections: asArray(collectionsSource)
-      .map(mapRuntimeCollectionItem)
-      .filter((item): item is MusicTemplateCollectionItem => Boolean(item)),
+    sourceLocator:
+      normalizeString(prepared.sourceLocator) || item.sourceLocator,
+    streamUrl,
+    cachePath,
+    mimeType: normalizeString(prepared.mimeType) || undefined,
+    durationSeconds:
+      typeof prepared.durationSeconds === 'number' &&
+      Number.isFinite(prepared.durationSeconds)
+        ? prepared.durationSeconds
+        : undefined,
+    resourceId: normalizeString(prepared.resourceId) || item.resourceId,
+    selectedQualityKey:
+      normalizeString(prepared.selectedQualityKey) || undefined,
+    selectedQualityLabel:
+      normalizeString(prepared.selectedQualityLabel) || undefined,
   };
 }
 
-function mapRuntimePlaybackQualityOption(value: unknown): MusicTemplatePlaybackQualityOption | null {
-  const record = asRecord(value);
-  if (!record) return null;
+function mapWorkspacePlaybackQualityState(
+  state: PlatformWorkspaceQualityState | null
+): MusicTemplatePlaybackQualityState | null {
+  if (!state) return null;
 
-  const key = normalizeString(record.key ?? record.qualityKey ?? record.id);
-  if (!key) return null;
+  const options: MusicTemplatePlaybackQualityOption[] = [];
+  for (const item of state.options) {
+    const key = normalizeString(item.key);
+    if (!key) continue;
+    options.push({
+      key,
+      label: normalizeString(item.label) || undefined,
+      available: item.available !== false,
+    });
+  }
+  const currentKey = normalizeString(state.currentKey);
 
-  return {
-    key,
-    label: normalizeString(record.label ?? record.title ?? key) || undefined,
-    available: record.available !== false,
-  };
-}
-
-function mapRuntimePlaybackQualityState(data: unknown): MusicTemplatePlaybackQualityState | null {
-  const record = asRecord(data);
-  if (!record) return null;
-
-  const options = asArray(record.options)
-    .map(mapRuntimePlaybackQualityOption)
-    .filter((item): item is MusicTemplatePlaybackQualityOption => Boolean(item));
-  const current = mapRuntimePlaybackQualityOption(record.current);
-  const currentKey = normalizeString(
-    current?.key ?? record.currentKey ?? record.key ?? record.preferredKey
-  );
-
-  if (!currentKey && options.length === 0) return null;
+  if (!currentKey && options.length < 1) {
+    return null;
+  }
 
   return {
     options,
     currentKey: currentKey || options[0]?.key || 'auto',
-    currentLabel:
-      normalizeString(current?.label ?? record.currentLabel ?? record.label) || undefined,
+    currentLabel: normalizeString(state.currentLabel) || undefined,
   };
-}
-
-async function callRuntime<T>(
-  target: MusicTemplateRuntimeTarget,
-  bucket: keyof NonNullable<PlatformCompatRegistryRecord['runtime']>,
-  method: string,
-  payload: Record<string, unknown>,
-  mapOk: (data: unknown) => T
-): Promise<T | null> {
-  if (!shouldUseRuntime(target)) return null;
-
-  const fn = readRuntimeBucketMethod(target, bucket, method);
-  if (!fn || !target.instanceId) return null;
-
-  const result = await fn({
-    instanceId: target.instanceId,
-    ...payload,
-  });
-
-  if (!result.ok) {
-    throw new Error(result.error.message);
-  }
-
-  return mapOk(result.data);
 }
 
 export async function listMusicTemplateCollections(
   target: MusicTemplateRuntimeTarget,
   options?: { forceRefresh?: boolean }
 ): Promise<MusicTemplateCollectionItem[]> {
-  return (
-    (await callRuntime(
-    target,
-    'library',
-    'listCollections',
-    {
-      scope: 'user',
-      collectionScope: 'user',
-      forceRefresh: options?.forceRefresh === true,
-    },
-    mapRuntimeCollectionList
-    )) ?? []
-  );
+  const workspaceTarget = resolveWorkspaceTarget(target);
+  if (!workspaceTarget) return [];
+
+  const collections = await listPlatformWorkspaceCollections({
+    connectorId: workspaceTarget.connectorId,
+    instanceId: workspaceTarget.instanceId,
+    forceRefresh: options?.forceRefresh === true,
+  });
+  return collections.map(mapWorkspaceCollectionItem);
 }
 
 export async function listMusicTemplateRecommendations(
   target: MusicTemplateRuntimeTarget,
   options?: { forceRefresh?: boolean }
 ): Promise<MusicTemplateRecommendationsResult> {
-  return (
-    (await callRuntime(
-    target,
-    'recommendations',
-    'listDaily',
-    {
-      forceRefresh: options?.forceRefresh === true,
-    },
-    mapRuntimeRecommendations
-    )) ?? {
+  const workspaceTarget = resolveWorkspaceTarget(target);
+  if (!workspaceTarget) {
+    return {
       page: null,
       collections: [],
-    }
-  );
+    };
+  }
+
+  const [resourcePage, collections] = await Promise.all([
+    listPlatformWorkspaceRecommendedResources({
+      connectorId: workspaceTarget.connectorId,
+      instanceId: workspaceTarget.instanceId,
+      forceRefresh: options?.forceRefresh === true,
+    }),
+    listPlatformWorkspaceRecommendedCollections({
+      connectorId: workspaceTarget.connectorId,
+      instanceId: workspaceTarget.instanceId,
+      forceRefresh: options?.forceRefresh === true,
+    }),
+  ]);
+
+  return {
+    page: mapWorkspaceResourcePage(resourcePage, {
+      sourceKind: 'recommended',
+      sourceId: 'recommended',
+    }),
+    collections: collections.map(mapWorkspaceCollectionItem),
+  };
 }
 
 export async function listMusicTemplateCollectionResources(
@@ -366,41 +313,21 @@ export async function listMusicTemplateCollectionResources(
   collectionId: string,
   options?: { forceRefresh?: boolean }
 ): Promise<MusicTemplateResourcePage | null> {
+  const workspaceTarget = resolveWorkspaceTarget(target);
   const normalizedCollectionId = normalizeString(collectionId);
-  if (!normalizedCollectionId) return null;
+  if (!workspaceTarget || !normalizedCollectionId) return null;
 
-  const runtimePage =
-    (await callRuntime(
-      target,
-      'library',
-      'listPlaylistTracks',
-      {
-        collectionId: normalizedCollectionId,
-        playlistId: normalizedCollectionId,
-        forceRefresh: options?.forceRefresh === true,
-      },
-      (data) =>
-        mapRuntimePage(data, {
-          sourceKind: 'user-playlist',
-          sourceId: normalizedCollectionId,
-        })
-    )) ??
-    (await callRuntime(
-      target,
-      'library',
-      'listResources',
-      {
-        collectionId: normalizedCollectionId,
-        playlistId: normalizedCollectionId,
-        forceRefresh: options?.forceRefresh === true,
-      },
-      (data) =>
-        mapRuntimePage(data, {
-          sourceKind: 'user-playlist',
-          sourceId: normalizedCollectionId,
-        })
-    ));
-  return runtimePage;
+  const resourcePage = await listPlatformWorkspaceCollectionResources({
+    connectorId: workspaceTarget.connectorId,
+    collectionId: normalizedCollectionId,
+    instanceId: workspaceTarget.instanceId,
+    forceRefresh: options?.forceRefresh === true,
+  });
+
+  return mapWorkspaceResourcePage(resourcePage, {
+    sourceKind: 'user-playlist',
+    sourceId: normalizedCollectionId,
+  });
 }
 
 export async function searchMusicTemplateResources(
@@ -412,32 +339,28 @@ export async function searchMusicTemplateResources(
     forceRefresh?: boolean;
   }
 ): Promise<MusicTemplateResourcePage | null> {
+  const workspaceTarget = resolveWorkspaceTarget(target);
   const keyword = normalizeString(options.keyword);
-  if (!keyword) return null;
+  if (!workspaceTarget || !keyword) return null;
 
   const pageNum = normalizePositiveInt(options.pageNum) || 1;
   const pageSize = normalizePositiveInt(options.pageSize) || 40;
 
-  const runtimePage = await callRuntime(
-    target,
-    'search',
-    'query',
-    {
-      keyword,
-      query: keyword,
-      pageNum,
-      pageSize,
-      forceRefresh: options.forceRefresh === true,
-    },
-    (data) =>
-      mapRuntimePage(data, {
-        sourceKind: 'search',
-        sourceId: keyword,
-        pageNum,
-        pageSize,
-      })
-  );
-  return runtimePage;
+  const resourcePage = await searchPlatformWorkspaceResources({
+    connectorId: workspaceTarget.connectorId,
+    keyword,
+    pageNum,
+    pageSize,
+    instanceId: workspaceTarget.instanceId,
+    forceRefresh: options.forceRefresh === true,
+  });
+
+  return mapWorkspaceResourcePage(resourcePage, {
+    sourceKind: 'search',
+    sourceId: keyword,
+    pageNum,
+    pageSize,
+  });
 }
 
 export async function getMusicTemplatePlaybackQualityState(
@@ -447,31 +370,17 @@ export async function getMusicTemplatePlaybackQualityState(
     forceRefresh?: boolean;
   }
 ): Promise<MusicTemplatePlaybackQualityState | null> {
-  const sourceLocator = normalizeString(options?.sourceLocator);
+  const workspaceTarget = resolveWorkspaceTarget(target);
+  if (!workspaceTarget) return null;
 
-  const qualityState =
-    (await callRuntime(
-      target,
-      'quality',
-      'listOptions',
-      {
-        sourceLocator: sourceLocator || undefined,
-        forceRefresh: options?.forceRefresh === true,
-      },
-      mapRuntimePlaybackQualityState
-    )) ??
-    (await callRuntime(
-      target,
-      'quality',
-      'getCurrent',
-      {
-        sourceLocator: sourceLocator || undefined,
-        forceRefresh: options?.forceRefresh === true,
-      },
-      mapRuntimePlaybackQualityState
-    ));
+  const qualityState = await listPlatformWorkspaceQualityState({
+    connectorId: workspaceTarget.connectorId,
+    sourceLocator: normalizeString(options?.sourceLocator) || undefined,
+    instanceId: workspaceTarget.instanceId,
+    forceRefresh: options?.forceRefresh === true,
+  });
 
-  return qualityState;
+  return mapWorkspacePlaybackQualityState(qualityState);
 }
 
 export async function setMusicTemplatePlaybackQualityPreference(
@@ -481,21 +390,18 @@ export async function setMusicTemplatePlaybackQualityPreference(
     sourceLocator?: string | null;
   }
 ): Promise<MusicTemplatePlaybackQualityState | null> {
+  const workspaceTarget = resolveWorkspaceTarget(target);
   const normalizedQualityKey = normalizeString(qualityKey);
-  if (!normalizedQualityKey) return null;
+  if (!workspaceTarget || !normalizedQualityKey) return null;
 
-  return callRuntime(
-    target,
-    'quality',
-    'setPreferred',
-    {
-      qualityKey: normalizedQualityKey,
-      key: normalizedQualityKey,
-      qualityHint: normalizedQualityKey,
-      sourceLocator: normalizeString(options?.sourceLocator) || undefined,
-    },
-    mapRuntimePlaybackQualityState
-  );
+  const qualityState = await setPlatformWorkspaceQualityPreference({
+    connectorId: workspaceTarget.connectorId,
+    qualityKey: normalizedQualityKey,
+    sourceLocator: normalizeString(options?.sourceLocator) || undefined,
+    instanceId: workspaceTarget.instanceId,
+  });
+
+  return mapWorkspacePlaybackQualityState(qualityState);
 }
 
 export async function prepareMusicTemplatePlayback(
@@ -505,76 +411,17 @@ export async function prepareMusicTemplatePlayback(
     qualityHint?: string | null;
   }
 ): Promise<MusicTemplatePreparedPlayback | null> {
-  const qualityHint = normalizeString(options?.qualityHint);
-  const runtimePlayback =
-    (await callRuntime(
-      target,
-      'library',
-      'preparePlayback',
-      {
-        sourceLocator: item.sourceLocator,
-        resourceId: item.resourceId,
-        webUrl: item.webUrl,
-        qualityHint: qualityHint || undefined,
-      },
-      (data) => {
-        const record = asRecord(data);
-        if (!record) return null;
-        return {
-          sourceLocator:
-            normalizeString(record.sourceLocator ?? item.sourceLocator) || item.sourceLocator,
-          streamUrl: normalizeString(record.streamUrl),
-          cachePath: normalizeString(record.cachePath),
-          mimeType: normalizeString(record.mimeType) || undefined,
-          durationSeconds:
-            typeof record.durationSeconds === 'number' && Number.isFinite(record.durationSeconds)
-              ? record.durationSeconds
-              : undefined,
-          resourceId:
-            normalizeString(record.resourceId ?? record.songId ?? item.resourceId) ||
-            item.resourceId,
-          selectedQualityKey: normalizeString(record.selectedQualityKey ?? record.qualityKey) || undefined,
-          selectedQualityLabel:
-            normalizeString(record.selectedQualityLabel ?? record.qualityLabel) || undefined,
-        } satisfies MusicTemplatePreparedPlayback | null;
-      }
-    )) ??
-    (await callRuntime(
-      target,
-      'search',
-      'preparePlayback',
-      {
-        sourceLocator: item.sourceLocator,
-        resourceId: item.resourceId,
-        webUrl: item.webUrl,
-        qualityHint: qualityHint || undefined,
-      },
-      (data) => {
-        const record = asRecord(data);
-        if (!record) return null;
-        return {
-          sourceLocator:
-            normalizeString(record.sourceLocator ?? item.sourceLocator) || item.sourceLocator,
-          streamUrl: normalizeString(record.streamUrl),
-          cachePath: normalizeString(record.cachePath),
-          mimeType: normalizeString(record.mimeType) || undefined,
-          durationSeconds:
-            typeof record.durationSeconds === 'number' && Number.isFinite(record.durationSeconds)
-              ? record.durationSeconds
-              : undefined,
-          resourceId:
-            normalizeString(record.resourceId ?? record.songId ?? item.resourceId) ||
-            item.resourceId,
-          selectedQualityKey: normalizeString(record.selectedQualityKey ?? record.qualityKey) || undefined,
-          selectedQualityLabel:
-            normalizeString(record.selectedQualityLabel ?? record.qualityLabel) || undefined,
-        } satisfies MusicTemplatePreparedPlayback | null;
-      }
-    ));
+  const workspaceTarget = resolveWorkspaceTarget(target);
+  if (!workspaceTarget) return null;
 
-  if (!runtimePlayback?.cachePath || !runtimePlayback.streamUrl) {
-    return null;
-  }
+  const prepared = await preparePlatformWorkspacePlayback({
+    connectorId: workspaceTarget.connectorId,
+    sourceLocator: item.sourceLocator,
+    qualityHint: normalizeString(options?.qualityHint) || undefined,
+    resourceId: item.resourceId,
+    webUrl: item.webUrl,
+    instanceId: workspaceTarget.instanceId,
+  });
 
-  return runtimePlayback;
+  return mapWorkspacePreparedPlayback(prepared, item);
 }

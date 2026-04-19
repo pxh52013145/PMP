@@ -46,6 +46,8 @@ export {
 } from './renderSelectionRegistry';
 
 export {
+  BILIBILI_CONNECTOR_ID,
+  NETEASE_CONNECTOR_ID,
   beginPlatformQrLogin,
   clearPlatformConnectorCookies,
   getPlatformConnectorAuthSnapshot,
@@ -157,6 +159,28 @@ export {
   type PlatformTrackSearchOptions,
   type PlatformTrackSearchResult,
 } from './platformFacade';
+
+export {
+  listPlatformWorkspaceCollections,
+  listPlatformWorkspaceCollectionResources,
+  listPlatformWorkspaceRecommendedCollections,
+  listPlatformWorkspaceRecommendedResources,
+  searchPlatformWorkspaceResources,
+  resolvePlatformWorkspaceResource,
+  preparePlatformWorkspacePlayback,
+  listPlatformWorkspaceQualityState,
+  listPlatformWorkspaceQualityOptions,
+  setPlatformWorkspaceQualityPreference,
+  resolvePlatformWorkspaceLyricLocator,
+  resolvePlatformWorkspaceCoverAssetUrl,
+  type PlatformWorkspaceCollectionItem,
+  type PlatformWorkspaceResourceItem,
+  type PlatformWorkspaceResourcePage,
+  type PlatformWorkspacePreparedPlayback,
+  type PlatformWorkspaceQualityState,
+  type PlatformWorkspaceQualityOption,
+  type PlatformWorkspaceLyricLocatorResolved,
+} from './platformWorkspaceFacade';
 
 export type {
   PlatformApiResult,

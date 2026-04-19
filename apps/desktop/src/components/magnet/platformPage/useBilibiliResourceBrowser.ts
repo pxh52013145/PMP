@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
-  listBilibiliFavoriteFolders,
-  listBilibiliFavoriteResources,
-  listBilibiliRecommendedResources,
-  searchBilibiliResources,
-  searchBilibiliResourceByBvid,
+  BILIBILI_CONNECTOR_ID,
+  listPlatformWorkspaceCollectionResources,
+  listPlatformWorkspaceCollections,
+  listPlatformWorkspaceRecommendedResources,
+  resolvePlatformWorkspaceResource,
+  searchPlatformWorkspaceResources,
   type BilibiliFavoriteFolderItem,
   type BilibiliFavoriteResourceItem,
   type BilibiliFavoriteResourcePage,
+  type PlatformWorkspaceCollectionItem,
+  type PlatformWorkspaceResourceItem,
+  type PlatformWorkspaceResourcePage,
 } from '../../../modules/music-platform';
 
 const BILIBILI_RESOURCE_PAGE_SIZE = 40;
@@ -71,6 +75,51 @@ function parseSearchKeywordFromResourceFolderId(folderId: string): string | null
   if (!normalizedFolderId.startsWith(prefix)) return null;
   const keyword = normalizedFolderId.slice(prefix.length).trim();
   return keyword.length > 0 ? keyword : null;
+}
+
+function mapWorkspaceCollectionToBilibiliFolder(
+  item: PlatformWorkspaceCollectionItem
+): BilibiliFavoriteFolderItem {
+  return {
+    folderId: item.collectionId,
+    title: item.title,
+    mediaCount: item.trackCount,
+    coverUrl: item.coverUrl,
+    updatedAtMs: item.updatedAtMs,
+  };
+}
+
+function mapWorkspaceResourceToBilibiliItem(
+  item: PlatformWorkspaceResourceItem
+): BilibiliFavoriteResourceItem {
+  return {
+    resourceId: item.resourceId,
+    title: item.title,
+    ownerName: item.ownerName || item.artistNames,
+    durationSeconds: item.durationSeconds,
+    coverUrl: item.coverUrl,
+    sourceLocator: item.sourceLocator,
+    lyricLocator: item.lyricLocator,
+    bvid: item.bvid,
+    cid: item.cid,
+    contentKind: item.contentKind || 'unknown',
+  };
+}
+
+function mapWorkspacePageToBilibiliPage(
+  page: PlatformWorkspaceResourcePage | null,
+  fallbackFolderId: string
+): BilibiliFavoriteResourcePage | null {
+  if (!page) return null;
+  const folderId = page.sourceId.trim() || fallbackFolderId;
+  return {
+    folderId,
+    pageNum: page.pageNum,
+    pageSize: page.pageSize,
+    total: page.total,
+    hasMore: page.hasMore,
+    items: page.items.map(mapWorkspaceResourceToBilibiliItem),
+  };
 }
 
 function mergeResourcePageItems(
@@ -157,7 +206,12 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
 
     setFolderLoading(true);
     try {
-      const folders = await listBilibiliFavoriteFolders(bilibiliInstanceId);
+      const folders = (
+        await listPlatformWorkspaceCollections({
+          connectorId: BILIBILI_CONNECTOR_ID,
+          instanceId: bilibiliInstanceId,
+        })
+      ).map(mapWorkspaceCollectionToBilibiliFolder);
       setBilibiliFolders(folders);
       setFolderError(null);
 
@@ -191,7 +245,13 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     setResourceLoading(true);
     try {
       setResourceSourceKey('recommended');
-      const page = await listBilibiliRecommendedResources(bilibiliInstanceId);
+      const page = mapWorkspacePageToBilibiliPage(
+        await listPlatformWorkspaceRecommendedResources({
+          connectorId: BILIBILI_CONNECTOR_ID,
+          instanceId: bilibiliInstanceId,
+        }),
+        'recommended'
+      );
       setResourcePage(
         page
           ? {
@@ -227,12 +287,16 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       setResourceLoading(true);
       try {
         setResourceSourceKey(`search:${normalizedKeyword.toLowerCase()}`);
-        const page = await searchBilibiliResources({
-          keyword: normalizedKeyword,
-          pageNum: 1,
-          pageSize: BILIBILI_RESOURCE_PAGE_SIZE,
-          instanceId: bilibiliInstanceId,
-        });
+        const page = mapWorkspacePageToBilibiliPage(
+          await searchPlatformWorkspaceResources({
+            connectorId: BILIBILI_CONNECTOR_ID,
+            keyword: normalizedKeyword,
+            pageNum: 1,
+            pageSize: BILIBILI_RESOURCE_PAGE_SIZE,
+            instanceId: bilibiliInstanceId,
+          }),
+          `bilibili:search:${normalizedKeyword}`
+        );
         setResourcePage(
           page
             ? {
@@ -273,12 +337,16 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       try {
         setResourceSourceKey(`folder:${normalizedFolderId}`);
         const requestFolderPage = async (pageNum: number, pageSize: number) =>
-          listBilibiliFavoriteResources({
-            folderId: normalizedFolderId,
-            pageNum,
-            pageSize,
-            instanceId: bilibiliInstanceId,
-          });
+          mapWorkspacePageToBilibiliPage(
+            await listPlatformWorkspaceCollectionResources({
+              connectorId: BILIBILI_CONNECTOR_ID,
+              collectionId: normalizedFolderId,
+              pageNum,
+              pageSize,
+              instanceId: bilibiliInstanceId,
+            }),
+            normalizedFolderId
+          );
 
         let page = await requestFolderPage(1, BILIBILI_RESOURCE_PAGE_SIZE);
         const expectedFolderCount =
@@ -355,20 +423,28 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       let nextPage: BilibiliFavoriteResourcePage | null = null;
 
       if (searchKeyword) {
-        nextPage = await searchBilibiliResources({
-          keyword: searchKeyword,
-          pageNum: nextPageNum,
-          pageSize,
-          instanceId: bilibiliInstanceId,
-        });
-      } else {
-        const requestFolderPage = async (pageNum: number) =>
-          listBilibiliFavoriteResources({
-            folderId: normalizedFolderId,
-            pageNum,
+        nextPage = mapWorkspacePageToBilibiliPage(
+          await searchPlatformWorkspaceResources({
+            connectorId: BILIBILI_CONNECTOR_ID,
+            keyword: searchKeyword,
+            pageNum: nextPageNum,
             pageSize,
             instanceId: bilibiliInstanceId,
-          });
+          }),
+          `bilibili:search:${searchKeyword}`
+        );
+      } else {
+        const requestFolderPage = async (pageNum: number) =>
+          mapWorkspacePageToBilibiliPage(
+            await listPlatformWorkspaceCollectionResources({
+              connectorId: BILIBILI_CONNECTOR_ID,
+              collectionId: normalizedFolderId,
+              pageNum,
+              pageSize,
+              instanceId: bilibiliInstanceId,
+            }),
+            normalizedFolderId
+          );
 
         nextPage = await requestFolderPage(nextPageNum);
         let probePageNum = nextPageNum;
@@ -438,14 +514,18 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     setResourceError(null);
     setResourceFilterQuery(normalizedQuery);
     try {
-      const result = await searchBilibiliResourceByBvid(normalizedQuery, bilibiliInstanceId);
+      const result = await resolvePlatformWorkspaceResource({
+        connectorId: BILIBILI_CONNECTOR_ID,
+        query: normalizedQuery,
+        instanceId: bilibiliInstanceId,
+      });
       if (!result) {
         setBvidSearchResult(null);
         setBvidSearchError(t('magnet.platform.bilibili.resource.bvSearchNotFound'));
         return true;
       }
 
-      setBvidSearchResult(result);
+      setBvidSearchResult(mapWorkspaceResourceToBilibiliItem(result));
       return true;
     } catch (err) {
       setBvidSearchResult(null);

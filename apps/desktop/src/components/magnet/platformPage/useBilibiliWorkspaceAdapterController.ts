@@ -3,12 +3,13 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { Track } from '../../../services/audio';
 import type { IAudioService } from '../../../services/audio/types';
 import {
+  BILIBILI_CONNECTOR_ID,
   type BilibiliFavoriteFolderItem,
-  listBilibiliPlaybackQualities,
   type BilibiliFavoriteResourceItem,
   type BilibiliPlaybackQualityOption,
   type BilibiliPreparedPlayback,
   type PlatformConnectorFacadeItem,
+  listPlatformWorkspaceQualityOptions,
 } from '../../../modules/music-platform';
 import { usePersistentSetting } from '../../../modules/storage';
 import type { BilibiliWorkspaceProps } from './BilibiliWorkspace';
@@ -23,7 +24,6 @@ import { useBilibiliResourcePlaybackActions } from './useBilibiliResourcePlaybac
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
 
-const BILIBILI_CONNECTOR_ID = 'connector.platform.bilibili' as const;
 const BILIBILI_PLAYBACK_QUALITY_PREFERENCE_KEY =
   'music-platform.bilibili.playback-quality-preference';
 
@@ -344,10 +344,11 @@ export function useBilibiliWorkspaceAdapterController(
 
     setPlaybackQualityLoading(true);
     try {
-      const options = await listBilibiliPlaybackQualities(
-        normalizedSourceLocator,
-        activeBilibiliInstanceId
-      );
+      const options = await listPlatformWorkspaceQualityOptions({
+        connectorId: BILIBILI_CONNECTOR_ID,
+        sourceLocator: normalizedSourceLocator,
+        instanceId: activeBilibiliInstanceId,
+      });
       setPlaybackQualityOptions(mergePlaybackQualityOptions(options));
       setPlaybackQualityProbeLocator(normalizedSourceLocator);
     } catch {

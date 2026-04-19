@@ -226,10 +226,9 @@ export function useMusicTemplateWorkspaceAdapterController(
             connectorId: activeMusicConnectorId,
             displayName: activeMusicDisplayName?.trim() || activeMusicConnectorId,
             instanceId: activeMusicInstanceId,
-            contractRecord: activeMusicContractRecord,
           }
         : null,
-    [activeMusicConnectorId, activeMusicContractRecord, activeMusicDisplayName, activeMusicInstanceId]
+    [activeMusicConnectorId, activeMusicDisplayName, activeMusicInstanceId]
   );
   const musicTemplateWorkspaceActive =
     Boolean(activeMusicConnectorId) && activeWorkspaceConnectorId === activeMusicConnectorId;
