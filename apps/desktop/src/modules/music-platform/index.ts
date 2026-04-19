@@ -82,6 +82,7 @@ export {
 } from './connectorAuth';
 
 export {
+  awaitBuiltinPlatformPackRegistrationsReady,
   installPlatformPackFromFile,
   installPlatformPackFromZipBytes,
   listPlatformPackRegistrations,

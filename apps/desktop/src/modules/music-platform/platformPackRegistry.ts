@@ -143,6 +143,7 @@ let installedPlatformPackSyncStarted = false;
 let installedPlatformPackRefreshPromise: Promise<void> | null = null;
 let builtinPlatformPackBootScheduled = false;
 let builtinPlatformPackBackgroundReconcileScheduled = false;
+let builtinPlatformPackBootPromise: Promise<void> | null = null;
 
 registerPlatformConnectorRegistryInitializer(
   ensureBuiltinPlatformPackRegistrationsInitialized
@@ -977,6 +978,27 @@ async function reconcileBuiltinPlatformPacksInBackground(): Promise<void> {
   await ensureBuiltinPlatformPacksInstalledInStore();
 }
 
+async function runBuiltinPlatformPackBootSequence(): Promise<void> {
+  try {
+    await refreshInstalledPlatformPackRegistrationsFromStore();
+  } catch {
+    // Ignore store bootstrap failures and keep builtin pack recovery in the background path.
+  } finally {
+    ensureInstalledPlatformPackStoreSync();
+  }
+
+  if (platformPackRegistry.size < 1) {
+    try {
+      await reconcileBuiltinPlatformPacksInBackground();
+    } catch {
+      // Keep the registry best-effort during early startup.
+    }
+    return;
+  }
+
+  scheduleBuiltinPlatformPackBackgroundReconcile(false);
+}
+
 function scheduleBuiltinPlatformPackBackgroundReconcile(immediate = false): void {
   if (builtinPlatformPackBackgroundReconcileScheduled) {
     return;
@@ -1002,18 +1024,10 @@ function scheduleBuiltinPlatformPackBootInTauriRuntime(): void {
     return;
   }
   builtinPlatformPackBootScheduled = true;
-
-  scheduleAfterFirstPaint(() => {
-    void (async () => {
-      try {
-        await refreshInstalledPlatformPackRegistrationsFromStore();
-      } catch {
-        // Ignore store bootstrap failures and keep builtin pack recovery in the background path.
-      } finally {
-        ensureInstalledPlatformPackStoreSync();
-        scheduleBuiltinPlatformPackBackgroundReconcile(platformPackRegistry.size < 1);
-      }
-    })();
+  builtinPlatformPackBootPromise = new Promise((resolve) => {
+    scheduleAfterFirstPaint(() => {
+      void runBuiltinPlatformPackBootSequence().finally(resolve);
+    });
   });
 }
 
@@ -1031,6 +1045,11 @@ export function ensureBuiltinPlatformPackRegistrationsInitialized(): void {
   }
 
   scheduleBuiltinPlatformPackBootInTauriRuntime();
+}
+
+export async function awaitBuiltinPlatformPackRegistrationsReady(): Promise<void> {
+  ensureBuiltinPlatformPackRegistrationsInitialized();
+  await (builtinPlatformPackBootPromise ?? Promise.resolve());
 }
 
 export async function installPlatformPackFromZipBytes(

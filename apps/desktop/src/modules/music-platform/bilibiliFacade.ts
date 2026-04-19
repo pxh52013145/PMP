@@ -1,8 +1,13 @@
 import { ConnectorScopedLruTtlCache } from './connectorScopedCache';
 import {
-  callPlatformFacadeBinding,
-  type PlatformFacadeRuntimeBucket,
-} from './platformFacadeBindingClient';
+  asPlatformFacadeRecord,
+  createPlatformConnectorFacadeCaller,
+  normalizePlatformFacadeAssetUrl,
+  normalizePlatformFacadePositiveInt,
+  normalizePlatformFacadeString,
+  readPlatformFacadeFiniteNumber,
+  resolvePlatformConnectorFacadeCacheScopeKey,
+} from './platformConnectorFacadeCore';
 import {
   PLATFORM_LIBRARY_BINDING_ID,
   PLATFORM_QUALITY_BINDING_ID,
@@ -10,7 +15,6 @@ import {
   PLATFORM_SEARCH_BINDING_ID,
 } from './platformInstanceApiBinding';
 import { BILIBILI_CONNECTOR_ID } from './platformConnectorModel';
-import { isTauriRuntime } from '../../utils/tauriRuntime';
 
 export interface BilibiliFavoriteFolderItem {
   folderId: string;
@@ -86,10 +90,16 @@ const BILIBILI_COVER_ASSET_CACHE = new ConnectorScopedLruTtlCache<string>({
   maxEntriesPerConnector: 360,
   defaultTtlMs: 10 * 60 * 1000,
 });
+const callBilibiliBinding = createPlatformConnectorFacadeCaller({
+  connectorId: BILIBILI_CONNECTOR_ID,
+  displayName: BILIBILI_DISPLAY_NAME,
+});
 
 function resolveBilibiliCacheScopeKey(instanceId?: string | null): string {
-  const normalizedInstanceId = normalizeString(instanceId);
-  return normalizedInstanceId || BILIBILI_CONNECTOR_ID;
+  return resolvePlatformConnectorFacadeCacheScopeKey(
+    BILIBILI_CONNECTOR_ID,
+    instanceId
+  );
 }
 
 function cloneResourceItem(item: BilibiliFavoriteResourceItem): BilibiliFavoriteResourceItem {
@@ -117,90 +127,55 @@ function clonePlaybackQualityOptions(
   }));
 }
 
-function normalizeString(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-async function normalizeBilibiliCoverAssetResult(value: unknown): Promise<string | undefined> {
-  const normalized = normalizeString(value);
-  if (!normalized) return undefined;
-
-  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(normalized) && !/^[a-zA-Z]:[\\/]/.test(normalized)) {
-    return normalized;
-  }
-
-  if (/^[a-zA-Z]:[\\/]/.test(normalized) || normalized.startsWith('/')) {
-    if (isTauriRuntime()) {
-      const tauriApi = await import('@tauri-apps/api/tauri');
-      if (typeof tauriApi.convertFileSrc === 'function') {
-        return tauriApi.convertFileSrc(normalized);
-      }
-    }
-  }
-
-  return normalized;
-}
-
-function normalizePositiveInt(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
-  return Math.max(0, Math.floor(value));
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
 function mapRuntimeFavoriteFolderItem(value: unknown): BilibiliFavoriteFolderItem | null {
-  const record = asRecord(value);
+  const record = asPlatformFacadeRecord(value);
   if (!record) return null;
 
   const folderId =
-    normalizeString(record.collectionId) || normalizeString(record.folderId);
-  const title = normalizeString(record.title);
+    normalizePlatformFacadeString(record.collectionId) ||
+    normalizePlatformFacadeString(record.folderId);
+  const title = normalizePlatformFacadeString(record.title);
   if (!folderId || !title) return null;
 
   return {
     folderId,
     title,
-    mediaCount: normalizePositiveInt(record.trackCount ?? record.mediaCount),
-    coverUrl: normalizeString(record.coverUrl) || undefined,
-    updatedAtMs: readFiniteNumber(record.updatedAtMs),
+    mediaCount: normalizePlatformFacadePositiveInt(record.trackCount ?? record.mediaCount),
+    coverUrl: normalizePlatformFacadeString(record.coverUrl) || undefined,
+    updatedAtMs: readPlatformFacadeFiniteNumber(record.updatedAtMs),
   };
 }
 
 function mapRuntimeFavoriteResourceItem(value: unknown): BilibiliFavoriteResourceItem | null {
-  const record = asRecord(value);
+  const record = asPlatformFacadeRecord(value);
   if (!record) return null;
 
   const resourceId =
-    normalizeString(record.resourceId) || normalizeString(record.songId);
-  const title = normalizeString(record.title);
-  const sourceLocator = normalizeString(record.sourceLocator);
+    normalizePlatformFacadeString(record.resourceId) ||
+    normalizePlatformFacadeString(record.songId);
+  const title = normalizePlatformFacadeString(record.title);
+  const sourceLocator = normalizePlatformFacadeString(record.sourceLocator);
   if (!resourceId || !title || !sourceLocator) return null;
 
   return {
     resourceId,
     title,
-    ownerName: normalizeString(record.ownerName ?? record.artistNames) || undefined,
-    durationSeconds: readFiniteNumber(record.durationSeconds),
-    coverUrl: normalizeString(record.coverUrl) || undefined,
+    ownerName:
+      normalizePlatformFacadeString(record.ownerName ?? record.artistNames) || undefined,
+    durationSeconds: readPlatformFacadeFiniteNumber(record.durationSeconds),
+    coverUrl: normalizePlatformFacadeString(record.coverUrl) || undefined,
     sourceLocator,
-    lyricLocator: normalizeString(record.lyricLocator) || undefined,
-    bvid: normalizeString(record.bvid) || undefined,
-    cid: normalizeString(record.cid) || undefined,
-    contentKind: normalizeString(record.contentKind) || 'unknown',
+    lyricLocator: normalizePlatformFacadeString(record.lyricLocator) || undefined,
+    bvid: normalizePlatformFacadeString(record.bvid) || undefined,
+    cid: normalizePlatformFacadeString(record.cid) || undefined,
+    contentKind: normalizePlatformFacadeString(record.contentKind) || 'unknown',
   };
 }
 
 function mapRuntimeFavoriteResourcePage(value: unknown): BilibiliFavoriteResourcePage | null | undefined {
   if (value === null) return null;
 
-  const record = asRecord(value);
+  const record = asPlatformFacadeRecord(value);
   if (!record) return undefined;
   if (!Array.isArray(record.items)) return undefined;
 
@@ -208,14 +183,18 @@ function mapRuntimeFavoriteResourcePage(value: unknown): BilibiliFavoriteResourc
     .map(mapRuntimeFavoriteResourceItem)
     .filter((item): item is BilibiliFavoriteResourceItem => Boolean(item));
 
-  const pageNum = normalizePositiveInt(record.pageNum) || 1;
+  const pageNum = normalizePlatformFacadePositiveInt(record.pageNum) || 1;
   const pageSize =
-    normalizePositiveInt(record.pageSize) || Math.max(1, items.length || normalizePositiveInt(record.total));
-  const total = normalizePositiveInt(record.total);
+    normalizePlatformFacadePositiveInt(record.pageSize) ||
+    Math.max(
+      1,
+      items.length || normalizePlatformFacadePositiveInt(record.total)
+    );
+  const total = normalizePlatformFacadePositiveInt(record.total);
   const folderId =
-    normalizeString(record.folderId) ||
-    normalizeString(record.sourceId) ||
-    normalizeString(record.collectionId) ||
+    normalizePlatformFacadeString(record.folderId) ||
+    normalizePlatformFacadeString(record.sourceId) ||
+    normalizePlatformFacadeString(record.collectionId) ||
     'default';
 
   return {
@@ -231,14 +210,14 @@ function mapRuntimeFavoriteResourcePage(value: unknown): BilibiliFavoriteResourc
 function mapRuntimePlayback(value: unknown): BilibiliPreparedPlayback | null | undefined {
   if (value === null) return null;
 
-  const record = asRecord(value);
+  const record = asPlatformFacadeRecord(value);
   if (!record) return undefined;
 
-  const sourceLocator = normalizeString(record.sourceLocator);
-  const streamUrl = normalizeString(record.streamUrl);
-  const cachePath = normalizeString(record.cachePath);
-  const selectedQualityKey = normalizeString(record.selectedQualityKey);
-  const selectedQualityLabel = normalizeString(record.selectedQualityLabel);
+  const sourceLocator = normalizePlatformFacadeString(record.sourceLocator);
+  const streamUrl = normalizePlatformFacadeString(record.streamUrl);
+  const cachePath = normalizePlatformFacadeString(record.cachePath);
+  const selectedQualityKey = normalizePlatformFacadeString(record.selectedQualityKey);
+  const selectedQualityLabel = normalizePlatformFacadeString(record.selectedQualityLabel);
   if (!sourceLocator || !streamUrl || !cachePath || !selectedQualityKey || !selectedQualityLabel) {
     return undefined;
   }
@@ -247,9 +226,9 @@ function mapRuntimePlayback(value: unknown): BilibiliPreparedPlayback | null | u
     sourceLocator,
     streamUrl,
     cachePath,
-    mimeType: normalizeString(record.mimeType) || undefined,
-    durationSeconds: readFiniteNumber(record.durationSeconds),
-    contentKind: normalizeString(record.contentKind) || 'unknown',
+    mimeType: normalizePlatformFacadeString(record.mimeType) || undefined,
+    durationSeconds: readPlatformFacadeFiniteNumber(record.durationSeconds),
+    contentKind: normalizePlatformFacadeString(record.contentKind) || 'unknown',
     selectedQualityKey,
     selectedQualityLabel,
   };
@@ -258,15 +237,15 @@ function mapRuntimePlayback(value: unknown): BilibiliPreparedPlayback | null | u
 function mapRuntimePlaybackQualityOptions(
   value: unknown
 ): BilibiliPlaybackQualityOption[] | undefined {
-  const record = asRecord(value);
+  const record = asPlatformFacadeRecord(value);
   if (!record || !Array.isArray(record.options)) return undefined;
 
   return record.options
     .map((item) => {
-      const optionRecord = asRecord(item);
+      const optionRecord = asPlatformFacadeRecord(item);
       if (!optionRecord) return null;
-      const key = normalizeString(optionRecord.key);
-      const label = normalizeString(optionRecord.label) || key;
+      const key = normalizePlatformFacadeString(optionRecord.key);
+      const label = normalizePlatformFacadeString(optionRecord.label) || key;
       if (!key) return null;
       return {
         key,
@@ -278,41 +257,19 @@ function mapRuntimePlaybackQualityOptions(
 }
 
 function mapRuntimeCoverAssetUrl(value: unknown): string | undefined {
-  const direct = normalizeString(value);
+  const direct = normalizePlatformFacadeString(value);
   if (direct) return direct;
 
-  const record = asRecord(value);
+  const record = asPlatformFacadeRecord(value);
   if (!record) return undefined;
 
   return (
-    normalizeString(record.assetUrl) ||
-    normalizeString(record.cachePath) ||
-    normalizeString(record.path) ||
-    normalizeString(record.url) ||
+    normalizePlatformFacadeString(record.assetUrl) ||
+    normalizePlatformFacadeString(record.cachePath) ||
+    normalizePlatformFacadeString(record.path) ||
+    normalizePlatformFacadeString(record.url) ||
     undefined
   );
-}
-
-async function callBilibiliBinding<T>(options: {
-  instanceId?: string | null;
-  bindingId: string;
-  method: string;
-  payload?: Record<string, unknown>;
-  runtimeBucket: PlatformFacadeRuntimeBucket;
-  runtimeMethods?: string[];
-  map: (value: unknown) => T | undefined;
-}): Promise<T> {
-  return callPlatformFacadeBinding<T>({
-    connectorId: BILIBILI_CONNECTOR_ID,
-    displayName: BILIBILI_DISPLAY_NAME,
-    instanceId: options.instanceId,
-    bindingId: options.bindingId,
-    method: options.method,
-    payload: options.payload,
-    runtimeBucket: options.runtimeBucket,
-    runtimeMethods: options.runtimeMethods,
-    map: options.map,
-  });
 }
 
 export async function listBilibiliFavoriteFolders(
@@ -326,7 +283,7 @@ export async function listBilibiliFavoriteFolders(
     method: 'listCollections',
     runtimeBucket: 'library',
     map: (value) => {
-      const record = asRecord(value);
+      const record = asPlatformFacadeRecord(value);
       if (!record || !Array.isArray(record.items)) return undefined;
       return record.items
         .map(mapRuntimeFavoriteFolderItem)
@@ -343,7 +300,7 @@ export async function listBilibiliFavoriteResources(options: {
   preferRuntime?: boolean;
 }): Promise<BilibiliFavoriteResourcePage | null> {
   void options.preferRuntime;
-  const folderId = normalizeString(options.folderId);
+  const folderId = normalizePlatformFacadeString(options.folderId);
   if (!folderId) return null;
 
   return callBilibiliBinding<BilibiliFavoriteResourcePage | null>({
@@ -375,16 +332,16 @@ export async function listBilibiliRecommendedResources(
     runtimeBucket: 'recommendations',
     map: (value) => {
       if (value === null) return null;
-      const record = asRecord(value);
+      const record = asPlatformFacadeRecord(value);
       const page = mapRuntimeFavoriteResourcePage(
         record
           ? {
               folderId: 'recommended',
-              pageNum: normalizePositiveInt(record.pageNum) || 1,
+              pageNum: normalizePlatformFacadePositiveInt(record.pageNum) || 1,
               pageSize:
-                normalizePositiveInt(record.pageSize) ||
+                normalizePlatformFacadePositiveInt(record.pageSize) ||
                 Math.max(1, Array.isArray(record.items) ? record.items.length : 0),
-              total: normalizePositiveInt(record.total),
+              total: normalizePlatformFacadePositiveInt(record.total),
               hasMore: record.hasMore === true,
               items: Array.isArray(record.items) ? record.items : [],
             }
@@ -407,7 +364,7 @@ export async function searchBilibiliResources(options: {
   preferRuntime?: boolean;
 }): Promise<BilibiliFavoriteResourcePage | null> {
   void options.preferRuntime;
-  const keyword = normalizeString(options.keyword);
+  const keyword = normalizePlatformFacadeString(options.keyword);
   if (!keyword) return null;
 
   return callBilibiliBinding<BilibiliFavoriteResourcePage | null>({
@@ -431,7 +388,7 @@ export async function searchBilibiliResourceByBvid(
   runtimeOptions?: RuntimePreferenceOptions
 ): Promise<BilibiliFavoriteResourceItem | null> {
   void runtimeOptions;
-  const normalizedBvid = normalizeString(bvid);
+  const normalizedBvid = normalizePlatformFacadeString(bvid);
   if (!normalizedBvid) return null;
   const scopeKey = resolveBilibiliCacheScopeKey(instanceId);
 
@@ -454,7 +411,7 @@ export async function searchBilibiliResourceByBvid(
     runtimeBucket: 'search',
     map: (value) => {
       if (value === null) return null;
-      const record = asRecord(value);
+      const record = asPlatformFacadeRecord(value);
       if (!record) return undefined;
       if (record.item === null) return null;
       return mapRuntimeFavoriteResourceItem(record.item) ?? undefined;
@@ -473,10 +430,11 @@ export async function prepareBilibiliCachedPlayback(
   runtimeOptions?: RuntimePreferenceOptions
 ): Promise<BilibiliPreparedPlayback | null> {
   void runtimeOptions;
-  const normalizedSourceLocator = normalizeString(sourceLocator);
+  const normalizedSourceLocator = normalizePlatformFacadeString(sourceLocator);
   if (!normalizedSourceLocator) return null;
 
-  const normalizedQualityHint = normalizeString(qualityHint) || undefined;
+  const normalizedQualityHint =
+    normalizePlatformFacadeString(qualityHint) || undefined;
   return callBilibiliBinding<BilibiliPreparedPlayback | null>({
     instanceId,
     bindingId: PLATFORM_LIBRARY_BINDING_ID,
@@ -497,7 +455,7 @@ export async function listBilibiliPlaybackQualities(
   runtimeOptions?: RuntimePreferenceOptions
 ): Promise<BilibiliPlaybackQualityOption[]> {
   void runtimeOptions;
-  const normalizedSourceLocator = normalizeString(sourceLocator);
+  const normalizedSourceLocator = normalizePlatformFacadeString(sourceLocator);
   if (!normalizedSourceLocator) return [];
   const scopeKey = resolveBilibiliCacheScopeKey(instanceId);
 
@@ -525,7 +483,7 @@ export async function resolveBilibiliLyricLocator(
   lyricLocator: string,
   instanceId?: string | null
 ): Promise<BilibiliLyricLocatorResolved | null> {
-  const normalizedLocator = normalizeString(lyricLocator);
+  const normalizedLocator = normalizePlatformFacadeString(lyricLocator);
   if (!normalizedLocator) return null;
 
   return callBilibiliBinding<BilibiliLyricLocatorResolved | null>({
@@ -538,18 +496,18 @@ export async function resolveBilibiliLyricLocator(
     runtimeBucket: 'library',
     map: (value) => {
       if (value === null) return null;
-      const record = asRecord(value);
+      const record = asPlatformFacadeRecord(value);
       if (!record) return undefined;
 
-      const locator = normalizeString(record.locator);
-      const format = normalizeString(record.format);
-      const sourceKind = normalizeString(record.sourceKind);
+      const locator = normalizePlatformFacadeString(record.locator);
+      const format = normalizePlatformFacadeString(record.format);
+      const sourceKind = normalizePlatformFacadeString(record.sourceKind);
       if (!locator || !format || !sourceKind) return undefined;
 
       return {
         locator,
         format,
-        lang: normalizeString(record.lang) || undefined,
+        lang: normalizePlatformFacadeString(record.lang) || undefined,
         sourceKind,
       };
     },
@@ -560,7 +518,7 @@ export async function resolveBilibiliCoverAssetUrl(
   coverUrl: string | undefined,
   instanceId?: string | null
 ): Promise<string | undefined> {
-  const normalizedCoverUrl = normalizeString(coverUrl);
+  const normalizedCoverUrl = normalizePlatformFacadeString(coverUrl);
   if (!normalizedCoverUrl) return undefined;
   const cacheScopeKey = resolveBilibiliCacheScopeKey(instanceId);
 
@@ -580,7 +538,7 @@ export async function resolveBilibiliCoverAssetUrl(
   });
 
   const normalizedResolved =
-    (await normalizeBilibiliCoverAssetResult(resolved)) ?? normalizedCoverUrl;
+    (await normalizePlatformFacadeAssetUrl(resolved)) ?? normalizedCoverUrl;
 
   BILIBILI_COVER_ASSET_CACHE.set(cacheScopeKey, normalizedCoverUrl, normalizedResolved);
   return normalizedResolved;

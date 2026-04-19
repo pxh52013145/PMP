@@ -1,8 +1,12 @@
 import { ConnectorScopedLruTtlCache } from './connectorScopedCache';
 import {
-  callPlatformFacadeBinding,
-  type PlatformFacadeRuntimeBucket,
-} from './platformFacadeBindingClient';
+  asPlatformFacadeRecord,
+  createPlatformConnectorFacadeCaller,
+  normalizePlatformFacadePositiveInt,
+  normalizePlatformFacadeString,
+  readPlatformFacadeFiniteNumber,
+  resolvePlatformConnectorFacadeCacheScopeKey,
+} from './platformConnectorFacadeCore';
 import {
   PLATFORM_LIBRARY_BINDING_ID,
   PLATFORM_RECOMMENDATIONS_BINDING_ID,
@@ -77,28 +81,16 @@ const NETEASE_SONG_PAGE_CACHE = new ConnectorScopedLruTtlCache<NeteaseSongPage |
   maxEntriesPerConnector: 64,
   defaultTtlMs: 75 * 1000,
 });
+const callNeteaseBinding = createPlatformConnectorFacadeCaller({
+  connectorId: NETEASE_CONNECTOR_ID,
+  displayName: NETEASE_DISPLAY_NAME,
+});
 
 function resolveNeteaseCacheScopeKey(instanceId?: string | null): string {
-  const normalizedInstanceId = normalizeString(instanceId);
-  return normalizedInstanceId || NETEASE_CONNECTOR_ID;
-}
-
-function normalizeString(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function normalizePositiveInt(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
-  return Math.max(0, Math.floor(value));
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
+  return resolvePlatformConnectorFacadeCacheScopeKey(
+    NETEASE_CONNECTOR_ID,
+    instanceId
+  );
 }
 
 function cloneSongPage(page: NeteaseSongPage | null): NeteaseSongPage | null {
@@ -147,40 +139,43 @@ function cloneRecommendedPlaylists(
 function mapRuntimePlaylistItem(
   value: unknown
 ): NeteaseUserPlaylistItem | NeteaseRecommendedPlaylistItem | null {
-  const record = asRecord(value);
+  const record = asPlatformFacadeRecord(value);
   if (!record) return null;
 
   const playlistId =
-    normalizeString(record.playlistId) || normalizeString(record.collectionId);
-  const title = normalizeString(record.title);
+    normalizePlatformFacadeString(record.playlistId) ||
+    normalizePlatformFacadeString(record.collectionId);
+  const title = normalizePlatformFacadeString(record.title);
   if (!playlistId || !title) return null;
 
   return {
     playlistId,
     title,
-    trackCount: normalizePositiveInt(record.trackCount),
-    coverUrl: normalizeString(record.coverUrl) || undefined,
-    updatedAtMs: readFiniteNumber(record.updatedAtMs),
+    trackCount: normalizePlatformFacadePositiveInt(record.trackCount),
+    coverUrl: normalizePlatformFacadeString(record.coverUrl) || undefined,
+    updatedAtMs: readPlatformFacadeFiniteNumber(record.updatedAtMs),
   };
 }
 
 function mapRuntimeSongItem(value: unknown): NeteaseSongItem | null {
-  const record = asRecord(value);
+  const record = asPlatformFacadeRecord(value);
   if (!record) return null;
 
-  const songId = normalizeString(record.songId) || normalizeString(record.resourceId);
-  const title = normalizeString(record.title);
-  const sourceLocator = normalizeString(record.sourceLocator);
-  const webUrl = normalizeString(record.webUrl) || sourceLocator;
+  const songId =
+    normalizePlatformFacadeString(record.songId) ||
+    normalizePlatformFacadeString(record.resourceId);
+  const title = normalizePlatformFacadeString(record.title);
+  const sourceLocator = normalizePlatformFacadeString(record.sourceLocator);
+  const webUrl = normalizePlatformFacadeString(record.webUrl) || sourceLocator;
   if (!songId || !title || !sourceLocator || !webUrl) return null;
 
   return {
     songId,
     title,
-    artistNames: normalizeString(record.artistNames),
-    albumName: normalizeString(record.albumName) || undefined,
-    durationSeconds: readFiniteNumber(record.durationSeconds),
-    coverUrl: normalizeString(record.coverUrl) || undefined,
+    artistNames: normalizePlatformFacadeString(record.artistNames),
+    albumName: normalizePlatformFacadeString(record.albumName) || undefined,
+    durationSeconds: readPlatformFacadeFiniteNumber(record.durationSeconds),
+    coverUrl: normalizePlatformFacadeString(record.coverUrl) || undefined,
     sourceLocator,
     webUrl,
   };
@@ -189,7 +184,7 @@ function mapRuntimeSongItem(value: unknown): NeteaseSongItem | null {
 function mapRuntimeSongPage(value: unknown): NeteaseSongPage | null | undefined {
   if (value === null) return null;
 
-  const record = asRecord(value);
+  const record = asPlatformFacadeRecord(value);
   if (!record || !Array.isArray(record.items)) return undefined;
 
   const items = record.items
@@ -197,13 +192,16 @@ function mapRuntimeSongPage(value: unknown): NeteaseSongPage | null | undefined 
     .filter((item): item is NeteaseSongItem => Boolean(item));
 
   return {
-    sourceKind: normalizeString(record.sourceKind) || 'unknown',
-    sourceId: normalizeString(record.sourceId) || 'unknown',
-    pageNum: normalizePositiveInt(record.pageNum) || 1,
+    sourceKind: normalizePlatformFacadeString(record.sourceKind) || 'unknown',
+    sourceId: normalizePlatformFacadeString(record.sourceId) || 'unknown',
+    pageNum: normalizePlatformFacadePositiveInt(record.pageNum) || 1,
     pageSize:
-      normalizePositiveInt(record.pageSize) ||
-      Math.max(1, items.length || normalizePositiveInt(record.total)),
-    total: normalizePositiveInt(record.total),
+      normalizePlatformFacadePositiveInt(record.pageSize) ||
+      Math.max(
+        1,
+        items.length || normalizePlatformFacadePositiveInt(record.total)
+      ),
+    total: normalizePlatformFacadePositiveInt(record.total),
     hasMore: record.hasMore === true,
     items,
   };
@@ -212,47 +210,29 @@ function mapRuntimeSongPage(value: unknown): NeteaseSongPage | null | undefined 
 function mapRuntimePreparedPlayback(value: unknown): NeteasePreparedPlayback | null | undefined {
   if (value === null) return null;
 
-  const record = asRecord(value);
+  const record = asPlatformFacadeRecord(value);
   if (!record) return undefined;
 
-  const sourceLocator = normalizeString(record.sourceLocator);
-  const streamUrl = normalizeString(record.streamUrl);
-  const cachePath = normalizeString(record.cachePath);
-  const songId = normalizeString(record.resourceId) || normalizeString(record.songId);
+  const sourceLocator = normalizePlatformFacadeString(record.sourceLocator);
+  const streamUrl = normalizePlatformFacadeString(record.streamUrl);
+  const cachePath = normalizePlatformFacadeString(record.cachePath);
+  const songId =
+    normalizePlatformFacadeString(record.resourceId) ||
+    normalizePlatformFacadeString(record.songId);
   if (!sourceLocator || !streamUrl || !cachePath || !songId) return undefined;
 
   return {
     sourceLocator,
     streamUrl,
     cachePath,
-    mimeType: normalizeString(record.mimeType) || undefined,
-    durationSeconds: readFiniteNumber(record.durationSeconds),
+    mimeType: normalizePlatformFacadeString(record.mimeType) || undefined,
+    durationSeconds: readPlatformFacadeFiniteNumber(record.durationSeconds),
     songId,
-    selectedQualityKey: normalizeString(record.selectedQualityKey) || undefined,
-    selectedQualityLabel: normalizeString(record.selectedQualityLabel) || undefined,
+    selectedQualityKey:
+      normalizePlatformFacadeString(record.selectedQualityKey) || undefined,
+    selectedQualityLabel:
+      normalizePlatformFacadeString(record.selectedQualityLabel) || undefined,
   };
-}
-
-async function callNeteaseBinding<T>(options: {
-  instanceId?: string | null;
-  bindingId: string;
-  method: string;
-  payload?: Record<string, unknown>;
-  runtimeBucket: PlatformFacadeRuntimeBucket;
-  runtimeMethods?: string[];
-  map: (value: unknown) => T | undefined;
-}): Promise<T> {
-  return callPlatformFacadeBinding<T>({
-    connectorId: NETEASE_CONNECTOR_ID,
-    displayName: NETEASE_DISPLAY_NAME,
-    instanceId: options.instanceId,
-    bindingId: options.bindingId,
-    method: options.method,
-    payload: options.payload,
-    runtimeBucket: options.runtimeBucket,
-    runtimeMethods: options.runtimeMethods,
-    map: options.map,
-  });
 }
 
 export function clearNeteaseFacadeCaches(instanceId?: string | null): void {
@@ -283,7 +263,7 @@ export async function listNeteaseRecommendedPlaylists(options?: {
     },
     runtimeBucket: 'recommendations',
     map: (value) => {
-      const record = asRecord(value);
+      const record = asPlatformFacadeRecord(value);
       if (!record || !Array.isArray(record.collections)) return undefined;
       return record.collections
         .map(mapRuntimePlaylistItem)
@@ -317,16 +297,16 @@ export async function listNeteaseRecommendedSongs(options?: {
     runtimeBucket: 'recommendations',
     map: (value) => {
       if (value === null) return null;
-      const record = asRecord(value);
+      const record = asPlatformFacadeRecord(value);
       if (!record) return undefined;
       return mapRuntimeSongPage({
-        sourceKind: normalizeString(record.sourceKind) || 'recommended',
-        sourceId: normalizeString(record.sourceId) || 'recommended',
-        pageNum: normalizePositiveInt(record.pageNum) || 1,
+        sourceKind: normalizePlatformFacadeString(record.sourceKind) || 'recommended',
+        sourceId: normalizePlatformFacadeString(record.sourceId) || 'recommended',
+        pageNum: normalizePlatformFacadePositiveInt(record.pageNum) || 1,
         pageSize:
-          normalizePositiveInt(record.pageSize) ||
+          normalizePlatformFacadePositiveInt(record.pageSize) ||
           Math.max(1, Array.isArray(record.items) ? record.items.length : 0),
-        total: normalizePositiveInt(record.total),
+        total: normalizePlatformFacadePositiveInt(record.total),
         hasMore: record.hasMore === true,
         items: Array.isArray(record.items) ? record.items : [],
       });
@@ -358,7 +338,7 @@ export async function listNeteaseUserPlaylists(options?: {
     },
     runtimeBucket: 'library',
     map: (value) => {
-      const record = asRecord(value);
+      const record = asPlatformFacadeRecord(value);
       if (!record || !Array.isArray(record.items)) return undefined;
       return record.items
         .map(mapRuntimePlaylistItem)
@@ -379,7 +359,7 @@ export async function listNeteasePlaylistTracks(
   }
 ): Promise<NeteaseSongPage | null> {
   void options?.preferRuntime;
-  const normalizedPlaylistId = normalizeString(playlistId);
+  const normalizedPlaylistId = normalizePlatformFacadeString(playlistId);
   if (!normalizedPlaylistId) return null;
   const scopeKey = resolveNeteaseCacheScopeKey(options?.instanceId);
 
@@ -416,12 +396,14 @@ export async function searchNeteaseSongs(options: {
   preferRuntime?: boolean;
 }): Promise<NeteaseSongPage | null> {
   void options.preferRuntime;
-  const keyword = normalizeString(options.keyword);
+  const keyword = normalizePlatformFacadeString(options.keyword);
   if (!keyword) return null;
   const scopeKey = resolveNeteaseCacheScopeKey(options.instanceId);
 
-  const pageNum = normalizePositiveInt(options.pageNum ?? 1) || 1;
-  const pageSize = normalizePositiveInt(options.pageSize ?? 40) || 40;
+  const pageNum =
+    normalizePlatformFacadePositiveInt(options.pageNum ?? 1) || 1;
+  const pageSize =
+    normalizePlatformFacadePositiveInt(options.pageSize ?? 40) || 40;
   const cacheKey = `search:${keyword.toLowerCase()}|page=${pageNum}|size=${pageSize}`;
   if (!options.forceRefresh) {
     const cached = NETEASE_SONG_PAGE_CACHE.get(scopeKey, cacheKey);
@@ -454,9 +436,10 @@ export async function prepareNeteaseCachedPlayback(
   runtimeOptions?: RuntimePreferenceOptions
 ): Promise<NeteasePreparedPlayback | null> {
   void runtimeOptions;
-  const normalizedSourceLocator = normalizeString(sourceLocator);
+  const normalizedSourceLocator = normalizePlatformFacadeString(sourceLocator);
   if (!normalizedSourceLocator) return null;
-  const normalizedQualityHint = normalizeString(qualityHint) || undefined;
+  const normalizedQualityHint =
+    normalizePlatformFacadeString(qualityHint) || undefined;
 
   return callNeteaseBinding<NeteasePreparedPlayback | null>({
     instanceId,
