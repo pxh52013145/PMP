@@ -3173,6 +3173,7 @@ const neteaseNativeApiCompatBridge = createNativeMusicPlatformApiCompatBridge({
     library: PLATFORM_LIBRARY_BINDING_ID,
     recommendations: PLATFORM_RECOMMENDATIONS_BINDING_ID,
     search: PLATFORM_SEARCH_BINDING_ID,
+    quality: PLATFORM_QUALITY_BINDING_ID,
   },
 });
 

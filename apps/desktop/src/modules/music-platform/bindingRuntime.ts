@@ -349,6 +349,10 @@ export function createPlatformCompatRuntimeFromBindingContract(
       ? {
           listDaily: async (input: Record<string, unknown>) =>
             invokeBinding(contract.apiBindings.recommendations, 'listDaily', input),
+          listRecommendedSongs: async (input: Record<string, unknown>) =>
+            invokeBinding(contract.apiBindings.recommendations, 'listRecommendedSongs', input),
+          listRecommendedPlaylists: async (input: Record<string, unknown>) =>
+            invokeBinding(contract.apiBindings.recommendations, 'listRecommendedPlaylists', input),
         }
       : undefined,
     search: contract.apiBindings.search

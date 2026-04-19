@@ -533,7 +533,7 @@ export async function listPlatformWorkspaceRecommendedCollections(options: {
   return call<PlatformWorkspaceCollectionItem[]>({
     instanceId: options.instanceId,
     bindingId: PLATFORM_RECOMMENDATIONS_BINDING_ID,
-    method: 'listDaily',
+    method: 'listRecommendedPlaylists',
     payload: {
       forceRefresh: options.forceRefresh === true,
     },

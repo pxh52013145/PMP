@@ -1,7 +1,7 @@
 use super::{
     first_payload_string, optional_payload_u32, required_payload_string, serialize_response,
-    PLATFORM_LIBRARY_BINDING_ID, PLATFORM_PAGES_BINDING_ID, PLATFORM_RECOMMENDATIONS_BINDING_ID,
-    PLATFORM_SEARCH_BINDING_ID,
+    PLATFORM_LIBRARY_BINDING_ID, PLATFORM_PAGES_BINDING_ID, PLATFORM_QUALITY_BINDING_ID,
+    PLATFORM_RECOMMENDATIONS_BINDING_ID, PLATFORM_SEARCH_BINDING_ID,
 };
 use crate::music_platform_runtime::MusicPlatformRuntimeHost as AppHandle;
 use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyInit, KeyIvInit};
@@ -20,7 +20,7 @@ use reqwest::{
     blocking::Client,
     header::{HeaderMap, HeaderValue, CONTENT_TYPE, COOKIE, REFERER, SET_COOKIE, USER_AGENT},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{
     collections::HashMap,
@@ -69,6 +69,7 @@ const NETEASE_KEYRING_SERVICE: &str = "pixel-matrix-player.netease";
 const NETEASE_KEYRING_TOKEN_REF_PREFIX: &str = "keyring://netease-cookie/";
 const NETEASE_DEBUG_LOG_FILE_NAME: &str = "netease-auth.log";
 const NETEASE_DEBUG_LOG_MAX_BYTES: u64 = 512 * 1024;
+const NETEASE_PLAYBACK_QUALITY_SETTINGS_FILE_NAME: &str = "playback-quality-settings.json";
 
 const NETEASE_QR_KEY_API: &str = "/api/login/qrcode/unikey";
 const NETEASE_QR_CHECK_API: &str = "/api/login/qrcode/client/login";
@@ -190,6 +191,29 @@ pub struct NeteasePlaybackPrepared {
     pub selected_quality_label: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NeteasePlaybackQualityOption {
+    pub key: String,
+    pub label: String,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NeteasePlaybackQualityState {
+    pub options: Vec<NeteasePlaybackQualityOption>,
+    pub current_key: String,
+    pub current_label: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NeteasePlaybackQualitySettingsState {
+    #[serde(default)]
+    preferred_by_instance: HashMap<String, String>,
+}
+
 #[derive(Debug, Clone)]
 struct QrSessionState {
     instance_id: String,
@@ -225,6 +249,9 @@ static ANONYMOUS_COOKIE_STATE: Lazy<Mutex<Option<AuthCookieState>>> =
 static NETEASE_DEBUG_LOG_PATH: OnceCell<PathBuf> = OnceCell::new();
 static NETEASE_DEBUG_LOG_INITIALIZED: OnceCell<()> = OnceCell::new();
 static NETEASE_DEBUG_LOG_WRITE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static NETEASE_PLAYBACK_QUALITY_SETTINGS_STATE: Lazy<
+    Mutex<Option<NeteasePlaybackQualitySettingsState>>,
+> = Lazy::new(|| Mutex::new(None));
 static NETEASE_SESSION_DEVICE_ID: Lazy<String> = Lazy::new(|| generate_random_hex_string(52, true));
 static NETEASE_SESSION_WNMCID: Lazy<String> = Lazy::new(generate_wnmcid);
 static NETEASE_SESSION_NTES_NUID: Lazy<String> =
@@ -316,6 +343,13 @@ fn lock_anonymous_cookie_state() -> Result<MutexGuard<'static, Option<AuthCookie
         .map_err(|_| "Netease anonymous cookie store is locked".to_string())
 }
 
+fn lock_playback_quality_settings_state(
+) -> Result<MutexGuard<'static, Option<NeteasePlaybackQualitySettingsState>>, String> {
+    NETEASE_PLAYBACK_QUALITY_SETTINGS_STATE
+        .lock()
+        .map_err(|_| "Netease playback quality settings store is locked".to_string())
+}
+
 fn cleanup_expired_qr_sessions(now: i64) {
     if let Ok(mut sessions) = lock_qr_sessions() {
         sessions.retain(|_, session| session.expires_at_ms > now);
@@ -328,6 +362,125 @@ fn normalize_instance_id(instance_id: Option<&str>) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or(NETEASE_DEFAULT_INSTANCE_ID)
         .to_string()
+}
+
+fn resolve_netease_settings_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path_resolver()
+        .app_data_dir()
+        .ok_or_else(|| "Failed to resolve app data directory for Netease settings".to_string())?;
+    let dir = app_data_dir.join("music-platform").join("netease");
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("Failed to create Netease settings directory: {error}"))?;
+    Ok(dir)
+}
+
+fn resolve_netease_playback_quality_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(resolve_netease_settings_dir(app)?.join(NETEASE_PLAYBACK_QUALITY_SETTINGS_FILE_NAME))
+}
+
+fn normalize_playback_quality_settings_state(
+    mut state: NeteasePlaybackQualitySettingsState,
+) -> NeteasePlaybackQualitySettingsState {
+    state.preferred_by_instance = state
+        .preferred_by_instance
+        .into_iter()
+        .filter_map(|(instance_id, quality_key)| {
+            let normalized_instance_id = normalize_instance_id(Some(instance_id.as_str()));
+            if normalized_instance_id.is_empty() {
+                return None;
+            }
+            Some((
+                normalized_instance_id,
+                normalize_playback_quality_hint(Some(quality_key.as_str())).to_string(),
+            ))
+        })
+        .collect();
+    state
+}
+
+fn read_playback_quality_settings_from_disk(
+    app: &AppHandle,
+) -> Result<NeteasePlaybackQualitySettingsState, String> {
+    let path = resolve_netease_playback_quality_settings_path(app)?;
+    if !path.exists() {
+        return Ok(NeteasePlaybackQualitySettingsState::default());
+    }
+
+    let payload = fs::read(&path).map_err(|error| {
+        format!("Failed to read Netease playback quality settings from disk: {error}")
+    })?;
+    let parsed = serde_json::from_slice::<NeteasePlaybackQualitySettingsState>(&payload).map_err(
+        |error| format!("Failed to parse Netease playback quality settings from disk: {error}"),
+    )?;
+    Ok(normalize_playback_quality_settings_state(parsed))
+}
+
+fn write_playback_quality_settings_to_disk(
+    app: &AppHandle,
+    state: &NeteasePlaybackQualitySettingsState,
+) -> Result<(), String> {
+    let path = resolve_netease_playback_quality_settings_path(app)?;
+    let payload = serde_json::to_vec_pretty(state).map_err(|error| {
+        format!("Failed to encode Netease playback quality settings for disk: {error}")
+    })?;
+    fs::write(path, payload).map_err(|error| {
+        format!("Failed to write Netease playback quality settings to disk: {error}")
+    })
+}
+
+fn get_playback_quality_settings_state(
+    app: &AppHandle,
+) -> Result<NeteasePlaybackQualitySettingsState, String> {
+    let mut guard = lock_playback_quality_settings_state()?;
+    if let Some(state) = guard.as_ref() {
+        return Ok(state.clone());
+    }
+
+    let loaded = read_playback_quality_settings_from_disk(app).unwrap_or_default();
+    *guard = Some(loaded.clone());
+    Ok(loaded)
+}
+
+fn persist_playback_quality_settings_state(
+    app: &AppHandle,
+    state: NeteasePlaybackQualitySettingsState,
+) -> Result<NeteasePlaybackQualitySettingsState, String> {
+    let normalized = normalize_playback_quality_settings_state(state);
+    {
+        let mut guard = lock_playback_quality_settings_state()?;
+        *guard = Some(normalized.clone());
+    }
+    write_playback_quality_settings_to_disk(app, &normalized)?;
+    Ok(normalized)
+}
+
+fn get_preferred_playback_quality_key(
+    app: &AppHandle,
+    instance_id: Option<&str>,
+) -> Result<String, String> {
+    let normalized_instance_id = normalize_instance_id(instance_id);
+    let state = get_playback_quality_settings_state(app)?;
+    Ok(state
+        .preferred_by_instance
+        .get(&normalized_instance_id)
+        .cloned()
+        .unwrap_or_else(|| "auto".to_string()))
+}
+
+fn set_preferred_playback_quality_key(
+    app: &AppHandle,
+    instance_id: Option<&str>,
+    quality_key: &str,
+) -> Result<String, String> {
+    let normalized_instance_id = normalize_instance_id(instance_id);
+    let normalized_quality_key = normalize_playback_quality_hint(Some(quality_key)).to_string();
+    let mut state = get_playback_quality_settings_state(app)?;
+    state
+        .preferred_by_instance
+        .insert(normalized_instance_id, normalized_quality_key.clone());
+    persist_playback_quality_settings_state(app, state)?;
+    Ok(normalized_quality_key)
 }
 
 fn migrate_default_instance_auth_if_needed(
@@ -1763,6 +1916,42 @@ fn quality_key_from_bitrate(bitrate: i64) -> &'static str {
     "auto"
 }
 
+fn build_playback_quality_options() -> Vec<NeteasePlaybackQualityOption> {
+    ["auto", "standard", "higher", "exhigh", "lossless"]
+        .iter()
+        .map(|quality_key| NeteasePlaybackQualityOption {
+            key: (*quality_key).to_string(),
+            label: quality_label_by_key(quality_key).to_string(),
+            available: true,
+        })
+        .collect()
+}
+
+fn get_playback_quality_state(
+    app: &AppHandle,
+    instance_id: Option<&str>,
+) -> Result<NeteasePlaybackQualityState, String> {
+    let current_key = get_preferred_playback_quality_key(app, instance_id)?;
+    Ok(NeteasePlaybackQualityState {
+        options: build_playback_quality_options(),
+        current_label: quality_label_by_key(&current_key).to_string(),
+        current_key,
+    })
+}
+
+fn set_playback_quality_preference(
+    app: &AppHandle,
+    instance_id: Option<&str>,
+    quality_key: &str,
+) -> Result<NeteasePlaybackQualityState, String> {
+    let current_key = set_preferred_playback_quality_key(app, instance_id, quality_key)?;
+    Ok(NeteasePlaybackQualityState {
+        options: build_playback_quality_options(),
+        current_label: quality_label_by_key(&current_key).to_string(),
+        current_key,
+    })
+}
+
 pub fn init(app: &AppHandle) -> Result<(), String> {
     init_netease_debug_logging(app);
     ensure_connector(app)?;
@@ -2562,6 +2751,27 @@ pub fn dispatch_api(
                 "Unsupported {DISPLAY_NAME} search method: {method}"
             )),
         },
+        PLATFORM_QUALITY_BINDING_ID => match method {
+            "listOptions" | "getCurrent" => {
+                serialize_response(get_playback_quality_state(app, instance_id)?)
+            }
+            "listPlaybackQualities" => serialize_response(build_playback_quality_options()),
+            "setPreferred" => {
+                let quality_key = required_payload_string(
+                    payload,
+                    &["qualityKey", "key", "qualityHint"],
+                    "payload.qualityKey or payload.key or payload.qualityHint",
+                )?;
+                serialize_response(set_playback_quality_preference(
+                    app,
+                    instance_id,
+                    &quality_key,
+                )?)
+            }
+            _ => Err(format!(
+                "Unsupported {DISPLAY_NAME} quality method: {method}"
+            )),
+        },
         PLATFORM_PAGES_BINDING_ID => match method {
             "getWorkspaceModel" => serialize_response(json!({
                 "workspaceKind": "netease",
@@ -2903,8 +3113,10 @@ pub fn prepare_cached_playback(
     let auth_context = ensure_auth_context(app, instance_id)?;
     let song_id = parse_song_id_from_source_locator(source_locator)
         .ok_or_else(|| "Failed to resolve Netease song id from source locator".to_string())?;
-    let requested_quality_key = normalize_playback_quality_hint(quality_hint);
-    let requested_bitrate = requested_bitrate_for_quality_key(requested_quality_key);
+    let requested_quality_key = quality_hint
+        .map(|value| normalize_playback_quality_hint(Some(value)).to_string())
+        .unwrap_or(get_preferred_playback_quality_key(app, instance_id)?);
+    let requested_bitrate = requested_bitrate_for_quality_key(&requested_quality_key);
 
     let client = build_http_client()?;
     let payload = request_netease_eapi_json(
