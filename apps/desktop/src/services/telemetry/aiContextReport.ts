@@ -28,7 +28,11 @@ const PERFORMANCE_AI_LEVELS = ['debug', 'info', 'warn', 'error', 'fatal'] as con
 const DEFAULT_AI_LIMIT = 180;
 const MAX_RECENT_RECORDS = 80;
 
-export type TelemetryAiContextPresetId = 'general' | 'plugins' | 'performance';
+export type TelemetryAiContextPresetId =
+  | 'general'
+  | 'plugins'
+  | 'performance'
+  | 'music-platform';
 
 export type TelemetryAiContextPreset = {
   id: TelemetryAiContextPresetId;
@@ -132,10 +136,30 @@ export function getPerformanceTelemetryAiQuery(): TelemetryQueryInput {
   };
 }
 
+export function getMusicPlatformTelemetryAiQuery(): TelemetryQueryInput {
+  return {
+    moduleIds: ['music-platform', 'magnet.platform'],
+    eventPrefixes: [
+      'music-platform.pack.',
+      'music-platform.instance-auth.',
+      'music-platform.facade.',
+      'music-platform.sidecar.',
+    ],
+    levels: [...DEFAULT_AI_LEVELS],
+    limit: DEFAULT_AI_LIMIT,
+  };
+}
+
 export function getTelemetryAiContextPreset(
   presetId: TelemetryAiContextPresetId = 'general'
 ): TelemetryAiContextPreset {
   switch (presetId) {
+    case 'music-platform':
+      return {
+        id: 'music-platform',
+        fileStem: 'music-platform-context',
+        query: cloneQuery(getMusicPlatformTelemetryAiQuery()),
+      };
     case 'plugins':
       return {
         id: 'plugins',
