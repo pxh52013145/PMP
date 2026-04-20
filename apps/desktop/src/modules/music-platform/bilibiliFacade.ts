@@ -76,9 +76,30 @@ export interface BilibiliPlaybackQualityOption {
   available: boolean;
 }
 
+export type BilibiliPlaybackQualityKey =
+  | 'auto'
+  | '64k'
+  | '132k'
+  | '192k'
+  | 'dolby'
+  | 'hires';
+
+export type BilibiliQualityBadge = 'dolby' | 'hires';
+
 type RuntimePreferenceOptions = {
   preferRuntime?: boolean;
 };
+
+const BILIBILI_SEARCH_SOURCE_PREFIX = 'bilibili:search:';
+const BILIBILI_BVID_PATTERN = /BV[0-9A-Za-z]{10}/i;
+const BILIBILI_PLAYBACK_QUALITY_OPTION_ORDER: BilibiliPlaybackQualityKey[] = [
+  'auto',
+  '64k',
+  '132k',
+  '192k',
+  'dolby',
+  'hires',
+];
 
 const BILIBILI_RESOURCE_BY_BVID_CACHE =
   new ConnectorScopedLruTtlCache<BilibiliFavoriteResourceItem>({
@@ -100,6 +121,191 @@ function resolveBilibiliCacheScopeKey(instanceId?: string | null): string {
     BILIBILI_CONNECTOR_ID,
     instanceId
   );
+}
+
+export function normalizeBilibiliPlaybackQualityKey(
+  value: string | null | undefined
+): BilibiliPlaybackQualityKey {
+  const recognized = readBilibiliPlaybackQualityKey(value);
+  return recognized ?? 'auto';
+}
+
+function readBilibiliPlaybackQualityKey(
+  value: string | null | undefined
+): BilibiliPlaybackQualityKey | null {
+  const normalized = normalizePlatformFacadeString(value).toLowerCase();
+  if (normalized === 'auto') return 'auto';
+  if (normalized === '64k') return '64k';
+  if (normalized === '132k') return '132k';
+  if (normalized === '192k') return '192k';
+  if (normalized === 'dolby') return 'dolby';
+  if (normalized === 'hires') return 'hires';
+  return null;
+}
+
+export function createDefaultBilibiliPlaybackQualityOptions(): BilibiliPlaybackQualityOption[] {
+  return BILIBILI_PLAYBACK_QUALITY_OPTION_ORDER.map((key) => ({
+    key,
+    label: key,
+    available: key === 'auto',
+  }));
+}
+
+export function mergeBilibiliPlaybackQualityOptions(
+  options: BilibiliPlaybackQualityOption[]
+): BilibiliPlaybackQualityOption[] {
+  const normalizedEntries = options.flatMap((item) => {
+    const key = readBilibiliPlaybackQualityKey(item.key);
+    if (!key) return [];
+    return [[key, { ...item, key }] as const];
+  });
+
+  const lookup = new Map<BilibiliPlaybackQualityKey, BilibiliPlaybackQualityOption>(
+    normalizedEntries
+  );
+
+  return BILIBILI_PLAYBACK_QUALITY_OPTION_ORDER.map((key) => {
+    const matched = lookup.get(key);
+    return {
+      key,
+      label: matched?.label ?? key,
+      available: matched?.available ?? key === 'auto',
+    };
+  });
+}
+
+export function extractBilibiliBvid(value: string | null | undefined): string | null {
+  const normalized = normalizePlatformFacadeString(value);
+  if (!normalized) return null;
+  const matched = normalized.match(BILIBILI_BVID_PATTERN);
+  if (!matched?.[0]) return null;
+  return matched[0].toUpperCase();
+}
+
+export function normalizeBilibiliLookupInput(value: string): string | null {
+  const trimmed = normalizePlatformFacadeString(value);
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    for (const [name, rawValue] of parsed.searchParams.entries()) {
+      if (!name.toLowerCase().includes('bvid')) continue;
+      const normalizedBvid = extractBilibiliBvid(rawValue);
+      if (normalizedBvid) return normalizedBvid;
+    }
+
+    const segments = parsed.pathname
+      .split('/')
+      .map((segment) => segment.trim())
+      .filter((segment) => segment.length > 0);
+    for (const segment of segments) {
+      const normalizedBvid = extractBilibiliBvid(segment);
+      if (normalizedBvid) return normalizedBvid;
+    }
+  } catch {
+    // noop
+  }
+
+  return extractBilibiliBvid(trimmed);
+}
+
+export function buildBilibiliSearchSourceId(keyword: string): string {
+  const normalizedKeyword = normalizePlatformFacadeString(keyword);
+  return `${BILIBILI_SEARCH_SOURCE_PREFIX}${normalizedKeyword}`;
+}
+
+export function parseBilibiliSearchSourceId(sourceId: string): string | null {
+  const normalizedSourceId = normalizePlatformFacadeString(sourceId);
+  if (!normalizedSourceId.startsWith(BILIBILI_SEARCH_SOURCE_PREFIX)) return null;
+  const keyword = normalizedSourceId.slice(BILIBILI_SEARCH_SOURCE_PREFIX.length).trim();
+  return keyword.length > 0 ? keyword : null;
+}
+
+export function isBilibiliVideoSourceLocator(sourceLocator: string): boolean {
+  const normalized = normalizePlatformFacadeString(sourceLocator).toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes('bilibili://video/') ||
+    normalized.includes('bilibili.com/video/') ||
+    normalized.includes('bvid=')
+  );
+}
+
+export function buildBilibiliResourceIdentity(
+  item: Pick<
+    BilibiliFavoriteResourceItem,
+    'resourceId' | 'bvid' | 'cid' | 'sourceLocator' | 'title' | 'ownerName' | 'durationSeconds'
+  >
+): string {
+  const resourceId = normalizePlatformFacadeString(item.resourceId);
+  if (resourceId) {
+    return `rid:${resourceId}`;
+  }
+
+  const bvid = normalizePlatformFacadeString(item.bvid).toUpperCase();
+  const cid = normalizePlatformFacadeString(item.cid);
+  if (bvid && cid) {
+    return `bvid:${bvid}::cid:${cid}`;
+  }
+  if (bvid) {
+    return `bvid:${bvid}`;
+  }
+
+  const sourceLocator = normalizePlatformFacadeString(item.sourceLocator);
+  if (sourceLocator) {
+    return `locator:${sourceLocator}`;
+  }
+
+  const fallbackSeed = `${item.title || 'unknown'}::${item.ownerName || ''}::${
+    item.durationSeconds || 0
+  }`;
+  return `meta:${normalizePlatformFacadeString(fallbackSeed) || 'unknown'}`;
+}
+
+export function buildBilibiliPreparedResourceKey(
+  item: Pick<
+    BilibiliFavoriteResourceItem,
+    'resourceId' | 'bvid' | 'cid' | 'sourceLocator' | 'title' | 'ownerName' | 'durationSeconds'
+  >,
+  qualityKey: string
+): string {
+  return `${buildBilibiliResourceIdentity(item)}::${normalizeBilibiliPlaybackQualityKey(
+    qualityKey
+  )}`;
+}
+
+export function resolveBilibiliWebUrl(
+  item: Pick<BilibiliFavoriteResourceItem, 'bvid' | 'sourceLocator'>
+): string | null {
+  const normalizedBvid = extractBilibiliBvid(item.bvid);
+  if (normalizedBvid) {
+    return `https://www.bilibili.com/video/${normalizedBvid}`;
+  }
+
+  const sourceLocator = normalizePlatformFacadeString(item.sourceLocator);
+  if (!sourceLocator) return null;
+  if (sourceLocator.startsWith('https://') || sourceLocator.startsWith('http://')) {
+    return sourceLocator;
+  }
+
+  const sourceBvid = extractBilibiliBvid(sourceLocator);
+  if (!sourceBvid) return null;
+  return `https://www.bilibili.com/video/${sourceBvid}`;
+}
+
+export function resolveBilibiliQualityBadges(
+  options: Array<Pick<BilibiliPlaybackQualityOption, 'key' | 'available'>>
+): BilibiliQualityBadge[] {
+  const available = new Set(
+    options
+      .filter((item) => item.available)
+      .map((item) => normalizeBilibiliPlaybackQualityKey(item.key))
+  );
+
+  const badges: BilibiliQualityBadge[] = [];
+  if (available.has('hires')) badges.push('hires');
+  if (available.has('dolby')) badges.push('dolby');
+  return badges;
 }
 
 function cloneResourceItem(item: BilibiliFavoriteResourceItem): BilibiliFavoriteResourceItem {
@@ -183,6 +389,7 @@ function mapWorkspacePlaybackToBilibili(
 ): BilibiliPreparedPlayback | null {
   if (!prepared) return null;
 
+  const selectedQualityKey = normalizeBilibiliPlaybackQualityKey(prepared.selectedQualityKey);
   return {
     sourceLocator: prepared.sourceLocator,
     streamUrl: prepared.streamUrl,
@@ -190,9 +397,8 @@ function mapWorkspacePlaybackToBilibili(
     mimeType: prepared.mimeType,
     durationSeconds: prepared.durationSeconds,
     contentKind: prepared.contentKind || 'unknown',
-    selectedQualityKey: prepared.selectedQualityKey || 'auto',
-    selectedQualityLabel:
-      prepared.selectedQualityLabel || prepared.selectedQualityKey || 'auto',
+    selectedQualityKey,
+    selectedQualityLabel: prepared.selectedQualityLabel || selectedQualityKey,
   };
 }
 
@@ -281,7 +487,7 @@ export async function searchBilibiliResources(options: {
     pageSize: options.pageSize,
     instanceId: options.instanceId,
   });
-  return mapWorkspacePageToBilibili(page, `bilibili:search:${keyword}`);
+  return mapWorkspacePageToBilibili(page, buildBilibiliSearchSourceId(keyword));
 }
 
 export async function searchBilibiliResourceByBvid(

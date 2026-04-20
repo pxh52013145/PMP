@@ -1,6 +1,9 @@
 import { useCallback, useState } from 'react';
 
-import type { BilibiliFavoriteResourceItem } from '../../../modules/music-platform';
+import {
+  buildBilibiliPreparedResourceKey,
+  type BilibiliFavoriteResourceItem,
+} from '../../../modules/music-platform';
 import type { ContextMenuItem } from '../ContextMenu';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
@@ -39,7 +42,8 @@ export function useBilibiliResourceContextMenu(params: UseBilibiliResourceContex
       event.preventDefault();
 
       const preparing =
-        preparingResourceId === `${item.resourceId || item.sourceLocator}::${normalizedPlaybackQualityHint}`;
+        preparingResourceId ===
+        buildBilibiliPreparedResourceKey(item, normalizedPlaybackQualityHint);
 
       setResourceContextMenu({
         x: event.clientX,

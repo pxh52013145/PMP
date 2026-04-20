@@ -112,6 +112,54 @@ type PlatformPackRuntimeModuleShape = {
 
 type PlatformPackRegistryListener = (records: PlatformPackRegistrationRecord[]) => void;
 
+export type PlatformPackBootStage =
+  | 'idle'
+  | 'scheduled'
+  | 'restore-store'
+  | 'reconcile-inline'
+  | 'inspect-store'
+  | 'background-reconcile'
+  | 'completed';
+
+export type PlatformPackStartupState =
+  | 'idle'
+  | 'scheduled'
+  | 'running'
+  | 'ready'
+  | 'degraded';
+
+export interface PlatformPackStartupStageRecord {
+  ts: number;
+  stage: PlatformPackBootStage;
+  state: PlatformPackStartupState;
+  level: 'info' | 'warn' | 'error';
+  message?: string;
+}
+
+export interface PlatformPackStartupHealth {
+  state: PlatformPackStartupState;
+  currentStage: PlatformPackBootStage;
+  bootScheduled: boolean;
+  bootStartedAtMs: number | null;
+  bootFinishedAtMs: number | null;
+  lastUpdatedAtMs: number | null;
+  durationMs: number | null;
+  backgroundReconcileScheduled: boolean;
+  backgroundReconcileRunning: boolean;
+  storeBootstrapFailed: boolean;
+  storeIndexAvailable: boolean | null;
+  storeReadyWithoutIndex: boolean | null;
+  storeAlreadyCurrent: boolean | null;
+  registeredBuiltinCount: number;
+  expectedBuiltinCount: number;
+  staleConnectorIds: PlatformConnectorId[];
+  relaxedDevConnectorIds: PlatformConnectorId[];
+  lastError: string | null;
+  recentStages: PlatformPackStartupStageRecord[];
+}
+
+type PlatformPackStartupHealthListener = (health: PlatformPackStartupHealth) => void;
+
 type BuiltinPlatformPackAsset = {
   source: string;
   connectorId: PlatformConnectorId;
@@ -168,6 +216,7 @@ const platformPackHostRuntimeSupportRegistry = new Map<
 >();
 const platformPackSidecarEntryPathRegistry = new Map<PlatformConnectorId, string>();
 const platformPackRegistryListeners = new Set<PlatformPackRegistryListener>();
+const platformPackStartupHealthListeners = new Set<PlatformPackStartupHealthListener>();
 const builtinPlatformPackAssets: BuiltinPlatformPackAsset[] = [
   {
     source: 'builtin-pack:bilibili',
@@ -199,6 +248,29 @@ let builtinPlatformPackBootPromise: Promise<void> | null = null;
 let platformPackRegistryBootstrapRegistered = false;
 let builtinPlatformPackBackgroundReconcileConnectorIds: Set<PlatformConnectorId> | null = null;
 const telemetry = getTelemetryLogger('music-platform', 'platformPackRegistry');
+const PLATFORM_PACK_STARTUP_STAGE_HISTORY_LIMIT = 24;
+let platformPackBootPerfStartedAtMs: number | null = null;
+const platformPackStartupHealth: PlatformPackStartupHealth = {
+  state: 'idle',
+  currentStage: 'idle',
+  bootScheduled: false,
+  bootStartedAtMs: null,
+  bootFinishedAtMs: null,
+  lastUpdatedAtMs: null,
+  durationMs: null,
+  backgroundReconcileScheduled: false,
+  backgroundReconcileRunning: false,
+  storeBootstrapFailed: false,
+  storeIndexAvailable: null,
+  storeReadyWithoutIndex: null,
+  storeAlreadyCurrent: null,
+  registeredBuiltinCount: 0,
+  expectedBuiltinCount: builtinPlatformPackAssets.length,
+  staleConnectorIds: [],
+  relaxedDevConnectorIds: [],
+  lastError: null,
+  recentStages: [],
+};
 
 function ensurePlatformPackRegistryBootstrapRegistered(): void {
   if (platformPackRegistryBootstrapRegistered) {
@@ -229,6 +301,140 @@ function readRuntimeErrorMessage(error: unknown): string {
 
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function clonePlatformPackStartupStageRecord(
+  record: PlatformPackStartupStageRecord
+): PlatformPackStartupStageRecord {
+  return { ...record };
+}
+
+function clonePlatformPackStartupHealth(
+  health: PlatformPackStartupHealth
+): PlatformPackStartupHealth {
+  return {
+    ...health,
+    staleConnectorIds: health.staleConnectorIds.slice(),
+    relaxedDevConnectorIds: health.relaxedDevConnectorIds.slice(),
+    recentStages: health.recentStages.map(clonePlatformPackStartupStageRecord),
+  };
+}
+
+function emitPlatformPackStartupHealthChanged(): void {
+  const snapshot = clonePlatformPackStartupHealth(platformPackStartupHealth);
+  for (const listener of platformPackStartupHealthListeners) {
+    listener(snapshot);
+  }
+}
+
+function mutatePlatformPackStartupHealth(
+  mutator: (health: PlatformPackStartupHealth) => void
+): void {
+  mutator(platformPackStartupHealth);
+  platformPackStartupHealth.registeredBuiltinCount = countRegisteredBuiltinPlatformPacks();
+  platformPackStartupHealth.expectedBuiltinCount = builtinPlatformPackAssets.length;
+  emitPlatformPackStartupHealthChanged();
+}
+
+function applyStoreInspectionToStartupHealth(
+  health: PlatformPackStartupHealth,
+  inspection: BuiltinPlatformPackStoreInspection | null
+): void {
+  health.storeIndexAvailable = inspection?.indexAvailable ?? null;
+  health.storeReadyWithoutIndex = inspection?.storeReadyWithoutIndex ?? null;
+  health.storeAlreadyCurrent = inspection?.current ?? null;
+  health.staleConnectorIds = inspection?.staleConnectorIds.slice() ?? [];
+  health.relaxedDevConnectorIds = inspection?.relaxedDevConnectorIds.slice() ?? [];
+}
+
+function recordPlatformPackBootStage(input: {
+  stage: PlatformPackBootStage;
+  state: PlatformPackStartupState;
+  level?: 'info' | 'warn' | 'error';
+  message?: string;
+  fields?: JsonRecord;
+  mutate?: (health: PlatformPackStartupHealth) => void;
+}): void {
+  const level = input.level ?? 'info';
+  const nowPerf = getMusicPlatformNowMs();
+  const nowTs = Date.now();
+  const event = `music-platform.pack.boot.${input.stage}`;
+  const message = normalizeString(input.message) || undefined;
+
+  telemetry[level](event, {
+    message,
+    fields: {
+      state: input.state,
+      registeredBuiltinCount: countRegisteredBuiltinPlatformPacks(),
+      expectedBuiltinCount: builtinPlatformPackAssets.length,
+      ...(input.fields ?? {}),
+    },
+  });
+
+  mutatePlatformPackStartupHealth((health) => {
+    if (input.stage === 'scheduled') {
+      platformPackBootPerfStartedAtMs = null;
+      health.bootScheduled = true;
+      health.bootStartedAtMs = null;
+      health.bootFinishedAtMs = null;
+      health.durationMs = null;
+      health.lastError = null;
+      health.storeBootstrapFailed = false;
+      health.backgroundReconcileScheduled = false;
+      health.backgroundReconcileRunning = false;
+      health.storeIndexAvailable = null;
+      health.storeReadyWithoutIndex = null;
+      health.storeAlreadyCurrent = null;
+      health.staleConnectorIds = [];
+      health.relaxedDevConnectorIds = [];
+    }
+
+    if (input.state === 'running') {
+      if (platformPackBootPerfStartedAtMs === null) {
+        platformPackBootPerfStartedAtMs = nowPerf;
+      }
+      if (health.bootStartedAtMs === null) {
+        health.bootStartedAtMs = nowTs;
+      }
+      health.bootFinishedAtMs = null;
+      health.durationMs = null;
+    }
+
+    if ((input.state === 'ready' || input.state === 'degraded') && health.bootStartedAtMs === null) {
+      health.bootStartedAtMs = nowTs;
+      platformPackBootPerfStartedAtMs = nowPerf;
+    }
+
+    if (input.state === 'ready' || input.state === 'degraded') {
+      health.bootFinishedAtMs = nowTs;
+      health.durationMs =
+        platformPackBootPerfStartedAtMs === null
+          ? health.durationMs
+          : Math.max(0, Math.round(nowPerf - platformPackBootPerfStartedAtMs));
+      health.bootScheduled = false;
+      if (input.state === 'ready') {
+        health.lastError = null;
+      } else if (message) {
+        health.lastError = message;
+      }
+    }
+
+    health.state = input.state;
+    health.currentStage = input.stage;
+    health.lastUpdatedAtMs = nowTs;
+    health.recentStages = [
+      ...health.recentStages,
+      {
+        ts: nowTs,
+        stage: input.stage,
+        state: input.state,
+        level,
+        message,
+      },
+    ].slice(-PLATFORM_PACK_STARTUP_STAGE_HISTORY_LIMIT);
+
+    input.mutate?.(health);
+  });
 }
 
 function isJsonRecord(value: unknown): value is JsonRecord {
@@ -1009,6 +1215,10 @@ function emitRegistryChanged(): void {
     .map(cloneRecord)
     .sort((left, right) => left.definition.sortOrder - right.definition.sortOrder);
 
+  mutatePlatformPackStartupHealth(() => {
+    // Keep builtin registration counters current for debug surfaces.
+  });
+
   for (const listener of platformPackRegistryListeners) {
     listener(snapshot);
   }
@@ -1359,15 +1569,38 @@ async function runBuiltinPlatformPackBootSequence(): Promise<void> {
   let storeBootstrapFailed = false;
   let storeInspection: BuiltinPlatformPackStoreInspection | null = null;
 
+  recordPlatformPackBootStage({
+    stage: 'restore-store',
+    state: 'running',
+    message: 'Restoring installed platform packs from store.',
+    mutate: (health) => {
+      health.bootScheduled = false;
+      health.backgroundReconcileScheduled = false;
+      health.backgroundReconcileRunning = false;
+      health.storeBootstrapFailed = false;
+      health.storeIndexAvailable = null;
+      health.storeReadyWithoutIndex = null;
+      health.storeAlreadyCurrent = null;
+      health.staleConnectorIds = [];
+      health.relaxedDevConnectorIds = [];
+      health.lastError = null;
+    },
+  });
+
   try {
     await refreshInstalledPlatformPackRegistrationsFromStore();
   } catch (error) {
     storeBootstrapFailed = true;
+    const message = readMusicPlatformDiagnosticErrorMessage(error);
     telemetry.warn('music-platform.pack.boot.store-bootstrap.failed', {
-      message: readMusicPlatformDiagnosticErrorMessage(error),
+      message,
       fields: {
         durationMs: getMusicPlatformDurationMs(startedAtMs),
       },
+    });
+    mutatePlatformPackStartupHealth((health) => {
+      health.storeBootstrapFailed = true;
+      health.lastError = message;
     });
     // Ignore store bootstrap failures and keep builtin pack recovery in the background path.
   } finally {
@@ -1375,16 +1608,28 @@ async function runBuiltinPlatformPackBootSequence(): Promise<void> {
   }
 
   if (countRegisteredBuiltinPlatformPacks() < builtinPlatformPackAssets.length) {
+    recordPlatformPackBootStage({
+      stage: 'reconcile-inline',
+      state: 'running',
+      message: 'Running inline builtin platform pack reconcile during startup.',
+      mutate: (health) => {
+        health.storeBootstrapFailed = storeBootstrapFailed;
+      },
+    });
     try {
       await reconcileBuiltinPlatformPacksInBackground();
     } catch (error) {
+      const message = readMusicPlatformDiagnosticErrorMessage(error);
       telemetry.warn('music-platform.pack.boot.reconcile.failed', {
-        message: readMusicPlatformDiagnosticErrorMessage(error),
+        message,
         fields: {
           durationMs: getMusicPlatformDurationMs(startedAtMs),
           registeredBuiltinCount: countRegisteredBuiltinPlatformPacks(),
           expectedBuiltinCount: builtinPlatformPackAssets.length,
         },
+      });
+      mutatePlatformPackStartupHealth((health) => {
+        health.lastError = message;
       });
       // Keep the registry best-effort during early startup.
     }
@@ -1399,11 +1644,42 @@ async function runBuiltinPlatformPackBootSequence(): Promise<void> {
         expectedBuiltinCount: builtinPlatformPackAssets.length,
       },
     });
+    const registeredBuiltinCount = countRegisteredBuiltinPlatformPacks();
+    const ready = registeredBuiltinCount >= builtinPlatformPackAssets.length;
+    recordPlatformPackBootStage({
+      stage: 'completed',
+      state: ready ? 'ready' : 'degraded',
+      level: ready ? 'info' : 'warn',
+      message: ready
+        ? 'Builtin platform packs recovered during inline startup reconcile.'
+        : 'Builtin platform pack startup remained degraded after inline reconcile.',
+      fields: {
+        storeBootstrapFailed,
+        scheduledBackgroundReconcile,
+      },
+      mutate: (health) => {
+        health.storeBootstrapFailed = storeBootstrapFailed;
+        health.backgroundReconcileScheduled = false;
+        health.backgroundReconcileRunning = false;
+      },
+    });
     return;
   }
 
   try {
+    recordPlatformPackBootStage({
+      stage: 'inspect-store',
+      state: 'running',
+      message: 'Inspecting builtin platform pack store state.',
+      mutate: (health) => {
+        health.storeBootstrapFailed = storeBootstrapFailed;
+      },
+    });
     storeInspection = await inspectBuiltinPlatformPackStore();
+    mutatePlatformPackStartupHealth((health) => {
+      applyStoreInspectionToStartupHealth(health, storeInspection);
+      health.storeBootstrapFailed = storeBootstrapFailed;
+    });
     if (storeInspection.current) {
       warnOnSlowMusicPlatformOperation({
         logger: telemetry,
@@ -1415,6 +1691,24 @@ async function runBuiltinPlatformPackBootSequence(): Promise<void> {
           registeredBuiltinCount: countRegisteredBuiltinPlatformPacks(),
           expectedBuiltinCount: builtinPlatformPackAssets.length,
           storeAlreadyCurrent: true,
+        },
+      });
+      recordPlatformPackBootStage({
+        stage: 'completed',
+        state: 'ready',
+        message: 'Builtin platform pack store is already current.',
+        fields: {
+          storeBootstrapFailed,
+          scheduledBackgroundReconcile,
+          storeAlreadyCurrent: true,
+          storeIndexAvailable: storeInspection.indexAvailable,
+          storeReadyWithoutIndex: storeInspection.storeReadyWithoutIndex,
+        },
+        mutate: (health) => {
+          applyStoreInspectionToStartupHealth(health, storeInspection);
+          health.storeBootstrapFailed = storeBootstrapFailed;
+          health.backgroundReconcileScheduled = false;
+          health.backgroundReconcileRunning = false;
         },
       });
       return;
@@ -1443,14 +1737,38 @@ async function runBuiltinPlatformPackBootSequence(): Promise<void> {
           storeReadyWithoutIndex: true,
         },
       });
+      recordPlatformPackBootStage({
+        stage: 'completed',
+        state: 'ready',
+        message:
+          'Builtin platform pack index is unavailable, but restored store registrations are ready.',
+        fields: {
+          storeBootstrapFailed,
+          scheduledBackgroundReconcile,
+          storeAlreadyCurrent: false,
+          storeIndexAvailable: false,
+          storeReadyWithoutIndex: true,
+        },
+        mutate: (health) => {
+          applyStoreInspectionToStartupHealth(health, storeInspection);
+          health.storeBootstrapFailed = storeBootstrapFailed;
+          health.backgroundReconcileScheduled = false;
+          health.backgroundReconcileRunning = false;
+        },
+      });
       return;
     }
   } catch (error) {
+    const message = readMusicPlatformDiagnosticErrorMessage(error);
     telemetry.warn('music-platform.pack.boot.store-check.failed', {
-      message: readMusicPlatformDiagnosticErrorMessage(error),
+      message,
       fields: {
         durationMs: getMusicPlatformDurationMs(startedAtMs),
       },
+    });
+    mutatePlatformPackStartupHealth((health) => {
+      health.lastError = message;
+      health.storeBootstrapFailed = storeBootstrapFailed;
     });
     // Fall through to best-effort background reconcile.
   }
@@ -1460,7 +1778,44 @@ async function runBuiltinPlatformPackBootSequence(): Promise<void> {
     builtinPlatformPackAssets.map((asset) => asset.connectorId);
   scheduledBackgroundReconcile = staleConnectorIds.length > 0;
   if (scheduledBackgroundReconcile) {
+    recordPlatformPackBootStage({
+      stage: 'background-reconcile',
+      state: 'degraded',
+      level: 'warn',
+      message: 'Startup scheduled a background reconcile for builtin platform packs.',
+      fields: {
+        storeBootstrapFailed,
+        staleConnectorIds: staleConnectorIds.join(','),
+        storeIndexAvailable: storeInspection?.indexAvailable ?? null,
+        storeReadyWithoutIndex: storeInspection?.storeReadyWithoutIndex ?? null,
+      },
+      mutate: (health) => {
+        applyStoreInspectionToStartupHealth(health, storeInspection);
+        health.storeBootstrapFailed = storeBootstrapFailed;
+        health.backgroundReconcileScheduled = true;
+        health.backgroundReconcileRunning = false;
+        health.lastError = null;
+      },
+    });
     scheduleBuiltinPlatformPackBackgroundReconcile(false, staleConnectorIds);
+  } else {
+    recordPlatformPackBootStage({
+      stage: 'completed',
+      state: 'ready',
+      message: 'Builtin platform pack startup finished without background reconcile.',
+      fields: {
+        storeBootstrapFailed,
+        scheduledBackgroundReconcile,
+        storeIndexAvailable: storeInspection?.indexAvailable ?? null,
+        storeReadyWithoutIndex: storeInspection?.storeReadyWithoutIndex ?? null,
+      },
+      mutate: (health) => {
+        applyStoreInspectionToStartupHealth(health, storeInspection);
+        health.storeBootstrapFailed = storeBootstrapFailed;
+        health.backgroundReconcileScheduled = false;
+        health.backgroundReconcileRunning = false;
+      },
+    });
   }
   warnOnSlowMusicPlatformOperation({
     logger: telemetry,
@@ -1509,6 +1864,19 @@ function scheduleBuiltinPlatformPackBackgroundReconcile(
   connectorIds?: readonly PlatformConnectorId[] | null
 ): void {
   mergeBuiltinPlatformPackBackgroundReconcileTargets(connectorIds);
+  mutatePlatformPackStartupHealth((health) => {
+    if (!connectorIds || connectorIds.length < 1) {
+      health.staleConnectorIds = builtinPlatformPackAssets.map((asset) => asset.connectorId);
+    } else {
+      health.staleConnectorIds = Array.from(
+        new Set([
+          ...health.staleConnectorIds,
+          ...connectorIds,
+        ])
+      ).sort((left, right) => left.localeCompare(right, 'zh-CN'));
+    }
+    health.backgroundReconcileScheduled = true;
+  });
   if (builtinPlatformPackBackgroundReconcileScheduled) {
     return;
   }
@@ -1516,9 +1884,70 @@ function scheduleBuiltinPlatformPackBackgroundReconcile(
 
   const run = () => {
     const targetConnectorIds = consumeBuiltinPlatformPackBackgroundReconcileTargets();
-    void reconcileBuiltinPlatformPacksInBackground(targetConnectorIds).finally(() => {
-      builtinPlatformPackBackgroundReconcileScheduled = false;
+    recordPlatformPackBootStage({
+      stage: 'background-reconcile',
+      state: 'running',
+      message: 'Running background reconcile for builtin platform packs.',
+      fields: {
+        targetConnectorIds:
+          targetConnectorIds && targetConnectorIds.length > 0
+            ? targetConnectorIds.join(',')
+            : 'all',
+      },
+      mutate: (health) => {
+        health.backgroundReconcileScheduled = false;
+        health.backgroundReconcileRunning = true;
+        health.lastError = null;
+      },
     });
+    void reconcileBuiltinPlatformPacksInBackground(targetConnectorIds)
+      .then(() => {
+        const ready = countRegisteredBuiltinPlatformPacks() >= builtinPlatformPackAssets.length;
+        recordPlatformPackBootStage({
+          stage: 'completed',
+          state: ready ? 'ready' : 'degraded',
+          level: ready ? 'info' : 'warn',
+          message: ready
+            ? 'Builtin platform pack background reconcile completed.'
+            : 'Builtin platform pack background reconcile completed, but startup is still degraded.',
+          fields: {
+            targetConnectorIds:
+              targetConnectorIds && targetConnectorIds.length > 0
+                ? targetConnectorIds.join(',')
+                : 'all',
+          },
+          mutate: (health) => {
+            health.backgroundReconcileScheduled = false;
+            health.backgroundReconcileRunning = false;
+            if (ready) {
+              health.staleConnectorIds = [];
+            }
+          },
+        });
+      })
+      .catch((error) => {
+        const message = readMusicPlatformDiagnosticErrorMessage(error);
+        recordPlatformPackBootStage({
+          stage: 'background-reconcile',
+          state: 'degraded',
+          level: 'warn',
+          message,
+          fields: {
+            targetConnectorIds:
+              targetConnectorIds && targetConnectorIds.length > 0
+                ? targetConnectorIds.join(',')
+                : 'all',
+          },
+          mutate: (health) => {
+            health.backgroundReconcileScheduled = false;
+            health.backgroundReconcileRunning = false;
+            health.lastError = message;
+          },
+        });
+      })
+      .finally(() => {
+        builtinPlatformPackBackgroundReconcileScheduled = false;
+      });
   };
 
   if (immediate) {
@@ -1534,6 +1963,11 @@ function scheduleBuiltinPlatformPackBootInTauriRuntime(): void {
     return;
   }
   builtinPlatformPackBootScheduled = true;
+  recordPlatformPackBootStage({
+    stage: 'scheduled',
+    state: 'scheduled',
+    message: 'Builtin platform pack boot scheduled after first paint.',
+  });
   builtinPlatformPackBootPromise = new Promise((resolve) => {
     scheduleAfterFirstPaint(() => {
       void runBuiltinPlatformPackBootSequence().finally(resolve);
@@ -1601,6 +2035,22 @@ export async function installPlatformPackFromFile(file: File): Promise<PlatformP
 export function listPlatformPackRegistrations(): PlatformPackRegistrationRecord[] {
   ensureBuiltinPlatformPackRegistrationsInitialized();
   return Array.from(platformPackRegistry.values()).map(cloneRecord);
+}
+
+export function getPlatformPackStartupHealth(): PlatformPackStartupHealth {
+  ensureBuiltinPlatformPackRegistrationsInitialized();
+  return clonePlatformPackStartupHealth(platformPackStartupHealth);
+}
+
+export function subscribePlatformPackStartupHealth(
+  listener: PlatformPackStartupHealthListener
+): () => void {
+  ensureBuiltinPlatformPackRegistrationsInitialized();
+  platformPackStartupHealthListeners.add(listener);
+  listener(clonePlatformPackStartupHealth(platformPackStartupHealth));
+  return () => {
+    platformPackStartupHealthListeners.delete(listener);
+  };
 }
 
 export function resolvePlatformPackHostRuntimeSupport(

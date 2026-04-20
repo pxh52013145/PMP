@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { BilibiliFavoriteResourceItem } from '../../../modules/music-platform';
+import {
+  buildBilibiliPreparedResourceKey,
+  type BilibiliFavoriteResourceItem,
+  type BilibiliQualityBadge,
+} from '../../../modules/music-platform';
 import { Tv } from 'lucide-react';
 import { PlatformResourceCard } from './PlatformResourceCard';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
-type BilibiliQualityBadge = 'dolby' | 'hires';
 
 const RESOURCE_GRID_MIN_COLUMN_WIDTH_PX = 250;
 const RESOURCE_GRID_COLUMN_GAP_PX = 12;
@@ -247,7 +250,8 @@ export function BilibiliResourceGrid(props: BilibiliResourceGridProps) {
               const resourceCacheKey = getResourceCacheKey(item);
               const renderKey = `${resourceCacheKey}:${row.rowIndex}:${itemOffset}`;
               const preparing =
-                preparingResourceId === `${item.resourceId || item.sourceLocator}::${normalizedPlaybackQualityHint}`;
+                preparingResourceId ===
+                buildBilibiliPreparedResourceKey(item, normalizedPlaybackQualityHint);
               const resolvedCoverUrl = resourceCoverUrlMap[resourceCacheKey] || item.coverUrl;
               const qualityBadges = resourceQualityTagMap[resourceCacheKey] ?? [];
 

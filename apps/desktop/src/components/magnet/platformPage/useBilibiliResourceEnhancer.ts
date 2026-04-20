@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 
 import {
-  BILIBILI_CONNECTOR_ID,
-  listPlatformWorkspaceQualityOptions,
-  resolvePlatformWorkspaceCoverAssetUrl,
-  type PlatformConnectorId,
+  listBilibiliPlaybackQualities,
+  resolveBilibiliQualityBadges,
+  resolveBilibiliCoverAssetUrl,
   type BilibiliFavoriteResourceItem,
+  type BilibiliQualityBadge,
 } from '../../../modules/music-platform';
-
-export type BilibiliQualityBadge = 'dolby' | 'hires';
 
 const RESOURCE_BADGE_CACHE_LIMIT = 512;
 const RESOURCE_RENDER_CACHE_LIMIT = 512;
@@ -44,32 +42,7 @@ function setBoundedRecordValue<T>(
   return bounded;
 }
 
-function toBilibiliResourceQualityBadgesFromOptions(
-  options: Array<{ key: string; available: boolean }>
-): BilibiliQualityBadge[] {
-  const available = new Set(
-    options
-      .filter((item) => item.available)
-      .map((item) => item.key.trim().toLowerCase())
-  );
-
-  const badges: BilibiliQualityBadge[] = [];
-  if (available.has('hires')) badges.push('hires');
-  if (available.has('dolby')) badges.push('dolby');
-  return badges;
-}
-
-function normalizeWorkspaceConnectorId(
-  value: string | null | undefined
-): PlatformConnectorId | null {
-  if (typeof value !== 'string') return null;
-  const normalized = value.trim().toLowerCase();
-  if (!normalized.startsWith('connector.platform.')) return null;
-  return normalized as PlatformConnectorId;
-}
-
 type UseBilibiliResourceEnhancerParams = {
-  workspaceConnectorId: string | null;
   activeBilibiliInstanceId: string | null;
   bilibiliAuthorized: boolean;
   selectedFolderId: string | null;
@@ -81,7 +54,6 @@ type UseBilibiliResourceEnhancerParams = {
 
 export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerParams) {
   const {
-    workspaceConnectorId,
     activeBilibiliInstanceId,
     bilibiliAuthorized,
     selectedFolderId,
@@ -90,8 +62,6 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
     isVideoSourceLocator,
     getResourceCacheKey,
   } = params;
-  const resolvedWorkspaceConnectorId =
-    normalizeWorkspaceConnectorId(workspaceConnectorId) ?? BILIBILI_CONNECTOR_ID;
 
   const [resourceCoverUrlMap, setResourceCoverUrlMap] = useState<Record<string, string>>({});
   const [resourceQualityTagMap, setResourceQualityTagMap] = useState<
@@ -163,11 +133,10 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
         if (cancelled) return;
         const normalizedCoverUrl = item.coverUrl?.trim();
         if (!normalizedCoverUrl) continue;
-        const resolvedCoverUrl = await resolvePlatformWorkspaceCoverAssetUrl({
-          connectorId: resolvedWorkspaceConnectorId,
-          coverUrl: normalizedCoverUrl,
-          instanceId: activeBilibiliInstanceId,
-        });
+        const resolvedCoverUrl = await resolveBilibiliCoverAssetUrl(
+          normalizedCoverUrl,
+          activeBilibiliInstanceId
+        );
         if (!resolvedCoverUrl || cancelled) continue;
 
         setResourceCoverUrlMap((prev) => {
@@ -184,7 +153,6 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
     activeBilibiliInstanceId,
     filteredBilibiliResources,
     getResourceCacheKey,
-    resolvedWorkspaceConnectorId,
     resourceCoverUrlMap,
   ]);
 
@@ -223,18 +191,14 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
         }
 
         try {
-          const options = await listPlatformWorkspaceQualityOptions({
-            connectorId: resolvedWorkspaceConnectorId,
-            sourceLocator: locator,
-            instanceId: activeBilibiliInstanceId,
-          });
+          const options = await listBilibiliPlaybackQualities(locator, activeBilibiliInstanceId);
           if (options.length === 0) {
             qualityProbeBackoffUntilRef.current.set(locator, Date.now() + 60_000);
             trimMapToMaxEntries(qualityProbeBackoffUntilRef.current, RESOURCE_BADGE_CACHE_LIMIT);
             continue;
           }
 
-          const badges = toBilibiliResourceQualityBadgesFromOptions(options);
+          const badges = resolveBilibiliQualityBadges(options);
           qualityBadgesByLocatorRef.current.set(locator, badges);
           qualityProbeBackoffUntilRef.current.delete(locator);
           trimMapToMaxEntries(qualityBadgesByLocatorRef.current, RESOURCE_BADGE_CACHE_LIMIT);
@@ -261,7 +225,6 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
     filteredBilibiliResources,
     getResourceCacheKey,
     isVideoSourceLocator,
-    resolvedWorkspaceConnectorId,
     resourceQualityTagMap,
     selectedFolderId,
   ]);

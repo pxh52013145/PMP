@@ -36,6 +36,122 @@ export type PlatformApiResult<T = unknown> =
       error: PlatformApiError;
     };
 
+export interface PlatformWorkspaceCollectionItem {
+  collectionId: string;
+  title: string;
+  trackCount: number;
+  coverUrl?: string;
+  updatedAtMs?: number;
+}
+
+export interface PlatformWorkspaceCollectionListResult {
+  items: PlatformWorkspaceCollectionItem[];
+}
+
+export interface PlatformWorkspaceResourceItem {
+  resourceId: string;
+  title: string;
+  sourceLocator: string;
+  durationSeconds?: number;
+  coverUrl?: string;
+  lyricLocator?: string;
+  ownerName?: string;
+  artistNames?: string;
+  albumName?: string;
+  webUrl?: string;
+  vipRequired?: boolean;
+  vipLabel?: string;
+  qualityKey?: string;
+  qualityLabel?: string;
+  tagLabels?: string[];
+  bvid?: string;
+  cid?: string;
+  contentKind?: string;
+}
+
+export interface PlatformWorkspaceResourcePage {
+  sourceKind: string;
+  sourceId: string;
+  pageNum: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
+  items: PlatformWorkspaceResourceItem[];
+}
+
+export interface PlatformWorkspaceResolvedResourceResult {
+  item: PlatformWorkspaceResourceItem | null;
+}
+
+export interface PlatformWorkspacePreparedPlayback {
+  sourceLocator: string;
+  streamUrl: string;
+  cachePath: string;
+  mimeType?: string;
+  durationSeconds?: number;
+  resourceId?: string;
+  selectedQualityKey?: string;
+  selectedQualityLabel?: string;
+  contentKind?: string;
+}
+
+export interface PlatformWorkspaceQualityOption {
+  key: string;
+  label: string;
+  available: boolean;
+}
+
+export interface PlatformWorkspaceQualityOptionListResult {
+  options: PlatformWorkspaceQualityOption[];
+}
+
+export interface PlatformWorkspaceQualityState {
+  options: PlatformWorkspaceQualityOption[];
+  currentKey: string;
+  currentLabel?: string;
+}
+
+export interface PlatformWorkspaceLyricLocatorResolved {
+  locator: string;
+  format: string;
+  lang?: string;
+  sourceKind: string;
+}
+
+export interface PlatformWorkspaceCoverAsset {
+  assetUrl?: string;
+  cachePath?: string;
+  path?: string;
+  url?: string;
+}
+
+export interface PlatformWorkspaceFeatureFlags {
+  collections: boolean;
+  recommendations: boolean;
+  search: boolean;
+  quality: boolean;
+}
+
+export interface PlatformWorkspacePageItem {
+  pageId: string;
+  kind: string;
+  title: string;
+  enabled: boolean;
+  subtitle?: string;
+  badgeLabel?: string;
+  iconKey?: string;
+}
+
+export interface PlatformWorkspacePageListResult {
+  items: PlatformWorkspacePageItem[];
+}
+
+export interface PlatformWorkspacePageModel {
+  features: PlatformWorkspaceFeatureFlags;
+  defaultPageId?: string;
+  pages: PlatformWorkspacePageItem[];
+}
+
 export interface PlatformCompatCapabilityMap {
   playlists: boolean;
   favorites: boolean;
@@ -74,6 +190,91 @@ export interface PlatformCompatContractFile {
     pages?: string;
   };
   extension?: Record<string, unknown>;
+}
+
+export interface PlatformCompatRuntimeLibraryApi {
+  listCollections?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspaceCollectionListResult>
+  >;
+  listResources?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspaceResourcePage | null>
+  >;
+  listPlaylistTracks?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspaceResourcePage | null>
+  >;
+  createPlaylist?: (input: Record<string, unknown>) => Promise<PlatformApiResult<unknown>>;
+  deletePlaylist?: (input: Record<string, unknown>) => Promise<PlatformApiResult<unknown>>;
+  addTrackToPlaylist?: (input: Record<string, unknown>) => Promise<PlatformApiResult<unknown>>;
+  removeTrackFromPlaylist?: (input: Record<string, unknown>) => Promise<PlatformApiResult<unknown>>;
+  preparePlayback?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspacePreparedPlayback | null>
+  >;
+  resolveLyricLocator?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspaceLyricLocatorResolved | null>
+  >;
+  resolveCoverAssetUrl?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<string | PlatformWorkspaceCoverAsset | null>
+  >;
+}
+
+export interface PlatformCompatRuntimeRecommendationsApi {
+  listDaily?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspaceResourcePage | null>
+  >;
+  listRecommendedSongs?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspaceResourcePage | null>
+  >;
+  listRecommendedPlaylists?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspaceCollectionListResult>
+  >;
+}
+
+export interface PlatformCompatRuntimeSearchApi {
+  query?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspaceResourcePage | null>
+  >;
+  resolveLocator?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspaceResolvedResourceResult>
+  >;
+  preparePlayback?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspacePreparedPlayback | null>
+  >;
+}
+
+export interface PlatformCompatRuntimeQualityApi {
+  listOptions?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspaceQualityState | PlatformWorkspaceQualityOptionListResult | null>
+  >;
+  getCurrent?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspaceQualityState | null>
+  >;
+  setPreferred?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspaceQualityState | null>
+  >;
+}
+
+export interface PlatformCompatRuntimeNavigationApi {
+  [method: string]:
+    | ((input: Record<string, unknown>) => Promise<PlatformApiResult<unknown>>)
+    | undefined;
+}
+
+export interface PlatformCompatRuntimeSettingsApi {
+  get?: (input: Record<string, unknown>) => Promise<PlatformApiResult<unknown>>;
+  set?: (input: Record<string, unknown>) => Promise<PlatformApiResult<unknown>>;
+  reset?: (input: Record<string, unknown>) => Promise<PlatformApiResult<unknown>>;
+  [method: string]:
+    | ((input: Record<string, unknown>) => Promise<PlatformApiResult<unknown>>)
+    | undefined;
+}
+
+export interface PlatformCompatRuntimePagesApi {
+  getWorkspaceModel?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspacePageModel | null>
+  >;
+  listPages?: (input: Record<string, unknown>) => Promise<
+    PlatformApiResult<PlatformWorkspacePageListResult>
+  >;
 }
 
 export interface PlatformCompatRuntimeApi {
@@ -149,13 +350,13 @@ export interface PlatformCompatRuntimeApi {
       }>
     >;
   };
-  library?: Record<string, unknown>;
-  recommendations?: Record<string, unknown>;
-  search?: Record<string, unknown>;
-  quality?: Record<string, unknown>;
-  navigation?: Record<string, unknown>;
-  settings?: Record<string, unknown>;
-  pages?: Record<string, unknown>;
+  library?: PlatformCompatRuntimeLibraryApi;
+  recommendations?: PlatformCompatRuntimeRecommendationsApi;
+  search?: PlatformCompatRuntimeSearchApi;
+  quality?: PlatformCompatRuntimeQualityApi;
+  navigation?: PlatformCompatRuntimeNavigationApi;
+  settings?: PlatformCompatRuntimeSettingsApi;
+  pages?: PlatformCompatRuntimePagesApi;
   metadata?: Record<string, unknown>;
 }
 

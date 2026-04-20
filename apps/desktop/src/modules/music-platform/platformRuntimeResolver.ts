@@ -1,8 +1,9 @@
 import type { PlatformCompatRuntimeApi } from '@pixel-matrix/plugin-platform-contracts';
 
-import { getPlatformCompatRuntimeApi } from './contractRegistry';
-import { getPlatformInstance } from './instanceRegistry';
-import { resolvePlatformInstanceId } from './platformInstanceAuth';
+import {
+  resolveDefaultPlatformInstanceIdForConnector,
+  resolvePlatformRuntimeDescriptorByInstanceId,
+} from './platformRuntimeDescriptor';
 
 export interface ResolvedPlatformRuntimeContext {
   instanceId: string;
@@ -19,17 +20,16 @@ export function resolvePlatformRuntimeContext(options: {
   instanceId?: string | null;
   connectorId?: string | null;
 }): ResolvedPlatformRuntimeContext | null {
-  const instanceId = resolvePlatformInstanceId({
-    instanceId: normalizeString(options.instanceId) || undefined,
-    connectorId: normalizeString(options.connectorId) || undefined,
-  });
-  if (!instanceId) return null;
+  const normalizedInstanceId = normalizeString(options.instanceId);
+  const resolvedInstanceId =
+    normalizedInstanceId ||
+    resolveDefaultPlatformInstanceIdForConnector(normalizeString(options.connectorId));
+  if (!resolvedInstanceId) return null;
 
-  const instance = getPlatformInstance(instanceId);
-  if (!instance) return null;
-
-  const runtime = getPlatformCompatRuntimeApi(instance.platformId);
-  if (!runtime) return null;
+  const descriptor = resolvePlatformRuntimeDescriptorByInstanceId(resolvedInstanceId);
+  const instance = descriptor?.instanceRecord ?? null;
+  const runtime = descriptor?.runtime ?? null;
+  if (!descriptor || !instance || !runtime) return null;
 
   return {
     instanceId: instance.instanceId,

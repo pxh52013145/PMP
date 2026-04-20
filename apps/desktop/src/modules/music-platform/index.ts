@@ -85,13 +85,27 @@ export {
 
 export {
   awaitBuiltinPlatformPackRegistrationsReady,
+  getPlatformPackStartupHealth,
   installPlatformPackFromFile,
   installPlatformPackFromZipBytes,
   listPlatformPackRegistrations,
   removePlatformPackRegistration,
+  subscribePlatformPackStartupHealth,
   subscribePlatformPackRegistrations,
+  type PlatformPackBootStage,
   type PlatformPackRegistrationRecord,
+  type PlatformPackStartupHealth,
+  type PlatformPackStartupStageRecord,
+  type PlatformPackStartupState,
 } from './platformPackRegistry';
+
+export {
+  listPlatformRuntimeDescriptors,
+  resolveDefaultPlatformInstanceIdForConnector,
+  resolvePlatformRuntimeDescriptorByInstanceId,
+  resolvePreferredPlatformRuntimeDescriptorForConnector,
+  type PlatformRuntimeDescriptor,
+} from './platformRuntimeDescriptor';
 
 export {
   createDefaultPlatformLoginRegistry,
@@ -116,13 +130,25 @@ export {
 } from './globalSettings';
 
 export {
+  createDefaultBilibiliPlaybackQualityOptions,
+  buildBilibiliPreparedResourceKey,
+  buildBilibiliResourceIdentity,
+  buildBilibiliSearchSourceId,
+  extractBilibiliBvid,
+  isBilibiliVideoSourceLocator,
   listBilibiliFavoriteFolders,
   listBilibiliFavoriteResources,
   listBilibiliRecommendedResources,
+  mergeBilibiliPlaybackQualityOptions,
+  normalizeBilibiliPlaybackQualityKey,
+  normalizeBilibiliLookupInput,
+  parseBilibiliSearchSourceId,
+  resolveBilibiliQualityBadges,
   searchBilibiliResources,
   listBilibiliPlaybackQualities,
   prepareBilibiliCachedPlayback,
   resolveBilibiliCoverAssetUrl,
+  resolveBilibiliWebUrl,
   resolveBilibiliLyricLocator,
   searchBilibiliResourceByBvid,
   type BilibiliFavoriteFolderItem,
@@ -130,6 +156,8 @@ export {
   type BilibiliFavoriteResourcePage,
   type BilibiliPreparedPlayback,
   type BilibiliPlaybackQualityOption,
+  type BilibiliPlaybackQualityKey,
+  type BilibiliQualityBadge,
   type BilibiliLyricLocatorResolved,
 } from './bilibiliFacade';
 
@@ -161,10 +189,23 @@ export {
 } from './platformFacade';
 
 export {
+  clonePlatformWorkspaceCollectionItem,
+  clonePlatformWorkspaceCollectionItems,
+  clonePlatformWorkspacePageItem,
+  clonePlatformWorkspacePageModel,
+  clonePlatformWorkspacePreparedPlayback,
+  clonePlatformWorkspaceQualityOption,
+  clonePlatformWorkspaceQualityState,
+  clonePlatformWorkspaceResourceItem,
+  clonePlatformWorkspaceResourcePage,
   listPlatformWorkspaceCollections,
   listPlatformWorkspaceCollectionResources,
+  createPlatformWorkspaceFeatureFlags,
+  createPlatformWorkspacePageModel,
+  getPlatformWorkspacePageModel,
   listPlatformWorkspaceRecommendedCollections,
   listPlatformWorkspaceRecommendedResources,
+  listPlatformWorkspacePages,
   searchPlatformWorkspaceResources,
   resolvePlatformWorkspaceResource,
   preparePlatformWorkspacePlayback,
@@ -180,6 +221,10 @@ export {
   type PlatformWorkspaceQualityState,
   type PlatformWorkspaceQualityOption,
   type PlatformWorkspaceLyricLocatorResolved,
+  type PlatformWorkspaceFeatureFlags,
+  type PlatformWorkspacePageItem,
+  type PlatformWorkspacePageListResult,
+  type PlatformWorkspacePageModel,
 } from './platformWorkspaceFacade';
 
 export type {

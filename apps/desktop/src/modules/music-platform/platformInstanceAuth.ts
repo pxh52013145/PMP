@@ -7,13 +7,12 @@ import type {
 
 import {
   getPlatformCompatRuntimeApi,
-  listPlatformCompatRegistryRecords,
 } from './contractRegistry';
+import { getPlatformInstance, listPlatformInstances, refreshPlatformInstance } from './instanceRegistry';
 import {
-  getPlatformInstance,
-  listPlatformInstances,
-  refreshPlatformInstance,
-} from './instanceRegistry';
+  resolveDefaultPlatformInstanceIdForConnector,
+  resolvePlatformRuntimeDescriptorByInstanceId,
+} from './platformRuntimeDescriptor';
 export interface PlatformInstanceAuthSnapshot {
   instanceId: string;
   platformId: string;
@@ -80,11 +79,6 @@ function mapInstanceAuthStatusToConnectorAuthState(value: unknown): PlatformComp
   return 'unauthorized';
 }
 
-function toBuiltinInstanceId(platformId: string): string | null {
-  const normalizedPlatformId = normalizeString(platformId).toLowerCase();
-  return normalizedPlatformId ? `${normalizedPlatformId}:builtin` : null;
-}
-
 function mapRecordToSnapshot(
   record: NonNullable<ReturnType<typeof getPlatformInstance>>
 ): PlatformInstanceAuthSnapshot {
@@ -107,30 +101,6 @@ function mapRecordToSnapshot(
   };
 }
 
-function findPreferredInstanceIdByConnectorId(connectorId: string): string | null {
-  const normalizedConnectorId = normalizeString(connectorId).toLowerCase();
-  if (!normalizedConnectorId) return null;
-
-  const matchingInstances = listPlatformInstances().filter(
-    (instance) =>
-      normalizeString(instance.metadata?.connectorId).toLowerCase() === normalizedConnectorId
-  );
-  if (matchingInstances.length > 0) {
-    const builtinMatch =
-      matchingInstances.find((instance) => instance.instanceId.endsWith(':builtin')) ?? null;
-    return (builtinMatch ?? matchingInstances[0])?.instanceId ?? null;
-  }
-
-  for (const record of listPlatformCompatRegistryRecords()) {
-    if (normalizeString(record.metadata?.connectorId).toLowerCase() !== normalizedConnectorId) {
-      continue;
-    }
-    return toBuiltinInstanceId(record.platformId);
-  }
-
-  return null;
-}
-
 function resolveRuntimeForInstance(
   instanceId: string
 ): {
@@ -140,15 +110,16 @@ function resolveRuntimeForInstance(
   displayName: string;
   runtime: PlatformCompatRuntimeApi | null;
 } | null {
-  const record = getPlatformInstance(instanceId);
-  if (!record) return null;
+  const descriptor = resolvePlatformRuntimeDescriptorByInstanceId(instanceId);
+  const record = descriptor?.instanceRecord ?? null;
+  if (!descriptor || !record) return null;
   return {
     instanceId: record.instanceId,
     platformId: record.platformId,
     connectorId:
       typeof record.metadata?.connectorId === 'string' ? record.metadata.connectorId : undefined,
     displayName: record.displayName,
-    runtime: getPlatformCompatRuntimeApi(record.platformId),
+    runtime: descriptor.runtime ?? getPlatformCompatRuntimeApi(record.platformId),
   };
 }
 
@@ -179,7 +150,7 @@ export function resolvePlatformInstanceId(options: {
 }): string | null {
   const explicitInstanceId = normalizeString(options.instanceId);
   if (explicitInstanceId) return explicitInstanceId;
-  return findPreferredInstanceIdByConnectorId(normalizeString(options.connectorId));
+  return resolveDefaultPlatformInstanceIdForConnector(normalizeString(options.connectorId));
 }
 
 export function getPlatformInstanceAuthSnapshot(

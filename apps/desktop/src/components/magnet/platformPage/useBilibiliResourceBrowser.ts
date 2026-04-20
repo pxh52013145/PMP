@@ -3,18 +3,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import {
   BILIBILI_CONNECTOR_ID,
-  listPlatformWorkspaceCollectionResources,
-  listPlatformWorkspaceCollections,
-  listPlatformWorkspaceRecommendedResources,
-  resolvePlatformWorkspaceResource,
-  searchPlatformWorkspaceResources,
+  listBilibiliFavoriteFolders,
+  listBilibiliFavoriteResources,
+  listBilibiliRecommendedResources,
+  normalizeBilibiliLookupInput,
+  parseBilibiliSearchSourceId,
+  searchBilibiliResourceByBvid,
+  searchBilibiliResources,
   type BilibiliFavoriteFolderItem,
   type BilibiliFavoriteResourceItem,
   type BilibiliFavoriteResourcePage,
   type PlatformConnectorId,
-  type PlatformWorkspaceCollectionItem,
-  type PlatformWorkspaceResourceItem,
-  type PlatformWorkspaceResourcePage,
 } from '../../../modules/music-platform';
 import {
   getMusicPlatformDurationMs,
@@ -47,45 +46,6 @@ function toErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function normalizeBilibiliLookupInput(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const normalizeBvidToken = (token: string): string | null => {
-    const normalized = token.trim();
-    if (!/^bv[0-9a-zA-Z]{10}$/i.test(normalized)) return null;
-    return `BV${normalized.slice(2)}`;
-  };
-
-  try {
-    const parsed = new URL(trimmed);
-    for (const [name, rawValue] of parsed.searchParams.entries()) {
-      if (!name.toLowerCase().includes('bvid')) continue;
-      const normalizedToken = normalizeBvidToken(rawValue);
-      if (normalizedToken) return normalizedToken;
-    }
-    const segments = parsed.pathname.split('/').filter((segment) => segment.length > 0);
-    for (const segment of segments) {
-      const normalizedToken = normalizeBvidToken(segment);
-      if (normalizedToken) return normalizedToken;
-    }
-  } catch {
-    // noop
-  }
-
-  const matchedToken = trimmed.match(/(BV[0-9A-Za-z]{10})/i);
-  if (!matchedToken) return null;
-  return `BV${matchedToken[1].slice(2)}`;
-}
-
-function parseSearchKeywordFromResourceFolderId(folderId: string): string | null {
-  const normalizedFolderId = folderId.trim();
-  const prefix = 'bilibili:search:';
-  if (!normalizedFolderId.startsWith(prefix)) return null;
-  const keyword = normalizedFolderId.slice(prefix.length).trim();
-  return keyword.length > 0 ? keyword : null;
-}
-
 function normalizeWorkspaceConnectorId(
   value: string | null | undefined
 ): PlatformConnectorId | null {
@@ -93,51 +53,6 @@ function normalizeWorkspaceConnectorId(
   const normalized = value.trim().toLowerCase();
   if (!normalized.startsWith('connector.platform.')) return null;
   return normalized as PlatformConnectorId;
-}
-
-function mapWorkspaceCollectionToBilibiliFolder(
-  item: PlatformWorkspaceCollectionItem
-): BilibiliFavoriteFolderItem {
-  return {
-    folderId: item.collectionId,
-    title: item.title,
-    mediaCount: item.trackCount,
-    coverUrl: item.coverUrl,
-    updatedAtMs: item.updatedAtMs,
-  };
-}
-
-function mapWorkspaceResourceToBilibiliItem(
-  item: PlatformWorkspaceResourceItem
-): BilibiliFavoriteResourceItem {
-  return {
-    resourceId: item.resourceId,
-    title: item.title,
-    ownerName: item.ownerName || item.artistNames,
-    durationSeconds: item.durationSeconds,
-    coverUrl: item.coverUrl,
-    sourceLocator: item.sourceLocator,
-    lyricLocator: item.lyricLocator,
-    bvid: item.bvid,
-    cid: item.cid,
-    contentKind: item.contentKind || 'unknown',
-  };
-}
-
-function mapWorkspacePageToBilibiliPage(
-  page: PlatformWorkspaceResourcePage | null,
-  fallbackFolderId: string
-): BilibiliFavoriteResourcePage | null {
-  if (!page) return null;
-  const folderId = page.sourceId.trim() || fallbackFolderId;
-  return {
-    folderId,
-    pageNum: page.pageNum,
-    pageSize: page.pageSize,
-    total: page.total,
-    hasMore: page.hasMore,
-    items: page.items.map(mapWorkspaceResourceToBilibiliItem),
-  };
 }
 
 function mergeResourcePageItems(
@@ -236,12 +151,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     const startedAtMs = getMusicPlatformNowMs();
     setFolderLoading(true);
     try {
-      const folders = (
-        await listPlatformWorkspaceCollections({
-          connectorId: resolvedWorkspaceConnectorId,
-          instanceId: bilibiliInstanceId,
-        })
-      ).map(mapWorkspaceCollectionToBilibiliFolder);
+      const folders = await listBilibiliFavoriteFolders(bilibiliInstanceId);
       setBilibiliFolders(folders);
       setFolderError(null);
 
@@ -295,13 +205,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     setResourceLoading(true);
     try {
       setResourceSourceKey('recommended');
-      const page = mapWorkspacePageToBilibiliPage(
-        await listPlatformWorkspaceRecommendedResources({
-          connectorId: resolvedWorkspaceConnectorId,
-          instanceId: bilibiliInstanceId,
-        }),
-        'recommended'
-      );
+      const page = await listBilibiliRecommendedResources(bilibiliInstanceId);
       setResourcePage(
         page
           ? {
@@ -357,19 +261,15 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       setResourceLoading(true);
       try {
         setResourceSourceKey(`search:${normalizedKeyword.toLowerCase()}`);
-        const page = mapWorkspacePageToBilibiliPage(
-          await searchPlatformWorkspaceResources({
-            connectorId: resolvedWorkspaceConnectorId,
-            keyword: normalizedKeyword,
-            pageNum: 1,
-            pageSize: BILIBILI_RESOURCE_PAGE_SIZE,
-            instanceId: bilibiliInstanceId,
-          }),
-          `bilibili:search:${normalizedKeyword}`
-        );
+        const page = await searchBilibiliResources({
+          keyword: normalizedKeyword,
+          pageNum: 1,
+          pageSize: BILIBILI_RESOURCE_PAGE_SIZE,
+          instanceId: bilibiliInstanceId,
+        });
         setResourcePage(
           page
-            ? {
+          ? {
                 ...page,
                 items: [...page.items],
               }
@@ -387,7 +287,6 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       bilibiliAuthorized,
       bilibiliInstanceId,
       refreshBilibiliRecommendedResources,
-      resolvedWorkspaceConnectorId,
       t,
       workspaceVisible,
     ]
@@ -416,16 +315,12 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       try {
         setResourceSourceKey(`folder:${normalizedFolderId}`);
         const requestFolderPage = async (pageNum: number, pageSize: number) =>
-          mapWorkspacePageToBilibiliPage(
-            await listPlatformWorkspaceCollectionResources({
-              connectorId: resolvedWorkspaceConnectorId,
-              collectionId: normalizedFolderId,
-              pageNum,
-              pageSize,
-              instanceId: bilibiliInstanceId,
-            }),
-            normalizedFolderId
-          );
+          await listBilibiliFavoriteResources({
+            folderId: normalizedFolderId,
+            pageNum,
+            pageSize,
+            instanceId: bilibiliInstanceId,
+          });
 
         let page = await requestFolderPage(1, BILIBILI_RESOURCE_PAGE_SIZE);
         const expectedFolderCount =
@@ -524,7 +419,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
 
     const nextPageNum = Math.max(2, currentPage.pageNum + 1);
     const pageSize = currentPage.pageSize || BILIBILI_RESOURCE_PAGE_SIZE;
-    const searchKeyword = parseSearchKeywordFromResourceFolderId(normalizedFolderId);
+    const searchKeyword = parseBilibiliSearchSourceId(normalizedFolderId);
 
     const startedAtMs = getMusicPlatformNowMs();
     setResourceLoadingMore(true);
@@ -532,28 +427,20 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       let nextPage: BilibiliFavoriteResourcePage | null = null;
 
       if (searchKeyword) {
-        nextPage = mapWorkspacePageToBilibiliPage(
-          await searchPlatformWorkspaceResources({
-            connectorId: resolvedWorkspaceConnectorId,
-            keyword: searchKeyword,
-            pageNum: nextPageNum,
-            pageSize,
-            instanceId: bilibiliInstanceId,
-          }),
-          `bilibili:search:${searchKeyword}`
-        );
+        nextPage = await searchBilibiliResources({
+          keyword: searchKeyword,
+          pageNum: nextPageNum,
+          pageSize,
+          instanceId: bilibiliInstanceId,
+        });
       } else {
         const requestFolderPage = async (pageNum: number) =>
-          mapWorkspacePageToBilibiliPage(
-            await listPlatformWorkspaceCollectionResources({
-              connectorId: resolvedWorkspaceConnectorId,
-              collectionId: normalizedFolderId,
-              pageNum,
-              pageSize,
-              instanceId: bilibiliInstanceId,
-            }),
-            normalizedFolderId
-          );
+          await listBilibiliFavoriteResources({
+            folderId: normalizedFolderId,
+            pageNum,
+            pageSize,
+            instanceId: bilibiliInstanceId,
+          });
 
         nextPage = await requestFolderPage(nextPageNum);
         let probePageNum = nextPageNum;
@@ -648,18 +535,14 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     setResourceError(null);
     setResourceFilterQuery(normalizedQuery);
     try {
-      const result = await resolvePlatformWorkspaceResource({
-        connectorId: resolvedWorkspaceConnectorId,
-        query: normalizedQuery,
-        instanceId: bilibiliInstanceId,
-      });
+      const result = await searchBilibiliResourceByBvid(normalizedQuery, bilibiliInstanceId);
       if (!result) {
         setBvidSearchResult(null);
         setBvidSearchError(t('magnet.platform.bilibili.resource.bvSearchNotFound'));
         return true;
       }
 
-      setBvidSearchResult(mapWorkspaceResourceToBilibiliItem(result));
+      setBvidSearchResult(result);
       return true;
     } catch (err) {
       setBvidSearchResult(null);
@@ -668,7 +551,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     } finally {
       setBvidSearching(false);
     }
-  }, [bilibiliInstanceId, resolvedWorkspaceConnectorId, t]);
+  }, [bilibiliInstanceId, t]);
 
   useEffect(() => {
     if (normalizeBilibiliLookupInput(resourceFilterQuery)) return;

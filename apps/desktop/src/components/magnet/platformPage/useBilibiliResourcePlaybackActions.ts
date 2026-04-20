@@ -2,16 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { IAudioService, Track } from '../../../services/audio';
 import {
-  BILIBILI_CONNECTOR_ID,
-  preparePlatformWorkspacePlayback,
-  resolvePlatformWorkspaceCoverAssetUrl,
-  resolvePlatformWorkspaceLyricLocator,
-  resolvePlatformWorkspaceResource,
+  buildBilibiliPreparedResourceKey,
+  extractBilibiliBvid,
+  prepareBilibiliCachedPlayback,
+  resolveBilibiliCoverAssetUrl,
+  resolveBilibiliLyricLocator,
+  resolveBilibiliWebUrl,
+  searchBilibiliResourceByBvid,
   type BilibiliFavoriteResourceItem,
   type BilibiliLyricLocatorResolved,
   type BilibiliPreparedPlayback,
-  type PlatformConnectorId,
-  type PlatformWorkspacePreparedPlayback,
 } from '../../../modules/music-platform';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
@@ -34,62 +34,7 @@ function toErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function toBilibiliWebUrl(item: BilibiliFavoriteResourceItem): string | null {
-  const bvid = item.bvid?.trim();
-  if (bvid) return `https://www.bilibili.com/video/${bvid}`;
-  const locator = item.sourceLocator.trim();
-  if (locator.startsWith('https://') || locator.startsWith('http://')) return locator;
-  return null;
-}
-
-const BILIBILI_BVID_PATTERN = /BV[0-9A-Za-z]{10}/i;
 const PREPARED_TRACK_CACHE_LIMIT = 96;
-
-function extractBvidFromText(value: string | null | undefined): string | null {
-  const normalized = typeof value === 'string' ? value.trim() : '';
-  if (!normalized) return null;
-  const matched = normalized.match(BILIBILI_BVID_PATTERN);
-  if (!matched || !matched[0]) return null;
-  return matched[0].toUpperCase();
-}
-
-function normalizeWorkspaceConnectorId(
-  value: string | null | undefined
-): PlatformConnectorId | null {
-  if (typeof value !== 'string') return null;
-  const normalized = value.trim().toLowerCase();
-  if (!normalized.startsWith('connector.platform.')) return null;
-  return normalized as PlatformConnectorId;
-}
-
-function buildStableBilibiliResourceIdentity(item: BilibiliFavoriteResourceItem): string {
-  const resourceId = typeof item.resourceId === 'string' ? item.resourceId.trim() : '';
-  if (resourceId) {
-    return `rid:${resourceId}`;
-  }
-
-  const bvid = typeof item.bvid === 'string' ? item.bvid.trim().toUpperCase() : '';
-  const cid = typeof item.cid === 'string' ? item.cid.trim() : '';
-  if (bvid && cid) {
-    return `bvid:${bvid}::cid:${cid}`;
-  }
-  if (bvid) {
-    return `bvid:${bvid}`;
-  }
-
-  const sourceLocator = typeof item.sourceLocator === 'string' ? item.sourceLocator.trim() : '';
-  if (sourceLocator) {
-    return `locator:${sourceLocator}`;
-  }
-
-  const title = typeof item.title === 'string' ? item.title.trim() : '';
-  const ownerName = typeof item.ownerName === 'string' ? item.ownerName.trim() : '';
-  const duration =
-    typeof item.durationSeconds === 'number' && Number.isFinite(item.durationSeconds)
-      ? String(Math.max(0, Math.floor(item.durationSeconds)))
-      : '0';
-  return `meta:${title || 'unknown'}::${ownerName}::${duration}`;
-}
 
 function setPreparedTrackWithBoundedLru(cache: Map<string, Track>, cacheKey: string, track: Track): void {
   if (cache.has(cacheKey)) {
@@ -101,22 +46,6 @@ function setPreparedTrackWithBoundedLru(cache: Map<string, Track>, cacheKey: str
     if (!oldestKey) break;
     cache.delete(oldestKey);
   }
-}
-
-function toBilibiliPreparedPlayback(
-  prepared: PlatformWorkspacePreparedPlayback
-): BilibiliPreparedPlayback {
-  return {
-    sourceLocator: prepared.sourceLocator,
-    streamUrl: prepared.streamUrl,
-    cachePath: prepared.cachePath,
-    mimeType: prepared.mimeType,
-    durationSeconds: prepared.durationSeconds,
-    contentKind: prepared.contentKind || 'unknown',
-    selectedQualityKey: prepared.selectedQualityKey || 'auto',
-    selectedQualityLabel:
-      prepared.selectedQualityLabel || prepared.selectedQualityKey || 'auto',
-  };
 }
 
 type UseBilibiliResourcePlaybackActionsParams = {
@@ -149,8 +78,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
     setPlaylistError,
     buildTrackFromPreparedPlayback,
   } = params;
-  const resolvedWorkspaceConnectorId =
-    normalizeWorkspaceConnectorId(workspaceConnectorId) ?? BILIBILI_CONNECTOR_ID;
+  void workspaceConnectorId;
 
   const [resourceInfo, setResourceInfo] = useState<string | null>(null);
   const [preparingResourceId, setPreparingResourceId] = useState<string | null>(null);
@@ -180,11 +108,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
       setLyricResolvingId(item.resourceId);
       setLyricError(null);
       try {
-        const resolved = await resolvePlatformWorkspaceLyricLocator({
-          connectorId: resolvedWorkspaceConnectorId,
-          lyricLocator: locator,
-          instanceId: activeBilibiliInstanceId,
-        });
+        const resolved = await resolveBilibiliLyricLocator(locator, activeBilibiliInstanceId);
         if (!resolved) {
           setLyricError(t('magnet.platform.bilibili.lyric.notFound'));
           setResolvedLyric(null);
@@ -198,54 +122,48 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
         setLyricResolvingId(null);
       }
     },
-    [activeBilibiliInstanceId, resolvedWorkspaceConnectorId, t]
+    [activeBilibiliInstanceId, t]
   );
 
   const ensurePreparedTrack = useCallback(
     async (item: BilibiliFavoriteResourceItem): Promise<Track> => {
-      const stableIdentity = buildStableBilibiliResourceIdentity(item);
-      const cacheKey = `${stableIdentity}::${normalizedPlaybackQualityHint}`;
+      const cacheKey = buildBilibiliPreparedResourceKey(item, normalizedPlaybackQualityHint);
       const cached = preparedTrackMapRef.current.get(cacheKey);
       if (cached) return cached;
 
       setPreparingResourceId(cacheKey);
       try {
-        const prepared = await preparePlatformWorkspacePlayback({
-          connectorId: resolvedWorkspaceConnectorId,
-          sourceLocator: item.sourceLocator,
-          qualityHint: normalizedPlaybackQualityHint,
-          instanceId: activeBilibiliInstanceId,
-        });
-        if (!prepared) {
+        const bilibiliPrepared = await prepareBilibiliCachedPlayback(
+          item.sourceLocator,
+          normalizedPlaybackQualityHint,
+          activeBilibiliInstanceId
+        );
+        if (!bilibiliPrepared) {
           throw new Error(t('magnet.platform.bilibili.player.error.prepareFailed'));
         }
-        const bilibiliPrepared = toBilibiliPreparedPlayback(prepared);
 
-        let resolvedCoverUrl = await resolvePlatformWorkspaceCoverAssetUrl({
-          connectorId: resolvedWorkspaceConnectorId,
-          coverUrl: item.coverUrl,
-          instanceId: activeBilibiliInstanceId,
-        });
+        let resolvedCoverUrl = await resolveBilibiliCoverAssetUrl(
+          item.coverUrl,
+          activeBilibiliInstanceId
+        );
         if (!resolvedCoverUrl) {
           const bvid =
-            extractBvidFromText(item.bvid) ||
-            extractBvidFromText(item.sourceLocator) ||
-            extractBvidFromText(item.lyricLocator);
+            extractBilibiliBvid(item.bvid) ||
+            extractBilibiliBvid(item.sourceLocator) ||
+            extractBilibiliBvid(item.lyricLocator);
           if (bvid) {
-            const matched = await resolvePlatformWorkspaceResource({
-              connectorId: resolvedWorkspaceConnectorId,
-              query: bvid,
-              instanceId: activeBilibiliInstanceId,
-            }).catch(() => null);
+            const matched = await searchBilibiliResourceByBvid(
+              bvid,
+              activeBilibiliInstanceId
+            ).catch(() => null);
             const discoveredCoverUrl =
               typeof matched?.coverUrl === 'string' ? matched.coverUrl.trim() : '';
             if (discoveredCoverUrl) {
               resolvedCoverUrl =
-                (await resolvePlatformWorkspaceCoverAssetUrl({
-                  connectorId: resolvedWorkspaceConnectorId,
-                  coverUrl: discoveredCoverUrl,
-                  instanceId: activeBilibiliInstanceId,
-                })) || discoveredCoverUrl;
+                (await resolveBilibiliCoverAssetUrl(
+                  discoveredCoverUrl,
+                  activeBilibiliInstanceId
+                )) || discoveredCoverUrl;
             }
           }
         }
@@ -275,7 +193,6 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
       activeBilibiliInstanceId,
       normalizedPlaybackQualityHint,
       preferredQualityLabel,
-      resolvedWorkspaceConnectorId,
       setResourceError,
       t,
     ]
@@ -330,7 +247,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
 
   const handleOpenBilibiliResource = useCallback(
     (item: BilibiliFavoriteResourceItem) => {
-      const url = toBilibiliWebUrl(item);
+      const url = resolveBilibiliWebUrl(item);
       if (!url) {
         setResourceError(t('magnet.platform.bilibili.resource.noLink'));
         return;

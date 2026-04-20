@@ -721,4 +721,69 @@ describe('platformPackRegistry builtin pack boot', () => {
     expect(fetchCalls).not.toContain('/resource/music-platform/packs/dist/builtin-bilibili.pmpp');
     expect(fetchCalls).not.toContain('/resource/music-platform/packs/dist/builtin-netease.pmpp');
   });
+
+  it('exposes ready startup health after builtin pack boot completes', async () => {
+    const { registry } = await bootPlatformPackRegistry();
+
+    const health = registry.getPlatformPackStartupHealth();
+    expect(health.state).toBe('ready');
+    expect(health.currentStage).toBe('completed');
+    expect(health.registeredBuiltinCount).toBe(2);
+    expect(health.expectedBuiltinCount).toBe(2);
+    expect(health.backgroundReconcileScheduled).toBe(false);
+    expect(health.backgroundReconcileRunning).toBe(false);
+    expect(health.recentStages.some((entry) => entry.stage === 'restore-store')).toBe(true);
+    expect(
+      health.recentStages.some(
+        (entry) => entry.stage === 'completed' && entry.state === 'ready'
+      )
+    ).toBe(true);
+    expect(telemetryLoggerMock.info).toHaveBeenCalledWith(
+      'music-platform.pack.boot.completed',
+      expect.objectContaining({
+        fields: expect.objectContaining({
+          state: 'ready',
+          registeredBuiltinCount: 2,
+          expectedBuiltinCount: 2,
+        }),
+      })
+    );
+  });
+
+  it('records background reconcile in startup health when the restored store is stale', async () => {
+    const { registry, windowCommunication } = await bootPlatformPackRegistry();
+    expect(registry.listPlatformPackRegistrations()).toHaveLength(2);
+
+    const storedRecords = JSON.parse(
+      localStorage.getItem(windowCommunication.STORAGE_KEYS.PLATFORM_PACKS_V1) ?? '[]'
+    ) as Array<Record<string, unknown>>;
+    expect(storedRecords).toHaveLength(2);
+
+    fetchState.builtinPackIndexPayload = buildBuiltinPackIndexPayload(
+      storedRecords.map((record, index) => ({
+        ...record,
+        packVersion: index === 0 ? '9.9.9' : record.packVersion,
+      }))
+    );
+    resetBootTestEnvironment({
+      clearStorage: false,
+      clearFs: false,
+      clearBuiltinPackIndex: false,
+    });
+
+    const secondBoot = await bootPlatformPackRegistry();
+    let health = secondBoot.registry.getPlatformPackStartupHealth();
+    for (
+      let attempt = 0;
+      attempt < 8 &&
+      !health.recentStages.some((entry) => entry.stage === 'background-reconcile');
+      attempt += 1
+    ) {
+      await flushBootLifecycle();
+      health = secondBoot.registry.getPlatformPackStartupHealth();
+    }
+
+    expect(['running', 'ready']).toContain(health.state);
+    expect(health.recentStages.some((entry) => entry.stage === 'background-reconcile')).toBe(true);
+  });
 });

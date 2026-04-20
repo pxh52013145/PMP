@@ -290,6 +290,12 @@ export function createPlatformCompatRuntimeFromBindingContract(
     });
   };
 
+  const invokeTypedBinding = <T>(
+    bindingId: string | undefined,
+    method: string,
+    payload: Record<string, unknown> = {}
+  ) => invokeBinding(bindingId, method, payload) as Promise<PlatformApiResult<T>>;
+
   const invokeTypedAuthBinding = async <T>(
     method: string,
     payload: Record<string, unknown>,
@@ -328,11 +334,11 @@ export function createPlatformCompatRuntimeFromBindingContract(
     library: contract.apiBindings.library
       ? {
           listCollections: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.library, 'listCollections', input),
+            invokeTypedBinding(contract.apiBindings.library, 'listCollections', input),
           listResources: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.library, 'listResources', input),
+            invokeTypedBinding(contract.apiBindings.library, 'listResources', input),
           listPlaylistTracks: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.library, 'listPlaylistTracks', input),
+            invokeTypedBinding(contract.apiBindings.library, 'listPlaylistTracks', input),
           createPlaylist: async (input: Record<string, unknown>) =>
             invokeBinding(contract.apiBindings.library, 'createPlaylist', input),
           deletePlaylist: async (input: Record<string, unknown>) =>
@@ -342,37 +348,41 @@ export function createPlatformCompatRuntimeFromBindingContract(
           removeTrackFromPlaylist: async (input: Record<string, unknown>) =>
             invokeBinding(contract.apiBindings.library, 'removeTrackFromPlaylist', input),
           preparePlayback: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.library, 'preparePlayback', input),
+            invokeTypedBinding(contract.apiBindings.library, 'preparePlayback', input),
+          resolveLyricLocator: async (input: Record<string, unknown>) =>
+            invokeTypedBinding(contract.apiBindings.library, 'resolveLyricLocator', input),
+          resolveCoverAssetUrl: async (input: Record<string, unknown>) =>
+            invokeTypedBinding(contract.apiBindings.library, 'resolveCoverAssetUrl', input),
         }
       : undefined,
     recommendations: contract.apiBindings.recommendations
       ? {
           listDaily: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.recommendations, 'listDaily', input),
+            invokeTypedBinding(contract.apiBindings.recommendations, 'listDaily', input),
           listRecommendedSongs: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.recommendations, 'listRecommendedSongs', input),
+            invokeTypedBinding(contract.apiBindings.recommendations, 'listRecommendedSongs', input),
           listRecommendedPlaylists: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.recommendations, 'listRecommendedPlaylists', input),
+            invokeTypedBinding(contract.apiBindings.recommendations, 'listRecommendedPlaylists', input),
         }
       : undefined,
     search: contract.apiBindings.search
       ? {
           query: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.search, 'query', input),
+            invokeTypedBinding(contract.apiBindings.search, 'query', input),
           resolveLocator: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.search, 'resolveLocator', input),
+            invokeTypedBinding(contract.apiBindings.search, 'resolveLocator', input),
           preparePlayback: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.search, 'preparePlayback', input),
+            invokeTypedBinding(contract.apiBindings.search, 'preparePlayback', input),
         }
       : undefined,
     quality: contract.apiBindings.quality
       ? {
           listOptions: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.quality, 'listOptions', input),
+            invokeTypedBinding(contract.apiBindings.quality, 'listOptions', input),
           getCurrent: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.quality, 'getCurrent', input),
+            invokeTypedBinding(contract.apiBindings.quality, 'getCurrent', input),
           setPreferred: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.quality, 'setPreferred', input),
+            invokeTypedBinding(contract.apiBindings.quality, 'setPreferred', input),
         }
       : undefined,
     settings: contract.apiBindings.settings
@@ -388,9 +398,9 @@ export function createPlatformCompatRuntimeFromBindingContract(
     pages: contract.apiBindings.pages
       ? {
           getWorkspaceModel: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.pages, 'getWorkspaceModel', input),
+            invokeTypedBinding(contract.apiBindings.pages, 'getWorkspaceModel', input),
           listPages: async (input: Record<string, unknown>) =>
-            invokeBinding(contract.apiBindings.pages, 'listPages', input),
+            invokeTypedBinding(contract.apiBindings.pages, 'listPages', input),
         }
       : undefined,
     metadata: {

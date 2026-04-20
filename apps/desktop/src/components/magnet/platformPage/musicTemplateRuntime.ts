@@ -1,5 +1,16 @@
-import type { PlatformConnectorId } from '../../../modules/music-platform';
+import type {
+  PlatformCompatRegistryRecord,
+  PlatformConnectorId,
+  PlatformWorkspaceFeatureFlags,
+  PlatformWorkspacePageModel,
+} from '../../../modules/music-platform';
 import {
+  clonePlatformWorkspaceCollectionItems,
+  clonePlatformWorkspacePreparedPlayback,
+  clonePlatformWorkspaceQualityState,
+  clonePlatformWorkspaceResourcePage,
+  createPlatformWorkspacePageModel,
+  getPlatformWorkspacePageModel,
   listPlatformWorkspaceCollectionResources,
   listPlatformWorkspaceCollections,
   listPlatformWorkspaceQualityState,
@@ -15,66 +26,35 @@ import {
   type PlatformWorkspaceResourcePage,
 } from '../../../modules/music-platform';
 
-export interface MusicTemplateCollectionItem {
-  collectionId: string;
-  title: string;
-  trackCount: number;
-  coverUrl?: string;
-  updatedAtMs?: number;
-}
-
-export interface MusicTemplateResourceItem {
-  resourceId: string;
-  title: string;
-  artistNames: string;
-  albumName?: string;
-  durationSeconds?: number;
-  coverUrl?: string;
-  vipRequired?: boolean;
-  vipLabel?: string;
-  qualityKey?: string;
-  qualityLabel?: string;
-  tagLabels?: string[];
-  sourceLocator: string;
-  webUrl: string;
-}
-
-export interface MusicTemplateResourcePage {
-  sourceKind: string;
-  sourceId: string;
-  pageNum: number;
-  pageSize: number;
-  total: number;
-  hasMore: boolean;
-  items: MusicTemplateResourceItem[];
-}
-
-export interface MusicTemplatePreparedPlayback {
-  sourceLocator: string;
-  streamUrl: string;
-  cachePath: string;
-  mimeType?: string;
-  durationSeconds?: number;
-  resourceId?: string;
-  selectedQualityKey?: string;
-  selectedQualityLabel?: string;
-}
+export type MusicTemplateCollectionItem = PlatformWorkspaceCollectionItem;
+export type MusicTemplateResourceItem = PlatformWorkspaceResourceItem;
+export type MusicTemplateResourcePage = PlatformWorkspaceResourcePage;
+export type MusicTemplatePreparedPlayback = PlatformWorkspacePreparedPlayback;
 
 export interface MusicTemplateRecommendationsResult {
   page: MusicTemplateResourcePage | null;
   collections: MusicTemplateCollectionItem[];
 }
 
-export interface MusicTemplatePlaybackQualityOption {
-  key: string;
-  label?: string;
-  available: boolean;
-}
+export type MusicTemplatePlaybackQualityOption = PlatformWorkspaceQualityState['options'][number];
+export type MusicTemplatePlaybackQualityState = PlatformWorkspaceQualityState;
+export type MusicTemplatePlaybackQualityKey =
+  | 'auto'
+  | 'standard'
+  | 'higher'
+  | 'exhigh'
+  | 'lossless';
 
-export interface MusicTemplatePlaybackQualityState {
-  options: MusicTemplatePlaybackQualityOption[];
-  currentKey: string;
-  currentLabel?: string;
+export type MusicTemplateWorkspaceModel = PlatformWorkspacePageModel;
+
+export interface MusicTemplateWorkspaceCapabilities {
+  collections: boolean;
+  recommendations: boolean;
+  search: boolean;
+  quality: boolean;
+  defaultPageId?: string;
+  enabledPageIds: string[];
+  enabledPageKinds: string[];
 }
 
 export interface MusicTemplateRuntimeTarget {
@@ -98,6 +78,119 @@ function normalizeConnectorId(value: string): PlatformConnectorId | null {
   return normalized as PlatformConnectorId;
 }
 
+const MUSIC_TEMPLATE_COLLECTION_PAGE_KINDS = new Set([
+  'library',
+  'collection',
+  'collections',
+  'playlist',
+  'playlists',
+  'favorites',
+  'folder',
+  'folders',
+]);
+const MUSIC_TEMPLATE_RECOMMENDATION_PAGE_KINDS = new Set([
+  'recommended',
+  'recommendations',
+  'daily',
+]);
+const MUSIC_TEMPLATE_SEARCH_PAGE_KINDS = new Set(['search']);
+const MUSIC_TEMPLATE_QUALITY_PAGE_KINDS = new Set(['quality']);
+
+export function normalizeMusicTemplateQualityKey(
+  value: string
+): MusicTemplatePlaybackQualityKey {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'standard' || normalized === '128k') return 'standard';
+  if (normalized === 'higher' || normalized === '192k') return 'higher';
+  if (normalized === 'exhigh' || normalized === '320k') return 'exhigh';
+  if (normalized === 'lossless' || normalized === '999k') return 'lossless';
+  return 'auto';
+}
+
+export function resolveMusicTemplateQualityLabelKey(value: string): string {
+  switch (normalizeMusicTemplateQualityKey(value)) {
+    case 'standard':
+      return 'magnet.platform.music-template.quality.option.standard';
+    case 'higher':
+      return 'magnet.platform.music-template.quality.option.higher';
+    case 'exhigh':
+      return 'magnet.platform.music-template.quality.option.exhigh';
+    case 'lossless':
+      return 'magnet.platform.music-template.quality.option.lossless';
+    default:
+      return 'magnet.platform.music-template.quality.option.auto';
+  }
+}
+
+export function resolveMusicTemplateWorkspaceCapabilities(
+  model: MusicTemplateWorkspaceModel
+): MusicTemplateWorkspaceCapabilities {
+  const enabledPages = model.pages.filter((page) => page.enabled !== false);
+  const enabledPageIds = enabledPages
+    .map((page) => normalizeString(page.pageId))
+    .filter((pageId, index, pageIds): pageId is string => Boolean(pageId) && pageIds.indexOf(pageId) === index);
+  const enabledPageKinds = enabledPages
+    .map((page) => normalizeString(page.kind).toLowerCase())
+    .filter(
+      (pageKind, index, pageKinds): pageKind is string =>
+        Boolean(pageKind) && pageKinds.indexOf(pageKind) === index
+    );
+  const enabledPageKindSet = new Set(enabledPageKinds);
+
+  return {
+    collections:
+      model.features.collections ||
+      [...MUSIC_TEMPLATE_COLLECTION_PAGE_KINDS].some((pageKind) => enabledPageKindSet.has(pageKind)),
+    recommendations:
+      model.features.recommendations ||
+      [...MUSIC_TEMPLATE_RECOMMENDATION_PAGE_KINDS].some((pageKind) =>
+        enabledPageKindSet.has(pageKind)
+      ),
+    search:
+      model.features.search ||
+      [...MUSIC_TEMPLATE_SEARCH_PAGE_KINDS].some((pageKind) => enabledPageKindSet.has(pageKind)),
+    quality:
+      model.features.quality ||
+      [...MUSIC_TEMPLATE_QUALITY_PAGE_KINDS].some((pageKind) => enabledPageKindSet.has(pageKind)),
+    defaultPageId: normalizeString(model.defaultPageId) || undefined,
+    enabledPageIds,
+    enabledPageKinds,
+  };
+}
+
+export function resolveMusicTemplateQualityProbeSourceLocator(
+  page: MusicTemplateResourcePage | null
+): string | null {
+  if (!page) return null;
+  for (const item of page.items) {
+    const sourceLocator = normalizeString(item.sourceLocator);
+    if (sourceLocator) return sourceLocator;
+  }
+  return null;
+}
+
+export function mergeMusicTemplateResourcePages(
+  previous: MusicTemplateResourcePage | null,
+  next: MusicTemplateResourcePage
+): MusicTemplateResourcePage {
+  if (!previous || previous.sourceKind !== next.sourceKind || previous.sourceId !== next.sourceId) {
+    return clonePlatformWorkspaceResourcePage(next) ?? next;
+  }
+
+  const seen = new Set(previous.items.map((item) => item.resourceId));
+  const items = previous.items.map((item) => ({ ...item }));
+  for (const item of next.items) {
+    if (seen.has(item.resourceId)) continue;
+    seen.add(item.resourceId);
+    items.push({ ...item });
+  }
+
+  return {
+    ...next,
+    items,
+  };
+}
+
 function resolveWorkspaceTarget(
   target: MusicTemplateRuntimeTarget
 ): { connectorId: PlatformConnectorId; instanceId?: string | null } | null {
@@ -110,152 +203,97 @@ function resolveWorkspaceTarget(
   };
 }
 
-function mapTagLabels(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const mapped = value
-    .map((item) => normalizeString(item))
-    .filter(
-      (item, index, array): item is string =>
-        Boolean(item) && array.indexOf(item) === index
-    );
-  return mapped.length > 0 ? mapped : undefined;
-}
-
-function mapWorkspaceCollectionItem(
-  value: PlatformWorkspaceCollectionItem
-): MusicTemplateCollectionItem {
+function createMusicTemplateWorkspaceFallbackFeatures(
+  contractRecord?: PlatformCompatRegistryRecord | null
+): PlatformWorkspaceFeatureFlags {
   return {
-    collectionId: value.collectionId,
-    title: value.title,
-    trackCount: value.trackCount,
-    coverUrl: value.coverUrl,
-    updatedAtMs: value.updatedAtMs,
+    collections: contractRecord?.contract.capabilities.playlists === true,
+    recommendations: contractRecord?.contract.capabilities.dailyRecommendations === true,
+    search: contractRecord?.contract.capabilities.search === true,
+    quality: contractRecord?.contract.capabilities.quality === true,
   };
 }
 
-function mapWorkspaceResourceItem(
-  value: PlatformWorkspaceResourceItem
-): MusicTemplateResourceItem | null {
-  const resourceId = normalizeString(value.resourceId);
-  const title = normalizeString(value.title);
-  const sourceLocator = normalizeString(value.sourceLocator);
-  if (!resourceId || !title || !sourceLocator) {
-    return null;
-  }
-
-  return {
-    resourceId,
-    title,
-    artistNames:
-      normalizeString(value.artistNames) ||
-      normalizeString(value.ownerName) ||
-      '',
-    albumName: normalizeString(value.albumName) || undefined,
-    durationSeconds:
-      typeof value.durationSeconds === 'number' &&
-      Number.isFinite(value.durationSeconds)
-        ? value.durationSeconds
-        : undefined,
-    coverUrl: normalizeString(value.coverUrl) || undefined,
-    vipRequired: value.vipRequired === true,
-    vipLabel: normalizeString(value.vipLabel) || undefined,
-    qualityKey: normalizeString(value.qualityKey) || undefined,
-    qualityLabel: normalizeString(value.qualityLabel) || undefined,
-    tagLabels: mapTagLabels(value.tagLabels),
-    sourceLocator,
-    webUrl: normalizeString(value.webUrl),
-  };
+export function createMusicTemplateWorkspaceFallbackModel(
+  contractRecord?: PlatformCompatRegistryRecord | null
+): MusicTemplateWorkspaceModel {
+  return createPlatformWorkspacePageModel({
+    features: createMusicTemplateWorkspaceFallbackFeatures(contractRecord),
+  });
 }
 
-function mapWorkspaceResourcePage(
+function withMusicTemplateResourcePageFallback(
   page: PlatformWorkspaceResourcePage | null,
   fallback: Partial<Omit<MusicTemplateResourcePage, 'items'>> = {}
 ): MusicTemplateResourcePage | null {
-  if (!page) return null;
+  const cloned = clonePlatformWorkspaceResourcePage(page);
+  if (!cloned) return null;
 
-  const items = page.items
-    .map(mapWorkspaceResourceItem)
-    .filter((item): item is MusicTemplateResourceItem => Boolean(item));
-
+  const sourceKind = normalizeString(cloned.sourceKind);
+  const sourceId = normalizeString(cloned.sourceId);
   return {
-    sourceKind: normalizeString(page.sourceKind || fallback.sourceKind) || 'runtime',
-    sourceId: normalizeString(page.sourceId || fallback.sourceId) || 'runtime',
+    ...cloned,
+    sourceKind:
+      (sourceKind && sourceKind !== 'unknown'
+        ? sourceKind
+        : normalizeString(fallback.sourceKind)) || 'runtime',
+    sourceId:
+      (sourceId && sourceId !== 'unknown'
+        ? sourceId
+        : normalizeString(fallback.sourceId)) || 'runtime',
     pageNum:
-      normalizePositiveInt(page.pageNum) ||
-      normalizePositiveInt(fallback.pageNum) ||
-      1,
+      normalizePositiveInt(cloned.pageNum) || normalizePositiveInt(fallback.pageNum) || 1,
     pageSize:
-      normalizePositiveInt(page.pageSize) ||
+      normalizePositiveInt(cloned.pageSize) ||
       normalizePositiveInt(fallback.pageSize) ||
-      Math.max(1, items.length),
+      Math.max(1, cloned.items.length),
     total:
-      normalizePositiveInt(page.total) ||
+      normalizePositiveInt(cloned.total) ||
       normalizePositiveInt(fallback.total) ||
-      items.length,
-    hasMore:
-      typeof page.hasMore === 'boolean'
-        ? page.hasMore
-        : fallback.hasMore === true,
-    items,
+      cloned.items.length,
+    hasMore: cloned.hasMore === true || fallback.hasMore === true,
   };
 }
 
-function mapWorkspacePreparedPlayback(
+function withMusicTemplatePreparedPlaybackFallback(
   prepared: PlatformWorkspacePreparedPlayback | null,
   item: MusicTemplateResourceItem
 ): MusicTemplatePreparedPlayback | null {
-  if (!prepared) return null;
+  const cloned = clonePlatformWorkspacePreparedPlayback(prepared);
+  if (!cloned) return null;
 
-  const streamUrl = normalizeString(prepared.streamUrl);
-  const cachePath = normalizeString(prepared.cachePath);
+  const streamUrl = normalizeString(cloned.streamUrl);
+  const cachePath = normalizeString(cloned.cachePath);
   if (!streamUrl || !cachePath) {
     return null;
   }
 
   return {
-    sourceLocator:
-      normalizeString(prepared.sourceLocator) || item.sourceLocator,
+    sourceLocator: normalizeString(cloned.sourceLocator) || item.sourceLocator,
     streamUrl,
     cachePath,
-    mimeType: normalizeString(prepared.mimeType) || undefined,
+    mimeType: normalizeString(cloned.mimeType) || undefined,
     durationSeconds:
-      typeof prepared.durationSeconds === 'number' &&
-      Number.isFinite(prepared.durationSeconds)
-        ? prepared.durationSeconds
+      typeof cloned.durationSeconds === 'number' && Number.isFinite(cloned.durationSeconds)
+        ? cloned.durationSeconds
         : undefined,
-    resourceId: normalizeString(prepared.resourceId) || item.resourceId,
-    selectedQualityKey:
-      normalizeString(prepared.selectedQualityKey) || undefined,
-    selectedQualityLabel:
-      normalizeString(prepared.selectedQualityLabel) || undefined,
+    resourceId: normalizeString(cloned.resourceId) || item.resourceId,
+    selectedQualityKey: normalizeString(cloned.selectedQualityKey) || undefined,
+    selectedQualityLabel: normalizeString(cloned.selectedQualityLabel) || undefined,
   };
 }
 
-function mapWorkspacePlaybackQualityState(
+function withMusicTemplateQualityStateFallback(
   state: PlatformWorkspaceQualityState | null
 ): MusicTemplatePlaybackQualityState | null {
-  if (!state) return null;
+  const cloned = clonePlatformWorkspaceQualityState(state);
+  if (!cloned) return null;
 
-  const options: MusicTemplatePlaybackQualityOption[] = [];
-  for (const item of state.options) {
-    const key = normalizeString(item.key);
-    if (!key) continue;
-    options.push({
-      key,
-      label: normalizeString(item.label) || undefined,
-      available: item.available !== false,
-    });
-  }
-  const currentKey = normalizeString(state.currentKey);
-
-  if (!currentKey && options.length < 1) {
-    return null;
-  }
-
+  const currentKey = normalizeString(cloned.currentKey);
   return {
-    options,
-    currentKey: currentKey || options[0]?.key || 'auto',
-    currentLabel: normalizeString(state.currentLabel) || undefined,
+    ...cloned,
+    currentKey: currentKey || cloned.options[0]?.key || 'auto',
+    currentLabel: normalizeString(cloned.currentLabel) || undefined,
   };
 }
 
@@ -271,7 +309,7 @@ export async function listMusicTemplateCollections(
     instanceId: workspaceTarget.instanceId,
     forceRefresh: options?.forceRefresh === true,
   });
-  return collections.map(mapWorkspaceCollectionItem);
+  return clonePlatformWorkspaceCollectionItems(collections);
 }
 
 export async function listMusicTemplateRecommendations(
@@ -300,11 +338,11 @@ export async function listMusicTemplateRecommendations(
   ]);
 
   return {
-    page: mapWorkspaceResourcePage(resourcePage, {
+    page: withMusicTemplateResourcePageFallback(resourcePage, {
       sourceKind: 'recommended',
       sourceId: 'recommended',
     }),
-    collections: collections.map(mapWorkspaceCollectionItem),
+    collections: clonePlatformWorkspaceCollectionItems(collections),
   };
 }
 
@@ -324,7 +362,7 @@ export async function listMusicTemplateCollectionResources(
     forceRefresh: options?.forceRefresh === true,
   });
 
-  return mapWorkspaceResourcePage(resourcePage, {
+  return withMusicTemplateResourcePageFallback(resourcePage, {
     sourceKind: 'user-playlist',
     sourceId: normalizedCollectionId,
   });
@@ -355,12 +393,35 @@ export async function searchMusicTemplateResources(
     forceRefresh: options.forceRefresh === true,
   });
 
-  return mapWorkspaceResourcePage(resourcePage, {
+  return withMusicTemplateResourcePageFallback(resourcePage, {
     sourceKind: 'search',
     sourceId: keyword,
     pageNum,
     pageSize,
   });
+}
+
+export async function getMusicTemplateWorkspaceModel(
+  target: MusicTemplateRuntimeTarget,
+  options?: {
+    contractRecord?: PlatformCompatRegistryRecord | null;
+  }
+): Promise<MusicTemplateWorkspaceModel> {
+  const workspaceTarget = resolveWorkspaceTarget(target);
+  const fallbackModel = createMusicTemplateWorkspaceFallbackModel(options?.contractRecord);
+  if (!workspaceTarget) {
+    return fallbackModel;
+  }
+
+  try {
+    const pageModel = await getPlatformWorkspacePageModel({
+      connectorId: workspaceTarget.connectorId,
+      instanceId: workspaceTarget.instanceId,
+    });
+    return pageModel ?? fallbackModel;
+  } catch {
+    return fallbackModel;
+  }
 }
 
 export async function getMusicTemplatePlaybackQualityState(
@@ -380,7 +441,7 @@ export async function getMusicTemplatePlaybackQualityState(
     forceRefresh: options?.forceRefresh === true,
   });
 
-  return mapWorkspacePlaybackQualityState(qualityState);
+  return withMusicTemplateQualityStateFallback(qualityState);
 }
 
 export async function setMusicTemplatePlaybackQualityPreference(
@@ -401,7 +462,7 @@ export async function setMusicTemplatePlaybackQualityPreference(
     instanceId: workspaceTarget.instanceId,
   });
 
-  return mapWorkspacePlaybackQualityState(qualityState);
+  return withMusicTemplateQualityStateFallback(qualityState);
 }
 
 export async function prepareMusicTemplatePlayback(
@@ -423,5 +484,5 @@ export async function prepareMusicTemplatePlayback(
     instanceId: workspaceTarget.instanceId,
   });
 
-  return mapWorkspacePreparedPlayback(prepared, item);
+  return withMusicTemplatePreparedPlaybackFallback(prepared, item);
 }

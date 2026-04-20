@@ -21,11 +21,18 @@ import type {
 } from './MusicTemplateWorkspace';
 import type { MusicTemplateWorkspaceToolbarProps } from './MusicTemplateWorkspaceAdapter';
 import {
+  createMusicTemplateWorkspaceFallbackModel,
+  getMusicTemplateWorkspaceModel,
   getMusicTemplatePlaybackQualityState,
   listMusicTemplateCollectionResources,
   listMusicTemplateCollections,
   listMusicTemplateRecommendations,
+  mergeMusicTemplateResourcePages,
   prepareMusicTemplatePlayback,
+  normalizeMusicTemplateQualityKey,
+  resolveMusicTemplateQualityLabelKey,
+  resolveMusicTemplateQualityProbeSourceLocator,
+  resolveMusicTemplateWorkspaceCapabilities,
   setMusicTemplatePlaybackQualityPreference,
   searchMusicTemplateResources,
   type MusicTemplateCollectionItem,
@@ -34,6 +41,7 @@ import {
   type MusicTemplateResourceItem,
   type MusicTemplateResourcePage,
   type MusicTemplateRuntimeTarget,
+  type MusicTemplateWorkspaceModel,
 } from './musicTemplateRuntime';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
@@ -42,33 +50,7 @@ const MUSIC_TEMPLATE_SEARCH_PAGE_SIZE = 40;
 const PREPARED_TRACK_CACHE_LIMIT = 96;
 const DAILY_COLLECTION_BROWSER_ID = '__music-template-daily__';
 const telemetry = getTelemetryLogger('magnet.platform', 'useMusicTemplateWorkspaceAdapterController');
-
-type MusicTemplatePlaybackQualityKey = 'auto' | 'standard' | 'higher' | 'exhigh' | 'lossless';
 type MusicTemplateCollectionSelectionKind = MusicTemplateCollectionBrowserItem['kind'] | 'search' | null;
-
-function normalizeMusicTemplateQualityKey(value: string): MusicTemplatePlaybackQualityKey {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'standard' || normalized === '128k') return 'standard';
-  if (normalized === 'higher' || normalized === '192k') return 'higher';
-  if (normalized === 'exhigh' || normalized === '320k') return 'exhigh';
-  if (normalized === 'lossless' || normalized === '999k') return 'lossless';
-  return 'auto';
-}
-
-function toMusicTemplateQualityLabelKey(value: string): string {
-  switch (normalizeMusicTemplateQualityKey(value)) {
-    case 'standard':
-      return 'magnet.platform.music-template.quality.option.standard';
-    case 'higher':
-      return 'magnet.platform.music-template.quality.option.higher';
-    case 'exhigh':
-      return 'magnet.platform.music-template.quality.option.exhigh';
-    case 'lossless':
-      return 'magnet.platform.music-template.quality.option.lossless';
-    default:
-      return 'magnet.platform.music-template.quality.option.auto';
-  }
-}
 
 function toErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error) {
@@ -112,28 +94,6 @@ function setPreparedTrackWithBoundedLru(cache: Map<string, Track>, cacheKey: str
     if (!oldestKey) break;
     cache.delete(oldestKey);
   }
-}
-
-function mergeSongPages(
-  previous: MusicTemplateResourcePage | null,
-  next: MusicTemplateResourcePage
-): MusicTemplateResourcePage {
-  if (!previous || previous.sourceKind !== next.sourceKind || previous.sourceId !== next.sourceId) {
-    return next;
-  }
-
-  const seen = new Set(previous.items.map((item) => item.resourceId));
-  const items = previous.items.slice();
-  for (const item of next.items) {
-    if (seen.has(item.resourceId)) continue;
-    seen.add(item.resourceId);
-    items.push(item);
-  }
-
-  return {
-    ...next,
-    items,
-  };
 }
 
 function buildTrackFromPreparedPlayback(
@@ -245,13 +205,17 @@ export function useMusicTemplateWorkspaceAdapterController(
     Boolean(activeMusicConnectorId) &&
     activeWorkspaceConnectorId === activeMusicConnectorId;
   const authorized = activeMusicAuthState === 'authorized';
-
-  const supportsCollections = activeMusicContractRecord?.contract.capabilities.playlists === true;
-  const supportsDailyRecommendations =
-    activeMusicContractRecord?.contract.capabilities.dailyRecommendations === true;
-  const supportsSearch = activeMusicContractRecord?.contract.capabilities.search === true;
-  const musicTemplateQualitySupported =
-    activeMusicContractRecord?.contract.capabilities.quality === true;
+  const [workspaceModel, setWorkspaceModel] = useState<MusicTemplateWorkspaceModel>(() =>
+    createMusicTemplateWorkspaceFallbackModel(activeMusicContractRecord)
+  );
+  const workspaceCapabilities = useMemo(
+    () => resolveMusicTemplateWorkspaceCapabilities(workspaceModel),
+    [workspaceModel]
+  );
+  const supportsCollections = workspaceCapabilities.collections;
+  const supportsDailyRecommendations = workspaceCapabilities.recommendations;
+  const supportsSearch = workspaceCapabilities.search;
+  const musicTemplateQualitySupported = workspaceCapabilities.quality;
 
   const [collectionLoading, setCollectionLoading] = useState(false);
   const [collectionError, setCollectionError] = useState<string | null>(null);
@@ -282,7 +246,10 @@ export function useMusicTemplateWorkspaceAdapterController(
   const preparedTrackMapRef = useRef<Map<string, Track>>(new Map());
   const resourceViewportRef = useRef<HTMLDivElement>(null);
 
-  const qualityProbeSourceLocator = resourcePage?.items[0]?.sourceLocator?.trim() || null;
+  const qualityProbeSourceLocator = useMemo(
+    () => resolveMusicTemplateQualityProbeSourceLocator(resourcePage),
+    [resourcePage]
+  );
 
   const resolveCollectionItemById = useCallback(
     (
@@ -545,7 +512,7 @@ export function useMusicTemplateWorkspaceAdapterController(
           pageSize: MUSIC_TEMPLATE_SEARCH_PAGE_SIZE,
           forceRefresh,
         });
-        setResourcePage((prev) => (append && page ? mergeSongPages(prev, page) : page));
+        setResourcePage((prev) => (append && page ? mergeMusicTemplateResourcePages(prev, page) : page));
       } catch (error) {
         setResourceError(toErrorMessage(error, t('magnet.platform.music-template.resource.errorSearch')));
       } finally {
@@ -634,6 +601,28 @@ export function useMusicTemplateWorkspaceAdapterController(
     },
     [authorized, musicRuntimeTarget, musicTemplateQualitySupported, qualityProbeSourceLocator, t]
   );
+
+  useEffect(() => {
+    const fallbackModel = createMusicTemplateWorkspaceFallbackModel(activeMusicContractRecord);
+    setWorkspaceModel(fallbackModel);
+
+    if (!musicRuntimeTarget) {
+      return;
+    }
+
+    let cancelled = false;
+    void getMusicTemplateWorkspaceModel(musicRuntimeTarget, {
+      contractRecord: activeMusicContractRecord,
+    }).then((nextModel) => {
+      if (!cancelled) {
+        setWorkspaceModel(nextModel);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeMusicContractRecord, musicRuntimeTarget]);
 
   useEffect(() => {
     setCollectionError(null);
@@ -957,7 +946,7 @@ export function useMusicTemplateWorkspaceAdapterController(
     qualityError: playbackQualityError,
     qualityState: playbackQualityState,
     qualityLabelForKey: (qualityKey) =>
-      t(toMusicTemplateQualityLabelKey(normalizeMusicTemplateQualityKey(qualityKey))),
+      t(resolveMusicTemplateQualityLabelKey(normalizeMusicTemplateQualityKey(qualityKey))),
     onQualityHintChange: (qualityKey) => {
       void setPlaybackQualityPreference(qualityKey);
     },

@@ -4,12 +4,12 @@ import type {
   BilibiliFavoriteFolderItem,
   BilibiliFavoriteResourceItem,
   BilibiliFavoriteResourcePage,
+  BilibiliQualityBadge,
   BilibiliLyricLocatorResolved,
 } from '../../../modules/music-platform';
 import type { ContextMenuItem } from '../ContextMenu';
 import { ContextMenu } from '../ContextMenu';
 import { BilibiliResourceGrid } from './BilibiliResourceGrid';
-import type { BilibiliQualityBadge } from './useBilibiliResourceEnhancer';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
 

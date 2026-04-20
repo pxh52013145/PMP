@@ -18,6 +18,10 @@ import {
   PLATFORM_SEARCH_BINDING_ID,
 } from './platformInstanceApiBinding';
 import {
+  listPlatformRuntimeDescriptors,
+  resolvePreferredPlatformRuntimeDescriptorForConnector,
+} from './platformRuntimeDescriptor';
+import {
   normalizePlatformConnectorId,
   type PlatformConnectorId,
 } from './platformConnectorModel';
@@ -174,15 +178,22 @@ async function resolvePrepareCandidates(
 ): Promise<PlatformPrepareCandidate[]> {
   const explicitConnectorId = normalizePlatformConnectorId(options.connectorId);
   if (explicitConnectorId) {
-    const definition = listPlatformConnectorDefinitions().find(
-      (item) => item.connectorId === explicitConnectorId
-    );
+    const descriptor =
+      resolvePreferredPlatformRuntimeDescriptorForConnector(explicitConnectorId);
+    const definition =
+      descriptor?.connectorDefinition ??
+      listPlatformConnectorDefinitions().find(
+        (item) => item.connectorId === explicitConnectorId
+      );
     return [
       {
         connectorId: explicitConnectorId,
         displayName:
-          normalizeString(definition?.displayName) || readConnectorSuffix(explicitConnectorId),
-        workspaceKind: definition?.workspaceKind,
+          normalizeString(descriptor?.displayName) ||
+          normalizeString(definition?.displayName) ||
+          readConnectorSuffix(explicitConnectorId),
+        workspaceKind: descriptor?.workspaceKind ?? definition?.workspaceKind,
+        authState: descriptor?.authState,
       },
     ];
   }
@@ -259,52 +270,6 @@ function byConnectorId(
   return normalizeString(item.connectorId);
 }
 
-function readAuthPriority(authState: PlatformCompatRuntimeAuthState): number {
-  switch (authState) {
-    case 'authorized':
-      return 5;
-    case 'pending':
-      return 4;
-    case 'expired':
-      return 3;
-    case 'error':
-      return 2;
-    case 'revoked':
-      return 1;
-    default:
-      return 0;
-  }
-}
-
-function pickPreferredInstanceSnapshot(
-  snapshots: PlatformInstanceAuthSnapshot[]
-): PlatformInstanceAuthSnapshot | null {
-  if (snapshots.length === 0) return null;
-
-  return snapshots.reduce<PlatformInstanceAuthSnapshot | null>((best, current) => {
-    if (!best) return current;
-
-    const authPriorityDelta = readAuthPriority(current.authState) - readAuthPriority(best.authState);
-    if (authPriorityDelta !== 0) {
-      return authPriorityDelta > 0 ? current : best;
-    }
-
-    const currentBuiltin = current.instanceId.endsWith(':builtin') ? 1 : 0;
-    const bestBuiltin = best.instanceId.endsWith(':builtin') ? 1 : 0;
-    if (currentBuiltin !== bestBuiltin) {
-      return currentBuiltin > bestBuiltin ? current : best;
-    }
-
-    const currentUpdatedAt = current.updatedAtMs ?? 0;
-    const bestUpdatedAt = best.updatedAtMs ?? 0;
-    if (currentUpdatedAt !== bestUpdatedAt) {
-      return currentUpdatedAt > bestUpdatedAt ? current : best;
-    }
-
-    return current.instanceId.localeCompare(best.instanceId, 'zh-CN') < 0 ? current : best;
-  }, null);
-}
-
 function mapToConnectorFacade(
   connectorId: string,
   authSnapshot: PlatformInstanceAuthSnapshot | null,
@@ -333,30 +298,17 @@ function mapToConnectorFacade(
 export async function listPlatformConnectorFacadeItems(
   options?: ListPlatformConnectorFacadeItemsOptions
 ): Promise<PlatformConnectorFacadeItem[]> {
-  const [authSnapshots, sourceItems] = await Promise.all([
+  const [, sourceItems] = await Promise.all([
     listPlatformInstanceAuthSnapshots({ refresh: options?.refresh === true }),
     listMusicSourceFacadeItems(),
   ]);
 
+  const runtimeDescriptors = listPlatformRuntimeDescriptors();
   const platformSourceItems = sourceItems.filter((item) => item.kind === 'platform');
-  const authByConnectorId = new Map<string, PlatformInstanceAuthSnapshot>();
-  const authBucketsByConnectorId = new Map<string, PlatformInstanceAuthSnapshot[]>();
+  const descriptorsByConnectorId = new Map(
+    runtimeDescriptors.map((descriptor) => [descriptor.connectorId, descriptor])
+  );
   const sourceByConnectorId = new Map<string, MusicSourceFacadeItem[]>();
-
-  for (const snapshot of authSnapshots) {
-    const connectorId = byConnectorId(snapshot);
-    if (!connectorId) continue;
-    const bucket = authBucketsByConnectorId.get(connectorId) ?? [];
-    bucket.push(snapshot);
-    authBucketsByConnectorId.set(connectorId, bucket);
-  }
-
-  for (const [connectorId, snapshots] of authBucketsByConnectorId.entries()) {
-    const preferredSnapshot = pickPreferredInstanceSnapshot(snapshots);
-    if (preferredSnapshot) {
-      authByConnectorId.set(connectorId, preferredSnapshot);
-    }
-  }
 
   for (const source of platformSourceItems) {
     const connectorId = byConnectorId(source);
@@ -367,14 +319,35 @@ export async function listPlatformConnectorFacadeItems(
   }
 
   const connectorIds = new Set<string>([
-    ...authByConnectorId.keys(),
+    ...descriptorsByConnectorId.keys(),
     ...sourceByConnectorId.keys(),
   ]);
 
   const items: PlatformConnectorFacadeItem[] = [];
   for (const connectorId of connectorIds) {
-    const authSnapshot = authByConnectorId.get(connectorId) ?? null;
+    const descriptor =
+      descriptorsByConnectorId.get(
+        normalizePlatformConnectorId(connectorId) ?? ('__unknown__' as PlatformConnectorId)
+      ) ?? null;
     const sources = sourceByConnectorId.get(connectorId) ?? [];
+    const authSnapshot: PlatformInstanceAuthSnapshot | null = descriptor
+      ? {
+          instanceId: descriptor.instanceRecord?.instanceId ?? `${descriptor.platformId ?? 'unknown'}:builtin`,
+          platformId: descriptor.platformId ?? 'unknown',
+          connectorId: descriptor.connectorId,
+          displayName: descriptor.displayName,
+          authState: descriptor.authState,
+          accountUid: descriptor.instanceRecord?.account.accountId,
+          updatedAtMs: descriptor.instanceRecord?.auth.cookieUpdatedAtMs,
+          expiresAtMs:
+            typeof descriptor.instanceRecord?.metadata?.authExpiresAtMs === 'number' &&
+            Number.isFinite(descriptor.instanceRecord.metadata.authExpiresAtMs)
+              ? descriptor.instanceRecord.metadata.authExpiresAtMs
+              : undefined,
+          availability: descriptor.availability ?? undefined,
+          availabilityMessage: descriptor.availabilityMessage,
+        }
+      : null;
     items.push(mapToConnectorFacade(connectorId, authSnapshot, sources));
   }
 

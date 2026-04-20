@@ -38,17 +38,22 @@ import {
 import {
   beginPlatformInstanceQrLogin,
   getPlatformInstanceAuthSnapshot,
+  getPlatformPackStartupHealth,
   listPlatformConnectorDefinitions,
   logoutPlatformInstance,
   pollPlatformInstanceQrLogin,
   refreshPlatformInstanceAuthSnapshot,
   resolvePlatformInstanceId,
+  subscribePlatformPackStartupHealth,
   subscribePlatformConnectorDefinitions,
   type PlatformConnectorDefinition,
   type PlatformConnectorId,
   type PlatformInstanceAuthSnapshot,
   type PlatformInstanceQrLoginPollResult,
   type PlatformInstanceQrLoginSession,
+  type PlatformPackBootStage,
+  type PlatformPackStartupHealth,
+  type PlatformPackStartupState,
 } from '../../modules/music-platform';
 import {
   type NativeLibrarySyncFailureOverview,
@@ -261,6 +266,62 @@ function formatTelemetryCountList(
     .slice(0, limit)
     .map((item) => `${item.key} x ${item.count}`)
     .join('\n');
+}
+
+function formatDebugTimestamp(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '-';
+  return new Date(value).toLocaleTimeString();
+}
+
+function formatNullableToggleState(
+  value: boolean | null | undefined,
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  if (value === true) return t('common.state.on');
+  if (value === false) return t('common.state.off');
+  return t('common.state.unknown');
+}
+
+function formatPlatformPackStartupStateLabel(
+  state: PlatformPackStartupState,
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  switch (state) {
+    case 'scheduled':
+      return t('debug.center.musicPlatformPack.state.scheduled');
+    case 'running':
+      return t('debug.center.musicPlatformPack.state.running');
+    case 'ready':
+      return t('debug.center.musicPlatformPack.state.ready');
+    case 'degraded':
+      return t('debug.center.musicPlatformPack.state.degraded');
+    case 'idle':
+    default:
+      return t('debug.center.musicPlatformPack.state.idle');
+  }
+}
+
+function formatPlatformPackBootStageLabel(
+  stage: PlatformPackBootStage,
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  switch (stage) {
+    case 'scheduled':
+      return t('debug.center.musicPlatformPack.stage.scheduled');
+    case 'restore-store':
+      return t('debug.center.musicPlatformPack.stage.restoreStore');
+    case 'reconcile-inline':
+      return t('debug.center.musicPlatformPack.stage.reconcileInline');
+    case 'inspect-store':
+      return t('debug.center.musicPlatformPack.stage.inspectStore');
+    case 'background-reconcile':
+      return t('debug.center.musicPlatformPack.stage.backgroundReconcile');
+    case 'completed':
+      return t('debug.center.musicPlatformPack.stage.completed');
+    case 'idle':
+    default:
+      return t('debug.center.musicPlatformPack.stage.idle');
+  }
 }
 
 function getLatestMusicLibraryRuntimeSnapshot(): MusicLibraryRuntimeMemorySnapshot | null {
@@ -647,6 +708,8 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [platformQrPollResult, setPlatformQrPollResult] =
     useState<PlatformInstanceQrLoginPollResult | null>(null);
   const [platformAuthBusy, setPlatformAuthBusy] = useState(false);
+  const [platformPackStartupHealth, setPlatformPackStartupHealth] =
+    useState<PlatformPackStartupHealth>(() => getPlatformPackStartupHealth());
   const [memoryBaselines, setMemoryBaselines] = useState<MemoryBaselineSample[]>(() =>
     readJson<MemoryBaselineSample[]>(STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1, [])
   );
@@ -681,6 +744,10 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       [
         { id: 'plugins' as const, label: t('debug.center.telemetry.query.preset.plugins') },
         { id: 'performance' as const, label: t('debug.center.telemetry.query.preset.performance') },
+        {
+          id: 'music-platform' as const,
+          label: t('debug.center.telemetry.query.preset.musicPlatform'),
+        },
         { id: 'general' as const, label: t('debug.center.telemetry.query.preset.general') },
       ] satisfies Array<{ id: TelemetryAiContextPresetId; label: string }>,
     [t]
@@ -730,6 +797,13 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     setPlatformConnectorDefinitions(listPlatformConnectorDefinitions());
     return subscribePlatformConnectorDefinitions((definitions) => {
       setPlatformConnectorDefinitions(definitions);
+    });
+  }, []);
+
+  useEffect(() => {
+    setPlatformPackStartupHealth(getPlatformPackStartupHealth());
+    return subscribePlatformPackStartupHealth((health) => {
+      setPlatformPackStartupHealth(health);
     });
   }, []);
 
@@ -3016,6 +3090,131 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                   .join('\n')}
               </pre>
             )}
+          </div>
+          <div
+            style={{
+              marginTop: 14,
+              padding: 12,
+              borderRadius: 12,
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid rgba(255,255,255,0.08)',
+            }}
+          >
+            <div className="settings-card-header">
+              <div>
+                <p className="settings-card-label">{t('debug.center.musicPlatformPack.title')}</p>
+                <p className="settings-card-desc">{t('debug.center.musicPlatformPack.desc')}</p>
+              </div>
+              <span className="settings-card-badge">
+                {formatPlatformPackStartupStateLabel(platformPackStartupHealth.state, t)}
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+              <p className="settings-card-desc">
+                {t('debug.center.musicPlatformPack.summary', {
+                  state: formatPlatformPackStartupStateLabel(platformPackStartupHealth.state, t),
+                  stage: formatPlatformPackBootStageLabel(platformPackStartupHealth.currentStage, t),
+                  registered: platformPackStartupHealth.registeredBuiltinCount,
+                  expected: platformPackStartupHealth.expectedBuiltinCount,
+                })}
+              </p>
+              <p className="settings-card-note">
+                {t('debug.center.musicPlatformPack.timing', {
+                  scheduled: formatNullableToggleState(platformPackStartupHealth.bootScheduled, t),
+                  startedAt: formatDebugTimestamp(platformPackStartupHealth.bootStartedAtMs),
+                  finishedAt: formatDebugTimestamp(platformPackStartupHealth.bootFinishedAtMs),
+                  duration:
+                    typeof platformPackStartupHealth.durationMs === 'number'
+                      ? `${platformPackStartupHealth.durationMs}ms`
+                      : '-',
+                })}
+              </p>
+              <p className="settings-card-note">
+                {t('debug.center.musicPlatformPack.storeStatus', {
+                  bootstrapFailed: formatNullableToggleState(
+                    platformPackStartupHealth.storeBootstrapFailed,
+                    t
+                  ),
+                  indexAvailable: formatNullableToggleState(
+                    platformPackStartupHealth.storeIndexAvailable,
+                    t
+                  ),
+                  readyWithoutIndex: formatNullableToggleState(
+                    platformPackStartupHealth.storeReadyWithoutIndex,
+                    t
+                  ),
+                  current: formatNullableToggleState(platformPackStartupHealth.storeAlreadyCurrent, t),
+                })}
+              </p>
+              <p className="settings-card-note">
+                {t('debug.center.musicPlatformPack.reconcileStatus', {
+                  scheduled: formatNullableToggleState(
+                    platformPackStartupHealth.backgroundReconcileScheduled,
+                    t
+                  ),
+                  running: formatNullableToggleState(
+                    platformPackStartupHealth.backgroundReconcileRunning,
+                    t
+                  ),
+                  staleConnectorIds:
+                    platformPackStartupHealth.staleConnectorIds.length > 0
+                      ? platformPackStartupHealth.staleConnectorIds.join(', ')
+                      : '-',
+                  relaxedDevConnectorIds:
+                    platformPackStartupHealth.relaxedDevConnectorIds.length > 0
+                      ? platformPackStartupHealth.relaxedDevConnectorIds.join(', ')
+                      : '-',
+                })}
+              </p>
+              {platformPackStartupHealth.lastError ? (
+                <p className="settings-card-note" style={{ color: 'rgba(255,120,120,0.9)' }}>
+                  {t('debug.center.musicPlatformPack.lastError', {
+                    message: platformPackStartupHealth.lastError,
+                  })}
+                </p>
+              ) : null}
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <p className="settings-card-note">{t('debug.center.musicPlatformPack.recentStages')}</p>
+              {platformPackStartupHealth.recentStages.length === 0 ? (
+                <p className="settings-card-note" style={{ marginTop: 8 }}>
+                  {t('debug.center.musicPlatformPack.emptyStages')}
+                </p>
+              ) : (
+                <pre
+                  style={{
+                    marginTop: 8,
+                    padding: 12,
+                    borderRadius: 10,
+                    background: 'rgba(0,0,0,0.2)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    overflowX: 'auto',
+                    maxHeight: 220,
+                    fontSize: 12,
+                    color: 'rgba(255,255,255,0.88)',
+                    whiteSpace: 'pre-wrap',
+                  }}
+                >
+                  {platformPackStartupHealth.recentStages
+                    .slice(-8)
+                    .reverse()
+                    .map((entry) =>
+                      [
+                        `[${formatDebugTimestamp(entry.ts)}]`,
+                        entry.level.toUpperCase(),
+                        formatPlatformPackStartupStateLabel(entry.state, t),
+                        formatPlatformPackBootStageLabel(entry.stage, t),
+                        entry.message,
+                      ]
+                        .filter((part) => typeof part === 'string' && part.length > 0)
+                        .join(' | ')
+                    )
+                    .join('\n')}
+                </pre>
+              )}
+            </div>
           </div>
           <div
             style={{
