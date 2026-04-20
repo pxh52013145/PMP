@@ -18,6 +18,9 @@ let compatRecords: Array<{
 }> = [];
 
 const listPlatformCompatRegistryRecordsMock = vi.fn(() => compatRecords);
+const getPlatformCompatRegistryRecordMock = vi.fn((platformId: string) => {
+  return compatRecords.find((record) => record.platformId === platformId) ?? null;
+});
 const getPlatformCompatRuntimeApiMock = vi.fn((platformId: string) => {
   return compatRecords.find((record) => record.platformId === platformId)?.runtime ?? null;
 });
@@ -31,8 +34,13 @@ const subscribePlatformCompatRegistryMock = vi.fn((listener: CompatListener) => 
 type RuntimeRefreshSnapshot = NonNullable<
   NonNullable<PlatformCompatRuntimeApi['auth']>['refreshSnapshot']
 >;
+type RuntimeGetSnapshot = NonNullable<
+  NonNullable<PlatformCompatRuntimeApi['auth']>['getSnapshot']
+>;
 
 vi.mock('./contractRegistry', () => ({
+  getPlatformCompatRegistryRecord: (platformId: string) =>
+    getPlatformCompatRegistryRecordMock(platformId),
   getPlatformCompatRuntimeApi: (platformId: string) => getPlatformCompatRuntimeApiMock(platformId),
   listPlatformCompatRegistryRecords: () => listPlatformCompatRegistryRecordsMock(),
   subscribePlatformCompatRegistry: (listener: CompatListener) =>
@@ -42,7 +50,10 @@ vi.mock('./contractRegistry', () => ({
 function createCompatRecord(
   platformId: string,
   connectorId: string,
-  refreshSnapshot: RuntimeRefreshSnapshot
+  options: {
+    getSnapshot?: RuntimeGetSnapshot;
+    refreshSnapshot?: RuntimeRefreshSnapshot;
+  }
 ) {
   return {
     platformId,
@@ -76,7 +87,8 @@ function createCompatRecord(
     } satisfies PlatformCompatContractFile,
     runtime: {
       auth: {
-        refreshSnapshot,
+        ...(options.getSnapshot ? { getSnapshot: options.getSnapshot } : {}),
+        ...(options.refreshSnapshot ? { refreshSnapshot: options.refreshSnapshot } : {}),
       },
     } satisfies PlatformCompatRuntimeApi,
     source: 'platform-pack',
@@ -100,6 +112,7 @@ describe('instanceRegistry auth hydration', () => {
     compatListeners.clear();
     compatRecords = [];
     listPlatformCompatRegistryRecordsMock.mockClear();
+    getPlatformCompatRegistryRecordMock.mockClear();
     getPlatformCompatRuntimeApiMock.mockClear();
     subscribePlatformCompatRegistryMock.mockClear();
 
@@ -126,7 +139,7 @@ describe('instanceRegistry auth hydration', () => {
   });
 
   it('hydrates auth state for auto-managed instances during initial bootstrap', async () => {
-    const refreshSnapshot = vi.fn(async (_input: { instanceId: string }) => ({
+    const getSnapshot = vi.fn(async (_input: { instanceId: string }) => ({
       ok: true as const,
       data: {
         authState: 'authorized' as const,
@@ -134,9 +147,20 @@ describe('instanceRegistry auth hydration', () => {
         updatedAtMs: 1710000000000,
       },
     }));
+    const refreshSnapshot = vi.fn(async (_input: { instanceId: string }) => ({
+      ok: true as const,
+      data: {
+        authState: 'authorized' as const,
+        accountId: 'user-1-refresh',
+        updatedAtMs: 1710000001000,
+      },
+    }));
 
     compatRecords = [
-      createCompatRecord('platform.bilibili', 'connector.platform.bilibili', refreshSnapshot),
+      createCompatRecord('platform.bilibili', 'connector.platform.bilibili', {
+        getSnapshot,
+        refreshSnapshot,
+      }),
     ];
 
     const registry = await import('./instanceRegistry');
@@ -144,7 +168,8 @@ describe('instanceRegistry auth hydration', () => {
     expect(registry.listPlatformInstances()[0]?.auth.status).toBe('empty');
 
     await vi.waitFor(() => {
-      expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+      expect(getSnapshot).toHaveBeenCalledTimes(1);
+      expect(refreshSnapshot).not.toHaveBeenCalled();
       expect(registry.getPlatformInstance('platform.bilibili:builtin')?.auth.status).toBe('authorized');
     });
   });
@@ -154,16 +179,26 @@ describe('instanceRegistry auth hydration', () => {
 
     expect(registry.listPlatformInstances()).toEqual([]);
 
-    const refreshSnapshot = vi.fn(async (_input: { instanceId: string }) => ({
+    const getSnapshot = vi.fn(async (_input: { instanceId: string }) => ({
       ok: true as const,
       data: {
         authState: 'authorized' as const,
         accountId: 'user-2',
       },
     }));
+    const refreshSnapshot = vi.fn(async (_input: { instanceId: string }) => ({
+      ok: true as const,
+      data: {
+        authState: 'authorized' as const,
+        accountId: 'user-2-refresh',
+      },
+    }));
 
     compatRecords = [
-      createCompatRecord('platform.netease', 'connector.platform.netease', refreshSnapshot),
+      createCompatRecord('platform.netease', 'connector.platform.netease', {
+        getSnapshot,
+        refreshSnapshot,
+      }),
     ];
     compatListeners.forEach((listener) => {
       listener(compatRecords);
@@ -172,8 +207,47 @@ describe('instanceRegistry auth hydration', () => {
     await flushAsyncWork();
 
     await vi.waitFor(() => {
-      expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+      expect(getSnapshot).toHaveBeenCalledTimes(1);
+      expect(refreshSnapshot).not.toHaveBeenCalled();
       expect(registry.getPlatformInstance('platform.netease:builtin')?.auth.status).toBe('authorized');
     });
+  });
+
+  it('uses refreshSnapshot for explicit instance refreshes after bootstrap hydration', async () => {
+    const getSnapshot = vi.fn(async (_input: { instanceId: string }) => ({
+      ok: true as const,
+      data: {
+        authState: 'authorized' as const,
+        accountId: 'user-3',
+      },
+    }));
+    const refreshSnapshot = vi.fn(async (_input: { instanceId: string }) => ({
+      ok: true as const,
+      data: {
+        authState: 'authorized' as const,
+        accountId: 'user-3-refresh',
+      },
+    }));
+
+    compatRecords = [
+      createCompatRecord('platform.netease', 'connector.platform.netease', {
+        getSnapshot,
+        refreshSnapshot,
+      }),
+    ];
+
+    const registry = await import('./instanceRegistry');
+    registry.listPlatformInstances();
+
+    await vi.waitFor(() => {
+      expect(getSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    await registry.refreshPlatformInstance('platform.netease:builtin');
+
+    expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+    expect(
+      registry.getPlatformInstance('platform.netease:builtin')?.account.accountId
+    ).toBe('user-3-refresh');
   });
 });

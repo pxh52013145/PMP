@@ -1,10 +1,18 @@
 import { listen } from '@tauri-apps/api/event';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import {
+  getMusicPlatformDurationMs,
+  getMusicPlatformNowMs,
+  readMusicPlatformDiagnosticErrorMessage,
+  warnOnSlowMusicPlatformOperation,
+} from './platformDiagnostics';
 
 const SIDECAR_BRIDGE_MESSAGE_EVENT = 'plugin-sidecar-bridge-message';
 const READY_TIMEOUT_MS = 10_000;
 const INVOKE_TIMEOUT_MS = 30_000;
+const telemetry = getTelemetryLogger('music-platform', 'platformPackSidecarBridge');
 
 type SidecarBridgeEventPayload = {
   runtimeInstanceId?: string;
@@ -100,6 +108,7 @@ function isRuntimeErrorMessage(value: unknown): value is SidecarRuntimeErrorMess
 }
 
 class PlatformPackSidecarClient {
+  private readonly connectorId: string;
   private readonly runtimeInstanceId: string;
   private readonly pluginId: string;
   private readonly runtimeId = 'platform.pack.sidecar';
@@ -114,6 +123,7 @@ class PlatformPackSidecarClient {
   private readonly readyPromise: Promise<void>;
 
   constructor(connectorId: string, entryPath: string) {
+    this.connectorId = connectorId;
     this.entryPath = entryPath;
     this.runtimeInstanceId = `platform-pack:${connectorId}`;
     this.pluginId = `platform-pack:${connectorId}`;
@@ -128,6 +138,7 @@ class PlatformPackSidecarClient {
     if (!isTauriRuntime()) {
       throw new Error('Platform pack sidecar runtime is only available in Tauri runtime');
     }
+    const startedAtMs = getMusicPlatformNowMs();
 
     this.unlisten = await listen<SidecarBridgeEventPayload>(SIDECAR_BRIDGE_MESSAGE_EVENT, (event) => {
       const payload = asRecord(event.payload) as SidecarBridgeEventPayload | null;
@@ -167,6 +178,15 @@ class PlatformPackSidecarClient {
       }
 
       if (isRuntimeErrorMessage(message)) {
+        telemetry.error('music-platform.sidecar.runtime.error', {
+          message: readSidecarErrorMessage(message, 'Platform pack sidecar runtime crashed'),
+          fields: {
+            connectorId: this.connectorId,
+            runtimeInstanceId: this.runtimeInstanceId,
+            sessionId: this.sessionId || null,
+            pendingRequestCount: this.pending.size,
+          },
+        });
         this.rejectAllPending(
           new Error(
             readSidecarErrorMessage(message, 'Platform pack sidecar runtime crashed')
@@ -194,6 +214,14 @@ class PlatformPackSidecarClient {
       );
       this.sessionId = response.sessionId;
     } catch (error) {
+      telemetry.warn('music-platform.sidecar.open.failed', {
+        message: readMusicPlatformDiagnosticErrorMessage(error),
+        fields: {
+          connectorId: this.connectorId,
+          runtimeInstanceId: this.runtimeInstanceId,
+          durationMs: getMusicPlatformDurationMs(startedAtMs),
+        },
+      });
       await this.dispose();
       throw error;
     }
@@ -207,11 +235,31 @@ class PlatformPackSidecarClient {
     try {
       await this.readyPromise;
     } catch (error) {
+      telemetry.warn('music-platform.sidecar.open.failed', {
+        message: readMusicPlatformDiagnosticErrorMessage(error),
+        fields: {
+          connectorId: this.connectorId,
+          runtimeInstanceId: this.runtimeInstanceId,
+          sessionId: this.sessionId || null,
+          durationMs: getMusicPlatformDurationMs(startedAtMs),
+        },
+      });
       await this.dispose();
       throw error;
     } finally {
       clearTimeout(readyTimeoutId);
     }
+
+    warnOnSlowMusicPlatformOperation({
+      logger: telemetry,
+      event: 'music-platform.sidecar.open.slow',
+      startedAtMs,
+      fields: {
+        connectorId: this.connectorId,
+        runtimeInstanceId: this.runtimeInstanceId,
+        sessionId: this.sessionId || null,
+      },
+    });
   }
 
   async invoke(request: PlatformPackSidecarInvokeRequest): Promise<unknown> {
@@ -221,6 +269,7 @@ class PlatformPackSidecarClient {
     if (!this.sessionId) {
       throw new Error('Platform pack sidecar session is not ready');
     }
+    const startedAtMs = getMusicPlatformNowMs();
 
     const requestId = `${this.runtimeInstanceId}:${Date.now()}:${Math.random()
       .toString(16)
@@ -265,16 +314,64 @@ class PlatformPackSidecarClient {
         this.pending.delete(requestId);
         pending.reject(error instanceof Error ? error : new Error(String(error)));
       }
+      telemetry.warn('music-platform.sidecar.invoke.failed', {
+        message: readMusicPlatformDiagnosticErrorMessage(error),
+        fields: {
+          connectorId: this.connectorId,
+          runtimeInstanceId: this.runtimeInstanceId,
+          sessionId: this.sessionId,
+          channel: request.channel,
+          method: request.method,
+          bindingId: request.bindingId ?? null,
+          instanceIdPresent: Boolean(normalizeString(request.instanceId)),
+          durationMs: getMusicPlatformDurationMs(startedAtMs),
+          stage: 'send',
+        },
+      });
       throw error;
     }
 
-    return await responsePromise;
+    try {
+      const response = await responsePromise;
+      warnOnSlowMusicPlatformOperation({
+        logger: telemetry,
+        event: 'music-platform.sidecar.invoke.slow',
+        startedAtMs,
+        fields: {
+          connectorId: this.connectorId,
+          runtimeInstanceId: this.runtimeInstanceId,
+          sessionId: this.sessionId,
+          channel: request.channel,
+          method: request.method,
+          bindingId: request.bindingId ?? null,
+          instanceIdPresent: Boolean(normalizeString(request.instanceId)),
+        },
+      });
+      return response;
+    } catch (error) {
+      telemetry.warn('music-platform.sidecar.invoke.failed', {
+        message: readMusicPlatformDiagnosticErrorMessage(error),
+        fields: {
+          connectorId: this.connectorId,
+          runtimeInstanceId: this.runtimeInstanceId,
+          sessionId: this.sessionId,
+          channel: request.channel,
+          method: request.method,
+          bindingId: request.bindingId ?? null,
+          instanceIdPresent: Boolean(normalizeString(request.instanceId)),
+          durationMs: getMusicPlatformDurationMs(startedAtMs),
+          stage: 'response',
+        },
+      });
+      throw error;
+    }
   }
 
   async dispose(reason = 'platform-pack-dispose'): Promise<void> {
     if (this.closed) {
       return;
     }
+    const pendingRequestCount = this.pending.size;
     this.closed = true;
     this.rejectAllPending(new Error(`Platform pack sidecar session disposed: ${reason}`));
     this.readyRejecter?.(new Error(`Platform pack sidecar session disposed: ${reason}`));
@@ -301,6 +398,18 @@ class PlatformPackSidecarClient {
         ).catch(() => undefined);
       }
     } finally {
+      if (pendingRequestCount > 0 || reason !== 'platform-pack-dispose') {
+        telemetry.warn('music-platform.sidecar.dispose', {
+          message: 'Platform pack sidecar client disposed',
+          fields: {
+            connectorId: this.connectorId,
+            runtimeInstanceId: this.runtimeInstanceId,
+            sessionId: sessionId || null,
+            reason,
+            pendingRequestCount,
+          },
+        });
+      }
       await Promise.resolve(this.unlisten?.());
       this.unlisten = null;
     }
@@ -352,6 +461,17 @@ export async function invokePlatformPackSidecar(
     return await client.invoke(request);
   } catch (error) {
     if (attempt < 1 && shouldRetryPlatformPackSidecarRequest(error)) {
+      telemetry.warn('music-platform.sidecar.retry', {
+        message: readMusicPlatformDiagnosticErrorMessage(error),
+        fields: {
+          connectorId,
+          entryPath,
+          channel: request.channel,
+          method: request.method,
+          bindingId: request.bindingId ?? null,
+          attempt,
+        },
+      });
       await disposePlatformPackSidecar(
         connectorId,
         entryPath,

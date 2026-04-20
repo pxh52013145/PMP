@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import {
   BILIBILI_CONNECTOR_ID,
   listPlatformWorkspaceCollectionResources,
@@ -15,9 +16,16 @@ import {
   type PlatformWorkspaceResourceItem,
   type PlatformWorkspaceResourcePage,
 } from '../../../modules/music-platform';
+import {
+  getMusicPlatformDurationMs,
+  getMusicPlatformNowMs,
+  readMusicPlatformDiagnosticErrorMessage,
+  warnOnSlowMusicPlatformOperation,
+} from '../../../modules/music-platform/platformDiagnostics';
 
 const BILIBILI_RESOURCE_PAGE_SIZE = 40;
 const BILIBILI_FAVORITE_RESOURCE_EMPTY_PAGE_PROBE_LIMIT = 6;
+const telemetry = getTelemetryLogger('magnet.platform', 'useBilibiliResourceBrowser');
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
 
@@ -162,6 +170,7 @@ function mergeResourcePageItems(
 }
 
 type UseBilibiliResourceBrowserParams = {
+  workspaceVisible: boolean;
   workspaceConnectorId: string | null;
   bilibiliInstanceId: string | null;
   bilibiliAuthorized: boolean;
@@ -169,7 +178,13 @@ type UseBilibiliResourceBrowserParams = {
 };
 
 export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserParams) {
-  const { workspaceConnectorId, bilibiliAuthorized, bilibiliInstanceId, t } = params;
+  const {
+    workspaceVisible,
+    workspaceConnectorId,
+    bilibiliAuthorized,
+    bilibiliInstanceId,
+    t,
+  } = params;
   const resolvedWorkspaceConnectorId =
     normalizeWorkspaceConnectorId(workspaceConnectorId) ?? BILIBILI_CONNECTOR_ID;
 
@@ -207,6 +222,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
   }, [bilibiliResources, resourceFilterQuery, selectedFolderId]);
 
   const refreshBilibiliFolders = useCallback(async () => {
+    if (!workspaceVisible) return;
     if (!bilibiliAuthorized) {
       setBilibiliFolders([]);
       setSelectedFolderId(null);
@@ -217,6 +233,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       return;
     }
 
+    const startedAtMs = getMusicPlatformNowMs();
     setFolderLoading(true);
     try {
       const folders = (
@@ -240,14 +257,33 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         if (prev && folders.some((item) => item.folderId === prev)) return prev;
         return null;
       });
+      warnOnSlowMusicPlatformOperation({
+        logger: telemetry,
+        event: 'platform.runtime.bilibili.folder-load.slow',
+        startedAtMs,
+        fields: {
+          connectorId: resolvedWorkspaceConnectorId,
+          instanceIdPresent: Boolean(bilibiliInstanceId),
+          folderCount: folders.length,
+        },
+      });
     } catch (err) {
+      telemetry.warn('platform.runtime.bilibili.folder-load.failed', {
+        message: readMusicPlatformDiagnosticErrorMessage(err),
+        fields: {
+          connectorId: resolvedWorkspaceConnectorId,
+          instanceIdPresent: Boolean(bilibiliInstanceId),
+          durationMs: getMusicPlatformDurationMs(startedAtMs),
+        },
+      });
       setFolderError(toErrorMessage(err, t('magnet.platform.bilibili.folder.error')));
     } finally {
       setFolderLoading(false);
     }
-  }, [bilibiliAuthorized, bilibiliInstanceId, resolvedWorkspaceConnectorId, t]);
+  }, [bilibiliAuthorized, bilibiliInstanceId, resolvedWorkspaceConnectorId, t, workspaceVisible]);
 
   const refreshBilibiliRecommendedResources = useCallback(async () => {
+    if (!workspaceVisible) return;
     if (!bilibiliAuthorized) {
       setResourcePage(null);
       setResourceSourceKey(null);
@@ -255,6 +291,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       return;
     }
 
+    const startedAtMs = getMusicPlatformNowMs();
     setResourceLoading(true);
     try {
       setResourceSourceKey('recommended');
@@ -275,15 +312,35 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       );
       setResourceLoadingMore(false);
       setResourceError(null);
+      warnOnSlowMusicPlatformOperation({
+        logger: telemetry,
+        event: 'platform.runtime.bilibili.recommended-load.slow',
+        startedAtMs,
+        fields: {
+          connectorId: resolvedWorkspaceConnectorId,
+          instanceIdPresent: Boolean(bilibiliInstanceId),
+          resultCount: page?.items.length ?? 0,
+          hasMore: page?.hasMore ?? false,
+        },
+      });
     } catch (err) {
+      telemetry.warn('platform.runtime.bilibili.recommended-load.failed', {
+        message: readMusicPlatformDiagnosticErrorMessage(err),
+        fields: {
+          connectorId: resolvedWorkspaceConnectorId,
+          instanceIdPresent: Boolean(bilibiliInstanceId),
+          durationMs: getMusicPlatformDurationMs(startedAtMs),
+        },
+      });
       setResourceError(toErrorMessage(err, t('magnet.platform.bilibili.resource.error')));
     } finally {
       setResourceLoading(false);
     }
-  }, [bilibiliAuthorized, bilibiliInstanceId, resolvedWorkspaceConnectorId, t]);
+  }, [bilibiliAuthorized, bilibiliInstanceId, resolvedWorkspaceConnectorId, t, workspaceVisible]);
 
   const searchBilibiliHomepageResources = useCallback(
     async (keyword: string) => {
+      if (!workspaceVisible) return;
       if (!bilibiliAuthorized) {
         setResourcePage(null);
         setResourceSourceKey(null);
@@ -332,11 +389,13 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       refreshBilibiliRecommendedResources,
       resolvedWorkspaceConnectorId,
       t,
+      workspaceVisible,
     ]
   );
 
   const refreshBilibiliResources = useCallback(
     async (folderId: string) => {
+      if (!workspaceVisible) return;
       if (!bilibiliAuthorized) {
         setResourcePage(null);
         setResourceSourceKey(null);
@@ -352,6 +411,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         return;
       }
 
+      const startedAtMs = getMusicPlatformNowMs();
       setResourceLoading(true);
       try {
         setResourceSourceKey(`folder:${normalizedFolderId}`);
@@ -415,7 +475,28 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         );
         setResourceLoadingMore(false);
         setResourceError(null);
+        warnOnSlowMusicPlatformOperation({
+          logger: telemetry,
+          event: 'platform.runtime.bilibili.resource-load.slow',
+          startedAtMs,
+          fields: {
+            connectorId: resolvedWorkspaceConnectorId,
+            instanceIdPresent: Boolean(bilibiliInstanceId),
+            folderId: normalizedFolderId,
+            resultCount: page?.items.length ?? 0,
+            hasMore: page?.hasMore ?? false,
+          },
+        });
       } catch (err) {
+        telemetry.warn('platform.runtime.bilibili.resource-load.failed', {
+          message: readMusicPlatformDiagnosticErrorMessage(err),
+          fields: {
+            connectorId: resolvedWorkspaceConnectorId,
+            instanceIdPresent: Boolean(bilibiliInstanceId),
+            folderId: normalizedFolderId,
+            durationMs: getMusicPlatformDurationMs(startedAtMs),
+          },
+        });
         setResourceError(toErrorMessage(err, t('magnet.platform.bilibili.resource.error')));
       } finally {
         setResourceLoading(false);
@@ -427,10 +508,12 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       bilibiliInstanceId,
       resolvedWorkspaceConnectorId,
       t,
+      workspaceVisible,
     ]
   );
 
   const loadMoreBilibiliResources = useCallback(async () => {
+    if (!workspaceVisible) return;
     if (!bilibiliAuthorized || resourceLoading || resourceLoadingMore) return;
 
     const currentPage = resourcePage;
@@ -443,6 +526,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     const pageSize = currentPage.pageSize || BILIBILI_RESOURCE_PAGE_SIZE;
     const searchKeyword = parseSearchKeywordFromResourceFolderId(normalizedFolderId);
 
+    const startedAtMs = getMusicPlatformNowMs();
     setResourceLoadingMore(true);
     try {
       let nextPage: BilibiliFavoriteResourcePage | null = null;
@@ -514,7 +598,30 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         };
       });
       setResourceError(null);
+      warnOnSlowMusicPlatformOperation({
+        logger: telemetry,
+        event: 'platform.runtime.bilibili.resource-load-more.slow',
+        startedAtMs,
+        fields: {
+          connectorId: resolvedWorkspaceConnectorId,
+          instanceIdPresent: Boolean(bilibiliInstanceId),
+          folderId: normalizedFolderId,
+          pageNum: nextPageNum,
+          searchKeywordPresent: Boolean(searchKeyword),
+        },
+      });
     } catch (err) {
+      telemetry.warn('platform.runtime.bilibili.resource-load-more.failed', {
+        message: readMusicPlatformDiagnosticErrorMessage(err),
+        fields: {
+          connectorId: resolvedWorkspaceConnectorId,
+          instanceIdPresent: Boolean(bilibiliInstanceId),
+          folderId: normalizedFolderId,
+          pageNum: nextPageNum,
+          searchKeywordPresent: Boolean(searchKeyword),
+          durationMs: getMusicPlatformDurationMs(startedAtMs),
+        },
+      });
       setResourceError(toErrorMessage(err, t('magnet.platform.bilibili.resource.error')));
     } finally {
       setResourceLoadingMore(false);
@@ -527,6 +634,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     resourceLoadingMore,
     resourcePage,
     t,
+    workspaceVisible,
   ]);
 
   const searchBilibiliResourceByLookupInput = useCallback(async (lookupInput: string): Promise<boolean> => {
@@ -574,12 +682,13 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
   }, [refreshBilibiliFolders]);
 
   useEffect(() => {
+    if (!workspaceVisible) return;
     if (selectedFolderId) {
       void refreshBilibiliResources(selectedFolderId);
       return;
     }
     void refreshBilibiliRecommendedResources();
-  }, [refreshBilibiliRecommendedResources, refreshBilibiliResources, selectedFolderId]);
+  }, [refreshBilibiliRecommendedResources, refreshBilibiliResources, selectedFolderId, workspaceVisible]);
 
   return {
     folderLoading,

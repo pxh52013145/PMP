@@ -420,6 +420,19 @@ export async function installPlatformPackToStorage(
     existing.packageDigest === packageDigest &&
     (await areInstalledPlatformPackArtifactsPresent(existing))
   ) {
+    const normalizedSource = normalizeString(options.source) || undefined;
+    const metadataAlreadyCurrent =
+      existing.sourceType === options.sourceType &&
+      normalizeString(existing.source) === normalizeString(normalizedSource);
+    if (!metadataAlreadyCurrent) {
+      const nextRecord: InstalledPlatformPackRecord = {
+        ...cloneInstalledPlatformPackRecord(existing),
+        sourceType: options.sourceType,
+        source: normalizedSource,
+      };
+      upsertInstalledPlatformPackRecord(nextRecord);
+      return cloneInstalledPlatformPackRecord(nextRecord);
+    }
     return cloneInstalledPlatformPackRecord(existing);
   }
 

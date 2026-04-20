@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import type { Track } from '../../../services/audio';
 import type { IAudioService } from '../../../services/audio/types';
 import {
@@ -12,6 +13,12 @@ import {
   type PlatformConnectorId,
   listPlatformWorkspaceQualityOptions,
 } from '../../../modules/music-platform';
+import {
+  getMusicPlatformDurationMs,
+  getMusicPlatformNowMs,
+  readMusicPlatformDiagnosticErrorMessage,
+  warnOnSlowMusicPlatformOperation,
+} from '../../../modules/music-platform/platformDiagnostics';
 import { usePersistentSetting } from '../../../modules/storage';
 import type { BilibiliWorkspaceProps } from './BilibiliWorkspace';
 import type { BilibiliPlaybackSettingsContentProps } from './BilibiliPlaybackSettingsModal';
@@ -45,6 +52,7 @@ const DEFAULT_BILIBILI_QUALITY_OPTIONS: BilibiliPlaybackQualityOption[] =
     label: key,
     available: key === 'auto',
   }));
+const telemetry = getTelemetryLogger('magnet.platform', 'useBilibiliWorkspaceAdapterController');
 
 function toBilibiliQualityLabelKey(key: string): string {
   const normalized = key.trim().toLowerCase();
@@ -183,6 +191,7 @@ function buildTrackFromPreparedPlayback(
 }
 
 export interface UseBilibiliWorkspaceAdapterControllerParams {
+  workspaceVisible: boolean;
   activeWorkspaceConnectorId: string | null;
   activeVideoConnectorId: string | null;
   activeVideoInstanceId: string | null;
@@ -221,6 +230,7 @@ export function useBilibiliWorkspaceAdapterController(
   params: UseBilibiliWorkspaceAdapterControllerParams
 ): BilibiliWorkspaceAdapterControllerResult {
   const {
+    workspaceVisible,
     activeWorkspaceConnectorId,
     activeVideoConnectorId,
     activeVideoInstanceId,
@@ -234,7 +244,8 @@ export function useBilibiliWorkspaceAdapterController(
 
   const workspaceConnectorId =
     normalizeWorkspaceConnectorId(activeVideoConnectorId) ?? BILIBILI_CONNECTOR_ID;
-  const bilibiliWorkspaceActive = activeWorkspaceConnectorId === workspaceConnectorId;
+  const bilibiliWorkspaceActive =
+    workspaceVisible && activeWorkspaceConnectorId === workspaceConnectorId;
   const bilibiliAuthorized = activeVideoAuthState === 'authorized';
 
   const [playbackQualityHint, setPlaybackQualityHint] = usePersistentSetting<string>(
@@ -276,6 +287,7 @@ export function useBilibiliWorkspaceAdapterController(
     loadMoreBilibiliResources,
     searchBilibiliResourceByLookupInput,
   } = useBilibiliResourceBrowser({
+    workspaceVisible,
     workspaceConnectorId,
     bilibiliInstanceId: activeVideoInstanceId,
     bilibiliAuthorized,
@@ -355,6 +367,7 @@ export function useBilibiliWorkspaceAdapterController(
     const normalizedSourceLocator = sourceLocator.trim();
     if (!normalizedSourceLocator) return;
 
+    const startedAtMs = getMusicPlatformNowMs();
     setPlaybackQualityLoading(true);
     try {
       const options = await listPlatformWorkspaceQualityOptions({
@@ -364,7 +377,26 @@ export function useBilibiliWorkspaceAdapterController(
       });
       setPlaybackQualityOptions(mergePlaybackQualityOptions(options));
       setPlaybackQualityProbeLocator(normalizedSourceLocator);
-    } catch {
+      warnOnSlowMusicPlatformOperation({
+        logger: telemetry,
+        event: 'platform.runtime.bilibili.quality-options-load.slow',
+        startedAtMs,
+        fields: {
+          connectorId: workspaceConnectorId,
+          instanceIdPresent: Boolean(activeVideoInstanceId),
+          sourceLocatorPresent: true,
+          optionCount: options.length,
+        },
+      });
+    } catch (error) {
+      telemetry.warn('platform.runtime.bilibili.quality-options-load.failed', {
+        message: readMusicPlatformDiagnosticErrorMessage(error),
+        fields: {
+          connectorId: workspaceConnectorId,
+          instanceIdPresent: Boolean(activeVideoInstanceId),
+          durationMs: getMusicPlatformDurationMs(startedAtMs),
+        },
+      });
       setPlaybackQualityOptions(DEFAULT_BILIBILI_QUALITY_OPTIONS);
     } finally {
       setPlaybackQualityLoading(false);

@@ -44,9 +44,7 @@ import {
   pickMusicPlatformGlobalCacheDirectory,
   readPlatformLoginRegistry,
   refreshAndEmitPlatformConnectorAuthSnapshot,
-  refreshPlatformInstanceAuthSnapshot,
   resolvePlatformConnectorTemplate,
-  resolvePlatformInstanceId,
   setMusicPlatformGlobalCacheSettings,
   setPlatformRenderSelectionMounted,
   subscribePlatformCompatRegistry,
@@ -62,6 +60,11 @@ import {
   type PlatformLoginRegistryEntry,
   type MusicPlatformGlobalCacheSettings,
 } from '../../../modules/music-platform';
+import {
+  getMusicPlatformNowMs,
+  MUSIC_PLATFORM_UI_STALL_THRESHOLD_MS,
+  warnOnSlowMusicPlatformOperation,
+} from '../../../modules/music-platform/platformDiagnostics';
 import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import {
   buildPlatformAuthSnapshotMapByConnectorId,
@@ -529,6 +532,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
   const refreshConnectorViews = useCallback(async (options?: { refreshAuth?: boolean }) => {
     const requestId = ++connectorViewsRequestIdRef.current;
+    const startedAtMs = getMusicPlatformNowMs();
     setConnectorViewsLoading(true);
 
     try {
@@ -538,27 +542,38 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       if (connectorViewsRequestIdRef.current !== requestId) return;
       setConnectorViews(nextViews);
       setLastRefreshAt(Date.now());
+      warnOnSlowMusicPlatformOperation({
+        logger: telemetry,
+        event: 'platform.runtime.connector-views.refresh-slow',
+        startedAtMs,
+        fields: {
+          requestId,
+          refreshAuth: options?.refreshAuth === true,
+          viewCount: nextViews.length,
+          platformInstanceCount: platformInstances.length,
+          activePage,
+          settingsOpen,
+        },
+      });
     } catch (error) {
       if (connectorViewsRequestIdRef.current !== requestId) return;
       telemetry.warn('platform.runtime.connector-views.refresh-failed', {
         message: readTelemetryErrorMessage(error),
+        fields: {
+          requestId,
+          refreshAuth: options?.refreshAuth === true,
+          durationMs: Math.max(0, Math.round(getMusicPlatformNowMs() - startedAtMs)),
+          platformInstanceCount: platformInstances.length,
+          activePage,
+          settingsOpen,
+        },
       });
     } finally {
       if (connectorViewsRequestIdRef.current === requestId) {
         setConnectorViewsLoading(false);
       }
     }
-  }, [telemetry]);
-
-  const refreshAuthSnapshot = useCallback(async (connectorId: PlatformConnectorId) => {
-    const instanceId = resolvePlatformInstanceId({ connectorId });
-    const snapshot = instanceId ? await refreshPlatformInstanceAuthSnapshot(instanceId) : null;
-    setAuthSnapshotsByConnectorId((prev) => ({
-      ...prev,
-      [connectorId]: snapshot,
-    }));
-    return snapshot;
-  }, []);
+  }, [activePage, platformInstances.length, settingsOpen, telemetry]);
 
   useEffect(() => {
     const syncWorkspacePlaylists = (playlists: AudioPlaylist[]): void => {
@@ -725,12 +740,38 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   );
 
   useEffect(() => {
-    for (const item of registeredItems) {
-      if (!item.definition) continue;
-      if (authSnapshotsByConnectorId[item.entry.connectorId] !== undefined) continue;
-      void refreshAuthSnapshot(item.entry.connectorId);
-    }
-  }, [authSnapshotsByConnectorId, refreshAuthSnapshot, registeredItems]);
+    let expectedAtMs = getMusicPlatformNowMs() + 1_000;
+    const intervalId = window.setInterval(() => {
+      const nowMs = getMusicPlatformNowMs();
+      const lagMs = Math.max(0, Math.round(nowMs - expectedAtMs));
+      expectedAtMs = nowMs + 1_000;
+      if (lagMs < MUSIC_PLATFORM_UI_STALL_THRESHOLD_MS) {
+        return;
+      }
+      telemetry.warn('platform.runtime.ui-stall.detected', {
+        message: 'PlatformMagnet main-thread stall detected',
+        fields: {
+          lagMs,
+          activePage,
+          settingsOpen,
+          selectedConnectorId: selectedConnectorId ?? null,
+          registeredCount: registeredItems.length,
+          mountedCount: mountedRegisteredItems.length,
+        },
+      });
+    }, 1_000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [
+    activePage,
+    mountedRegisteredItems.length,
+    registeredItems.length,
+    selectedConnectorId,
+    settingsOpen,
+    telemetry,
+  ]);
 
   useEffect(() => {
     const nextSelectedConnectorId = resolvePreferredConnectorId(
@@ -1003,6 +1044,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     (settingsOpen && settingsVideoItem ? settingsVideoItem : activeVideoItem) ?? null;
 
   const bilibiliController = useBilibiliWorkspaceAdapterController({
+    workspaceVisible: activePage === 'instance' || settingsOpen,
     activeWorkspaceConnectorId,
     activeVideoConnectorId: controllerVideoItem?.entry.connectorId ?? null,
     activeVideoInstanceId: controllerVideoItem?.instance?.instanceId ?? null,
@@ -1015,6 +1057,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   });
 
   const musicTemplateController = useMusicTemplateWorkspaceAdapterController({
+    workspaceVisible: activePage === 'instance',
     activeWorkspaceConnectorId,
     activeMusicConnectorId,
     activeMusicDisplayName,
@@ -1029,6 +1072,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     setPlaylistError,
   });
   const settingsMusicTemplateController = useMusicTemplateWorkspaceAdapterController({
+    workspaceVisible: settingsOpen,
     activeWorkspaceConnectorId: settingsMusicConnectorId,
     activeMusicConnectorId: settingsMusicConnectorId,
     activeMusicDisplayName: settingsMusicDisplayName,

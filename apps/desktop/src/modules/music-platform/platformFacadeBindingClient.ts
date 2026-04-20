@@ -3,7 +3,14 @@ import type {
   PlatformCompatRuntimeApi,
 } from '@pixel-matrix/plugin-platform-contracts';
 
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { invokePlatformRuntimeBinding } from './bindingRuntime';
+import {
+  getMusicPlatformDurationMs,
+  getMusicPlatformNowMs,
+  readMusicPlatformDiagnosticErrorMessage,
+  warnOnSlowMusicPlatformOperation,
+} from './platformDiagnostics';
 import {
   resolvePlatformRuntimeContext,
   type ResolvedPlatformRuntimeContext,
@@ -23,6 +30,8 @@ export type PlatformFacadeRuntimeBucket =
   | 'search'
   | 'quality'
   | 'pages';
+
+const telemetry = getTelemetryLogger('music-platform', 'platformFacadeBindingClient');
 
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -107,64 +116,123 @@ export async function callPlatformFacadeBinding<T>(options: {
   invokeRuntime?: RuntimeBindingInvoker;
   map: (value: unknown) => T | undefined;
 }): Promise<T> {
+  const startedAtMs = getMusicPlatformNowMs();
   const runtimeContext = resolveRuntimeContext({
     connectorId: options.connectorId,
     instanceId: options.instanceId,
   });
-
-  if (runtimeContext && options.invokeRuntime) {
-    const runtimePayload = buildBindingPayload(options.payload, runtimeContext.instanceId);
-    const runtimeResult = await options.invokeRuntime(
-      runtimeContext.runtime,
-      runtimeContext.instanceId,
-      runtimePayload
-    );
-    if (runtimeResult) {
-      return ensureMappedResult(
-        options.displayName,
-        options.bindingId,
-        options.method,
-        runtimeResult,
-        options.map
-      );
-    }
-  }
-
-  if (runtimeContext && options.runtimeBucket) {
-    const runtimePayload = buildBindingPayload(options.payload, runtimeContext.instanceId);
-    const runtimeResult = await invokeRuntimeBucketBinding(
-      runtimeContext.runtime,
-      options.runtimeBucket,
-      options.runtimeMethods?.length ? options.runtimeMethods : [options.method],
-      runtimePayload
-    );
-    if (runtimeResult) {
-      return ensureMappedResult(
-        options.displayName,
-        options.bindingId,
-        options.method,
-        runtimeResult,
-        options.map
-      );
-    }
-  }
-
-  const bindingInstanceId =
-    runtimeContext?.instanceId || normalizeString(options.instanceId) || undefined;
-  const bindingPayload = buildBindingPayload(options.payload, bindingInstanceId);
-  const bindingResult = await invokePlatformRuntimeBinding({
-    bindingId: options.bindingId,
+  let stage: 'runtime-explicit' | 'runtime-bucket' | 'binding' = 'binding';
+  const diagnosticFields = {
     connectorId: options.connectorId,
-    displayName: options.displayName,
+    bindingId: options.bindingId,
     method: options.method,
-    payload: bindingPayload,
-  });
+    runtimeBucket: options.runtimeBucket ?? null,
+    hasRuntimeContext: Boolean(runtimeContext),
+    requestedInstanceIdPresent: Boolean(normalizeString(options.instanceId)),
+    resolvedInstanceId:
+      runtimeContext?.instanceId ?? (normalizeString(options.instanceId) || null),
+    runtimePlatformId: runtimeContext?.platformId ?? null,
+    runtimeConnectorId: runtimeContext?.connectorId ?? null,
+  };
 
-  return ensureMappedResult(
-    options.displayName,
-    options.bindingId,
-    options.method,
-    bindingResult,
-    options.map
-  );
+  try {
+    if (runtimeContext && options.invokeRuntime) {
+      stage = 'runtime-explicit';
+      const runtimePayload = buildBindingPayload(options.payload, runtimeContext.instanceId);
+      const runtimeResult = await options.invokeRuntime(
+        runtimeContext.runtime,
+        runtimeContext.instanceId,
+        runtimePayload
+      );
+      if (runtimeResult) {
+        const mapped = ensureMappedResult(
+          options.displayName,
+          options.bindingId,
+          options.method,
+          runtimeResult,
+          options.map
+        );
+        warnOnSlowMusicPlatformOperation({
+          logger: telemetry,
+          event: 'music-platform.facade.call.slow',
+          startedAtMs,
+          fields: {
+            ...diagnosticFields,
+            stage,
+          },
+        });
+        return mapped;
+      }
+    }
+
+    if (runtimeContext && options.runtimeBucket) {
+      stage = 'runtime-bucket';
+      const runtimePayload = buildBindingPayload(options.payload, runtimeContext.instanceId);
+      const runtimeResult = await invokeRuntimeBucketBinding(
+        runtimeContext.runtime,
+        options.runtimeBucket,
+        options.runtimeMethods?.length ? options.runtimeMethods : [options.method],
+        runtimePayload
+      );
+      if (runtimeResult) {
+        const mapped = ensureMappedResult(
+          options.displayName,
+          options.bindingId,
+          options.method,
+          runtimeResult,
+          options.map
+        );
+        warnOnSlowMusicPlatformOperation({
+          logger: telemetry,
+          event: 'music-platform.facade.call.slow',
+          startedAtMs,
+          fields: {
+            ...diagnosticFields,
+            stage,
+          },
+        });
+        return mapped;
+      }
+    }
+
+    stage = 'binding';
+    const bindingInstanceId =
+      runtimeContext?.instanceId || normalizeString(options.instanceId) || undefined;
+    const bindingPayload = buildBindingPayload(options.payload, bindingInstanceId);
+    const bindingResult = await invokePlatformRuntimeBinding({
+      bindingId: options.bindingId,
+      connectorId: options.connectorId,
+      displayName: options.displayName,
+      method: options.method,
+      payload: bindingPayload,
+    });
+
+    const mapped = ensureMappedResult(
+      options.displayName,
+      options.bindingId,
+      options.method,
+      bindingResult,
+      options.map
+    );
+    warnOnSlowMusicPlatformOperation({
+      logger: telemetry,
+      event: 'music-platform.facade.call.slow',
+      startedAtMs,
+      fields: {
+        ...diagnosticFields,
+        stage,
+      },
+    });
+    return mapped;
+  } catch (error) {
+    telemetry.warn('music-platform.facade.call.failed', {
+      message: readMusicPlatformDiagnosticErrorMessage(error),
+      fields: {
+        ...diagnosticFields,
+        stage,
+        durationMs: getMusicPlatformDurationMs(startedAtMs),
+      },
+    });
+    throw error;
+  }
 }

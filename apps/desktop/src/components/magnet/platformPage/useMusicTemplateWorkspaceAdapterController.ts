@@ -1,11 +1,18 @@
 ﻿
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import type { IAudioService, Playlist as AudioPlaylist, Track } from '../../../services/audio';
 import type {
   PlatformCompatRegistryRecord,
   PlatformConnectorAuthState,
 } from '../../../modules/music-platform';
+import {
+  getMusicPlatformDurationMs,
+  getMusicPlatformNowMs,
+  readMusicPlatformDiagnosticErrorMessage,
+  warnOnSlowMusicPlatformOperation,
+} from '../../../modules/music-platform/platformDiagnostics';
 import type { MusicTemplatePlaybackSettingsContentProps } from './MusicTemplatePlaybackSettings';
 import type {
   MusicTemplateCollectionBrowserItem,
@@ -34,6 +41,7 @@ type Translator = (key: string, params?: Record<string, string | number>) => str
 const MUSIC_TEMPLATE_SEARCH_PAGE_SIZE = 40;
 const PREPARED_TRACK_CACHE_LIMIT = 96;
 const DAILY_COLLECTION_BROWSER_ID = '__music-template-daily__';
+const telemetry = getTelemetryLogger('magnet.platform', 'useMusicTemplateWorkspaceAdapterController');
 
 type MusicTemplatePlaybackQualityKey = 'auto' | 'standard' | 'higher' | 'exhigh' | 'lossless';
 type MusicTemplateCollectionSelectionKind = MusicTemplateCollectionBrowserItem['kind'] | 'search' | null;
@@ -165,6 +173,7 @@ function isSameCollection(
 }
 
 export interface UseMusicTemplateWorkspaceAdapterControllerParams {
+  workspaceVisible: boolean;
   activeWorkspaceConnectorId: string | null;
   activeMusicConnectorId: string | null;
   activeMusicDisplayName: string | null;
@@ -205,6 +214,7 @@ export function useMusicTemplateWorkspaceAdapterController(
   params: UseMusicTemplateWorkspaceAdapterControllerParams
 ): MusicTemplateWorkspaceAdapterControllerResult {
   const {
+    workspaceVisible,
     activeWorkspaceConnectorId,
     activeMusicConnectorId,
     activeMusicDisplayName,
@@ -231,7 +241,9 @@ export function useMusicTemplateWorkspaceAdapterController(
     [activeMusicConnectorId, activeMusicDisplayName, activeMusicInstanceId]
   );
   const musicTemplateWorkspaceActive =
-    Boolean(activeMusicConnectorId) && activeWorkspaceConnectorId === activeMusicConnectorId;
+    workspaceVisible &&
+    Boolean(activeMusicConnectorId) &&
+    activeWorkspaceConnectorId === activeMusicConnectorId;
   const authorized = activeMusicAuthState === 'authorized';
 
   const supportsCollections = activeMusicContractRecord?.contract.capabilities.playlists === true;
@@ -294,6 +306,7 @@ export function useMusicTemplateWorkspaceAdapterController(
         return;
       }
 
+      const startedAtMs = getMusicPlatformNowMs();
       setCollectionLoading(true);
       setCollectionError(null);
       try {
@@ -344,6 +357,42 @@ export function useMusicTemplateWorkspaceAdapterController(
         }
 
         setCollectionError(nextError);
+        warnOnSlowMusicPlatformOperation({
+          logger: telemetry,
+          event: 'platform.runtime.music-template.collection-browser-load.slow',
+          startedAtMs,
+          fields: {
+            connectorId: musicRuntimeTarget.connectorId,
+            instanceIdPresent: Boolean(musicRuntimeTarget.instanceId),
+            forceRefresh,
+            supportsCollections,
+            supportsDailyRecommendations,
+            userCollectionCount:
+              userCollectionsResult.status === 'fulfilled' ? userCollectionsResult.value.length : 0,
+            recommendedCollectionCount:
+              recommendationsResult.status === 'fulfilled'
+                ? recommendationsResult.value.collections.length
+                : 0,
+            hasRecommendedResourcePage:
+              recommendationsResult.status === 'fulfilled'
+                ? Boolean(recommendationsResult.value.page)
+                : false,
+            hasPartialError: Boolean(nextError),
+          },
+        });
+      } catch (error) {
+        telemetry.warn('platform.runtime.music-template.collection-browser-load.failed', {
+          message: readMusicPlatformDiagnosticErrorMessage(error),
+          fields: {
+            connectorId: musicRuntimeTarget.connectorId,
+            instanceIdPresent: Boolean(musicRuntimeTarget.instanceId),
+            forceRefresh,
+            durationMs: getMusicPlatformDurationMs(startedAtMs),
+          },
+        });
+        setCollectionError(
+          toErrorMessage(error, t('magnet.platform.music-template.collection.error'))
+        );
       } finally {
         setCollectionLoading(false);
       }
@@ -518,6 +567,7 @@ export function useMusicTemplateWorkspaceAdapterController(
         return;
       }
 
+      const startedAtMs = getMusicPlatformNowMs();
       setPlaybackQualityLoading(true);
       setPlaybackQualityError(null);
       try {
@@ -526,7 +576,29 @@ export function useMusicTemplateWorkspaceAdapterController(
           forceRefresh,
         });
         setPlaybackQualityState(nextState);
+        warnOnSlowMusicPlatformOperation({
+          logger: telemetry,
+          event: 'platform.runtime.music-template.quality-state-load.slow',
+          startedAtMs,
+          fields: {
+            connectorId: musicRuntimeTarget.connectorId,
+            instanceIdPresent: Boolean(musicRuntimeTarget.instanceId),
+            forceRefresh,
+            sourceLocatorPresent: Boolean(qualityProbeSourceLocator),
+            optionCount: nextState?.options.length ?? 0,
+          },
+        });
       } catch (error) {
+        telemetry.warn('platform.runtime.music-template.quality-state-load.failed', {
+          message: readMusicPlatformDiagnosticErrorMessage(error),
+          fields: {
+            connectorId: musicRuntimeTarget.connectorId,
+            instanceIdPresent: Boolean(musicRuntimeTarget.instanceId),
+            forceRefresh,
+            sourceLocatorPresent: Boolean(qualityProbeSourceLocator),
+            durationMs: getMusicPlatformDurationMs(startedAtMs),
+          },
+        });
         setPlaybackQualityError(
           toErrorMessage(error, t('magnet.platform.music-template.quality.errorLoad'))
         );

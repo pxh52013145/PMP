@@ -176,6 +176,17 @@ type MemoryBaselineExportPayload = {
   scenarioComparisons: MemoryBaselineScenarioComparison[];
 };
 
+type TelemetryArtifactAction =
+  | 'session-json'
+  | 'scenario-report'
+  | 'copy-ai-context'
+  | 'export-ai-context';
+
+type TelemetryArtifactFeedback = {
+  tone: 'progress' | 'success' | 'error';
+  message: string;
+};
+
 const MEMORY_BASELINE_MAX_ENTRIES = 20;
 const THREE_STAGE_CAPTURE_PLAN: ReadonlyArray<{
   stage: MemoryBaselineSample['stage'];
@@ -653,10 +664,14 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [telemetrySnapshot, setTelemetrySnapshot] = useState<TelemetrySnapshot>(() =>
     telemetryService.getSnapshot()
   );
-  const [telemetryQueryPresetId, setTelemetryQueryPresetId] = useState<TelemetryAiContextPresetId>('plugins');
+  const [telemetryQueryPresetId, setTelemetryQueryPresetId] = useState<TelemetryAiContextPresetId>('general');
   const [telemetryQueryResult, setTelemetryQueryResult] = useState<TelemetryQueryResult | null>(null);
   const [telemetryQueryBusy, setTelemetryQueryBusy] = useState(false);
   const [telemetryQueryError, setTelemetryQueryError] = useState<string | null>(null);
+  const [telemetryArtifactBusyAction, setTelemetryArtifactBusyAction] =
+    useState<TelemetryArtifactAction | null>(null);
+  const [telemetryArtifactFeedback, setTelemetryArtifactFeedback] =
+    useState<TelemetryArtifactFeedback | null>(null);
   const telemetryQueryPreset = useMemo(
     () => getTelemetryAiContextPreset(telemetryQueryPresetId),
     [telemetryQueryPresetId]
@@ -1636,23 +1651,82 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   ) => {
     if (!isTauri) {
       downloadTextFile(fileName, content, mimeType);
-      return { kind: 'download' as const, path: fileName };
+      return { kind: 'download' as const, path: `downloads/${fileName}` };
     }
 
     const fs = await import('@tauri-apps/api/fs');
     const relativePath = `logs/${fileName}`;
     await fs.createDir('logs', { dir: fs.BaseDirectory.AppData, recursive: true });
     await fs.writeFile({ path: relativePath, contents: content }, { dir: fs.BaseDirectory.AppData });
-    return { kind: 'saved' as const, path: relativePath };
+    return { kind: 'saved' as const, path: `appData/${relativePath}` };
   }, [downloadTextFile, isTauri]);
 
-  const handleExportTelemetrySessionJson = useCallback(async () => {
+  const beginTelemetryArtifactAction = useCallback((
+    action: TelemetryArtifactAction,
+    mode: 'copy' | 'export'
+  ) => {
+    const labelKey =
+      action === 'session-json'
+        ? 'debug.center.telemetry.artifacts.label.sessionJson'
+        : action === 'scenario-report'
+          ? 'debug.center.telemetry.artifacts.label.scenarioReport'
+          : 'debug.center.telemetry.artifacts.label.aiContext';
+    setTelemetryArtifactBusyAction(action);
+    setTelemetryArtifactFeedback({
+      tone: 'progress',
+      message: t(
+        mode === 'copy'
+          ? 'debug.center.telemetry.artifacts.feedback.copying'
+          : 'debug.center.telemetry.artifacts.feedback.exporting',
+        { label: t(labelKey) }
+      ),
+    });
+  }, [t]);
+
+  const completeTelemetryArtifactAction = useCallback((
+    action: TelemetryArtifactAction,
+    message: string
+  ) => {
+    setTelemetryArtifactBusyAction((current) => (current === action ? null : current));
+    setTelemetryArtifactFeedback({ tone: 'success', message });
     setError(null);
+    setStatusMessage(message);
+  }, []);
+
+  const failTelemetryArtifactAction = useCallback((
+    action: TelemetryArtifactAction,
+    mode: 'copy' | 'export',
+    err: unknown
+  ) => {
+    const message = err instanceof Error ? err.message : String(err);
+    setTelemetryArtifactBusyAction((current) => (current === action ? null : current));
+    setTelemetryArtifactFeedback({
+      tone: 'error',
+      message: t(
+        mode === 'copy'
+          ? 'debug.center.telemetry.artifacts.feedback.copyFailed'
+          : 'debug.center.telemetry.artifacts.feedback.exportFailed',
+        { message }
+      ),
+    });
+    setStatusMessage(null);
+    setError(message);
+  }, [t]);
+
+  const handleExportTelemetrySessionJson = useCallback(async () => {
+    const action: TelemetryArtifactAction = 'session-json';
+    setError(null);
+    beginTelemetryArtifactAction(action, 'export');
     try {
       const session = await readCurrentTelemetrySession();
       if (!session || session.records.length === 0) {
+        const message = t('debug.center.telemetry.artifacts.feedback.sessionEmpty', {
+          label: t('debug.center.telemetry.artifacts.label.sessionJson'),
+        });
+        setTelemetryArtifactBusyAction(null);
+        setTelemetryArtifactFeedback({ tone: 'error', message });
         setStatusMessage(null);
-        setError('Telemetry session is empty.');
+        setError(message);
         return;
       }
 
@@ -1661,25 +1735,36 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       const content = JSON.stringify(session, null, 2);
       const fileName = `telemetry-session-${safeTs}-${safeSessionId}.json`;
       const result = await saveDebugArtifact(fileName, content, 'application/json;charset=utf-8');
-
-      setStatusMessage(
+      completeTelemetryArtifactAction(
+        action,
         result.kind === 'saved'
-          ? `Telemetry session exported to ${result.path}`
-          : 'Telemetry session exported.'
+          ? t('debug.center.telemetry.artifacts.feedback.exportedTo', {
+              label: t('debug.center.telemetry.artifacts.label.sessionJson'),
+              path: result.path,
+            })
+          : t('debug.center.telemetry.artifacts.feedback.downloadStarted', {
+              label: t('debug.center.telemetry.artifacts.label.sessionJson'),
+            })
       );
     } catch (err) {
-      setStatusMessage(null);
-      setError(err instanceof Error ? err.message : String(err));
+      failTelemetryArtifactAction(action, 'export', err);
     }
-  }, [saveDebugArtifact]);
+  }, [beginTelemetryArtifactAction, completeTelemetryArtifactAction, failTelemetryArtifactAction, saveDebugArtifact, t]);
 
   const handleExportTelemetryScenarioReport = useCallback(async () => {
+    const action: TelemetryArtifactAction = 'scenario-report';
     setError(null);
+    beginTelemetryArtifactAction(action, 'export');
     try {
       const session = await readCurrentTelemetrySession();
       if (!session || session.records.length === 0) {
+        const message = t('debug.center.telemetry.artifacts.feedback.sessionEmpty', {
+          label: t('debug.center.telemetry.artifacts.label.scenarioReport'),
+        });
+        setTelemetryArtifactBusyAction(null);
+        setTelemetryArtifactFeedback({ tone: 'error', message });
         setStatusMessage(null);
-        setError('Telemetry session is empty.');
+        setError(message);
         return;
       }
 
@@ -1694,17 +1779,21 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       const safeSessionId = sanitizeFileSegment(session.status.currentSessionId, 'session');
       const fileName = `telemetry-scenario-${safeTs}-${safeSessionId}.md`;
       const result = await saveDebugArtifact(fileName, report, 'text/markdown;charset=utf-8');
-
-      setStatusMessage(
+      completeTelemetryArtifactAction(
+        action,
         result.kind === 'saved'
-          ? `Telemetry scenario report exported to ${result.path}`
-          : 'Telemetry scenario report exported.'
+          ? t('debug.center.telemetry.artifacts.feedback.exportedTo', {
+              label: t('debug.center.telemetry.artifacts.label.scenarioReport'),
+              path: result.path,
+            })
+          : t('debug.center.telemetry.artifacts.feedback.downloadStarted', {
+              label: t('debug.center.telemetry.artifacts.label.scenarioReport'),
+            })
       );
     } catch (err) {
-      setStatusMessage(null);
-      setError(err instanceof Error ? err.message : String(err));
+      failTelemetryArtifactAction(action, 'export', err);
     }
-  }, [isTauri, saveDebugArtifact]);
+  }, [beginTelemetryArtifactAction, completeTelemetryArtifactAction, failTelemetryArtifactAction, isTauri, saveDebugArtifact, t]);
 
   const loadTelemetryAiContextArtifact = useCallback(async (
     presetId: TelemetryAiContextPresetId = 'general'
@@ -1744,38 +1833,51 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const handleCopyTelemetryAiContext = useCallback(async (
     presetId: TelemetryAiContextPresetId = 'general'
   ) => {
+    const action: TelemetryArtifactAction = 'copy-ai-context';
     setError(null);
+    beginTelemetryArtifactAction(action, 'copy');
     try {
       const artifact = await loadTelemetryAiContextArtifact(presetId);
       await navigator.clipboard.writeText(artifact.report);
-      setStatusMessage(`Telemetry AI context copied from session ${artifact.sessionId}.`);
+      completeTelemetryArtifactAction(
+        action,
+        t('debug.center.telemetry.artifacts.feedback.copiedFromSession', {
+          label: t('debug.center.telemetry.artifacts.label.aiContext'),
+          sessionId: artifact.sessionId,
+        })
+      );
     } catch (err) {
-      setStatusMessage(null);
-      setError(err instanceof Error ? err.message : String(err));
+      failTelemetryArtifactAction(action, 'copy', err);
     }
-  }, [loadTelemetryAiContextArtifact]);
+  }, [beginTelemetryArtifactAction, completeTelemetryArtifactAction, failTelemetryArtifactAction, loadTelemetryAiContextArtifact, t]);
 
   const handleExportTelemetryAiContext = useCallback(async (
     presetId: TelemetryAiContextPresetId = 'general'
   ) => {
+    const action: TelemetryArtifactAction = 'export-ai-context';
     setError(null);
+    beginTelemetryArtifactAction(action, 'export');
     try {
       const artifact = await loadTelemetryAiContextArtifact(presetId);
       const safeTs = new Date().toISOString().replace(/[:.]/g, '-');
       const safeSessionId = sanitizeFileSegment(artifact.sessionId, 'session');
       const fileName = `telemetry-${artifact.preset.fileStem}-${safeTs}-${safeSessionId}.md`;
       const result = await saveDebugArtifact(fileName, artifact.report, 'text/markdown;charset=utf-8');
-
-      setStatusMessage(
+      completeTelemetryArtifactAction(
+        action,
         result.kind === 'saved'
-          ? `Telemetry AI context exported to ${result.path}`
-          : 'Telemetry AI context exported.'
+          ? t('debug.center.telemetry.artifacts.feedback.exportedTo', {
+              label: t('debug.center.telemetry.artifacts.label.aiContext'),
+              path: result.path,
+            })
+          : t('debug.center.telemetry.artifacts.feedback.downloadStarted', {
+              label: t('debug.center.telemetry.artifacts.label.aiContext'),
+            })
       );
     } catch (err) {
-      setStatusMessage(null);
-      setError(err instanceof Error ? err.message : String(err));
+      failTelemetryArtifactAction(action, 'export', err);
     }
-  }, [loadTelemetryAiContextArtifact, saveDebugArtifact]);
+  }, [beginTelemetryArtifactAction, completeTelemetryArtifactAction, failTelemetryArtifactAction, loadTelemetryAiContextArtifact, saveDebugArtifact, t]);
 
   const handleExportBaselinesJson = useCallback(() => {
     if (memoryBaselines.length === 0) {
@@ -3090,37 +3192,57 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
             <SettingsActionButton
               type="button"
+              disabled={telemetryArtifactBusyAction !== null}
               onClick={() => {
                 void handleExportTelemetrySessionJson();
               }}
             >
-              Export Session JSON
+              {t('debug.center.telemetry.artifacts.action.exportSessionJson')}
             </SettingsActionButton>
             <SettingsActionButton
               type="button"
+              disabled={telemetryArtifactBusyAction !== null}
               onClick={() => {
                 void handleExportTelemetryScenarioReport();
               }}
             >
-              Export Scenario Report
+              {t('debug.center.telemetry.artifacts.action.exportScenarioReport')}
             </SettingsActionButton>
             <SettingsActionButton
               type="button"
+              disabled={telemetryArtifactBusyAction !== null}
               onClick={() => {
                 void handleCopyTelemetryAiContext(telemetryQueryPresetId);
               }}
             >
-              Copy AI Context
+              {t('debug.center.telemetry.artifacts.action.copyAiContext')}
             </SettingsActionButton>
             <SettingsActionButton
               type="button"
+              disabled={telemetryArtifactBusyAction !== null}
               onClick={() => {
                 void handleExportTelemetryAiContext(telemetryQueryPresetId);
               }}
             >
-              Export AI Context
+              {t('debug.center.telemetry.artifacts.action.exportAiContext')}
             </SettingsActionButton>
           </div>
+          {telemetryArtifactFeedback ? (
+            <p
+              className="settings-card-note"
+              style={{
+                marginTop: 10,
+                color:
+                  telemetryArtifactFeedback.tone === 'error'
+                    ? 'rgba(255,140,140,0.95)'
+                    : telemetryArtifactFeedback.tone === 'progress'
+                      ? 'rgba(255,225,150,0.95)'
+                      : 'rgba(140,255,190,0.95)',
+              }}
+            >
+              {telemetryArtifactFeedback.message}
+            </p>
+          ) : null}
         </SettingsCard>
 
         <SettingsCard>

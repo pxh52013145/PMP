@@ -1,10 +1,12 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
   buildPlatformPackArchiveBytes,
+  readPlatformPackManifest,
 } from './package-platform-pack.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -13,7 +15,8 @@ const srcTauriCwd = path.join(desktopCwd, 'src-tauri');
 const cargoManifestPath = path.join(srcTauriCwd, 'Cargo.toml');
 const isWindows = process.platform === 'win32';
 const hostBinaryExt = isWindows ? '.exe' : '';
-const buildProfile = process.env.TAURI_DEBUG ? 'debug' : 'release';
+const buildProfile = resolveBuildProfile(process.argv.slice(2));
+const BUILTIN_PACK_INDEX_FILE_NAME = 'builtin-pack-index.json';
 
 const packTargets = [
   {
@@ -34,6 +37,7 @@ const packTargets = [
       path.join(repoRoot, 'resource', 'music-platform', 'packs', 'dist'),
       path.join(desktopCwd, 'public', 'resource', 'music-platform', 'packs', 'dist'),
     ],
+    source: 'builtin-pack:bilibili',
   },
   {
     packSourceDir: path.join(
@@ -53,8 +57,49 @@ const packTargets = [
       path.join(repoRoot, 'resource', 'music-platform', 'packs', 'dist'),
       path.join(desktopCwd, 'public', 'resource', 'music-platform', 'packs', 'dist'),
     ],
+    source: 'builtin-pack:netease',
   },
 ];
+
+const cargoInputPaths = [
+  cargoManifestPath,
+  path.join(srcTauriCwd, 'Cargo.lock'),
+  path.join(srcTauriCwd, 'build.rs'),
+  path.join(srcTauriCwd, 'src'),
+  path.join(srcTauriCwd, 'crates'),
+];
+
+function parseExplicitBuildProfile(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'debug' || normalized === 'release' ? normalized : null;
+}
+
+function isTruthyEnvFlag(value) {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
+}
+
+function resolveBuildProfile(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] !== '--profile') {
+      continue;
+    }
+    return parseExplicitBuildProfile(argv[index + 1]) ?? 'release';
+  }
+
+  const envProfile = parseExplicitBuildProfile(process.env.PMP_PLATFORM_PACK_PROFILE);
+  if (envProfile) {
+    return envProfile;
+  }
+
+  return isTruthyEnvFlag(process.env.TAURI_DEBUG) ? 'debug' : 'release';
+}
 
 function canRun(cmd, args = ['--version']) {
   try {
@@ -94,6 +139,101 @@ function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
 
+function statMtimeMs(targetPath) {
+  try {
+    return fs.statSync(targetPath).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function latestMtimeMs(targetPath) {
+  if (!targetPath || !fs.existsSync(targetPath)) {
+    return 0;
+  }
+
+  const stats = fs.statSync(targetPath);
+  let latest = stats.mtimeMs;
+  if (!stats.isDirectory()) {
+    return latest;
+  }
+
+  for (const entry of fs.readdirSync(targetPath, { withFileTypes: true })) {
+    latest = Math.max(latest, latestMtimeMs(path.join(targetPath, entry.name)));
+  }
+
+  return latest;
+}
+
+function normalizeRelativeFsPath(value) {
+  return value.replace(/\\/g, '/');
+}
+
+function latestRelevantFileMtimeMs(
+  targetPath,
+  rootPath = targetPath,
+  excludedRelativePaths = new Set()
+) {
+  if (!targetPath || !fs.existsSync(targetPath)) {
+    return 0;
+  }
+
+  const stats = fs.statSync(targetPath);
+  if (stats.isFile()) {
+    const relativePath = normalizeRelativeFsPath(path.relative(rootPath, targetPath));
+    if (excludedRelativePaths.has(relativePath)) {
+      return 0;
+    }
+    return stats.mtimeMs;
+  }
+
+  if (!stats.isDirectory()) {
+    return 0;
+  }
+
+  let latest = 0;
+  for (const entry of fs.readdirSync(targetPath, { withFileTypes: true })) {
+    latest = Math.max(
+      latest,
+      latestRelevantFileMtimeMs(
+        path.join(targetPath, entry.name),
+        rootPath,
+        excludedRelativePaths
+      )
+    );
+  }
+
+  return latest;
+}
+
+function latestMtimeMsForPaths(paths) {
+  let latest = 0;
+  for (const targetPath of paths) {
+    latest = Math.max(latest, latestMtimeMs(targetPath));
+  }
+  return latest;
+}
+
+function areOutputsFresh(outputPaths, inputLatestMs) {
+  return (
+    outputPaths.length > 0 &&
+    outputPaths.every(
+      (outputPath) => fs.existsSync(outputPath) && statMtimeMs(outputPath) >= inputLatestMs
+    )
+  );
+}
+
+function computePackTreeDigest(files) {
+  const hash = createHash('sha256');
+  for (const file of [...files].sort((left, right) => left.relativePath.localeCompare(right.relativePath, 'en'))) {
+    hash.update(file.relativePath, 'utf8');
+    hash.update('\0', 'utf8');
+    hash.update(Buffer.from(file.bytes));
+    hash.update(Buffer.from([0]));
+  }
+  return hash.digest('hex');
+}
+
 function run(command, args) {
   const result = spawnSync(command, args, {
     cwd: repoRoot,
@@ -118,6 +258,20 @@ function writePackArchive(bytes, destinationPath) {
   fs.writeFileSync(destinationPath, bytes);
 }
 
+function writeBuiltinPackIndex(entries, destinationPath) {
+  ensureDir(path.dirname(destinationPath));
+  fs.writeFileSync(
+    destinationPath,
+    JSON.stringify(
+      {
+        packs: entries,
+      },
+      null,
+      2
+    )
+  );
+}
+
 async function main() {
   const cargo = findCargoExecutable();
   if (!cargo) {
@@ -126,26 +280,40 @@ async function main() {
     process.exit(1);
   }
 
-  const cargoArgs = ['build', '--manifest-path', cargoManifestPath];
-  if (buildProfile === 'release') {
-    cargoArgs.push('--release');
-  }
-  for (const target of packTargets) {
-    cargoArgs.push('--bin', target.binName);
-  }
-
-  console.log(
-    `[prepare-music-platform-packs] building builtin music platform sidecars (${buildProfile})`
+  const cargoSourcesLatestMs = latestMtimeMsForPaths(cargoInputPaths);
+  const builtBinaryPaths = new Map(
+    packTargets.map((target) => [
+      target.binName,
+      path.join(srcTauriCwd, 'target', buildProfile, `${target.binName}${hostBinaryExt}`),
+    ])
   );
-  run(cargo, cargoArgs);
+
+  const needsCargoBuild = packTargets.some((target) => {
+    const builtBinaryPath = builtBinaryPaths.get(target.binName);
+    return !builtBinaryPath || !areOutputsFresh([builtBinaryPath], cargoSourcesLatestMs);
+  });
+
+  if (needsCargoBuild) {
+    const cargoArgs = ['build', '--manifest-path', cargoManifestPath];
+    if (buildProfile === 'release') {
+      cargoArgs.push('--release');
+    }
+    for (const target of packTargets) {
+      cargoArgs.push('--bin', target.binName);
+    }
+
+    console.log(
+      `[prepare-music-platform-packs] building builtin music platform sidecars (${buildProfile})`
+    );
+    run(cargo, cargoArgs);
+  } else {
+    console.log(
+      `[prepare-music-platform-packs] builtin music platform sidecars are up to date (${buildProfile})`
+    );
+  }
 
   for (const target of packTargets) {
-    const builtBinaryPath = path.join(
-      srcTauriCwd,
-      'target',
-      buildProfile,
-      `${target.binName}${hostBinaryExt}`
-    );
+    const builtBinaryPath = builtBinaryPaths.get(target.binName);
     if (!fs.existsSync(builtBinaryPath)) {
       console.error(
         `[prepare-music-platform-packs] expected built sidecar missing: ${builtBinaryPath}`
@@ -155,6 +323,9 @@ async function main() {
 
     for (const outputDir of target.binaryOutputDirs) {
       const destinationPath = path.join(outputDir, target.publishedFileName);
+      if (areOutputsFresh([destinationPath], cargoSourcesLatestMs)) {
+        continue;
+      }
       copyPublishedBinary(builtBinaryPath, destinationPath);
       console.log(
         `[prepare-music-platform-packs] copied ${path.relative(
@@ -180,20 +351,102 @@ async function main() {
     });
   }
 
+  const packTargetsWithManifest = [];
+  const sourceLatestMsByConnectorId = new Map();
   for (const target of packTargets) {
-    const archive = await buildPlatformPackArchiveBytes(target.packSourceDir);
-    const publishedPackFileName = `${archive.manifest.metadata.id}.pmpp`;
+    const manifest = await readPlatformPackManifest(target.packSourceDir);
+    const excludedRelativePaths = new Set(
+      manifest.entry.sidecar ? [normalizeRelativeFsPath(manifest.entry.sidecar)] : []
+    );
+    const packSourceLatestMs = Math.max(
+      cargoSourcesLatestMs,
+      latestRelevantFileMtimeMs(
+        target.packSourceDir,
+        target.packSourceDir,
+        excludedRelativePaths
+      )
+    );
+    packTargetsWithManifest.push({
+      target,
+      manifest,
+      publishedPackFileName: `${manifest.metadata.id}.pmpp`,
+      packSourceLatestMs,
+    });
+    sourceLatestMsByConnectorId.set(manifest.connector.connectorId, packSourceLatestMs);
+  }
 
-    for (const outputDir of target.packOutputDirs) {
-      const destinationPath = path.join(outputDir, publishedPackFileName);
+  const indexOutputDirs = Array.from(
+    new Set(packTargets.flatMap((target) => target.packOutputDirs))
+  );
+  const indexLatestRequiredMs = Math.max(
+    0,
+    ...Array.from(sourceLatestMsByConnectorId.values())
+  );
+  const indexOutputPaths = indexOutputDirs.map((outputDir) =>
+    path.join(outputDir, BUILTIN_PACK_INDEX_FILE_NAME)
+  );
+  const indexNeedsRefresh = !areOutputsFresh(indexOutputPaths, indexLatestRequiredMs);
+
+  const packTargetsNeedingRefresh = packTargetsWithManifest.map((entry) => {
+    const packOutputPaths = entry.target.packOutputDirs.map((outputDir) =>
+      path.join(outputDir, entry.publishedPackFileName)
+    );
+    const packNeedsRefresh =
+      indexNeedsRefresh || !areOutputsFresh(packOutputPaths, entry.packSourceLatestMs);
+
+    return {
+      ...entry,
+      packNeedsRefresh,
+    };
+  });
+
+  if (
+    packTargetsNeedingRefresh.length > 0 &&
+    packTargetsNeedingRefresh.every((entry) => entry.packNeedsRefresh === false) &&
+    !indexNeedsRefresh
+  ) {
+    console.log('[prepare-music-platform-packs] builtin platform pack archives are up to date');
+    return;
+  }
+
+  const packArchives = [];
+  for (const entry of packTargetsNeedingRefresh) {
+    const archive = await buildPlatformPackArchiveBytes(entry.target.packSourceDir);
+    packArchives.push({
+      ...entry,
+      archive,
+    });
+
+    if (!entry.packNeedsRefresh) {
+      continue;
+    }
+
+    for (const outputDir of entry.target.packOutputDirs) {
+      const destinationPath = path.join(outputDir, entry.publishedPackFileName);
       writePackArchive(archive.bytes, destinationPath);
       console.log(
         `[prepare-music-platform-packs] packed ${path.relative(
           repoRoot,
-          target.packSourceDir
+          entry.target.packSourceDir
         )} -> ${path.relative(repoRoot, destinationPath)}`
       );
     }
+  }
+
+  const indexEntries = packArchives.map(({ target, archive, publishedPackFileName }) => ({
+    source: target.source,
+    connectorId: archive.manifest.connector.connectorId,
+    packId: archive.manifest.metadata.id,
+    packVersion: archive.manifest.metadata.version,
+    packageDigest: computePackTreeDigest(archive.files),
+    packAssetUrl: `/resource/music-platform/packs/dist/${publishedPackFileName}`,
+  }));
+
+  for (const outputPath of indexOutputPaths) {
+    writeBuiltinPackIndex(indexEntries, outputPath);
+    console.log(
+      `[prepare-music-platform-packs] wrote ${path.relative(repoRoot, outputPath)}`
+    );
   }
 }
 

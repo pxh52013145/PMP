@@ -47,6 +47,10 @@ const fsState = vi.hoisted(() => ({
   files: new Map<string, Uint8Array>(),
 }));
 
+const fetchState = vi.hoisted(() => ({
+  builtinPackIndexPayload: null as { packs: Array<Record<string, unknown>> } | null,
+}));
+
 vi.mock('./connectorAuth', () => ({
   createPassivePlatformConnectorAdapter: vi.fn((definition: Record<string, unknown>) => ({
     definition,
@@ -203,6 +207,159 @@ const builtinPackAssetBytes = {
   ),
 };
 
+const builtinPackAssetUrlByConnectorId = {
+  'connector.platform.bilibili': '/resource/music-platform/packs/dist/builtin-bilibili.pmpp',
+  'connector.platform.netease': '/resource/music-platform/packs/dist/builtin-netease.pmpp',
+} as const;
+
+type BuiltinPackIndexPayloadEntry = {
+  source: string;
+  connectorId: string;
+  packId: string;
+  packVersion: string;
+  packageDigest?: string;
+  packAssetUrl: string;
+};
+
+function installFetchMock(): void {
+  globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    const pathname = new URL(url, 'http://localhost:1420').pathname;
+    if (pathname === '/resource/music-platform/packs/dist/builtin-pack-index.json') {
+      if (!fetchState.builtinPackIndexPayload) {
+        return new Response(null, { status: 404 });
+      }
+      return new Response(JSON.stringify(fetchState.builtinPackIndexPayload), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+    }
+    const bytes = builtinPackAssetBytes[pathname as keyof typeof builtinPackAssetBytes];
+    if (!bytes) {
+      return new Response(null, { status: 404 });
+    }
+    return new Response(bytes.slice(), { status: 200 });
+  }) as typeof fetch;
+}
+
+function buildBuiltinPackIndexPayload(records: Array<Record<string, unknown>>): {
+  packs: BuiltinPackIndexPayloadEntry[];
+} {
+  const packs: BuiltinPackIndexPayloadEntry[] = [];
+  for (const record of records) {
+    const connectorId =
+      typeof record.connectorId === 'string' ? record.connectorId : '';
+    const packId = typeof record.packId === 'string' ? record.packId : '';
+    const packVersion =
+      typeof record.packVersion === 'string' ? record.packVersion : '';
+    const packAssetUrl =
+      builtinPackAssetUrlByConnectorId[
+        connectorId as keyof typeof builtinPackAssetUrlByConnectorId
+      ];
+    if (!connectorId || !packId || !packVersion || !packAssetUrl) {
+      continue;
+    }
+    packs.push({
+      source:
+        typeof record.source === 'string' && record.source.length > 0
+          ? record.source
+          : `builtin-pack:${connectorId.replace('connector.platform.', '')}`,
+      connectorId,
+      packId,
+      packVersion,
+      packageDigest:
+        typeof record.packageDigest === 'string' && record.packageDigest.length > 0
+          ? record.packageDigest
+          : undefined,
+      packAssetUrl,
+    });
+  }
+
+  return {
+    packs,
+  };
+}
+
+function resetBootTestEnvironment(
+  options: {
+    clearStorage?: boolean;
+    clearFs?: boolean;
+    clearBuiltinPackIndex?: boolean;
+  } = {}
+): void {
+  const {
+    clearStorage = true,
+    clearFs = true,
+    clearBuiltinPackIndex = true,
+  } = options;
+
+  vi.resetModules();
+  vi.useFakeTimers();
+
+  connectorAuthState.adapters.clear();
+  connectorAuthState.compatRegistrations.clear();
+  connectorAuthState.initializers.length = 0;
+  bindingRuntimeMock.invokePlatformRuntimeBinding.mockClear();
+  sidecarBridgeMock.invokePlatformPackSidecar.mockClear();
+  sidecarBridgeMock.disposePlatformPackSidecar.mockClear();
+  tauriEventMock.emit.mockClear();
+  tauriEventMock.listen.mockClear();
+  tauriInvokeTelemetryMock.invokeWithTelemetry.mockClear();
+  telemetryLoggerMock.debug.mockClear();
+  telemetryLoggerMock.info.mockClear();
+  telemetryLoggerMock.warn.mockClear();
+  telemetryLoggerMock.error.mockClear();
+
+  if (clearFs) {
+    fsState.files.clear();
+  }
+  if (clearStorage) {
+    localStorage.clear();
+  }
+  if (clearBuiltinPackIndex) {
+    fetchState.builtinPackIndexPayload = null;
+  }
+
+  Object.defineProperty(window, '__TAURI__', {
+    configurable: true,
+    value: {},
+  });
+  Object.defineProperty(window, 'requestAnimationFrame', {
+    configurable: true,
+    value: (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    },
+  });
+  Object.defineProperty(globalThis, 'crypto', {
+    configurable: true,
+    value: {
+      subtle: {
+        digest: vi.fn(async () => new Uint8Array([1, 2, 3, 4]).buffer),
+      },
+    },
+  });
+
+  installFetchMock();
+
+  globalThis.Blob = RuntimeCodeBlob as unknown as typeof Blob;
+  URL.createObjectURL = ((blob: unknown) => {
+    const code =
+      blob && typeof blob === 'object' && '__text' in blob
+        ? String((blob as { __text: string }).__text)
+        : '';
+    return `data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`;
+  }) as typeof URL.createObjectURL;
+  URL.revokeObjectURL = (() => undefined) as typeof URL.revokeObjectURL;
+}
+
 async function flushBootLifecycle(): Promise<void> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     await Promise.resolve();
@@ -262,69 +419,7 @@ async function bootPlatformPackRegistry() {
 
 describe('platformPackRegistry builtin pack boot', () => {
   beforeEach(() => {
-    vi.resetModules();
-    vi.useFakeTimers();
-
-    connectorAuthState.adapters.clear();
-    connectorAuthState.compatRegistrations.clear();
-    connectorAuthState.initializers.length = 0;
-    bindingRuntimeMock.invokePlatformRuntimeBinding.mockClear();
-    sidecarBridgeMock.invokePlatformPackSidecar.mockClear();
-    sidecarBridgeMock.disposePlatformPackSidecar.mockClear();
-    tauriEventMock.emit.mockClear();
-    tauriEventMock.listen.mockClear();
-    tauriInvokeTelemetryMock.invokeWithTelemetry.mockClear();
-    telemetryLoggerMock.debug.mockClear();
-    telemetryLoggerMock.info.mockClear();
-    telemetryLoggerMock.warn.mockClear();
-    telemetryLoggerMock.error.mockClear();
-    fsState.files.clear();
-
-    localStorage.clear();
-    Object.defineProperty(window, '__TAURI__', {
-      configurable: true,
-      value: {},
-    });
-    Object.defineProperty(window, 'requestAnimationFrame', {
-      configurable: true,
-      value: (callback: FrameRequestCallback) => {
-        callback(0);
-        return 1;
-      },
-    });
-    Object.defineProperty(globalThis, 'crypto', {
-      configurable: true,
-      value: {
-        subtle: {
-          digest: vi.fn(async () => new Uint8Array([1, 2, 3, 4]).buffer),
-        },
-      },
-    });
-
-    globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
-      const url =
-        typeof input === 'string'
-          ? input
-          : input instanceof URL
-            ? input.toString()
-            : input.url;
-      const pathname = new URL(url, 'http://localhost:1420').pathname;
-      const bytes = builtinPackAssetBytes[pathname as keyof typeof builtinPackAssetBytes];
-      if (!bytes) {
-        return new Response(null, { status: 404 });
-      }
-      return new Response(bytes.slice(), { status: 200 });
-    }) as typeof fetch;
-
-    globalThis.Blob = RuntimeCodeBlob as unknown as typeof Blob;
-    URL.createObjectURL = ((blob: unknown) => {
-      const code =
-        blob && typeof blob === 'object' && '__text' in blob
-          ? String((blob as { __text: string }).__text)
-          : '';
-      return `data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`;
-    }) as typeof URL.createObjectURL;
-    URL.revokeObjectURL = (() => undefined) as typeof URL.revokeObjectURL;
+    resetBootTestEnvironment();
   });
 
   afterEach(() => {
@@ -496,5 +591,134 @@ describe('platformPackRegistry builtin pack boot', () => {
         instanceId: 'bilibili:builtin',
       })
     );
+  });
+
+  it('skips builtin pack asset reconcile when installed builtin packs already match the lightweight index', async () => {
+    const { registry, windowCommunication } = await bootPlatformPackRegistry();
+    expect(registry.listPlatformPackRegistrations()).toHaveLength(2);
+
+    const storedRecords = JSON.parse(
+      localStorage.getItem(windowCommunication.STORAGE_KEYS.PLATFORM_PACKS_V1) ?? '[]'
+    ) as Array<Record<string, unknown>>;
+
+    fetchState.builtinPackIndexPayload = buildBuiltinPackIndexPayload(storedRecords);
+    resetBootTestEnvironment({
+      clearStorage: false,
+      clearFs: false,
+      clearBuiltinPackIndex: false,
+    });
+
+    const secondBoot = await bootPlatformPackRegistry();
+    expect(secondBoot.registry.listPlatformPackRegistrations().map((item) => item.connectorId)).toEqual([
+      'connector.platform.bilibili',
+      'connector.platform.netease',
+    ]);
+
+    const fetchCalls =
+      'mock' in globalThis.fetch
+        ? (globalThis.fetch as unknown as { mock: { calls: Array<[string | URL | Request]> } }).mock
+            .calls
+            .map(([input]) => {
+              const url =
+                typeof input === 'string'
+                  ? input
+                  : input instanceof URL
+                    ? input.toString()
+                    : input.url;
+              return new URL(url, 'http://localhost:1420').pathname;
+            })
+        : [];
+
+    expect(fetchCalls).toContain('/resource/music-platform/packs/dist/builtin-pack-index.json');
+    expect(fetchCalls).not.toContain('/resource/music-platform/packs/dist/builtin-bilibili.pmpp');
+    expect(fetchCalls).not.toContain('/resource/music-platform/packs/dist/builtin-netease.pmpp');
+  });
+
+  it('keeps restored builtin packs when the lightweight index is temporarily unavailable', async () => {
+    const { registry, windowCommunication } = await bootPlatformPackRegistry();
+    expect(registry.listPlatformPackRegistrations()).toHaveLength(2);
+
+    const storedRecords = JSON.parse(
+      localStorage.getItem(windowCommunication.STORAGE_KEYS.PLATFORM_PACKS_V1) ?? '[]'
+    ) as Array<Record<string, unknown>>;
+    expect(storedRecords).toHaveLength(2);
+
+    resetBootTestEnvironment({
+      clearStorage: false,
+      clearFs: false,
+      clearBuiltinPackIndex: true,
+    });
+
+    const secondBoot = await bootPlatformPackRegistry();
+    expect(secondBoot.registry.listPlatformPackRegistrations().map((item) => item.connectorId)).toEqual([
+      'connector.platform.bilibili',
+      'connector.platform.netease',
+    ]);
+
+    const fetchCalls =
+      'mock' in globalThis.fetch
+        ? (globalThis.fetch as unknown as { mock: { calls: Array<[string | URL | Request]> } }).mock
+            .calls
+            .map(([input]) => {
+              const url =
+                typeof input === 'string'
+                  ? input
+                  : input instanceof URL
+                    ? input.toString()
+                    : input.url;
+              return new URL(url, 'http://localhost:1420').pathname;
+            })
+        : [];
+
+    expect(fetchCalls).toContain('/resource/music-platform/packs/dist/builtin-pack-index.json');
+    expect(fetchCalls).not.toContain('/resource/music-platform/packs/dist/builtin-bilibili.pmpp');
+    expect(fetchCalls).not.toContain('/resource/music-platform/packs/dist/builtin-netease.pmpp');
+  });
+
+  it('keeps restored builtin packs in dev when the lightweight index only differs by digest', async () => {
+    const { registry, windowCommunication } = await bootPlatformPackRegistry();
+    expect(registry.listPlatformPackRegistrations()).toHaveLength(2);
+
+    const storedRecords = JSON.parse(
+      localStorage.getItem(windowCommunication.STORAGE_KEYS.PLATFORM_PACKS_V1) ?? '[]'
+    ) as Array<Record<string, unknown>>;
+    expect(storedRecords).toHaveLength(2);
+
+    fetchState.builtinPackIndexPayload = buildBuiltinPackIndexPayload(
+      storedRecords.map((record, index) => ({
+        ...record,
+        packageDigest: `dev-digest-${index + 1}`,
+      }))
+    );
+    resetBootTestEnvironment({
+      clearStorage: false,
+      clearFs: false,
+      clearBuiltinPackIndex: false,
+    });
+
+    const secondBoot = await bootPlatformPackRegistry();
+    expect(secondBoot.registry.listPlatformPackRegistrations().map((item) => item.connectorId)).toEqual([
+      'connector.platform.bilibili',
+      'connector.platform.netease',
+    ]);
+
+    const fetchCalls =
+      'mock' in globalThis.fetch
+        ? (globalThis.fetch as unknown as { mock: { calls: Array<[string | URL | Request]> } }).mock
+            .calls
+            .map(([input]) => {
+              const url =
+                typeof input === 'string'
+                  ? input
+                  : input instanceof URL
+                    ? input.toString()
+                    : input.url;
+              return new URL(url, 'http://localhost:1420').pathname;
+            })
+        : [];
+
+    expect(fetchCalls).toContain('/resource/music-platform/packs/dist/builtin-pack-index.json');
+    expect(fetchCalls).not.toContain('/resource/music-platform/packs/dist/builtin-bilibili.pmpp');
+    expect(fetchCalls).not.toContain('/resource/music-platform/packs/dist/builtin-netease.pmpp');
   });
 });

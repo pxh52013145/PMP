@@ -136,6 +136,12 @@ pub struct BilibiliAuthStatus {
     pub availability_message: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthStatusQueryMode {
+    CachedSnapshot,
+    RemoteRefresh,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BilibiliFavoriteFolder {
@@ -1345,6 +1351,44 @@ fn get_auth_cookie_header(instance_id: Option<&str>) -> Option<String> {
             .get(normalized_instance_id.as_str())
             .map(|cookie| cookie.cookie_header.clone())
     })
+}
+
+fn has_persisted_auth_token(token_ref: Option<&str>) -> bool {
+    token_ref
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+}
+
+fn build_cached_authorized_auth_snapshot(
+    connector_id: &str,
+    auth_state: String,
+    account_uid: Option<String>,
+    updated_at_ms: Option<i64>,
+    expires_at_ms: Option<i64>,
+    has_local_token_material: bool,
+    display_name: &str,
+) -> BilibiliAuthStatus {
+    let (availability, availability_message) = if has_local_token_material {
+        (Some(AUTH_AVAILABILITY_AVAILABLE.to_string()), None)
+    } else {
+        (
+            Some(AUTH_AVAILABILITY_DEGRADED.to_string()),
+            Some(format!(
+                "{display_name} login token is unavailable in current session, please refresh login status"
+            )),
+        )
+    };
+
+    BilibiliAuthStatus {
+        connector_id: connector_id.to_string(),
+        auth_state,
+        account_uid,
+        updated_at_ms,
+        expires_at_ms,
+        availability,
+        availability_message,
+    }
 }
 
 fn ensure_auth_context(app: &AppHandle, instance_id: Option<&str>) -> Result<AuthContext, String> {
@@ -3174,9 +3218,10 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<BilibiliQrPollResult
     })
 }
 
-pub fn get_auth_status(
+fn get_auth_status(
     app: &AppHandle,
     instance_id: Option<&str>,
+    query_mode: AuthStatusQueryMode,
 ) -> Result<BilibiliAuthStatus, String> {
     ensure_connector(app)?;
     let normalized_instance_id = normalize_instance_id(instance_id);
@@ -3232,13 +3277,31 @@ pub fn get_auth_status(
 
     if let Some(account) = account.as_ref() {
         if auth_state.eq_ignore_ascii_case("authorized") {
-            let cookie_header = get_auth_cookie_header(Some(normalized_instance_id.as_str()))
-                .or_else(|| {
-                    account
-                        .token_ref
-                        .as_deref()
-                        .and_then(read_cookie_header_from_token_ref)
-                });
+            let in_memory_cookie_header =
+                get_auth_cookie_header(Some(normalized_instance_id.as_str()));
+
+            if matches!(query_mode, AuthStatusQueryMode::CachedSnapshot) {
+                if let Some(cookie_header) = in_memory_cookie_header.as_ref() {
+                    set_auth_cookie_state(normalized_instance_id.as_str(), cookie_header.clone());
+                }
+                return Ok(build_cached_authorized_auth_snapshot(
+                    BILIBILI_CONNECTOR_ID,
+                    auth_state,
+                    account_uid,
+                    updated_at_ms,
+                    expires_at_ms,
+                    in_memory_cookie_header.is_some()
+                        || has_persisted_auth_token(account.token_ref.as_deref()),
+                    DISPLAY_NAME,
+                ));
+            }
+
+            let cookie_header = in_memory_cookie_header.or_else(|| {
+                account
+                    .token_ref
+                    .as_deref()
+                    .and_then(read_cookie_header_from_token_ref)
+            });
 
             if let Some(cookie_header) = cookie_header {
                 set_auth_cookie_state(normalized_instance_id.as_str(), cookie_header.clone());
@@ -3355,7 +3418,11 @@ pub fn logout(app: &AppHandle, instance_id: Option<&str>) -> Result<BilibiliAuth
     }
     clear_auth_cookie_state(Some(normalized_instance_id.as_str()));
 
-    get_auth_status(app, Some(normalized_instance_id.as_str()))
+    get_auth_status(
+        app,
+        Some(normalized_instance_id.as_str()),
+        AuthStatusQueryMode::CachedSnapshot,
+    )
 }
 
 pub fn clear_auth_cookies(
@@ -3399,7 +3466,11 @@ pub fn clear_auth_cookies(
     }
     clear_auth_cookie_state(Some(normalized_instance_id.as_str()));
 
-    get_auth_status(app, Some(normalized_instance_id.as_str()))
+    get_auth_status(
+        app,
+        Some(normalized_instance_id.as_str()),
+        AuthStatusQueryMode::CachedSnapshot,
+    )
 }
 
 pub fn dispatch_auth(
@@ -3414,7 +3485,16 @@ pub fn dispatch_auth(
             let session_id = required_payload_string(payload, &["sessionId"], "payload.sessionId")?;
             serialize_response(qr_poll(app, &session_id)?)
         }
-        "getSnapshot" | "refreshSnapshot" => serialize_response(get_auth_status(app, instance_id)?),
+        "getSnapshot" => serialize_response(get_auth_status(
+            app,
+            instance_id,
+            AuthStatusQueryMode::CachedSnapshot,
+        )?),
+        "refreshSnapshot" => serialize_response(get_auth_status(
+            app,
+            instance_id,
+            AuthStatusQueryMode::RemoteRefresh,
+        )?),
         "logout" => serialize_response(logout(app, instance_id)?),
         "clearAuthCookies" => serialize_response(clear_auth_cookies(app, instance_id)?),
         _ => Err(format!("Unsupported {DISPLAY_NAME} auth method: {method}")),
@@ -4288,8 +4368,9 @@ pub fn resolve_lyric_locator(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_stream_candidates, build_wbi_mixin_key, parse_bvid_from_text,
-        sanitize_wbi_query_value, spawn_or_get_playback_download_job, QUALITY_KEY_DOLBY,
+        build_cached_authorized_auth_snapshot, build_stream_candidates, build_wbi_mixin_key,
+        parse_bvid_from_text, sanitize_wbi_query_value, spawn_or_get_playback_download_job,
+        AUTH_AVAILABILITY_AVAILABLE, AUTH_AVAILABILITY_DEGRADED, QUALITY_KEY_DOLBY,
         QUALITY_KEY_HIRES,
     };
     use serde_json::json;
@@ -4329,6 +4410,45 @@ mod tests {
             None
         );
         assert_eq!(parse_bvid_from_text(""), None);
+    }
+
+    #[test]
+    fn cached_auth_snapshot_stays_available_when_local_token_material_exists() {
+        let status = build_cached_authorized_auth_snapshot(
+            "connector.platform.bilibili",
+            "authorized".to_string(),
+            Some("user-1".to_string()),
+            Some(1710000000000),
+            None,
+            true,
+            "Bilibili",
+        );
+
+        assert_eq!(status.availability.as_deref(), Some(AUTH_AVAILABILITY_AVAILABLE));
+        assert_eq!(status.availability_message, None);
+        assert_eq!(status.auth_state, "authorized");
+    }
+
+    #[test]
+    fn cached_auth_snapshot_degrades_when_local_token_material_is_missing() {
+        let status = build_cached_authorized_auth_snapshot(
+            "connector.platform.bilibili",
+            "authorized".to_string(),
+            Some("user-1".to_string()),
+            Some(1710000000000),
+            None,
+            false,
+            "Bilibili",
+        );
+
+        assert_eq!(status.availability.as_deref(), Some(AUTH_AVAILABILITY_DEGRADED));
+        assert!(
+            status
+                .availability_message
+                .as_deref()
+                .is_some_and(|message| message.contains("refresh login status"))
+        );
+        assert_eq!(status.auth_state, "authorized");
     }
 
     #[test]

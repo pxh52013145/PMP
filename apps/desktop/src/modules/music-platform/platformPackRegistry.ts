@@ -1,5 +1,6 @@
 import type { PlatformCompatRuntimeApi } from '@pixel-matrix/plugin-platform-contracts';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import {
   createPassivePlatformConnectorAdapter,
   createPlatformCompatRuntimeFromConnectorAdapter,
@@ -43,6 +44,12 @@ import {
   createPlatformPackSidecarHostRuntimeSupport,
 } from './platformPackSidecarHostSupport';
 import { disposePlatformPackSidecar } from './platformPackSidecarBridge';
+import {
+  getMusicPlatformDurationMs,
+  getMusicPlatformNowMs,
+  readMusicPlatformDiagnosticErrorMessage,
+  warnOnSlowMusicPlatformOperation,
+} from './platformDiagnostics';
 import {
   BILIBILI_CONNECTOR_ID,
   NETEASE_CONNECTOR_ID,
@@ -111,10 +118,47 @@ type BuiltinPlatformPackAsset = {
   packAssetUrl: string;
 };
 
+type BuiltinPlatformPackIndexEntry = {
+  source: string;
+  connectorId: PlatformConnectorId;
+  packId: string;
+  packVersion: string;
+  packageDigest?: string;
+  packAssetUrl?: string;
+};
+
 type LoadedBuiltinPlatformPackAsset = {
   source: string;
   connectorId: PlatformConnectorId;
   pack: ParsedPlatformPack;
+};
+
+type BuiltinPlatformPackStoreInspectionEntry = {
+  connectorId: PlatformConnectorId;
+  storedRecordFound: boolean;
+  artifactsPresent: boolean;
+  storedSourceType: string | null;
+  storedPackId: string | null;
+  storedPackVersion: string | null;
+  storedPackageDigest: string | null;
+  indexEntryPresent: boolean;
+  indexPackId: string | null;
+  indexPackVersion: string | null;
+  indexPackageDigest: string | null;
+  indexPackAssetUrl: string | null;
+  expectedPackAssetUrl: string;
+  strictReasonCodes: string[];
+  effectiveReasonCodes: string[];
+  relaxedDevReasonCodes: string[];
+};
+
+type BuiltinPlatformPackStoreInspection = {
+  indexAvailable: boolean;
+  current: boolean;
+  storeReadyWithoutIndex: boolean;
+  staleConnectorIds: PlatformConnectorId[];
+  relaxedDevConnectorIds: PlatformConnectorId[];
+  entries: BuiltinPlatformPackStoreInspectionEntry[];
 };
 
 const platformPackRegistry = new Map<PlatformConnectorId, PlatformPackRegistrationRecord>();
@@ -136,15 +180,25 @@ const builtinPlatformPackAssets: BuiltinPlatformPackAsset[] = [
     packAssetUrl: '/resource/music-platform/packs/dist/builtin-netease.pmpp',
   },
 ];
+const BUILTIN_PLATFORM_PACK_INDEX_ASSET_URL =
+  '/resource/music-platform/packs/dist/builtin-pack-index.json';
+const BUILTIN_PLATFORM_PACK_FETCH_INIT: RequestInit = {
+  cache: 'no-store',
+};
 
 let builtinPlatformPackRegistrationsInitialized = false;
 let builtinPlatformPackLoadPromise: Promise<LoadedBuiltinPlatformPackAsset[]> | null = null;
+let builtinPlatformPackIndexPromise: Promise<
+  Map<PlatformConnectorId, BuiltinPlatformPackIndexEntry> | null
+> | null = null;
 let installedPlatformPackSyncStarted = false;
 let installedPlatformPackRefreshPromise: Promise<void> | null = null;
 let builtinPlatformPackBootScheduled = false;
 let builtinPlatformPackBackgroundReconcileScheduled = false;
 let builtinPlatformPackBootPromise: Promise<void> | null = null;
 let platformPackRegistryBootstrapRegistered = false;
+let builtinPlatformPackBackgroundReconcileConnectorIds: Set<PlatformConnectorId> | null = null;
+const telemetry = getTelemetryLogger('music-platform', 'platformPackRegistry');
 
 function ensurePlatformPackRegistryBootstrapRegistered(): void {
   if (platformPackRegistryBootstrapRegistered) {
@@ -179,6 +233,33 @@ function normalizeString(value: unknown): string {
 
 function isJsonRecord(value: unknown): value is JsonRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function sanitizeBuiltinPlatformPackIndexEntry(
+  value: unknown
+): BuiltinPlatformPackIndexEntry | null {
+  if (!isJsonRecord(value)) return null;
+
+  try {
+    const connectorId = normalizePackConnectorId(value.connectorId);
+    const source = normalizeString(value.source);
+    const packId = normalizeString(value.packId);
+    const packVersion = normalizeString(value.packVersion);
+    if (!source || !packId || !packVersion) {
+      return null;
+    }
+
+    return {
+      source,
+      connectorId,
+      packId,
+      packVersion,
+      packageDigest: normalizeString(value.packageDigest) || undefined,
+      packAssetUrl: normalizeString(value.packAssetUrl) || undefined,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function isRuntimeCreateConnectorAdapter(
@@ -400,8 +481,40 @@ function resolveAssetUrl(assetUrl: string): string {
   return normalized;
 }
 
+function shouldRelaxBuiltinPlatformPackIndexMismatchInDev(): boolean {
+  return Boolean(import.meta.env.DEV) && isTauriRuntime();
+}
+
+function buildBuiltinPlatformPackStoreInspectionLogPayload(
+  inspection: BuiltinPlatformPackStoreInspection
+): string {
+  return JSON.stringify(
+    inspection.entries.map((entry) => ({
+      connectorId: entry.connectorId,
+      storedRecordFound: entry.storedRecordFound,
+      artifactsPresent: entry.artifactsPresent,
+      storedSourceType: entry.storedSourceType,
+      storedPackId: entry.storedPackId,
+      storedPackVersion: entry.storedPackVersion,
+      storedPackageDigest: entry.storedPackageDigest,
+      indexEntryPresent: entry.indexEntryPresent,
+      indexPackId: entry.indexPackId,
+      indexPackVersion: entry.indexPackVersion,
+      indexPackageDigest: entry.indexPackageDigest,
+      indexPackAssetUrl: entry.indexPackAssetUrl,
+      expectedPackAssetUrl: entry.expectedPackAssetUrl,
+      strictReasonCodes: entry.strictReasonCodes,
+      effectiveReasonCodes: entry.effectiveReasonCodes,
+      relaxedDevReasonCodes: entry.relaxedDevReasonCodes,
+    }))
+  );
+}
+
 async function fetchPlatformPackAssetBytes(assetUrl: string): Promise<Uint8Array> {
-  const response = await fetch(resolveAssetUrl(assetUrl)).catch(() => null);
+  const response = await fetch(
+    resolveAssetUrl(assetUrl),
+    BUILTIN_PLATFORM_PACK_FETCH_INIT
+  ).catch(() => null);
   if (!response?.ok) {
     throw new Error(`Failed to fetch platform pack asset (${assetUrl})`);
   }
@@ -410,6 +523,53 @@ async function fetchPlatformPackAssetBytes(assetUrl: string): Promise<Uint8Array
     throw new Error(`Platform pack asset is empty (${assetUrl})`);
   }
   return bytes;
+}
+
+async function loadBuiltinPlatformPackIndex(): Promise<
+  Map<PlatformConnectorId, BuiltinPlatformPackIndexEntry> | null
+> {
+  if (builtinPlatformPackIndexPromise) {
+    const result = await builtinPlatformPackIndexPromise;
+    if (!result) {
+      builtinPlatformPackIndexPromise = null;
+    }
+    return result;
+  }
+
+  builtinPlatformPackIndexPromise = (async () => {
+    const response = await fetch(
+      resolveAssetUrl(BUILTIN_PLATFORM_PACK_INDEX_ASSET_URL),
+      BUILTIN_PLATFORM_PACK_FETCH_INIT
+    ).catch(() => null);
+    if (!response?.ok) {
+      return null;
+    }
+
+    const payload = (await response.json().catch(() => null)) as unknown;
+    if (!isJsonRecord(payload) || !Array.isArray(payload.packs)) {
+      return null;
+    }
+
+    const next = new Map<PlatformConnectorId, BuiltinPlatformPackIndexEntry>();
+    for (const item of payload.packs) {
+      const entry = sanitizeBuiltinPlatformPackIndexEntry(item);
+      if (!entry) continue;
+      next.set(entry.connectorId, entry);
+    }
+
+    return next.size > 0 ? next : null;
+  })();
+
+  try {
+    const result = await builtinPlatformPackIndexPromise;
+    if (!result) {
+      builtinPlatformPackIndexPromise = null;
+    }
+    return result;
+  } catch (error) {
+    builtinPlatformPackIndexPromise = null;
+    throw error;
+  }
 }
 
 async function loadBuiltinPlatformPackAssets(): Promise<LoadedBuiltinPlatformPackAsset[]> {
@@ -441,6 +601,171 @@ async function loadBuiltinPlatformPackAssets(): Promise<LoadedBuiltinPlatformPac
     builtinPlatformPackLoadPromise = null;
     throw error;
   }
+}
+
+async function inspectBuiltinPlatformPackStore(): Promise<BuiltinPlatformPackStoreInspection> {
+  const index = await loadBuiltinPlatformPackIndex();
+  const records = loadInstalledPlatformPackRecords();
+  const staleConnectorIds: PlatformConnectorId[] = [];
+  const relaxedDevConnectorIds: PlatformConnectorId[] = [];
+  const entries: BuiltinPlatformPackStoreInspectionEntry[] = [];
+  const relaxDevIndexMismatch = shouldRelaxBuiltinPlatformPackIndexMismatchInDev();
+  let readyRecordCount = 0;
+
+  for (const asset of builtinPlatformPackAssets) {
+    const storedRecord =
+      records.find((record) => record.connectorId === asset.connectorId) ?? null;
+    const artifactsPresent = storedRecord
+      ? await areInstalledPlatformPackArtifactsPresent(storedRecord)
+      : false;
+    const strictReasonCodes: string[] = [];
+    const relaxedDevReasonCodes: string[] = [];
+
+    if (storedRecord && artifactsPresent) {
+      readyRecordCount += 1;
+    }
+
+    if (!index) {
+      if (!storedRecord || !artifactsPresent) {
+        if (!storedRecord) strictReasonCodes.push('record-missing');
+        if (!artifactsPresent) strictReasonCodes.push('artifacts-missing');
+        staleConnectorIds.push(asset.connectorId);
+      }
+      entries.push({
+        connectorId: asset.connectorId,
+        storedRecordFound: Boolean(storedRecord),
+        artifactsPresent,
+        storedSourceType: storedRecord?.sourceType ?? null,
+        storedPackId: storedRecord?.packId ?? null,
+        storedPackVersion: storedRecord?.packVersion ?? null,
+        storedPackageDigest: storedRecord?.packageDigest ?? null,
+        indexEntryPresent: false,
+        indexPackId: null,
+        indexPackVersion: null,
+        indexPackageDigest: null,
+        indexPackAssetUrl: null,
+        expectedPackAssetUrl: asset.packAssetUrl,
+        strictReasonCodes,
+        effectiveReasonCodes: strictReasonCodes.slice(),
+        relaxedDevReasonCodes,
+      });
+      continue;
+    }
+
+    const indexEntry = index.get(asset.connectorId);
+    if (!indexEntry) {
+      strictReasonCodes.push('index-entry-missing');
+    }
+    if (!storedRecord) {
+      strictReasonCodes.push('record-missing');
+    }
+    if (!artifactsPresent) {
+      strictReasonCodes.push('artifacts-missing');
+    }
+    if (storedRecord && storedRecord.sourceType !== 'builtin') {
+      strictReasonCodes.push('source-not-builtin');
+    }
+
+    if (storedRecord && indexEntry) {
+      if (storedRecord.packId !== indexEntry.packId) {
+        strictReasonCodes.push('pack-id-mismatch');
+      }
+      if (storedRecord.packVersion !== indexEntry.packVersion) {
+        strictReasonCodes.push('pack-version-mismatch');
+      }
+      if (storedRecord.packageDigest !== indexEntry.packageDigest) {
+        strictReasonCodes.push('package-digest-mismatch');
+      }
+      if (
+        indexEntry.packAssetUrl &&
+        normalizeString(indexEntry.packAssetUrl) !== asset.packAssetUrl
+      ) {
+        strictReasonCodes.push('asset-url-mismatch');
+      }
+    }
+
+    let effectiveReasonCodes = strictReasonCodes.slice();
+    const canRelaxDevIndexMetadataMismatch =
+      relaxDevIndexMismatch &&
+      Boolean(storedRecord) &&
+      artifactsPresent &&
+      storedRecord?.sourceType === 'builtin' &&
+      Boolean(indexEntry) &&
+      storedRecord?.packId === indexEntry?.packId &&
+      storedRecord?.packVersion === indexEntry?.packVersion;
+    if (canRelaxDevIndexMetadataMismatch) {
+      const relaxableReasonCodes = new Set([
+        'package-digest-mismatch',
+        'asset-url-mismatch',
+      ]);
+      effectiveReasonCodes = strictReasonCodes.filter((reasonCode) => {
+        if (!relaxableReasonCodes.has(reasonCode)) {
+          return true;
+        }
+        relaxedDevReasonCodes.push(reasonCode);
+        return false;
+      });
+      if (relaxedDevReasonCodes.length > 0 && effectiveReasonCodes.length < 1) {
+        relaxedDevConnectorIds.push(asset.connectorId);
+      }
+    }
+
+    if (effectiveReasonCodes.length > 0) {
+      staleConnectorIds.push(asset.connectorId);
+    }
+
+    entries.push({
+      connectorId: asset.connectorId,
+      storedRecordFound: Boolean(storedRecord),
+      artifactsPresent,
+      storedSourceType: storedRecord?.sourceType ?? null,
+      storedPackId: storedRecord?.packId ?? null,
+      storedPackVersion: storedRecord?.packVersion ?? null,
+      storedPackageDigest: storedRecord?.packageDigest ?? null,
+      indexEntryPresent: Boolean(indexEntry),
+      indexPackId: indexEntry?.packId ?? null,
+      indexPackVersion: indexEntry?.packVersion ?? null,
+      indexPackageDigest: indexEntry?.packageDigest ?? null,
+      indexPackAssetUrl: indexEntry?.packAssetUrl ?? null,
+      expectedPackAssetUrl: asset.packAssetUrl,
+      strictReasonCodes,
+      effectiveReasonCodes,
+      relaxedDevReasonCodes,
+    });
+  }
+
+  const inspection: BuiltinPlatformPackStoreInspection = {
+    indexAvailable: Boolean(index),
+    current: Boolean(index) && staleConnectorIds.length < 1,
+    storeReadyWithoutIndex: readyRecordCount === builtinPlatformPackAssets.length,
+    staleConnectorIds,
+    relaxedDevConnectorIds,
+    entries,
+  };
+
+  if (inspection.staleConnectorIds.length > 0) {
+    telemetry.warn('music-platform.pack.store-inspection.stale', {
+      fields: {
+        indexAvailable: inspection.indexAvailable,
+        readyRecordCount,
+        expectedBuiltinCount: builtinPlatformPackAssets.length,
+        staleConnectorIds: inspection.staleConnectorIds.join(','),
+        inspectionDetails: buildBuiltinPlatformPackStoreInspectionLogPayload(inspection),
+      },
+    });
+  } else if (inspection.relaxedDevConnectorIds.length > 0) {
+    telemetry.info('music-platform.pack.store-inspection.dev-relaxed', {
+      fields: {
+        indexAvailable: inspection.indexAvailable,
+        readyRecordCount,
+        expectedBuiltinCount: builtinPlatformPackAssets.length,
+        relaxedDevConnectorIds: inspection.relaxedDevConnectorIds.join(','),
+        inspectionDetails: buildBuiltinPlatformPackStoreInspectionLogPayload(inspection),
+      },
+    });
+  }
+
+  return inspection;
 }
 
 function buildDefinitionFromPack(pack: ParsedPlatformPack): PlatformConnectorDefinition {
@@ -819,7 +1144,17 @@ async function refreshInstalledPlatformPackRegistrationsFromStore(): Promise<voi
     for (const record of records) {
       try {
         await registerInstalledPlatformPackRecord(record);
-      } catch {
+      } catch (error) {
+        telemetry.warn('music-platform.pack.store-registration.failed', {
+          message: readMusicPlatformDiagnosticErrorMessage(error),
+          fields: {
+            connectorId: record.connectorId,
+            packId: record.packId,
+            packVersion: record.packVersion,
+            runtimePath: record.runtimePath,
+            sidecarPath: record.sidecarPath ?? null,
+          },
+        });
         removePlatformPackRegistration(record.connectorId);
       }
     }
@@ -975,9 +1310,16 @@ async function bootstrapBuiltinPlatformPacksFromAssets(): Promise<void> {
   }
 }
 
-async function ensureBuiltinPlatformPacksInstalledInStore(): Promise<void> {
+async function ensureBuiltinPlatformPacksInstalledInStore(
+  connectorIds?: readonly PlatformConnectorId[] | null
+): Promise<void> {
   const assets = await loadBuiltinPlatformPackAssets();
+  const targetConnectorIds =
+    connectorIds && connectorIds.length > 0 ? new Set(connectorIds) : null;
   for (const asset of assets) {
+    if (targetConnectorIds && !targetConnectorIds.has(asset.connectorId)) {
+      continue;
+    }
     const storedRecord = await installPlatformPackToStorage(asset.pack, {
       sourceType: 'builtin',
       source: asset.source,
@@ -986,39 +1328,195 @@ async function ensureBuiltinPlatformPacksInstalledInStore(): Promise<void> {
   }
 }
 
-async function reconcileBuiltinPlatformPacksInBackground(): Promise<void> {
-  await ensureBuiltinPlatformPacksInstalledInStore();
+async function reconcileBuiltinPlatformPacksInBackground(
+  connectorIds?: readonly PlatformConnectorId[] | null
+): Promise<void> {
+  const startedAtMs = getMusicPlatformNowMs();
+  await ensureBuiltinPlatformPacksInstalledInStore(connectorIds);
+  warnOnSlowMusicPlatformOperation({
+    logger: telemetry,
+    event: 'music-platform.pack.reconcile.slow',
+    startedAtMs,
+    fields: {
+      registeredBuiltinCount: countRegisteredBuiltinPlatformPacks(),
+      expectedBuiltinCount: builtinPlatformPackAssets.length,
+      targetConnectorIds:
+        connectorIds && connectorIds.length > 0 ? connectorIds.join(',') : 'all',
+    },
+  });
+}
+
+function countRegisteredBuiltinPlatformPacks(): number {
+  return builtinPlatformPackAssets.reduce(
+    (count, asset) => count + (platformPackRegistry.has(asset.connectorId) ? 1 : 0),
+    0
+  );
 }
 
 async function runBuiltinPlatformPackBootSequence(): Promise<void> {
+  const startedAtMs = getMusicPlatformNowMs();
+  let scheduledBackgroundReconcile = false;
+  let storeBootstrapFailed = false;
+  let storeInspection: BuiltinPlatformPackStoreInspection | null = null;
+
   try {
     await refreshInstalledPlatformPackRegistrationsFromStore();
-  } catch {
+  } catch (error) {
+    storeBootstrapFailed = true;
+    telemetry.warn('music-platform.pack.boot.store-bootstrap.failed', {
+      message: readMusicPlatformDiagnosticErrorMessage(error),
+      fields: {
+        durationMs: getMusicPlatformDurationMs(startedAtMs),
+      },
+    });
     // Ignore store bootstrap failures and keep builtin pack recovery in the background path.
   } finally {
     ensureInstalledPlatformPackStoreSync();
   }
 
-  if (platformPackRegistry.size < 1) {
+  if (countRegisteredBuiltinPlatformPacks() < builtinPlatformPackAssets.length) {
     try {
       await reconcileBuiltinPlatformPacksInBackground();
-    } catch {
+    } catch (error) {
+      telemetry.warn('music-platform.pack.boot.reconcile.failed', {
+        message: readMusicPlatformDiagnosticErrorMessage(error),
+        fields: {
+          durationMs: getMusicPlatformDurationMs(startedAtMs),
+          registeredBuiltinCount: countRegisteredBuiltinPlatformPacks(),
+          expectedBuiltinCount: builtinPlatformPackAssets.length,
+        },
+      });
       // Keep the registry best-effort during early startup.
     }
+    warnOnSlowMusicPlatformOperation({
+      logger: telemetry,
+      event: 'music-platform.pack.boot.slow',
+      startedAtMs,
+      fields: {
+        storeBootstrapFailed,
+        scheduledBackgroundReconcile,
+        registeredBuiltinCount: countRegisteredBuiltinPlatformPacks(),
+        expectedBuiltinCount: builtinPlatformPackAssets.length,
+      },
+    });
     return;
   }
 
-  scheduleBuiltinPlatformPackBackgroundReconcile(false);
+  try {
+    storeInspection = await inspectBuiltinPlatformPackStore();
+    if (storeInspection.current) {
+      warnOnSlowMusicPlatformOperation({
+        logger: telemetry,
+        event: 'music-platform.pack.boot.slow',
+        startedAtMs,
+        fields: {
+          storeBootstrapFailed,
+          scheduledBackgroundReconcile,
+          registeredBuiltinCount: countRegisteredBuiltinPlatformPacks(),
+          expectedBuiltinCount: builtinPlatformPackAssets.length,
+          storeAlreadyCurrent: true,
+        },
+      });
+      return;
+    }
+
+    if (!storeInspection.indexAvailable && storeInspection.storeReadyWithoutIndex) {
+      telemetry.info('music-platform.pack.boot.index-unavailable', {
+        message:
+          'Builtin platform pack index unavailable during startup; keeping restored store registrations.',
+        fields: {
+          registeredBuiltinCount: countRegisteredBuiltinPlatformPacks(),
+          expectedBuiltinCount: builtinPlatformPackAssets.length,
+        },
+      });
+      warnOnSlowMusicPlatformOperation({
+        logger: telemetry,
+        event: 'music-platform.pack.boot.slow',
+        startedAtMs,
+        fields: {
+          storeBootstrapFailed,
+          scheduledBackgroundReconcile,
+          registeredBuiltinCount: countRegisteredBuiltinPlatformPacks(),
+          expectedBuiltinCount: builtinPlatformPackAssets.length,
+          storeAlreadyCurrent: false,
+          storeIndexAvailable: false,
+          storeReadyWithoutIndex: true,
+        },
+      });
+      return;
+    }
+  } catch (error) {
+    telemetry.warn('music-platform.pack.boot.store-check.failed', {
+      message: readMusicPlatformDiagnosticErrorMessage(error),
+      fields: {
+        durationMs: getMusicPlatformDurationMs(startedAtMs),
+      },
+    });
+    // Fall through to best-effort background reconcile.
+  }
+
+  const staleConnectorIds =
+    storeInspection?.staleConnectorIds ??
+    builtinPlatformPackAssets.map((asset) => asset.connectorId);
+  scheduledBackgroundReconcile = staleConnectorIds.length > 0;
+  if (scheduledBackgroundReconcile) {
+    scheduleBuiltinPlatformPackBackgroundReconcile(false, staleConnectorIds);
+  }
+  warnOnSlowMusicPlatformOperation({
+    logger: telemetry,
+    event: 'music-platform.pack.boot.slow',
+    startedAtMs,
+    fields: {
+      storeBootstrapFailed,
+      scheduledBackgroundReconcile,
+      registeredBuiltinCount: countRegisteredBuiltinPlatformPacks(),
+      expectedBuiltinCount: builtinPlatformPackAssets.length,
+      storeAlreadyCurrent: false,
+      storeIndexAvailable: storeInspection?.indexAvailable ?? null,
+      storeReadyWithoutIndex: storeInspection?.storeReadyWithoutIndex ?? null,
+      staleConnectorIds: staleConnectorIds.length > 0 ? staleConnectorIds.join(',') : null,
+    },
+  });
 }
 
-function scheduleBuiltinPlatformPackBackgroundReconcile(immediate = false): void {
+function mergeBuiltinPlatformPackBackgroundReconcileTargets(
+  connectorIds?: readonly PlatformConnectorId[] | null
+): void {
+  if (!connectorIds || connectorIds.length < 1) {
+    builtinPlatformPackBackgroundReconcileConnectorIds = null;
+    return;
+  }
+  if (!builtinPlatformPackBackgroundReconcileConnectorIds) {
+    builtinPlatformPackBackgroundReconcileConnectorIds = new Set(connectorIds);
+    return;
+  }
+  for (const connectorId of connectorIds) {
+    builtinPlatformPackBackgroundReconcileConnectorIds.add(connectorId);
+  }
+}
+
+function consumeBuiltinPlatformPackBackgroundReconcileTargets(): PlatformConnectorId[] | null {
+  if (!builtinPlatformPackBackgroundReconcileConnectorIds) {
+    return null;
+  }
+  const connectorIds = Array.from(builtinPlatformPackBackgroundReconcileConnectorIds);
+  builtinPlatformPackBackgroundReconcileConnectorIds = null;
+  return connectorIds.length > 0 ? connectorIds : null;
+}
+
+function scheduleBuiltinPlatformPackBackgroundReconcile(
+  immediate = false,
+  connectorIds?: readonly PlatformConnectorId[] | null
+): void {
+  mergeBuiltinPlatformPackBackgroundReconcileTargets(connectorIds);
   if (builtinPlatformPackBackgroundReconcileScheduled) {
     return;
   }
   builtinPlatformPackBackgroundReconcileScheduled = true;
 
   const run = () => {
-    void reconcileBuiltinPlatformPacksInBackground().finally(() => {
+    const targetConnectorIds = consumeBuiltinPlatformPackBackgroundReconcileTargets();
+    void reconcileBuiltinPlatformPacksInBackground(targetConnectorIds).finally(() => {
       builtinPlatformPackBackgroundReconcileScheduled = false;
     });
   };

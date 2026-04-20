@@ -134,6 +134,12 @@ pub struct NeteaseAuthStatus {
     pub availability_message: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthStatusQueryMode {
+    CachedSnapshot,
+    RemoteRefresh,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NeteaseUserPlaylist {
@@ -524,6 +530,43 @@ fn get_auth_cookie_header(instance_id: Option<&str>) -> Option<String> {
             .get(normalized_instance_id.as_str())
             .map(|cookie| cookie.cookie_header.clone())
     })
+}
+
+fn has_persisted_auth_token(token_ref: Option<&str>) -> bool {
+    token_ref
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+}
+
+fn build_cached_authorized_auth_snapshot(
+    auth_state: String,
+    account_uid: Option<String>,
+    updated_at_ms: Option<i64>,
+    expires_at_ms: Option<i64>,
+    has_local_token_material: bool,
+    display_name: &str,
+) -> NeteaseAuthStatus {
+    let (availability, availability_message) = if has_local_token_material {
+        (Some(AUTH_AVAILABILITY_AVAILABLE.to_string()), None)
+    } else {
+        (
+            Some(AUTH_AVAILABILITY_DEGRADED.to_string()),
+            Some(format!(
+                "{display_name} login token is unavailable in current session, please refresh login status"
+            )),
+        )
+    };
+
+    NeteaseAuthStatus {
+        connector_id: NETEASE_CONNECTOR_ID.to_string(),
+        auth_state,
+        account_uid,
+        updated_at_ms,
+        expires_at_ms,
+        availability,
+        availability_message,
+    }
 }
 
 fn set_anonymous_cookie_state(cookie_header: String) {
@@ -2329,9 +2372,10 @@ pub fn qr_poll(app: &AppHandle, session_id: &str) -> Result<NeteaseQrPollResult,
     })
 }
 
-pub fn get_auth_status(
+fn get_auth_status(
     app: &AppHandle,
     instance_id: Option<&str>,
+    query_mode: AuthStatusQueryMode,
 ) -> Result<NeteaseAuthStatus, String> {
     init_netease_debug_logging(app);
     ensure_connector(app)?;
@@ -2381,10 +2425,24 @@ pub fn get_auth_status(
     );
 
     if auth_state == "authorized" {
+        let in_memory_cookie_header = get_auth_cookie_header(Some(normalized_instance_id.as_str()));
+        if matches!(query_mode, AuthStatusQueryMode::CachedSnapshot) {
+            if let Some(cookie_header) = in_memory_cookie_header.as_ref() {
+                set_auth_cookie_state(normalized_instance_id.as_str(), cookie_header.clone());
+            }
+            return Ok(build_cached_authorized_auth_snapshot(
+                auth_state,
+                account_uid,
+                updated_at_ms,
+                account.expires_at_ms,
+                in_memory_cookie_header.is_some()
+                    || has_persisted_auth_token(account.token_ref.as_deref()),
+                DISPLAY_NAME,
+            ));
+        }
+
         let mut keyring_restore_failed = false;
-        let cookie_header = if let Some(cookie_header) =
-            get_auth_cookie_header(Some(normalized_instance_id.as_str()))
-        {
+        let cookie_header = if let Some(cookie_header) = in_memory_cookie_header {
             Some(cookie_header)
         } else {
             match restore_cookie_header_from_token_ref(
@@ -2580,7 +2638,11 @@ pub fn logout(app: &AppHandle, instance_id: Option<&str>) -> Result<NeteaseAuthS
     clear_auth_cookie_state(Some(normalized_instance_id.as_str()));
     netease_log("logout", "cleared in-memory auth and qr sessions");
 
-    get_auth_status(app, Some(normalized_instance_id.as_str()))
+    get_auth_status(
+        app,
+        Some(normalized_instance_id.as_str()),
+        AuthStatusQueryMode::CachedSnapshot,
+    )
 }
 
 pub fn clear_auth_cookies(
@@ -2647,7 +2709,11 @@ pub fn clear_auth_cookies(
         "cleared in-memory auth and qr sessions",
     );
 
-    get_auth_status(app, Some(normalized_instance_id.as_str()))
+    get_auth_status(
+        app,
+        Some(normalized_instance_id.as_str()),
+        AuthStatusQueryMode::CachedSnapshot,
+    )
 }
 
 pub fn dispatch_auth(
@@ -2662,7 +2728,16 @@ pub fn dispatch_auth(
             let session_id = required_payload_string(payload, &["sessionId"], "payload.sessionId")?;
             serialize_response(qr_poll(app, &session_id)?)
         }
-        "getSnapshot" | "refreshSnapshot" => serialize_response(get_auth_status(app, instance_id)?),
+        "getSnapshot" => serialize_response(get_auth_status(
+            app,
+            instance_id,
+            AuthStatusQueryMode::CachedSnapshot,
+        )?),
+        "refreshSnapshot" => serialize_response(get_auth_status(
+            app,
+            instance_id,
+            AuthStatusQueryMode::RemoteRefresh,
+        )?),
         "logout" => serialize_response(logout(app, instance_id)?),
         "clearAuthCookies" => serialize_response(clear_auth_cookies(app, instance_id)?),
         _ => Err(format!("Unsupported {DISPLAY_NAME} auth method: {method}")),
@@ -3167,6 +3242,43 @@ pub fn prepare_cached_playback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_auth_snapshot_stays_available_when_local_token_material_exists() {
+        let status = build_cached_authorized_auth_snapshot(
+            "authorized".to_string(),
+            Some("user-1".to_string()),
+            Some(1710000000000),
+            None,
+            true,
+            "Netease Cloud Music",
+        );
+
+        assert_eq!(status.availability.as_deref(), Some(AUTH_AVAILABILITY_AVAILABLE));
+        assert_eq!(status.availability_message, None);
+        assert_eq!(status.auth_state, "authorized");
+    }
+
+    #[test]
+    fn cached_auth_snapshot_degrades_when_local_token_material_is_missing() {
+        let status = build_cached_authorized_auth_snapshot(
+            "authorized".to_string(),
+            Some("user-1".to_string()),
+            Some(1710000000000),
+            None,
+            false,
+            "Netease Cloud Music",
+        );
+
+        assert_eq!(status.availability.as_deref(), Some(AUTH_AVAILABILITY_DEGRADED));
+        assert!(
+            status
+                .availability_message
+                .as_deref()
+                .is_some_and(|message| message.contains("refresh login status"))
+        );
+        assert_eq!(status.auth_state, "authorized");
+    }
 
     #[test]
     fn sanitize_auth_cookie_prefers_music_u_and_csrf_only() {

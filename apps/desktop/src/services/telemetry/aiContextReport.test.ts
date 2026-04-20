@@ -60,7 +60,7 @@ function createQueryResult(): TelemetryQueryResult {
 describe('aiContextReport', () => {
   it('exposes focused presets for plugin and performance telemetry queries', () => {
     expect(getDefaultTelemetryAiQuery().moduleIds).toEqual(
-      expect.arrayContaining(['plugins', 'performance'])
+      expect.arrayContaining(['plugins', 'performance', 'music-platform', 'magnet.platform'])
     );
     expect(getPluginTelemetryAiQuery().eventPrefixes).toEqual(['plugin.']);
     expect(getPerformanceTelemetryAiQuery().eventPrefixes).toEqual(['performance.']);

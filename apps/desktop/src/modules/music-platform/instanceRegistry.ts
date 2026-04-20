@@ -13,16 +13,31 @@ import {
   subscribePlatformCompatRegistry,
   type PlatformCompatRegistryRecord,
 } from './contractRegistry';
+import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import {
+  getMusicPlatformDurationMs,
+  getMusicPlatformNowMs,
+  readMusicPlatformDiagnosticErrorMessage,
+  warnOnSlowMusicPlatformOperation,
+} from './platformDiagnostics';
 
 type PlatformInstanceRegistryListener = (instances: PlatformInstanceRecord[]) => void;
 
 const platformInstanceRegistry = new Map<string, PlatformInstanceRecord>();
 const platformInstanceRegistryListeners = new Set<PlatformInstanceRegistryListener>();
+type PlatformInstanceAuthRefreshMode = 'snapshot' | 'refresh';
+
+type PlatformInstanceAuthRefreshEntry = {
+  mode: PlatformInstanceAuthRefreshMode;
+  promise: Promise<PlatformInstanceRecord | null>;
+};
+
 const platformInstanceAuthRefreshRegistry = new Map<
   string,
-  Promise<PlatformInstanceRecord | null>
+  PlatformInstanceAuthRefreshEntry
 >();
 const platformInstanceAuthHydrationScheduled = new Set<string>();
+const telemetry = getTelemetryLogger('music-platform', 'instanceRegistry');
 
 let platformInstanceRegistryInitialized = false;
 
@@ -268,7 +283,11 @@ function scheduleAutoManagedPlatformInstanceAuthRefresh(
 
   platformInstanceAuthHydrationScheduled.add(normalizedInstanceId);
   schedulePlatformInstanceAuthHydration(() => {
-    void refreshPlatformInstanceAuthState(normalizedInstanceId, runtimeOverride).finally(() => {
+    void refreshPlatformInstanceAuthState(
+      normalizedInstanceId,
+      runtimeOverride,
+      'snapshot'
+    ).finally(() => {
       platformInstanceAuthHydrationScheduled.delete(normalizedInstanceId);
     });
   });
@@ -286,22 +305,67 @@ function scheduleAutoManagedPlatformInstanceAuthRefreshes(): void {
 
 async function refreshPlatformInstanceAuthState(
   instanceId: string,
-  runtimeOverride?: PlatformCompatRuntimeApi | null
+  runtimeOverride?: PlatformCompatRuntimeApi | null,
+  mode: PlatformInstanceAuthRefreshMode = 'snapshot'
 ): Promise<PlatformInstanceRecord | null> {
   const normalizedInstanceId = normalizeInstanceId(instanceId);
   if (!normalizedInstanceId) return null;
 
   const existingRefresh = platformInstanceAuthRefreshRegistry.get(normalizedInstanceId);
   if (existingRefresh) {
-    return await existingRefresh;
+    if (mode === 'refresh' && existingRefresh.mode === 'snapshot') {
+      const waitStartedAtMs = getMusicPlatformNowMs();
+      await existingRefresh.promise.catch(() => null);
+      warnOnSlowMusicPlatformOperation({
+        logger: telemetry,
+        event: 'music-platform.instance-auth.refresh.waited-on-snapshot.slow',
+        startedAtMs: waitStartedAtMs,
+        fields: {
+          instanceId: normalizedInstanceId,
+          requestedMode: mode,
+          pendingMode: existingRefresh.mode,
+        },
+      });
+    } else {
+      return await existingRefresh.promise;
+    }
   }
 
   const refreshPromise = (async () => {
+    const startedAtMs = getMusicPlatformNowMs();
     const currentRecord = platformInstanceRegistry.get(normalizedInstanceId);
     if (!currentRecord) return null;
 
     const runtime = runtimeOverride ?? getPlatformCompatRuntimeApi(currentRecord.platformId);
-    const readAuthSnapshot = runtime?.auth?.refreshSnapshot ?? runtime?.auth?.getSnapshot;
+    const readerMethod =
+      mode === 'refresh'
+        ? typeof runtime?.auth?.refreshSnapshot === 'function'
+          ? 'refreshSnapshot'
+          : typeof runtime?.auth?.getSnapshot === 'function'
+            ? 'getSnapshot'
+            : 'none'
+        : typeof runtime?.auth?.getSnapshot === 'function'
+          ? 'getSnapshot'
+          : typeof runtime?.auth?.refreshSnapshot === 'function'
+            ? 'refreshSnapshot'
+            : 'none';
+    const readAuthSnapshot =
+      readerMethod === 'refreshSnapshot'
+        ? runtime?.auth?.refreshSnapshot
+        : readerMethod === 'getSnapshot'
+          ? runtime?.auth?.getSnapshot
+          : undefined;
+    const diagnosticFields = {
+      instanceId: normalizedInstanceId,
+      platformId: currentRecord.platformId,
+      connectorId:
+        typeof currentRecord.metadata?.connectorId === 'string'
+          ? currentRecord.metadata.connectorId
+          : null,
+      mode,
+      readerMethod,
+      hasRuntimeOverride: Boolean(runtimeOverride),
+    };
     if (!readAuthSnapshot) {
       return clonePlatformInstanceRecord(currentRecord);
     }
@@ -310,12 +374,38 @@ async function refreshPlatformInstanceAuthState(
     try {
       const result = await readAuthSnapshot({ instanceId: normalizedInstanceId });
       if (!result.ok && result.error.code === 'RUNTIME_RELOADING') {
+        warnOnSlowMusicPlatformOperation({
+          logger: telemetry,
+          event: 'music-platform.instance-auth.read.slow',
+          startedAtMs,
+          fields: {
+            ...diagnosticFields,
+            outcome: 'runtime-reloading',
+          },
+        });
         return clonePlatformInstanceRecord(currentRecord);
+      }
+      if (!result.ok && result.error.code !== 'AUTH_REQUIRED') {
+        telemetry.warn('music-platform.instance-auth.read.degraded', {
+          message: result.error.message,
+          fields: {
+            ...diagnosticFields,
+            durationMs: getMusicPlatformDurationMs(startedAtMs),
+            errorCode: result.error.code,
+          },
+        });
       }
       nextRecord = result.ok
         ? applyPlatformAuthSuccessToRecord(currentRecord, result.data)
         : applyPlatformAuthErrorToRecord(currentRecord, result);
     } catch (error) {
+      telemetry.warn('music-platform.instance-auth.read.failed', {
+        message: readMusicPlatformDiagnosticErrorMessage(error),
+        fields: {
+          ...diagnosticFields,
+          durationMs: getMusicPlatformDurationMs(startedAtMs),
+        },
+      });
       nextRecord = {
         ...currentRecord,
         auth: {
@@ -327,6 +417,16 @@ async function refreshPlatformInstanceAuthState(
       };
     }
 
+    warnOnSlowMusicPlatformOperation({
+      logger: telemetry,
+      event: 'music-platform.instance-auth.read.slow',
+      startedAtMs,
+      fields: {
+        ...diagnosticFields,
+        authStatus: nextRecord.auth.status,
+        availability: nextRecord.availability ?? null,
+      },
+    });
     platformInstanceRegistry.set(normalizedInstanceId, nextRecord);
     emitPlatformInstancesChanged();
     return clonePlatformInstanceRecord(nextRecord);
@@ -334,12 +434,15 @@ async function refreshPlatformInstanceAuthState(
 
   const trackedRefreshPromise = refreshPromise.finally(() => {
     const pending = platformInstanceAuthRefreshRegistry.get(normalizedInstanceId);
-    if (pending === trackedRefreshPromise) {
+    if (pending?.promise === trackedRefreshPromise) {
       platformInstanceAuthRefreshRegistry.delete(normalizedInstanceId);
     }
   });
 
-  platformInstanceAuthRefreshRegistry.set(normalizedInstanceId, trackedRefreshPromise);
+  platformInstanceAuthRefreshRegistry.set(normalizedInstanceId, {
+    mode,
+    promise: trackedRefreshPromise,
+  });
   return await trackedRefreshPromise;
 }
 
@@ -418,5 +521,9 @@ export async function refreshPlatformInstance(instanceId: string): Promise<Platf
   if (!record) return null;
 
   const registryRecord = getPlatformCompatRegistryRecord(record.platformId);
-  return refreshPlatformInstanceAuthState(normalizedInstanceId, registryRecord?.runtime ?? null);
+  return refreshPlatformInstanceAuthState(
+    normalizedInstanceId,
+    registryRecord?.runtime ?? null,
+    'refresh'
+  );
 }
