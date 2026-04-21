@@ -92,6 +92,21 @@ function toDefaultInstanceIdForConnector(connectorId: string): string | undefine
   return toDefaultInstanceIdForPlatform(resolvePlatformIdFromConnectorId(connectorId));
 }
 
+function resolveDefaultInstanceId(
+  definition: PlatformConnectorDefinition,
+  platformId?: string
+): string {
+  const defaultInstanceId =
+    toDefaultInstanceIdForPlatform(platformId ?? '') ??
+    toDefaultInstanceIdForConnector(definition.connectorId);
+  if (!defaultInstanceId) {
+    throw new Error(
+      `Platform connector ${definition.connectorId} requires a stable default instance id`
+    );
+  }
+  return defaultInstanceId;
+}
+
 function resolveBindingInstanceId(options: BindingInvokeOptions): string | undefined {
   return (
     normalizeString(options.payload?.instanceId) ||
@@ -416,14 +431,19 @@ export function createPlatformConnectorAdapterFromBindingContract(
   contract: PlatformCompatContractFile
 ): PlatformConnectorAdapter {
   const runtime = createPlatformCompatRuntimeFromBindingContract(definition, contract);
-  const defaultInstanceId =
-    toDefaultInstanceIdForPlatform(contract.platform.platformId) ??
-    toDefaultInstanceIdForConnector(definition.connectorId);
-  if (!defaultInstanceId) {
-    throw new Error(
-      `Platform connector ${definition.connectorId} requires a stable default instance id`
-    );
-  }
+  return createPlatformConnectorAdapterFromRuntimeApi(definition, runtime, {
+    platformId: contract.platform.platformId,
+  });
+}
+
+export function createPlatformConnectorAdapterFromRuntimeApi(
+  definition: PlatformConnectorDefinition,
+  runtime: PlatformCompatRuntimeApi,
+  options: {
+    platformId?: string;
+  } = {}
+): PlatformConnectorAdapter {
+  const defaultInstanceId = resolveDefaultInstanceId(definition, options.platformId);
 
   const readSnapshot = async (
     method: 'getSnapshot' | 'refreshSnapshot' | 'logout' | 'clearAuthCookies'

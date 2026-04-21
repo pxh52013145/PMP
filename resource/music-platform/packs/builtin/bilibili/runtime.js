@@ -103,12 +103,18 @@ export function createRuntimeApi(context) {
       listCollections: (input) => library('listCollections', input),
       listResources: (input) => library('listResources', input),
       listPlaylistTracks: (input) => library('listPlaylistTracks', input),
+      createPlaylist: (input) => library('createPlaylist', input),
+      deletePlaylist: (input) => library('deletePlaylist', input),
+      addTrackToPlaylist: (input) => library('addTrackToPlaylist', input),
+      removeTrackFromPlaylist: (input) => library('removeTrackFromPlaylist', input),
       preparePlayback: (input) => library('preparePlayback', input),
       resolveLyricLocator: (input) => library('resolveLyricLocator', input),
       resolveCoverAssetUrl: (input) => library('resolveCoverAssetUrl', input),
     },
     recommendations: {
       listDaily: (input) => recommendations('listDaily', input),
+      listRecommendedSongs: (input) => recommendations('listRecommendedSongs', input),
+      listRecommendedPlaylists: (input) => recommendations('listRecommendedPlaylists', input),
     },
     search: {
       query: (input) => search('query', input),

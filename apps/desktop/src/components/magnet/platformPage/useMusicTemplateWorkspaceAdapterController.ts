@@ -1,74 +1,25 @@
-﻿
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useMemo } from 'react';
 
-import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
-import type { IAudioService, Playlist as AudioPlaylist, Track } from '../../../services/audio';
+import type { IAudioService, Playlist as AudioPlaylist } from '../../../services/audio';
 import type {
   PlatformCompatRegistryRecord,
   PlatformConnectorAuthState,
 } from '../../../modules/music-platform';
-import {
-  getMusicPlatformDurationMs,
-  getMusicPlatformNowMs,
-  readMusicPlatformDiagnosticErrorMessage,
-  warnOnSlowMusicPlatformOperation,
-} from '../../../modules/music-platform/platformDiagnostics';
 import type { MusicTemplatePlaybackSettingsContentProps } from './MusicTemplatePlaybackSettings';
-import type {
-  MusicTemplateCollectionBrowserItem,
-  MusicTemplateCollectionBrowserSection,
-  MusicTemplateWorkspaceProps,
-} from './MusicTemplateWorkspace';
+import type { MusicTemplateWorkspaceProps } from './MusicTemplateWorkspace';
 import type { MusicTemplateWorkspaceToolbarProps } from './MusicTemplateWorkspaceAdapter';
 import {
-  createMusicTemplateWorkspaceFallbackModel,
-  getMusicTemplateWorkspaceModel,
-  getMusicTemplatePlaybackQualityState,
-  listMusicTemplateCollectionResources,
-  listMusicTemplateCollections,
-  listMusicTemplateRecommendations,
-  mergeMusicTemplateResourcePages,
-  prepareMusicTemplatePlayback,
   normalizeMusicTemplateQualityKey,
   resolveMusicTemplateQualityLabelKey,
   resolveMusicTemplateQualityProbeSourceLocator,
-  resolveMusicTemplateWorkspaceCapabilities,
-  setMusicTemplatePlaybackQualityPreference,
-  searchMusicTemplateResources,
-  type MusicTemplateCollectionItem,
-  type MusicTemplatePlaybackQualityState,
-  type MusicTemplatePreparedPlayback,
-  type MusicTemplateResourceItem,
-  type MusicTemplateResourcePage,
   type MusicTemplateRuntimeTarget,
-  type MusicTemplateWorkspaceModel,
 } from './musicTemplateRuntime';
+import { useMusicTemplateCollectionBrowser } from './useMusicTemplateCollectionBrowser';
+import { useMusicTemplatePlaybackActions } from './useMusicTemplatePlaybackActions';
+import { useMusicTemplatePlaybackQuality } from './useMusicTemplatePlaybackQuality';
+import { useMusicTemplateWorkspaceModel } from './useMusicTemplateWorkspaceModel';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
-
-const MUSIC_TEMPLATE_SEARCH_PAGE_SIZE = 40;
-const PREPARED_TRACK_CACHE_LIMIT = 96;
-const DAILY_COLLECTION_BROWSER_ID = '__music-template-daily__';
-const telemetry = getTelemetryLogger('magnet.platform', 'useMusicTemplateWorkspaceAdapterController');
-type MusicTemplateCollectionSelectionKind = MusicTemplateCollectionBrowserItem['kind'] | 'search' | null;
-
-function toErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error) {
-    const message = error.message?.trim();
-    return message || fallback;
-  }
-  if (typeof error === 'string') {
-    const message = error.trim();
-    return message || fallback;
-  }
-  if (error && typeof error === 'object' && 'message' in error) {
-    const value = (error as { message?: unknown }).message;
-    if (typeof value === 'string' && value.trim().length > 0) {
-      return value.trim();
-    }
-  }
-  return fallback;
-}
 
 function formatDuration(seconds: number | undefined): string {
   if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
@@ -83,57 +34,9 @@ function formatDuration(seconds: number | undefined): string {
   return `${minutes}:${rest}`;
 }
 
-function setPreparedTrackWithBoundedLru(cache: Map<string, Track>, cacheKey: string, track: Track): void {
-  if (cache.has(cacheKey)) {
-    cache.delete(cacheKey);
-  }
-  cache.set(cacheKey, track);
-
-  while (cache.size > PREPARED_TRACK_CACHE_LIMIT) {
-    const oldestKey = cache.keys().next().value;
-    if (!oldestKey) break;
-    cache.delete(oldestKey);
-  }
-}
-
-function buildTrackFromPreparedPlayback(
-  item: MusicTemplateResourceItem,
-  prepared: MusicTemplatePreparedPlayback,
-  platformLabel: string
-): Track {
-  return {
-    id: `${item.resourceId}:${item.sourceLocator}`,
-    title: item.title,
-    artist: item.artistNames || platformLabel,
-    album: item.albumName,
-    duration: item.durationSeconds ?? prepared.durationSeconds,
-    filePath: prepared.cachePath,
-    path: prepared.cachePath,
-    originalPath: item.sourceLocator,
-    coverUrl: item.coverUrl,
-    genre: platformLabel,
-    comment: item.sourceLocator,
-    mimeType: prepared.mimeType,
-  };
-}
-
-function isSameCollection(
-  left: MusicTemplateCollectionItem | null,
-  right: MusicTemplateCollectionItem | null
-): boolean {
-  if (!left && !right) return true;
-  if (!left || !right) return false;
-  return (
-    left.collectionId === right.collectionId &&
-    left.title === right.title &&
-    left.trackCount === right.trackCount &&
-    left.coverUrl === right.coverUrl &&
-    left.updatedAtMs === right.updatedAtMs
-  );
-}
-
 export interface UseMusicTemplateWorkspaceAdapterControllerParams {
   workspaceVisible: boolean;
+  workspaceDataEnabled?: boolean;
   activeWorkspaceConnectorId: string | null;
   activeMusicConnectorId: string | null;
   activeMusicDisplayName: string | null;
@@ -175,6 +78,7 @@ export function useMusicTemplateWorkspaceAdapterController(
 ): MusicTemplateWorkspaceAdapterControllerResult {
   const {
     workspaceVisible,
+    workspaceDataEnabled = true,
     activeWorkspaceConnectorId,
     activeMusicConnectorId,
     activeMusicDisplayName,
@@ -200,701 +104,61 @@ export function useMusicTemplateWorkspaceAdapterController(
         : null,
     [activeMusicConnectorId, activeMusicDisplayName, activeMusicInstanceId]
   );
-  const musicTemplateWorkspaceActive =
+  const controllerVisible =
     workspaceVisible &&
     Boolean(activeMusicConnectorId) &&
     activeWorkspaceConnectorId === activeMusicConnectorId;
+  const musicTemplateWorkspaceActive = controllerVisible && workspaceDataEnabled;
   const authorized = activeMusicAuthState === 'authorized';
-  const [workspaceModel, setWorkspaceModel] = useState<MusicTemplateWorkspaceModel>(() =>
-    createMusicTemplateWorkspaceFallbackModel(activeMusicContractRecord)
-  );
-  const workspaceCapabilities = useMemo(
-    () => resolveMusicTemplateWorkspaceCapabilities(workspaceModel),
-    [workspaceModel]
-  );
+
+  const { workspaceCapabilities } = useMusicTemplateWorkspaceModel({
+    contractRecord: activeMusicContractRecord,
+    musicRuntimeTarget,
+  });
   const supportsCollections = workspaceCapabilities.collections;
   const supportsDailyRecommendations = workspaceCapabilities.recommendations;
   const supportsSearch = workspaceCapabilities.search;
   const musicTemplateQualitySupported = workspaceCapabilities.quality;
 
-  const [collectionLoading, setCollectionLoading] = useState(false);
-  const [collectionError, setCollectionError] = useState<string | null>(null);
-  const [userPlaylists, setUserPlaylists] = useState<MusicTemplateCollectionItem[]>([]);
-  const [recommendedCollections, setRecommendedCollections] = useState<MusicTemplateCollectionItem[]>([]);
-  const [recommendedResourcePage, setRecommendedResourcePage] =
-    useState<MusicTemplateResourcePage | null>(null);
-  const [showCollectionBrowser, setShowCollectionBrowser] = useState(true);
-  const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(null);
-  const [selectedCollectionKind, setSelectedCollectionKind] =
-    useState<MusicTemplateCollectionSelectionKind>(null);
-  const [selectedCollection, setSelectedCollection] = useState<MusicTemplateCollectionItem | null>(null);
-
-  const [searchQuery, setSearchQuery] = useState('');
-  const [resourceLoading, setResourceLoading] = useState(false);
-  const [resourceLoadingMore, setResourceLoadingMore] = useState(false);
-  const [resourceError, setResourceError] = useState<string | null>(null);
-  const [resourceInfo, setResourceInfo] = useState<string | null>(null);
-  const [resourcePage, setResourcePage] = useState<MusicTemplateResourcePage | null>(null);
-  const [resourceSourceKey, setResourceSourceKey] = useState<string | null>(null);
-  const [preparingResourceId, setPreparingResourceId] = useState<string | null>(null);
-  const [playbackQualityState, setPlaybackQualityState] =
-    useState<MusicTemplatePlaybackQualityState | null>(null);
-  const [playbackQualityLoading, setPlaybackQualityLoading] = useState(false);
-  const [playbackQualitySaving, setPlaybackQualitySaving] = useState(false);
-  const [playbackQualityError, setPlaybackQualityError] = useState<string | null>(null);
-
-  const preparedTrackMapRef = useRef<Map<string, Track>>(new Map());
-  const resourceViewportRef = useRef<HTMLDivElement>(null);
+  const browser = useMusicTemplateCollectionBrowser({
+    workspaceVisible: controllerVisible,
+    workspaceDataEnabled,
+    authorized,
+    musicRuntimeTarget,
+    supportsCollections,
+    supportsDailyRecommendations,
+    supportsSearch,
+    t,
+  });
 
   const qualityProbeSourceLocator = useMemo(
-    () => resolveMusicTemplateQualityProbeSourceLocator(resourcePage),
-    [resourcePage]
+    () => resolveMusicTemplateQualityProbeSourceLocator(browser.resourcePage),
+    [browser.resourcePage]
   );
 
-  const resolveCollectionItemById = useCallback(
-    (
-      collectionId: string | null,
-      kind: Extract<MusicTemplateCollectionSelectionKind, 'recommended-playlist' | 'user-playlist'>
-    ): MusicTemplateCollectionItem | null => {
-      if (!collectionId) return null;
-      const pool = kind === 'recommended-playlist' ? recommendedCollections : userPlaylists;
-      return pool.find((item) => item.collectionId === collectionId) ?? null;
-    },
-    [recommendedCollections, userPlaylists]
-  );
-
-  const loadCollectionBrowserData = useCallback(
-    async (forceRefresh = false) => {
-      if (!authorized || !musicRuntimeTarget) {
-        setUserPlaylists([]);
-        setRecommendedCollections([]);
-        setRecommendedResourcePage(null);
-        setCollectionError(null);
-        return;
-      }
-
-      const startedAtMs = getMusicPlatformNowMs();
-      setCollectionLoading(true);
-      setCollectionError(null);
-      try {
-        const userCollectionsPromise = supportsCollections
-          ? listMusicTemplateCollections(musicRuntimeTarget, {
-              forceRefresh,
-            })
-          : Promise.resolve<MusicTemplateCollectionItem[]>([]);
-        const recommendationsPromise = supportsDailyRecommendations
-          ? listMusicTemplateRecommendations(musicRuntimeTarget, {
-              forceRefresh,
-            })
-          : Promise.resolve<{
-              page: MusicTemplateResourcePage | null;
-              collections: MusicTemplateCollectionItem[];
-            }>({
-              page: null,
-              collections: [],
-            });
-
-        const [userCollectionsResult, recommendationsResult] = await Promise.allSettled([
-          userCollectionsPromise,
-          recommendationsPromise,
-        ]);
-
-        let nextError: string | null = null;
-
-        if (userCollectionsResult.status === 'fulfilled') {
-          setUserPlaylists(userCollectionsResult.value);
-        } else {
-          setUserPlaylists([]);
-          nextError = toErrorMessage(
-            userCollectionsResult.reason,
-            t('magnet.platform.music-template.collection.error')
-          );
-        }
-
-        if (recommendationsResult.status === 'fulfilled') {
-          setRecommendedCollections(recommendationsResult.value.collections);
-          setRecommendedResourcePage(recommendationsResult.value.page);
-        } else {
-          setRecommendedCollections([]);
-          setRecommendedResourcePage(null);
-          nextError ??= toErrorMessage(
-            recommendationsResult.reason,
-            t('magnet.platform.music-template.resource.errorRecommended')
-          );
-        }
-
-        setCollectionError(nextError);
-        warnOnSlowMusicPlatformOperation({
-          logger: telemetry,
-          event: 'platform.runtime.music-template.collection-browser-load.slow',
-          startedAtMs,
-          fields: {
-            connectorId: musicRuntimeTarget.connectorId,
-            instanceIdPresent: Boolean(musicRuntimeTarget.instanceId),
-            forceRefresh,
-            supportsCollections,
-            supportsDailyRecommendations,
-            userCollectionCount:
-              userCollectionsResult.status === 'fulfilled' ? userCollectionsResult.value.length : 0,
-            recommendedCollectionCount:
-              recommendationsResult.status === 'fulfilled'
-                ? recommendationsResult.value.collections.length
-                : 0,
-            hasRecommendedResourcePage:
-              recommendationsResult.status === 'fulfilled'
-                ? Boolean(recommendationsResult.value.page)
-                : false,
-            hasPartialError: Boolean(nextError),
-          },
-        });
-      } catch (error) {
-        telemetry.warn('platform.runtime.music-template.collection-browser-load.failed', {
-          message: readMusicPlatformDiagnosticErrorMessage(error),
-          fields: {
-            connectorId: musicRuntimeTarget.connectorId,
-            instanceIdPresent: Boolean(musicRuntimeTarget.instanceId),
-            forceRefresh,
-            durationMs: getMusicPlatformDurationMs(startedAtMs),
-          },
-        });
-        setCollectionError(
-          toErrorMessage(error, t('magnet.platform.music-template.collection.error'))
-        );
-      } finally {
-        setCollectionLoading(false);
-      }
-    },
-    [authorized, musicRuntimeTarget, supportsCollections, supportsDailyRecommendations, t]
-  );
-
-  const loadDailyResources = useCallback(
-    async (forceRefresh = false) => {
-      if (!supportsDailyRecommendations) {
-        setResourceInfo(t('magnet.platform.music-template.collection.waiting'));
-        setResourcePage(null);
-        setResourceSourceKey(null);
-        setShowCollectionBrowser(true);
-        return;
-      }
-      if (!authorized || !musicRuntimeTarget) {
-        setResourcePage(null);
-        setResourceSourceKey(null);
-        return;
-      }
-
-      setSearchQuery('');
-      setShowCollectionBrowser(false);
-      setSelectedCollectionKind('daily');
-      setSelectedCollectionId(DAILY_COLLECTION_BROWSER_ID);
-      setSelectedCollection(null);
-      setResourceSourceKey('recommended');
-      setResourceLoading(true);
-      setResourceError(null);
-      setResourceInfo(null);
-
-      try {
-        if (!forceRefresh && recommendedResourcePage) {
-          setResourcePage(recommendedResourcePage);
-          return;
-        }
-
-        const recommendations = await listMusicTemplateRecommendations(musicRuntimeTarget, {
-          forceRefresh,
-        });
-        setRecommendedCollections(recommendations.collections);
-        setRecommendedResourcePage(recommendations.page);
-        setResourcePage(recommendations.page);
-      } catch (error) {
-        setResourceError(
-          toErrorMessage(error, t('magnet.platform.music-template.resource.errorRecommended'))
-        );
-      } finally {
-        setResourceLoading(false);
-      }
-    },
-    [authorized, musicRuntimeTarget, recommendedResourcePage, supportsDailyRecommendations, t]
-  );
-
-  const loadCollectionResources = useCallback(
-    async (
-      collectionId: string,
-      kind: Extract<MusicTemplateCollectionSelectionKind, 'recommended-playlist' | 'user-playlist'>,
-      providedCollection: MusicTemplateCollectionItem | null = null,
-      forceRefresh = false
-    ) => {
-      const normalizedCollectionId = collectionId.trim();
-      if (!normalizedCollectionId) {
-        setShowCollectionBrowser(true);
-        return;
-      }
-      if (!authorized || !musicRuntimeTarget) {
-        setResourcePage(null);
-        setResourceSourceKey(null);
-        return;
-      }
-
-      const resolvedCollection =
-        providedCollection ?? resolveCollectionItemById(normalizedCollectionId, kind);
-
-      setSearchQuery('');
-      setShowCollectionBrowser(false);
-      setSelectedCollectionKind(kind);
-      setSelectedCollectionId(normalizedCollectionId);
-      setSelectedCollection(resolvedCollection);
-      setResourceSourceKey(`collection:${kind}:${normalizedCollectionId}`);
-      setResourceLoading(true);
-      setResourceError(null);
-      setResourceInfo(null);
-
-      try {
-        const page = await listMusicTemplateCollectionResources(
-          musicRuntimeTarget,
-          normalizedCollectionId,
-          { forceRefresh }
-        );
-        setSelectedCollection((prev) => {
-          if (resolvedCollection) return resolvedCollection;
-          const refreshedCollection = resolveCollectionItemById(normalizedCollectionId, kind);
-          return refreshedCollection ?? prev;
-        });
-        setResourcePage(page);
-      } catch (error) {
-        setResourceError(
-          toErrorMessage(error, t('magnet.platform.music-template.resource.errorPlaylist'))
-        );
-      } finally {
-        setResourceLoading(false);
-      }
-    },
-    [authorized, musicRuntimeTarget, resolveCollectionItemById, t]
-  );
-
-  const runSearch = useCallback(
-    async (keyword: string, pageNum = 1, append = false, forceRefresh = false) => {
-      const normalizedKeyword = keyword.trim();
-      if (append && resourceLoadingMore) return;
-      if (!normalizedKeyword) {
-        setShowCollectionBrowser(true);
-        setResourceError(null);
-        setResourceInfo(null);
-        await loadCollectionBrowserData(forceRefresh);
-        return;
-      }
-      if (!supportsSearch) {
-        setShowCollectionBrowser(true);
-        setResourceError(null);
-        setResourceInfo(t('magnet.platform.music-template.resource.searchUnavailable'));
-        return;
-      }
-      if (!authorized || !musicRuntimeTarget) {
-        setResourcePage(null);
-        setResourceSourceKey(null);
-        return;
-      }
-
-      setShowCollectionBrowser(false);
-      setSelectedCollectionKind('search');
-      setSelectedCollectionId(null);
-      setSelectedCollection(null);
-      setResourceSourceKey(`search:${normalizedKeyword.toLowerCase()}`);
-      if (append) {
-        setResourceLoadingMore(true);
-      } else {
-        setResourceLoading(true);
-      }
-      setResourceError(null);
-      setResourceInfo(null);
-
-      try {
-        const page = await searchMusicTemplateResources(musicRuntimeTarget, {
-          keyword: normalizedKeyword,
-          pageNum,
-          pageSize: MUSIC_TEMPLATE_SEARCH_PAGE_SIZE,
-          forceRefresh,
-        });
-        setResourcePage((prev) => (append && page ? mergeMusicTemplateResourcePages(prev, page) : page));
-      } catch (error) {
-        setResourceError(toErrorMessage(error, t('magnet.platform.music-template.resource.errorSearch')));
-      } finally {
-        if (append) {
-          setResourceLoadingMore(false);
-        } else {
-          setResourceLoading(false);
-        }
-      }
-    },
-    [authorized, loadCollectionBrowserData, musicRuntimeTarget, resourceLoadingMore, supportsSearch, t]
-  );
-
-  const refreshPlaybackQualityState = useCallback(
-    async (forceRefresh = false) => {
-      if (!authorized || !musicRuntimeTarget || !musicTemplateQualitySupported) {
-        setPlaybackQualityState(null);
-        setPlaybackQualityError(null);
-        return;
-      }
-
-      const startedAtMs = getMusicPlatformNowMs();
-      setPlaybackQualityLoading(true);
-      setPlaybackQualityError(null);
-      try {
-        const nextState = await getMusicTemplatePlaybackQualityState(musicRuntimeTarget, {
-          sourceLocator: qualityProbeSourceLocator,
-          forceRefresh,
-        });
-        setPlaybackQualityState(nextState);
-        warnOnSlowMusicPlatformOperation({
-          logger: telemetry,
-          event: 'platform.runtime.music-template.quality-state-load.slow',
-          startedAtMs,
-          fields: {
-            connectorId: musicRuntimeTarget.connectorId,
-            instanceIdPresent: Boolean(musicRuntimeTarget.instanceId),
-            forceRefresh,
-            sourceLocatorPresent: Boolean(qualityProbeSourceLocator),
-            optionCount: nextState?.options.length ?? 0,
-          },
-        });
-      } catch (error) {
-        telemetry.warn('platform.runtime.music-template.quality-state-load.failed', {
-          message: readMusicPlatformDiagnosticErrorMessage(error),
-          fields: {
-            connectorId: musicRuntimeTarget.connectorId,
-            instanceIdPresent: Boolean(musicRuntimeTarget.instanceId),
-            forceRefresh,
-            sourceLocatorPresent: Boolean(qualityProbeSourceLocator),
-            durationMs: getMusicPlatformDurationMs(startedAtMs),
-          },
-        });
-        setPlaybackQualityError(
-          toErrorMessage(error, t('magnet.platform.music-template.quality.errorLoad'))
-        );
-      } finally {
-        setPlaybackQualityLoading(false);
-      }
-    },
-    [authorized, musicRuntimeTarget, musicTemplateQualitySupported, qualityProbeSourceLocator, t]
-  );
-
-  const setPlaybackQualityPreference = useCallback(
-    async (qualityKey: string) => {
-      if (!authorized || !musicRuntimeTarget || !musicTemplateQualitySupported) return;
-
-      setPlaybackQualitySaving(true);
-      setPlaybackQualityError(null);
-      try {
-        const nextState = await setMusicTemplatePlaybackQualityPreference(
-          musicRuntimeTarget,
-          normalizeMusicTemplateQualityKey(qualityKey),
-          {
-            sourceLocator: qualityProbeSourceLocator,
-          }
-        );
-        setPlaybackQualityState((prev) => nextState ?? prev);
-      } catch (error) {
-        setPlaybackQualityError(
-          toErrorMessage(error, t('magnet.platform.music-template.quality.errorSave'))
-        );
-      } finally {
-        setPlaybackQualitySaving(false);
-      }
-    },
-    [authorized, musicRuntimeTarget, musicTemplateQualitySupported, qualityProbeSourceLocator, t]
-  );
-
-  useEffect(() => {
-    const fallbackModel = createMusicTemplateWorkspaceFallbackModel(activeMusicContractRecord);
-    setWorkspaceModel(fallbackModel);
-
-    if (!musicRuntimeTarget) {
-      return;
-    }
-
-    let cancelled = false;
-    void getMusicTemplateWorkspaceModel(musicRuntimeTarget, {
-      contractRecord: activeMusicContractRecord,
-    }).then((nextModel) => {
-      if (!cancelled) {
-        setWorkspaceModel(nextModel);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeMusicContractRecord, musicRuntimeTarget]);
-
-  useEffect(() => {
-    setCollectionError(null);
-    setCollectionLoading(false);
-    setUserPlaylists([]);
-    setRecommendedCollections([]);
-    setRecommendedResourcePage(null);
-    setShowCollectionBrowser(true);
-    setSelectedCollectionId(null);
-    setSelectedCollectionKind(null);
-    setSelectedCollection(null);
-    setSearchQuery('');
-    setResourceLoading(false);
-    setResourceLoadingMore(false);
-    setResourceError(null);
-    setResourceInfo(null);
-    setResourcePage(null);
-    setResourceSourceKey(null);
-    setPreparingResourceId(null);
-    setPlaybackQualityState(null);
-    setPlaybackQualityLoading(false);
-    setPlaybackQualitySaving(false);
-    setPlaybackQualityError(null);
-    preparedTrackMapRef.current.clear();
-  }, [activeMusicConnectorId, activeMusicInstanceId]);
-
-  useEffect(() => {
-    if (!musicTemplateWorkspaceActive || !authorized) {
-      if (!authorized) {
-        setCollectionError(null);
-        setResourceError(null);
-        setResourceInfo(null);
-        setUserPlaylists([]);
-        setRecommendedCollections([]);
-        setRecommendedResourcePage(null);
-        setShowCollectionBrowser(true);
-        setSelectedCollectionId(null);
-        setSelectedCollectionKind(null);
-        setSelectedCollection(null);
-        setResourcePage(null);
-        setResourceSourceKey(null);
-        setResourceLoadingMore(false);
-        setPlaybackQualityState(null);
-        setPlaybackQualityError(null);
-        preparedTrackMapRef.current.clear();
-      }
-      return;
-    }
-
-    void loadCollectionBrowserData();
-  }, [authorized, loadCollectionBrowserData, musicTemplateWorkspaceActive]);
-
-  useEffect(() => {
-    if (!musicTemplateWorkspaceActive || !authorized || !musicTemplateQualitySupported) {
-      if (!musicTemplateQualitySupported) {
-        setPlaybackQualityState(null);
-        setPlaybackQualityError(null);
-      }
-      return;
-    }
-
-    void refreshPlaybackQualityState();
-  }, [
+  const quality = useMusicTemplatePlaybackQuality({
+    controllerVisible,
     authorized,
-    musicTemplateQualitySupported,
-    musicTemplateWorkspaceActive,
+    qualitySupported: musicTemplateQualitySupported,
+    musicRuntimeTarget,
     qualityProbeSourceLocator,
-    refreshPlaybackQualityState,
-  ]);
-
-  useEffect(() => {
-    if (!selectedCollectionId) return;
-    if (
-      selectedCollectionKind !== 'recommended-playlist' &&
-      selectedCollectionKind !== 'user-playlist'
-    ) {
-      return;
-    }
-
-    const nextSelectedCollection = resolveCollectionItemById(
-      selectedCollectionId,
-      selectedCollectionKind
-    );
-    if (nextSelectedCollection) {
-      setSelectedCollection((prev) =>
-        isSameCollection(prev, nextSelectedCollection) ? prev : nextSelectedCollection
-      );
-      return;
-    }
-
-    if (showCollectionBrowser) {
-      setSelectedCollection(null);
-      setSelectedCollectionId(null);
-      setSelectedCollectionKind(null);
-    }
-  }, [resolveCollectionItemById, selectedCollectionId, selectedCollectionKind, showCollectionBrowser]);
-
-  useLayoutEffect(() => {
-    if (!resourceSourceKey) return;
-    const viewportElement = resourceViewportRef.current;
-    if (!viewportElement) return;
-    viewportElement.scrollTop = 0;
-    viewportElement.scrollLeft = 0;
-  }, [resourceSourceKey]);
-
-  const ensurePreparedTrack = useCallback(
-    async (item: MusicTemplateResourceItem): Promise<Track> => {
-      const cacheKey = item.resourceId.trim() || item.sourceLocator.trim();
-      const cached = preparedTrackMapRef.current.get(cacheKey);
-      if (cached) return cached;
-
-      setPreparingResourceId(item.resourceId);
-      try {
-        if (!musicRuntimeTarget) {
-          throw new Error(t('magnet.platform.music-template.player.error.prepareFailed'));
-        }
-
-        const prepared = await prepareMusicTemplatePlayback(musicRuntimeTarget, item, {
-          qualityHint: playbackQualityState?.currentKey,
-        });
-        if (!prepared) {
-          throw new Error(t('magnet.platform.music-template.player.error.prepareFailed'));
-        }
-
-        const track = buildTrackFromPreparedPlayback(item, prepared, musicRuntimeTarget.displayName);
-        setPreparedTrackWithBoundedLru(preparedTrackMapRef.current, cacheKey, track);
-        return track;
-      } finally {
-        setPreparingResourceId((prev) => (prev === item.resourceId ? null : prev));
-      }
-    },
-    [musicRuntimeTarget, playbackQualityState?.currentKey, t]
-  );
-
-  const handlePlaySong = useCallback(
-    async (item: MusicTemplateResourceItem) => {
-      try {
-        const track = await ensurePreparedTrack(item);
-        const queueLengthBefore = audioService.getQueue().length;
-        audioService.addMultipleToQueue([track]);
-        await audioService.playTrackAtIndex(Math.max(0, queueLengthBefore));
-        setResourceError(null);
-      } catch (error) {
-        setResourceInfo(null);
-        setResourceError(toErrorMessage(error, t('magnet.platform.music-template.player.error.playFailed')));
-      }
-    },
-    [audioService, ensurePreparedTrack, t]
-  );
-
-  const handleQueueSong = useCallback(
-    async (item: MusicTemplateResourceItem) => {
-      try {
-        const track = await ensurePreparedTrack(item);
-        audioService.addToQueue(track);
-        setResourceError(null);
-      } catch (error) {
-        setResourceInfo(null);
-        setResourceError(toErrorMessage(error, t('magnet.platform.music-template.player.error.queueFailed')));
-      }
-    },
-    [audioService, ensurePreparedTrack, t]
-  );
-
-  const handleAddSongToPlaylist = useCallback(
-    async (item: MusicTemplateResourceItem) => {
-      if (!selectedPlaylistId) {
-        setPlaylistError(t('magnet.platform.music-template.playlist.addHintNoSelection'));
-        return;
-      }
-
-      try {
-        const track = await ensurePreparedTrack(item);
-        audioService.addTrackToPlaylist(selectedPlaylistId, track);
-        setPlaylistError(null);
-      } catch (error) {
-        setPlaylistError(
-          toErrorMessage(error, t('magnet.platform.music-template.playlist.errorAddTrackFailed'))
-        );
-      }
-    },
-    [audioService, ensurePreparedTrack, selectedPlaylistId, setPlaylistError, t]
-  );
-
-  const handleOpenSong = useCallback(
-    (item: MusicTemplateResourceItem) => {
-      const webUrl = item.webUrl?.trim();
-      if (!webUrl) {
-        setResourceError(t('magnet.platform.music-template.resource.noLink'));
-        return;
-      }
-      window.open(webUrl, '_blank', 'noopener,noreferrer');
-    },
-    [t]
-  );
-
-  const handleBackToCollections = useCallback((): boolean => {
-    if (showCollectionBrowser) {
-      return false;
-    }
-    setShowCollectionBrowser(true);
-    return true;
-  }, [showCollectionBrowser]);
-
-  const handleOpenDrawerPlaylist = useCallback(
-    (collectionId: string) => {
-      const normalizedCollectionId = collectionId.trim();
-      if (!normalizedCollectionId) return;
-      const resolvedCollection = resolveCollectionItemById(normalizedCollectionId, 'user-playlist');
-      void loadCollectionResources(normalizedCollectionId, 'user-playlist', resolvedCollection);
-    },
-    [loadCollectionResources, resolveCollectionItemById]
-  );
-
-  const collectionBrowserSections = useMemo<MusicTemplateCollectionBrowserSection[]>(() => {
-    if (!authorized) return [];
-
-    const nextSections: MusicTemplateCollectionBrowserSection[] = [];
-
-    const exploreItems: MusicTemplateCollectionBrowserItem[] = [];
-    if (supportsDailyRecommendations) {
-      exploreItems.push({
-        id: 'daily',
-        kind: 'daily',
-        collectionId: DAILY_COLLECTION_BROWSER_ID,
-        title: t('magnet.platform.music-template.collection.recommendedEntry'),
-        subtitle: t('magnet.platform.music-template.collection-browser.dailySubtitle'),
-        countLabel:
-          recommendedResourcePage && recommendedResourcePage.total > 0
-            ? t('magnet.platform.music-template.resource.total', {
-                count: recommendedResourcePage.total,
-              })
-            : null,
-      });
-      exploreItems.push(
-        ...recommendedCollections.map((collection) => ({
-          id: `recommended:${collection.collectionId}`,
-          kind: 'recommended-playlist' as const,
-          collectionId: collection.collectionId,
-          title: collection.title,
-          subtitle: t('magnet.platform.music-template.collection-browser.recommendedSubtitle'),
-          countLabel:
-            collection.trackCount > 0
-              ? t('magnet.platform.music-template.collection.count', {
-                  count: collection.trackCount,
-                })
-              : null,
-          coverUrl: collection.coverUrl,
-        }))
-      );
-    }
-
-    if (exploreItems.length > 0) {
-      nextSections.push({
-        id: 'explore',
-        title: t('magnet.platform.music-template.collection-browser.sectionExplore'),
-        items: exploreItems,
-      });
-    }
-
-    return nextSections;
-  }, [
-    authorized,
-    recommendedCollections,
-    recommendedResourcePage,
-    supportsDailyRecommendations,
     t,
-  ]);
+  });
+
+  const playbackActions = useMusicTemplatePlaybackActions({
+    musicRuntimeTarget,
+    playbackQualityState: quality.playbackQualityState,
+    audioService,
+    selectedPlaylistId,
+    t,
+    setResourceError: browser.setResourceError,
+    setResourceInfo: browser.setResourceInfo,
+    setPlaylistError,
+  });
 
   const musicTemplateDrawerPlaylists = useMemo<AudioPlaylist[]>(
     () =>
-      userPlaylists.map((collection) => ({
+      browser.userPlaylists.map((collection) => ({
         id: collection.collectionId,
         name: collection.title,
         description: '',
@@ -910,7 +174,7 @@ export function useMusicTemplateWorkspaceAdapterController(
         totalDuration: 0,
         tracksHydrated: false,
       })),
-    [activeMusicConnectorId, userPlaylists]
+    [activeMusicConnectorId, browser.userPlaylists]
   );
 
   const selectedDrawerPlaylist = useMemo(
@@ -918,6 +182,13 @@ export function useMusicTemplateWorkspaceAdapterController(
       musicTemplateDrawerPlaylists.find((playlist) => playlist.id === selectedPlaylistId) ?? null,
     [musicTemplateDrawerPlaylists, selectedPlaylistId]
   );
+  const {
+    searchQuery,
+    resourceLoading,
+    resourceLoadingMore,
+    setSearchQuery,
+    runSearch,
+  } = browser;
 
   const musicTemplateShellSearch = useMemo(
     () => ({
@@ -932,7 +203,16 @@ export function useMusicTemplateWorkspaceAdapterController(
         void runSearch(searchQuery, 1, false, false);
       },
     }),
-    [authorized, resourceLoading, resourceLoadingMore, runSearch, searchQuery, supportsSearch, t]
+    [
+      authorized,
+      resourceLoading,
+      resourceLoadingMore,
+      runSearch,
+      searchQuery,
+      setSearchQuery,
+      supportsSearch,
+      t,
+    ]
   );
 
   const musicTemplateToolbarProps: MusicTemplateWorkspaceToolbarProps = {};
@@ -941,17 +221,17 @@ export function useMusicTemplateWorkspaceAdapterController(
     t,
     authorized,
     qualitySupported: musicTemplateQualitySupported,
-    qualityLoading: playbackQualityLoading,
-    qualitySaving: playbackQualitySaving,
-    qualityError: playbackQualityError,
-    qualityState: playbackQualityState,
+    qualityLoading: quality.playbackQualityLoading,
+    qualitySaving: quality.playbackQualitySaving,
+    qualityError: quality.playbackQualityError,
+    qualityState: quality.playbackQualityState,
     qualityLabelForKey: (qualityKey) =>
       t(resolveMusicTemplateQualityLabelKey(normalizeMusicTemplateQualityKey(qualityKey))),
     onQualityHintChange: (qualityKey) => {
-      void setPlaybackQualityPreference(qualityKey);
+      void quality.setPlaybackQualityPreference(qualityKey);
     },
     onRefreshQualityState: () => {
-      void refreshPlaybackQualityState(true);
+      void quality.refreshPlaybackQualityState(true);
     },
   };
 
@@ -961,19 +241,20 @@ export function useMusicTemplateWorkspaceAdapterController(
     platformAccentColor: '#8aa6ff',
     platformFallbackLabel: 'M',
     platformIconAssetUrl: null,
-    collectionLoading,
-    collectionError,
-    collectionBrowserSections,
-    selectedCollectionId: selectedCollectionKind === 'search' ? null : selectedCollectionId,
-    selectedCollection,
-    showCollectionBrowser,
-    resourceLoading,
-    resourceLoadingMore,
-    resourceError,
-    resourceInfo,
-    resourcePage,
-    resourceViewportRef,
-    preparingResourceId,
+    collectionLoading: browser.collectionLoading,
+    collectionError: browser.collectionError,
+    collectionBrowserSections: browser.collectionBrowserSections,
+    selectedCollectionId:
+      browser.selectedCollectionKind === 'search' ? null : browser.selectedCollectionId,
+    selectedCollection: browser.selectedCollection,
+    showCollectionBrowser: browser.showCollectionBrowser,
+    resourceLoading: browser.resourceLoading,
+    resourceLoadingMore: browser.resourceLoadingMore,
+    resourceError: browser.resourceError,
+    resourceInfo: browser.resourceInfo,
+    resourcePage: browser.resourcePage,
+    resourceViewportRef: browser.resourceViewportRef,
+    preparingResourceId: playbackActions.preparingResourceId,
     selectedPlatformPlaylistId: selectedPlaylistId,
     selectedPlatformPlaylistTitle: selectedDrawerPlaylist?.name ?? null,
     selectedPlatformPlaylistCoverUrl: selectedDrawerPlaylist?.coverUrl ?? null,
@@ -985,29 +266,18 @@ export function useMusicTemplateWorkspaceAdapterController(
     playlistError,
     t,
     formatDuration,
-    onSelectCollection: (item) => {
-      if (item.kind === 'daily') {
-        void loadDailyResources();
-        return;
-      }
-      if (!item.collectionId) return;
-      const resolvedCollection = resolveCollectionItemById(item.collectionId, item.kind);
-      void loadCollectionResources(item.collectionId, item.kind, resolvedCollection);
-    },
-    onLoadMoreResources: () => {
-      if (!resourcePage?.hasMore || resourcePage.sourceKind !== 'search') return;
-      void runSearch(resourcePage.sourceId, resourcePage.pageNum + 1, true);
-    },
+    onSelectCollection: browser.handleSelectCollection,
+    onLoadMoreResources: browser.handleLoadMoreResources,
     onPlaySong: (item) => {
-      void handlePlaySong(item);
+      void playbackActions.handlePlaySong(item);
     },
     onQueueSong: (item) => {
-      void handleQueueSong(item);
+      void playbackActions.handleQueueSong(item);
     },
     onAddSongToPlaylist: (item) => {
-      void handleAddSongToPlaylist(item);
+      void playbackActions.handleAddSongToPlaylist(item);
     },
-    onOpenSong: handleOpenSong,
+    onOpenSong: playbackActions.handleOpenSong,
   };
 
   return {
@@ -1015,9 +285,9 @@ export function useMusicTemplateWorkspaceAdapterController(
     musicTemplateUseDarkMode: musicTemplateWorkspaceActive && prefersDarkMode,
     musicTemplateQualitySupported,
     musicTemplateSettingsSupported: musicTemplateQualitySupported,
-    musicTemplateCanGoBack: !showCollectionBrowser,
-    musicTemplateHandleBackAction: handleBackToCollections,
-    musicTemplateOpenDrawerPlaylist: handleOpenDrawerPlaylist,
+    musicTemplateCanGoBack: browser.canGoBack,
+    musicTemplateHandleBackAction: browser.handleBackToCollections,
+    musicTemplateOpenDrawerPlaylist: browser.handleOpenDrawerPlaylist,
     musicTemplateDrawerPlaylists,
     musicTemplateShellSearch,
     musicTemplateToolbarProps,

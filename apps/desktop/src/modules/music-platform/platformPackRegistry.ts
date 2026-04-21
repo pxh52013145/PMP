@@ -1,10 +1,11 @@
-import type { PlatformCompatRuntimeApi } from '@pixel-matrix/plugin-platform-contracts';
+import {
+  PLATFORM_COMPAT_PMP_SUPPORTED_BINDINGS,
+  type PlatformCompatRuntimeApi,
+} from '@pixel-matrix/plugin-platform-contracts';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import {
-  createPassivePlatformConnectorAdapter,
   createPlatformCompatRuntimeFromConnectorAdapter,
-  listPlatformConnectorAdapters,
   registerPlatformCompatRegistrationForConnector,
   registerPlatformConnectorAdapter,
   registerPlatformConnectorRegistryInitializer,
@@ -23,6 +24,9 @@ import {
   type PlatformPackConnectorTemplate,
 } from './platformPack';
 import {
+  createPlatformCompatRuntimeFromBindingContract,
+  createPlatformConnectorAdapterFromBindingContract,
+  createPlatformConnectorAdapterFromRuntimeApi,
   invokePlatformRuntimeBinding,
 } from './bindingRuntime';
 import {
@@ -39,6 +43,7 @@ import {
   loadInstalledPlatformPackRecords,
   subscribeInstalledPlatformPackRecords,
   type InstalledPlatformPackRecord,
+  type InstalledPlatformPackSourceType,
 } from './installedPlatformPacks';
 import {
   createPlatformPackSidecarHostRuntimeSupport,
@@ -56,6 +61,27 @@ import {
 } from './platformConnectorModel';
 
 type JsonRecord = Record<string, unknown>;
+
+export type PlatformPackReadinessDiagnosticSeverity = 'info' | 'warn' | 'error';
+export type PlatformPackReadinessDiagnosticPhase =
+  | 'install'
+  | 'hydrate'
+  | 'register'
+  | 'compatibility';
+
+export interface PlatformPackReadinessDiagnostic {
+  ts: number;
+  code: string;
+  severity: PlatformPackReadinessDiagnosticSeverity;
+  phase: PlatformPackReadinessDiagnosticPhase;
+  connectorId: PlatformConnectorId | null;
+  packId: string | null;
+  packVersion: string | null;
+  sourceType: InstalledPlatformPackSourceType | null;
+  source: string | null;
+  message: string;
+  fields?: JsonRecord;
+}
 
 export interface PlatformPackRegistrationRecord {
   packId: string;
@@ -86,6 +112,17 @@ interface PlatformPackRuntimeContext {
     payload?: Record<string, unknown>
   ) => Promise<{ ok: boolean; data?: unknown; error?: unknown }>;
 }
+
+type PlatformPackResolvedRuntimeMode =
+  | 'platformPackRuntime'
+  | 'bindingContract'
+  | 'connectorAdapterCompat';
+
+type PlatformPackResolvedAdapterMode =
+  | 'runtimeModule'
+  | 'runtimeApiBridge'
+  | 'bindingContract'
+  | 'connectorAdapter';
 
 type PlatformPackRuntimeModuleShape = {
   createConnectorAdapter?: (context: PlatformPackRuntimeContext) => Promise<PlatformConnectorAdapter> | PlatformConnectorAdapter;
@@ -160,11 +197,11 @@ export interface PlatformPackStartupHealth {
 
 type PlatformPackStartupHealthListener = (health: PlatformPackStartupHealth) => void;
 
-type BuiltinPlatformPackAsset = {
+export interface BuiltinPlatformPackAssetDefinition {
   source: string;
   connectorId: PlatformConnectorId;
   packAssetUrl: string;
-};
+}
 
 type BuiltinPlatformPackIndexEntry = {
   source: string;
@@ -181,7 +218,7 @@ type LoadedBuiltinPlatformPackAsset = {
   pack: ParsedPlatformPack;
 };
 
-type BuiltinPlatformPackStoreInspectionEntry = {
+export interface BuiltinPlatformPackStoreInspectionEntry {
   connectorId: PlatformConnectorId;
   storedRecordFound: boolean;
   artifactsPresent: boolean;
@@ -198,18 +235,19 @@ type BuiltinPlatformPackStoreInspectionEntry = {
   strictReasonCodes: string[];
   effectiveReasonCodes: string[];
   relaxedDevReasonCodes: string[];
-};
+}
 
-type BuiltinPlatformPackStoreInspection = {
+export interface BuiltinPlatformPackStoreInspection {
   indexAvailable: boolean;
   current: boolean;
   storeReadyWithoutIndex: boolean;
   staleConnectorIds: PlatformConnectorId[];
   relaxedDevConnectorIds: PlatformConnectorId[];
   entries: BuiltinPlatformPackStoreInspectionEntry[];
-};
+}
 
 const platformPackRegistry = new Map<PlatformConnectorId, PlatformPackRegistrationRecord>();
+const platformPackReadinessDiagnostics = new Map<string, PlatformPackReadinessDiagnostic>();
 const platformPackHostRuntimeSupportRegistry = new Map<
   PlatformConnectorId,
   PlatformPackHostRuntimeSupport
@@ -217,7 +255,7 @@ const platformPackHostRuntimeSupportRegistry = new Map<
 const platformPackSidecarEntryPathRegistry = new Map<PlatformConnectorId, string>();
 const platformPackRegistryListeners = new Set<PlatformPackRegistryListener>();
 const platformPackStartupHealthListeners = new Set<PlatformPackStartupHealthListener>();
-const builtinPlatformPackAssets: BuiltinPlatformPackAsset[] = [
+const builtinPlatformPackAssets: BuiltinPlatformPackAssetDefinition[] = [
   {
     source: 'builtin-pack:bilibili',
     connectorId: BILIBILI_CONNECTOR_ID,
@@ -249,6 +287,7 @@ let platformPackRegistryBootstrapRegistered = false;
 let builtinPlatformPackBackgroundReconcileConnectorIds: Set<PlatformConnectorId> | null = null;
 const telemetry = getTelemetryLogger('music-platform', 'platformPackRegistry');
 const PLATFORM_PACK_STARTUP_STAGE_HISTORY_LIMIT = 24;
+const PLATFORM_PACK_READINESS_DIAGNOSTIC_LIMIT = 64;
 let platformPackBootPerfStartedAtMs: number | null = null;
 const platformPackStartupHealth: PlatformPackStartupHealth = {
   state: 'idle',
@@ -303,10 +342,166 @@ function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function normalizeDiagnosticSourceType(
+  value: InstalledPlatformPackSourceType | null | undefined
+): InstalledPlatformPackSourceType | null {
+  return value === 'builtin' || value === 'external' ? value : null;
+}
+
+function normalizeDiagnosticConnectorId(
+  value: unknown
+): PlatformConnectorId | null {
+  try {
+    return normalizePackConnectorId(value);
+  } catch {
+    return null;
+  }
+}
+
+function clonePlatformPackReadinessDiagnostic(
+  diagnostic: PlatformPackReadinessDiagnostic
+): PlatformPackReadinessDiagnostic {
+  return {
+    ...diagnostic,
+    fields: diagnostic.fields ? { ...diagnostic.fields } : undefined,
+  };
+}
+
+function buildPlatformPackReadinessDiagnosticKey(
+  diagnostic: Pick<
+    PlatformPackReadinessDiagnostic,
+    | 'phase'
+    | 'code'
+    | 'connectorId'
+    | 'packId'
+    | 'packVersion'
+    | 'sourceType'
+    | 'source'
+  >
+): string {
+  return [
+    diagnostic.phase,
+    diagnostic.code,
+    diagnostic.connectorId ?? '-',
+    diagnostic.packId ?? '-',
+    diagnostic.packVersion ?? '-',
+    diagnostic.sourceType ?? '-',
+    diagnostic.source ?? '-',
+  ].join('|');
+}
+
+function trimPlatformPackReadinessDiagnostics(): void {
+  if (platformPackReadinessDiagnostics.size <= PLATFORM_PACK_READINESS_DIAGNOSTIC_LIMIT) {
+    return;
+  }
+
+  const overflow =
+    platformPackReadinessDiagnostics.size - PLATFORM_PACK_READINESS_DIAGNOSTIC_LIMIT;
+  const staleKeys = Array.from(platformPackReadinessDiagnostics.entries())
+    .sort((left, right) => left[1].ts - right[1].ts)
+    .slice(0, overflow)
+    .map(([key]) => key);
+  for (const key of staleKeys) {
+    platformPackReadinessDiagnostics.delete(key);
+  }
+}
+
+function recordPlatformPackReadinessDiagnostic(input: {
+  code: string;
+  severity: PlatformPackReadinessDiagnosticSeverity;
+  phase: PlatformPackReadinessDiagnosticPhase;
+  connectorId?: PlatformConnectorId | string | null;
+  packId?: string | null;
+  packVersion?: string | null;
+  sourceType?: InstalledPlatformPackSourceType | null;
+  source?: string | null;
+  message: string;
+  fields?: JsonRecord;
+}): void {
+  const message = normalizeString(input.message);
+  if (!message) {
+    return;
+  }
+
+  const diagnostic: PlatformPackReadinessDiagnostic = {
+    ts: Date.now(),
+    code: input.code,
+    severity: input.severity,
+    phase: input.phase,
+    connectorId: normalizeDiagnosticConnectorId(input.connectorId),
+    packId: normalizeString(input.packId) || null,
+    packVersion: normalizeString(input.packVersion) || null,
+    sourceType: normalizeDiagnosticSourceType(input.sourceType),
+    source: normalizeString(input.source) || null,
+    message,
+    fields: input.fields ? { ...input.fields } : undefined,
+  };
+  const key = buildPlatformPackReadinessDiagnosticKey(diagnostic);
+  platformPackReadinessDiagnostics.set(key, diagnostic);
+  trimPlatformPackReadinessDiagnostics();
+}
+
+function clearPlatformPackReadinessDiagnostics(input: {
+  connectorId?: PlatformConnectorId | string | null;
+  packId?: string | null;
+  source?: string | null;
+} = {}): void {
+  const connectorId = normalizeDiagnosticConnectorId(input.connectorId);
+  const packId = normalizeString(input.packId);
+  const source = normalizeString(input.source);
+  if (!connectorId && !packId && !source) {
+    return;
+  }
+
+  for (const [key, diagnostic] of platformPackReadinessDiagnostics.entries()) {
+    if (
+      (connectorId && diagnostic.connectorId === connectorId) ||
+      (packId && diagnostic.packId === packId) ||
+      (source && diagnostic.source === source)
+    ) {
+      platformPackReadinessDiagnostics.delete(key);
+    }
+  }
+}
+
 function clonePlatformPackStartupStageRecord(
   record: PlatformPackStartupStageRecord
 ): PlatformPackStartupStageRecord {
   return { ...record };
+}
+
+function cloneBuiltinPlatformPackAssetDefinition(
+  asset: BuiltinPlatformPackAssetDefinition
+): BuiltinPlatformPackAssetDefinition {
+  return {
+    source: asset.source,
+    connectorId: asset.connectorId,
+    packAssetUrl: asset.packAssetUrl,
+  };
+}
+
+function cloneBuiltinPlatformPackStoreInspectionEntry(
+  entry: BuiltinPlatformPackStoreInspectionEntry
+): BuiltinPlatformPackStoreInspectionEntry {
+  return {
+    ...entry,
+    strictReasonCodes: entry.strictReasonCodes.slice(),
+    effectiveReasonCodes: entry.effectiveReasonCodes.slice(),
+    relaxedDevReasonCodes: entry.relaxedDevReasonCodes.slice(),
+  };
+}
+
+function cloneBuiltinPlatformPackStoreInspection(
+  inspection: BuiltinPlatformPackStoreInspection
+): BuiltinPlatformPackStoreInspection {
+  return {
+    indexAvailable: inspection.indexAvailable,
+    current: inspection.current,
+    storeReadyWithoutIndex: inspection.storeReadyWithoutIndex,
+    staleConnectorIds: inspection.staleConnectorIds.slice(),
+    relaxedDevConnectorIds: inspection.relaxedDevConnectorIds.slice(),
+    entries: inspection.entries.map(cloneBuiltinPlatformPackStoreInspectionEntry),
+  };
 }
 
 function clonePlatformPackStartupHealth(
@@ -778,6 +973,89 @@ async function loadBuiltinPlatformPackIndex(): Promise<
   }
 }
 
+const PLATFORM_PACK_BINDING_RUNTIME_BUCKETS = [
+  'library',
+  'recommendations',
+  'search',
+  'quality',
+  'pages',
+] as const;
+
+type PlatformPackBindingRuntimeBucket =
+  (typeof PLATFORM_PACK_BINDING_RUNTIME_BUCKETS)[number];
+
+function hasBindingProviderBucket(
+  provider: PlatformInstanceApiBindingProvider | null,
+  bucket: PlatformPackBindingRuntimeBucket
+): boolean {
+  const value = provider?.[bucket];
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function assessBindingContractSupport(input: {
+  contract: ParsedPlatformPack['contract'];
+  authBindingProvider: PlatformInstanceAuthBindingProvider | null;
+  bindingProvider: PlatformInstanceApiBindingProvider | null;
+}): {
+  canCreateAdapter: boolean;
+  canCreateRuntime: boolean;
+  reasonCodes: string[];
+} {
+  const reasonCodes: string[] = [];
+  const authBindingId = normalizeString(input.contract.apiBindings.auth);
+  const supportedAuthBindingId = PLATFORM_COMPAT_PMP_SUPPORTED_BINDINGS.auth;
+  const hasSupportedAuthBinding = authBindingId === supportedAuthBindingId;
+  const hasAuthBindingProvider = Boolean(input.authBindingProvider);
+
+  if (!hasSupportedAuthBinding) {
+    reasonCodes.push(
+      `unsupported-auth-binding:${authBindingId || '(missing)'}`
+    );
+  }
+  if (!hasAuthBindingProvider) {
+    reasonCodes.push('missing-auth-binding-provider');
+  }
+
+  let canCreateRuntime = hasSupportedAuthBinding && hasAuthBindingProvider;
+  for (const bucket of PLATFORM_PACK_BINDING_RUNTIME_BUCKETS) {
+    const bindingId = normalizeString(input.contract.apiBindings[bucket]);
+    if (!bindingId) {
+      continue;
+    }
+    const supportedBindingId = PLATFORM_COMPAT_PMP_SUPPORTED_BINDINGS[bucket];
+    if (bindingId !== supportedBindingId) {
+      canCreateRuntime = false;
+      reasonCodes.push(`unsupported-binding:${bucket}:${bindingId}`);
+      continue;
+    }
+    if (!hasBindingProviderBucket(input.bindingProvider, bucket)) {
+      canCreateRuntime = false;
+      reasonCodes.push(`missing-binding-provider:${bucket}`);
+    }
+  }
+
+  if (hasContractBinding(input.contract.apiBindings.navigation)) {
+    canCreateRuntime = false;
+    reasonCodes.push(
+      `unsupported-binding:navigation:${normalizeString(input.contract.apiBindings.navigation)}`
+    );
+  }
+  if (hasContractBinding(input.contract.apiBindings.settings)) {
+    canCreateRuntime = false;
+    reasonCodes.push(
+      `unsupported-binding:settings:${normalizeString(input.contract.apiBindings.settings)}`
+    );
+  }
+
+  return {
+    canCreateAdapter: hasSupportedAuthBinding && hasAuthBindingProvider,
+    canCreateRuntime,
+    reasonCodes: Array.from(new Set(reasonCodes)).sort((left, right) =>
+      left.localeCompare(right, 'en')
+    ),
+  };
+}
+
 async function loadBuiltinPlatformPackAssets(): Promise<LoadedBuiltinPlatformPackAsset[]> {
   if (builtinPlatformPackLoadPromise) {
     return await builtinPlatformPackLoadPromise;
@@ -1091,7 +1369,9 @@ async function importRuntimeModuleFromUrl(url: string): Promise<Record<string, u
   return (await import(/* @vite-ignore */ url)) as Record<string, unknown>;
 }
 
-async function resolveRuntimeModule(pack: ParsedPlatformPack): Promise<PlatformPackRuntimeModuleShape> {
+async function resolveRuntimeModule(
+  pack: ParsedPlatformPack
+): Promise<PlatformPackRuntimeModuleShape | null> {
   let moduleRecord: Record<string, unknown>;
   if (pack.runtimeImportUrl) {
     try {
@@ -1114,20 +1394,34 @@ async function resolveRuntimeModule(pack: ParsedPlatformPack): Promise<PlatformP
   const direct = resolveRuntimeModuleShape(moduleRecord);
   if (direct) return direct;
   const fromDefault = resolveRuntimeModuleShape(moduleRecord.default);
-  if (fromDefault) return fromDefault;
-  throw new Error(
-    `Platform pack runtime entry must export at least one of createConnectorAdapter/connectorAdapter/createRuntimeApi/runtimeApi/createAuthBindingProvider/authBindingProvider/createBindingProvider/bindingProvider (${pack.runtimePath})`
+  return fromDefault;
+}
+
+function buildPlatformPackCompatibilityError(
+  pack: ParsedPlatformPack,
+  definition: PlatformConnectorDefinition,
+  reasonCodes: readonly string[]
+): Error {
+  const reasonSuffix =
+    reasonCodes.length > 0 ? ` Missing support: ${reasonCodes.join(', ')}` : '';
+  return new Error(
+    `Platform pack ${pack.manifest.metadata.id}@${pack.manifest.metadata.version} ` +
+      `for ${definition.connectorId} could not resolve a compatible runtime/adapter path.` +
+      reasonSuffix
   );
 }
 
 async function resolveAdapterAndRuntime(
   pack: ParsedPlatformPack,
-  definition: PlatformConnectorDefinition
+  definition: PlatformConnectorDefinition,
+  hostRuntimeSupport: PlatformPackHostRuntimeSupport | null
 ): Promise<{
   adapter: PlatformConnectorAdapter;
   runtime: PlatformCompatRuntimeApi;
   authBindingProvider: PlatformInstanceAuthBindingProvider | null;
   bindingProvider: PlatformInstanceApiBindingProvider | null;
+  runtimeAdapter: PlatformPackResolvedRuntimeMode;
+  connectorAdapterMode: PlatformPackResolvedAdapterMode;
 }> {
   const runtimeModule = await resolveRuntimeModule(pack);
   const runtimeContext: PlatformPackRuntimeContext = {
@@ -1157,37 +1451,87 @@ async function resolveAdapterAndRuntime(
     },
   };
 
-  const existingAdapter =
-    listPlatformConnectorAdapters().find((item) => item.definition.connectorId === definition.connectorId) ??
+  const authBindingProvider =
+    (runtimeModule?.createAuthBindingProvider
+      ? (await runtimeModule.createAuthBindingProvider(runtimeContext)) ?? null
+      : runtimeModule?.authBindingProvider ?? null) ??
+    hostRuntimeSupport?.authBindingProvider ??
     null;
-  const passiveAdapter = createPassivePlatformConnectorAdapter(definition);
+  const bindingProvider =
+    (runtimeModule?.createBindingProvider
+      ? (await runtimeModule.createBindingProvider(runtimeContext)) ?? null
+      : runtimeModule?.bindingProvider ?? null) ??
+    hostRuntimeSupport?.apiBindingProvider ??
+    null;
+  const bindingSupport = assessBindingContractSupport({
+    contract: pack.contract,
+    authBindingProvider,
+    bindingProvider,
+  });
+
   const runtimeModuleAdapter = runtimeModule?.createConnectorAdapter
     ? await runtimeModule.createConnectorAdapter(runtimeContext)
     : runtimeModule?.connectorAdapter;
-  const normalizedAdapter = runtimeModuleAdapter
+  const normalizedRuntimeModuleAdapter = runtimeModuleAdapter
     ? ensureAdapterShape(runtimeModuleAdapter, definition)
-    : existingAdapter
-      ? ensureAdapterShape(existingAdapter, definition)
-      : passiveAdapter;
-
+    : null;
   const runtimeFromModule = runtimeModule?.createRuntimeApi
     ? await runtimeModule.createRuntimeApi(runtimeContext)
-    : runtimeModule?.runtimeApi;
+    : runtimeModule?.runtimeApi ?? null;
+
   const runtime =
-    runtimeFromModule ?? createPlatformCompatRuntimeFromConnectorAdapter(definition, normalizedAdapter);
+    runtimeFromModule ??
+    (bindingSupport.canCreateRuntime
+      ? createPlatformCompatRuntimeFromBindingContract(definition, pack.contract)
+      : normalizedRuntimeModuleAdapter
+        ? createPlatformCompatRuntimeFromConnectorAdapter(
+            definition,
+            normalizedRuntimeModuleAdapter
+          )
+        : null);
+  if (!runtime) {
+    throw buildPlatformPackCompatibilityError(
+      pack,
+      definition,
+      bindingSupport.reasonCodes
+    );
+  }
   validateRuntimeApiCoverage(runtime, pack.contract, pack.runtimePath);
-  const authBindingProvider = runtimeModule?.createAuthBindingProvider
-    ? (await runtimeModule.createAuthBindingProvider(runtimeContext)) ?? null
-    : runtimeModule?.authBindingProvider ?? null;
-  const bindingProvider = runtimeModule?.createBindingProvider
-    ? (await runtimeModule.createBindingProvider(runtimeContext)) ?? null
-    : runtimeModule?.bindingProvider ?? null;
+
+  const adapter =
+    normalizedRuntimeModuleAdapter ??
+    (runtimeFromModule
+      ? createPlatformConnectorAdapterFromRuntimeApi(definition, runtimeFromModule, {
+          platformId: pack.contract.platform.platformId,
+        })
+      : bindingSupport.canCreateAdapter
+        ? createPlatformConnectorAdapterFromBindingContract(definition, pack.contract)
+        : null);
+  if (!adapter) {
+    throw buildPlatformPackCompatibilityError(
+      pack,
+      definition,
+      bindingSupport.reasonCodes
+    );
+  }
 
   return {
-    adapter: normalizedAdapter,
+    adapter,
     runtime,
     authBindingProvider,
     bindingProvider,
+    runtimeAdapter: runtimeFromModule
+      ? 'platformPackRuntime'
+      : bindingSupport.canCreateRuntime
+        ? 'bindingContract'
+        : 'connectorAdapterCompat',
+    connectorAdapterMode: normalizedRuntimeModuleAdapter
+      ? 'runtimeModule'
+      : runtimeFromModule
+        ? 'runtimeApiBridge'
+        : bindingSupport.canCreateAdapter
+          ? 'bindingContract'
+          : 'connectorAdapter',
   };
 }
 
@@ -1228,7 +1572,8 @@ function buildCompatRegistration(
   pack: ParsedPlatformPack,
   definition: PlatformConnectorDefinition,
   runtime: PlatformCompatRuntimeApi,
-  runtimeAdapter: string
+  runtimeAdapter: PlatformPackResolvedRuntimeMode,
+  connectorAdapterMode: PlatformPackResolvedAdapterMode
 ): BuiltinPlatformCompatRegistration {
   return {
     platformId: pack.contract.platform.platformId,
@@ -1239,6 +1584,7 @@ function buildCompatRegistration(
     source: 'pack',
     metadata: {
       runtimeAdapter,
+      connectorAdapterMode,
       connectorId: definition.connectorId,
       platformPackId: pack.manifest.metadata.id,
       platformPackVersion: pack.manifest.metadata.version,
@@ -1320,6 +1666,22 @@ async function registerInstalledPlatformPackRecord(
   record: InstalledPlatformPackRecord
 ): Promise<PlatformPackRegistrationRecord | null> {
   if (!(await areInstalledPlatformPackArtifactsPresent(record))) {
+    recordPlatformPackReadinessDiagnostic({
+      code: 'hydrate.artifacts-missing',
+      severity: 'error',
+      phase: 'hydrate',
+      connectorId: record.connectorId,
+      packId: record.packId,
+      packVersion: record.packVersion,
+      sourceType: record.sourceType,
+      source: buildInstalledPackSource(record),
+      message: `Installed platform pack artifacts are missing for ${record.connectorId}.`,
+      fields: {
+        runtimePath: record.runtimePath,
+        iconPath: record.iconPath,
+        sidecarPath: record.sidecarPath ?? null,
+      },
+    });
     removePlatformPackRegistration(record.connectorId);
     return null;
   }
@@ -1330,6 +1692,7 @@ async function registerInstalledPlatformPackRecord(
     source: buildInstalledPackSource(record),
     hostRuntimeSupport,
     installedAtMs: record.installedAtMs,
+    sourceType: record.sourceType,
   });
 }
 
@@ -1355,6 +1718,21 @@ async function refreshInstalledPlatformPackRegistrationsFromStore(): Promise<voi
       try {
         await registerInstalledPlatformPackRecord(record);
       } catch (error) {
+        recordPlatformPackReadinessDiagnostic({
+          code: 'hydrate.registration-failed',
+          severity: 'error',
+          phase: 'hydrate',
+          connectorId: record.connectorId,
+          packId: record.packId,
+          packVersion: record.packVersion,
+          sourceType: record.sourceType,
+          source: buildInstalledPackSource(record),
+          message: readMusicPlatformDiagnosticErrorMessage(error),
+          fields: {
+            runtimePath: record.runtimePath,
+            sidecarPath: record.sidecarPath ?? null,
+          },
+        });
         telemetry.warn('music-platform.pack.store-registration.failed', {
           message: readMusicPlatformDiagnosticErrorMessage(error),
           fields: {
@@ -1429,7 +1807,8 @@ function registerPlatformPackRuntimeArtifacts(
   hostRuntimeSupport: PlatformPackHostRuntimeSupport | null,
   options: {
     source?: string;
-    runtimeAdapter: string;
+    runtimeAdapter: PlatformPackResolvedRuntimeMode;
+    connectorAdapterMode: PlatformPackResolvedAdapterMode;
     installedAtMs?: number;
   }
 ): PlatformPackRegistrationRecord {
@@ -1471,7 +1850,8 @@ function registerPlatformPackRuntimeArtifacts(
     pack,
     definition,
     runtime,
-    options.runtimeAdapter
+    options.runtimeAdapter,
+    options.connectorAdapterMode
   );
   registerPlatformCompatRegistrationForConnector(compatRegistration);
   return upsertPlatformPackRecord(
@@ -1489,25 +1869,61 @@ async function installParsedPlatformPack(
     source?: string;
     hostRuntimeSupport?: PlatformPackHostRuntimeSupport | null;
     installedAtMs?: number;
+    sourceType?: InstalledPlatformPackSourceType | null;
   } = {}
 ): Promise<PlatformPackRegistrationRecord> {
+  const hostRuntimeSupport = options.hostRuntimeSupport ?? null;
   const definition = buildDefinitionFromPack(pack);
-  const { adapter, runtime, authBindingProvider, bindingProvider } =
-    await resolveAdapterAndRuntime(pack, definition);
-  return registerPlatformPackRuntimeArtifacts(
-    pack,
-    definition,
-    adapter,
-    runtime,
-    authBindingProvider,
-    bindingProvider,
-    options.hostRuntimeSupport ?? null,
-    {
+
+  try {
+    const {
+      adapter,
+      runtime,
+      authBindingProvider,
+      bindingProvider,
+      runtimeAdapter,
+      connectorAdapterMode,
+    } = await resolveAdapterAndRuntime(pack, definition, hostRuntimeSupport);
+    const registration = registerPlatformPackRuntimeArtifacts(
+      pack,
+      definition,
+      adapter,
+      runtime,
+      authBindingProvider,
+      bindingProvider,
+      hostRuntimeSupport,
+      {
+        source: options.source,
+        runtimeAdapter,
+        connectorAdapterMode,
+        installedAtMs: options.installedAtMs,
+      }
+    );
+    clearPlatformPackReadinessDiagnostics({
+      connectorId: definition.connectorId,
+      packId: pack.manifest.metadata.id,
       source: options.source,
-      runtimeAdapter: 'platformPackRuntime',
-      installedAtMs: options.installedAtMs,
-    }
-  );
+    });
+    return registration;
+  } catch (error) {
+    recordPlatformPackReadinessDiagnostic({
+      code: 'register.failed',
+      severity: 'error',
+      phase: 'register',
+      connectorId: definition.connectorId,
+      packId: pack.manifest.metadata.id,
+      packVersion: pack.manifest.metadata.version,
+      sourceType: options.sourceType ?? null,
+      source: options.source,
+      message: readMusicPlatformDiagnosticErrorMessage(error),
+      fields: {
+        platformId: pack.contract.platform.platformId,
+        runtimePath: pack.runtimePath,
+        sidecarPath: pack.sidecarPath ?? null,
+      },
+    });
+    throw error;
+  }
 }
 
 async function bootstrapBuiltinPlatformPacksFromAssets(): Promise<void> {
@@ -1516,6 +1932,7 @@ async function bootstrapBuiltinPlatformPacksFromAssets(): Promise<void> {
     if (platformPackRegistry.has(asset.connectorId)) continue;
     await installParsedPlatformPack(asset.pack, {
       source: asset.source,
+      sourceType: 'builtin',
     });
   }
 }
@@ -2001,9 +2418,31 @@ export async function installPlatformPackFromZipBytes(
   bytes: Uint8Array,
   options: { source?: string } = {}
 ): Promise<PlatformPackRegistrationRecord> {
-  const pack = await parsePlatformPackFromZipBytes(bytes);
+  let pack: ParsedPlatformPack;
+  try {
+    pack = await parsePlatformPackFromZipBytes(bytes);
+  } catch (error) {
+    recordPlatformPackReadinessDiagnostic({
+      code: 'install.parse-failed',
+      severity: 'error',
+      phase: 'install',
+      source: options.source ?? null,
+      sourceType: isTauriRuntime() ? 'external' : null,
+      message: readMusicPlatformDiagnosticErrorMessage(error),
+    });
+    throw error;
+  }
+
+  clearPlatformPackReadinessDiagnostics({
+    connectorId: pack.manifest.connector.connectorId,
+    packId: pack.manifest.metadata.id,
+    source: options.source,
+  });
   if (!isTauriRuntime()) {
-    return await installParsedPlatformPack(pack, options);
+    return await installParsedPlatformPack(pack, {
+      ...options,
+      sourceType: options.source ? 'external' : null,
+    });
   }
 
   const storedRecord = await installPlatformPackToStorage(pack, {
@@ -2037,9 +2476,24 @@ export function listPlatformPackRegistrations(): PlatformPackRegistrationRecord[
   return Array.from(platformPackRegistry.values()).map(cloneRecord);
 }
 
+export function listBuiltinPlatformPackAssets(): BuiltinPlatformPackAssetDefinition[] {
+  return builtinPlatformPackAssets.map(cloneBuiltinPlatformPackAssetDefinition);
+}
+
+export function listPlatformPackReadinessDiagnostics(): PlatformPackReadinessDiagnostic[] {
+  return Array.from(platformPackReadinessDiagnostics.values())
+    .map(clonePlatformPackReadinessDiagnostic)
+    .sort((left, right) => right.ts - left.ts);
+}
+
 export function getPlatformPackStartupHealth(): PlatformPackStartupHealth {
   ensureBuiltinPlatformPackRegistrationsInitialized();
   return clonePlatformPackStartupHealth(platformPackStartupHealth);
+}
+
+export async function inspectBuiltinPlatformPackStoreState(): Promise<BuiltinPlatformPackStoreInspection> {
+  ensureBuiltinPlatformPackRegistrationsInitialized();
+  return cloneBuiltinPlatformPackStoreInspection(await inspectBuiltinPlatformPackStore());
 }
 
 export function subscribePlatformPackStartupHealth(

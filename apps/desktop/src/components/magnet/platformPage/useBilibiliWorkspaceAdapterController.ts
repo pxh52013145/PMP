@@ -1,64 +1,29 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 
-import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import type { Track } from '../../../services/audio';
 import type { IAudioService } from '../../../services/audio/types';
 import {
   BILIBILI_CONNECTOR_ID,
   buildBilibiliResourceIdentity,
-  createDefaultBilibiliPlaybackQualityOptions,
   isBilibiliVideoSourceLocator,
-  listBilibiliPlaybackQualities,
-  mergeBilibiliPlaybackQualityOptions,
   normalizeBilibiliPlaybackQualityKey,
   type BilibiliFavoriteFolderItem,
   type BilibiliFavoriteResourceItem,
-  type BilibiliQualityBadge,
-  type BilibiliPlaybackQualityOption,
   type BilibiliPreparedPlayback,
+  type BilibiliQualityBadge,
   type PlatformConnectorAuthState,
   type PlatformConnectorId,
 } from '../../../modules/music-platform';
-import {
-  getMusicPlatformDurationMs,
-  getMusicPlatformNowMs,
-  readMusicPlatformDiagnosticErrorMessage,
-  warnOnSlowMusicPlatformOperation,
-} from '../../../modules/music-platform/platformDiagnostics';
-import { usePersistentSetting } from '../../../modules/storage';
-import type { BilibiliWorkspaceProps } from './BilibiliWorkspace';
 import type { BilibiliPlaybackSettingsContentProps } from './BilibiliPlaybackSettingsModal';
+import type { BilibiliWorkspaceProps } from './BilibiliWorkspace';
+import { useBilibiliPlaybackQuality, resolveBilibiliPlaybackQualityLabelKey } from './useBilibiliPlaybackQuality';
 import { useBilibiliResourceBrowser } from './useBilibiliResourceBrowser';
 import { useBilibiliResourceContextMenu } from './useBilibiliResourceContextMenu';
 import { useBilibiliResourceEnhancer } from './useBilibiliResourceEnhancer';
 import { useBilibiliResourcePlaybackActions } from './useBilibiliResourcePlaybackActions';
+import { useBilibiliResourceViewport } from './useBilibiliResourceViewport';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
-
-const BILIBILI_PLAYBACK_QUALITY_PREFERENCE_KEY =
-  'music-platform.bilibili.playback-quality-preference';
-
-const telemetry = getTelemetryLogger('magnet.platform', 'useBilibiliWorkspaceAdapterController');
-
-function toBilibiliQualityLabelKey(key: string): string {
-  const normalized = key.trim().toLowerCase();
-  switch (normalized) {
-    case 'auto':
-      return 'magnet.platform.bilibili.quality.option.auto';
-    case '64k':
-      return 'magnet.platform.bilibili.quality.option.64k';
-    case '132k':
-      return 'magnet.platform.bilibili.quality.option.132k';
-    case '192k':
-      return 'magnet.platform.bilibili.quality.option.192k';
-    case 'dolby':
-      return 'magnet.platform.bilibili.quality.option.dolby';
-    case 'hires':
-      return 'magnet.platform.bilibili.quality.option.hires';
-    default:
-      return 'magnet.platform.bilibili.quality.option.auto';
-  }
-}
 
 function toBilibiliQualityBadgeLabelKey(badge: BilibiliQualityBadge): string {
   switch (badge) {
@@ -114,6 +79,7 @@ function buildTrackFromPreparedPlayback(
 
 export interface UseBilibiliWorkspaceAdapterControllerParams {
   workspaceVisible: boolean;
+  workspaceDataEnabled?: boolean;
   activeWorkspaceConnectorId: string | null;
   activeVideoConnectorId: string | null;
   activeVideoInstanceId: string | null;
@@ -153,6 +119,7 @@ export function useBilibiliWorkspaceAdapterController(
 ): BilibiliWorkspaceAdapterControllerResult {
   const {
     workspaceVisible,
+    workspaceDataEnabled = true,
     activeWorkspaceConnectorId,
     activeVideoConnectorId,
     activeVideoInstanceId,
@@ -166,23 +133,12 @@ export function useBilibiliWorkspaceAdapterController(
 
   const workspaceConnectorId =
     normalizeWorkspaceConnectorId(activeVideoConnectorId) ?? BILIBILI_CONNECTOR_ID;
-  const bilibiliWorkspaceActive =
-    workspaceVisible && activeWorkspaceConnectorId === workspaceConnectorId;
+  const controllerVisible =
+    workspaceVisible &&
+    Boolean(activeVideoConnectorId) &&
+    activeWorkspaceConnectorId === workspaceConnectorId;
+  const bilibiliWorkspaceActive = controllerVisible && workspaceDataEnabled;
   const bilibiliAuthorized = activeVideoAuthState === 'authorized';
-
-  const [playbackQualityHint, setPlaybackQualityHint] = usePersistentSetting<string>(
-    BILIBILI_PLAYBACK_QUALITY_PREFERENCE_KEY,
-    'auto',
-    { format: 'string' }
-  );
-  const [playbackQualityLoading, setPlaybackQualityLoading] = useState(false);
-  const [playbackQualityProbeLocator, setPlaybackQualityProbeLocator] = useState<string | null>(null);
-  const [playbackQualityOptions, setPlaybackQualityOptions] = useState<BilibiliPlaybackQualityOption[]>(
-    () => createDefaultBilibiliPlaybackQualityOptions()
-  );
-
-  const resourceViewportRef = useRef<HTMLDivElement>(null);
-  const resourceLoadMoreSentinelRef = useRef<HTMLDivElement>(null);
 
   const {
     folderLoading,
@@ -209,7 +165,7 @@ export function useBilibiliWorkspaceAdapterController(
     loadMoreBilibiliResources,
     searchBilibiliResourceByLookupInput,
   } = useBilibiliResourceBrowser({
-    workspaceVisible,
+    workspaceVisible: bilibiliWorkspaceActive,
     workspaceConnectorId,
     bilibiliInstanceId: activeVideoInstanceId,
     bilibiliAuthorized,
@@ -221,13 +177,8 @@ export function useBilibiliWorkspaceAdapterController(
     [bilibiliFolders, selectedFolderId]
   );
 
-  const normalizedPlaybackQualityHint = useMemo(
-    () => normalizeBilibiliPlaybackQualityKey(playbackQualityHint),
-    [playbackQualityHint]
-  );
-
   const qualityProbeSourceLocator = useMemo(() => {
-    if (!bilibiliAuthorized) return null;
+    if (!bilibiliWorkspaceActive || !bilibiliAuthorized) return null;
     const bvidLocator = bvidSearchResult?.sourceLocator?.trim();
     if (bvidLocator && isBilibiliVideoSourceLocator(bvidLocator)) {
       return bvidLocator;
@@ -237,18 +188,21 @@ export function useBilibiliWorkspaceAdapterController(
       isBilibiliVideoSourceLocator(item.sourceLocator)
     );
     return candidate?.sourceLocator?.trim() || null;
-  }, [bilibiliAuthorized, bvidSearchResult?.sourceLocator, filteredBilibiliResources]);
+  }, [
+    bilibiliAuthorized,
+    bilibiliWorkspaceActive,
+    bvidSearchResult?.sourceLocator,
+    filteredBilibiliResources,
+  ]);
 
-  const availablePlaybackQualityLabel = useMemo(() => {
-    const availableKeys = playbackQualityOptions.filter((item) => item.available).map((item) => item.key);
-    if (availableKeys.length === 0) return t('magnet.platform.bilibili.quality.none');
-    return availableKeys.map((key) => t(toBilibiliQualityLabelKey(key))).join(' / ');
-  }, [playbackQualityOptions, t]);
-
-  const preferredPlaybackQualityLabel = useMemo(
-    () => t(toBilibiliQualityLabelKey(normalizedPlaybackQualityHint)),
-    [normalizedPlaybackQualityHint, t]
-  );
+  const playbackQuality = useBilibiliPlaybackQuality({
+    controllerVisible,
+    workspaceConnectorId,
+    activeVideoInstanceId,
+    bilibiliAuthorized,
+    qualityProbeSourceLocator,
+    t,
+  });
 
   const { resourceCoverUrlMap, resourceQualityTagMap } = useBilibiliResourceEnhancer({
     activeBilibiliInstanceId: activeVideoInstanceId,
@@ -275,8 +229,8 @@ export function useBilibiliWorkspaceAdapterController(
     workspaceConnectorId,
     activeBilibiliInstanceId: activeVideoInstanceId,
     audioService,
-    normalizedPlaybackQualityHint,
-    preferredQualityLabel: preferredPlaybackQualityLabel,
+    normalizedPlaybackQualityHint: playbackQuality.normalizedPlaybackQualityHint,
+    preferredQualityLabel: playbackQuality.preferredPlaybackQualityLabel,
     targetPlaylistId: selectedLocalPlaylistId,
     t,
     setResourceError,
@@ -284,99 +238,16 @@ export function useBilibiliWorkspaceAdapterController(
     buildTrackFromPreparedPlayback,
   });
 
-  const refreshPlaybackQualityOptions = useCallback(async (sourceLocator: string) => {
-    const normalizedSourceLocator = sourceLocator.trim();
-    if (!normalizedSourceLocator) return;
-
-    const startedAtMs = getMusicPlatformNowMs();
-    setPlaybackQualityLoading(true);
-    try {
-      const options = await listBilibiliPlaybackQualities(
-        normalizedSourceLocator,
-        activeVideoInstanceId
-      );
-      setPlaybackQualityOptions(mergeBilibiliPlaybackQualityOptions(options));
-      setPlaybackQualityProbeLocator(normalizedSourceLocator);
-      warnOnSlowMusicPlatformOperation({
-        logger: telemetry,
-        event: 'platform.runtime.bilibili.quality-options-load.slow',
-        startedAtMs,
-        fields: {
-          connectorId: workspaceConnectorId,
-          instanceIdPresent: Boolean(activeVideoInstanceId),
-          sourceLocatorPresent: true,
-          optionCount: options.length,
-        },
-      });
-    } catch (error) {
-      telemetry.warn('platform.runtime.bilibili.quality-options-load.failed', {
-        message: readMusicPlatformDiagnosticErrorMessage(error),
-        fields: {
-          connectorId: workspaceConnectorId,
-          instanceIdPresent: Boolean(activeVideoInstanceId),
-          durationMs: getMusicPlatformDurationMs(startedAtMs),
-        },
-      });
-      setPlaybackQualityOptions(createDefaultBilibiliPlaybackQualityOptions());
-    } finally {
-      setPlaybackQualityLoading(false);
-    }
-  }, [activeVideoInstanceId, workspaceConnectorId]);
-
-  useEffect(() => {
-    const supportsResourceAutoLoad = Boolean(selectedFolderId) || resourceSourceKey?.startsWith('search:');
-    if (!supportsResourceAutoLoad || !resourcePage?.hasMore) return;
-    const rootElement = resourceViewportRef.current;
-    const sentinelElement = resourceLoadMoreSentinelRef.current;
-    if (!rootElement || !sentinelElement) return;
-    if (rootElement.scrollHeight <= rootElement.clientHeight + 1) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (!entries.some((entry) => entry.isIntersecting)) return;
-        if (resourceLoading || resourceLoadingMore) return;
-        void loadMoreBilibiliResources();
-      },
-      {
-        root: rootElement,
-        rootMargin: '220px 0px',
-        threshold: 0.01,
-      }
-    );
-
-    observer.observe(sentinelElement);
-    return () => observer.disconnect();
-  }, [
-    filteredBilibiliResources.length,
-    loadMoreBilibiliResources,
+  const { resourceViewportRef, resourceLoadMoreSentinelRef } = useBilibiliResourceViewport({
+    workspaceVisible: bilibiliWorkspaceActive,
+    selectedFolderId,
+    resourceSourceKey,
+    resourcePageHasMore: resourcePage?.hasMore === true,
     resourceLoading,
     resourceLoadingMore,
-    resourcePage?.hasMore,
-    resourceSourceKey,
-    selectedFolderId,
-  ]);
-
-  useLayoutEffect(() => {
-    if (!resourceSourceKey) return;
-    const viewportElement = resourceViewportRef.current;
-    if (!viewportElement) return;
-    viewportElement.scrollTop = 0;
-    viewportElement.scrollLeft = 0;
-  }, [resourceSourceKey]);
-
-  useEffect(() => {
-    if (!qualityProbeSourceLocator) {
-      setPlaybackQualityProbeLocator(null);
-      setPlaybackQualityOptions(createDefaultBilibiliPlaybackQualityOptions());
-      return;
-    }
-    if (playbackQualityProbeLocator === qualityProbeSourceLocator) return;
-    void refreshPlaybackQualityOptions(qualityProbeSourceLocator);
-  }, [
-    playbackQualityProbeLocator,
-    qualityProbeSourceLocator,
-    refreshPlaybackQualityOptions,
-  ]);
+    filteredResourceCount: filteredBilibiliResources.length,
+    loadMoreBilibiliResources,
+  });
 
   const {
     resourceContextMenu,
@@ -385,7 +256,7 @@ export function useBilibiliWorkspaceAdapterController(
   } = useBilibiliResourceContextMenu({
     t,
     preparingResourceId,
-    normalizedPlaybackQualityHint,
+    normalizedPlaybackQualityHint: playbackQuality.normalizedPlaybackQualityHint,
     lyricResolvingId,
     onPlay: (item) => {
       void handlePlayResource(item);
@@ -423,8 +294,8 @@ export function useBilibiliWorkspaceAdapterController(
   }, [
     refreshBilibiliResources,
     resourceFilterQuery,
-    searchBilibiliResourceByLookupInput,
     searchBilibiliHomepageResources,
+    searchBilibiliResourceByLookupInput,
     selectedFolderId,
   ]);
 
@@ -472,19 +343,17 @@ export function useBilibiliWorkspaceAdapterController(
   const bilibiliSettingsProps: BilibiliPlaybackSettingsContentProps = {
     t,
     bilibiliAuthorized,
-    normalizedPlaybackQualityHint,
-    playbackQualityOptions,
-    playbackQualityLoading,
+    normalizedPlaybackQualityHint: playbackQuality.normalizedPlaybackQualityHint,
+    playbackQualityOptions: playbackQuality.playbackQualityOptions,
+    playbackQualityLoading: playbackQuality.playbackQualityLoading,
     qualityProbeSourceLocator,
-    availablePlaybackQualityLabel,
+    availablePlaybackQualityLabel: playbackQuality.availablePlaybackQualityLabel,
     qualityLabelForKey: (qualityKey) =>
-      t(toBilibiliQualityLabelKey(normalizeBilibiliPlaybackQualityKey(qualityKey))),
-    onQualityHintChange: (qualityKey) => {
-      setPlaybackQualityHint(normalizeBilibiliPlaybackQualityKey(qualityKey));
-    },
+      t(resolveBilibiliPlaybackQualityLabelKey(normalizeBilibiliPlaybackQualityKey(qualityKey))),
+    onQualityHintChange: playbackQuality.handleQualityHintChange,
     onRefreshQualityOptions: () => {
       if (!qualityProbeSourceLocator) return;
-      void refreshPlaybackQualityOptions(qualityProbeSourceLocator);
+      void playbackQuality.refreshPlaybackQualityOptions(qualityProbeSourceLocator);
     },
   };
 
@@ -501,7 +370,7 @@ export function useBilibiliWorkspaceAdapterController(
     bvidSearchError,
     filteredBilibiliResources,
     preparingResourceId,
-    normalizedPlaybackQualityHint,
+    normalizedPlaybackQualityHint: playbackQuality.normalizedPlaybackQualityHint,
     resourceCoverUrlMap,
     resourceQualityTagMap,
     resourceViewportRef,

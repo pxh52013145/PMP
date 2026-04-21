@@ -86,13 +86,22 @@ export {
 export {
   awaitBuiltinPlatformPackRegistrationsReady,
   getPlatformPackStartupHealth,
+  inspectBuiltinPlatformPackStoreState,
   installPlatformPackFromFile,
   installPlatformPackFromZipBytes,
+  listBuiltinPlatformPackAssets,
+  listPlatformPackReadinessDiagnostics,
   listPlatformPackRegistrations,
   removePlatformPackRegistration,
   subscribePlatformPackStartupHealth,
   subscribePlatformPackRegistrations,
+  type BuiltinPlatformPackAssetDefinition,
+  type BuiltinPlatformPackStoreInspection,
+  type BuiltinPlatformPackStoreInspectionEntry,
   type PlatformPackBootStage,
+  type PlatformPackReadinessDiagnostic,
+  type PlatformPackReadinessDiagnosticPhase,
+  type PlatformPackReadinessDiagnosticSeverity,
   type PlatformPackRegistrationRecord,
   type PlatformPackStartupHealth,
   type PlatformPackStartupStageRecord,
@@ -106,6 +115,18 @@ export {
   resolvePreferredPlatformRuntimeDescriptorForConnector,
   type PlatformRuntimeDescriptor,
 } from './platformRuntimeDescriptor';
+
+export {
+  inspectPlatformPackDoctor,
+  type PlatformPackDoctorConnectorReport,
+  type PlatformPackDoctorFlowStatus,
+  type PlatformPackDoctorIssue,
+  type PlatformPackDoctorReport,
+  type PlatformPackDoctorRuntimeBucket,
+  type PlatformPackDoctorRuntimeBucketCoverage,
+  type PlatformPackDoctorSeverity,
+  type PlatformPackDoctorStatus,
+} from './platformPackDoctor';
 
 export {
   createDefaultPlatformLoginRegistry,

@@ -94,9 +94,13 @@ vi.mock('./connectorAuth', () => ({
   }),
 }));
 
-vi.mock('./bindingRuntime', () => ({
-  invokePlatformRuntimeBinding: bindingRuntimeMock.invokePlatformRuntimeBinding,
-}));
+vi.mock('./bindingRuntime', async () => {
+  const actual = await vi.importActual<typeof import('./bindingRuntime')>('./bindingRuntime');
+  return {
+    ...actual,
+    invokePlatformRuntimeBinding: bindingRuntimeMock.invokePlatformRuntimeBinding,
+  };
+});
 
 vi.mock('./platformPackSidecarBridge', () => ({
   invokePlatformPackSidecar: sidecarBridgeMock.invokePlatformPackSidecar,
@@ -285,6 +289,16 @@ function buildBuiltinPackIndexPayload(records: Array<Record<string, unknown>>): 
   return {
     packs,
   };
+}
+
+const EXTERNAL_PROVIDER_ONLY_PACK_BASE64 =
+  'UEsDBBQAAAAIAM98lVwTuGQCxgAAAKUBAAANAAAAbWFuaWZlc3QuanNvbnWPzQ6CMBCE7z4F4ayNXn0DY/TofdOupgIttAtKDO/utvwFoqe2821nZj+bJEnv1hVAN3ReW5Mek/Qg9uk2EGpLDEKZA4WpXQky61GBBAoIGAcTVrQKo/gmdAbyXVUVtdcyTjM1UESrldwsUjmX5S4GSGsMSrJuTpikU4yanmLsJ1buSntG7fV39su6zPNGeNYmGv7jF6vif4VKSyBUc0s05NpFQ3IgaagX7+LpecHB09WGdN9muDIeoeYvgYRT+OYRYzbdF1BLAwQUAAAACADPfJVckmpDCkkBAAAFAwAADQAAAGNvbnRyYWN0Lmpzb25tUrtuwzAM3PMVgefGaNdubaegSIcM3RmJcYjIoixRaY0i/17J8atuJkG8w92Jup/Vel0otuJBySf6QGyL53XxVD4WDxlzBuTIvk7DzJ1NtjoTm6aOgVRHTqCmkPD2A2q8gwYBIbVNfhmkdJbhUo1odI69hF00QlubyFZllSOYgIly7QJBlNMUxnBFdsf65uYHKY9NJI/hjflMo8YCfFGKo5XuHXN8yLHHY2JlM/FxCqDAwYEMCWH4s5XWUJA8mosd4cKepKPO5xrItHtUXNdodVoL2yUlIHiV7efDJkKybhdTCxeqOpF/GiJkq6W0g2pKNK3W0StZ3fP7h/X7Lk4cpHS1K9OvWVTCftNBvaKhgwefc03MoSkb6j+zHFijJX4L2r50veGofyvYeB3lykWrvtifgwOF7yn8ndaN+NATjZoUCOoux+r6C1BLAwQUAAAACADPfJVcuxFkSrkAAABTAQAACgAAAHJ1bnRpbWUuanOlzr0OgjAQAOCdp7gNTYiJK8ZBnRxMTIwPUOmpjdiD65WIhHe3gBKdndr7/yJ8FMQCGVknoLxc18ZqYy97pspoZFhCE0FXt5gJ8VanEI/RrMiVnInvs7K8e2eyOAnNytU2gwvKwarCXUkm034JAKN4ttD0lw6iBMO27k9snqjjBHyhQ1avZOdSmEO7CHNtEoX3R3r6X5mbEyuu0zdtQDM6yivcUIW8cg7lyPmo//LTLQVhjwOwJ36cL1BLAwQUAAAACADPfJVcVQF81ysAAAAqAAAACAAAAGljb24uc3ZnsykuS1eoyM3JK7ZVyigpKbDS1y8vL9crN9bLL0rXNzIwMNAHqlBS0LcDAFBLAQIUABQAAAAIAM98lVwTuGQCxgAAAKUBAAANAAAAAAAAAAAAAAAAAAAAAABtYW5pZmVzdC5qc29uUEsBAhQAFAAAAAgAz3yVXJJqQwpJAQAABQMAAA0AAAAAAAAAAAAAAAAA8QAAAGNvbnRyYWN0Lmpzb25QSwECFAAUAAAACADPfJVcuxFkSrkAAABTAQAACgAAAAAAAAAAAAAAAABlAgAAcnVudGltZS5qc1BLAQIUABQAAAAIAM98lVxVAXzXKwAAACoAAAAIAAAAAAAAAAAAAAAAAEYDAABpY29uLnN2Z1BLBQYAAAAABAAEAOQAAACXAwAAAAA=';
+
+const EXTERNAL_BROKEN_PACK_BASE64 =
+  'UEsDBBQAAAAIAM98lVwx8VDKxQAAAKMBAAANAAAAbWFuaWZlc3QuanNvbnWPzQ6CMBCE7z4F4SyNXn0DY/TofW1XU5EW2gVDDO/utvwFoqe2821nZj+bJEnv1hVAV3ReW5MeknQvduk2EGpLDEL5AgpTWQky71GBBAoIGAcTVrQKozdnczRZVRW11zLOMjNQRKOV3CwyOZXlLtpLawxKsm72n6RjDJqeYmwnVu5Ke0bt5Xf227rc8z540iYa/uNnq+J/hUpLIFRzSzTk2kVDciBpqBfv4ul5wcHT1YZ032a4Mh6h5i+BhFP45hFjNt0XUEsDBBQAAAAIAM98lVySakMKSQEAAAUDAAANAAAAY29udHJhY3QuanNvbm1Su27DMAzc8xWB58Zo125tp6BIhwzdGYlxiMiiLFFpjSL/Xsnxq24mQbzD3Ym6n9V6XSi24kHJJ/pAbIvndfFUPhYPGXMG5Mi+TsPMnU22OhObpo6BVEdOoKaQ8PYDaryDBgEhtU1+GaR0luFSjWh0jr2EXTRCW5vIVmWVI5iAiXLtAkGU0xTGcEV2x/rm5gcpj00kj+GN+UyjxgJ8UYqjle4dc3zIscdjYmUz8XEKoMDBgQwJYfizldZQkDyaix3hwp6ko87nGsi0e1Rc12h1WgvbJSUgeJXt58MmQrJuF1MLF6o6kX8aImSrpbSDako0rdbRK1nd8/uH9fsuThykdLUr069ZVMJ+00G9oqGDB59zTcyhKRvqP7McWKMlfgvavnS94ah/K9h4HeXKRau+2J+DA4XvKfyd1o340BONmhQI6i7H6voLUEsDBBQAAAAIAM98lVxFquC8FAAAABIAAAAKAAAAcnVudGltZS5qc0utKMgvKlFISU1LLM0pUaiutQYAUEsDBBQAAAAIAM98lVxVAXzXKwAAACoAAAAIAAAAaWNvbi5zdmezKS5LV6jIzckrtlXKKCkpsNLXLy8v1ys31ssvStc3MjAw0AeqUFLQtwMAUEsBAhQAFAAAAAgAz3yVXDHxUMrFAAAAowEAAA0AAAAAAAAAAAAAAAAAAAAAAG1hbmlmZXN0Lmpzb25QSwECFAAUAAAACADPfJVckmpDCkkBAAAFAwAADQAAAAAAAAAAAAAAAADwAAAAY29udHJhY3QuanNvblBLAQIUABQAAAAIAM98lVxFquC8FAAAABIAAAAKAAAAAAAAAAAAAAAAAGQCAABydW50aW1lLmpzUEsBAhQAFAAAAAgAz3yVXFUBfNcrAAAAKgAAAAgAAAAAAAAAAAAAAAAAoAIAAGljb24uc3ZnUEsFBgAAAAAEAAQA5AAAAPECAAAAAA==';
+
+function decodePackArchive(base64: string): Uint8Array {
+  return new Uint8Array(Buffer.from(base64, 'base64'));
 }
 
 function resetBootTestEnvironment(
@@ -785,5 +799,123 @@ describe('platformPackRegistry builtin pack boot', () => {
 
     expect(['running', 'ready']).toContain(health.state);
     expect(health.recentStages.some((entry) => entry.stage === 'background-reconcile')).toBe(true);
+  });
+});
+
+describe('platformPackRegistry external pack readiness', () => {
+  beforeEach(() => {
+    resetBootTestEnvironment();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.clear();
+    delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    globalThis.Blob = OriginalBlob;
+    Object.defineProperty(globalThis, 'crypto', {
+      configurable: true,
+      value: originalCrypto,
+    });
+    URL.createObjectURL = originalCreateObjectUrl;
+    URL.revokeObjectURL = originalRevokeObjectUrl;
+  });
+
+  it('hydrates provider-only external packs through the binding-contract runtime path', async () => {
+    const registry = await import('./platformPackRegistry');
+    const bytes = decodePackArchive(EXTERNAL_PROVIDER_ONLY_PACK_BASE64);
+
+    const registration = await registry.installPlatformPackFromZipBytes(bytes, {
+      source: 'file:qqmusic.pmpp',
+    });
+
+    expect(registration.connectorId).toBe('connector.platform.qqmusic');
+    expect(registration.compat.metadata).toMatchObject({
+      runtimeAdapter: 'bindingContract',
+      connectorAdapterMode: 'bindingContract',
+      platformPackId: 'external-qqmusic',
+    });
+    expect((registration.compat.runtime as { metadata?: unknown }).metadata).toMatchObject({
+      connectorId: 'connector.platform.qqmusic',
+      source: 'binding-contract-runtime',
+    });
+
+    const result = await registration.compat.runtime.library?.resolveCoverAssetUrl?.({
+      instanceId: 'qqmusic:builtin',
+      coverUrl: 'https://example.test/cover.jpg',
+    });
+    expect(result).toMatchObject({ ok: true });
+
+    const hostSupport = registry.resolvePlatformPackHostRuntimeSupport('connector.platform.qqmusic');
+    expect(hostSupport).toBeTruthy();
+
+    const authSnapshot = await hostSupport?.authBindingProvider?.getSnapshot({
+      instanceId: 'qqmusic:builtin',
+      options: {
+        bindingId: 'host.pmp.connector-auth',
+        connectorId: 'connector.platform.qqmusic',
+        displayName: 'qqmusic',
+        method: 'getSnapshot',
+      },
+    });
+    const providerLibrary = hostSupport?.apiBindingProvider?.library as
+      | {
+          resolveCoverAssetUrl?: (context: {
+            instanceId: string;
+            options: {
+              bindingId: string;
+              connectorId: string;
+              displayName: string;
+              method: string;
+              payload?: Record<string, unknown>;
+            };
+          }) => Promise<unknown>;
+        }
+      | undefined;
+    const providerResult = await providerLibrary?.resolveCoverAssetUrl?.({
+      instanceId: 'qqmusic:builtin',
+      options: {
+        bindingId: 'host.pmp.platform-instance.library',
+        connectorId: 'connector.platform.qqmusic',
+        displayName: 'qqmusic',
+        method: 'resolveCoverAssetUrl',
+        payload: {
+          coverUrl: 'https://example.test/provider-cover.jpg',
+        },
+      },
+    });
+
+    expect(authSnapshot).toMatchObject({
+      authState: 'authorized',
+      updatedAtMs: 1,
+    });
+    expect(providerResult).toMatchObject({
+      ok: true,
+    });
+    expect(registry.listPlatformPackReadinessDiagnostics()).toEqual([]);
+  });
+
+  it('records structured diagnostics when an external pack has no compatible runtime path', async () => {
+    const registry = await import('./platformPackRegistry');
+    const bytes = decodePackArchive(EXTERNAL_BROKEN_PACK_BASE64);
+
+    await expect(
+      registry.installPlatformPackFromZipBytes(bytes, {
+        source: 'file:broken-qqmusic.pmpp',
+      })
+    ).rejects.toThrow(/could not resolve a compatible runtime\/adapter path/i);
+
+    expect(registry.listPlatformPackRegistrations()).toEqual([]);
+    expect(registry.listPlatformPackReadinessDiagnostics()).toEqual([
+      expect.objectContaining({
+        code: 'register.failed',
+        phase: 'register',
+        severity: 'error',
+        connectorId: 'connector.platform.qqmusic',
+        packId: 'broken-qqmusic',
+        packVersion: '1.0.0',
+        sourceType: 'external',
+        source: 'file:broken-qqmusic.pmpp',
+      }),
+    ]);
   });
 });

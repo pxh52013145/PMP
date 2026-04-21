@@ -35,6 +35,8 @@
     "plugin:shell-surface:smoke": "node scripts/shell-surface-smoke.mjs",
     "plugin:platform:smoke": "node scripts/plugin-platform-smoke.mjs",
     "pack:platform": "node scripts/package-platform-pack.mjs",
+    "prepare:platform-packs": "node scripts/prepare-music-platform-packs.mjs --profile release",
+    "prepare:platform-packs:check": "node scripts/prepare-music-platform-packs.mjs --profile release --check",
     "test": "pnpm --filter @pixel-matrix/desktop test",
     "test:tauri:asio": "pnpm --filter @pixel-matrix/desktop test:tauri:asio",
     "hooks:install": "git config core.hooksPath .githooks",

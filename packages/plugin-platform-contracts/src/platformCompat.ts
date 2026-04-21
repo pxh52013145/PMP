@@ -12,6 +12,36 @@ export type PlatformCompatRuntimeAuthState =
 
 export type PlatformInstanceAuthState = 'empty' | 'authorizing' | 'authorized' | 'expired' | 'error';
 
+export const PLATFORM_COMPAT_PMP_SUPPORTED_BINDINGS = {
+  auth: 'host.pmp.connector-auth',
+  library: 'host.pmp.platform-instance.library',
+  recommendations: 'host.pmp.platform-instance.recommendations',
+  search: 'host.pmp.platform-instance.search',
+  quality: 'host.pmp.platform-instance.quality',
+  pages: 'host.pmp.platform-instance.pages',
+} as const;
+
+export type PlatformCompatPmpSupportedBindingBucket =
+  keyof typeof PLATFORM_COMPAT_PMP_SUPPORTED_BINDINGS;
+
+export type PlatformCompatPmpSupportedBindingId =
+  (typeof PLATFORM_COMPAT_PMP_SUPPORTED_BINDINGS)[PlatformCompatPmpSupportedBindingBucket];
+
+export const PLATFORM_COMPAT_PMP_SUPPORTED_BINDING_IDS = Object.freeze(
+  Object.values(PLATFORM_COMPAT_PMP_SUPPORTED_BINDINGS)
+) as readonly PlatformCompatPmpSupportedBindingId[];
+
+export function isPlatformCompatPmpSupportedBindingId(
+  value: unknown
+): value is PlatformCompatPmpSupportedBindingId {
+  return (
+    typeof value === 'string' &&
+    PLATFORM_COMPAT_PMP_SUPPORTED_BINDING_IDS.includes(
+      value as PlatformCompatPmpSupportedBindingId
+    )
+  );
+}
+
 export interface PlatformApiError {
   code:
     | 'AUTH_REQUIRED'

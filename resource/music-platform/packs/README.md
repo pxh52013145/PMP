@@ -16,14 +16,22 @@ Identity rules:
 4. Account identity comes from `instanceId`
 
 Runtime rules:
-1. `runtime.js` must export at least one runtime entry:
+1. `runtime.js` must export at least one compatible integration entry:
    - `createConnectorAdapter` or `connectorAdapter`
    - `createRuntimeApi` or `runtimeApi`
    - `createAuthBindingProvider` or `authBindingProvider`
    - `createBindingProvider` or `bindingProvider`
-2. Runtime coverage must match the API buckets declared by the contract
-3. The host executes runtime artifacts, not source trees. TS/Rust source may be shipped as extra resources, but the host must not depend on compiling them dynamically
-4. Standard pack runtime code should depend on the public runtime context and binding contract only. Host-private helper injections such as `createDefaultRuntimeApi` / `createDefaultAuthBindingProvider` / `createDefaultBindingProvider` are not part of the pack contract
+2. The host can synthesize the standard runtime path when the pack only exports binding providers, but only for the current PMP-supported binding ids:
+   - `host.pmp.connector-auth`
+   - `host.pmp.platform-instance.library`
+   - `host.pmp.platform-instance.recommendations`
+   - `host.pmp.platform-instance.search`
+   - `host.pmp.platform-instance.quality`
+   - `host.pmp.platform-instance.pages`
+3. Navigation/settings bindings are not part of the current synthesized host surface. Packs that reference other binding ids must bring their own runtime behavior and will show readiness diagnostics in host tooling
+4. Runtime coverage must match the API buckets declared by the contract
+5. The host executes runtime artifacts, not source trees. TS/Rust source may be shipped as extra resources, but the host must not depend on compiling them dynamically
+6. Standard pack runtime code should depend on the public runtime context and binding contract only. Host-private helper injections such as `createDefaultRuntimeApi` / `createDefaultAuthBindingProvider` / `createDefaultBindingProvider` are not part of the pack contract
 
 Builtin source directories in this repo:
 1. `resource/music-platform/packs/builtin/bilibili/`
@@ -33,11 +41,36 @@ Published builtin pack outputs:
 1. `resource/music-platform/packs/dist/builtin-bilibili.pmpp`
 2. `resource/music-platform/packs/dist/builtin-netease.pmpp`
 3. `apps/desktop/public/resource/music-platform/packs/dist/*.pmpp`
+4. `resource/music-platform/packs/dist/builtin-pack-index.json`
+5. `apps/desktop/public/resource/music-platform/packs/dist/builtin-pack-index.json`
+
+Builtin preparation workflow:
+1. Build or refresh builtin sidecars and `.pmpp` outputs:
+
+```powershell
+pnpm prepare:platform-packs
+```
+
+2. Validate that builtin sidecars, pack archives, and the pack index are already current without writing files:
+
+```powershell
+pnpm prepare:platform-packs:check
+```
+
+3. For debug/dev startup parity, the desktop package already runs the same script with `--profile debug` from:
+   - `pnpm --dir apps/desktop dev:vite:tauri`
+   - `pnpm --dir apps/desktop build:vite:tauri`
+
+Preparation script observability:
+1. `node scripts/prepare-music-platform-packs.mjs --profile release --check` exits with code `1` when sidecars, pack archives, or `builtin-pack-index.json` are stale
+2. Add `--json` to get a machine-readable summary for CI or local diagnosis
+3. `builtin-pack-index.json` now carries `schemaVersion`, `generatedBy`, `buildProfile`, `packCount`, and per-pack artifact metadata in addition to the `packs` array the host reads today
 
 Current host model:
 1. Builtin and external packs now enter the same parse/install/unpack/register pipeline
 2. Installed artifacts are deployment/cache locations only, never runtime identity
-3. Cookie/token/keyring state must stay bound to `instanceId`, not pack path
+3. External pack registration now prefers explicit runtime/adapters, then the standard binding-contract synthesis path, and only treats incompatible packs as explicit readiness failures
+4. Cookie/token/keyring state must stay bound to `instanceId`, not pack path
 
 Pack authoring workflow:
 1. Create a directory that follows the contract-only layout described above

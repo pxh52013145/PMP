@@ -39,6 +39,7 @@ import {
   beginPlatformInstanceQrLogin,
   getPlatformInstanceAuthSnapshot,
   getPlatformPackStartupHealth,
+  inspectPlatformPackDoctor,
   listPlatformConnectorDefinitions,
   logoutPlatformInstance,
   pollPlatformInstanceQrLogin,
@@ -52,6 +53,9 @@ import {
   type PlatformInstanceQrLoginPollResult,
   type PlatformInstanceQrLoginSession,
   type PlatformPackBootStage,
+  type PlatformPackDoctorIssue,
+  type PlatformPackDoctorReport,
+  type PlatformPackDoctorStatus,
   type PlatformPackStartupHealth,
   type PlatformPackStartupState,
 } from '../../modules/music-platform';
@@ -322,6 +326,48 @@ function formatPlatformPackBootStageLabel(
     default:
       return t('debug.center.musicPlatformPack.stage.idle');
   }
+}
+
+function formatPlatformPackDoctorStatusLabel(
+  status: PlatformPackDoctorStatus,
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  switch (status) {
+    case 'error':
+      return t('debug.center.musicPlatformPack.doctor.status.error');
+    case 'degraded':
+      return t('debug.center.musicPlatformPack.doctor.status.degraded');
+    case 'ready':
+    default:
+      return t('debug.center.musicPlatformPack.doctor.status.ready');
+  }
+}
+
+function formatPlatformPackDoctorFlowStatusLabel(
+  status: 'ready' | 'degraded' | 'error' | 'unsupported',
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  switch (status) {
+    case 'error':
+      return t('debug.center.musicPlatformPack.doctor.flow.error');
+    case 'degraded':
+      return t('debug.center.musicPlatformPack.doctor.flow.degraded');
+    case 'unsupported':
+      return t('debug.center.musicPlatformPack.doctor.flow.unsupported');
+    case 'ready':
+    default:
+      return t('debug.center.musicPlatformPack.doctor.flow.ready');
+  }
+}
+
+function formatPlatformPackDoctorIssueDetails(issue: PlatformPackDoctorIssue): string {
+  const entries = Object.entries(issue.fields ?? {}).filter(([, value]) => value !== null);
+  if (entries.length < 1) {
+    return '-';
+  }
+  return entries
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(' | ');
 }
 
 function getLatestMusicLibraryRuntimeSnapshot(): MusicLibraryRuntimeMemorySnapshot | null {
@@ -710,6 +756,10 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [platformAuthBusy, setPlatformAuthBusy] = useState(false);
   const [platformPackStartupHealth, setPlatformPackStartupHealth] =
     useState<PlatformPackStartupHealth>(() => getPlatformPackStartupHealth());
+  const [platformPackDoctorReport, setPlatformPackDoctorReport] =
+    useState<PlatformPackDoctorReport | null>(null);
+  const [platformPackDoctorBusy, setPlatformPackDoctorBusy] = useState(false);
+  const [platformPackDoctorError, setPlatformPackDoctorError] = useState<string | null>(null);
   const [memoryBaselines, setMemoryBaselines] = useState<MemoryBaselineSample[]>(() =>
     readJson<MemoryBaselineSample[]>(STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1, [])
   );
@@ -806,6 +856,28 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       setPlatformPackStartupHealth(health);
     });
   }, []);
+
+  const refreshPlatformPackDoctor = useCallback(async () => {
+    setPlatformPackDoctorBusy(true);
+    setPlatformPackDoctorError(null);
+    try {
+      const report = await inspectPlatformPackDoctor();
+      setPlatformPackDoctorReport(report);
+    } catch (error) {
+      setPlatformPackDoctorReport(null);
+      setPlatformPackDoctorError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPlatformPackDoctorBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshPlatformPackDoctor();
+  }, [
+    refreshPlatformPackDoctor,
+    platformPackStartupHealth.currentStage,
+    platformPackStartupHealth.registeredBuiltinCount,
+  ]);
 
   useEffect(() => {
     setSelectedAuthConnectorId((current) =>
@@ -3174,6 +3246,236 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                   })}
                 </p>
               ) : null}
+            </div>
+
+            <div
+              style={{
+                marginTop: 12,
+                padding: 12,
+                borderRadius: 10,
+                background: 'rgba(0,0,0,0.14)',
+                border: '1px solid rgba(255,255,255,0.08)',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 12,
+                  justifyContent: 'space-between',
+                  alignItems: 'flex-start',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div>
+                  <p className="settings-card-label">
+                    {t('debug.center.musicPlatformPack.doctor.title')}
+                  </p>
+                  <p className="settings-card-desc">
+                    {t('debug.center.musicPlatformPack.doctor.desc')}
+                  </p>
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 8,
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <span className="settings-card-badge">
+                    {platformPackDoctorReport
+                      ? formatPlatformPackDoctorStatusLabel(platformPackDoctorReport.status, t)
+                      : t('common.state.unknown')}
+                  </span>
+                  <SettingsActionButton
+                    type="button"
+                    onClick={() => {
+                      void refreshPlatformPackDoctor();
+                    }}
+                    disabled={platformPackDoctorBusy}
+                  >
+                    {platformPackDoctorBusy
+                      ? t('debug.center.musicPlatformPack.doctor.actionRefreshing')
+                      : t('debug.center.musicPlatformPack.doctor.actionRefresh')}
+                  </SettingsActionButton>
+                </div>
+              </div>
+
+              {platformPackDoctorReport ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+                  <p className="settings-card-note">
+                    {t('debug.center.musicPlatformPack.doctor.summary', {
+                      status: formatPlatformPackDoctorStatusLabel(
+                        platformPackDoctorReport.status,
+                        t
+                      ),
+                      total: platformPackDoctorReport.connectors.length,
+                      ready: platformPackDoctorReport.readyConnectorCount,
+                      degraded: platformPackDoctorReport.degradedConnectorCount,
+                      error: platformPackDoctorReport.errorConnectorCount,
+                      globalIssues: platformPackDoctorReport.issues.length,
+                    })}
+                  </p>
+                  <p className="settings-card-note">
+                    {t('debug.center.musicPlatformPack.doctor.refreshedAt', {
+                      refreshedAt: formatDebugTimestamp(platformPackDoctorReport.generatedAtMs),
+                      duration: `${platformPackDoctorReport.durationMs}ms`,
+                    })}
+                  </p>
+                  {platformPackDoctorError ? (
+                    <p className="settings-card-note" style={{ color: 'rgba(255,120,120,0.9)' }}>
+                      {t('debug.center.musicPlatformPack.doctor.error', {
+                        message: platformPackDoctorError,
+                      })}
+                    </p>
+                  ) : null}
+                  {platformPackDoctorReport.issues.length > 0 ? (
+                    <pre
+                      style={{
+                        marginTop: 2,
+                        padding: 12,
+                        borderRadius: 10,
+                        background: 'rgba(0,0,0,0.2)',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                        overflowX: 'auto',
+                        maxHeight: 160,
+                        fontSize: 12,
+                        color: 'rgba(255,255,255,0.88)',
+                        whiteSpace: 'pre-wrap',
+                      }}
+                    >
+                      {platformPackDoctorReport.issues
+                        .map((issue) =>
+                          t('debug.center.musicPlatformPack.doctor.issueLine', {
+                            severity: issue.severity.toUpperCase(),
+                            code: issue.code,
+                            details: formatPlatformPackDoctorIssueDetails(issue),
+                          })
+                        )
+                        .join('\n')}
+                    </pre>
+                  ) : null}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {platformPackDoctorReport.connectors.map((connector) => (
+                      <div
+                        key={connector.connectorId}
+                        style={{
+                          padding: 10,
+                          borderRadius: 10,
+                          background: 'rgba(255,255,255,0.03)',
+                          border: '1px solid rgba(255,255,255,0.06)',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            gap: 8,
+                            justifyContent: 'space-between',
+                            alignItems: 'flex-start',
+                            flexWrap: 'wrap',
+                          }}
+                        >
+                          <div>
+                            <p className="settings-card-note" style={{ fontWeight: 600 }}>
+                              {connector.displayName}
+                            </p>
+                            <p className="settings-card-note">{connector.connectorId}</p>
+                          </div>
+                          <span className="settings-card-badge">
+                            {formatPlatformPackDoctorStatusLabel(connector.status, t)}
+                          </span>
+                        </div>
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 6,
+                            marginTop: 8,
+                          }}
+                        >
+                          <p className="settings-card-note">
+                            {t('debug.center.musicPlatformPack.doctor.connectorState', {
+                              builtin: formatNullableToggleState(connector.expectedBuiltin, t),
+                              installed: formatNullableToggleState(
+                                connector.installedRecord.installedAtMs !== null,
+                                t
+                              ),
+                              registration: formatNullableToggleState(
+                                connector.registrationPresent,
+                                t
+                              ),
+                              descriptor: formatNullableToggleState(connector.descriptorPresent, t),
+                              definition: formatNullableToggleState(
+                                connector.connectorDefinitionPresent,
+                                t
+                              ),
+                            })}
+                          </p>
+                          <p className="settings-card-note">
+                            {t('debug.center.musicPlatformPack.doctor.connectorFlows', {
+                              recommendations: formatPlatformPackDoctorFlowStatusLabel(
+                                connector.requiredFlows.recommendations,
+                                t
+                              ),
+                              quality: formatPlatformPackDoctorFlowStatusLabel(
+                                connector.requiredFlows.quality,
+                                t
+                              ),
+                              pages: formatPlatformPackDoctorFlowStatusLabel(
+                                connector.requiredFlows.pages,
+                                t
+                              ),
+                            })}
+                          </p>
+                          {connector.issues.length > 0 ? (
+                            <pre
+                              style={{
+                                marginTop: 2,
+                                padding: 10,
+                                borderRadius: 8,
+                                background: 'rgba(0,0,0,0.16)',
+                                border: '1px solid rgba(255,255,255,0.06)',
+                                overflowX: 'auto',
+                                maxHeight: 160,
+                                fontSize: 12,
+                                color: 'rgba(255,255,255,0.88)',
+                                whiteSpace: 'pre-wrap',
+                              }}
+                            >
+                              {connector.issues
+                                .map((issue) =>
+                                  t('debug.center.musicPlatformPack.doctor.issueLine', {
+                                    severity: issue.severity.toUpperCase(),
+                                    code: issue.code,
+                                    details: formatPlatformPackDoctorIssueDetails(issue),
+                                  })
+                                )
+                                .join('\n')}
+                            </pre>
+                          ) : (
+                            <p className="settings-card-note">
+                              {t('debug.center.musicPlatformPack.doctor.emptyConnectorIssues')}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : platformPackDoctorError ? (
+                <p
+                  className="settings-card-note"
+                  style={{ marginTop: 10, color: 'rgba(255,120,120,0.9)' }}
+                >
+                  {t('debug.center.musicPlatformPack.doctor.error', {
+                    message: platformPackDoctorError,
+                  })}
+                </p>
+              ) : (
+                <p className="settings-card-note" style={{ marginTop: 10 }}>
+                  {t('debug.center.musicPlatformPack.doctor.empty')}
+                </p>
+              )}
             </div>
 
             <div style={{ marginTop: 12 }}>

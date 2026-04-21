@@ -77,12 +77,6 @@ import {
   parsePlatformMagnetSkinProps,
   type PlatformMagnetDefaultMode,
 } from './platformMagnetSkin';
-import { BilibiliPlaybackSettingsContent } from './BilibiliPlaybackSettingsModal';
-import { MusicTemplatePlaybackSettingsContent } from './MusicTemplatePlaybackSettings';
-import {
-  DedicatedWorkspacePlaceholderAdapter,
-  DedicatedWorkspacePlaceholderToolbar,
-} from './DedicatedWorkspacePlaceholderAdapter';
 import {
   renderPlatformWorkspaceAdapterToolbar,
   renderPlatformWorkspaceAdapterWorkspace,
@@ -91,15 +85,17 @@ import {
   resolvePlatformWorkspaceAdapterKind,
   resolveDefaultWorkspaceAdapterKindByWorkspaceDefaultMode,
   type PlatformWorkspaceAdapterKind,
-  type PlatformWorkspaceAdapterPayloadMap,
 } from './platformWorkspaceAdapterRegistry';
+import {
+  type PlaylistDrawerGroup,
+  type PlatformPageView,
+  type WorkspaceRuntimeAdapter,
+} from './platformWorkspaceRuntimeAdapters';
 import {
   toConnectorWorkspaceMode,
   type PlatformWorkspaceDescriptor,
 } from './platformWorkspaceModes';
-import { useBilibiliWorkspaceAdapterController } from './useBilibiliWorkspaceAdapterController';
-import { useDedicatedWorkspacePlaceholderController } from './useDedicatedWorkspacePlaceholderController';
-import { useMusicTemplateWorkspaceAdapterController } from './useMusicTemplateWorkspaceAdapterController';
+import { usePlatformWorkspaceControllerRegistry } from './usePlatformWorkspaceControllerRegistry';
 
 import './PlatformMagnet.css';
 
@@ -109,7 +105,6 @@ type PlatformMagnetRendererProps = {
   skinProps?: Record<string, unknown>;
 };
 
-type PlatformPageView = 'daily' | 'overview' | 'instance' | 'local';
 type SettingsTabId = 'global' | string;
 type CreateView = 'create' | 'existing';
 type ContentTransitionPhase = 'entered' | 'entering' | 'exiting';
@@ -122,51 +117,6 @@ type RegisteredPlatformItem = {
   renderSelection: PlatformRenderSelectionRecord | null;
   snapshot: PlatformInstanceAuthSnapshot | null;
   facade: PlatformConnectorFacadeItem | null;
-};
-
-type PlaylistDrawerGroup = {
-  id: string;
-  connectorId: string | null;
-  label: string;
-  playlists: AudioPlaylist[];
-  collections?: Array<{
-    collectionId: string | null;
-    title: string;
-    count: number | null;
-  }>;
-  selectedCollectionId?: string | null;
-  collectionSectionLabelKey?: string;
-  playlistSectionLabelKey?: string;
-  collectionLoading?: boolean;
-  collectionError?: string | null;
-};
-
-type WorkspaceShellSearchState = {
-  value: string;
-  placeholder: string;
-  disabled: boolean;
-  loading: boolean;
-  onChange: (value: string) => void;
-  onSubmit: () => void;
-};
-
-type WorkspaceSettingsPanelRenderContext = {
-  settingsLabel: string;
-  settingsItems: RegisteredPlatformItem[];
-};
-
-type WorkspaceRuntimeAdapter = {
-  shellSearch?: WorkspaceShellSearchState;
-  playlistOpener?: (() => void) | null;
-  playlistActionLabelKey?: string;
-  shouldResetPageStageScroll?: boolean;
-  scrollResetToken?: string | null;
-  buildDrawerGroup?: () => PlaylistDrawerGroup | null;
-  selectDrawerFolder?: (folderId: string | null) => void;
-  selectDrawerPlaylist?: (playlistId: string) => void;
-  resolveDrawerConnectorId?: () => string | null;
-  handleBackAction?: () => boolean;
-  renderSettingsPanel?: (context: WorkspaceSettingsPanelRenderContext) => JSX.Element | null;
 };
 
 const CONNECTOR_VISUAL_META_BY_ICON_KEY: Record<string, { Icon: IconComponent; color: string }> = {
@@ -815,30 +765,6 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       platformTemplate: resolvePlatformConnectorTemplate(activeDefinition),
     });
   }, [activeConnectorId, activeDefinition]);
-  const activeVideoItem = useMemo<RegisteredPlatformItem | null>(
-    () => (activeWorkspaceAdapterKind === 'bilibili' ? activeItem : null),
-    [activeItem, activeWorkspaceAdapterKind]
-  );
-  const activeMusicItem = useMemo<RegisteredPlatformItem | null>(
-    () => (activeWorkspaceAdapterKind === 'music' ? activeItem : null),
-    [activeItem, activeWorkspaceAdapterKind]
-  );
-  const activeMusicConnectorId = activeMusicItem?.entry.connectorId ?? null;
-  const activeMusicDefinition = activeMusicItem?.definition ?? null;
-  const activeMusicContractRecord = activeMusicItem?.contractRecord ?? null;
-  const activeMusicInstanceId = activeMusicItem?.instance?.instanceId ?? null;
-  const activeMusicAuthState = activeMusicItem?.facade?.authState ?? null;
-  const activeMusicDisplayName = useMemo(() => {
-    if (!activeMusicItem) return null;
-    if (activeMusicDefinition?.labelKey) {
-      return t(activeMusicDefinition.labelKey);
-    }
-    return (
-      activeMusicItem.facade?.displayName ??
-      activeMusicDefinition?.displayName ??
-      activeMusicConnectorId
-    );
-  }, [activeMusicConnectorId, activeMusicDefinition, activeMusicItem, t]);
 
   const platformPlaylistsByConnectorId = useMemo(() => {
     const next = new Map<string, AudioPlaylist[]>();
@@ -1016,129 +942,31 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     [mountedRegisteredItems, settingsTab]
   );
   const settingsItem = settingsItems[0] ?? null;
-  const settingsMusicItem = useMemo<RegisteredPlatformItem | null>(
-    () => (settingsWorkspaceAdapterKind === 'music' ? settingsItem : null),
-    [settingsItem, settingsWorkspaceAdapterKind]
-  );
-  const settingsVideoItem = useMemo<RegisteredPlatformItem | null>(
-    () => (settingsWorkspaceAdapterKind === 'bilibili' ? settingsItem : null),
-    [settingsItem, settingsWorkspaceAdapterKind]
-  );
-  const settingsMusicConnectorId = settingsMusicItem?.entry.connectorId ?? null;
-  const settingsMusicDefinition = settingsMusicItem?.definition ?? null;
-  const settingsMusicContractRecord = settingsMusicItem?.contractRecord ?? null;
-  const settingsMusicInstanceId = settingsMusicItem?.instance?.instanceId ?? null;
-  const settingsMusicAuthState = settingsMusicItem?.facade?.authState ?? null;
-  const settingsMusicDisplayName = useMemo(() => {
-    if (!settingsMusicItem) return null;
-    if (settingsMusicDefinition?.labelKey) {
-      return t(settingsMusicDefinition.labelKey);
-    }
-    return (
-      settingsMusicItem.facade?.displayName ??
-      settingsMusicDefinition?.displayName ??
-      settingsMusicConnectorId
-    );
-  }, [settingsMusicConnectorId, settingsMusicDefinition, settingsMusicItem, t]);
-  const controllerVideoItem =
-    (settingsOpen && settingsVideoItem ? settingsVideoItem : activeVideoItem) ?? null;
-
-  const bilibiliController = useBilibiliWorkspaceAdapterController({
-    workspaceVisible: activePage === 'instance' || settingsOpen,
+  const {
+    workspaceTemplateAdapterPayloads,
+    workspaceRuntimeAdapterRegistry,
+    fallbackToolbar,
+    fallbackWorkspace,
+  } = usePlatformWorkspaceControllerRegistry({
+    activePage,
+    settingsOpen,
+    activeConnectorId,
     activeWorkspaceConnectorId,
-    activeVideoConnectorId: controllerVideoItem?.entry.connectorId ?? null,
-    activeVideoInstanceId: controllerVideoItem?.instance?.instanceId ?? null,
-    activeVideoAuthState: controllerVideoItem?.facade?.authState ?? null,
-    audioService,
-    t,
-    selectedLocalPlaylistId: resolvedSelectedLocalPlaylistId,
-    playlistError,
-    setPlaylistError,
-  });
-
-  const musicTemplateController = useMusicTemplateWorkspaceAdapterController({
-    workspaceVisible: activePage === 'instance',
-    activeWorkspaceConnectorId,
-    activeMusicConnectorId,
-    activeMusicDisplayName,
-    activeMusicContractRecord,
-    activeMusicInstanceId,
-    activeMusicAuthState,
-    prefersDarkMode: true,
+    activeWorkspaceAdapterKind,
+    activeWorkspaceDescriptor,
+    settingsWorkspaceAdapterKind,
+    activeItem,
+    settingsItem,
+    mountedRegisteredItems,
+    platformPlaylistsByConnectorId,
     audioService,
     t,
     selectedPlaylistId,
+    selectedLocalPlaylistId: resolvedSelectedLocalPlaylistId,
     playlistError,
     setPlaylistError,
+    resolveConnectorVisualMeta,
   });
-  const settingsMusicTemplateController = useMusicTemplateWorkspaceAdapterController({
-    workspaceVisible: settingsOpen,
-    activeWorkspaceConnectorId: settingsMusicConnectorId,
-    activeMusicConnectorId: settingsMusicConnectorId,
-    activeMusicDisplayName: settingsMusicDisplayName,
-    activeMusicContractRecord: settingsMusicContractRecord,
-    activeMusicInstanceId: settingsMusicInstanceId,
-    activeMusicAuthState: settingsMusicAuthState,
-    prefersDarkMode: true,
-    audioService,
-    t,
-    selectedPlaylistId: null,
-    playlistError,
-    setPlaylistError,
-  });
-  const musicTemplatePlatformLabel =
-    activeMusicDisplayName ?? musicTemplateController.musicTemplateWorkspaceProps.platformLabel;
-  const musicTemplateVisualMeta = getConnectorVisualMeta(
-    activeMusicConnectorId,
-    activeMusicDefinition
-  );
-  const musicTemplatePlatformAccentColor = musicTemplateVisualMeta.color;
-  const musicTemplatePlatformFallbackLabel =
-    musicTemplatePlatformLabel.trim().charAt(0).toUpperCase() || 'M';
-  const musicTemplateWorkspaceProps = {
-    ...musicTemplateController.musicTemplateWorkspaceProps,
-    platformLabel: musicTemplatePlatformLabel,
-    platformAccentColor: musicTemplatePlatformAccentColor,
-    platformFallbackLabel: musicTemplatePlatformFallbackLabel,
-    platformIconAssetUrl: musicTemplateVisualMeta.iconAssetUrl ?? null,
-  };
-
-  const placeholderController = useDedicatedWorkspacePlaceholderController({
-    activeWorkspaceDescriptor,
-    t,
-  });
-
-  const connectorIdsByAdapterKind = useMemo(() => {
-    const next = new Map<PlatformWorkspaceAdapterKind, string[]>();
-    for (const item of mountedRegisteredItems) {
-      if (!item.definition) continue;
-      const adapterKind = resolvePlatformWorkspaceAdapterKind({
-        connectorId: item.entry.connectorId,
-        workspaceKind: item.definition.workspaceKind,
-        platformTemplate: resolvePlatformConnectorTemplate(item.definition),
-      });
-      if (!adapterKind) continue;
-      const bucket = next.get(adapterKind) ?? [];
-      bucket.push(item.entry.connectorId);
-      next.set(adapterKind, bucket);
-    }
-    return next;
-  }, [mountedRegisteredItems]);
-
-  const workspaceTemplateAdapterPayloads: PlatformWorkspaceAdapterPayloadMap = {
-    bilibili: {
-      toolbar: {},
-      workspace: bilibiliController.bilibiliWorkspaceProps,
-    },
-    music: {
-      toolbar: musicTemplateController.musicTemplateToolbarProps,
-      workspace: musicTemplateWorkspaceProps,
-    },
-    generic: {
-      toolbar: placeholderController.placeholderToolbarProps,
-      workspace: placeholderController.placeholderWorkspaceProps,
-    },
-  };
 
   const activeWorkspaceTemplateAdapter = useMemo(() => {
     if (!activeDefinition) return null;
@@ -1148,122 +976,6 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       platformTemplate: resolvePlatformConnectorTemplate(activeDefinition),
     });
   }, [activeConnectorId, activeDefinition]);
-
-  const workspaceRuntimeAdapterRegistry = useMemo<Record<PlatformWorkspaceAdapterKind, WorkspaceRuntimeAdapter>>(
-    () => ({
-      bilibili: {
-        shellSearch: bilibiliController.bilibiliShellSearch,
-        shouldResetPageStageScroll: true,
-        scrollResetToken: bilibiliController.bilibiliPreviewFolders.selectedFolderId,
-        resolveDrawerConnectorId: () =>
-          activeConnectorId ?? connectorIdsByAdapterKind.get('bilibili')?.[0] ?? null,
-        selectDrawerFolder: (folderId) => {
-          if (folderId) {
-            bilibiliController.bilibiliPreviewFolders.onSelectFolder(folderId);
-            return;
-          }
-          bilibiliController.bilibiliPreviewFolders.onShowRecommended();
-        },
-        buildDrawerGroup: () => {
-          if (activePage !== 'instance' || !activeConnectorId) return null;
-          const bilibiliItem =
-            mountedRegisteredItems.find((item) => item.entry.connectorId === activeConnectorId) ?? null;
-          const bilibiliCollections = bilibiliController.bilibiliPreviewFolders.authorized
-            ? [
-                {
-                  collectionId: null,
-                  title: t('magnet.platform.bilibili.folder.recommendedEntry'),
-                  count: null,
-                },
-                ...bilibiliController.bilibiliPreviewFolders.folders.map((folder) => ({
-                  collectionId: folder.folderId,
-                  title: folder.title,
-                  count: folder.mediaCount,
-                })),
-              ]
-            : [];
-
-          return {
-            id: activeConnectorId,
-            connectorId: activeConnectorId,
-            label: bilibiliItem?.definition?.labelKey
-              ? t(bilibiliItem.definition.labelKey)
-              : bilibiliItem?.facade?.displayName ?? activeConnectorId,
-            playlists: platformPlaylistsByConnectorId.get(activeConnectorId) ?? [],
-            collections: bilibiliCollections,
-            selectedCollectionId: bilibiliController.bilibiliPreviewFolders.selectedFolderId,
-            collectionSectionLabelKey: 'magnet.platform.bilibili.folder.title',
-            playlistSectionLabelKey: 'magnet.platform.bilibili.drawer.playlists.open',
-            collectionLoading: bilibiliController.bilibiliPreviewFolders.loading,
-            collectionError: bilibiliController.bilibiliPreviewFolders.error,
-          };
-        },
-        renderSettingsPanel: () => (
-          <BilibiliPlaybackSettingsContent {...bilibiliController.bilibiliSettingsProps} />
-        ),
-      },
-      music: {
-        shellSearch: musicTemplateController.musicTemplateShellSearch,
-        resolveDrawerConnectorId: () =>
-          activeMusicConnectorId ?? connectorIdsByAdapterKind.get('music')?.[0] ?? null,
-        selectDrawerPlaylist: (playlistId) => {
-          const targetPlaylist =
-            musicTemplateController.musicTemplateDrawerPlaylists.find(
-              (playlist) => playlist.id === playlistId
-            ) ?? null;
-          const collectionId = targetPlaylist?.sourcePlaylistId?.trim() || targetPlaylist?.id?.trim() || '';
-          if (!collectionId) return;
-          musicTemplateController.musicTemplateOpenDrawerPlaylist(collectionId);
-        },
-        handleBackAction: () => {
-          if (!musicTemplateController.musicTemplateCanGoBack) {
-            return false;
-          }
-          return musicTemplateController.musicTemplateHandleBackAction();
-        },
-        buildDrawerGroup: () => {
-          const connectorId =
-            activeMusicConnectorId ?? connectorIdsByAdapterKind.get('music')?.[0] ?? null;
-          if (activePage !== 'instance' || !connectorId) return null;
-          const musicItem =
-            mountedRegisteredItems.find((item) => item.entry.connectorId === connectorId) ?? null;
-
-          return {
-            id: connectorId,
-            connectorId,
-            label: musicItem?.definition?.labelKey
-              ? t(musicItem.definition.labelKey)
-              : musicItem?.facade?.displayName ?? connectorId,
-            playlists: musicTemplateController.musicTemplateDrawerPlaylists,
-            playlistSectionLabelKey: 'magnet.platform.music-template.playlist.title',
-            collectionLoading: musicTemplateController.musicTemplateWorkspaceProps.collectionLoading,
-            collectionError: musicTemplateController.musicTemplateWorkspaceProps.collectionError,
-          };
-        },
-        renderSettingsPanel: () =>
-          settingsMusicTemplateController.musicTemplateSettingsSupported ? (
-            <MusicTemplatePlaybackSettingsContent
-              {...settingsMusicTemplateController.musicTemplateSettingsProps}
-            />
-          ) : null,
-      },
-      generic: {},
-    }),
-    [
-      activeConnectorId,
-      activeMusicConnectorId,
-      activePage,
-      bilibiliController.bilibiliPreviewFolders,
-      bilibiliController.bilibiliSettingsProps,
-      bilibiliController.bilibiliShellSearch,
-      connectorIdsByAdapterKind,
-      musicTemplateController,
-      settingsMusicTemplateController,
-      platformPlaylistsByConnectorId,
-      mountedRegisteredItems,
-      t,
-    ]
-  );
 
   const activeWorkspaceRuntimeAdapter = useMemo<WorkspaceRuntimeAdapter | null>(() => {
     if (!activeWorkspaceAdapterKind) return null;
@@ -1747,7 +1459,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       );
     }
 
-    return <DedicatedWorkspacePlaceholderToolbar {...placeholderController.placeholderToolbarProps} />;
+    return fallbackToolbar;
   };
 
   const renderWorkspaceBody = () => {
@@ -1758,7 +1470,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       );
     }
 
-    return <DedicatedWorkspacePlaceholderAdapter {...placeholderController.placeholderWorkspaceProps} />;
+    return fallbackWorkspace;
   };
 
   const renderNavPopover = () => {

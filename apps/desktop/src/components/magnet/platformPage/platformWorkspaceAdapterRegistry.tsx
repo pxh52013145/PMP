@@ -43,7 +43,6 @@ export type PlatformWorkspaceAdapterKind = keyof PlatformWorkspaceAdapterPayload
 
 export interface PlatformWorkspaceAdapter<K extends PlatformWorkspaceAdapterKind> {
   adapterKind: K;
-  settingsController: 'none' | 'bilibili';
   renderToolbar: (
     payload: PlatformWorkspaceAdapterPayloadMap[K]['toolbar']
   ) => React.ReactElement | null;
@@ -58,21 +57,18 @@ export type AnyPlatformWorkspaceAdapter = {
 
 const bilibiliWorkspaceAdapter: PlatformWorkspaceAdapter<'bilibili'> = {
   adapterKind: 'bilibili',
-  settingsController: 'bilibili',
   renderToolbar: (payload) => <BilibiliWorkspaceToolbar {...payload} />,
   renderWorkspace: (payload) => <BilibiliWorkspaceAdapter {...payload} />,
 };
 
 const musicTemplateWorkspaceAdapter: PlatformWorkspaceAdapter<'music'> = {
   adapterKind: 'music',
-  settingsController: 'none',
   renderToolbar: (payload) => <MusicTemplateWorkspaceToolbar {...payload} />,
   renderWorkspace: (payload) => <MusicTemplateWorkspaceAdapter {...payload} />,
 };
 
 const genericWorkspaceAdapter: PlatformWorkspaceAdapter<'generic'> = {
   adapterKind: 'generic',
-  settingsController: 'none',
   renderToolbar: (payload) => <DedicatedWorkspacePlaceholderToolbar {...payload} />,
   renderWorkspace: (payload) => <DedicatedWorkspacePlaceholderAdapter {...payload} />,
 };
@@ -172,12 +168,6 @@ export function resolveDailySubtitleKeyByConnectorId(
   const normalizedConnectorId = normalizeConnectorId(connectorId);
   if (!normalizedConnectorId) return 'magnet.platform.daily.defaultSubtitle';
   return DAILY_SUBTITLE_KEY_BY_CONNECTOR_ID[normalizedConnectorId] ?? 'magnet.platform.daily.defaultSubtitle';
-}
-
-export function resolveWorkspaceSettingsController(
-  options: PlatformWorkspaceAdapterResolveOptions
-): AnyPlatformWorkspaceAdapter['settingsController'] {
-  return resolvePlatformWorkspaceAdapter(options)?.settingsController ?? 'none';
 }
 
 export function renderPlatformWorkspaceAdapterToolbar(

@@ -15,7 +15,10 @@ const srcTauriCwd = path.join(desktopCwd, 'src-tauri');
 const cargoManifestPath = path.join(srcTauriCwd, 'Cargo.toml');
 const isWindows = process.platform === 'win32';
 const hostBinaryExt = isWindows ? '.exe' : '';
-const buildProfile = resolveBuildProfile(process.argv.slice(2));
+const cli = parseCliArgs(process.argv.slice(2));
+const buildProfile = resolveBuildProfile(cli.forwardedArgs);
+const checkOnly = cli.check;
+const jsonOutput = cli.json;
 const BUILTIN_PACK_INDEX_FILE_NAME = 'builtin-pack-index.json';
 
 const packTargets = [
@@ -99,6 +102,37 @@ function resolveBuildProfile(argv) {
   }
 
   return isTruthyEnvFlag(process.env.TAURI_DEBUG) ? 'debug' : 'release';
+}
+
+function parseCliArgs(argv) {
+  const forwardedArgs = [];
+  let check = false;
+  let json = false;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const current = argv[index];
+    if (current === '--check') {
+      check = true;
+      continue;
+    }
+    if (current === '--json') {
+      json = true;
+      continue;
+    }
+    forwardedArgs.push(current);
+  }
+
+  return {
+    check,
+    json,
+    forwardedArgs,
+  };
+}
+
+function logInfo(message) {
+  if (!jsonOutput) {
+    console.log(message);
+  }
 }
 
 function canRun(cmd, args = ['--version']) {
@@ -264,12 +298,54 @@ function writeBuiltinPackIndex(entries, destinationPath) {
     destinationPath,
     JSON.stringify(
       {
+        schemaVersion: '1.0',
+        generatedBy: 'prepare-music-platform-packs',
+        buildProfile,
+        packCount: entries.length,
         packs: entries,
       },
       null,
       2
     )
   );
+}
+
+function buildPreparationSummary(input) {
+  const connectorSummaries = input.packTargetsNeedingRefresh.map((entry) => ({
+    connectorId: entry.manifest.connector.connectorId,
+    packId: entry.manifest.metadata.id,
+    packVersion: entry.manifest.metadata.version,
+    source: entry.target.source,
+    packNeedsRefresh: entry.packNeedsRefresh,
+    binaryNeedsRefresh: entry.binaryNeedsRefresh,
+    publishedPackFileName: entry.publishedPackFileName,
+  }));
+
+  return {
+    checkOnly,
+    buildProfile,
+    cargoBuildRequired: input.needsCargoBuild,
+    cargoBuildExecuted: input.needsCargoBuild && !checkOnly,
+    indexNeedsRefresh: input.indexNeedsRefresh,
+    expectedBuiltinCount: connectorSummaries.length,
+    connectors: connectorSummaries,
+  };
+}
+
+function emitPreparationSummary(summary) {
+  if (jsonOutput) {
+    console.log(JSON.stringify(summary, null, 2));
+    return;
+  }
+
+  logInfo(
+    `[prepare-music-platform-packs] summary: profile=${summary.buildProfile} checkOnly=${summary.checkOnly} cargoBuildRequired=${summary.cargoBuildRequired} indexNeedsRefresh=${summary.indexNeedsRefresh}`
+  );
+  for (const connector of summary.connectors) {
+    logInfo(
+      `[prepare-music-platform-packs] connector=${connector.connectorId} pack=${connector.packId}@${connector.packVersion} binaryNeedsRefresh=${connector.binaryNeedsRefresh} packNeedsRefresh=${connector.packNeedsRefresh}`
+    );
+  }
 }
 
 async function main() {
@@ -293,7 +369,16 @@ async function main() {
     return !builtBinaryPath || !areOutputsFresh([builtBinaryPath], cargoSourcesLatestMs);
   });
 
-  if (needsCargoBuild) {
+  const binaryNeedsRefreshByConnectorId = new Map();
+  for (const target of packTargets) {
+    const binaryNeedsRefresh = target.binaryOutputDirs.some((outputDir) => {
+      const destinationPath = path.join(outputDir, target.publishedFileName);
+      return !areOutputsFresh([destinationPath], cargoSourcesLatestMs);
+    });
+    binaryNeedsRefreshByConnectorId.set(target.source, binaryNeedsRefresh);
+  }
+
+  if (!checkOnly && needsCargoBuild) {
     const cargoArgs = ['build', '--manifest-path', cargoManifestPath];
     if (buildProfile === 'release') {
       cargoArgs.push('--release');
@@ -302,23 +387,31 @@ async function main() {
       cargoArgs.push('--bin', target.binName);
     }
 
-    console.log(
+    logInfo(
       `[prepare-music-platform-packs] building builtin music platform sidecars (${buildProfile})`
     );
     run(cargo, cargoArgs);
-  } else {
-    console.log(
-      `[prepare-music-platform-packs] builtin music platform sidecars are up to date (${buildProfile})`
-    );
+  }
+
+  if (!checkOnly) {
+    if (!needsCargoBuild) {
+      logInfo(
+        `[prepare-music-platform-packs] builtin music platform sidecars are up to date (${buildProfile})`
+      );
+    }
   }
 
   for (const target of packTargets) {
     const builtBinaryPath = builtBinaryPaths.get(target.binName);
-    if (!fs.existsSync(builtBinaryPath)) {
+    if (!checkOnly && !fs.existsSync(builtBinaryPath)) {
       console.error(
         `[prepare-music-platform-packs] expected built sidecar missing: ${builtBinaryPath}`
       );
       process.exit(1);
+    }
+
+    if (checkOnly) {
+      continue;
     }
 
     for (const outputDir of target.binaryOutputDirs) {
@@ -327,7 +420,7 @@ async function main() {
         continue;
       }
       copyPublishedBinary(builtBinaryPath, destinationPath);
-      console.log(
+      logInfo(
         `[prepare-music-platform-packs] copied ${path.relative(
           repoRoot,
           builtBinaryPath
@@ -344,7 +437,7 @@ async function main() {
     'packs',
     'builtin'
   );
-  if (fs.existsSync(deprecatedPublicBuiltinDir)) {
+  if (!checkOnly && fs.existsSync(deprecatedPublicBuiltinDir)) {
     fs.rmSync(deprecatedPublicBuiltinDir, {
       recursive: true,
       force: true,
@@ -371,6 +464,7 @@ async function main() {
       manifest,
       publishedPackFileName: `${manifest.metadata.id}.pmpp`,
       packSourceLatestMs,
+      binaryNeedsRefresh: Boolean(binaryNeedsRefreshByConnectorId.get(target.source)),
     });
     sourceLatestMsByConnectorId.set(manifest.connector.connectorId, packSourceLatestMs);
   }
@@ -400,12 +494,33 @@ async function main() {
     };
   });
 
+  const preparationSummary = buildPreparationSummary({
+    needsCargoBuild,
+    indexNeedsRefresh,
+    packTargetsNeedingRefresh,
+  });
+
+  if (checkOnly) {
+    emitPreparationSummary(preparationSummary);
+    if (
+      needsCargoBuild ||
+      indexNeedsRefresh ||
+      packTargetsNeedingRefresh.some(
+        (entry) => entry.packNeedsRefresh || entry.binaryNeedsRefresh
+      )
+    ) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (
     packTargetsNeedingRefresh.length > 0 &&
     packTargetsNeedingRefresh.every((entry) => entry.packNeedsRefresh === false) &&
     !indexNeedsRefresh
   ) {
-    console.log('[prepare-music-platform-packs] builtin platform pack archives are up to date');
+    logInfo('[prepare-music-platform-packs] builtin platform pack archives are up to date');
+    emitPreparationSummary(preparationSummary);
     return;
   }
 
@@ -424,7 +539,7 @@ async function main() {
     for (const outputDir of entry.target.packOutputDirs) {
       const destinationPath = path.join(outputDir, entry.publishedPackFileName);
       writePackArchive(archive.bytes, destinationPath);
-      console.log(
+      logInfo(
         `[prepare-music-platform-packs] packed ${path.relative(
           repoRoot,
           entry.target.packSourceDir
@@ -440,14 +555,21 @@ async function main() {
     packVersion: archive.manifest.metadata.version,
     packageDigest: computePackTreeDigest(archive.files),
     packAssetUrl: `/resource/music-platform/packs/dist/${publishedPackFileName}`,
+    archiveByteLength: archive.bytes.byteLength,
+    contractPath: archive.manifest.entry.contract,
+    runtimePath: archive.manifest.entry.runtime,
+    iconPath: archive.manifest.entry.icon,
+    sidecarPath: archive.manifest.entry.sidecar ?? null,
   }));
 
   for (const outputPath of indexOutputPaths) {
     writeBuiltinPackIndex(indexEntries, outputPath);
-    console.log(
+    logInfo(
       `[prepare-music-platform-packs] wrote ${path.relative(repoRoot, outputPath)}`
     );
   }
+
+  emitPreparationSummary(preparationSummary);
 }
 
 main().catch((error) => {
