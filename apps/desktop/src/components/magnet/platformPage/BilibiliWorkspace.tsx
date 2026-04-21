@@ -4,9 +4,9 @@ import type {
   BilibiliFavoriteFolderItem,
   BilibiliFavoriteResourceItem,
   BilibiliFavoriteResourcePage,
-  BilibiliQualityBadge,
   BilibiliLyricLocatorResolved,
-} from '../../../modules/music-platform';
+  BilibiliQualityBadge,
+} from '../../../modules/music-platform/bilibiliWorkspaceModel';
 import type { ContextMenuItem } from '../ContextMenu';
 import { ContextMenu } from '../ContextMenu';
 import { BilibiliResourceGrid } from './BilibiliResourceGrid';

@@ -3,7 +3,7 @@ import { useCallback, useState } from 'react';
 import {
   buildBilibiliPreparedResourceKey,
   type BilibiliFavoriteResourceItem,
-} from '../../../modules/music-platform';
+} from '../../../modules/music-platform/bilibiliWorkspaceModel';
 import type { ContextMenuItem } from '../ContextMenu';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;

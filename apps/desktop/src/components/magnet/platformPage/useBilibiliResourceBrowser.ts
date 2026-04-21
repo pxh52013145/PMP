@@ -3,24 +3,29 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import {
   BILIBILI_CONNECTOR_ID,
-  listBilibiliFavoriteFolders,
-  listBilibiliFavoriteResources,
-  listBilibiliRecommendedResources,
+  type PlatformConnectorId,
+} from '../../../modules/music-platform';
+import {
   normalizeBilibiliLookupInput,
   parseBilibiliSearchSourceId,
-  searchBilibiliResourceByBvid,
-  searchBilibiliResources,
   type BilibiliFavoriteFolderItem,
   type BilibiliFavoriteResourceItem,
   type BilibiliFavoriteResourcePage,
-  type PlatformConnectorId,
-} from '../../../modules/music-platform';
+} from '../../../modules/music-platform/bilibiliWorkspaceModel';
 import {
   getMusicPlatformDurationMs,
   getMusicPlatformNowMs,
   readMusicPlatformDiagnosticErrorMessage,
   warnOnSlowMusicPlatformOperation,
 } from '../../../modules/music-platform/platformDiagnostics';
+import {
+  listBilibiliWorkspaceFolderResources,
+  listBilibiliWorkspaceFolders,
+  listBilibiliWorkspaceRecommendedResources,
+  searchBilibiliWorkspaceResourceByBvid,
+  searchBilibiliWorkspaceResources,
+  type BilibiliWorkspaceRuntimeTarget,
+} from './bilibiliWorkspaceRuntime';
 
 const BILIBILI_RESOURCE_PAGE_SIZE = 40;
 const BILIBILI_FAVORITE_RESOURCE_EMPTY_PAGE_PROBE_LIMIT = 6;
@@ -86,8 +91,7 @@ function mergeResourcePageItems(
 
 type UseBilibiliResourceBrowserParams = {
   workspaceVisible: boolean;
-  workspaceConnectorId: string | null;
-  bilibiliInstanceId: string | null;
+  bilibiliRuntimeTarget: BilibiliWorkspaceRuntimeTarget | null;
   bilibiliAuthorized: boolean;
   t: Translator;
 };
@@ -95,13 +99,12 @@ type UseBilibiliResourceBrowserParams = {
 export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserParams) {
   const {
     workspaceVisible,
-    workspaceConnectorId,
+    bilibiliRuntimeTarget,
     bilibiliAuthorized,
-    bilibiliInstanceId,
     t,
   } = params;
   const resolvedWorkspaceConnectorId =
-    normalizeWorkspaceConnectorId(workspaceConnectorId) ?? BILIBILI_CONNECTOR_ID;
+    normalizeWorkspaceConnectorId(bilibiliRuntimeTarget?.connectorId) ?? BILIBILI_CONNECTOR_ID;
 
   const [folderLoading, setFolderLoading] = useState(false);
   const [folderError, setFolderError] = useState<string | null>(null);
@@ -151,7 +154,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     const startedAtMs = getMusicPlatformNowMs();
     setFolderLoading(true);
     try {
-      const folders = await listBilibiliFavoriteFolders(bilibiliInstanceId);
+      const folders = await listBilibiliWorkspaceFolders(bilibiliRuntimeTarget);
       setBilibiliFolders(folders);
       setFolderError(null);
 
@@ -173,7 +176,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         startedAtMs,
         fields: {
           connectorId: resolvedWorkspaceConnectorId,
-          instanceIdPresent: Boolean(bilibiliInstanceId),
+          instanceIdPresent: Boolean(bilibiliRuntimeTarget?.instanceId),
           folderCount: folders.length,
         },
       });
@@ -182,7 +185,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         message: readMusicPlatformDiagnosticErrorMessage(err),
         fields: {
           connectorId: resolvedWorkspaceConnectorId,
-          instanceIdPresent: Boolean(bilibiliInstanceId),
+          instanceIdPresent: Boolean(bilibiliRuntimeTarget?.instanceId),
           durationMs: getMusicPlatformDurationMs(startedAtMs),
         },
       });
@@ -190,7 +193,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     } finally {
       setFolderLoading(false);
     }
-  }, [bilibiliAuthorized, bilibiliInstanceId, resolvedWorkspaceConnectorId, t, workspaceVisible]);
+  }, [bilibiliAuthorized, bilibiliRuntimeTarget, resolvedWorkspaceConnectorId, t, workspaceVisible]);
 
   const refreshBilibiliRecommendedResources = useCallback(async () => {
     if (!workspaceVisible) return;
@@ -205,7 +208,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     setResourceLoading(true);
     try {
       setResourceSourceKey('recommended');
-      const page = await listBilibiliRecommendedResources(bilibiliInstanceId);
+      const page = await listBilibiliWorkspaceRecommendedResources(bilibiliRuntimeTarget);
       setResourcePage(
         page
           ? {
@@ -222,7 +225,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         startedAtMs,
         fields: {
           connectorId: resolvedWorkspaceConnectorId,
-          instanceIdPresent: Boolean(bilibiliInstanceId),
+          instanceIdPresent: Boolean(bilibiliRuntimeTarget?.instanceId),
           resultCount: page?.items.length ?? 0,
           hasMore: page?.hasMore ?? false,
         },
@@ -232,7 +235,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         message: readMusicPlatformDiagnosticErrorMessage(err),
         fields: {
           connectorId: resolvedWorkspaceConnectorId,
-          instanceIdPresent: Boolean(bilibiliInstanceId),
+          instanceIdPresent: Boolean(bilibiliRuntimeTarget?.instanceId),
           durationMs: getMusicPlatformDurationMs(startedAtMs),
         },
       });
@@ -240,7 +243,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     } finally {
       setResourceLoading(false);
     }
-  }, [bilibiliAuthorized, bilibiliInstanceId, resolvedWorkspaceConnectorId, t, workspaceVisible]);
+  }, [bilibiliAuthorized, bilibiliRuntimeTarget, resolvedWorkspaceConnectorId, t, workspaceVisible]);
 
   const searchBilibiliHomepageResources = useCallback(
     async (keyword: string) => {
@@ -261,11 +264,10 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       setResourceLoading(true);
       try {
         setResourceSourceKey(`search:${normalizedKeyword.toLowerCase()}`);
-        const page = await searchBilibiliResources({
+        const page = await searchBilibiliWorkspaceResources(bilibiliRuntimeTarget, {
           keyword: normalizedKeyword,
           pageNum: 1,
           pageSize: BILIBILI_RESOURCE_PAGE_SIZE,
-          instanceId: bilibiliInstanceId,
         });
         setResourcePage(
           page
@@ -285,7 +287,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     },
     [
       bilibiliAuthorized,
-      bilibiliInstanceId,
+      bilibiliRuntimeTarget,
       refreshBilibiliRecommendedResources,
       t,
       workspaceVisible,
@@ -315,11 +317,10 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       try {
         setResourceSourceKey(`folder:${normalizedFolderId}`);
         const requestFolderPage = async (pageNum: number, pageSize: number) =>
-          await listBilibiliFavoriteResources({
+          await listBilibiliWorkspaceFolderResources(bilibiliRuntimeTarget, {
             folderId: normalizedFolderId,
             pageNum,
             pageSize,
-            instanceId: bilibiliInstanceId,
           });
 
         let page = await requestFolderPage(1, BILIBILI_RESOURCE_PAGE_SIZE);
@@ -376,7 +377,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
           startedAtMs,
           fields: {
             connectorId: resolvedWorkspaceConnectorId,
-            instanceIdPresent: Boolean(bilibiliInstanceId),
+            instanceIdPresent: Boolean(bilibiliRuntimeTarget?.instanceId),
             folderId: normalizedFolderId,
             resultCount: page?.items.length ?? 0,
             hasMore: page?.hasMore ?? false,
@@ -387,7 +388,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
           message: readMusicPlatformDiagnosticErrorMessage(err),
           fields: {
             connectorId: resolvedWorkspaceConnectorId,
-            instanceIdPresent: Boolean(bilibiliInstanceId),
+            instanceIdPresent: Boolean(bilibiliRuntimeTarget?.instanceId),
             folderId: normalizedFolderId,
             durationMs: getMusicPlatformDurationMs(startedAtMs),
           },
@@ -400,7 +401,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     [
       bilibiliAuthorized,
       bilibiliFolders,
-      bilibiliInstanceId,
+      bilibiliRuntimeTarget,
       resolvedWorkspaceConnectorId,
       t,
       workspaceVisible,
@@ -427,19 +428,17 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       let nextPage: BilibiliFavoriteResourcePage | null = null;
 
       if (searchKeyword) {
-        nextPage = await searchBilibiliResources({
+        nextPage = await searchBilibiliWorkspaceResources(bilibiliRuntimeTarget, {
           keyword: searchKeyword,
           pageNum: nextPageNum,
           pageSize,
-          instanceId: bilibiliInstanceId,
         });
       } else {
         const requestFolderPage = async (pageNum: number) =>
-          await listBilibiliFavoriteResources({
+          await listBilibiliWorkspaceFolderResources(bilibiliRuntimeTarget, {
             folderId: normalizedFolderId,
             pageNum,
             pageSize,
-            instanceId: bilibiliInstanceId,
           });
 
         nextPage = await requestFolderPage(nextPageNum);
@@ -491,7 +490,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         startedAtMs,
         fields: {
           connectorId: resolvedWorkspaceConnectorId,
-          instanceIdPresent: Boolean(bilibiliInstanceId),
+          instanceIdPresent: Boolean(bilibiliRuntimeTarget?.instanceId),
           folderId: normalizedFolderId,
           pageNum: nextPageNum,
           searchKeywordPresent: Boolean(searchKeyword),
@@ -502,7 +501,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
         message: readMusicPlatformDiagnosticErrorMessage(err),
         fields: {
           connectorId: resolvedWorkspaceConnectorId,
-          instanceIdPresent: Boolean(bilibiliInstanceId),
+          instanceIdPresent: Boolean(bilibiliRuntimeTarget?.instanceId),
           folderId: normalizedFolderId,
           pageNum: nextPageNum,
           searchKeywordPresent: Boolean(searchKeyword),
@@ -515,7 +514,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     }
   }, [
     bilibiliAuthorized,
-    bilibiliInstanceId,
+    bilibiliRuntimeTarget,
     resolvedWorkspaceConnectorId,
     resourceLoading,
     resourceLoadingMore,
@@ -535,7 +534,10 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     setResourceError(null);
     setResourceFilterQuery(normalizedQuery);
     try {
-      const result = await searchBilibiliResourceByBvid(normalizedQuery, bilibiliInstanceId);
+      const result = await searchBilibiliWorkspaceResourceByBvid(
+        bilibiliRuntimeTarget,
+        normalizedQuery
+      );
       if (!result) {
         setBvidSearchResult(null);
         setBvidSearchError(t('magnet.platform.bilibili.resource.bvSearchNotFound'));
@@ -551,7 +553,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     } finally {
       setBvidSearching(false);
     }
-  }, [bilibiliInstanceId, t]);
+  }, [bilibiliRuntimeTarget, t]);
 
   useEffect(() => {
     if (normalizeBilibiliLookupInput(resourceFilterQuery)) return;

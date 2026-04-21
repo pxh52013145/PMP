@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 
 import {
-  listBilibiliPlaybackQualities,
   resolveBilibiliQualityBadges,
-  resolveBilibiliCoverAssetUrl,
   type BilibiliFavoriteResourceItem,
   type BilibiliQualityBadge,
-} from '../../../modules/music-platform';
+} from '../../../modules/music-platform/bilibiliWorkspaceModel';
+import {
+  listBilibiliWorkspacePlaybackQualities,
+  resolveBilibiliWorkspaceCoverAssetUrl,
+  type BilibiliWorkspaceRuntimeTarget,
+} from './bilibiliWorkspaceRuntime';
 
 const RESOURCE_BADGE_CACHE_LIMIT = 512;
 const RESOURCE_RENDER_CACHE_LIMIT = 512;
@@ -43,7 +46,7 @@ function setBoundedRecordValue<T>(
 }
 
 type UseBilibiliResourceEnhancerParams = {
-  activeBilibiliInstanceId: string | null;
+  bilibiliRuntimeTarget: BilibiliWorkspaceRuntimeTarget | null;
   bilibiliAuthorized: boolean;
   selectedFolderId: string | null;
   bilibiliResources: BilibiliFavoriteResourceItem[];
@@ -54,7 +57,7 @@ type UseBilibiliResourceEnhancerParams = {
 
 export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerParams) {
   const {
-    activeBilibiliInstanceId,
+    bilibiliRuntimeTarget,
     bilibiliAuthorized,
     selectedFolderId,
     bilibiliResources,
@@ -76,7 +79,7 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
     setResourceQualityTagMap({});
     qualityBadgesByLocatorRef.current.clear();
     qualityProbeBackoffUntilRef.current.clear();
-  }, [activeBilibiliInstanceId, selectedFolderId]);
+  }, [bilibiliRuntimeTarget?.connectorId, bilibiliRuntimeTarget?.instanceId, selectedFolderId]);
 
   useEffect(() => {
     setResourceQualityTagMap({});
@@ -133,9 +136,9 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
         if (cancelled) return;
         const normalizedCoverUrl = item.coverUrl?.trim();
         if (!normalizedCoverUrl) continue;
-        const resolvedCoverUrl = await resolveBilibiliCoverAssetUrl(
+        const resolvedCoverUrl = await resolveBilibiliWorkspaceCoverAssetUrl(
+          bilibiliRuntimeTarget,
           normalizedCoverUrl,
-          activeBilibiliInstanceId
         );
         if (!resolvedCoverUrl || cancelled) continue;
 
@@ -150,7 +153,7 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
       cancelled = true;
     };
   }, [
-    activeBilibiliInstanceId,
+    bilibiliRuntimeTarget,
     filteredBilibiliResources,
     getResourceCacheKey,
     resourceCoverUrlMap,
@@ -191,7 +194,10 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
         }
 
         try {
-          const options = await listBilibiliPlaybackQualities(locator, activeBilibiliInstanceId);
+          const options = await listBilibiliWorkspacePlaybackQualities(
+            bilibiliRuntimeTarget,
+            locator
+          );
           if (options.length === 0) {
             qualityProbeBackoffUntilRef.current.set(locator, Date.now() + 60_000);
             trimMapToMaxEntries(qualityProbeBackoffUntilRef.current, RESOURCE_BADGE_CACHE_LIMIT);
@@ -221,7 +227,7 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
       cancelled = true;
     };
   }, [
-    activeBilibiliInstanceId,
+    bilibiliRuntimeTarget,
     filteredBilibiliResources,
     getResourceCacheKey,
     isVideoSourceLocator,

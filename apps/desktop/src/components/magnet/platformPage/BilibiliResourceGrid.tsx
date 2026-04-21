@@ -3,7 +3,7 @@ import {
   buildBilibiliPreparedResourceKey,
   type BilibiliFavoriteResourceItem,
   type BilibiliQualityBadge,
-} from '../../../modules/music-platform';
+} from '../../../modules/music-platform/bilibiliWorkspaceModel';
 import { Tv } from 'lucide-react';
 import { PlatformResourceCard } from './PlatformResourceCard';
 

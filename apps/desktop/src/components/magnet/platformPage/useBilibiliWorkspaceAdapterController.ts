@@ -4,6 +4,11 @@ import type { Track } from '../../../services/audio';
 import type { IAudioService } from '../../../services/audio/types';
 import {
   BILIBILI_CONNECTOR_ID,
+  getPlatformConnectorDefinition,
+  type PlatformConnectorAuthState,
+  type PlatformConnectorId,
+} from '../../../modules/music-platform';
+import {
   buildBilibiliResourceIdentity,
   isBilibiliVideoSourceLocator,
   normalizeBilibiliPlaybackQualityKey,
@@ -11,11 +16,10 @@ import {
   type BilibiliFavoriteResourceItem,
   type BilibiliPreparedPlayback,
   type BilibiliQualityBadge,
-  type PlatformConnectorAuthState,
-  type PlatformConnectorId,
-} from '../../../modules/music-platform';
+} from '../../../modules/music-platform/bilibiliWorkspaceModel';
 import type { BilibiliPlaybackSettingsContentProps } from './BilibiliPlaybackSettingsModal';
 import type { BilibiliWorkspaceProps } from './BilibiliWorkspace';
+import type { BilibiliWorkspaceRuntimeTarget } from './bilibiliWorkspaceRuntime';
 import { useBilibiliPlaybackQuality, resolveBilibiliPlaybackQualityLabelKey } from './useBilibiliPlaybackQuality';
 import { useBilibiliResourceBrowser } from './useBilibiliResourceBrowser';
 import { useBilibiliResourceContextMenu } from './useBilibiliResourceContextMenu';
@@ -139,6 +143,16 @@ export function useBilibiliWorkspaceAdapterController(
     activeWorkspaceConnectorId === workspaceConnectorId;
   const bilibiliWorkspaceActive = controllerVisible && workspaceDataEnabled;
   const bilibiliAuthorized = activeVideoAuthState === 'authorized';
+  const bilibiliRuntimeTarget = useMemo<BilibiliWorkspaceRuntimeTarget | null>(() => {
+    if (!workspaceConnectorId) return null;
+    const displayName =
+      getPlatformConnectorDefinition(workspaceConnectorId)?.displayName || 'Bilibili';
+    return {
+      connectorId: workspaceConnectorId,
+      displayName,
+      instanceId: activeVideoInstanceId,
+    };
+  }, [activeVideoInstanceId, workspaceConnectorId]);
 
   const {
     folderLoading,
@@ -166,8 +180,7 @@ export function useBilibiliWorkspaceAdapterController(
     searchBilibiliResourceByLookupInput,
   } = useBilibiliResourceBrowser({
     workspaceVisible: bilibiliWorkspaceActive,
-    workspaceConnectorId,
-    bilibiliInstanceId: activeVideoInstanceId,
+    bilibiliRuntimeTarget,
     bilibiliAuthorized,
     t,
   });
@@ -197,15 +210,14 @@ export function useBilibiliWorkspaceAdapterController(
 
   const playbackQuality = useBilibiliPlaybackQuality({
     controllerVisible,
-    workspaceConnectorId,
-    activeVideoInstanceId,
+    bilibiliRuntimeTarget,
     bilibiliAuthorized,
     qualityProbeSourceLocator,
     t,
   });
 
   const { resourceCoverUrlMap, resourceQualityTagMap } = useBilibiliResourceEnhancer({
-    activeBilibiliInstanceId: activeVideoInstanceId,
+    bilibiliRuntimeTarget,
     bilibiliAuthorized,
     selectedFolderId,
     bilibiliResources,
@@ -226,8 +238,7 @@ export function useBilibiliWorkspaceAdapterController(
     handleAddToPlaylist,
     handleOpenBilibiliResource,
   } = useBilibiliResourcePlaybackActions({
-    workspaceConnectorId,
-    activeBilibiliInstanceId: activeVideoInstanceId,
+    bilibiliRuntimeTarget,
     audioService,
     normalizedPlaybackQualityHint: playbackQuality.normalizedPlaybackQualityHint,
     preferredQualityLabel: playbackQuality.preferredPlaybackQualityLabel,

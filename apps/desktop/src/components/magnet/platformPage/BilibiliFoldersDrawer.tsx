@@ -1,4 +1,4 @@
-import type { BilibiliFavoriteFolderItem } from '../../../modules/music-platform';
+import type { BilibiliFavoriteFolderItem } from '../../../modules/music-platform/bilibiliWorkspaceModel';
 import { PmpButton, PmpDrawer } from '../../primitives';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;

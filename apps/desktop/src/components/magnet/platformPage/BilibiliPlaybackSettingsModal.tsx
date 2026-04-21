@@ -1,4 +1,4 @@
-import type { BilibiliPlaybackQualityOption } from '../../../modules/music-platform';
+import type { BilibiliPlaybackQualityOption } from '../../../modules/music-platform/bilibiliWorkspaceModel';
 import { PmpButton, PmpDialog } from '../../primitives';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;

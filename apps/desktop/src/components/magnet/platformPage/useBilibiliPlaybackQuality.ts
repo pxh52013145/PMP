@@ -2,11 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
   createDefaultBilibiliPlaybackQualityOptions,
-  listBilibiliPlaybackQualities,
   mergeBilibiliPlaybackQualityOptions,
   normalizeBilibiliPlaybackQualityKey,
   type BilibiliPlaybackQualityOption,
-} from '../../../modules/music-platform';
+} from '../../../modules/music-platform/bilibiliWorkspaceModel';
 import {
   getMusicPlatformDurationMs,
   getMusicPlatformNowMs,
@@ -15,6 +14,10 @@ import {
 } from '../../../modules/music-platform/platformDiagnostics';
 import { usePersistentSetting } from '../../../modules/storage';
 import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
+import {
+  listBilibiliWorkspacePlaybackQualities,
+  type BilibiliWorkspaceRuntimeTarget,
+} from './bilibiliWorkspaceRuntime';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
 
@@ -44,8 +47,7 @@ export function resolveBilibiliPlaybackQualityLabelKey(key: string): string {
 
 export interface UseBilibiliPlaybackQualityParams {
   controllerVisible: boolean;
-  workspaceConnectorId: string | null;
-  activeVideoInstanceId: string | null;
+  bilibiliRuntimeTarget: BilibiliWorkspaceRuntimeTarget | null;
   bilibiliAuthorized: boolean;
   qualityProbeSourceLocator: string | null;
   t: Translator;
@@ -67,8 +69,7 @@ export function useBilibiliPlaybackQuality(
 ): BilibiliPlaybackQualityController {
   const {
     controllerVisible,
-    workspaceConnectorId,
-    activeVideoInstanceId,
+    bilibiliRuntimeTarget,
     bilibiliAuthorized,
     qualityProbeSourceLocator,
     t,
@@ -111,9 +112,9 @@ export function useBilibiliPlaybackQuality(
       const startedAtMs = getMusicPlatformNowMs();
       setPlaybackQualityLoading(true);
       try {
-        const options = await listBilibiliPlaybackQualities(
-          normalizedSourceLocator,
-          activeVideoInstanceId
+        const options = await listBilibiliWorkspacePlaybackQualities(
+          bilibiliRuntimeTarget,
+          normalizedSourceLocator
         );
         setPlaybackQualityOptions(mergeBilibiliPlaybackQualityOptions(options));
         setPlaybackQualityProbeLocator(normalizedSourceLocator);
@@ -122,8 +123,8 @@ export function useBilibiliPlaybackQuality(
           event: 'platform.runtime.bilibili.quality-options-load.slow',
           startedAtMs,
           fields: {
-            connectorId: workspaceConnectorId,
-            instanceIdPresent: Boolean(activeVideoInstanceId),
+            connectorId: bilibiliRuntimeTarget?.connectorId ?? null,
+            instanceIdPresent: Boolean(bilibiliRuntimeTarget?.instanceId),
             sourceLocatorPresent: true,
             optionCount: options.length,
           },
@@ -132,8 +133,8 @@ export function useBilibiliPlaybackQuality(
         telemetry.warn('platform.runtime.bilibili.quality-options-load.failed', {
           message: readMusicPlatformDiagnosticErrorMessage(error),
           fields: {
-            connectorId: workspaceConnectorId,
-            instanceIdPresent: Boolean(activeVideoInstanceId),
+            connectorId: bilibiliRuntimeTarget?.connectorId ?? null,
+            instanceIdPresent: Boolean(bilibiliRuntimeTarget?.instanceId),
             durationMs: getMusicPlatformDurationMs(startedAtMs),
           },
         });
@@ -142,7 +143,7 @@ export function useBilibiliPlaybackQuality(
         setPlaybackQualityLoading(false);
       }
     },
-    [activeVideoInstanceId, workspaceConnectorId]
+    [bilibiliRuntimeTarget]
   );
 
   useEffect(() => {
