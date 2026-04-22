@@ -2,6 +2,7 @@ import type { CapabilityPermission } from './capabilities';
 import type {
   CommandContributionDescriptor,
   KeybindingContributionDescriptor,
+  MusicPlatformWorkspaceContributionDescriptor,
   PageContributionDescriptor,
   ShellSurfaceContributionDescriptor,
   SettingsPanelContributionDescriptor,
@@ -41,6 +42,7 @@ export interface ExtensionContributionBuckets {
   pages?: PageContributionDescriptor[];
   windows?: WindowContributionDescriptor[];
   shellSurfaces?: ShellSurfaceContributionDescriptor[];
+  musicPlatformWorkspaces?: MusicPlatformWorkspaceContributionDescriptor[];
   commands?: CommandContributionDescriptor[];
   settingsPanels?: SettingsPanelContributionDescriptor[];
   visualizers?: VisualizerContributionDescriptor[];

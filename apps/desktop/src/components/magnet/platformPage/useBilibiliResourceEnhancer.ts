@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   resolveBilibiliQualityBadges,
@@ -13,6 +13,10 @@ import {
 
 const RESOURCE_BADGE_CACHE_LIMIT = 512;
 const RESOURCE_RENDER_CACHE_LIMIT = 512;
+const COVER_RESOLVE_BATCH_SIZE = 6;
+const QUALITY_PROBE_BATCH_SIZE = 4;
+const COVER_RESOLVE_BACKOFF_MS = 60_000;
+const QUALITY_PROBE_BACKOFF_MS = 60_000;
 
 function trimMapToMaxEntries<K, V>(map: Map<K, V>, maxEntries: number): void {
   while (map.size > maxEntries) {
@@ -45,6 +49,20 @@ function setBoundedRecordValue<T>(
   return bounded;
 }
 
+function retainRecordEntries<T>(
+  current: Record<string, T>,
+  retainedKeys: ReadonlySet<string>
+): Record<string, T> {
+  let removed = false;
+  const retainedEntries = Object.entries(current).filter(([key]) => {
+    const keep = retainedKeys.has(key);
+    if (!keep) removed = true;
+    return keep;
+  });
+  if (!removed) return current;
+  return Object.fromEntries(retainedEntries) as Record<string, T>;
+}
+
 type UseBilibiliResourceEnhancerParams = {
   bilibiliRuntimeTarget: BilibiliWorkspaceRuntimeTarget | null;
   bilibiliAuthorized: boolean;
@@ -71,20 +89,73 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
     Record<string, BilibiliQualityBadge[]>
   >({});
 
+  const resourceEnhancerContextKey = [
+    bilibiliRuntimeTarget?.connectorId ?? '',
+    bilibiliRuntimeTarget?.instanceId ?? '',
+    selectedFolderId ?? '',
+    bilibiliAuthorized ? 'authorized' : 'unauthorized',
+  ].join('\u001f');
+  const mountedRef = useRef(true);
+  const resourceEnhancerContextKeyRef = useRef(resourceEnhancerContextKey);
+  resourceEnhancerContextKeyRef.current = resourceEnhancerContextKey;
+  const resourceCoverUrlMapRef = useRef<Record<string, string>>({});
+  const resourceQualityTagMapRef = useRef<Record<string, BilibiliQualityBadge[]>>({});
+  const coverResolveBackoffUntilRef = useRef<Map<string, number>>(new Map());
+  const coverResolutionInFlightRef = useRef<Set<string>>(new Set());
   const qualityBadgesByLocatorRef = useRef<Map<string, BilibiliQualityBadge[]>>(new Map());
   const qualityProbeBackoffUntilRef = useRef<Map<string, number>>(new Map());
+  const qualityProbeInFlightLocatorsRef = useRef<Set<string>>(new Set());
+
+  const updateResourceCoverUrlMap = useCallback(
+    (updater: (current: Record<string, string>) => Record<string, string>) => {
+      const current = resourceCoverUrlMapRef.current;
+      const next = updater(current);
+      if (next === current) return;
+      resourceCoverUrlMapRef.current = next;
+      setResourceCoverUrlMap(next);
+    },
+    []
+  );
+
+  const updateResourceQualityTagMap = useCallback(
+    (
+      updater: (
+        current: Record<string, BilibiliQualityBadge[]>
+      ) => Record<string, BilibiliQualityBadge[]>
+    ) => {
+      const current = resourceQualityTagMapRef.current;
+      const next = updater(current);
+      if (next === current) return;
+      resourceQualityTagMapRef.current = next;
+      setResourceQualityTagMap(next);
+    },
+    []
+  );
 
   useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    resourceCoverUrlMapRef.current = {};
+    resourceQualityTagMapRef.current = {};
     setResourceCoverUrlMap({});
     setResourceQualityTagMap({});
+    coverResolveBackoffUntilRef.current.clear();
+    coverResolutionInFlightRef.current.clear();
     qualityBadgesByLocatorRef.current.clear();
     qualityProbeBackoffUntilRef.current.clear();
+    qualityProbeInFlightLocatorsRef.current.clear();
   }, [bilibiliRuntimeTarget?.connectorId, bilibiliRuntimeTarget?.instanceId, selectedFolderId]);
 
   useEffect(() => {
+    resourceQualityTagMapRef.current = {};
     setResourceQualityTagMap({});
     qualityBadgesByLocatorRef.current.clear();
     qualityProbeBackoffUntilRef.current.clear();
+    qualityProbeInFlightLocatorsRef.current.clear();
   }, [bilibiliAuthorized]);
 
   useEffect(() => {
@@ -97,17 +168,18 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
         .filter((value) => value.length > 0)
     );
 
-    setResourceCoverUrlMap((prev) => {
-      const entries = Object.entries(prev).filter(([resourceId]) => retainedResourceIds.has(resourceId));
-      if (entries.length === Object.keys(prev).length) return prev;
-      return Object.fromEntries(entries) as Record<string, string>;
-    });
+    updateResourceCoverUrlMap((prev) => retainRecordEntries(prev, retainedResourceIds));
 
-    setResourceQualityTagMap((prev) => {
-      const entries = Object.entries(prev).filter(([resourceId]) => retainedResourceIds.has(resourceId));
-      if (entries.length === Object.keys(prev).length) return prev;
-      return Object.fromEntries(entries) as Record<string, BilibiliQualityBadge[]>;
-    });
+    updateResourceQualityTagMap((prev) => retainRecordEntries(prev, retainedResourceIds));
+
+    coverResolveBackoffUntilRef.current = new Map(
+      [...coverResolveBackoffUntilRef.current.entries()].filter(([cacheKey]) =>
+        retainedResourceIds.has(cacheKey)
+      )
+    );
+    coverResolutionInFlightRef.current = new Set(
+      [...coverResolutionInFlightRef.current].filter((cacheKey) => retainedResourceIds.has(cacheKey))
+    );
 
     qualityBadgesByLocatorRef.current = new Map(
       [...qualityBadgesByLocatorRef.current.entries()].filter(([locator]) =>
@@ -119,120 +191,240 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
         retainedSourceLocators.has(locator.trim())
       )
     );
-  }, [bilibiliResources, getResourceCacheKey]);
+    qualityProbeInFlightLocatorsRef.current = new Set(
+      [...qualityProbeInFlightLocatorsRef.current].filter((locator) =>
+        retainedSourceLocators.has(locator.trim())
+      )
+    );
+  }, [bilibiliResources, getResourceCacheKey, updateResourceCoverUrlMap, updateResourceQualityTagMap]);
 
   useEffect(() => {
-    const candidates = filteredBilibiliResources
-      .filter((item) => {
-        const cacheKey = getResourceCacheKey(item);
-        return item.coverUrl && !resourceCoverUrlMap[cacheKey];
-      })
-      .slice(0, 24);
-    if (candidates.length === 0) return;
+    if (!bilibiliAuthorized) return;
 
-    let cancelled = false;
+    const effectContextKey = resourceEnhancerContextKey;
     void (async () => {
-      for (const item of candidates) {
-        if (cancelled) return;
-        const normalizedCoverUrl = item.coverUrl?.trim();
-        if (!normalizedCoverUrl) continue;
-        const resolvedCoverUrl = await resolveBilibiliWorkspaceCoverAssetUrl(
-          bilibiliRuntimeTarget,
-          normalizedCoverUrl,
-        );
-        if (!resolvedCoverUrl || cancelled) continue;
+      let shouldDrain = true;
+      while (shouldDrain) {
+        const now = Date.now();
+        const scheduledCacheKeys = new Set<string>();
+        const candidates: Array<{
+          cacheKey: string;
+          normalizedCoverUrl: string;
+        }> = [];
 
-        setResourceCoverUrlMap((prev) => {
+        for (const item of filteredBilibiliResources) {
           const cacheKey = getResourceCacheKey(item);
-          return setBoundedRecordValue(prev, cacheKey, resolvedCoverUrl, RESOURCE_RENDER_CACHE_LIMIT);
-        });
+          const normalizedCoverUrl = item.coverUrl?.trim();
+          if (!cacheKey || !normalizedCoverUrl) continue;
+          if (resourceCoverUrlMapRef.current[cacheKey]) continue;
+          if (
+            scheduledCacheKeys.has(cacheKey) ||
+            coverResolutionInFlightRef.current.has(cacheKey)
+          ) {
+            continue;
+          }
+          const backoffUntilMs = coverResolveBackoffUntilRef.current.get(cacheKey) ?? 0;
+          if (backoffUntilMs > now) continue;
+
+          scheduledCacheKeys.add(cacheKey);
+          candidates.push({ cacheKey, normalizedCoverUrl });
+          if (candidates.length >= COVER_RESOLVE_BATCH_SIZE) break;
+        }
+
+        if (candidates.length === 0) {
+          shouldDrain = false;
+          continue;
+        }
+        for (const candidate of candidates) {
+          coverResolutionInFlightRef.current.add(candidate.cacheKey);
+        }
+
+        await Promise.allSettled(
+          candidates.map(async ({ cacheKey, normalizedCoverUrl }) => {
+            try {
+              const resolvedCoverUrl = await resolveBilibiliWorkspaceCoverAssetUrl(
+                bilibiliRuntimeTarget,
+                normalizedCoverUrl
+              );
+              if (!resolvedCoverUrl) {
+                coverResolveBackoffUntilRef.current.set(
+                  cacheKey,
+                  Date.now() + COVER_RESOLVE_BACKOFF_MS
+                );
+                trimMapToMaxEntries(
+                  coverResolveBackoffUntilRef.current,
+                  RESOURCE_BADGE_CACHE_LIMIT
+                );
+                return;
+              }
+
+              coverResolveBackoffUntilRef.current.delete(cacheKey);
+              trimMapToMaxEntries(
+                coverResolveBackoffUntilRef.current,
+                RESOURCE_BADGE_CACHE_LIMIT
+              );
+              if (
+                !mountedRef.current ||
+                resourceEnhancerContextKeyRef.current !== effectContextKey
+              ) {
+                return;
+              }
+
+              updateResourceCoverUrlMap((prev) =>
+                setBoundedRecordValue(
+                  prev,
+                  cacheKey,
+                  resolvedCoverUrl,
+                  RESOURCE_RENDER_CACHE_LIMIT
+                )
+              );
+            } catch {
+              coverResolveBackoffUntilRef.current.set(
+                cacheKey,
+                Date.now() + COVER_RESOLVE_BACKOFF_MS
+              );
+              trimMapToMaxEntries(
+                coverResolveBackoffUntilRef.current,
+                RESOURCE_BADGE_CACHE_LIMIT
+              );
+            } finally {
+              coverResolutionInFlightRef.current.delete(cacheKey);
+            }
+          })
+        );
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
   }, [
+    bilibiliAuthorized,
     bilibiliRuntimeTarget,
     filteredBilibiliResources,
     getResourceCacheKey,
-    resourceCoverUrlMap,
+    resourceEnhancerContextKey,
+    updateResourceCoverUrlMap,
   ]);
 
   useEffect(() => {
-    if (!selectedFolderId) return;
-    const now = Date.now();
-    const candidates = filteredBilibiliResources
-      .filter((item) => {
-        const locator = item.sourceLocator.trim();
-        const cacheKey = getResourceCacheKey(item);
-        if (!locator || !isVideoSourceLocator(locator) || resourceQualityTagMap[cacheKey]) {
-          return false;
-        }
-        const backoffUntilMs = qualityProbeBackoffUntilRef.current.get(locator) ?? 0;
-        return backoffUntilMs <= now;
-      })
-      .slice(0, 16);
-    if (candidates.length === 0) return;
+    if (!selectedFolderId || !bilibiliAuthorized) return;
 
-    let cancelled = false;
+    const effectContextKey = resourceEnhancerContextKey;
     void (async () => {
-      for (const item of candidates) {
-        if (cancelled) return;
+      const applyQualityBadgesToVisibleResources = (
+        locator: string,
+        badges: BilibiliQualityBadge[]
+      ) => {
+        updateResourceQualityTagMap((prev) => {
+          let next = prev;
+          for (const resource of filteredBilibiliResources) {
+            if (resource.sourceLocator.trim() !== locator) continue;
+            const cacheKey = getResourceCacheKey(resource);
+            if (!cacheKey) continue;
+            next = setBoundedRecordValue(next, cacheKey, badges, RESOURCE_RENDER_CACHE_LIMIT);
+          }
+          return next;
+        });
+      };
 
-        const locator = item.sourceLocator.trim();
-        if (!locator) continue;
+      let shouldDrain = true;
+      while (shouldDrain) {
+        const now = Date.now();
+        const scheduledLocators = new Set<string>();
+        const candidates: string[] = [];
 
-        const cachedBadges = qualityBadgesByLocatorRef.current.get(locator);
-        if (cachedBadges) {
-          setResourceQualityTagMap((prev) => {
-            const cacheKey = getResourceCacheKey(item);
-            if (prev[cacheKey]) return prev;
-            return setBoundedRecordValue(prev, cacheKey, cachedBadges, RESOURCE_RENDER_CACHE_LIMIT);
-          });
-          continue;
-        }
+        for (const item of filteredBilibiliResources) {
+          const locator = item.sourceLocator.trim();
+          const cacheKey = getResourceCacheKey(item);
+          if (!locator || !cacheKey || !isVideoSourceLocator(locator)) continue;
+          if (resourceQualityTagMapRef.current[cacheKey]) continue;
 
-        try {
-          const options = await listBilibiliWorkspacePlaybackQualities(
-            bilibiliRuntimeTarget,
-            locator
-          );
-          if (options.length === 0) {
-            qualityProbeBackoffUntilRef.current.set(locator, Date.now() + 60_000);
-            trimMapToMaxEntries(qualityProbeBackoffUntilRef.current, RESOURCE_BADGE_CACHE_LIMIT);
+          const cachedBadges = qualityBadgesByLocatorRef.current.get(locator);
+          if (cachedBadges) {
+            applyQualityBadgesToVisibleResources(locator, cachedBadges);
             continue;
           }
 
-          const badges = resolveBilibiliQualityBadges(options);
-          qualityBadgesByLocatorRef.current.set(locator, badges);
-          qualityProbeBackoffUntilRef.current.delete(locator);
-          trimMapToMaxEntries(qualityBadgesByLocatorRef.current, RESOURCE_BADGE_CACHE_LIMIT);
-          trimMapToMaxEntries(qualityProbeBackoffUntilRef.current, RESOURCE_BADGE_CACHE_LIMIT);
+          if (
+            scheduledLocators.has(locator) ||
+            qualityProbeInFlightLocatorsRef.current.has(locator)
+          ) {
+            continue;
+          }
 
-          if (cancelled) return;
-          setResourceQualityTagMap((prev) => {
-            const cacheKey = getResourceCacheKey(item);
-            if (prev[cacheKey]) return prev;
-            return setBoundedRecordValue(prev, cacheKey, badges, RESOURCE_RENDER_CACHE_LIMIT);
-          });
-        } catch {
-          qualityProbeBackoffUntilRef.current.set(locator, Date.now() + 60_000);
-          trimMapToMaxEntries(qualityProbeBackoffUntilRef.current, RESOURCE_BADGE_CACHE_LIMIT);
+          const backoffUntilMs = qualityProbeBackoffUntilRef.current.get(locator) ?? 0;
+          if (backoffUntilMs > now) continue;
+
+          scheduledLocators.add(locator);
+          candidates.push(locator);
+          if (candidates.length >= QUALITY_PROBE_BATCH_SIZE) break;
         }
+
+        if (candidates.length === 0) {
+          shouldDrain = false;
+          continue;
+        }
+        for (const locator of candidates) {
+          qualityProbeInFlightLocatorsRef.current.add(locator);
+        }
+
+        await Promise.allSettled(
+          candidates.map(async (locator) => {
+            try {
+              const options = await listBilibiliWorkspacePlaybackQualities(
+                bilibiliRuntimeTarget,
+                locator
+              );
+              if (options.length === 0) {
+                qualityProbeBackoffUntilRef.current.set(
+                  locator,
+                  Date.now() + QUALITY_PROBE_BACKOFF_MS
+                );
+                trimMapToMaxEntries(
+                  qualityProbeBackoffUntilRef.current,
+                  RESOURCE_BADGE_CACHE_LIMIT
+                );
+                return;
+              }
+
+              const badges = resolveBilibiliQualityBadges(options);
+              qualityBadgesByLocatorRef.current.set(locator, badges);
+              qualityProbeBackoffUntilRef.current.delete(locator);
+              trimMapToMaxEntries(qualityBadgesByLocatorRef.current, RESOURCE_BADGE_CACHE_LIMIT);
+              trimMapToMaxEntries(
+                qualityProbeBackoffUntilRef.current,
+                RESOURCE_BADGE_CACHE_LIMIT
+              );
+
+              if (
+                !mountedRef.current ||
+                resourceEnhancerContextKeyRef.current !== effectContextKey
+              ) {
+                return;
+              }
+              applyQualityBadgesToVisibleResources(locator, badges);
+            } catch {
+              qualityProbeBackoffUntilRef.current.set(
+                locator,
+                Date.now() + QUALITY_PROBE_BACKOFF_MS
+              );
+              trimMapToMaxEntries(
+                qualityProbeBackoffUntilRef.current,
+                RESOURCE_BADGE_CACHE_LIMIT
+              );
+            } finally {
+              qualityProbeInFlightLocatorsRef.current.delete(locator);
+            }
+          })
+        );
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
   }, [
+    bilibiliAuthorized,
     bilibiliRuntimeTarget,
     filteredBilibiliResources,
     getResourceCacheKey,
     isVideoSourceLocator,
-    resourceQualityTagMap,
+    resourceEnhancerContextKey,
     selectedFolderId,
+    updateResourceQualityTagMap,
   ]);
 
   return {

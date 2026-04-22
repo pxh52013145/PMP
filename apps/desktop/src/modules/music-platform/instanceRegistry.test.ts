@@ -6,8 +6,12 @@ import type {
 } from '@pixel-matrix/plugin-platform-contracts';
 
 type CompatListener = (records: unknown[]) => void;
+type ImportedInstanceListener = () => void;
+type InstalledPackListener = () => void;
 
 const compatListeners = new Set<CompatListener>();
+const importedInstanceListeners = new Set<ImportedInstanceListener>();
+const installedPackListeners = new Set<InstalledPackListener>();
 let compatRecords: Array<{
   platformId: string;
   contract: PlatformCompatContractFile;
@@ -16,6 +20,7 @@ let compatRecords: Array<{
   registeredAtMs: number;
   metadata: Record<string, unknown>;
 }> = [];
+let importedInstanceRecords: Array<Record<string, unknown>> = [];
 
 const listPlatformCompatRegistryRecordsMock = vi.fn(() => compatRecords);
 const getPlatformCompatRegistryRecordMock = vi.fn((platformId: string) => {
@@ -30,6 +35,24 @@ const subscribePlatformCompatRegistryMock = vi.fn((listener: CompatListener) => 
     compatListeners.delete(listener);
   };
 });
+const listPlatformImportedInstanceRecordsMock = vi.fn(() => importedInstanceRecords);
+const subscribePlatformImportedInstanceRecordsMock = vi.fn(
+  (listener: ImportedInstanceListener) => {
+    importedInstanceListeners.add(listener);
+    return async () => {
+      importedInstanceListeners.delete(listener);
+    };
+  }
+);
+const getInstalledPlatformPackRecordMock = vi.fn((_installationId: string) => null);
+const subscribeInstalledPlatformPackRecordsMock = vi.fn(
+  (listener: InstalledPackListener) => {
+    installedPackListeners.add(listener);
+    return async () => {
+      installedPackListeners.delete(listener);
+    };
+  }
+);
 
 type RuntimeRefreshSnapshot = NonNullable<
   NonNullable<PlatformCompatRuntimeApi['auth']>['refreshSnapshot']
@@ -45,6 +68,19 @@ vi.mock('./contractRegistry', () => ({
   listPlatformCompatRegistryRecords: () => listPlatformCompatRegistryRecordsMock(),
   subscribePlatformCompatRegistry: (listener: CompatListener) =>
     subscribePlatformCompatRegistryMock(listener),
+}));
+
+vi.mock('./platformImportedInstanceRegistry', () => ({
+  listPlatformImportedInstanceRecords: () => listPlatformImportedInstanceRecordsMock(),
+  subscribePlatformImportedInstanceRecords: async (listener: ImportedInstanceListener) =>
+    subscribePlatformImportedInstanceRecordsMock(listener),
+}));
+
+vi.mock('./installedPlatformPacks', () => ({
+  getInstalledPlatformPackRecord: (installationId: string) =>
+    getInstalledPlatformPackRecordMock(installationId),
+  subscribeInstalledPlatformPackRecords: async (listener: InstalledPackListener) =>
+    subscribeInstalledPlatformPackRecordsMock(listener),
 }));
 
 function createCompatRecord(
@@ -110,11 +146,18 @@ describe('instanceRegistry auth hydration', () => {
   beforeEach(() => {
     vi.resetModules();
     compatListeners.clear();
+    importedInstanceListeners.clear();
+    installedPackListeners.clear();
     compatRecords = [];
+    importedInstanceRecords = [];
     listPlatformCompatRegistryRecordsMock.mockClear();
     getPlatformCompatRegistryRecordMock.mockClear();
     getPlatformCompatRuntimeApiMock.mockClear();
     subscribePlatformCompatRegistryMock.mockClear();
+    listPlatformImportedInstanceRecordsMock.mockClear();
+    subscribePlatformImportedInstanceRecordsMock.mockClear();
+    getInstalledPlatformPackRecordMock.mockClear();
+    subscribeInstalledPlatformPackRecordsMock.mockClear();
 
     Object.defineProperty(window, 'requestAnimationFrame', {
       configurable: true,

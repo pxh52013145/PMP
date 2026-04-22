@@ -1,3 +1,5 @@
+import type { MusicPlatformWorkspaceDescriptor } from './musicPlatformWorkspace';
+
 export type ContributionSource = 'builtin' | 'plugin' | 'runtime';
 
 export type ContributionMetadata = Record<string, unknown>;
@@ -50,6 +52,13 @@ export interface CommandContributionDescriptor extends OrderedContributionDescri
   kind: 'command';
 }
 
+export interface MusicPlatformWorkspaceContributionDescriptor
+  extends OrderedContributionDescriptor {
+  kind: 'music-platform-workspace';
+  connectorId?: string;
+  workspace: MusicPlatformWorkspaceDescriptor;
+}
+
 export interface KeybindingContributionDescriptor {
   kind: 'keybinding';
   id: string;
@@ -68,6 +77,7 @@ export type ExtensionContributionDescriptor =
   | SettingsPanelContributionDescriptor
   | VisualizerContributionDescriptor
   | CommandContributionDescriptor
+  | MusicPlatformWorkspaceContributionDescriptor
   | KeybindingContributionDescriptor;
 
 export type {

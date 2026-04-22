@@ -219,6 +219,149 @@ vi.mock('../../modules/music-platform', async () => {
         };
       }
     ),
+    getPlatformWorkspacePageModel: vi.fn(
+      async (options: { connectorId: string; instanceId?: string | null }) => ({
+        features: {
+          collections: true,
+          recommendations: true,
+          search: true,
+          quality: true,
+        },
+        defaultPageId: 'recommended',
+        pages: [
+          {
+            pageId: 'recommended',
+            kind: 'recommended',
+            title: `${options.connectorId} Recommended`,
+            enabled: true,
+          },
+          {
+            pageId: 'instance',
+            kind: 'workspace',
+            title: `${options.instanceId ?? 'builtin'} Library`,
+            enabled: true,
+          },
+        ],
+      })
+    ),
+    listPlatformWorkspacePages: vi.fn(
+      async (options: { connectorId: string; instanceId?: string | null }) => [
+        {
+          pageId: 'recommended',
+          kind: 'recommended',
+          title: `${options.connectorId} Recommended`,
+          enabled: true,
+        },
+        {
+          pageId: 'instance',
+          kind: 'workspace',
+          title: `${options.instanceId ?? 'builtin'} Library`,
+          enabled: true,
+        },
+      ]
+    ),
+    listPlatformWorkspaceCollections: vi.fn(
+      async (options: { connectorId: string; instanceId?: string | null }) => [
+        {
+          collectionId: `${options.connectorId}:favorites`,
+          title: `${options.instanceId ?? 'builtin'} Favorites`,
+          trackCount: 12,
+        },
+      ]
+    ),
+    listPlatformWorkspaceCollectionResources: vi.fn(
+      async (options: { connectorId: string; collectionId: string; instanceId?: string | null }) => ({
+        sourceKind: 'playlist',
+        sourceId: options.collectionId,
+        pageNum: 1,
+        pageSize: 1,
+        total: 1,
+        hasMore: false,
+        items: [
+          {
+            resourceId: `${options.collectionId}:track-1`,
+            title: `${options.connectorId} Collection Track`,
+            sourceLocator: 'netease://song/collection-track-1',
+          },
+        ],
+      })
+    ),
+    listPlatformWorkspaceRecommendedCollections: vi.fn(
+      async (options: { connectorId: string }) => [
+        {
+          collectionId: `${options.connectorId}:daily-playlists`,
+          title: 'Daily Playlists',
+          trackCount: 8,
+        },
+      ]
+    ),
+    listPlatformWorkspaceRecommendedResources: vi.fn(
+      async (options: { connectorId: string }) => ({
+        sourceKind: 'recommended',
+        sourceId: `${options.connectorId}:daily`,
+        pageNum: 1,
+        pageSize: 1,
+        total: 1,
+        hasMore: false,
+        items: [
+          {
+            resourceId: 'daily-track-1',
+            title: `${options.connectorId} Daily Track`,
+            sourceLocator: 'netease://song/daily-track-1',
+          },
+        ],
+      })
+    ),
+    searchPlatformWorkspaceResources: vi.fn(
+      async (options: { connectorId: string; keyword: string }) => ({
+        sourceKind: 'search',
+        sourceId: options.keyword,
+        pageNum: 1,
+        pageSize: 1,
+        total: 1,
+        hasMore: false,
+        items: [
+          {
+            resourceId: `search:${options.keyword}`,
+            title: `${options.connectorId} Search Result`,
+            sourceLocator: 'netease://song/search-track-1',
+          },
+        ],
+      })
+    ),
+    preparePlatformWorkspacePlayback: vi.fn(
+      async (options: { connectorId: string; sourceLocator: string; qualityHint?: string }) => ({
+        sourceLocator: options.sourceLocator,
+        streamUrl: `https://example.test/${options.connectorId}/workspace-stream`,
+        cachePath: `/cache/${options.connectorId}/workspace-track`,
+        selectedQualityKey: options.qualityHint ?? 'auto',
+        selectedQualityLabel: options.qualityHint ?? 'Auto',
+      })
+    ),
+    listPlatformWorkspaceQualityState: vi.fn(
+      async (_options: { connectorId: string; sourceLocator?: string | null }) => ({
+        currentKey: 'lossless',
+        currentLabel: 'Lossless',
+        options: [
+          { key: 'auto', label: 'Auto', available: true },
+          { key: 'lossless', label: 'Lossless', available: true },
+        ],
+      })
+    ),
+    setPlatformWorkspaceQualityPreference: vi.fn(
+      async (options: { qualityKey: string }) => ({
+        currentKey: options.qualityKey,
+        currentLabel: options.qualityKey.toUpperCase(),
+        options: [
+          { key: 'auto', label: 'Auto', available: true },
+          { key: options.qualityKey, label: options.qualityKey.toUpperCase(), available: true },
+        ],
+      })
+    ),
+    resolvePlatformWorkspaceCoverAssetUrl: vi.fn(
+      async (options: { coverUrl?: string | null }) =>
+        options.coverUrl ? `asset://${options.coverUrl.replace(/^https?:\/\//, '')}` : undefined
+    ),
   };
 });
 
@@ -2037,6 +2180,264 @@ describe('host.pmp capabilities', () => {
       sourceLocator: 'netease://song/1',
       qualityHint: undefined,
       instanceId: undefined,
+    });
+  });
+
+  it('routes host.pmp.music-platform.workspace through instance-aware workspace facades', async () => {
+    const api = createMountApi({
+      permissions: [
+        'api:host',
+        'api:host-capability',
+        'api:music-platform-workspace',
+      ],
+    });
+
+    const describeResult = await api.host.invokeCapability(
+      'host.pmp.music-platform.workspace',
+      'describe'
+    );
+    const modelResult = await api.host.invokeCapability(
+      'host.pmp.music-platform.workspace',
+      'getWorkspaceModel',
+      {
+        connectorId: 'connector.platform.netease',
+      }
+    );
+    const pagesResult = await api.host.invokeCapability(
+      'host.pmp.music-platform.workspace',
+      'listPages',
+      {
+        connectorId: 'connector.platform.netease',
+      }
+    );
+    const collectionsResult = await api.host.invokeCapability(
+      'host.pmp.music-platform.workspace',
+      'listCollections',
+      {
+        connectorId: 'connector.platform.netease',
+        forceRefresh: true,
+      }
+    );
+    const collectionResourcesResult = await api.host.invokeCapability(
+      'host.pmp.music-platform.workspace',
+      'listCollectionResources',
+      {
+        connectorId: 'connector.platform.netease',
+        collectionId: 'connector.platform.netease:favorites',
+      }
+    );
+    const recommendedCollectionsResult = await api.host.invokeCapability(
+      'host.pmp.music-platform.workspace',
+      'listRecommendedCollections',
+      {
+        connectorId: 'connector.platform.netease',
+      }
+    );
+    const recommendedResourcesResult = await api.host.invokeCapability(
+      'host.pmp.music-platform.workspace',
+      'listRecommendedResources',
+      {
+        connectorId: 'connector.platform.netease',
+      }
+    );
+    const searchResult = await api.host.invokeCapability(
+      'host.pmp.music-platform.workspace',
+      'searchResources',
+      {
+        connectorId: 'connector.platform.netease',
+        query: 'daily mix',
+      }
+    );
+    const prepareResult = await api.host.invokeCapability(
+      'host.pmp.music-platform.workspace',
+      'preparePlayback',
+      {
+        connectorId: 'connector.platform.netease',
+        sourceLocator: 'netease://song/workspace-track-1',
+        qualityHint: 'lossless',
+      }
+    );
+    const qualityStateResult = await api.host.invokeCapability(
+      'host.pmp.music-platform.workspace',
+      'listQualityState',
+      {
+        connectorId: 'connector.platform.netease',
+      }
+    );
+    const qualityPreferenceResult = await api.host.invokeCapability(
+      'host.pmp.music-platform.workspace',
+      'setQualityPreference',
+      {
+        connectorId: 'connector.platform.netease',
+        qualityKey: 'exhigh',
+      }
+    );
+    const coverResult = await api.host.invokeCapability(
+      'host.pmp.music-platform.workspace',
+      'resolveCoverAssetUrl',
+      {
+        connectorId: 'connector.platform.netease',
+        coverUrl: 'https://example.test/covers/netease.jpg',
+      }
+    );
+
+    expect(describeResult).toMatchObject({
+      ok: true,
+      data: {
+        capabilityId: 'host.pmp.music-platform.workspace',
+      },
+    });
+    expect(modelResult).toMatchObject({
+      ok: true,
+      data: {
+        connectorId: 'connector.platform.netease',
+        instanceId: 'bilibili:builtin',
+        model: {
+          defaultPageId: 'recommended',
+        },
+      },
+    });
+    expect(pagesResult).toMatchObject({
+      ok: true,
+      data: {
+        items: [{ pageId: 'recommended' }, { pageId: 'instance' }],
+      },
+    });
+    expect(collectionsResult).toMatchObject({
+      ok: true,
+      data: {
+        items: [{ collectionId: 'connector.platform.netease:favorites' }],
+      },
+    });
+    expect(collectionResourcesResult).toMatchObject({
+      ok: true,
+      data: {
+        collectionId: 'connector.platform.netease:favorites',
+        page: {
+          sourceId: 'connector.platform.netease:favorites',
+        },
+      },
+    });
+    expect(recommendedCollectionsResult).toMatchObject({
+      ok: true,
+      data: {
+        items: [{ collectionId: 'connector.platform.netease:daily-playlists' }],
+      },
+    });
+    expect(recommendedResourcesResult).toMatchObject({
+      ok: true,
+      data: {
+        page: {
+          sourceKind: 'recommended',
+        },
+      },
+    });
+    expect(searchResult).toMatchObject({
+      ok: true,
+      data: {
+        query: 'daily mix',
+        page: {
+          sourceId: 'daily mix',
+        },
+      },
+    });
+    expect(prepareResult).toMatchObject({
+      ok: true,
+      data: {
+        prepared: {
+          sourceLocator: 'netease://song/workspace-track-1',
+          selectedQualityKey: 'lossless',
+        },
+      },
+    });
+    expect(qualityStateResult).toMatchObject({
+      ok: true,
+      data: {
+        state: {
+          currentKey: 'lossless',
+        },
+      },
+    });
+    expect(qualityPreferenceResult).toMatchObject({
+      ok: true,
+      data: {
+        state: {
+          currentKey: 'exhigh',
+        },
+      },
+    });
+    expect(coverResult).toMatchObject({
+      ok: true,
+      data: {
+        assetUrl: 'asset://example.test/covers/netease.jpg',
+      },
+    });
+    expect(musicPlatformModule.resolvePlatformInstanceId).toHaveBeenCalledWith({
+      connectorId: 'connector.platform.netease',
+    });
+    expect(musicPlatformModule.getPlatformWorkspacePageModel).toHaveBeenCalledWith({
+      connectorId: 'connector.platform.netease',
+      instanceId: 'bilibili:builtin',
+    });
+    expect(musicPlatformModule.listPlatformWorkspacePages).toHaveBeenCalledWith({
+      connectorId: 'connector.platform.netease',
+      instanceId: 'bilibili:builtin',
+    });
+    expect(musicPlatformModule.listPlatformWorkspaceCollections).toHaveBeenCalledWith({
+      connectorId: 'connector.platform.netease',
+      instanceId: 'bilibili:builtin',
+      forceRefresh: true,
+    });
+    expect(musicPlatformModule.listPlatformWorkspaceCollectionResources).toHaveBeenCalledWith({
+      connectorId: 'connector.platform.netease',
+      instanceId: 'bilibili:builtin',
+      collectionId: 'connector.platform.netease:favorites',
+      pageNum: undefined,
+      pageSize: undefined,
+      forceRefresh: false,
+    });
+    expect(musicPlatformModule.listPlatformWorkspaceRecommendedCollections).toHaveBeenCalledWith({
+      connectorId: 'connector.platform.netease',
+      instanceId: 'bilibili:builtin',
+      forceRefresh: false,
+    });
+    expect(musicPlatformModule.listPlatformWorkspaceRecommendedResources).toHaveBeenCalledWith({
+      connectorId: 'connector.platform.netease',
+      instanceId: 'bilibili:builtin',
+      forceRefresh: false,
+    });
+    expect(musicPlatformModule.searchPlatformWorkspaceResources).toHaveBeenCalledWith({
+      connectorId: 'connector.platform.netease',
+      instanceId: 'bilibili:builtin',
+      keyword: 'daily mix',
+      pageNum: undefined,
+      pageSize: undefined,
+      forceRefresh: false,
+    });
+    expect(musicPlatformModule.preparePlatformWorkspacePlayback).toHaveBeenCalledWith({
+      connectorId: 'connector.platform.netease',
+      instanceId: 'bilibili:builtin',
+      sourceLocator: 'netease://song/workspace-track-1',
+      qualityHint: 'lossless',
+      resourceId: undefined,
+      webUrl: undefined,
+    });
+    expect(musicPlatformModule.listPlatformWorkspaceQualityState).toHaveBeenCalledWith({
+      connectorId: 'connector.platform.netease',
+      instanceId: 'bilibili:builtin',
+      sourceLocator: undefined,
+      forceRefresh: false,
+    });
+    expect(musicPlatformModule.setPlatformWorkspaceQualityPreference).toHaveBeenCalledWith({
+      connectorId: 'connector.platform.netease',
+      instanceId: 'bilibili:builtin',
+      qualityKey: 'exhigh',
+      sourceLocator: undefined,
+    });
+    expect(musicPlatformModule.resolvePlatformWorkspaceCoverAssetUrl).toHaveBeenCalledWith({
+      connectorId: 'connector.platform.netease',
+      instanceId: 'bilibili:builtin',
+      coverUrl: 'https://example.test/covers/netease.jpg',
     });
   });
 

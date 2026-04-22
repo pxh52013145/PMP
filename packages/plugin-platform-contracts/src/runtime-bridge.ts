@@ -1,4 +1,11 @@
 import type { DataPlaneKind } from './core';
+import type {
+  MusicPlatformWorkspaceCapabilityFamilies,
+  MusicPlatformWorkspaceContextDescriptor,
+  MusicPlatformWorkspaceDescriptor,
+  MusicPlatformWorkspaceRootDescriptor,
+  MusicPlatformWorkspaceShellSlotDescriptor,
+} from './musicPlatformWorkspace';
 
 export type RuntimeKind = 'extension-host' | 'webview' | 'sidecar';
 
@@ -90,6 +97,20 @@ export interface ViewMountRequest extends RuntimeBridgeEnvelope {
   viewType: string;
   surfaceSlot: string;
   props?: unknown;
+  mountMetadata?: {
+    scope?: 'generic' | 'music-platform-workspace';
+    connectorId?: string;
+    platformId?: string;
+    instanceId?: string;
+    workspace?: Pick<
+      MusicPlatformWorkspaceDescriptor,
+      'ownership' | 'requiredRuntimeCarrier'
+    >;
+    root?: MusicPlatformWorkspaceRootDescriptor;
+    shellSlot?: MusicPlatformWorkspaceShellSlotDescriptor;
+    capabilityFamilies?: MusicPlatformWorkspaceCapabilityFamilies;
+    context?: MusicPlatformWorkspaceContextDescriptor;
+  };
 }
 
 export interface ViewMountAck extends RuntimeBridgeEnvelope {

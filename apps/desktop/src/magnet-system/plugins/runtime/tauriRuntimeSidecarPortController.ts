@@ -33,6 +33,10 @@ function isRuntimeBridgeTransportMessage(value: unknown): value is RuntimeBridge
   return typeof asObject(value)?.op === 'string';
 }
 
+function normalizeString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 export async function createTauriRuntimeSidecarPortController(
   options: CreateRuntimeSidecarPortControllerOptions
 ): Promise<RuntimeSidecarPortController> {
@@ -59,6 +63,10 @@ export async function createTauriRuntimeSidecarPortController(
   const unlisten = await listen<SidecarBridgeEventPayload>(SIDECAR_BRIDGE_MESSAGE_EVENT, (event) => {
     const payload = asObject(event.payload) as SidecarBridgeEventPayload | null;
     if (!payload || payload.runtimeInstanceId !== options.runtimeInstanceId) {
+      return;
+    }
+    const payloadSessionId = normalizeString(payload.sessionId);
+    if (sessionId && payloadSessionId && payloadSessionId !== sessionId) {
       return;
     }
 

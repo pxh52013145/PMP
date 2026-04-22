@@ -3254,7 +3254,10 @@ mod tests {
             "Netease Cloud Music",
         );
 
-        assert_eq!(status.availability.as_deref(), Some(AUTH_AVAILABILITY_AVAILABLE));
+        assert_eq!(
+            status.availability.as_deref(),
+            Some(AUTH_AVAILABILITY_AVAILABLE)
+        );
         assert_eq!(status.availability_message, None);
         assert_eq!(status.auth_state, "authorized");
     }
@@ -3270,13 +3273,14 @@ mod tests {
             "Netease Cloud Music",
         );
 
-        assert_eq!(status.availability.as_deref(), Some(AUTH_AVAILABILITY_DEGRADED));
-        assert!(
-            status
-                .availability_message
-                .as_deref()
-                .is_some_and(|message| message.contains("refresh login status"))
+        assert_eq!(
+            status.availability.as_deref(),
+            Some(AUTH_AVAILABILITY_DEGRADED)
         );
+        assert!(status
+            .availability_message
+            .as_deref()
+            .is_some_and(|message| message.contains("refresh login status")));
         assert_eq!(status.auth_state, "authorized");
     }
 

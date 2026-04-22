@@ -15,20 +15,18 @@ export type PlatformRegistrationVisualState =
 
 type PlatformRegistrationItemLike = {
   entry: {
+    instanceId: string;
     connectorId: string;
   };
   renderSelection?: PlatformRenderSelectionRecord | null;
 };
 
-export function buildPlatformAuthSnapshotMapByConnectorId(
+export function buildPlatformAuthSnapshotMapByInstanceId(
   instances: PlatformInstanceRecord[]
 ): Record<string, PlatformInstanceAuthSnapshot | null> {
   const next: Record<string, PlatformInstanceAuthSnapshot | null> = {};
   for (const instance of instances) {
-    const connectorId =
-      typeof instance.metadata?.connectorId === 'string' ? instance.metadata.connectorId : '';
-    if (!connectorId) continue;
-    next[connectorId] = getPlatformInstanceAuthSnapshot(instance.instanceId);
+    next[instance.instanceId] = getPlatformInstanceAuthSnapshot(instance.instanceId);
   }
   return next;
 }
@@ -54,9 +52,9 @@ export function filterMountedPlatformRegistrationItems<T extends PlatformRegistr
 }
 
 export function resolveActiveMountedPlatformRegistrationItem<T extends PlatformRegistrationItemLike>(
-  selectedConnectorId: string | null | undefined,
+  selectedInstanceId: string | null | undefined,
   items: T[]
 ): T | null {
   const mountedItems = filterMountedPlatformRegistrationItems(items);
-  return mountedItems.find((item) => item.entry.connectorId === selectedConnectorId) ?? mountedItems[0] ?? null;
+  return mountedItems.find((item) => item.entry.instanceId === selectedInstanceId) ?? mountedItems[0] ?? null;
 }

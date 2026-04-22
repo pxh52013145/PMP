@@ -126,6 +126,33 @@ function createPlatformApiErrorResult(
   };
 }
 
+function cloneWorkspaceDescriptor(
+  workspace: PlatformCompatContractFile['workspace'] | undefined
+): PlatformCompatContractFile['workspace'] | undefined {
+  if (!workspace) {
+    return undefined;
+  }
+
+  return {
+    ownership: workspace.ownership,
+    requiredRuntimeCarrier: workspace.requiredRuntimeCarrier,
+    root: workspace.root ? { ...workspace.root } : undefined,
+    shellSlots: workspace.shellSlots?.map((slot) => ({ ...slot })),
+    capabilityFamilies: workspace.capabilityFamilies
+      ? {
+          required: workspace.capabilityFamilies.required?.slice(),
+          optional: workspace.capabilityFamilies.optional?.slice(),
+        }
+      : undefined,
+    context: workspace.context
+      ? {
+          scope: workspace.context.scope,
+          fields: workspace.context.fields.slice(),
+        }
+      : undefined,
+  };
+}
+
 function cloneContract(contract: PlatformCompatContractFile): PlatformCompatContractFile {
   return {
     ...contract,
@@ -133,6 +160,7 @@ function cloneContract(contract: PlatformCompatContractFile): PlatformCompatCont
     auth: { ...contract.auth },
     capabilities: { ...contract.capabilities },
     apiBindings: { ...contract.apiBindings },
+    workspace: cloneWorkspaceDescriptor(contract.workspace),
     extension: contract.extension ? { ...contract.extension } : undefined,
   };
 }

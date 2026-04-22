@@ -1,5 +1,6 @@
 import {
   PLATFORM_COMPAT_PMP_SUPPORTED_BINDINGS,
+  type PlatformCompatContractFile,
   type PlatformCompatRuntimeApi,
 } from '@pixel-matrix/plugin-platform-contracts';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
@@ -39,12 +40,17 @@ import type { PlatformInstanceAuthAdapter } from './platformInstanceAuthAdapter'
 import {
   areInstalledPlatformPackArtifactsPresent,
   createInstalledPlatformPackEntryUrl,
+  getInstalledPlatformPackRecord,
   installPlatformPackToStorage,
   loadInstalledPlatformPackRecords,
   subscribeInstalledPlatformPackRecords,
   type InstalledPlatformPackRecord,
   type InstalledPlatformPackSourceType,
 } from './installedPlatformPacks';
+import {
+  ensurePlatformImportedInstanceForInstallation,
+  getPlatformImportedInstanceRecord,
+} from './platformImportedInstanceRegistry';
 import {
   createPlatformPackSidecarHostRuntimeSupport,
 } from './platformPackSidecarHostSupport';
@@ -59,6 +65,14 @@ import {
   BILIBILI_CONNECTOR_ID,
   NETEASE_CONNECTOR_ID,
 } from './platformConnectorModel';
+import {
+  clonePlatformPackWorkspaceSurfaceRecord,
+  createPlatformPackWorkspaceSurfaceRecord,
+  isPlatformPackWorkspaceHostRouterReady,
+  isPlatformPackWorkspaceRuntimeCarrierSupported,
+  normalizePlatformPackWorkspaceRuntimeCarrier,
+  type PlatformPackWorkspaceSurfaceRecord,
+} from './platformWorkspaceSurface';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -83,6 +97,28 @@ export interface PlatformPackReadinessDiagnostic {
   fields?: JsonRecord;
 }
 
+export interface PlatformPackWorkspaceReadinessDiagnostic {
+  code: string;
+  severity: PlatformPackReadinessDiagnosticSeverity;
+  message: string;
+  fields?: JsonRecord;
+}
+
+export interface PlatformPackWorkspaceReadiness {
+  connectorId: PlatformConnectorId;
+  packId: string | null;
+  packVersion: string | null;
+  source: string | null;
+  ready: boolean;
+  hostRouterReady: boolean;
+  registrationPresent: boolean;
+  contractPresent: boolean;
+  runtimePresent: boolean;
+  workspaceOwnershipDeclared: boolean;
+  mountSurfaceDeclared: boolean;
+  diagnostics: PlatformPackWorkspaceReadinessDiagnostic[];
+}
+
 export interface PlatformPackRegistrationRecord {
   packId: string;
   packVersion: string;
@@ -92,6 +128,11 @@ export interface PlatformPackRegistrationRecord {
   installedAtMs: number;
   definition: PlatformConnectorDefinition;
   compat: BuiltinPlatformCompatRegistration;
+}
+
+export interface PlatformPackInstallResult extends PlatformPackRegistrationRecord {
+  installationId?: string;
+  importedInstanceId?: string | null;
 }
 
 export interface PlatformPackHostRuntimeSupport {
@@ -247,7 +288,19 @@ export interface BuiltinPlatformPackStoreInspection {
 }
 
 const platformPackRegistry = new Map<PlatformConnectorId, PlatformPackRegistrationRecord>();
+const platformPackRegistrationByInstallationId = new Map<
+  string,
+  PlatformPackRegistrationRecord
+>();
 const platformPackReadinessDiagnostics = new Map<string, PlatformPackReadinessDiagnostic>();
+const platformPackWorkspaceSurfaceRegistry = new Map<
+  PlatformConnectorId,
+  PlatformPackWorkspaceSurfaceRecord
+>();
+const platformPackWorkspaceSurfaceByInstallationId = new Map<
+  string,
+  PlatformPackWorkspaceSurfaceRecord
+>();
 const platformPackHostRuntimeSupportRegistry = new Map<
   PlatformConnectorId,
   PlatformPackHostRuntimeSupport
@@ -288,6 +341,11 @@ let builtinPlatformPackBackgroundReconcileConnectorIds: Set<PlatformConnectorId>
 const telemetry = getTelemetryLogger('music-platform', 'platformPackRegistry');
 const PLATFORM_PACK_STARTUP_STAGE_HISTORY_LIMIT = 24;
 const PLATFORM_PACK_READINESS_DIAGNOSTIC_LIMIT = 64;
+type ConsecutiveDiagnosticFingerprint = {
+  state: string;
+  fingerprint: string;
+};
+let lastBuiltinPlatformPackStoreInspectionTelemetry: ConsecutiveDiagnosticFingerprint | null = null;
 let platformPackBootPerfStartedAtMs: number | null = null;
 const platformPackStartupHealth: PlatformPackStartupHealth = {
   state: 'idle',
@@ -342,6 +400,61 @@ function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function normalizeDiagnosticFingerprintValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeDiagnosticFingerprintValue(item));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right, 'en'))
+        .map(([key, item]) => [key, normalizeDiagnosticFingerprintValue(item)])
+    );
+  }
+  return value ?? null;
+}
+
+function shouldEmitConsecutiveDiagnosticFingerprint(
+  previous: ConsecutiveDiagnosticFingerprint | null,
+  next: ConsecutiveDiagnosticFingerprint
+): boolean {
+  return !previous || previous.state !== next.state || previous.fingerprint !== next.fingerprint;
+}
+
+function buildBuiltinPlatformPackStoreInspectionFingerprint(
+  inspection: BuiltinPlatformPackStoreInspection
+): string {
+  return JSON.stringify(
+    normalizeDiagnosticFingerprintValue({
+      indexAvailable: inspection.indexAvailable,
+      current: inspection.current,
+      storeReadyWithoutIndex: inspection.storeReadyWithoutIndex,
+      staleConnectorIds: inspection.staleConnectorIds,
+      relaxedDevConnectorIds: inspection.relaxedDevConnectorIds,
+      entries: inspection.entries
+        .filter(
+          (entry) =>
+            entry.effectiveReasonCodes.length > 0 || entry.relaxedDevReasonCodes.length > 0
+        )
+        .map((entry) => ({
+          connectorId: entry.connectorId,
+          storedRecordFound: entry.storedRecordFound,
+          artifactsPresent: entry.artifactsPresent,
+          storedSourceType: entry.storedSourceType,
+          storedPackId: entry.storedPackId,
+          storedPackVersion: entry.storedPackVersion,
+          storedPackageDigest: entry.storedPackageDigest,
+          indexEntryPresent: entry.indexEntryPresent,
+          indexPackId: entry.indexPackId,
+          indexPackVersion: entry.indexPackVersion,
+          indexPackageDigest: entry.indexPackageDigest,
+          effectiveReasonCodes: entry.effectiveReasonCodes,
+          relaxedDevReasonCodes: entry.relaxedDevReasonCodes,
+        })),
+    })
+  );
+}
+
 function normalizeDiagnosticSourceType(
   value: InstalledPlatformPackSourceType | null | undefined
 ): InstalledPlatformPackSourceType | null {
@@ -364,6 +477,24 @@ function clonePlatformPackReadinessDiagnostic(
   return {
     ...diagnostic,
     fields: diagnostic.fields ? { ...diagnostic.fields } : undefined,
+  };
+}
+
+function clonePlatformPackWorkspaceReadinessDiagnostic(
+  diagnostic: PlatformPackWorkspaceReadinessDiagnostic
+): PlatformPackWorkspaceReadinessDiagnostic {
+  return {
+    ...diagnostic,
+    fields: diagnostic.fields ? { ...diagnostic.fields } : undefined,
+  };
+}
+
+function clonePlatformPackWorkspaceReadiness(
+  readiness: PlatformPackWorkspaceReadiness
+): PlatformPackWorkspaceReadiness {
+  return {
+    ...readiness,
+    diagnostics: readiness.diagnostics.map(clonePlatformPackWorkspaceReadinessDiagnostic),
   };
 }
 
@@ -764,6 +895,94 @@ function normalizePackConnectorId(value: unknown): PlatformConnectorId {
   return normalized as PlatformConnectorId;
 }
 
+function readWorkspaceExtensionRecord(
+  extension: Record<string, unknown> | undefined
+): Record<string, unknown> | null {
+  if (!extension || !isJsonRecord(extension)) {
+    return null;
+  }
+  const workspace = extension.workspace;
+  return isJsonRecord(workspace) ? workspace : null;
+}
+
+function readWorkspaceOwnershipDeclared(
+  contract: PlatformCompatContractFile | null | undefined
+): boolean {
+  const declaredWorkspace = contract?.workspace;
+  if (typeof declaredWorkspace !== 'undefined') {
+    return declaredWorkspace.ownership === 'pack';
+  }
+
+  const extension = contract?.extension;
+  if (!extension || !isJsonRecord(extension)) {
+    return false;
+  }
+
+  const directOwnership = normalizeString(extension.workspaceOwnership);
+  if (directOwnership === 'pack') {
+    return true;
+  }
+
+  const legacyWorkspace = readWorkspaceExtensionRecord(extension);
+  if (!legacyWorkspace) {
+    return false;
+  }
+
+  const nestedOwnership =
+    normalizeString(legacyWorkspace.ownership) || normalizeString(legacyWorkspace.owner);
+  return nestedOwnership === 'pack';
+}
+
+function readWorkspaceMountDeclared(
+  contract: PlatformCompatContractFile | null | undefined
+): boolean {
+  const declaredWorkspace = contract?.workspace;
+  if (typeof declaredWorkspace !== 'undefined') {
+    return Boolean(
+      declaredWorkspace.root || (declaredWorkspace.shellSlots?.length ?? 0) > 0
+    );
+  }
+
+  const extension = contract?.extension;
+  if (!extension || !isJsonRecord(extension)) {
+    return false;
+  }
+
+  const directMount =
+    normalizeString(extension.workspaceMount) ||
+    normalizeString(extension.workspaceSurface) ||
+    normalizeString(extension.workspaceRootView);
+  if (directMount) {
+    return true;
+  }
+
+  const legacyWorkspace = readWorkspaceExtensionRecord(extension);
+  if (!legacyWorkspace) {
+    return false;
+  }
+
+  return Boolean(
+    normalizeString(legacyWorkspace.mount) ||
+      normalizeString(legacyWorkspace.surface) ||
+      normalizeString(legacyWorkspace.rootViewId) ||
+      normalizeString(legacyWorkspace.entry)
+  );
+}
+
+function createWorkspaceReadinessDiagnostic(input: {
+  code: string;
+  severity: PlatformPackReadinessDiagnosticSeverity;
+  message: string;
+  fields?: JsonRecord;
+}): PlatformPackWorkspaceReadinessDiagnostic {
+  return {
+    code: input.code,
+    severity: input.severity,
+    message: normalizeString(input.message),
+    fields: input.fields ? { ...input.fields } : undefined,
+  };
+}
+
 function guessIconMimeTypeFromPath(path: string): string {
   const normalized = path.trim().toLowerCase();
   if (normalized.endsWith('.svg')) return 'image/svg+xml';
@@ -1097,8 +1316,26 @@ async function inspectBuiltinPlatformPackStore(): Promise<BuiltinPlatformPackSto
   let readyRecordCount = 0;
 
   for (const asset of builtinPlatformPackAssets) {
-    const storedRecord =
-      records.find((record) => record.connectorId === asset.connectorId) ?? null;
+    const indexEntry = index?.get(asset.connectorId);
+    const builtinStoredRecord =
+      records.find(
+        (record) =>
+          record.connectorId === asset.connectorId && record.sourceType === 'builtin'
+      ) ?? null;
+    const exactMatchExternalRecord =
+      !builtinStoredRecord &&
+      indexEntry &&
+      normalizeString(indexEntry.packageDigest)
+        ? records.find(
+            (record) =>
+              record.connectorId === asset.connectorId &&
+              record.sourceType === 'external' &&
+              record.packId === indexEntry.packId &&
+              record.packVersion === indexEntry.packVersion &&
+              record.packageDigest === indexEntry.packageDigest
+          ) ?? null
+        : null;
+    const storedRecord = builtinStoredRecord ?? exactMatchExternalRecord ?? null;
     const artifactsPresent = storedRecord
       ? await areInstalledPlatformPackArtifactsPresent(storedRecord)
       : false;
@@ -1136,7 +1373,6 @@ async function inspectBuiltinPlatformPackStore(): Promise<BuiltinPlatformPackSto
       continue;
     }
 
-    const indexEntry = index.get(asset.connectorId);
     if (!indexEntry) {
       strictReasonCodes.push('index-entry-missing');
     }
@@ -1146,7 +1382,11 @@ async function inspectBuiltinPlatformPackStore(): Promise<BuiltinPlatformPackSto
     if (!artifactsPresent) {
       strictReasonCodes.push('artifacts-missing');
     }
-    if (storedRecord && storedRecord.sourceType !== 'builtin') {
+    if (
+      storedRecord &&
+      storedRecord.sourceType !== 'builtin' &&
+      !exactMatchExternalRecord
+    ) {
       strictReasonCodes.push('source-not-builtin');
     }
 
@@ -1227,26 +1467,54 @@ async function inspectBuiltinPlatformPackStore(): Promise<BuiltinPlatformPackSto
     entries,
   };
 
-  if (inspection.staleConnectorIds.length > 0) {
-    telemetry.warn('music-platform.pack.store-inspection.stale', {
-      fields: {
-        indexAvailable: inspection.indexAvailable,
-        readyRecordCount,
-        expectedBuiltinCount: builtinPlatformPackAssets.length,
-        staleConnectorIds: inspection.staleConnectorIds.join(','),
-        inspectionDetails: buildBuiltinPlatformPackStoreInspectionLogPayload(inspection),
-      },
-    });
-  } else if (inspection.relaxedDevConnectorIds.length > 0) {
-    telemetry.info('music-platform.pack.store-inspection.dev-relaxed', {
-      fields: {
-        indexAvailable: inspection.indexAvailable,
-        readyRecordCount,
-        expectedBuiltinCount: builtinPlatformPackAssets.length,
-        relaxedDevConnectorIds: inspection.relaxedDevConnectorIds.join(','),
-        inspectionDetails: buildBuiltinPlatformPackStoreInspectionLogPayload(inspection),
-      },
-    });
+  const inspectionTelemetryState =
+    inspection.staleConnectorIds.length > 0
+      ? 'stale'
+      : inspection.relaxedDevConnectorIds.length > 0
+        ? 'dev-relaxed'
+        : 'current';
+  const inspectionTelemetryFingerprint: ConsecutiveDiagnosticFingerprint = {
+    state: inspectionTelemetryState,
+    fingerprint: buildBuiltinPlatformPackStoreInspectionFingerprint(inspection),
+  };
+
+  if (
+    shouldEmitConsecutiveDiagnosticFingerprint(
+      lastBuiltinPlatformPackStoreInspectionTelemetry,
+      inspectionTelemetryFingerprint
+    )
+  ) {
+    if (inspection.staleConnectorIds.length > 0) {
+      telemetry.warn('music-platform.pack.store-inspection.stale', {
+        fields: {
+          indexAvailable: inspection.indexAvailable,
+          readyRecordCount,
+          expectedBuiltinCount: builtinPlatformPackAssets.length,
+          staleConnectorIds: inspection.staleConnectorIds.join(','),
+          inspectionDetails: buildBuiltinPlatformPackStoreInspectionLogPayload(inspection),
+        },
+      });
+    } else if (inspection.relaxedDevConnectorIds.length > 0) {
+      telemetry.info('music-platform.pack.store-inspection.dev-relaxed', {
+        fields: {
+          indexAvailable: inspection.indexAvailable,
+          readyRecordCount,
+          expectedBuiltinCount: builtinPlatformPackAssets.length,
+          relaxedDevConnectorIds: inspection.relaxedDevConnectorIds.join(','),
+          inspectionDetails: buildBuiltinPlatformPackStoreInspectionLogPayload(inspection),
+        },
+      });
+    } else if (lastBuiltinPlatformPackStoreInspectionTelemetry?.state !== 'current') {
+      telemetry.info('music-platform.pack.store-inspection.current', {
+        fields: {
+          indexAvailable: inspection.indexAvailable,
+          readyRecordCount,
+          expectedBuiltinCount: builtinPlatformPackAssets.length,
+        },
+      });
+    }
+
+    lastBuiltinPlatformPackStoreInspectionTelemetry = inspectionTelemetryFingerprint;
   }
 
   return inspection;
@@ -1535,20 +1803,52 @@ async function resolveAdapterAndRuntime(
   };
 }
 
+function cloneWorkspaceDescriptor(
+  workspace: PlatformCompatContractFile['workspace'] | undefined
+): PlatformCompatContractFile['workspace'] | undefined {
+  if (!workspace) {
+    return undefined;
+  }
+
+  return {
+    ownership: workspace.ownership,
+    requiredRuntimeCarrier: workspace.requiredRuntimeCarrier,
+    root: workspace.root ? { ...workspace.root } : undefined,
+    shellSlots: workspace.shellSlots?.map((slot) => ({ ...slot })),
+    capabilityFamilies: workspace.capabilityFamilies
+      ? {
+          required: workspace.capabilityFamilies.required?.slice(),
+          optional: workspace.capabilityFamilies.optional?.slice(),
+        }
+      : undefined,
+    context: workspace.context
+      ? {
+          scope: workspace.context.scope,
+          fields: workspace.context.fields.slice(),
+        }
+      : undefined,
+  };
+}
+
+function cloneContract(contract: PlatformCompatContractFile): PlatformCompatContractFile {
+  return {
+    ...contract,
+    platform: { ...contract.platform },
+    auth: { ...contract.auth },
+    capabilities: { ...contract.capabilities },
+    apiBindings: { ...contract.apiBindings },
+    workspace: cloneWorkspaceDescriptor(contract.workspace),
+    extension: contract.extension ? { ...contract.extension } : undefined,
+  };
+}
+
 function cloneRecord(record: PlatformPackRegistrationRecord): PlatformPackRegistrationRecord {
   return {
     ...record,
     definition: { ...record.definition },
     compat: {
       ...record.compat,
-      contract: {
-        ...record.compat.contract,
-        platform: { ...record.compat.contract.platform },
-        auth: { ...record.compat.contract.auth },
-        capabilities: { ...record.compat.contract.capabilities },
-        apiBindings: { ...record.compat.contract.apiBindings },
-        extension: record.compat.contract.extension ? { ...record.compat.contract.extension } : undefined,
-      },
+      contract: cloneContract(record.compat.contract),
       metadata: record.compat.metadata ? { ...record.compat.metadata } : undefined,
     },
   };
@@ -1592,6 +1892,45 @@ function buildCompatRegistration(
   };
 }
 
+function cloneWorkspaceSurfaceRecord(
+  record: PlatformPackWorkspaceSurfaceRecord
+): PlatformPackWorkspaceSurfaceRecord {
+  return clonePlatformPackWorkspaceSurfaceRecord(record);
+}
+
+function upsertPlatformPackWorkspaceSurfaceRecord(
+  pack: ParsedPlatformPack,
+  definition: PlatformConnectorDefinition,
+  source: string,
+  installationId?: string
+): void {
+  const workspaceSurface = createPlatformPackWorkspaceSurfaceRecord({
+    connectorId: definition.connectorId,
+    platformId: pack.contract.platform.platformId,
+    displayName: definition.displayName,
+    packId: pack.manifest.metadata.id,
+    packVersion: pack.manifest.metadata.version,
+    source,
+    runtimeCode: pack.runtimeCode,
+    runtimeImportUrl: pack.runtimeImportUrl,
+    workspace: pack.contract.workspace,
+  });
+
+  if (!workspaceSurface) {
+    platformPackWorkspaceSurfaceRegistry.delete(definition.connectorId);
+    if (installationId) {
+      platformPackWorkspaceSurfaceByInstallationId.delete(installationId);
+    }
+    return;
+  }
+
+  const clonedSurface = cloneWorkspaceSurfaceRecord(workspaceSurface);
+  platformPackWorkspaceSurfaceRegistry.set(definition.connectorId, clonedSurface);
+  if (installationId) {
+    platformPackWorkspaceSurfaceByInstallationId.set(installationId, clonedSurface);
+  }
+}
+
 function cloneHostRuntimeSupport(
   support: PlatformPackHostRuntimeSupport
 ): PlatformPackHostRuntimeSupport {
@@ -1608,7 +1947,7 @@ function buildInstalledPackSource(record: InstalledPlatformPackRecord): string {
     normalizeString(record.source) ||
     (record.sourceType === 'builtin'
       ? `builtin-pack:${record.packId}`
-      : `installed-pack:${record.packId}`)
+      : `installed-pack:${record.packId}:${record.installationId}`)
   );
 }
 
@@ -1642,14 +1981,8 @@ async function buildParsedPlatformPackFromInstalledRecord(
       },
     },
     contractPath: record.manifest.entry.contract,
-    contract: {
-      ...record.contract,
-      platform: { ...record.contract.platform },
-      auth: { ...record.contract.auth },
-      capabilities: { ...record.contract.capabilities },
-      apiBindings: { ...record.contract.apiBindings },
-      extension: record.contract.extension ? { ...record.contract.extension } : undefined,
-    },
+    contract: cloneContract(record.contract),
+    workspace: cloneWorkspaceDescriptor(record.contract.workspace) ?? null,
     runtimePath: record.runtimePath,
     runtimeCode,
     runtimeImportUrl,
@@ -1666,6 +1999,8 @@ async function registerInstalledPlatformPackRecord(
   record: InstalledPlatformPackRecord
 ): Promise<PlatformPackRegistrationRecord | null> {
   if (!(await areInstalledPlatformPackArtifactsPresent(record))) {
+    platformPackRegistrationByInstallationId.delete(record.installationId);
+    platformPackWorkspaceSurfaceByInstallationId.delete(record.installationId);
     recordPlatformPackReadinessDiagnostic({
       code: 'hydrate.artifacts-missing',
       severity: 'error',
@@ -1692,6 +2027,7 @@ async function registerInstalledPlatformPackRecord(
     source: buildInstalledPackSource(record),
     hostRuntimeSupport,
     installedAtMs: record.installedAtMs,
+    installationId: record.installationId,
     sourceType: record.sourceType,
   });
 }
@@ -1707,6 +2043,17 @@ async function refreshInstalledPlatformPackRegistrationsFromStore(): Promise<voi
   installedPlatformPackRefreshPromise = (async () => {
     const records = loadInstalledPlatformPackRecords();
     const desiredConnectorIds = new Set(records.map((record) => record.connectorId));
+    const desiredInstallationIds = new Set(records.map((record) => record.installationId));
+
+    for (const installationId of Array.from(platformPackRegistrationByInstallationId.keys())) {
+      if (desiredInstallationIds.has(installationId)) continue;
+      platformPackRegistrationByInstallationId.delete(installationId);
+    }
+
+    for (const installationId of Array.from(platformPackWorkspaceSurfaceByInstallationId.keys())) {
+      if (desiredInstallationIds.has(installationId)) continue;
+      platformPackWorkspaceSurfaceByInstallationId.delete(installationId);
+    }
 
     for (const connectorId of Array.from(platformPackRegistry.keys())) {
       if (!desiredConnectorIds.has(connectorId)) {
@@ -1718,6 +2065,8 @@ async function refreshInstalledPlatformPackRegistrationsFromStore(): Promise<voi
       try {
         await registerInstalledPlatformPackRecord(record);
       } catch (error) {
+        platformPackRegistrationByInstallationId.delete(record.installationId);
+        platformPackWorkspaceSurfaceByInstallationId.delete(record.installationId);
         recordPlatformPackReadinessDiagnostic({
           code: 'hydrate.registration-failed',
           severity: 'error',
@@ -1773,7 +2122,8 @@ function upsertPlatformPackRecord(
   definition: PlatformConnectorDefinition,
   compatRegistration: BuiltinPlatformCompatRegistration,
   source: string | undefined,
-  installedAtMs?: number
+  installedAtMs?: number,
+  installationId?: string
 ): PlatformPackRegistrationRecord {
   const existing = platformPackRegistry.get(definition.connectorId) ?? null;
   const record: PlatformPackRegistrationRecord = {
@@ -1792,7 +2142,16 @@ function upsertPlatformPackRecord(
     compat: compatRegistration,
   };
 
+  upsertPlatformPackWorkspaceSurfaceRecord(
+    pack,
+    definition,
+    record.source,
+    installationId
+  );
   platformPackRegistry.set(record.connectorId, cloneRecord(record));
+  if (installationId) {
+    platformPackRegistrationByInstallationId.set(installationId, cloneRecord(record));
+  }
   emitRegistryChanged();
   return cloneRecord(record);
 }
@@ -1810,6 +2169,7 @@ function registerPlatformPackRuntimeArtifacts(
     runtimeAdapter: PlatformPackResolvedRuntimeMode;
     connectorAdapterMode: PlatformPackResolvedAdapterMode;
     installedAtMs?: number;
+    installationId?: string;
   }
 ): PlatformPackRegistrationRecord {
   const previousSidecarEntryPath =
@@ -1859,7 +2219,8 @@ function registerPlatformPackRuntimeArtifacts(
     definition,
     compatRegistration,
     options.source,
-    options.installedAtMs
+    options.installedAtMs,
+    options.installationId
   );
 }
 
@@ -1869,6 +2230,7 @@ async function installParsedPlatformPack(
     source?: string;
     hostRuntimeSupport?: PlatformPackHostRuntimeSupport | null;
     installedAtMs?: number;
+    installationId?: string;
     sourceType?: InstalledPlatformPackSourceType | null;
   } = {}
 ): Promise<PlatformPackRegistrationRecord> {
@@ -1897,6 +2259,7 @@ async function installParsedPlatformPack(
         runtimeAdapter,
         connectorAdapterMode,
         installedAtMs: options.installedAtMs,
+        installationId: options.installationId,
       }
     );
     clearPlatformPackReadinessDiagnostics({
@@ -2417,7 +2780,7 @@ export async function awaitBuiltinPlatformPackRegistrationsReady(): Promise<void
 export async function installPlatformPackFromZipBytes(
   bytes: Uint8Array,
   options: { source?: string } = {}
-): Promise<PlatformPackRegistrationRecord> {
+): Promise<PlatformPackInstallResult> {
   let pack: ParsedPlatformPack;
   try {
     pack = await parsePlatformPackFromZipBytes(bytes);
@@ -2455,10 +2818,15 @@ export async function installPlatformPackFromZipBytes(
       `Failed to register installed platform pack (${storedRecord.connectorId})`
     );
   }
-  return registration;
+  const importedInstance = await ensurePlatformImportedInstanceForInstallation(storedRecord);
+  return {
+    ...registration,
+    installationId: storedRecord.installationId,
+    importedInstanceId: importedInstance?.instanceId ?? null,
+  };
 }
 
-export async function installPlatformPackFromFile(file: File): Promise<PlatformPackRegistrationRecord> {
+export async function installPlatformPackFromFile(file: File): Promise<PlatformPackInstallResult> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   try {
     return await installPlatformPackFromZipBytes(bytes, {
@@ -2474,6 +2842,392 @@ export async function installPlatformPackFromFile(file: File): Promise<PlatformP
 export function listPlatformPackRegistrations(): PlatformPackRegistrationRecord[] {
   ensureBuiltinPlatformPackRegistrationsInitialized();
   return Array.from(platformPackRegistry.values()).map(cloneRecord);
+}
+
+export function resolvePlatformPackWorkspaceSurface(
+  connectorId: string
+): PlatformPackWorkspaceSurfaceRecord | null {
+  ensureBuiltinPlatformPackRegistrationsInitialized();
+  let normalizedConnectorId: PlatformConnectorId;
+  try {
+    normalizedConnectorId = normalizePackConnectorId(connectorId);
+  } catch {
+    return null;
+  }
+
+  const surface = platformPackWorkspaceSurfaceRegistry.get(normalizedConnectorId);
+  return surface ? cloneWorkspaceSurfaceRecord(surface) : null;
+}
+
+export function resolvePlatformPackWorkspaceSurfaceForInstallation(
+  installationId: string
+): PlatformPackWorkspaceSurfaceRecord | null {
+  ensureBuiltinPlatformPackRegistrationsInitialized();
+  const normalizedInstallationId = normalizeString(installationId);
+  if (!normalizedInstallationId) {
+    return null;
+  }
+
+  const surface =
+    platformPackWorkspaceSurfaceByInstallationId.get(normalizedInstallationId) ?? null;
+  return surface ? cloneWorkspaceSurfaceRecord(surface) : null;
+}
+
+export function resolvePlatformPackWorkspaceSurfaceForInstance(
+  instanceId: string
+): PlatformPackWorkspaceSurfaceRecord | null {
+  ensureBuiltinPlatformPackRegistrationsInitialized();
+  const importedInstance = getPlatformImportedInstanceRecord(instanceId);
+  if (!importedInstance) {
+    return null;
+  }
+
+  return resolvePlatformPackWorkspaceSurfaceForInstallation(
+    importedInstance.installationId
+  );
+}
+
+export function listPlatformPackWorkspaceSurfaces(): PlatformPackWorkspaceSurfaceRecord[] {
+  ensureBuiltinPlatformPackRegistrationsInitialized();
+  return Array.from(platformPackWorkspaceSurfaceRegistry.values()).map(
+    cloneWorkspaceSurfaceRecord
+  );
+}
+
+function createEmptyPlatformPackWorkspaceReadiness(
+  input: {
+    connectorId: PlatformConnectorId;
+    packId?: string | null;
+    packVersion?: string | null;
+    source?: string | null;
+  },
+  hostRouterReady: boolean,
+  diagnostics: PlatformPackWorkspaceReadinessDiagnostic[]
+): PlatformPackWorkspaceReadiness {
+  return clonePlatformPackWorkspaceReadiness({
+    connectorId: input.connectorId,
+    packId: normalizeString(input.packId) || null,
+    packVersion: normalizeString(input.packVersion) || null,
+    source: normalizeString(input.source) || null,
+    ready: false,
+    hostRouterReady,
+    registrationPresent: false,
+    contractPresent: false,
+    runtimePresent: false,
+    workspaceOwnershipDeclared: false,
+    mountSurfaceDeclared: false,
+    diagnostics,
+  });
+}
+
+function inspectPlatformPackWorkspaceReadinessRecord(input: {
+  connectorId: PlatformConnectorId;
+  registration: PlatformPackRegistrationRecord | null;
+  contract: PlatformCompatContractFile | null;
+  runtimePresent: boolean;
+  workspaceSurface: PlatformPackWorkspaceSurfaceRecord | null;
+  source?: string | null;
+  registrationMissingCode?: string;
+  registrationMissingMessage?: string;
+  registrationMissingFields?: JsonRecord;
+}): PlatformPackWorkspaceReadiness {
+  const hostRouterReady = isPlatformPackWorkspaceHostRouterReady();
+  const { registration, contract, workspaceSurface } = input;
+  const workspace = contract?.workspace ?? null;
+  const workspaceOwnershipDeclared = readWorkspaceOwnershipDeclared(contract);
+  const mountSurfaceDeclared = readWorkspaceMountDeclared(contract);
+  const requiredRuntimeCarrier = workspace
+    ? normalizePlatformPackWorkspaceRuntimeCarrier(workspace.requiredRuntimeCarrier)
+    : null;
+  const diagnostics: PlatformPackWorkspaceReadinessDiagnostic[] = [];
+
+  if (!hostRouterReady) {
+    diagnostics.push(
+      createWorkspaceReadinessDiagnostic({
+        code: 'workspace.host-router.unavailable',
+        severity: 'error',
+        message:
+          'Host pack-owned workspace routing is not available in this runtime, so pack workspace UI cannot mount.',
+      })
+    );
+  }
+
+  if (!registration) {
+    diagnostics.push(
+      createWorkspaceReadinessDiagnostic({
+        code: input.registrationMissingCode ?? 'workspace.pack-registration.missing',
+        severity: 'error',
+        message:
+          input.registrationMissingMessage ??
+          'No platform pack registration is available for this connector, so pack-owned workspace UI cannot mount.',
+        fields: input.registrationMissingFields,
+      })
+    );
+  } else {
+    if (!contract) {
+      diagnostics.push(
+        createWorkspaceReadinessDiagnostic({
+          code: 'workspace.pack-contract.missing',
+          severity: 'error',
+          message:
+            'Platform pack contract is missing, so pack-owned workspace readiness cannot be established.',
+          fields: {
+            packId: registration.packId,
+            packVersion: registration.packVersion,
+          },
+        })
+      );
+    }
+
+    if (!input.runtimePresent) {
+      diagnostics.push(
+        createWorkspaceReadinessDiagnostic({
+          code: 'workspace.pack-runtime.missing',
+          severity: 'error',
+          message:
+            'Platform pack runtime is missing, so pack-owned workspace UI cannot mount.',
+          fields: {
+            packId: registration.packId,
+            packVersion: registration.packVersion,
+          },
+        })
+      );
+    }
+
+    if (contract && !workspaceOwnershipDeclared) {
+      diagnostics.push(
+        createWorkspaceReadinessDiagnostic({
+          code: 'workspace.pack-ownership.undeclared',
+          severity: 'warn',
+          message:
+            'Platform pack contract does not declare pack-owned workspace ownership yet.',
+          fields: {
+            packId: registration.packId,
+            packVersion: registration.packVersion,
+          },
+        })
+      );
+    }
+
+    if (contract && !mountSurfaceDeclared) {
+      diagnostics.push(
+        createWorkspaceReadinessDiagnostic({
+          code: 'workspace.pack-mount.undeclared',
+          severity: 'warn',
+          message:
+            'Platform pack contract does not declare a workspace mount surface yet.',
+          fields: {
+            packId: registration.packId,
+            packVersion: registration.packVersion,
+          },
+        })
+      );
+    }
+
+    if (contract && workspaceOwnershipDeclared && mountSurfaceDeclared && !workspace) {
+      diagnostics.push(
+        createWorkspaceReadinessDiagnostic({
+          code: 'workspace.contract.descriptor.missing',
+          severity: 'error',
+          message:
+            'Pack workspace ownership is only declared through legacy extension fields; Phase 2 mount routing requires contract.workspace.',
+          fields: {
+            packId: registration.packId,
+            packVersion: registration.packVersion,
+          },
+        })
+      );
+    }
+
+    if (workspace?.ownership === 'pack' && !workspace.root) {
+      diagnostics.push(
+        createWorkspaceReadinessDiagnostic({
+          code: 'workspace.pack-root.missing',
+          severity: 'error',
+          message:
+            'Pack workspace contract does not declare workspace.root, so the Phase 2 root mount container has nothing to mount.',
+          fields: {
+            packId: registration.packId,
+            packVersion: registration.packVersion,
+          },
+        })
+      );
+    }
+
+    if (
+      workspace?.ownership === 'pack' &&
+      requiredRuntimeCarrier &&
+      !isPlatformPackWorkspaceRuntimeCarrierSupported(requiredRuntimeCarrier)
+    ) {
+      diagnostics.push(
+        createWorkspaceReadinessDiagnostic({
+          code: 'workspace.runtime-carrier.unsupported',
+          severity: 'error',
+          message:
+            'Pack workspace requires a runtime carrier the Phase 2 host router does not support yet.',
+          fields: {
+            packId: registration.packId,
+            packVersion: registration.packVersion,
+            requiredRuntimeCarrier,
+          },
+        })
+      );
+    }
+
+    if (
+      workspace?.ownership === 'pack' &&
+      workspace.root &&
+      hostRouterReady &&
+      !workspaceSurface
+    ) {
+      diagnostics.push(
+        createWorkspaceReadinessDiagnostic({
+          code: 'workspace.surface.unresolved',
+          severity: 'error',
+          message:
+            'Pack workspace root is declared, but the host could not resolve a mountable workspace surface record.',
+          fields: {
+            packId: registration.packId,
+            packVersion: registration.packVersion,
+            rootViewId: workspace.root.viewId,
+          },
+        })
+      );
+    }
+  }
+
+  return clonePlatformPackWorkspaceReadiness({
+    connectorId: input.connectorId,
+    packId: registration?.packId ?? null,
+    packVersion: registration?.packVersion ?? null,
+    source: normalizeString(input.source) || (registration?.source ?? null),
+    ready:
+      hostRouterReady &&
+      Boolean(registration) &&
+      Boolean(contract) &&
+      input.runtimePresent &&
+      workspaceOwnershipDeclared &&
+      mountSurfaceDeclared &&
+      Boolean(workspaceSurface) &&
+      (!requiredRuntimeCarrier ||
+        isPlatformPackWorkspaceRuntimeCarrierSupported(requiredRuntimeCarrier)),
+    hostRouterReady,
+    registrationPresent: Boolean(registration),
+    contractPresent: Boolean(contract),
+    runtimePresent: input.runtimePresent,
+    workspaceOwnershipDeclared,
+    mountSurfaceDeclared,
+    diagnostics,
+  });
+}
+
+export function inspectPlatformPackWorkspaceReadiness(
+  connectorId: string
+): PlatformPackWorkspaceReadiness {
+  ensureBuiltinPlatformPackRegistrationsInitialized();
+  const hostRouterReady = isPlatformPackWorkspaceHostRouterReady();
+
+  let normalizedConnectorId: PlatformConnectorId;
+  try {
+    normalizedConnectorId = normalizePackConnectorId(connectorId);
+  } catch {
+    return createEmptyPlatformPackWorkspaceReadiness(
+      {
+        connectorId: connectorId as PlatformConnectorId,
+      },
+      hostRouterReady,
+      [
+        createWorkspaceReadinessDiagnostic({
+          code: 'workspace.connector-id.invalid',
+          severity: 'error',
+          message: 'Connector id is invalid for platform pack workspace inspection.',
+          fields: {
+            connectorId,
+          },
+        }),
+      ]
+    );
+  }
+
+  const registration = platformPackRegistry.get(normalizedConnectorId) ?? null;
+  return inspectPlatformPackWorkspaceReadinessRecord({
+    connectorId: normalizedConnectorId,
+    registration,
+    contract: registration?.compat.contract ?? null,
+    runtimePresent: Boolean(registration?.compat.runtime),
+    workspaceSurface:
+      platformPackWorkspaceSurfaceRegistry.get(normalizedConnectorId) ?? null,
+    source: registration?.source ?? null,
+  });
+}
+
+export function inspectPlatformPackWorkspaceReadinessForInstallation(
+  installationId: string
+): PlatformPackWorkspaceReadiness {
+  ensureBuiltinPlatformPackRegistrationsInitialized();
+  const hostRouterReady = isPlatformPackWorkspaceHostRouterReady();
+  const normalizedInstallationId = normalizeString(installationId);
+  if (!normalizedInstallationId) {
+    return createEmptyPlatformPackWorkspaceReadiness(
+      {
+        connectorId: 'connector.platform.unknown' as PlatformConnectorId,
+      },
+      hostRouterReady,
+      [
+        createWorkspaceReadinessDiagnostic({
+          code: 'workspace.installation-id.invalid',
+          severity: 'error',
+          message: 'Installation id is invalid for platform pack workspace inspection.',
+          fields: {
+            installationId,
+          },
+        }),
+      ]
+    );
+  }
+
+  const installedRecord = getInstalledPlatformPackRecord(normalizedInstallationId);
+  if (!installedRecord) {
+    return createEmptyPlatformPackWorkspaceReadiness(
+      {
+        connectorId: 'connector.platform.unknown' as PlatformConnectorId,
+      },
+      hostRouterReady,
+      [
+        createWorkspaceReadinessDiagnostic({
+          code: 'workspace.installation.missing',
+          severity: 'error',
+          message:
+            'Installed platform pack record is missing for this installation, so pack workspace readiness cannot be resolved.',
+          fields: {
+            installationId: normalizedInstallationId,
+          },
+        }),
+      ]
+    );
+  }
+
+  const registration =
+    platformPackRegistrationByInstallationId.get(normalizedInstallationId) ?? null;
+  return inspectPlatformPackWorkspaceReadinessRecord({
+    connectorId: installedRecord.connectorId,
+    registration,
+    contract: registration?.compat.contract ?? installedRecord.contract ?? null,
+    runtimePresent: Boolean(registration?.compat.runtime),
+    workspaceSurface:
+      platformPackWorkspaceSurfaceByInstallationId.get(normalizedInstallationId) ?? null,
+    source: buildInstalledPackSource(installedRecord),
+    registrationMissingCode: 'workspace.installation-registration.missing',
+    registrationMissingMessage:
+      'This installation has not resolved a pack registration yet, so pack-owned workspace UI cannot mount for the installation-specific route.',
+    registrationMissingFields: {
+      installationId: normalizedInstallationId,
+      sourceType: installedRecord.sourceType,
+      source: buildInstalledPackSource(installedRecord),
+      packId: installedRecord.packId,
+      packVersion: installedRecord.packVersion,
+    },
+  });
 }
 
 export function listBuiltinPlatformPackAssets(): BuiltinPlatformPackAssetDefinition[] {
@@ -2581,6 +3335,17 @@ export function removePlatformPackRegistration(connectorId: string): boolean {
   const existing = platformPackRegistry.get(normalizedConnectorId);
   if (!existing) return false;
   platformPackRegistry.delete(normalizedConnectorId);
+  for (const [installationId, record] of platformPackRegistrationByInstallationId.entries()) {
+    if (record.connectorId === normalizedConnectorId) {
+      platformPackRegistrationByInstallationId.delete(installationId);
+    }
+  }
+  platformPackWorkspaceSurfaceRegistry.delete(normalizedConnectorId);
+  for (const [installationId, surface] of platformPackWorkspaceSurfaceByInstallationId.entries()) {
+    if (surface.connectorId === normalizedConnectorId) {
+      platformPackWorkspaceSurfaceByInstallationId.delete(installationId);
+    }
+  }
   platformPackHostRuntimeSupportRegistry.delete(normalizedConnectorId);
   const sidecarEntryPath =
     platformPackSidecarEntryPathRegistry.get(normalizedConnectorId) ?? '';

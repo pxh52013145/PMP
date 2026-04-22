@@ -11,10 +11,19 @@ import {
 } from './contractRegistry';
 import { listPlatformConnectorDefinitions } from './connectorAuth';
 import { getPlatformInstance, listPlatformInstances } from './instanceRegistry';
+import { getPlatformImportedInstanceRecord } from './platformImportedInstanceRegistry';
 import {
   listPlatformPackRegistrations,
+  inspectPlatformPackWorkspaceReadiness,
+  inspectPlatformPackWorkspaceReadinessForInstallation,
+  type PlatformPackWorkspaceReadiness,
+  type PlatformPackWorkspaceReadinessDiagnostic,
   type PlatformPackRegistrationRecord,
 } from './platformPackRegistry';
+import {
+  resolveMusicPlatformWorkspaceOwnershipMode,
+  type MusicPlatformWorkspaceOwnershipMode,
+} from './globalSettings';
 import {
   normalizePlatformConnectorId,
   resolvePlatformConnectorTemplate,
@@ -23,6 +32,21 @@ import {
   type PlatformConnectorTemplate,
   type PlatformConnectorWorkspaceMode,
 } from './platformConnectorModel';
+
+export type PlatformRuntimeWorkspacePath = 'legacy' | 'pack' | 'none';
+export type PlatformRuntimeWorkspacePathStatus = 'active' | 'fallback' | 'blocked';
+
+export interface PlatformRuntimeWorkspaceRouting {
+  ownershipMode: MusicPlatformWorkspaceOwnershipMode;
+  path: PlatformRuntimeWorkspacePath;
+  status: PlatformRuntimeWorkspacePathStatus;
+  usesLegacyHostWorkspace: boolean;
+  packWorkspaceReady: boolean;
+  fallbackReasonCode: string | null;
+  fallbackReasonMessage: string | null;
+  diagnostics: PlatformPackWorkspaceReadinessDiagnostic[];
+  packReadiness: PlatformPackWorkspaceReadiness;
+}
 
 export interface PlatformRuntimeDescriptor {
   connectorId: PlatformConnectorId;
@@ -42,6 +66,7 @@ export interface PlatformRuntimeDescriptor {
   compatRegistryRecord: PlatformCompatRegistryRecord | null;
   instanceRecord: PlatformInstanceRecord | null;
   runtime: PlatformCompatRuntimeApi | null;
+  workspaceRouting: PlatformRuntimeWorkspaceRouting;
 }
 
 function normalizeString(value: unknown): string {
@@ -59,6 +84,16 @@ function readConnectorIdFromMetadata(value: unknown): PlatformConnectorId | null
   return normalizePlatformConnectorId(
     (value as { connectorId?: unknown }).connectorId
   );
+}
+
+function readInstallationIdFromMetadata(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const installationId = normalizeString(
+    (value as { installationId?: unknown }).installationId
+  );
+  return installationId || null;
 }
 
 function mapInstanceAuthState(
@@ -118,6 +153,122 @@ function pickPreferredInstanceRecord(
       ? current
       : best;
   }, null);
+}
+
+function sortWorkspaceDiagnostics(
+  left: PlatformPackWorkspaceReadinessDiagnostic,
+  right: PlatformPackWorkspaceReadinessDiagnostic
+): number {
+  const severityWeight = (
+    value: PlatformPackWorkspaceReadinessDiagnostic['severity']
+  ): number => {
+    switch (value) {
+      case 'error':
+        return 3;
+      case 'warn':
+        return 2;
+      case 'info':
+      default:
+        return 1;
+    }
+  };
+  const severityDelta = severityWeight(right.severity) - severityWeight(left.severity);
+  if (severityDelta !== 0) {
+    return severityDelta;
+  }
+  return left.code.localeCompare(right.code, 'en');
+}
+
+function pickPrimaryWorkspaceDiagnostic(
+  diagnostics: readonly PlatformPackWorkspaceReadinessDiagnostic[]
+): PlatformPackWorkspaceReadinessDiagnostic | null {
+  return diagnostics.slice().sort(sortWorkspaceDiagnostics)[0] ?? null;
+}
+
+function buildPlatformWorkspaceRouting(
+  ownershipMode: MusicPlatformWorkspaceOwnershipMode,
+  packReadiness: PlatformPackWorkspaceReadiness
+): PlatformRuntimeWorkspaceRouting {
+  const primaryDiagnostic = pickPrimaryWorkspaceDiagnostic(packReadiness.diagnostics);
+
+  if (ownershipMode === 'legacy') {
+    return {
+      ownershipMode,
+      path: 'legacy',
+      status: 'active',
+      usesLegacyHostWorkspace: true,
+      packWorkspaceReady: packReadiness.ready,
+      fallbackReasonCode: null,
+      fallbackReasonMessage: null,
+      diagnostics: packReadiness.diagnostics,
+      packReadiness,
+    };
+  }
+
+  if (packReadiness.ready) {
+    return {
+      ownershipMode,
+      path: 'pack',
+      status: 'active',
+      usesLegacyHostWorkspace: false,
+      packWorkspaceReady: true,
+      fallbackReasonCode: null,
+      fallbackReasonMessage: null,
+      diagnostics: packReadiness.diagnostics,
+      packReadiness,
+    };
+  }
+
+  if (ownershipMode === 'auto') {
+    return {
+      ownershipMode,
+      path: 'legacy',
+      status: 'fallback',
+      usesLegacyHostWorkspace: true,
+      packWorkspaceReady: false,
+      fallbackReasonCode: primaryDiagnostic?.code ?? 'workspace.pack.unavailable',
+      fallbackReasonMessage:
+        primaryDiagnostic?.message ??
+        'Pack-owned workspace is unavailable; falling back to legacy host workspace.',
+      diagnostics: packReadiness.diagnostics,
+      packReadiness,
+    };
+  }
+
+  return {
+    ownershipMode,
+    path: 'none',
+    status: 'blocked',
+    usesLegacyHostWorkspace: false,
+    packWorkspaceReady: false,
+    fallbackReasonCode: primaryDiagnostic?.code ?? 'workspace.pack.unavailable',
+    fallbackReasonMessage:
+      primaryDiagnostic?.message ??
+      'Pack-owned workspace is unavailable and pack mode does not allow legacy fallback.',
+    diagnostics: packReadiness.diagnostics,
+    packReadiness,
+  };
+}
+
+function resolvePlatformWorkspaceRoutingForNormalizedConnector(
+  connectorId: PlatformConnectorId
+): PlatformRuntimeWorkspaceRouting {
+  const ownershipMode = resolveMusicPlatformWorkspaceOwnershipMode(connectorId);
+  return buildPlatformWorkspaceRouting(
+    ownershipMode,
+    inspectPlatformPackWorkspaceReadiness(connectorId)
+  );
+}
+
+function resolvePlatformWorkspaceRoutingForInstallation(
+  connectorId: PlatformConnectorId,
+  installationId: string
+): PlatformRuntimeWorkspaceRouting {
+  const ownershipMode = resolveMusicPlatformWorkspaceOwnershipMode(connectorId);
+  return buildPlatformWorkspaceRouting(
+    ownershipMode,
+    inspectPlatformPackWorkspaceReadinessForInstallation(installationId)
+  );
 }
 
 type PlatformRuntimeDescriptorMaps = {
@@ -282,6 +433,7 @@ function buildPlatformRuntimeDescriptorForConnector(
     compatRegistryRecord,
     instanceRecord,
     runtime: compatRegistryRecord?.runtime ?? null,
+    workspaceRouting: resolvePlatformWorkspaceRoutingForNormalizedConnector(connectorId),
   };
 }
 
@@ -307,6 +459,9 @@ function buildPlatformRuntimeDescriptorForInstance(
     availability: instanceRecord.availability,
     availabilityMessage: instanceRecord.availabilityMessage,
     instanceRecord,
+    workspaceRouting:
+      resolvePlatformWorkspaceRoutingForInstanceId(instanceRecord.instanceId) ??
+      descriptor.workspaceRouting,
   };
 }
 
@@ -327,6 +482,53 @@ export function listPlatformRuntimeDescriptors(): PlatformRuntimeDescriptor[] {
       }
       return left.displayName.localeCompare(right.displayName, 'zh-CN');
     });
+}
+
+export function resolvePlatformWorkspaceRoutingForConnector(
+  connectorId: string
+): PlatformRuntimeWorkspaceRouting | null {
+  const normalizedConnectorId = normalizePlatformConnectorId(connectorId);
+  if (!normalizedConnectorId) {
+    return null;
+  }
+
+  return resolvePlatformWorkspaceRoutingForNormalizedConnector(normalizedConnectorId);
+}
+
+export function resolvePlatformWorkspaceRoutingForInstanceId(
+  instanceId: string
+): PlatformRuntimeWorkspaceRouting | null {
+  const normalizedInstanceId = normalizeString(instanceId);
+  if (!normalizedInstanceId) {
+    return null;
+  }
+
+  const importedInstance = getPlatformImportedInstanceRecord(normalizedInstanceId);
+  if (importedInstance) {
+    return resolvePlatformWorkspaceRoutingForInstallation(
+      importedInstance.connectorId,
+      importedInstance.installationId
+    );
+  }
+
+  const instanceRecord = getPlatformInstance(normalizedInstanceId);
+  if (!instanceRecord) {
+    return null;
+  }
+
+  const connectorId =
+    readConnectorIdFromMetadata(instanceRecord.metadata) ??
+    normalizePlatformConnectorId(`connector.platform.${instanceRecord.platformId}`);
+  if (!connectorId) {
+    return null;
+  }
+
+  const installationId = readInstallationIdFromMetadata(instanceRecord.metadata);
+  if (installationId) {
+    return resolvePlatformWorkspaceRoutingForInstallation(connectorId, installationId);
+  }
+
+  return resolvePlatformWorkspaceRoutingForNormalizedConnector(connectorId);
 }
 
 export function resolvePreferredPlatformRuntimeDescriptorForConnector(

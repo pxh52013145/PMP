@@ -48,6 +48,33 @@ function normalizeConnectorId(value: unknown): PlatformConnectorId | null {
   return normalized as PlatformConnectorId;
 }
 
+function cloneWorkspaceDescriptor(
+  workspace: PlatformCompatContractFile['workspace'] | undefined
+): PlatformCompatContractFile['workspace'] | undefined {
+  if (!workspace) {
+    return undefined;
+  }
+
+  return {
+    ownership: workspace.ownership,
+    requiredRuntimeCarrier: workspace.requiredRuntimeCarrier,
+    root: workspace.root ? { ...workspace.root } : undefined,
+    shellSlots: workspace.shellSlots?.map((slot) => ({ ...slot })),
+    capabilityFamilies: workspace.capabilityFamilies
+      ? {
+          required: workspace.capabilityFamilies.required?.slice(),
+          optional: workspace.capabilityFamilies.optional?.slice(),
+        }
+      : undefined,
+    context: workspace.context
+      ? {
+          scope: workspace.context.scope,
+          fields: workspace.context.fields.slice(),
+        }
+      : undefined,
+  };
+}
+
 function cloneContract(contract: PlatformCompatContractFile): PlatformCompatContractFile {
   return {
     ...contract,
@@ -55,6 +82,7 @@ function cloneContract(contract: PlatformCompatContractFile): PlatformCompatCont
     auth: { ...contract.auth },
     capabilities: { ...contract.capabilities },
     apiBindings: { ...contract.apiBindings },
+    workspace: cloneWorkspaceDescriptor(contract.workspace),
     extension: contract.extension ? { ...contract.extension } : undefined,
   };
 }
@@ -68,6 +96,24 @@ function cloneRegistryRecord(record: PlatformCompatRegistryRecord): PlatformComp
     registeredAtMs: record.registeredAtMs,
     metadata: record.metadata ? { ...record.metadata } : undefined,
   };
+}
+
+function normalizeComparableValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeComparableValue(item));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right, 'en'))
+        .map(([key, item]) => [key, normalizeComparableValue(item)])
+    );
+  }
+  return value ?? null;
+}
+
+function buildComparableFingerprint(value: unknown): string {
+  return JSON.stringify(normalizeComparableValue(value));
 }
 
 function sortRegistryRecords(
@@ -183,19 +229,38 @@ export function registerPlatformCompatContract(input: RegisterPlatformCompatCont
   }
 
   const existing = platformCompatRegistry.get(platformId);
+  const contract = cloneContract({
+    ...input.contract,
+    platform: {
+      ...input.contract.platform,
+      platformId,
+    },
+  });
+  const source = input.source?.trim() || existing?.source || 'runtime';
+  const metadata = input.metadata
+    ? { ...input.metadata }
+    : existing?.metadata
+      ? { ...existing.metadata }
+      : undefined;
+
+  if (
+    existing &&
+    existing.runtime === input.runtime &&
+    existing.source === source &&
+    buildComparableFingerprint(existing.contract) === buildComparableFingerprint(contract) &&
+    buildComparableFingerprint(existing.metadata ?? null) ===
+      buildComparableFingerprint(metadata ?? null)
+  ) {
+    return;
+  }
+
   platformCompatRegistry.set(platformId, {
     platformId,
-    contract: cloneContract({
-      ...input.contract,
-      platform: {
-        ...input.contract.platform,
-        platformId,
-      },
-    }),
+    contract,
     runtime: input.runtime,
-    source: input.source?.trim() || existing?.source || 'runtime',
+    source,
     registeredAtMs: existing?.registeredAtMs ?? Date.now(),
-    metadata: input.metadata ? { ...input.metadata } : existing?.metadata ? { ...existing.metadata } : undefined,
+    metadata,
   });
 
   emitPlatformCompatRegistryChanged();

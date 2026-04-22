@@ -666,6 +666,84 @@
   min-width: 0;
 }
 
+.platform-pack-workspace-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.06), transparent 32%),
+    rgba(7, 10, 14, 0.86);
+}
+
+.platform-pack-workspace-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: transparent;
+  display: block;
+}
+
+.platform-pack-workspace-state {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  backdrop-filter: blur(8px);
+}
+
+.platform-pack-workspace-state-loading {
+  background: linear-gradient(180deg, rgba(9, 13, 19, 0.74), rgba(9, 13, 19, 0.56));
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.platform-pack-workspace-state-error {
+  background: linear-gradient(180deg, rgba(62, 17, 30, 0.84), rgba(34, 12, 19, 0.78));
+  color: rgba(255, 239, 243, 0.92);
+}
+
+.platform-pack-workspace-state-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.platform-pack-workspace-state-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.platform-pack-workspace-state-detail {
+  max-width: 520px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: inherit;
+  opacity: 0.82;
+}
+
+.platform-pack-workspace-state-reason {
+  max-width: 620px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: inherit;
+  opacity: 0.72;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .platform-magnet-bilibili-panel-actions {
   display: inline-flex;
   align-items: center;

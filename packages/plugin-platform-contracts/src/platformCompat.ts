@@ -1,3 +1,5 @@
+import type { MusicPlatformWorkspaceDescriptor } from './musicPlatformWorkspace';
+
 export type PlatformCompatAvailability = 'available' | 'degraded' | 'unavailable';
 
 export type PlatformCompatLoginMode = 'none' | 'cookie' | 'qr' | 'cookie+qr';
@@ -219,6 +221,7 @@ export interface PlatformCompatContractFile {
     settings?: string;
     pages?: string;
   };
+  workspace?: MusicPlatformWorkspaceDescriptor;
   extension?: Record<string, unknown>;
 }
 

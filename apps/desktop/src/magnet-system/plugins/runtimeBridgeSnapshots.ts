@@ -87,6 +87,9 @@ type RuntimeBridgeSurfaceOptions = {
   mountContext?: unknown;
   commandArgs?: unknown;
   runtimeId?: string;
+  viewType?: string;
+  surfaceSlot?: string;
+  mountMetadata?: ViewMountRequest['mountMetadata'];
 };
 
 const VIEW_TYPE_BY_SURFACE: Record<Exclude<RuntimeBridgeSurfaceKind, 'command'>, string> = {
@@ -463,7 +466,7 @@ export function buildViewMountRequestSnapshot(
     return null;
   }
 
-  const viewType = VIEW_TYPE_BY_SURFACE[options.kind];
+  const viewType = options.viewType?.trim() || VIEW_TYPE_BY_SURFACE[options.kind];
   const viewId = resolveViewId(options);
   const viewInstanceId = `${options.runtimeInstanceId}:${viewType}:${viewId}`;
 
@@ -477,7 +480,8 @@ export function buildViewMountRequestSnapshot(
     viewInstanceId,
     viewId,
     viewType,
-    surfaceSlot: SURFACE_SLOT_BY_SURFACE[options.kind],
+    surfaceSlot: options.surfaceSlot?.trim() || SURFACE_SLOT_BY_SURFACE[options.kind],
     props: buildSurfacePayload(options),
+    mountMetadata: options.mountMetadata,
   };
 }

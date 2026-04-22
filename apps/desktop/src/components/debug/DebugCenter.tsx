@@ -56,6 +56,7 @@ import {
   type PlatformPackDoctorIssue,
   type PlatformPackDoctorReport,
   type PlatformPackDoctorStatus,
+  type PlatformPackWorkspaceReadinessDiagnostic,
   type PlatformPackStartupHealth,
   type PlatformPackStartupState,
 } from '../../modules/music-platform';
@@ -277,6 +278,17 @@ function formatDebugTimestamp(value: number | null | undefined): string {
   return new Date(value).toLocaleTimeString();
 }
 
+function formatOptionalText(value: unknown): string {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+    return normalized || '-';
+  }
+  return '-';
+}
+
 function formatNullableToggleState(
   value: boolean | null | undefined,
   t: (key: string, params?: Record<string, unknown>) => string
@@ -360,6 +372,27 @@ function formatPlatformPackDoctorFlowStatusLabel(
   }
 }
 
+function formatPlatformWorkspaceOwnershipModeLabel(
+  mode: 'legacy' | 'pack' | 'auto',
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  return t(`magnet.platform.workspace.ownership.${mode}`);
+}
+
+function formatPlatformWorkspacePathLabel(
+  path: 'legacy' | 'pack' | 'none',
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  return t(`magnet.platform.workspace.path.${path}`);
+}
+
+function formatPlatformWorkspaceStatusLabel(
+  status: 'active' | 'fallback' | 'blocked',
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  return t(`magnet.platform.workspace.status.${status}`);
+}
+
 function formatPlatformPackDoctorIssueDetails(issue: PlatformPackDoctorIssue): string {
   const entries = Object.entries(issue.fields ?? {}).filter(([, value]) => value !== null);
   if (entries.length < 1) {
@@ -367,6 +400,18 @@ function formatPlatformPackDoctorIssueDetails(issue: PlatformPackDoctorIssue): s
   }
   return entries
     .map(([key, value]) => `${key}=${String(value)}`)
+    .join(' | ');
+}
+
+function formatPlatformWorkspaceDiagnosticDetails(
+  diagnostic: PlatformPackWorkspaceReadinessDiagnostic
+): string {
+  const entries = Object.entries(diagnostic.fields ?? {}).filter(([, value]) => value !== null);
+  if (entries.length < 1) {
+    return diagnostic.message || '-';
+  }
+  return [diagnostic.message, ...entries.map(([key, value]) => `${key}=${String(value)}`)]
+    .filter((value) => value.trim().length > 0)
     .join(' | ');
 }
 
@@ -3310,6 +3355,8 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                         t
                       ),
                       total: platformPackDoctorReport.connectors.length,
+                      installations: platformPackDoctorReport.installationCount,
+                      instances: platformPackDoctorReport.instanceCount,
                       ready: platformPackDoctorReport.readyConnectorCount,
                       degraded: platformPackDoctorReport.degradedConnectorCount,
                       error: platformPackDoctorReport.errorConnectorCount,
@@ -3427,6 +3474,510 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                               ),
                             })}
                           </p>
+                          <p className="settings-card-note">
+                            {t('debug.center.musicPlatformPack.doctor.connectorWorkspace', {
+                              mode: formatPlatformWorkspaceOwnershipModeLabel(
+                                connector.workspaceRouting.ownershipMode,
+                                t
+                              ),
+                              path: formatPlatformWorkspacePathLabel(
+                                connector.workspaceRouting.path,
+                                t
+                              ),
+                              status: formatPlatformWorkspaceStatusLabel(
+                                connector.workspaceRouting.status,
+                                t
+                              ),
+                              packReady: formatNullableToggleState(
+                                connector.workspaceRouting.packWorkspaceReady,
+                                t
+                              ),
+                            })}
+                          </p>
+                          {connector.workspaceRouting.fallbackReasonCode ||
+                          connector.workspaceRouting.fallbackReasonMessage ? (
+                            <p className="settings-card-note">
+                              {t('debug.center.musicPlatformPack.doctor.connectorWorkspaceFallback', {
+                                code:
+                                  connector.workspaceRouting.fallbackReasonCode ??
+                                  t('common.state.unknown'),
+                                message:
+                                  connector.workspaceRouting.fallbackReasonMessage ??
+                                  t('common.state.unknown'),
+                              })}
+                            </p>
+                          ) : null}
+                          {connector.workspaceRouting.diagnostics.length > 0 ? (
+                            <pre
+                              style={{
+                                marginTop: 2,
+                                padding: 10,
+                                borderRadius: 8,
+                                background: 'rgba(0,0,0,0.16)',
+                                border: '1px solid rgba(255,255,255,0.06)',
+                                overflowX: 'auto',
+                                maxHeight: 140,
+                                fontSize: 12,
+                                color: 'rgba(255,255,255,0.88)',
+                                whiteSpace: 'pre-wrap',
+                              }}
+                            >
+                              {connector.workspaceRouting.diagnostics
+                                .map((diagnostic) =>
+                                  t('debug.center.musicPlatformPack.doctor.workspaceDiagnosticLine', {
+                                    severity: diagnostic.severity.toUpperCase(),
+                                    code: diagnostic.code,
+                                    details: formatPlatformWorkspaceDiagnosticDetails(diagnostic),
+                                  })
+                                )
+                                .join('\n')}
+                            </pre>
+                          ) : null}
+                          <div
+                            style={{
+                              marginTop: 4,
+                              padding: 10,
+                              borderRadius: 8,
+                              background: 'rgba(255,255,255,0.02)',
+                              border: '1px solid rgba(255,255,255,0.06)',
+                            }}
+                          >
+                            <p className="settings-card-note" style={{ fontWeight: 600 }}>
+                              {t('debug.center.musicPlatformPack.doctor.installationsTitle', {
+                                count: connector.installations.length,
+                              })}
+                            </p>
+                            {connector.installations.length > 0 ? (
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: 8,
+                                  marginTop: 8,
+                                }}
+                              >
+                                {connector.installations.map((installation) => (
+                                  <div
+                                    key={installation.installationId}
+                                    style={{
+                                      padding: 10,
+                                      borderRadius: 8,
+                                      background: 'rgba(0,0,0,0.16)',
+                                      border: '1px solid rgba(255,255,255,0.06)',
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        display: 'flex',
+                                        gap: 8,
+                                        justifyContent: 'space-between',
+                                        alignItems: 'flex-start',
+                                        flexWrap: 'wrap',
+                                      }}
+                                    >
+                                      <div>
+                                        <p className="settings-card-note" style={{ fontWeight: 600 }}>
+                                          {t('debug.center.musicPlatformPack.doctor.installationHeader', {
+                                            installationId: installation.installationId,
+                                          })}
+                                        </p>
+                                        <p className="settings-card-note">
+                                          {t('debug.center.musicPlatformPack.doctor.installationIdentity', {
+                                            connectorId: installation.connectorId,
+                                            platformId: installation.platformId,
+                                            packId: installation.packId,
+                                            packVersion: installation.packVersion,
+                                          })}
+                                        </p>
+                                      </div>
+                                      <span className="settings-card-badge">
+                                        {formatPlatformPackDoctorStatusLabel(installation.status, t)}
+                                      </span>
+                                    </div>
+                                    <div
+                                      style={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: 6,
+                                        marginTop: 8,
+                                      }}
+                                    >
+                                      <p className="settings-card-note">
+                                        {t('debug.center.musicPlatformPack.doctor.installationSource', {
+                                          sourceType: formatOptionalText(installation.sourceType),
+                                          source: formatOptionalText(installation.source),
+                                          installedAt: formatDebugTimestamp(installation.installedAtMs),
+                                          activeRegistration: formatNullableToggleState(
+                                            installation.activeConnectorRegistration,
+                                            t
+                                          ),
+                                          registration: formatNullableToggleState(
+                                            installation.registrationPresent,
+                                            t
+                                          ),
+                                        })}
+                                      </p>
+                                      <p className="settings-card-note">
+                                        {t('debug.center.musicPlatformPack.doctor.installationArtifacts', {
+                                          artifactRoot: formatOptionalText(
+                                            installation.artifactRoot.path
+                                          ),
+                                          artifactRootResolved: formatNullableToggleState(
+                                            installation.artifactRoot.resolved,
+                                            t
+                                          ),
+                                          artifactsPresent: formatNullableToggleState(
+                                            installation.artifactsPresent,
+                                            t
+                                          ),
+                                        })}
+                                      </p>
+                                      <p className="settings-card-note">
+                                        {t('debug.center.musicPlatformPack.doctor.installationRuntime', {
+                                          runtimeResolved: formatNullableToggleState(
+                                            installation.runtime.resolved,
+                                            t
+                                          ),
+                                          runtimePath: formatOptionalText(installation.runtime.path),
+                                        })}
+                                      </p>
+                                      <p className="settings-card-note">
+                                        {t('debug.center.musicPlatformPack.doctor.installationIcon', {
+                                          iconResolved: formatNullableToggleState(
+                                            installation.icon.resolved,
+                                            t
+                                          ),
+                                          iconPath: formatOptionalText(installation.icon.path),
+                                        })}
+                                      </p>
+                                      <p className="settings-card-note">
+                                        {t('debug.center.musicPlatformPack.doctor.installationWorkspace', {
+                                          surfaceResolved: formatNullableToggleState(
+                                            installation.workspaceSurface.resolved,
+                                            t
+                                          ),
+                                          source: formatOptionalText(
+                                            installation.workspaceSurface.source
+                                          ),
+                                          rootViewId: formatOptionalText(
+                                            installation.workspaceSurface.rootViewId
+                                          ),
+                                          viewType: formatOptionalText(
+                                            installation.workspaceSurface.viewType
+                                          ),
+                                          runtimeCarrier: formatOptionalText(
+                                            installation.workspaceSurface.requiredRuntimeCarrier
+                                          ),
+                                          runtimeImportUrl: formatNullableToggleState(
+                                            installation.workspaceSurface.runtimeImportUrlPresent,
+                                            t
+                                          ),
+                                        })}
+                                      </p>
+                                      <p className="settings-card-note">
+                                        {t('debug.center.musicPlatformPack.doctor.installationReadiness', {
+                                          ready: formatNullableToggleState(
+                                            installation.workspaceReadiness.ready,
+                                            t
+                                          ),
+                                          registration: formatNullableToggleState(
+                                            installation.workspaceReadiness.registrationPresent,
+                                            t
+                                          ),
+                                          contract: formatNullableToggleState(
+                                            installation.workspaceReadiness.contractPresent,
+                                            t
+                                          ),
+                                          runtime: formatNullableToggleState(
+                                            installation.workspaceReadiness.runtimePresent,
+                                            t
+                                          ),
+                                          ownership: formatNullableToggleState(
+                                            installation.workspaceReadiness.workspaceOwnershipDeclared,
+                                            t
+                                          ),
+                                          mount: formatNullableToggleState(
+                                            installation.workspaceReadiness.mountSurfaceDeclared,
+                                            t
+                                          ),
+                                        })}
+                                      </p>
+                                      {installation.workspaceReadiness.diagnostics.length > 0 ? (
+                                        <pre
+                                          style={{
+                                            marginTop: 2,
+                                            padding: 10,
+                                            borderRadius: 8,
+                                            background: 'rgba(255,255,255,0.03)',
+                                            border: '1px solid rgba(255,255,255,0.06)',
+                                            overflowX: 'auto',
+                                            maxHeight: 140,
+                                            fontSize: 12,
+                                            color: 'rgba(255,255,255,0.88)',
+                                            whiteSpace: 'pre-wrap',
+                                          }}
+                                        >
+                                          {installation.workspaceReadiness.diagnostics
+                                            .map((diagnostic) =>
+                                              t(
+                                                'debug.center.musicPlatformPack.doctor.workspaceDiagnosticLine',
+                                                {
+                                                  severity: diagnostic.severity.toUpperCase(),
+                                                  code: diagnostic.code,
+                                                  details:
+                                                    formatPlatformWorkspaceDiagnosticDetails(
+                                                      diagnostic
+                                                    ),
+                                                }
+                                              )
+                                            )
+                                            .join('\n')}
+                                        </pre>
+                                      ) : null}
+                                      {installation.issues.length > 0 ? (
+                                        <pre
+                                          style={{
+                                            marginTop: 2,
+                                            padding: 10,
+                                            borderRadius: 8,
+                                            background: 'rgba(255,255,255,0.03)',
+                                            border: '1px solid rgba(255,255,255,0.06)',
+                                            overflowX: 'auto',
+                                            maxHeight: 140,
+                                            fontSize: 12,
+                                            color: 'rgba(255,255,255,0.88)',
+                                            whiteSpace: 'pre-wrap',
+                                          }}
+                                        >
+                                          {installation.issues
+                                            .map((issue) =>
+                                              t('debug.center.musicPlatformPack.doctor.issueLine', {
+                                                severity: issue.severity.toUpperCase(),
+                                                code: issue.code,
+                                                details:
+                                                  formatPlatformPackDoctorIssueDetails(issue),
+                                              })
+                                            )
+                                            .join('\n')}
+                                        </pre>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="settings-card-note" style={{ marginTop: 8 }}>
+                                {t('debug.center.musicPlatformPack.doctor.emptyInstallations')}
+                              </p>
+                            )}
+                          </div>
+                          <div
+                            style={{
+                              marginTop: 4,
+                              padding: 10,
+                              borderRadius: 8,
+                              background: 'rgba(255,255,255,0.02)',
+                              border: '1px solid rgba(255,255,255,0.06)',
+                            }}
+                          >
+                            <p className="settings-card-note" style={{ fontWeight: 600 }}>
+                              {t('debug.center.musicPlatformPack.doctor.instancesTitle', {
+                                count: connector.instances.length,
+                              })}
+                            </p>
+                            {connector.instances.length > 0 ? (
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: 8,
+                                  marginTop: 8,
+                                }}
+                              >
+                                {connector.instances.map((instance) => (
+                                  <div
+                                    key={instance.instanceId}
+                                    style={{
+                                      padding: 10,
+                                      borderRadius: 8,
+                                      background: 'rgba(0,0,0,0.16)',
+                                      border: '1px solid rgba(255,255,255,0.06)',
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        display: 'flex',
+                                        gap: 8,
+                                        justifyContent: 'space-between',
+                                        alignItems: 'flex-start',
+                                        flexWrap: 'wrap',
+                                      }}
+                                    >
+                                      <div>
+                                        <p className="settings-card-note" style={{ fontWeight: 600 }}>
+                                          {t('debug.center.musicPlatformPack.doctor.instanceHeader', {
+                                            instanceId: instance.instanceId,
+                                          })}
+                                        </p>
+                                        <p className="settings-card-note">
+                                          {t('debug.center.musicPlatformPack.doctor.instanceIdentity', {
+                                            installationId: formatOptionalText(
+                                              instance.installationId
+                                            ),
+                                            connectorId: instance.connectorId,
+                                            platformId: instance.platformId,
+                                          })}
+                                        </p>
+                                      </div>
+                                      <span className="settings-card-badge">
+                                        {formatPlatformPackDoctorStatusLabel(instance.status, t)}
+                                      </span>
+                                    </div>
+                                    <div
+                                      style={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: 6,
+                                        marginTop: 8,
+                                      }}
+                                    >
+                                      <p className="settings-card-note">
+                                        {t('debug.center.musicPlatformPack.doctor.instanceState', {
+                                          displayName: formatOptionalText(instance.displayName),
+                                          instanceLabel: formatOptionalText(instance.instanceLabel),
+                                          imported: formatNullableToggleState(instance.imported, t),
+                                          importedRegistry: formatNullableToggleState(
+                                            instance.importedRegistryPresent,
+                                            t
+                                          ),
+                                          instanceRecord: formatNullableToggleState(
+                                            instance.instanceRecordPresent,
+                                            t
+                                          ),
+                                          descriptor: formatNullableToggleState(
+                                            instance.descriptorPresent,
+                                            t
+                                          ),
+                                          installationPresent: formatNullableToggleState(
+                                            instance.installationPresent,
+                                            t
+                                          ),
+                                        })}
+                                      </p>
+                                      <p className="settings-card-note">
+                                        {t('debug.center.musicPlatformPack.doctor.instanceSource', {
+                                          sourceType: formatOptionalText(instance.sourceType),
+                                          source: formatOptionalText(instance.source),
+                                          authState: formatOptionalText(instance.authState),
+                                          availability: formatOptionalText(instance.availability),
+                                        })}
+                                      </p>
+                                      <p className="settings-card-note">
+                                        {t('debug.center.musicPlatformPack.doctor.instanceWorkspace', {
+                                          mode: formatPlatformWorkspaceOwnershipModeLabel(
+                                            instance.workspaceRouting.ownershipMode,
+                                            t
+                                          ),
+                                          path: formatPlatformWorkspacePathLabel(
+                                            instance.workspaceRouting.path,
+                                            t
+                                          ),
+                                          status: formatPlatformWorkspaceStatusLabel(
+                                            instance.workspaceRouting.status,
+                                            t
+                                          ),
+                                          packReady: formatNullableToggleState(
+                                            instance.workspaceRouting.packWorkspaceReady,
+                                            t
+                                          ),
+                                        })}
+                                      </p>
+                                      {instance.workspaceRouting.fallbackReasonCode ||
+                                      instance.workspaceRouting.fallbackReasonMessage ? (
+                                        <p className="settings-card-note">
+                                          {t(
+                                            'debug.center.musicPlatformPack.doctor.connectorWorkspaceFallback',
+                                            {
+                                              code:
+                                                instance.workspaceRouting.fallbackReasonCode ??
+                                                t('common.state.unknown'),
+                                              message:
+                                                instance.workspaceRouting
+                                                  .fallbackReasonMessage ??
+                                                t('common.state.unknown'),
+                                            }
+                                          )}
+                                        </p>
+                                      ) : null}
+                                      {instance.workspaceRouting.diagnostics.length > 0 ? (
+                                        <pre
+                                          style={{
+                                            marginTop: 2,
+                                            padding: 10,
+                                            borderRadius: 8,
+                                            background: 'rgba(255,255,255,0.03)',
+                                            border: '1px solid rgba(255,255,255,0.06)',
+                                            overflowX: 'auto',
+                                            maxHeight: 140,
+                                            fontSize: 12,
+                                            color: 'rgba(255,255,255,0.88)',
+                                            whiteSpace: 'pre-wrap',
+                                          }}
+                                        >
+                                          {instance.workspaceRouting.diagnostics
+                                            .map((diagnostic) =>
+                                              t(
+                                                'debug.center.musicPlatformPack.doctor.workspaceDiagnosticLine',
+                                                {
+                                                  severity: diagnostic.severity.toUpperCase(),
+                                                  code: diagnostic.code,
+                                                  details:
+                                                    formatPlatformWorkspaceDiagnosticDetails(
+                                                      diagnostic
+                                                    ),
+                                                }
+                                              )
+                                            )
+                                            .join('\n')}
+                                        </pre>
+                                      ) : null}
+                                      {instance.issues.length > 0 ? (
+                                        <pre
+                                          style={{
+                                            marginTop: 2,
+                                            padding: 10,
+                                            borderRadius: 8,
+                                            background: 'rgba(255,255,255,0.03)',
+                                            border: '1px solid rgba(255,255,255,0.06)',
+                                            overflowX: 'auto',
+                                            maxHeight: 140,
+                                            fontSize: 12,
+                                            color: 'rgba(255,255,255,0.88)',
+                                            whiteSpace: 'pre-wrap',
+                                          }}
+                                        >
+                                          {instance.issues
+                                            .map((issue) =>
+                                              t('debug.center.musicPlatformPack.doctor.issueLine', {
+                                                severity: issue.severity.toUpperCase(),
+                                                code: issue.code,
+                                                details:
+                                                  formatPlatformPackDoctorIssueDetails(issue),
+                                              })
+                                            )
+                                            .join('\n')}
+                                        </pre>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="settings-card-note" style={{ marginTop: 8 }}>
+                                {t('debug.center.musicPlatformPack.doctor.emptyInstances')}
+                              </p>
+                            )}
+                          </div>
                           {connector.issues.length > 0 ? (
                             <pre
                               style={{

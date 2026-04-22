@@ -6,3 +6,4 @@ export * from './runtime';
 export * from './host';
 export * from './nativeAdapter';
 export * from './platformCompat';
+export * from './musicPlatformWorkspace';

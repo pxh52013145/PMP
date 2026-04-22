@@ -1,5 +1,6 @@
 import type { ExtensionDefaultAnchorDescriptor, ExtensionVariantDescriptor } from './manifest';
 import type {
+  MusicPlatformWorkspaceContributionDescriptor,
   PageContributionDescriptor,
   ShellSurfaceContributionDescriptor,
   SettingsPanelContributionDescriptor,
@@ -68,6 +69,7 @@ export const PMP_HOST_CAPABILITY_FAMILIES = [
   'host.pmp.audio-engine.analysis',
   'host.pmp.audio-engine.input',
   'host.pmp.music-platform.catalog',
+  'host.pmp.music-platform.workspace',
   'host.pmp.music-platform.search',
   'host.pmp.music-platform.prepare',
   'host.pmp.connector-auth',
@@ -82,6 +84,21 @@ export const PMP_HOST_CAPABILITY_FAMILIES = [
 ] as const;
 
 export type PmpHostCapabilityFamilyId = (typeof PMP_HOST_CAPABILITY_FAMILIES)[number];
+
+export const PMP_HOST_MUSIC_PLATFORM_WORKSPACE_CAPABILITY_FAMILIES = [
+  'host.pmp.audio-engine.playback',
+  'host.pmp.connector-auth',
+  'host.pmp.i18n',
+  'host.pmp.music-platform.catalog',
+  'host.pmp.music-platform.workspace',
+  'host.pmp.music-platform.prepare',
+  'host.pmp.music-platform.search',
+  'host.pmp.navigation',
+  'host.pmp.storage.config',
+  'host.pmp.storage.durable-text',
+  'host.pmp.telemetry',
+  'host.pmp.theme-bindings',
+] as const satisfies readonly PmpHostCapabilityFamilyId[];
 
 export const PMP_HOST_CAPABILITY_PACK_DESCRIPTOR: PmpHostCapabilityPackDescriptor = {
   hostId: 'pmp',
@@ -111,6 +128,7 @@ export interface PmpHostManifestContributionDescriptor {
   pages?: PageContributionDescriptor[];
   windows?: WindowContributionDescriptor[];
   shellSurfaces?: ShellSurfaceContributionDescriptor[];
+  musicPlatformWorkspaces?: MusicPlatformWorkspaceContributionDescriptor[];
   settingsPanels?: SettingsPanelContributionDescriptor[];
   visualizers?: VisualizerContributionDescriptor[];
   magnets?: PmpHostMagnetContributionDescriptor;

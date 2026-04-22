@@ -43,12 +43,23 @@ import {
   listPlatformConnectorDefinitions,
   listPlatformInstanceAuthSnapshots,
   listPlatformConnectorFacadeItems,
+  listPlatformWorkspaceCollections,
+  listPlatformWorkspaceCollectionResources,
+  listPlatformWorkspacePages,
+  listPlatformWorkspaceQualityState,
+  listPlatformWorkspaceRecommendedCollections,
+  listPlatformWorkspaceRecommendedResources,
   logoutPlatformInstance,
+  getPlatformWorkspacePageModel,
   pollPlatformInstanceQrLogin,
   preparePlatformPlayback,
+  preparePlatformWorkspacePlayback,
   refreshPlatformInstanceAuthSnapshot,
   resolvePlatformInstanceId,
+  resolvePlatformWorkspaceCoverAssetUrl,
+  searchPlatformWorkspaceResources,
   searchPlatformTracks,
+  setPlatformWorkspaceQualityPreference,
 } from '../../../modules/music-platform';
 import {
   FALLBACK_LOCALE,
@@ -160,6 +171,8 @@ const HOST_PMP_AUDIO_INPUT_CAPABILITY_ID = 'host.pmp.audio-engine.input';
 const HOST_PMP_AUDIO_INPUT_CAPABILITY_VERSION = '0.4.0';
 const HOST_PMP_MUSIC_PLATFORM_CATALOG_CAPABILITY_ID = 'host.pmp.music-platform.catalog';
 const HOST_PMP_MUSIC_PLATFORM_CATALOG_CAPABILITY_VERSION = '1.0.0';
+const HOST_PMP_MUSIC_PLATFORM_WORKSPACE_CAPABILITY_ID = 'host.pmp.music-platform.workspace';
+const HOST_PMP_MUSIC_PLATFORM_WORKSPACE_CAPABILITY_VERSION = '1.0.0';
 const HOST_PMP_MUSIC_PLATFORM_SEARCH_CAPABILITY_ID = 'host.pmp.music-platform.search';
 const HOST_PMP_MUSIC_PLATFORM_SEARCH_CAPABILITY_VERSION = '1.0.0';
 const HOST_PMP_MUSIC_PLATFORM_PREPARE_CAPABILITY_ID = 'host.pmp.music-platform.prepare';
@@ -4074,6 +4087,268 @@ function createPmpMusicPlatformCatalogHandler(): PluginHostCapabilityHandler {
   };
 }
 
+function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
+  type WorkspaceTarget = {
+    connectorId: `connector.platform.${string}`;
+    instanceId?: string;
+  };
+
+  const readWorkspaceTarget = (
+    payload: Record<string, unknown> | null
+  ): WorkspaceTarget | PluginHostCapabilityResult => {
+    const connectorId = asNonEmptyString(payload?.connectorId);
+    if (!connectorId || !connectorId.startsWith('connector.platform.')) {
+      return resultError('INVALID_PAYLOAD', 'payload.connectorId is required');
+    }
+
+    return {
+      connectorId: connectorId as WorkspaceTarget['connectorId'],
+      instanceId:
+        asNonEmptyString(payload?.instanceId) ??
+        resolvePlatformInstanceId({
+          connectorId: connectorId as WorkspaceTarget['connectorId'],
+        }) ??
+        undefined,
+    };
+  };
+
+  return async (request) => {
+    const denied = readMethodPermissionError(request, 'api:music-platform-workspace');
+    if (request.method !== 'describe' && denied) {
+      return denied;
+    }
+
+    const payload = asObject(request.payload);
+
+    switch (request.method) {
+      case 'describe':
+        return resultOk({
+          capabilityId: HOST_PMP_MUSIC_PLATFORM_WORKSPACE_CAPABILITY_ID,
+          stage: 'host-pack',
+          implementation: 'platform-workspace-facade',
+          methods: [
+            'describe',
+            'getWorkspaceModel',
+            'listPages',
+            'listCollections',
+            'listCollectionResources',
+            'listRecommendedCollections',
+            'listRecommendedResources',
+            'searchResources',
+            'preparePlayback',
+            'listQualityState',
+            'setQualityPreference',
+            'resolveCoverAssetUrl',
+          ],
+        });
+      case 'getWorkspaceModel': {
+        const target = readWorkspaceTarget(payload);
+        if ('ok' in target) {
+          return target;
+        }
+        const model = await getPlatformWorkspacePageModel(target);
+        return resultOk({
+          connectorId: target.connectorId,
+          instanceId: target.instanceId ?? null,
+          model,
+        });
+      }
+      case 'listPages': {
+        const target = readWorkspaceTarget(payload);
+        if ('ok' in target) {
+          return target;
+        }
+        const items = await listPlatformWorkspacePages(target);
+        return resultOk({
+          connectorId: target.connectorId,
+          instanceId: target.instanceId ?? null,
+          items,
+        });
+      }
+      case 'listCollections': {
+        const target = readWorkspaceTarget(payload);
+        if ('ok' in target) {
+          return target;
+        }
+        const items = await listPlatformWorkspaceCollections({
+          ...target,
+          forceRefresh: payload?.forceRefresh === true,
+        });
+        return resultOk({
+          connectorId: target.connectorId,
+          instanceId: target.instanceId ?? null,
+          items,
+        });
+      }
+      case 'listCollectionResources': {
+        const target = readWorkspaceTarget(payload);
+        if ('ok' in target) {
+          return target;
+        }
+        const collectionId =
+          asNonEmptyString(payload?.collectionId) ??
+          asNonEmptyString(payload?.playlistId);
+        if (!collectionId) {
+          return resultError('INVALID_PAYLOAD', 'payload.collectionId is required');
+        }
+        const page = await listPlatformWorkspaceCollectionResources({
+          ...target,
+          collectionId,
+          pageNum: asNonNegativeInt(payload?.pageNum) ?? undefined,
+          pageSize: asNonNegativeInt(payload?.pageSize) ?? undefined,
+          forceRefresh: payload?.forceRefresh === true,
+        });
+        return resultOk({
+          connectorId: target.connectorId,
+          instanceId: target.instanceId ?? null,
+          collectionId,
+          page,
+        });
+      }
+      case 'listRecommendedCollections': {
+        const target = readWorkspaceTarget(payload);
+        if ('ok' in target) {
+          return target;
+        }
+        const items = await listPlatformWorkspaceRecommendedCollections({
+          ...target,
+          forceRefresh: payload?.forceRefresh === true,
+        });
+        return resultOk({
+          connectorId: target.connectorId,
+          instanceId: target.instanceId ?? null,
+          items,
+        });
+      }
+      case 'listRecommendedResources': {
+        const target = readWorkspaceTarget(payload);
+        if ('ok' in target) {
+          return target;
+        }
+        const page = await listPlatformWorkspaceRecommendedResources({
+          ...target,
+          forceRefresh: payload?.forceRefresh === true,
+        });
+        return resultOk({
+          connectorId: target.connectorId,
+          instanceId: target.instanceId ?? null,
+          page,
+        });
+      }
+      case 'searchResources': {
+        const target = readWorkspaceTarget(payload);
+        if ('ok' in target) {
+          return target;
+        }
+        const query =
+          asNonEmptyString(payload?.query) ?? asNonEmptyString(payload?.keyword);
+        if (!query) {
+          return resultError('INVALID_PAYLOAD', 'payload.query is required');
+        }
+        const page = await searchPlatformWorkspaceResources({
+          ...target,
+          keyword: query,
+          pageNum: asNonNegativeInt(payload?.pageNum) ?? undefined,
+          pageSize: asNonNegativeInt(payload?.pageSize) ?? undefined,
+          forceRefresh: payload?.forceRefresh === true,
+        });
+        return resultOk({
+          connectorId: target.connectorId,
+          instanceId: target.instanceId ?? null,
+          query,
+          page,
+        });
+      }
+      case 'preparePlayback': {
+        const target = readWorkspaceTarget(payload);
+        if ('ok' in target) {
+          return target;
+        }
+        const sourceLocator = asNonEmptyString(payload?.sourceLocator);
+        if (!sourceLocator) {
+          return resultError('INVALID_PAYLOAD', 'payload.sourceLocator is required');
+        }
+        const prepared = await preparePlatformWorkspacePlayback({
+          ...target,
+          sourceLocator,
+          qualityHint: asNonEmptyString(payload?.qualityHint) ?? undefined,
+          resourceId: asNonEmptyString(payload?.resourceId) ?? undefined,
+          webUrl: asNonEmptyString(payload?.webUrl) ?? undefined,
+        });
+        return resultOk({
+          connectorId: target.connectorId,
+          instanceId: target.instanceId ?? null,
+          prepared,
+        });
+      }
+      case 'listQualityState': {
+        const target = readWorkspaceTarget(payload);
+        if ('ok' in target) {
+          return target;
+        }
+        const state = await listPlatformWorkspaceQualityState({
+          ...target,
+          sourceLocator: asNonEmptyString(payload?.sourceLocator) ?? undefined,
+          forceRefresh: payload?.forceRefresh === true,
+        });
+        return resultOk({
+          connectorId: target.connectorId,
+          instanceId: target.instanceId ?? null,
+          state,
+        });
+      }
+      case 'setQualityPreference': {
+        const target = readWorkspaceTarget(payload);
+        if ('ok' in target) {
+          return target;
+        }
+        const qualityKey =
+          asNonEmptyString(payload?.qualityKey) ??
+          asNonEmptyString(payload?.key) ??
+          asNonEmptyString(payload?.qualityHint);
+        if (!qualityKey) {
+          return resultError('INVALID_PAYLOAD', 'payload.qualityKey is required');
+        }
+        const state = await setPlatformWorkspaceQualityPreference({
+          ...target,
+          qualityKey,
+          sourceLocator: asNonEmptyString(payload?.sourceLocator) ?? undefined,
+        });
+        return resultOk({
+          connectorId: target.connectorId,
+          instanceId: target.instanceId ?? null,
+          state,
+        });
+      }
+      case 'resolveCoverAssetUrl': {
+        const target = readWorkspaceTarget(payload);
+        if ('ok' in target) {
+          return target;
+        }
+        const coverUrl = asNonEmptyString(payload?.coverUrl);
+        if (!coverUrl) {
+          return resultError('INVALID_PAYLOAD', 'payload.coverUrl is required');
+        }
+        const assetUrl = await resolvePlatformWorkspaceCoverAssetUrl({
+          ...target,
+          coverUrl,
+        });
+        return resultOk({
+          connectorId: target.connectorId,
+          instanceId: target.instanceId ?? null,
+          coverUrl,
+          assetUrl: assetUrl ?? null,
+        });
+      }
+      default:
+        return resultError(
+          'METHOD_NOT_SUPPORTED',
+          `Unsupported music-platform.workspace method: ${request.method}`
+        );
+    }
+  };
+}
+
 function createPmpMusicPlatformSearchHandler(): PluginHostCapabilityHandler {
   return async (request) => {
     const denied = readMethodPermissionError(request, 'api:music-platform-search');
@@ -5209,6 +5484,13 @@ const BUILTIN_CAPABILITIES: PluginHostCapabilityRegistration[] = [
     permission: 'api:music-platform-catalog',
     description: 'PMP music platform connector catalog bridge',
     handler: createPmpMusicPlatformCatalogHandler(),
+  },
+  {
+    id: HOST_PMP_MUSIC_PLATFORM_WORKSPACE_CAPABILITY_ID,
+    version: HOST_PMP_MUSIC_PLATFORM_WORKSPACE_CAPABILITY_VERSION,
+    permission: 'api:music-platform-workspace',
+    description: 'PMP music platform workspace provider bridge',
+    handler: createPmpMusicPlatformWorkspaceHandler(),
   },
   {
     id: HOST_PMP_MUSIC_PLATFORM_SEARCH_CAPABILITY_ID,

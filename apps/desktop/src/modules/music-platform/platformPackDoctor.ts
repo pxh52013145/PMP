@@ -2,6 +2,7 @@ import {
   PLATFORM_COMPAT_PMP_SUPPORTED_BINDINGS,
   PlatformCompatContractFile,
   PlatformCompatRuntimeApi,
+  type PlatformInstanceRecord,
 } from '@pixel-matrix/plugin-platform-contracts';
 
 import { isTauriRuntime } from '../../utils/tauriRuntime';
@@ -18,25 +19,40 @@ import {
 } from './connectorAuth';
 import {
   areInstalledPlatformPackArtifactsPresent,
+  createInstalledPlatformPackEntryUrl,
   loadInstalledPlatformPackRecords,
   type InstalledPlatformPackRecord,
+  type InstalledPlatformPackSourceType,
 } from './installedPlatformPacks';
+import { listPlatformInstances } from './instanceRegistry';
+import {
+  listPlatformImportedInstanceRecords,
+  type PlatformImportedInstanceRecord,
+} from './platformImportedInstanceRegistry';
 import {
   getPlatformPackStartupHealth,
   inspectBuiltinPlatformPackStoreState,
   listBuiltinPlatformPackAssets,
   listPlatformPackReadinessDiagnostics,
   listPlatformPackRegistrations,
+  inspectPlatformPackWorkspaceReadinessForInstallation,
+  resolvePlatformPackWorkspaceSurfaceForInstallation,
   type BuiltinPlatformPackAssetDefinition,
   type BuiltinPlatformPackStoreInspection,
   type BuiltinPlatformPackStoreInspectionEntry,
   type PlatformPackReadinessDiagnostic,
   type PlatformPackRegistrationRecord,
+  type PlatformPackWorkspaceReadinessDiagnostic,
+  type PlatformPackWorkspaceReadiness,
   type PlatformPackStartupHealth,
 } from './platformPackRegistry';
 import {
   listPlatformRuntimeDescriptors,
+  resolvePlatformRuntimeDescriptorByInstanceId,
+  resolvePlatformWorkspaceRoutingForConnector,
+  resolvePlatformWorkspaceRoutingForInstanceId,
   type PlatformRuntimeDescriptor,
+  type PlatformRuntimeWorkspaceRouting,
 } from './platformRuntimeDescriptor';
 
 export type PlatformPackDoctorSeverity = 'info' | 'warn' | 'error';
@@ -65,6 +81,62 @@ export interface PlatformPackDoctorRuntimeBucketCoverage {
   missingMethodNames: string[];
 }
 
+export interface PlatformPackDoctorResolvedAssetStatus {
+  path: string | null;
+  resolved: boolean;
+}
+
+export interface PlatformPackDoctorWorkspaceSurfaceStatus {
+  resolved: boolean;
+  source: string | null;
+  rootViewId: string | null;
+  viewType: string | null;
+  requiredRuntimeCarrier: string | null;
+  runtimeImportUrlPresent: boolean;
+}
+
+export interface PlatformPackDoctorInstallationReport {
+  installationId: string;
+  connectorId: PlatformConnectorId;
+  platformId: string;
+  packId: string;
+  packVersion: string;
+  sourceType: InstalledPlatformPackSourceType;
+  source: string | null;
+  installedAtMs: number;
+  status: PlatformPackDoctorStatus;
+  artifactsPresent: boolean;
+  registrationPresent: boolean;
+  activeConnectorRegistration: boolean;
+  artifactRoot: PlatformPackDoctorResolvedAssetStatus;
+  runtime: PlatformPackDoctorResolvedAssetStatus;
+  icon: PlatformPackDoctorResolvedAssetStatus;
+  workspaceSurface: PlatformPackDoctorWorkspaceSurfaceStatus;
+  workspaceReadiness: PlatformPackWorkspaceReadiness;
+  issues: PlatformPackDoctorIssue[];
+}
+
+export interface PlatformPackDoctorInstanceReport {
+  instanceId: string;
+  installationId: string | null;
+  connectorId: PlatformConnectorId;
+  platformId: string;
+  sourceType: InstalledPlatformPackSourceType | null;
+  source: string | null;
+  displayName: string;
+  instanceLabel: string;
+  imported: boolean;
+  instanceRecordPresent: boolean;
+  importedRegistryPresent: boolean;
+  descriptorPresent: boolean;
+  installationPresent: boolean;
+  authState: PlatformInstanceRecord['auth']['status'] | null;
+  availability: PlatformInstanceRecord['availability'] | null;
+  status: PlatformPackDoctorStatus;
+  workspaceRouting: PlatformRuntimeWorkspaceRouting;
+  issues: PlatformPackDoctorIssue[];
+}
+
 export interface PlatformPackDoctorConnectorReport {
   connectorId: PlatformConnectorId;
   displayName: string;
@@ -82,12 +154,15 @@ export interface PlatformPackDoctorConnectorReport {
   registrationPresent: boolean;
   descriptorPresent: boolean;
   connectorDefinitionPresent: boolean;
+  workspaceRouting: PlatformRuntimeWorkspaceRouting;
   requiredFlows: {
     recommendations: PlatformPackDoctorFlowStatus;
     quality: PlatformPackDoctorFlowStatus;
     pages: PlatformPackDoctorFlowStatus;
   };
   bucketCoverage: PlatformPackDoctorRuntimeBucketCoverage[];
+  installations: PlatformPackDoctorInstallationReport[];
+  instances: PlatformPackDoctorInstanceReport[];
 }
 
 export interface PlatformPackDoctorReport {
@@ -95,6 +170,8 @@ export interface PlatformPackDoctorReport {
   durationMs: number;
   status: PlatformPackDoctorStatus;
   expectedBuiltinCount: number;
+  installationCount: number;
+  instanceCount: number;
   readyConnectorCount: number;
   degradedConnectorCount: number;
   errorConnectorCount: number;
@@ -104,6 +181,11 @@ export interface PlatformPackDoctorReport {
 }
 
 const telemetry = getTelemetryLogger('music-platform', 'platformPackDoctor');
+type ConsecutiveDoctorTelemetryFingerprint = {
+  status: PlatformPackDoctorStatus;
+  fingerprint: string;
+};
+let lastPlatformPackDoctorTelemetry: ConsecutiveDoctorTelemetryFingerprint | null = null;
 
 const STANDARD_RUNTIME_METHODS: Readonly<Record<PlatformPackDoctorRuntimeBucket, readonly string[]>> = {
   auth: [
@@ -158,6 +240,206 @@ const PMP_SUPPORTED_BINDINGS_BY_BUCKET: Partial<
 
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function readConnectorIdFromInstanceRecord(
+  record: PlatformInstanceRecord | null | undefined
+): PlatformConnectorId | null {
+  const connectorId = normalizeString(record?.metadata?.connectorId);
+  if (!connectorId.startsWith('connector.platform.')) {
+    return null;
+  }
+  return connectorId as PlatformConnectorId;
+}
+
+function readInstallationIdFromInstanceRecord(
+  record: PlatformInstanceRecord | null | undefined
+): string | null {
+  const installationId = normalizeString(record?.metadata?.installationId);
+  return installationId || null;
+}
+
+function buildInstalledPackSource(record: InstalledPlatformPackRecord): string {
+  return (
+    normalizeString(record.source) ||
+    (record.sourceType === 'builtin'
+      ? `builtin-pack:${record.packId}`
+      : `installed-pack:${record.packId}:${record.installationId}`)
+  );
+}
+
+function createResolvedAssetStatus(
+  path: string | null | undefined,
+  resolved: boolean
+): PlatformPackDoctorResolvedAssetStatus {
+  return {
+    path: normalizeString(path) || null,
+    resolved,
+  };
+}
+
+function toDoctorIssueFromWorkspaceDiagnostic(
+  diagnostic: PlatformPackWorkspaceReadinessDiagnostic
+): PlatformPackDoctorIssue {
+  return {
+    code: diagnostic.code,
+    severity: diagnostic.severity,
+    fields: Object.fromEntries(
+      Object.entries(diagnostic.fields ?? {})
+        .filter(([, value]) => value !== null)
+        .map(([key, value]) => [key, String(value)])
+    ),
+  };
+}
+
+function resolveStatusWithWorkspaceDiagnostics(input: {
+  issues: PlatformPackDoctorIssue[];
+  workspaceDiagnostics?: readonly PlatformPackWorkspaceReadinessDiagnostic[];
+}): PlatformPackDoctorStatus {
+  return resolveStatusFromIssues([
+    ...input.issues,
+    ...(input.workspaceDiagnostics ?? []).map(toDoctorIssueFromWorkspaceDiagnostic),
+  ]);
+}
+
+function pushWorkspaceRoutingIssue(
+  issues: PlatformPackDoctorIssue[],
+  workspaceRouting: PlatformRuntimeWorkspaceRouting | null | undefined
+): void {
+  if (!workspaceRouting) {
+    return;
+  }
+
+  if (workspaceRouting.status === 'fallback') {
+    pushIssue(issues, 'workspace.fallback-to-legacy', 'warn', {
+      ownershipMode: workspaceRouting.ownershipMode,
+      path: workspaceRouting.path,
+      reasonCode: workspaceRouting.fallbackReasonCode,
+      reasonMessage: workspaceRouting.fallbackReasonMessage,
+      packReady: workspaceRouting.packWorkspaceReady,
+    });
+    return;
+  }
+
+  if (workspaceRouting.status === 'blocked') {
+    pushIssue(issues, 'workspace.pack-mode-blocked', 'error', {
+      ownershipMode: workspaceRouting.ownershipMode,
+      path: workspaceRouting.path,
+      reasonCode: workspaceRouting.fallbackReasonCode,
+      reasonMessage: workspaceRouting.fallbackReasonMessage,
+      packReady: workspaceRouting.packWorkspaceReady,
+    });
+  }
+}
+
+function sortInstallationReports(
+  left: PlatformPackDoctorInstallationReport,
+  right: PlatformPackDoctorInstallationReport
+): number {
+  const installedAtDiff = left.installedAtMs - right.installedAtMs;
+  if (installedAtDiff !== 0) return installedAtDiff;
+  return left.installationId.localeCompare(right.installationId, 'zh-CN');
+}
+
+function sortInstanceReports(
+  left: PlatformPackDoctorInstanceReport,
+  right: PlatformPackDoctorInstanceReport
+): number {
+  const importedDiff = Number(right.imported) - Number(left.imported);
+  if (importedDiff !== 0) return importedDiff;
+  const displayNameDiff = left.displayName.localeCompare(right.displayName, 'zh-CN');
+  if (displayNameDiff !== 0) return displayNameDiff;
+  return left.instanceId.localeCompare(right.instanceId, 'zh-CN');
+}
+
+function normalizeDiagnosticFingerprintValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeDiagnosticFingerprintValue(item));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right, 'en'))
+        .map(([key, item]) => [key, normalizeDiagnosticFingerprintValue(item)])
+    );
+  }
+  return value ?? null;
+}
+
+function buildPlatformPackDoctorTelemetryFingerprint(
+  report: PlatformPackDoctorReport
+): string {
+  return JSON.stringify(
+    normalizeDiagnosticFingerprintValue({
+      status: report.status,
+      expectedBuiltinCount: report.expectedBuiltinCount,
+      installationCount: report.installationCount,
+      instanceCount: report.instanceCount,
+      readyConnectorCount: report.readyConnectorCount,
+      degradedConnectorCount: report.degradedConnectorCount,
+      errorConnectorCount: report.errorConnectorCount,
+      issues: report.issues.map((issue) => ({
+        code: issue.code,
+        severity: issue.severity,
+        fields: issue.fields ?? null,
+      })),
+      connectors: report.connectors.map((connector) => ({
+        connectorId: connector.connectorId,
+        status: connector.status,
+        workspaceRouting: {
+          status: connector.workspaceRouting.status,
+          path: connector.workspaceRouting.path,
+          ownershipMode: connector.workspaceRouting.ownershipMode,
+          packWorkspaceReady: connector.workspaceRouting.packWorkspaceReady,
+          fallbackReasonCode: connector.workspaceRouting.fallbackReasonCode,
+        },
+        requiredFlows: connector.requiredFlows,
+        issues: connector.issues.map((issue) => ({
+          code: issue.code,
+          severity: issue.severity,
+          fields: issue.fields ?? null,
+        })),
+        installations: connector.installations.map((installation) => ({
+          installationId: installation.installationId,
+          status: installation.status,
+          sourceType: installation.sourceType,
+          source: installation.source,
+          artifactsPresent: installation.artifactsPresent,
+          registrationPresent: installation.registrationPresent,
+          activeConnectorRegistration: installation.activeConnectorRegistration,
+          workspaceSurfaceResolved: installation.workspaceSurface.resolved,
+          workspaceReadinessReady: installation.workspaceReadiness.ready,
+          issues: installation.issues.map((issue) => ({
+            code: issue.code,
+            severity: issue.severity,
+            fields: issue.fields ?? null,
+          })),
+        })),
+        instances: connector.instances.map((instance) => ({
+          instanceId: instance.instanceId,
+          installationId: instance.installationId,
+          status: instance.status,
+          imported: instance.imported,
+          instanceRecordPresent: instance.instanceRecordPresent,
+          importedRegistryPresent: instance.importedRegistryPresent,
+          descriptorPresent: instance.descriptorPresent,
+          installationPresent: instance.installationPresent,
+          workspaceRouting: {
+            status: instance.workspaceRouting.status,
+            path: instance.workspaceRouting.path,
+            ownershipMode: instance.workspaceRouting.ownershipMode,
+            packWorkspaceReady: instance.workspaceRouting.packWorkspaceReady,
+            fallbackReasonCode: instance.workspaceRouting.fallbackReasonCode,
+          },
+          issues: instance.issues.map((issue) => ({
+            code: issue.code,
+            severity: issue.severity,
+            fields: issue.fields ?? null,
+          })),
+        })),
+      })),
+    })
+  );
 }
 
 function sortConnectorIds(left: PlatformConnectorId, right: PlatformConnectorId): number {
@@ -368,6 +650,8 @@ function pickConnectorIds(input: {
   descriptors: PlatformRuntimeDescriptor[];
   definitions: PlatformConnectorDefinition[];
   readinessDiagnostics: PlatformPackReadinessDiagnostic[];
+  importedInstances: PlatformImportedInstanceRecord[];
+  platformInstances: PlatformInstanceRecord[];
 }): PlatformConnectorId[] {
   return Array.from(
     new Set<PlatformConnectorId>([
@@ -376,6 +660,10 @@ function pickConnectorIds(input: {
       ...input.registrations.map((record) => record.connectorId),
       ...input.descriptors.map((descriptor) => descriptor.connectorId),
       ...input.definitions.map((definition) => definition.connectorId),
+      ...input.importedInstances.map((record) => record.connectorId),
+      ...input.platformInstances
+        .map((record) => readConnectorIdFromInstanceRecord(record))
+        .filter((connectorId): connectorId is PlatformConnectorId => Boolean(connectorId)),
       ...input.readinessDiagnostics
         .map((diagnostic) => diagnostic.connectorId)
         .filter((connectorId): connectorId is PlatformConnectorId => Boolean(connectorId)),
@@ -392,6 +680,8 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
   const registrations = listPlatformPackRegistrations();
   const descriptors = listPlatformRuntimeDescriptors();
   const installedRecords = loadInstalledPlatformPackRecords();
+  const importedInstances = listPlatformImportedInstanceRecords();
+  const platformInstances = listPlatformInstances();
   const readinessDiagnostics = listPlatformPackReadinessDiagnostics();
   const reportIssues: PlatformPackDoctorIssue[] = [];
   let storeInspection: BuiltinPlatformPackStoreInspection | null = null;
@@ -406,12 +696,34 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
     }
   }
 
-  const installedArtifactPresenceEntries = await Promise.all(
-    installedRecords.map(async (record) => [
-      record.connectorId,
-      await areInstalledPlatformPackArtifactsPresent(record).catch(() => false),
-    ] as const)
-  );
+  const [
+    installedArtifactPresenceEntries,
+    installedRuntimeResolutionEntries,
+    installedIconResolutionEntries,
+  ] = await Promise.all([
+    Promise.all(
+      installedRecords.map(async (record) => [
+        record.installationId,
+        await areInstalledPlatformPackArtifactsPresent(record).catch(() => false),
+      ] as const)
+    ),
+    Promise.all(
+      installedRecords.map(async (record) => [
+        record.installationId,
+        await createInstalledPlatformPackEntryUrl(record.runtimePath)
+          .then(() => true)
+          .catch(() => false),
+      ] as const)
+    ),
+    Promise.all(
+      installedRecords.map(async (record) => [
+        record.installationId,
+        await createInstalledPlatformPackEntryUrl(record.iconPath)
+          .then(() => true)
+          .catch(() => false),
+      ] as const)
+    ),
+  ]);
 
   const builtinAssetByConnectorId = new Map(
     builtinAssets.map((asset) => [asset.connectorId, asset] as const)
@@ -425,25 +737,71 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
   const descriptorByConnectorId = new Map(
     descriptors.map((descriptor) => [descriptor.connectorId, descriptor] as const)
   );
-  const installedRecordByConnectorId = new Map(
-    installedRecords.map((record) => [record.connectorId, record] as const)
+  const installedRecordsByConnectorId = new Map<
+    PlatformConnectorId,
+    InstalledPlatformPackRecord[]
+  >();
+  for (const record of installedRecords) {
+    const bucket = installedRecordsByConnectorId.get(record.connectorId) ?? [];
+    bucket.push(record);
+    installedRecordsByConnectorId.set(record.connectorId, bucket);
+  }
+  const installedRecordByInstallationId = new Map(
+    installedRecords.map((record) => [record.installationId, record] as const)
   );
-  const installedArtifactsPresentByConnectorId = new Map(installedArtifactPresenceEntries);
+  const installedArtifactsPresentByInstallationId = new Map(
+    installedArtifactPresenceEntries
+  );
+  const runtimeResolvedByInstallationId = new Map(installedRuntimeResolutionEntries);
+  const iconResolvedByInstallationId = new Map(installedIconResolutionEntries);
   const storeEntryByConnectorId = new Map(
     (storeInspection?.entries ?? []).map((entry) => [entry.connectorId, entry] as const)
   );
+  const importedInstancesByConnectorId = new Map<
+    PlatformConnectorId,
+    PlatformImportedInstanceRecord[]
+  >();
+  const importedInstanceById = new Map(
+    importedInstances.map((record) => [record.instanceId, record] as const)
+  );
+  for (const record of importedInstances) {
+    const bucket = importedInstancesByConnectorId.get(record.connectorId) ?? [];
+    bucket.push(record);
+    importedInstancesByConnectorId.set(record.connectorId, bucket);
+  }
+  const instanceRecordsByConnectorId = new Map<
+    PlatformConnectorId,
+    PlatformInstanceRecord[]
+  >();
+  const instanceRecordById = new Map(
+    platformInstances.map((record) => [record.instanceId, record] as const)
+  );
+  for (const record of platformInstances) {
+    const connectorId = readConnectorIdFromInstanceRecord(record);
+    if (!connectorId) continue;
+    const bucket = instanceRecordsByConnectorId.get(connectorId) ?? [];
+    bucket.push(record);
+    instanceRecordsByConnectorId.set(connectorId, bucket);
+  }
   const readinessDiagnosticsByConnectorId = new Map<
     PlatformConnectorId,
     PlatformPackReadinessDiagnostic[]
   >();
+  const readinessDiagnosticsBySource = new Map<string, PlatformPackReadinessDiagnostic[]>();
   for (const diagnostic of readinessDiagnostics) {
     if (!diagnostic.connectorId) {
       pushIssueFromReadinessDiagnostic(reportIssues, diagnostic);
-      continue;
+    } else {
+      const connectorList = readinessDiagnosticsByConnectorId.get(diagnostic.connectorId) ?? [];
+      connectorList.push(diagnostic);
+      readinessDiagnosticsByConnectorId.set(diagnostic.connectorId, connectorList);
     }
-    const list = readinessDiagnosticsByConnectorId.get(diagnostic.connectorId) ?? [];
-    list.push(diagnostic);
-    readinessDiagnosticsByConnectorId.set(diagnostic.connectorId, list);
+    const source = normalizeString(diagnostic.source);
+    if (source) {
+      const sourceList = readinessDiagnosticsBySource.get(source) ?? [];
+      sourceList.push(diagnostic);
+      readinessDiagnosticsBySource.set(source, sourceList);
+    }
   }
 
   const connectors = pickConnectorIds({
@@ -453,12 +811,24 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
     descriptors,
     definitions,
     readinessDiagnostics,
+    importedInstances,
+    platformInstances,
   }).map((connectorId) => {
+    const connectorInstalledRecords =
+      installedRecordsByConnectorId.get(connectorId) ?? [];
     const packAsset = builtinAssetByConnectorId.get(connectorId) ?? null;
     const definition = definitionByConnectorId.get(connectorId) ?? null;
     const registration = registrationByConnectorId.get(connectorId) ?? null;
     const descriptor = descriptorByConnectorId.get(connectorId) ?? null;
-    const installedRecord = installedRecordByConnectorId.get(connectorId) ?? null;
+    const workspaceRouting =
+      descriptor?.workspaceRouting ??
+      resolvePlatformWorkspaceRoutingForConnector(connectorId);
+    const installedRecord =
+      connectorInstalledRecords.find(
+        (record) => registration?.source === buildInstalledPackSource(record)
+      ) ??
+      connectorInstalledRecords[connectorInstalledRecords.length - 1] ??
+      null;
     const storeEntry = storeEntryByConnectorId.get(connectorId) ?? null;
     const contract = resolveContract({
       registration,
@@ -478,7 +848,7 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
     } else if (
       !packAsset &&
       installedRecord &&
-      installedArtifactsPresentByConnectorId.get(connectorId) === false
+      installedArtifactsPresentByInstallationId.get(installedRecord.installationId) === false
     ) {
       pushIssue(issues, 'store.artifacts-missing', 'warn', {
         sourceType: installedRecord.sourceType,
@@ -517,6 +887,8 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
     for (const diagnostic of connectorReadinessDiagnostics) {
       pushIssueFromReadinessDiagnostic(issues, diagnostic);
     }
+
+    pushWorkspaceRoutingIssue(issues, workspaceRouting);
 
     const bucketCoverage = ([
       'auth',
@@ -625,6 +997,202 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
       ),
     };
 
+    const installations = connectorInstalledRecords
+      .map((record) => {
+        const source = buildInstalledPackSource(record);
+        const artifactsPresent =
+          installedArtifactsPresentByInstallationId.get(record.installationId) ?? false;
+        const workspaceReadiness = inspectPlatformPackWorkspaceReadinessForInstallation(
+          record.installationId
+        );
+        const workspaceSurface = resolvePlatformPackWorkspaceSurfaceForInstallation(
+          record.installationId
+        );
+        const installationIssues: PlatformPackDoctorIssue[] = [];
+
+        for (const diagnostic of readinessDiagnosticsBySource.get(source) ?? []) {
+          pushIssueFromReadinessDiagnostic(installationIssues, diagnostic);
+        }
+
+        if (!artifactsPresent) {
+          pushIssue(installationIssues, 'installation.artifacts-missing', 'warn', {
+            installationId: record.installationId,
+            sourceType: record.sourceType,
+          });
+        }
+        if (!(runtimeResolvedByInstallationId.get(record.installationId) ?? false)) {
+          pushIssue(installationIssues, 'installation.runtime-entry.unresolved', 'warn', {
+            installationId: record.installationId,
+            runtimePath: record.runtimePath,
+          });
+        }
+        if (!(iconResolvedByInstallationId.get(record.installationId) ?? false)) {
+          pushIssue(installationIssues, 'installation.icon-entry.unresolved', 'warn', {
+            installationId: record.installationId,
+            iconPath: record.iconPath,
+          });
+        }
+        if (!workspaceReadiness.registrationPresent) {
+          pushIssue(installationIssues, 'installation.registration.missing', 'error', {
+            installationId: record.installationId,
+            sourceType: record.sourceType,
+            source,
+          });
+        }
+
+        return {
+          installationId: record.installationId,
+          connectorId: record.connectorId,
+          platformId: record.platformId,
+          packId: record.packId,
+          packVersion: record.packVersion,
+          sourceType: record.sourceType,
+          source: normalizeString(record.source) || source,
+          installedAtMs: record.installedAtMs,
+          status: resolveStatusWithWorkspaceDiagnostics({
+            issues: installationIssues,
+            workspaceDiagnostics: workspaceReadiness.diagnostics,
+          }),
+          artifactsPresent,
+          registrationPresent: workspaceReadiness.registrationPresent,
+          activeConnectorRegistration: registration?.source === source,
+          artifactRoot: createResolvedAssetStatus(
+            record.artifactRootPath,
+            normalizeString(record.artifactRootPath).length > 0
+          ),
+          runtime: createResolvedAssetStatus(
+            record.runtimePath,
+            runtimeResolvedByInstallationId.get(record.installationId) ?? false
+          ),
+          icon: createResolvedAssetStatus(
+            record.iconPath,
+            iconResolvedByInstallationId.get(record.installationId) ?? false
+          ),
+          workspaceSurface: {
+            resolved: Boolean(workspaceSurface),
+            source: workspaceSurface?.source ?? null,
+            rootViewId: workspaceSurface?.root.viewId ?? null,
+            viewType: workspaceSurface?.root.viewType ?? null,
+            requiredRuntimeCarrier: workspaceSurface?.requiredRuntimeCarrier ?? null,
+            runtimeImportUrlPresent:
+              normalizeString(workspaceSurface?.runtimeImportUrl).length > 0,
+          },
+          workspaceReadiness,
+          issues: installationIssues.sort(sortIssues),
+        } satisfies PlatformPackDoctorInstallationReport;
+      })
+      .sort(sortInstallationReports);
+
+    const connectorInstanceIds = new Set<string>([
+      ...(importedInstancesByConnectorId.get(connectorId) ?? []).map((record) => record.instanceId),
+      ...(instanceRecordsByConnectorId.get(connectorId) ?? []).map((record) => record.instanceId),
+    ]);
+    if (descriptor?.instanceRecord?.instanceId) {
+      connectorInstanceIds.add(descriptor.instanceRecord.instanceId);
+    }
+
+    const instances = Array.from(connectorInstanceIds)
+      .map((instanceId) => {
+        const importedRecord = importedInstanceById.get(instanceId) ?? null;
+        const instanceRecord = instanceRecordById.get(instanceId) ?? null;
+        const runtimeDescriptor = resolvePlatformRuntimeDescriptorByInstanceId(instanceId);
+        const installationId =
+          importedRecord?.installationId ?? readInstallationIdFromInstanceRecord(instanceRecord);
+        const installationRecord =
+          installationId ? installedRecordByInstallationId.get(installationId) ?? null : null;
+        const runtimeDescriptorRouting =
+          runtimeDescriptor?.workspaceRouting ??
+          resolvePlatformWorkspaceRoutingForInstanceId(instanceId) ??
+          resolvePlatformWorkspaceRoutingForConnector(connectorId);
+        const instanceIssues: PlatformPackDoctorIssue[] = [];
+
+        if (importedRecord && !instanceRecord) {
+          pushIssue(instanceIssues, 'instance.record.missing', 'error', {
+            instanceId,
+            installationId: importedRecord.installationId,
+          });
+        }
+        if (instanceRecord && !runtimeDescriptor) {
+          pushIssue(instanceIssues, 'instance.descriptor.missing', 'error', {
+            instanceId,
+            connectorId,
+          });
+        }
+        if (installationId && !installationRecord) {
+          pushIssue(instanceIssues, 'instance.installation.missing', 'error', {
+            instanceId,
+            installationId,
+          });
+        }
+        pushWorkspaceRoutingIssue(instanceIssues, runtimeDescriptorRouting);
+
+        const metadataSourceType = normalizeString(instanceRecord?.metadata?.sourceType);
+        const sourceType =
+          installationRecord?.sourceType ??
+          (metadataSourceType === 'builtin' || metadataSourceType === 'external'
+            ? metadataSourceType
+            : null);
+        const source =
+          normalizeString(installationRecord?.source) ||
+          normalizeString(instanceRecord?.metadata?.source) ||
+          null;
+        const displayName =
+          normalizeString(runtimeDescriptor?.displayName) ||
+          normalizeString(instanceRecord?.displayName) ||
+          normalizeString(importedRecord?.displayName) ||
+          instanceId;
+        const instanceLabel =
+          normalizeString(instanceRecord?.instanceLabel) ||
+          normalizeString(importedRecord?.instanceLabel) ||
+          displayName;
+        const platformId =
+          normalizeString(importedRecord?.platformId) ||
+          normalizeString(runtimeDescriptor?.platformId) ||
+          normalizeString(instanceRecord?.platformId) ||
+          normalizeString(installationRecord?.platformId) ||
+          connectorId.replace(/^connector\.platform\./i, '') ||
+          'unknown';
+
+        return {
+          instanceId,
+          installationId: installationId ?? null,
+          connectorId,
+          platformId,
+          sourceType,
+          source,
+          displayName,
+          instanceLabel,
+          imported:
+            Boolean(importedRecord) || instanceRecord?.metadata?.imported === true,
+          instanceRecordPresent: Boolean(instanceRecord),
+          importedRegistryPresent: Boolean(importedRecord),
+          descriptorPresent: Boolean(runtimeDescriptor),
+          installationPresent: installationId ? Boolean(installationRecord) : true,
+          authState: instanceRecord?.auth.status ?? null,
+          availability: instanceRecord?.availability ?? null,
+          status: resolveStatusWithWorkspaceDiagnostics({
+            issues: instanceIssues,
+            workspaceDiagnostics: runtimeDescriptorRouting?.diagnostics ?? [],
+          }),
+          workspaceRouting:
+            runtimeDescriptorRouting ?? resolvePlatformWorkspaceRoutingForConnector(connectorId)!,
+          issues: instanceIssues.sort(sortIssues),
+        } satisfies PlatformPackDoctorInstanceReport;
+      })
+      .sort(sortInstanceReports);
+
+    const status = resolveStatusFromIssues([
+      ...issues,
+      ...installations.flatMap((installation) => installation.issues),
+      ...installations.flatMap((installation) =>
+        installation.workspaceReadiness.diagnostics.map(toDoctorIssueFromWorkspaceDiagnostic)
+      ),
+      ...instances.flatMap((instance) => instance.issues),
+      ...instances.flatMap((instance) =>
+        instance.workspaceRouting.diagnostics.map(toDoctorIssueFromWorkspaceDiagnostic)
+      ),
+    ]);
+
     return {
       connectorId,
       displayName: resolveDisplayName({
@@ -635,7 +1203,7 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
         installedRecord,
       }),
       expectedBuiltin: Boolean(packAsset),
-      status: resolveStatusFromIssues(issues),
+      status,
       issues: issues.sort(sortIssues),
       storeInspection: storeEntry,
       packAsset,
@@ -645,17 +1213,29 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
         installedAtMs: installedRecord?.installedAtMs ?? null,
         artifactsPresent:
           typeof installedRecord === 'object'
-            ? installedArtifactsPresentByConnectorId.get(connectorId) ?? null
+            ? installedArtifactsPresentByInstallationId.get(installedRecord.installationId) ??
+              null
             : null,
       },
       registrationPresent: Boolean(registration),
       descriptorPresent: Boolean(descriptor),
       connectorDefinitionPresent: Boolean(definition),
+      workspaceRouting: workspaceRouting ?? resolvePlatformWorkspaceRoutingForConnector(connectorId)!,
       requiredFlows,
       bucketCoverage,
+      installations,
+      instances,
     };
   });
 
+  const installationCount = connectors.reduce(
+    (count, connector) => count + connector.installations.length,
+    0
+  );
+  const instanceCount = connectors.reduce(
+    (count, connector) => count + connector.instances.length,
+    0
+  );
   const readyConnectorCount = connectors.filter((connector) => connector.status === 'ready').length;
   const degradedConnectorCount = connectors.filter(
     (connector) => connector.status === 'degraded'
@@ -668,6 +1248,8 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
     durationMs: getMusicPlatformDurationMs(startedAtMs),
     status,
     expectedBuiltinCount: builtinAssets.length,
+    installationCount,
+    instanceCount,
     readyConnectorCount,
     degradedConnectorCount,
     errorConnectorCount,
@@ -676,22 +1258,50 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
     connectors,
   };
 
-  telemetry[status === 'error' ? 'error' : status === 'degraded' ? 'warn' : 'info'](
-    'music-platform.pack.doctor.completed',
-    {
-      fields: {
-        status,
-        expectedBuiltinCount: report.expectedBuiltinCount,
-        connectorCount: report.connectors.length,
-        readyConnectorCount,
-        degradedConnectorCount,
-        errorConnectorCount,
-        issueCount:
-          report.issues.length +
-          report.connectors.reduce((count, connector) => count + connector.issues.length, 0),
-      },
-    }
-  );
+  const reportTelemetryFingerprint: ConsecutiveDoctorTelemetryFingerprint = {
+    status,
+    fingerprint: buildPlatformPackDoctorTelemetryFingerprint(report),
+  };
+  if (
+    !lastPlatformPackDoctorTelemetry ||
+    lastPlatformPackDoctorTelemetry.status !== reportTelemetryFingerprint.status ||
+    lastPlatformPackDoctorTelemetry.fingerprint !== reportTelemetryFingerprint.fingerprint
+  ) {
+    telemetry[status === 'error' ? 'error' : status === 'degraded' ? 'warn' : 'info'](
+      'music-platform.pack.doctor.completed',
+      {
+        fields: {
+          status,
+          expectedBuiltinCount: report.expectedBuiltinCount,
+          installationCount: report.installationCount,
+          instanceCount: report.instanceCount,
+          connectorCount: report.connectors.length,
+          readyConnectorCount,
+          degradedConnectorCount,
+          errorConnectorCount,
+          issueCount:
+            report.issues.length +
+            report.connectors.reduce(
+              (count, connector) =>
+                count +
+                connector.issues.length +
+                connector.installations.reduce(
+                  (installationCount, installation) =>
+                    installationCount + installation.issues.length,
+                  0
+                ) +
+                connector.instances.reduce(
+                  (instanceIssueCount, instance) =>
+                    instanceIssueCount + instance.issues.length,
+                  0
+                ),
+              0
+            ),
+        },
+      }
+    );
+    lastPlatformPackDoctorTelemetry = reportTelemetryFingerprint;
+  }
 
   return report;
 }

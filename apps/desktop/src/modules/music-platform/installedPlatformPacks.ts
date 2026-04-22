@@ -20,6 +20,7 @@ import {
 export type InstalledPlatformPackSourceType = 'builtin' | 'external';
 
 export interface InstalledPlatformPackRecord {
+  installationId: string;
   packId: string;
   packVersion: string;
   packageDigest?: string;
@@ -38,8 +39,54 @@ export interface InstalledPlatformPackRecord {
   sidecarPath?: string;
 }
 
+const textEncoder = new TextEncoder();
+
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function createSimpleId(prefix: string): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function normalizeIdSegment(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'pack';
+}
+
+function hashString(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+function createLegacyInstallationId(input: {
+  connectorId: PlatformConnectorId;
+  packId: string;
+  packVersion: string;
+  packageDigest?: string;
+  artifactRootPath: string;
+}): string {
+  const seed = [
+    input.connectorId,
+    input.packId,
+    input.packVersion,
+    input.packageDigest ?? '',
+    input.artifactRootPath,
+  ].join('|');
+  return `legacy-${normalizeIdSegment(input.packId)}-${hashString(seed)}`;
+}
+
+export function createPlatformPackInstallationId(packId: string): string {
+  return createSimpleId(`pack-install-${normalizeIdSegment(packId)}`);
 }
 
 function normalizeFsPath(value: string): string {
@@ -91,6 +138,33 @@ function cloneManifest(manifest: PlatformPackManifestV1): PlatformPackManifestV1
   };
 }
 
+function cloneWorkspaceDescriptor(
+  workspace: PlatformCompatContractFile['workspace'] | undefined
+): PlatformCompatContractFile['workspace'] | undefined {
+  if (!workspace) {
+    return undefined;
+  }
+
+  return {
+    ownership: workspace.ownership,
+    requiredRuntimeCarrier: workspace.requiredRuntimeCarrier,
+    root: workspace.root ? { ...workspace.root } : undefined,
+    shellSlots: workspace.shellSlots?.map((slot) => ({ ...slot })),
+    capabilityFamilies: workspace.capabilityFamilies
+      ? {
+          required: workspace.capabilityFamilies.required?.slice(),
+          optional: workspace.capabilityFamilies.optional?.slice(),
+        }
+      : undefined,
+    context: workspace.context
+      ? {
+          scope: workspace.context.scope,
+          fields: workspace.context.fields.slice(),
+        }
+      : undefined,
+  };
+}
+
 function cloneContract(contract: PlatformCompatContractFile): PlatformCompatContractFile {
   return {
     ...contract,
@@ -98,6 +172,7 @@ function cloneContract(contract: PlatformCompatContractFile): PlatformCompatCont
     auth: { ...contract.auth },
     capabilities: { ...contract.capabilities },
     apiBindings: { ...contract.apiBindings },
+    workspace: cloneWorkspaceDescriptor(contract.workspace),
     extension: contract.extension ? { ...contract.extension } : undefined,
   };
 }
@@ -117,6 +192,7 @@ function sanitizeInstalledPlatformPackRecord(
 ): InstalledPlatformPackRecord | null {
   if (!isRecord(value)) return null;
 
+  const installationId = normalizeString(value.installationId);
   const connectorId = normalizePlatformConnectorId(value.connectorId);
   const packId = normalizeString(value.packId);
   const packVersion = normalizeString(value.packVersion);
@@ -158,6 +234,15 @@ function sanitizeInstalledPlatformPackRecord(
   const packageDigest = normalizeString(value.packageDigest) || undefined;
 
   return {
+    installationId:
+      installationId ||
+      createLegacyInstallationId({
+        connectorId,
+        packId,
+        packVersion,
+        packageDigest,
+        artifactRootPath,
+      }),
     packId,
     packVersion,
     packageDigest,
@@ -185,7 +270,11 @@ function sortInstalledPlatformPackRecords(
     (left.manifest.connector.sortOrder ?? 1000) -
     (right.manifest.connector.sortOrder ?? 1000);
   if (sortOrderDiff !== 0) return sortOrderDiff;
-  return left.connectorId.localeCompare(right.connectorId, 'zh-CN');
+  const connectorDiff = left.connectorId.localeCompare(right.connectorId, 'zh-CN');
+  if (connectorDiff !== 0) return connectorDiff;
+  const installedAtDiff = left.installedAtMs - right.installedAtMs;
+  if (installedAtDiff !== 0) return installedAtDiff;
+  return left.installationId.localeCompare(right.installationId, 'zh-CN');
 }
 
 function saveInstalledPlatformPackRecords(records: InstalledPlatformPackRecord[]): void {
@@ -198,7 +287,7 @@ function saveInstalledPlatformPackRecords(records: InstalledPlatformPackRecord[]
 
 function upsertInstalledPlatformPackRecord(record: InstalledPlatformPackRecord): void {
   const records = loadInstalledPlatformPackRecords();
-  const next = records.filter((item) => item.connectorId !== record.connectorId);
+  const next = records.filter((item) => item.installationId !== record.installationId);
   next.push(cloneInstalledPlatformPackRecord(record));
   saveInstalledPlatformPackRecords(next);
 }
@@ -208,9 +297,7 @@ async function sha256Hex(data: Uint8Array): Promise<string | undefined> {
     return undefined;
   }
 
-  const buffer = new ArrayBuffer(data.byteLength);
-  new Uint8Array(buffer).set(data);
-  const digest = await crypto.subtle.digest('SHA-256', buffer);
+  const digest = await crypto.subtle.digest('SHA-256', data as unknown as BufferSource);
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
@@ -225,7 +312,7 @@ async function computeTreeDigest(
   for (const file of [...files].sort((left, right) =>
     left.relativePath.localeCompare(right.relativePath, 'en')
   )) {
-    const header = new TextEncoder().encode(`${file.relativePath}\u0000`);
+    const header = textEncoder.encode(`${file.relativePath}\u0000`);
     const footer = new Uint8Array([0]);
     chunks.push(header, file.bytes, footer);
     totalLength += header.byteLength + file.bytes.byteLength + footer.byteLength;
@@ -273,15 +360,16 @@ async function resolvePlatformPackFilesForInstall(
 
 function buildInstallRootRelativePath(
   pack: ParsedPlatformPack,
-  packageDigest: string | undefined
+  installationId: string
 ): string {
-  const versionOrDigest = packageDigest || normalizeString(pack.manifest.metadata.version) || 'current';
-  return `pmp-durable/music-platform-packs/${pack.manifest.metadata.id}/${versionOrDigest}`;
+  return `pmp-durable/music-platform-packs/${pack.manifest.metadata.id}/${installationId}`;
 }
 
 async function persistInstalledPlatformPackArtifacts(
   pack: ParsedPlatformPack,
-  filesToPersist: Array<{ relativePath: string; bytes: Uint8Array }>
+  filesToPersist: Array<{ relativePath: string; bytes: Uint8Array }>,
+  installationId: string,
+  packageDigest?: string
 ): Promise<{
   packageDigest?: string;
   artifactRootPath: string;
@@ -299,8 +387,8 @@ async function persistInstalledPlatformPackArtifacts(
     import('@tauri-apps/api/fs'),
     import('@tauri-apps/api/path'),
   ]);
-  const packageDigest = await computeTreeDigest(filesToPersist);
-  const rootRelative = buildInstallRootRelativePath(pack, packageDigest);
+  const resolvedPackageDigest = packageDigest ?? (await computeTreeDigest(filesToPersist));
+  const rootRelative = buildInstallRootRelativePath(pack, installationId);
 
   await fs.createDir(rootRelative, {
     dir: fs.BaseDirectory.AppData,
@@ -340,7 +428,7 @@ async function persistInstalledPlatformPackArtifacts(
     );
 
   return {
-    packageDigest,
+    packageDigest: resolvedPackageDigest,
     artifactRootPath: await pathApi.join(
       appDataDir,
       ...rootRelative.split('/').filter((segment) => segment.length > 0)
@@ -403,21 +491,24 @@ export async function installPlatformPackToStorage(
     source?: string;
   }
 ): Promise<InstalledPlatformPackRecord> {
-  const existing =
-    loadInstalledPlatformPackRecords().find(
-      (record) => record.connectorId === pack.manifest.connector.connectorId
-    ) ?? null;
-
   const filesToPersist = await resolvePlatformPackFilesForInstall(pack, {
     sourceType: options.sourceType,
   });
   const packageDigest = await computeTreeDigest(filesToPersist);
+  const existing =
+    options.sourceType === 'builtin'
+      ? loadInstalledPlatformPackRecords().find(
+          (record) =>
+            record.sourceType === 'builtin' &&
+            record.connectorId === pack.manifest.connector.connectorId &&
+            record.packId === pack.manifest.metadata.id &&
+            record.packVersion === pack.manifest.metadata.version &&
+            record.platformId === pack.contract.platform.platformId &&
+            record.packageDigest === packageDigest
+        ) ?? null
+      : null;
   if (
     existing &&
-    existing.packId === pack.manifest.metadata.id &&
-    existing.packVersion === pack.manifest.metadata.version &&
-    existing.platformId === pack.contract.platform.platformId &&
-    existing.packageDigest === packageDigest &&
     (await areInstalledPlatformPackArtifactsPresent(existing))
   ) {
     const normalizedSource = normalizeString(options.source) || undefined;
@@ -436,8 +527,15 @@ export async function installPlatformPackToStorage(
     return cloneInstalledPlatformPackRecord(existing);
   }
 
-  const persisted = await persistInstalledPlatformPackArtifacts(pack, filesToPersist);
+  const installationId = createPlatformPackInstallationId(pack.manifest.metadata.id);
+  const persisted = await persistInstalledPlatformPackArtifacts(
+    pack,
+    filesToPersist,
+    installationId,
+    packageDigest
+  );
   const record: InstalledPlatformPackRecord = {
+    installationId,
     packId: pack.manifest.metadata.id,
     packVersion: pack.manifest.metadata.version,
     packageDigest: persisted.packageDigest,
@@ -445,7 +543,7 @@ export async function installPlatformPackToStorage(
     platformId: pack.contract.platform.platformId,
     sourceType: options.sourceType,
     source: normalizeString(options.source) || undefined,
-    installedAtMs: existing?.installedAtMs ?? Date.now(),
+    installedAtMs: Date.now(),
     manifest: cloneManifest(pack.manifest),
     contract: cloneContract(pack.contract),
     artifactRootPath: normalizeFsPath(persisted.artifactRootPath),
@@ -465,16 +563,37 @@ export function loadInstalledPlatformPackRecords(): InstalledPlatformPackRecord[
   const raw = readJson<unknown>(STORAGE_KEYS.PLATFORM_PACKS_V1, []);
   if (!Array.isArray(raw)) return [];
 
-  const byConnectorId = new Map<PlatformConnectorId, InstalledPlatformPackRecord>();
-  for (const item of raw) {
-    const record = sanitizeInstalledPlatformPackRecord(item);
-    if (!record) continue;
-    byConnectorId.set(record.connectorId, record);
-  }
-
-  return Array.from(byConnectorId.values())
+  return raw
+    .map((item) => sanitizeInstalledPlatformPackRecord(item))
+    .filter((record): record is InstalledPlatformPackRecord => Boolean(record))
     .map(cloneInstalledPlatformPackRecord)
     .sort(sortInstalledPlatformPackRecords);
+}
+
+export function getInstalledPlatformPackRecord(
+  installationId: string
+): InstalledPlatformPackRecord | null {
+  const normalizedInstallationId = normalizeString(installationId);
+  if (!normalizedInstallationId) {
+    return null;
+  }
+  return (
+    loadInstalledPlatformPackRecords().find(
+      (record) => record.installationId === normalizedInstallationId
+    ) ?? null
+  );
+}
+
+export function listInstalledPlatformPackRecordsForConnector(
+  connectorId: string
+): InstalledPlatformPackRecord[] {
+  const normalizedConnectorId = normalizePlatformConnectorId(connectorId);
+  if (!normalizedConnectorId) {
+    return [];
+  }
+  return loadInstalledPlatformPackRecords().filter(
+    (record) => record.connectorId === normalizedConnectorId
+  );
 }
 
 export async function subscribeInstalledPlatformPackRecords(

@@ -36,6 +36,7 @@ import { useSkinSurfaceModel } from '../../../themes/skinSurface';
 import { useConfirmDialog } from '../../core/ConfirmDialog';
 import {
   getMusicPlatformGlobalCacheSettings,
+  listPlatformRuntimeDescriptors,
   listPlatformCompatRegistryRecords,
   listPlatformConnectorDefinitions,
   listPlatformConnectorFacadeItems,
@@ -44,13 +45,18 @@ import {
   pickMusicPlatformGlobalCacheDirectory,
   readPlatformLoginRegistry,
   refreshAndEmitPlatformConnectorAuthSnapshot,
+  resolvePlatformPackWorkspaceSurface,
+  resolvePlatformPackWorkspaceSurfaceForInstallation,
   resolvePlatformConnectorTemplate,
+  resolvePlatformRuntimeDescriptorByInstanceId,
+  setMusicPlatformConnectorWorkspaceOwnershipMode,
   setMusicPlatformGlobalCacheSettings,
   setPlatformRenderSelectionMounted,
   subscribePlatformCompatRegistry,
   subscribePlatformConnectorDefinitions,
   subscribePlatformInstances,
   subscribePlatformLoginRegistry,
+  subscribeMusicPlatformWorkspaceOwnershipSettings,
   subscribePlatformRenderSelections,
   type PlatformCompatRegistryRecord,
   type PlatformConnectorDefinition,
@@ -59,6 +65,8 @@ import {
   type PlatformInstanceAuthSnapshot,
   type PlatformLoginRegistryEntry,
   type MusicPlatformGlobalCacheSettings,
+  type MusicPlatformWorkspaceOwnershipMode,
+  type PlatformRuntimeDescriptor,
 } from '../../../modules/music-platform';
 import {
   getMusicPlatformNowMs,
@@ -67,7 +75,7 @@ import {
 } from '../../../modules/music-platform/platformDiagnostics';
 import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import {
-  buildPlatformAuthSnapshotMapByConnectorId,
+  buildPlatformAuthSnapshotMapByInstanceId,
   filterMountedPlatformRegistrationItems,
   resolveActiveMountedPlatformRegistrationItem,
 } from '../shared/platformRegistrationState';
@@ -92,10 +100,15 @@ import {
   type WorkspaceRuntimeAdapter,
 } from './platformWorkspaceRuntimeAdapters';
 import {
+  shouldRenderLegacyPlatformWorkspace,
+  shouldRenderPackPlatformWorkspace,
+  shouldRenderBlockedPackWorkspace,
   toConnectorWorkspaceMode,
+  toPlatformWorkspaceRouteDisplayState,
   type PlatformWorkspaceDescriptor,
 } from './platformWorkspaceModes';
 import { usePlatformWorkspaceControllerRegistry } from './usePlatformWorkspaceControllerRegistry';
+import { PackWorkspaceMount } from './PackWorkspaceMount';
 
 import './PlatformMagnet.css';
 
@@ -207,6 +220,27 @@ function resolveRegisteredItemAccountValue(item: RegisteredPlatformItem | null):
   );
 }
 
+function formatWorkspaceOwnershipModeLabel(
+  mode: MusicPlatformWorkspaceOwnershipMode,
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  return t(`magnet.platform.workspace.ownership.${mode}`);
+}
+
+function formatWorkspacePathLabel(
+  path: 'legacy' | 'pack' | 'none',
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  return t(`magnet.platform.workspace.path.${path}`);
+}
+
+function formatWorkspaceStatusLabel(
+  status: 'active' | 'fallback' | 'blocked',
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  return t(`magnet.platform.workspace.status.${status}`);
+}
+
 function listCapabilityLabelKeys(contract: PlatformCompatContractFile | null): string[] {
   if (!contract) return [];
 
@@ -241,14 +275,14 @@ function listApiBindingKeys(contract: PlatformCompatContractFile | null): string
     .map(([key]) => key);
 }
 
-function resolvePreferredConnectorId(
-  selectedConnectorId: string | null,
+function resolvePreferredInstanceId(
+  selectedInstanceId: string | null,
   items: RegisteredPlatformItem[],
   defaultMode: PlatformMagnetDefaultMode
 ): string | null {
-  const registeredConnectorIds = new Set(items.map((item) => item.entry.connectorId));
-  if (selectedConnectorId && registeredConnectorIds.has(selectedConnectorId as PlatformConnectorId)) {
-    return selectedConnectorId;
+  const registeredInstanceIds = new Set(items.map((item) => item.entry.instanceId));
+  if (selectedInstanceId && registeredInstanceIds.has(selectedInstanceId)) {
+    return selectedInstanceId;
   }
 
   const preferredAdapterKind = resolveDefaultWorkspaceAdapterKindByWorkspaceDefaultMode(defaultMode);
@@ -266,19 +300,19 @@ function resolvePreferredConnectorId(
   const mountedItems = items.filter((item) => item.renderSelection?.mounted === true);
   if (preferredAdapterKind) {
     const preferredMounted = mountedItems.find(matchesPreferredAdapter);
-    if (preferredMounted) return preferredMounted.entry.connectorId;
+    if (preferredMounted) return preferredMounted.entry.instanceId;
   }
 
   if (mountedItems[0]) {
-    return mountedItems[0].entry.connectorId;
+    return mountedItems[0].entry.instanceId;
   }
 
   if (preferredAdapterKind) {
     const preferredRegistered = items.find(matchesPreferredAdapter);
-    if (preferredRegistered) return preferredRegistered.entry.connectorId;
+    if (preferredRegistered) return preferredRegistered.entry.instanceId;
   }
 
-  return items[0]?.entry.connectorId ?? null;
+  return items[0]?.entry.instanceId ?? null;
 }
 
 function getConnectorVisualMeta(
@@ -421,7 +455,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   );
 
   const [registryEntries, setRegistryEntries] = useState<PlatformLoginRegistryEntry[]>(() =>
-    readPlatformLoginRegistry(platformDefinitions)
+    readPlatformLoginRegistry(platformDefinitions, undefined, listPlatformInstances())
   );
   const [platformInstances, setPlatformInstances] = useState<PlatformInstanceRecord[]>(() =>
     listPlatformInstances()
@@ -432,12 +466,12 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const [contractRecords, setContractRecords] = useState<PlatformCompatRegistryRecord[]>(() =>
     listPlatformCompatRegistryRecords()
   );
-  const [authSnapshotsByConnectorId, setAuthSnapshotsByConnectorId] = useState<
+  const [authSnapshotsByInstanceId, setAuthSnapshotsByInstanceId] = useState<
     Record<string, PlatformInstanceAuthSnapshot | null>
   >({});
   const [connectorViews, setConnectorViews] = useState<PlatformConnectorFacadeItem[]>([]);
   const [connectorViewsLoading, setConnectorViewsLoading] = useState(true);
-  const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
+  const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(null);
   const [activePage, setActivePage] = useState<PlatformPageView>('daily');
   const [launcherOpen, setLauncherOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
@@ -462,6 +496,11 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const [globalCacheSettingsSaving, setGlobalCacheSettingsSaving] = useState(false);
   const [globalCacheSettingsInfo, setGlobalCacheSettingsInfo] = useState<string | null>(null);
   const [globalCacheSettingsError, setGlobalCacheSettingsError] = useState<string | null>(null);
+  const [, setWorkspaceOwnershipSettingsVersion] = useState(0);
+  const [workspaceOwnershipSavingConnectorId, setWorkspaceOwnershipSavingConnectorId] =
+    useState<string | null>(null);
+  const [workspaceOwnershipInfo, setWorkspaceOwnershipInfo] = useState<string | null>(null);
+  const [workspaceOwnershipError, setWorkspaceOwnershipError] = useState<string | null>(null);
   const [selectedFilterConnectorIds, setSelectedFilterConnectorIds] = useState<string[]>([]);
   const [contentTransitionPhase, setContentTransitionPhase] = useState<ContentTransitionPhase>('entered');
   const [allPlaylists, setAllPlaylists] = useState<AudioPlaylist[]>(() => audioService.getPlaylists());
@@ -479,6 +518,35 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       setPlatformDefinitions(definitions);
     });
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unsubscribe = () => {};
+
+    const refresh = () => {
+      if (disposed) return;
+      setWorkspaceOwnershipSettingsVersion((version) => version + 1);
+    };
+
+    void subscribeMusicPlatformWorkspaceOwnershipSettings(refresh)
+      .then((nextUnsubscribe) => {
+        if (disposed) {
+          nextUnsubscribe();
+          return;
+        }
+        unsubscribe = nextUnsubscribe;
+      })
+      .catch((error) => {
+        telemetry.warn('platform.workspace-ownership.subscribe-failed', {
+          message: readTelemetryErrorMessage(error),
+        });
+      });
+
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [telemetry]);
 
   const refreshConnectorViews = useCallback(async (options?: { refreshAuth?: boolean }) => {
     const requestId = ++connectorViewsRequestIdRef.current;
@@ -559,7 +627,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
     const refresh = () => {
       if (disposed) return;
-      setRegistryEntries(readPlatformLoginRegistry(platformDefinitions));
+      setRegistryEntries(readPlatformLoginRegistry(platformDefinitions, undefined, platformInstances));
     };
 
     refresh();
@@ -577,7 +645,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       disposed = true;
       unsubscribe();
     };
-  }, [platformDefinitions]);
+  }, [platformDefinitions, platformInstances]);
 
   useEffect(() => {
     setPlatformInstances(listPlatformInstances());
@@ -587,7 +655,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   }, []);
 
   useEffect(() => {
-    setAuthSnapshotsByConnectorId(buildPlatformAuthSnapshotMapByConnectorId(platformInstances));
+    setAuthSnapshotsByInstanceId(buildPlatformAuthSnapshotMapByInstanceId(platformInstances));
   }, [platformInstances]);
 
   useEffect(() => {
@@ -638,16 +706,10 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     () => new Map(contractRecords.map((record) => [record.platformId, record])),
     [contractRecords]
   );
-  const platformInstancesByConnectorId = useMemo(() => {
-    const next = new Map<string, PlatformInstanceRecord>();
-    for (const instance of platformInstances) {
-      const connectorId =
-        typeof instance.metadata?.connectorId === 'string' ? instance.metadata.connectorId : '';
-      if (!connectorId) continue;
-      next.set(connectorId, instance);
-    }
-    return next;
-  }, [platformInstances]);
+  const platformInstancesById = useMemo(
+    () => new Map(platformInstances.map((instance) => [instance.instanceId, instance] as const)),
+    [platformInstances]
+  );
 
   const registeredItems = useMemo<RegisteredPlatformItem[]>(
     () =>
@@ -655,14 +717,14 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
         .filter((entry) => entry.enabled !== false)
         .map((entry) => {
           const definition = platformDefinitionsById.get(entry.connectorId) ?? null;
-          const instance = platformInstancesByConnectorId.get(entry.connectorId) ?? null;
+          const instance = platformInstancesById.get(entry.instanceId) ?? null;
           const renderSelection = instance
             ? renderSelectionsByInstanceId.get(instance.instanceId) ?? null
             : null;
           const contractRecord = instance
             ? contractRecordsByPlatformId.get(instance.platformId) ?? null
             : null;
-          const snapshot = authSnapshotsByConnectorId[entry.connectorId] ?? null;
+          const snapshot = authSnapshotsByInstanceId[entry.instanceId] ?? null;
 
           return {
             entry,
@@ -675,11 +737,11 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
           };
         }),
     [
-      authSnapshotsByConnectorId,
+      authSnapshotsByInstanceId,
       connectorViewsById,
       contractRecordsByPlatformId,
       platformDefinitionsById,
-      platformInstancesByConnectorId,
+      platformInstancesById,
       registryEntries,
       renderSelectionsByInstanceId,
     ]
@@ -704,7 +766,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
           lagMs,
           activePage,
           settingsOpen,
-          selectedConnectorId: selectedConnectorId ?? null,
+          selectedInstanceId: selectedInstanceId ?? null,
           registeredCount: registeredItems.length,
           mountedCount: mountedRegisteredItems.length,
         },
@@ -718,34 +780,91 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     activePage,
     mountedRegisteredItems.length,
     registeredItems.length,
-    selectedConnectorId,
+    selectedInstanceId,
     settingsOpen,
     telemetry,
   ]);
 
   useEffect(() => {
-    const nextSelectedConnectorId = resolvePreferredConnectorId(
-      selectedConnectorId,
+    const nextSelectedInstanceId = resolvePreferredInstanceId(
+      selectedInstanceId,
       registeredItems,
       skinProps.defaultMode
     );
-    if (nextSelectedConnectorId !== selectedConnectorId) {
-      setSelectedConnectorId(nextSelectedConnectorId);
+    if (nextSelectedInstanceId !== selectedInstanceId) {
+      setSelectedInstanceId(nextSelectedInstanceId);
     }
-  }, [registeredItems, selectedConnectorId, skinProps.defaultMode]);
+  }, [registeredItems, selectedInstanceId, skinProps.defaultMode]);
 
+  const runtimeDescriptors: PlatformRuntimeDescriptor[] = listPlatformRuntimeDescriptors();
+  const runtimeDescriptorsByConnectorId = useMemo(
+    () =>
+      new Map(
+        runtimeDescriptors.map((descriptor) => [descriptor.connectorId, descriptor] as const)
+      ),
+    [runtimeDescriptors]
+  );
   const activeItem = useMemo(
-    () => resolveActiveMountedPlatformRegistrationItem(selectedConnectorId, mountedRegisteredItems),
-    [mountedRegisteredItems, selectedConnectorId]
+    () => resolveActiveMountedPlatformRegistrationItem(selectedInstanceId, mountedRegisteredItems),
+    [mountedRegisteredItems, selectedInstanceId]
   );
   const activeDefinition = activeItem?.definition ?? null;
   const activeContractRecord = activeItem?.contractRecord ?? null;
   const activeInstance = activeItem?.instance ?? null;
   const activeRenderSelection = activeItem?.renderSelection ?? null;
   const activeFacade = activeItem?.facade ?? null;
+  const activeInstanceId = activeItem?.entry.instanceId ?? activeInstance?.instanceId ?? null;
   const activeConnectorId = activeItem?.entry.connectorId ?? null;
+  const activeRuntimeDescriptor = useMemo(() => {
+    if (activeInstanceId) {
+      const instanceDescriptor = resolvePlatformRuntimeDescriptorByInstanceId(activeInstanceId);
+      if (instanceDescriptor) {
+        return instanceDescriptor;
+      }
+    }
+
+    return activeConnectorId
+      ? runtimeDescriptorsByConnectorId.get(activeConnectorId as PlatformConnectorId) ?? null
+      : null;
+  }, [activeConnectorId, activeInstanceId, runtimeDescriptorsByConnectorId]);
+  const activeWorkspaceRouteState = toPlatformWorkspaceRouteDisplayState(
+    activeRuntimeDescriptor?.workspaceRouting
+  );
+  const activeLegacyWorkspacePath = shouldRenderLegacyPlatformWorkspace(
+    activeWorkspaceRouteState
+  );
+  const activePackWorkspacePath = shouldRenderPackPlatformWorkspace(
+    activeWorkspaceRouteState
+  );
+  const activeWorkspacePackBlocked = shouldRenderBlockedPackWorkspace(
+    activeWorkspaceRouteState
+  );
+  const activeInstallationId =
+    typeof activeRuntimeDescriptor?.instanceRecord?.metadata?.installationId === 'string' &&
+    activeRuntimeDescriptor.instanceRecord.metadata.installationId.trim().length > 0
+      ? activeRuntimeDescriptor.instanceRecord.metadata.installationId.trim()
+      : null;
+  const activePackWorkspaceSurface = useMemo(
+    () => {
+      if (!activePackWorkspacePath) {
+        return null;
+      }
+      if (activeInstallationId) {
+        return resolvePlatformPackWorkspaceSurfaceForInstallation(activeInstallationId);
+      }
+      if (activeConnectorId) {
+        return resolvePlatformPackWorkspaceSurface(activeConnectorId);
+      }
+      return null;
+    },
+    [activeConnectorId, activeInstallationId, activePackWorkspacePath]
+  );
   const activeWorkspaceConnectorId =
     activeRenderSelection?.mounted === true && activeConnectorId ? activeConnectorId : null;
+  const activePackWorkspaceInstanceId =
+    activeInstance?.instanceId ??
+    activeRuntimeDescriptor?.instanceRecord?.instanceId ??
+    null;
 
   const activeWorkspaceDescriptor = useMemo<PlatformWorkspaceDescriptor | null>(() => {
     if (!activeDefinition) return null;
@@ -758,13 +877,13 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     };
   }, [activeDefinition]);
   const activeWorkspaceAdapterKind = useMemo<PlatformWorkspaceAdapterKind | null>(() => {
-    if (!activeDefinition) return null;
+    if (!activeDefinition || !activeLegacyWorkspacePath) return null;
     return resolvePlatformWorkspaceAdapterKind({
       connectorId: activeConnectorId,
       workspaceKind: activeDefinition.workspaceKind,
       platformTemplate: resolvePlatformConnectorTemplate(activeDefinition),
     });
-  }, [activeConnectorId, activeDefinition]);
+  }, [activeConnectorId, activeDefinition, activeLegacyWorkspacePath]);
 
   const platformPlaylistsByConnectorId = useMemo(() => {
     const next = new Map<string, AudioPlaylist[]>();
@@ -942,6 +1061,19 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     [mountedRegisteredItems, settingsTab]
   );
   const settingsItem = settingsItems[0] ?? null;
+  const workspaceOwnershipRows = platformDefinitions
+    .slice()
+    .sort((left, right) => left.sortOrder - right.sortOrder)
+    .map((definition) => {
+      const runtimeDescriptor =
+        runtimeDescriptorsByConnectorId.get(definition.connectorId) ?? null;
+      return {
+        definition,
+        routeState: toPlatformWorkspaceRouteDisplayState(
+          runtimeDescriptor?.workspaceRouting
+        ),
+      };
+    });
   const {
     workspaceTemplateAdapterPayloads,
     workspaceRuntimeAdapterRegistry,
@@ -950,6 +1082,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   } = usePlatformWorkspaceControllerRegistry({
     activePage,
     settingsOpen,
+    activeWorkspacePath: activeWorkspaceRouteState.path,
     activeConnectorId,
     activeWorkspaceConnectorId,
     activeWorkspaceAdapterKind,
@@ -969,13 +1102,13 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   });
 
   const activeWorkspaceTemplateAdapter = useMemo(() => {
-    if (!activeDefinition) return null;
+    if (!activeDefinition || !activeLegacyWorkspacePath) return null;
     return resolvePlatformWorkspaceAdapter({
       connectorId: activeConnectorId,
       workspaceKind: activeDefinition.workspaceKind,
       platformTemplate: resolvePlatformConnectorTemplate(activeDefinition),
     });
-  }, [activeConnectorId, activeDefinition]);
+  }, [activeConnectorId, activeDefinition, activeLegacyWorkspacePath]);
 
   const activeWorkspaceRuntimeAdapter = useMemo<WorkspaceRuntimeAdapter | null>(() => {
     if (!activeWorkspaceAdapterKind) return null;
@@ -1023,8 +1156,8 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     setCreateNameEditing(false);
   }, []);
 
-  const handleSelectConnector = useCallback((connectorId: string) => {
-    setSelectedConnectorId(connectorId);
+  const handleSelectInstance = useCallback((instanceId: string) => {
+    setSelectedInstanceId(instanceId);
     setActivePage('instance');
     setSubmittedQuery('');
     closeTopMenus();
@@ -1098,7 +1231,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
         setPlatformRenderSelectionMounted(targetItem.instance.instanceId, true);
       }
 
-      setSelectedConnectorId(targetConnectorId);
+      setSelectedInstanceId(targetItem?.entry.instanceId ?? null);
       setActivePage('instance');
       setSubmittedQuery('');
       setDrawerOpen(false);
@@ -1122,12 +1255,15 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       }
 
       selectDrawerFolder(folderId);
-      setSelectedConnectorId(connectorId);
+      setSelectedInstanceId(
+        registeredItems.find((item) => item.entry.connectorId === connectorId)?.entry.instanceId ??
+          null
+      );
       setActivePage('instance');
       setSubmittedQuery('');
       setDrawerOpen(false);
     },
-    [activeWorkspaceRuntimeAdapter]
+    [activeWorkspaceRuntimeAdapter, registeredItems]
   );
 
   const handleCreateLocalPlaylist = useCallback(() => {
@@ -1148,7 +1284,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     const nextMounted = item.renderSelection?.mounted !== true;
     setPlatformRenderSelectionMounted(item.instance.instanceId, nextMounted);
     if (nextMounted) {
-      setSelectedConnectorId(item.entry.connectorId);
+      setSelectedInstanceId(item.entry.instanceId);
     }
   }, []);
 
@@ -1263,6 +1399,47 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       setGlobalCacheSettingsSaving(false);
     }
   }, [globalCacheSettingsSaving, t]);
+
+  const handleSetWorkspaceOwnershipMode = useCallback(
+    async (
+      connectorId: string,
+      mode: MusicPlatformWorkspaceOwnershipMode,
+      definition: PlatformConnectorDefinition | null
+    ) => {
+      if (workspaceOwnershipSavingConnectorId === connectorId) return;
+
+      setWorkspaceOwnershipSavingConnectorId(connectorId);
+      setWorkspaceOwnershipError(null);
+      setWorkspaceOwnershipInfo(null);
+      try {
+        await setMusicPlatformConnectorWorkspaceOwnershipMode(
+          connectorId,
+          mode
+        );
+        setWorkspaceOwnershipSettingsVersion((version) => version + 1);
+        setWorkspaceOwnershipInfo(
+          t('magnet.platform.global.workspaceOwnership.stateSaved', {
+            platform:
+              definition?.labelKey && definition.labelKey.trim().length > 0
+                ? t(definition.labelKey)
+                : definition?.displayName ?? connectorId,
+          })
+        );
+      } catch (error) {
+        telemetry.warn('platform.workspace-ownership.save-failed', {
+          message: readTelemetryErrorMessage(error),
+          fields: {
+            connectorId,
+            mode,
+          },
+        });
+        setWorkspaceOwnershipError(t('magnet.platform.global.workspaceOwnership.errorSave'));
+      } finally {
+        setWorkspaceOwnershipSavingConnectorId(null);
+      }
+    },
+    [t, telemetry, workspaceOwnershipSavingConnectorId]
+  );
 
   const registeredCount = registeredItems.length;
   const loadedCount = mountedRegisteredItems.length;
@@ -1451,7 +1628,81 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     };
   }, [activePage, submittedQuery]);
 
+  const renderWorkspaceRoutingNotice = () => {
+    if (!activeConnectorId || activePage === 'local') {
+      return null;
+    }
+    if (activeWorkspaceRouteState.status === 'active') {
+      return null;
+    }
+
+    const blocked = activeWorkspaceRouteState.status === 'blocked';
+    return (
+      <div
+        className={cx(
+          'mb-3 rounded-[18px] border px-4 py-3 text-sm',
+          blocked
+            ? 'border-rose-400/20 bg-rose-400/10 text-rose-100'
+            : 'border-amber-300/20 bg-amber-300/10 text-amber-50'
+        )}
+      >
+        <div className="font-medium">
+          {blocked
+            ? t('magnet.platform.workspace.notice.blockedTitle')
+            : t('magnet.platform.workspace.notice.fallbackTitle')}
+        </div>
+        <div className="mt-1 text-xs opacity-80">
+          {t('magnet.platform.workspace.diagnostic.stateLine', {
+            mode: formatWorkspaceOwnershipModeLabel(
+              activeWorkspaceRouteState.ownershipMode,
+              t
+            ),
+            path: formatWorkspacePathLabel(activeWorkspaceRouteState.path, t),
+            status: formatWorkspaceStatusLabel(activeWorkspaceRouteState.status, t),
+          })}
+        </div>
+        {activeWorkspaceRouteState.fallbackReasonCode ||
+        activeWorkspaceRouteState.fallbackReasonMessage ? (
+          <div className="mt-1 text-xs opacity-80">
+            {t('magnet.platform.workspace.diagnostic.reason', {
+              code: activeWorkspaceRouteState.fallbackReasonCode ?? t('common.state.unknown'),
+              message:
+                activeWorkspaceRouteState.fallbackReasonMessage ??
+                t('common.state.unknown'),
+            })}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderBlockedPackWorkspace = () => (
+    <div className="flex h-full min-h-[320px] items-center justify-center rounded-[20px] border border-dashed border-rose-300/20 bg-rose-400/8 px-6 text-center">
+      <div className="max-w-lg space-y-3">
+        <div className="text-base font-medium text-white">
+          {t('magnet.platform.workspace.notice.blockedTitle')}
+        </div>
+        <p className="text-sm leading-6 text-white/72">
+          {t('magnet.platform.workspace.notice.blockedBody')}
+        </p>
+        <p className="text-xs leading-5 text-white/52">
+          {t('magnet.platform.workspace.diagnostic.reason', {
+            code: activeWorkspaceRouteState.fallbackReasonCode ?? t('common.state.unknown'),
+            message:
+              activeWorkspaceRouteState.fallbackReasonMessage ?? t('common.state.unknown'),
+          })}
+        </p>
+      </div>
+    </div>
+  );
+
   const renderWorkspaceToolbar = () => {
+    if (activePage !== 'local' && activeWorkspacePackBlocked) {
+      return null;
+    }
+    if (activePage !== 'local' && activePackWorkspacePath) {
+      return null;
+    }
     if (activeWorkspaceTemplateAdapter) {
       return renderPlatformWorkspaceAdapterToolbar(
         activeWorkspaceTemplateAdapter,
@@ -1463,6 +1714,22 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   };
 
   const renderWorkspaceBody = () => {
+    if (activePage !== 'local' && activeWorkspacePackBlocked) {
+      return renderBlockedPackWorkspace();
+    }
+    if (activePage !== 'local' && activePackWorkspacePath && !activePackWorkspaceSurface) {
+      return renderBlockedPackWorkspace();
+    }
+    if (activePage !== 'local' && activePackWorkspacePath && activePackWorkspaceSurface) {
+      return (
+        <PackWorkspaceMount
+          connectorId={activeConnectorId ?? activePackWorkspaceSurface.connectorId}
+          displayName={activeConnectorLabel}
+          instanceId={activePackWorkspaceInstanceId}
+          surface={activePackWorkspaceSurface}
+        />
+      );
+    }
     if (activeWorkspaceTemplateAdapter) {
       return renderPlatformWorkspaceAdapterWorkspace(
         activeWorkspaceTemplateAdapter,
@@ -1545,12 +1812,12 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
                 return (
                   <button
-                    key={item.entry.connectorId}
+                    key={item.entry.instanceId}
                     type="button"
-                    onClick={() => handleSelectConnector(item.entry.connectorId)}
+                    onClick={() => handleSelectInstance(item.entry.instanceId)}
                     className={cx(
                       'platform-preview-nav-instance flex w-full items-center justify-between gap-3 rounded-full px-4 py-3 text-left text-sm transition-colors',
-                      activePage === 'instance' && item.entry.connectorId === activeConnectorId
+                      activePage === 'instance' && item.entry.instanceId === activeInstanceId
                         ? 'platform-preview-nav-instance-active text-white'
                         : 'text-white/64 hover:text-white/88'
                     )}
@@ -1633,12 +1900,17 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     }
 
     const workspaceToolbar = renderWorkspaceToolbar();
+    const workspaceRoutingNotice = renderWorkspaceRoutingNotice();
 
     return (
       <>
+        {workspaceRoutingNotice}
         {workspaceToolbar ? <div className="mt-3">{workspaceToolbar}</div> : null}
         <div className="mt-3 min-h-0 flex-1">
-          {connectorViewsLoading && !activeFacade ? (
+          {connectorViewsLoading &&
+          !activeFacade &&
+          !activeWorkspacePackBlocked &&
+          !activePackWorkspacePath ? (
             <div className="platform-workspace-loading flex h-full min-h-[320px] items-center justify-center text-sm text-white/48">
               {t('common.state.loading')}
             </div>
@@ -1700,9 +1972,9 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
             return (
               <button
-                key={item.entry.connectorId}
+                key={item.entry.instanceId}
                 type="button"
-                onClick={() => handleSelectConnector(item.entry.connectorId)}
+                onClick={() => handleSelectInstance(item.entry.instanceId)}
                 className="platform-preview-card grid w-full grid-cols-[auto,minmax(0,1fr),auto] items-center gap-3 rounded-[18px] px-4 py-3 text-left"
               >
                 <span className="platform-preview-channel-icon inline-flex h-11 w-11 items-center justify-center rounded-full">
@@ -1973,21 +2245,21 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             );
             const mounted = item.renderSelection?.mounted === true;
             const canToggleMounted = isItemAuthorized(item) && Boolean(item.instance);
-            const active = item.entry.connectorId === activeConnectorId && activePage === 'instance';
+            const active = item.entry.instanceId === activeInstanceId && activePage === 'instance';
             const platformName = item.definition?.labelKey
               ? t(item.definition.labelKey)
               : item.facade?.displayName ?? item.entry.connectorId;
 
             return (
               <div
-                key={item.entry.connectorId}
+                key={item.entry.instanceId}
                 role="button"
                 tabIndex={0}
-                onClick={() => handleSelectConnector(item.entry.connectorId)}
+                onClick={() => handleSelectInstance(item.entry.instanceId)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
-                    handleSelectConnector(item.entry.connectorId);
+                    handleSelectInstance(item.entry.instanceId);
                   }
                 }}
                 className="group flex cursor-pointer flex-col items-center gap-3 text-center outline-none"
@@ -2015,7 +2287,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                         if (!mounted && canToggleMounted) {
                           handleToggleMounted(item);
                         }
-                        handleSelectConnector(item.entry.connectorId);
+                        handleSelectInstance(item.entry.instanceId);
                       }}
                       className="platform-preview-record-play absolute left-1/2 top-1/2 inline-flex h-14 w-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/18 bg-white/8 text-white shadow-xl backdrop-blur-md transition-all duration-200 hover:scale-105 hover:bg-white/14"
                       title={t('common.action.open')}
@@ -2406,7 +2678,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
                   return (
                     <button
-                      key={item.entry.connectorId}
+                      key={item.entry.instanceId}
                       type="button"
                       onClick={() => handleLauncherStripToggle(item)}
                       aria-pressed={mounted}
@@ -2528,7 +2800,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
                         return (
                           <button
-                            key={item.entry.connectorId}
+                            key={item.entry.instanceId}
                             type="button"
                             onClick={() => {
                               setSelectedFilterConnectorIds((current) => {
@@ -3021,6 +3293,108 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                   </div>
 
                   <div className="rounded-[18px] border border-white/8 bg-black/10 px-5 py-5">
+                    <div className="mb-4">
+                      <div className="text-sm font-medium text-white">
+                        {t('magnet.platform.global.workspaceOwnership.title')}
+                      </div>
+                      <div className="mt-1 text-xs text-white/42">
+                        {t('magnet.platform.global.workspaceOwnership.subtitle')}
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      {workspaceOwnershipRows.map(({ definition, routeState }) => {
+                        const connectorLabel = definition.labelKey
+                          ? t(definition.labelKey)
+                          : definition.displayName;
+                        const saving =
+                          workspaceOwnershipSavingConnectorId === definition.connectorId;
+
+                        return (
+                          <div
+                            key={definition.connectorId}
+                            className="rounded-[14px] border border-white/8 bg-white/[0.03] px-4 py-4"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-medium text-white">
+                                  {connectorLabel}
+                                </div>
+                                <div className="mt-1 text-xs text-white/42">
+                                  {definition.connectorId}
+                                </div>
+                              </div>
+                              {saving ? (
+                                <span className="text-[11px] uppercase tracking-[0.14em] text-white/42">
+                                  {t('common.state.loading')}
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="mt-3 text-xs text-white/52">
+                              {t('magnet.platform.workspace.diagnostic.stateLine', {
+                                mode: formatWorkspaceOwnershipModeLabel(
+                                  routeState.ownershipMode,
+                                  t
+                                ),
+                                path: formatWorkspacePathLabel(routeState.path, t),
+                                status: formatWorkspaceStatusLabel(routeState.status, t),
+                              })}
+                            </div>
+                            {routeState.fallbackReasonCode || routeState.fallbackReasonMessage ? (
+                              <div className="mt-1 text-xs text-white/42">
+                                {t('magnet.platform.workspace.diagnostic.reason', {
+                                  code:
+                                    routeState.fallbackReasonCode ?? t('common.state.unknown'),
+                                  message:
+                                    routeState.fallbackReasonMessage ??
+                                    t('common.state.unknown'),
+                                })}
+                              </div>
+                            ) : null}
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {(['legacy', 'auto', 'pack'] as const).map((mode) => (
+                                <button
+                                  key={mode}
+                                  type="button"
+                                  onClick={() => {
+                                    void handleSetWorkspaceOwnershipMode(
+                                      definition.connectorId,
+                                      mode,
+                                      definition
+                                    );
+                                  }}
+                                  disabled={saving}
+                                  className={cx(
+                                    'platform-preview-detail-ghost inline-flex items-center rounded-full px-3 py-2 text-xs transition-colors',
+                                    routeState.ownershipMode === mode
+                                      ? 'bg-white/12 text-white'
+                                      : 'text-white/62 hover:text-white/88'
+                                  )}
+                                >
+                                  {formatWorkspaceOwnershipModeLabel(mode, t)}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <p className="platform-magnet-note mt-4">
+                      {t('magnet.platform.global.workspaceOwnership.modeHint')}
+                    </p>
+                    <p className="platform-magnet-note">
+                      {t('magnet.platform.global.workspaceOwnership.phaseHint')}
+                    </p>
+                    {workspaceOwnershipInfo ? (
+                      <p className="platform-magnet-note">{workspaceOwnershipInfo}</p>
+                    ) : null}
+                    {workspaceOwnershipError ? (
+                      <p className="platform-magnet-error">{workspaceOwnershipError}</p>
+                    ) : null}
+                  </div>
+
+                  <div className="rounded-[18px] border border-white/8 bg-black/10 px-5 py-5">
                     <div className="mb-4 flex items-center justify-between gap-3">
                       <div>
                         <div className="text-sm font-medium text-white">
@@ -3425,13 +3799,13 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                       item.definition
                     );
                     const mounted = item.renderSelection?.mounted === true;
-                    const selected = item.entry.connectorId === activeConnectorId;
+                    const selected = item.entry.instanceId === activeInstanceId;
                     const canToggleMounted =
                       isItemAuthorized(item) && Boolean(item.instance);
 
                     return (
                       <div
-                        key={item.entry.connectorId}
+                        key={item.entry.instanceId}
                         className={`rounded-[20px] border p-3 transition ${
                           selected
                             ? 'border-white/16 bg-white/[0.09]'
@@ -3442,7 +3816,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                           <button
                             type="button"
                             className="min-w-0 flex-1 text-left"
-                            onClick={() => setSelectedConnectorId(item.entry.connectorId)}
+                            onClick={() => setSelectedInstanceId(item.entry.instanceId)}
                           >
                             <div className="flex items-center gap-3">
                               <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/20">
@@ -3633,14 +4007,20 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                     </div>
                   ) : (
                     <div className="flex h-full min-h-0 flex-col gap-4">
-                      <div className="rounded-[18px] border border-white/8 bg-black/10 px-3 py-3">
-                        {renderWorkspaceToolbar()}
-                      </div>
+                      {renderWorkspaceRoutingNotice()}
+                      {renderWorkspaceToolbar() ? (
+                        <div className="rounded-[18px] border border-white/8 bg-black/10 px-3 py-3">
+                          {renderWorkspaceToolbar()}
+                        </div>
+                      ) : null}
                       <div className="min-h-0 flex-1 overflow-hidden rounded-[20px] border border-white/8 bg-black/10 p-2">
-                        {connectorViewsLoading && !activeFacade ? (
-                          <div className="flex h-full min-h-[320px] items-center justify-center text-sm text-white/48">
-                            {t('common.state.loading')}
-                          </div>
+          {connectorViewsLoading &&
+          !activeFacade &&
+          !activeWorkspacePackBlocked &&
+          !activePackWorkspacePath ? (
+            <div className="flex h-full min-h-[320px] items-center justify-center text-sm text-white/48">
+              {t('common.state.loading')}
+            </div>
                         ) : (
                           renderWorkspaceBody()
                         )}

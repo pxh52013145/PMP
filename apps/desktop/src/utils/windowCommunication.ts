@@ -135,6 +135,8 @@ export const STORAGE_KEYS = {
   MAGNET_PLACEMENT_REQUEST_V1: 'pixel-matrix-magnet-placement-request-v1', // Request placing a magnet into the main matrix (v1)
   MAGNET_LIBRARY_FOCUS_REQUEST_V1: 'pixel-matrix-magnet-library-focus-request-v1', // Request focusing a magnet in the library window (v1)
   MAGNET_CHROME_OVERRIDE_MODE_V1: 'pixel-matrix-magnet-chrome-override-mode-v1', // Global magnet chrome override mode (v1)
+  MUSIC_PLATFORM_WORKSPACE_OWNERSHIP_V1:
+    'pixel-matrix-music-platform-workspace-ownership-v1', // Music platform workspace ownership migration setting
   BACKGROUND_SETTINGS: 'pixel-matrix-background-settings', // 背景设置
   BACKGROUND_HISTORY: 'pixel-matrix-background-history', // 背景历史
   IS_MAXIMIZED: 'pixel-matrix-is-maximized', // 窗口最大化状态
@@ -240,6 +242,7 @@ export const STORAGE_KEYS = {
   MUSIC_LIBRARY_FIELD_CAPABILITIES_V1:
     'pixel-matrix-music-library-field-capabilities-v1', // MusicLibraryExtensionFieldCapabilityInput[]
   PLATFORM_LOGIN_REGISTRY_V1: 'pixel-matrix-platform-login-registry-v1', // Registered platform login launcher entries
+  PLATFORM_IMPORTED_INSTANCES_V1: 'pixel-matrix-platform-imported-instances-v1', // Imported platform instance registrations
   PLATFORM_PACKS_V1: 'pixel-matrix-platform-packs-v1', // Installed platform packs (manifest + contract + unpacked artifacts)
 
   // === Memory Governance ===
@@ -272,6 +275,8 @@ export const TAURI_EVENTS = {
   BACKGROUND_UPDATED: 'background-updated',
   MUSIC_LIBRARY_SYNC_STATUS_UPDATED: 'music-library-sync-status-updated',
   MUSIC_LIBRARY_SCHEMA_CHANGED: 'music-library-schema-changed',
+  MUSIC_PLATFORM_WORKSPACE_OWNERSHIP_UPDATED:
+    'music-platform-workspace-ownership-updated',
 
   // Pixel 渲染相关
   PIXEL_SHAPE_UPDATED: 'pixel-shape-updated',
@@ -351,6 +356,7 @@ export const TAURI_EVENTS = {
 
   // Platform Login
   PLATFORM_LOGIN_REGISTRY_UPDATED: 'platform-login-registry-updated',
+  PLATFORM_IMPORTED_INSTANCES_UPDATED: 'platform-imported-instances-updated',
   PLATFORM_PACKS_UPDATED: 'platform-packs-updated',
 
   // Extensions

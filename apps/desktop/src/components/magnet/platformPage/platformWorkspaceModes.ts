@@ -1,6 +1,7 @@
 import type {
   PlatformConnectorDefinition,
   PlatformConnectorWorkspaceKind,
+  PlatformRuntimeWorkspaceRouting,
 } from '../../../modules/music-platform';
 
 export const GENERIC_PLATFORM_WORKSPACE_MODE = 'generic' as const;
@@ -15,6 +16,15 @@ export interface PlatformWorkspaceDescriptor {
   workspaceKind: PlatformConnectorWorkspaceKind;
   displayName: string;
   labelKey?: string;
+}
+
+export interface PlatformWorkspaceRouteDisplayState {
+  ownershipMode: 'legacy' | 'pack' | 'auto';
+  path: 'legacy' | 'pack' | 'none';
+  status: 'active' | 'fallback' | 'blocked';
+  fallbackReasonCode: string | null;
+  fallbackReasonMessage: string | null;
+  packWorkspaceReady: boolean;
 }
 
 function normalizeConnectorId(connectorId: string): string {
@@ -69,4 +79,35 @@ export function normalizeWorkspaceMode(
   }
 
   return descriptors[0]?.mode ?? GENERIC_PLATFORM_WORKSPACE_MODE;
+}
+
+export function toPlatformWorkspaceRouteDisplayState(
+  routing: PlatformRuntimeWorkspaceRouting | null | undefined
+): PlatformWorkspaceRouteDisplayState {
+  return {
+    ownershipMode: routing?.ownershipMode ?? 'legacy',
+    path: routing?.path ?? 'legacy',
+    status: routing?.status ?? 'active',
+    fallbackReasonCode: routing?.fallbackReasonCode ?? null,
+    fallbackReasonMessage: routing?.fallbackReasonMessage ?? null,
+    packWorkspaceReady: routing?.packWorkspaceReady ?? false,
+  };
+}
+
+export function shouldRenderLegacyPlatformWorkspace(
+  state: PlatformWorkspaceRouteDisplayState
+): boolean {
+  return state.path === 'legacy';
+}
+
+export function shouldRenderPackPlatformWorkspace(
+  state: PlatformWorkspaceRouteDisplayState
+): boolean {
+  return state.path === 'pack' && state.status === 'active';
+}
+
+export function shouldRenderBlockedPackWorkspace(
+  state: PlatformWorkspaceRouteDisplayState
+): boolean {
+  return state.status === 'blocked';
 }

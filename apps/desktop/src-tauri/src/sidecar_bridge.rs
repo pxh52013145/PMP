@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -20,6 +20,7 @@ const MAX_STDERR_TAIL_BYTES: usize = 8 * 1024;
 #[cfg(unix)]
 const SIDECAR_TERM_GRACE_PERIOD_MS: u64 = 250;
 const SIDECAR_FORCE_KILL_WAIT_MS: u64 = 750;
+static SIDECAR_SESSION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -230,6 +231,7 @@ impl UnixProcessGroupCleanup {
 #[derive(Default)]
 struct SidecarBridgeRegistryInner {
     sessions: RwLock<HashMap<String, Arc<SidecarBridgeSession>>>,
+    runtime_sessions: RwLock<HashMap<String, String>>,
 }
 
 impl Drop for SidecarBridgeRegistryInner {
@@ -258,11 +260,13 @@ impl SidecarBridgeRegistry {
         app: &tauri::AppHandle,
         request: SidecarBridgeOpenRequest,
     ) -> Result<SidecarBridgeOpenResponse, String> {
-        let session_id = request.runtime_instance_id.clone();
+        let runtime_instance_id = request.runtime_instance_id.clone();
         let command_id = request.command_id.clone();
         let timeout_ms = request.timeout_ms;
 
-        if let Some(existing_session) = self.get_session(&session_id)? {
+        if let Some(existing_session) =
+            self.get_active_session_for_runtime_instance(&runtime_instance_id)?
+        {
             if sidecar_session_is_running(&existing_session)? {
                 crate::backend_telemetry::info(
                     app,
@@ -292,7 +296,7 @@ impl SidecarBridgeRegistry {
                 });
             }
 
-            let _ = self.remove_session(&session_id);
+            let _ = self.remove_session(&existing_session.session_id);
         }
 
         let mut spawned = spawn_sidecar_process(&request)?;
@@ -317,6 +321,7 @@ impl SidecarBridgeRegistry {
             .take()
             .ok_or_else(|| "Failed to open sidecar stderr".to_string())?;
 
+        let session_id = allocate_sidecar_session_id(&runtime_instance_id);
         let session = Arc::new(SidecarBridgeSession {
             session_id: session_id.clone(),
             plugin_id: request.plugin_id,
@@ -330,14 +335,7 @@ impl SidecarBridgeRegistry {
             stderr_tail: Arc::new(Mutex::new(Vec::new())),
         });
 
-        {
-            let mut sessions = self
-                .inner
-                .sessions
-                .write()
-                .map_err(|_| "Sidecar bridge registry lock poisoned".to_string())?;
-            sessions.insert(session_id.clone(), session.clone());
-        }
+        self.insert_session(session.clone())?;
 
         crate::backend_telemetry::info(
             app,
@@ -458,16 +456,93 @@ impl SidecarBridgeRegistry {
         Ok(sessions.get(session_id).cloned())
     }
 
+    fn get_active_session_for_runtime_instance(
+        &self,
+        runtime_instance_id: &str,
+    ) -> Result<Option<Arc<SidecarBridgeSession>>, String> {
+        let session_id = {
+            let runtime_sessions = self
+                .inner
+                .runtime_sessions
+                .read()
+                .map_err(|_| "Sidecar bridge registry lock poisoned".to_string())?;
+            runtime_sessions.get(runtime_instance_id).cloned()
+        };
+
+        match session_id {
+            Some(session_id) => self.get_session(&session_id),
+            None => Ok(None),
+        }
+    }
+
+    fn insert_session(&self, session: Arc<SidecarBridgeSession>) -> Result<(), String> {
+        {
+            let mut sessions = self
+                .inner
+                .sessions
+                .write()
+                .map_err(|_| "Sidecar bridge registry lock poisoned".to_string())?;
+            sessions.insert(session.session_id.clone(), session.clone());
+        }
+
+        let mut runtime_sessions = self
+            .inner
+            .runtime_sessions
+            .write()
+            .map_err(|_| "Sidecar bridge registry lock poisoned".to_string())?;
+        runtime_sessions.insert(
+            session.runtime_instance_id.clone(),
+            session.session_id.clone(),
+        );
+        Ok(())
+    }
+
     fn remove_session(
         &self,
         session_id: &str,
     ) -> Result<Option<Arc<SidecarBridgeSession>>, String> {
-        let mut sessions = self
-            .inner
-            .sessions
-            .write()
-            .map_err(|_| "Sidecar bridge registry lock poisoned".to_string())?;
-        Ok(sessions.remove(session_id))
+        let removed = {
+            let mut sessions = self
+                .inner
+                .sessions
+                .write()
+                .map_err(|_| "Sidecar bridge registry lock poisoned".to_string())?;
+            sessions.remove(session_id)
+        };
+
+        if let Some(session) = removed.as_ref() {
+            let mut runtime_sessions = self
+                .inner
+                .runtime_sessions
+                .write()
+                .map_err(|_| "Sidecar bridge registry lock poisoned".to_string())?;
+            clear_runtime_session_mapping_if_matches(
+                &mut runtime_sessions,
+                &session.runtime_instance_id,
+                &session.session_id,
+            );
+        }
+
+        Ok(removed)
+    }
+}
+
+fn allocate_sidecar_session_id(runtime_instance_id: &str) -> String {
+    let seq = SIDECAR_SESSION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("{runtime_instance_id}:session:{seq}")
+}
+
+fn clear_runtime_session_mapping_if_matches(
+    runtime_sessions: &mut HashMap<String, String>,
+    runtime_instance_id: &str,
+    session_id: &str,
+) {
+    if runtime_sessions
+        .get(runtime_instance_id)
+        .map(String::as_str)
+        == Some(session_id)
+    {
+        runtime_sessions.remove(runtime_instance_id);
     }
 }
 
@@ -933,10 +1008,12 @@ fn send_process_group_signal(pgid: i32, signal: i32) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_sidecar_launch_command, resolve_sidecar_entry_path, spawn_sidecar_process,
-        SidecarBridgeOpenRequest,
+        allocate_sidecar_session_id, build_sidecar_launch_command,
+        clear_runtime_session_mapping_if_matches, resolve_sidecar_entry_path,
+        spawn_sidecar_process, SidecarBridgeOpenRequest,
     };
     use serde_json::{json, Value};
+    use std::collections::HashMap;
     use std::fs;
     use std::io::{BufRead, BufReader, Write};
     use std::path::{Path, PathBuf};
@@ -969,6 +1046,46 @@ setInterval(() => {}, 1000);
 
         assert_eq!(program, PathBuf::from("node"));
         assert_eq!(args, vec![entry.to_string_lossy().to_string()]);
+    }
+
+    #[test]
+    fn allocates_unique_sidecar_session_ids_for_same_runtime_instance() {
+        let first = allocate_sidecar_session_id("platform-pack:connector.platform.netease");
+        let second = allocate_sidecar_session_id("platform-pack:connector.platform.netease");
+
+        assert_ne!(first, second);
+        assert!(first.starts_with("platform-pack:connector.platform.netease:session:"));
+        assert!(second.starts_with("platform-pack:connector.platform.netease:session:"));
+    }
+
+    #[test]
+    fn only_clears_active_runtime_session_mapping_when_session_matches() {
+        let runtime_instance_id = "platform-pack:connector.platform.netease";
+        let active_session_id = "platform-pack:connector.platform.netease:session:42";
+        let stale_session_id = "platform-pack:connector.platform.netease:session:7";
+        let mut runtime_sessions = HashMap::from([(
+            runtime_instance_id.to_string(),
+            active_session_id.to_string(),
+        )]);
+
+        clear_runtime_session_mapping_if_matches(
+            &mut runtime_sessions,
+            runtime_instance_id,
+            stale_session_id,
+        );
+        assert_eq!(
+            runtime_sessions
+                .get(runtime_instance_id)
+                .map(String::as_str),
+            Some(active_session_id)
+        );
+
+        clear_runtime_session_mapping_if_matches(
+            &mut runtime_sessions,
+            runtime_instance_id,
+            active_session_id,
+        );
+        assert!(!runtime_sessions.contains_key(runtime_instance_id));
     }
 
     #[test]

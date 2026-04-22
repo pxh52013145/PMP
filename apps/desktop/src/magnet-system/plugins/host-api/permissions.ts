@@ -15,6 +15,7 @@ export const PLUGIN_PERMISSIONS = {
   magnetsCatalog: 'api:magnets-catalog',
   magnetsLayout: 'api:magnets-layout',
   musicPlatformCatalog: 'api:music-platform-catalog',
+  musicPlatformWorkspace: 'api:music-platform-workspace',
   musicPlatformSearch: 'api:music-platform-search',
   musicPlatformPrepare: 'api:music-platform-prepare',
 

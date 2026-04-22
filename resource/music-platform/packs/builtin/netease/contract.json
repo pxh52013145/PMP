@@ -31,6 +31,39 @@
     "quality": "host.pmp.platform-instance.quality",
     "pages": "host.pmp.platform-instance.pages"
   },
+  "workspace": {
+    "ownership": "pack",
+    "requiredRuntimeCarrier": "webview-frame",
+    "root": {
+      "viewId": "netease.workspace.root",
+      "viewType": "music-platform.workspace-root"
+    },
+    "capabilityFamilies": {
+      "required": [
+        "host.pmp.music-platform.workspace",
+        "host.pmp.connector-auth"
+      ],
+      "optional": [
+        "host.pmp.audio-engine.playback",
+        "host.pmp.i18n",
+        "host.pmp.navigation",
+        "host.pmp.storage.config",
+        "host.pmp.storage.durable-text",
+        "host.pmp.telemetry",
+        "host.pmp.theme-bindings"
+      ]
+    },
+    "context": {
+      "scope": "platform-instance",
+      "fields": [
+        "connectorId",
+        "platformId",
+        "instanceId",
+        "cacheScope",
+        "grantedCapabilityFamilies"
+      ]
+    }
+  },
   "extension": {
     "connectorId": "connector.platform.netease",
     "workspaceKind": "netease",

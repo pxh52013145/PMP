@@ -1,4 +1,5 @@
 import { readJson } from '../storage';
+import type { PlatformInstanceRecord } from '@pixel-matrix/plugin-platform-contracts';
 import type { PlatformConnectorDefinition, PlatformConnectorId } from './connectorAuth';
 import {
   broadcastDataUpdate,
@@ -6,8 +7,10 @@ import {
   STORAGE_KEYS,
   TAURI_EVENTS,
 } from '../../utils/windowCommunication';
+import { listPlatformImportedInstanceRecords } from './platformImportedInstanceRegistry';
 
 export interface PlatformLoginRegistryEntry {
+  instanceId: string;
   connectorId: PlatformConnectorId;
   enabled: boolean;
   addedAtMs: number;
@@ -24,41 +27,116 @@ function buildDefinitionMap(
 }
 
 function createEntry(
+  instanceId: string,
   connectorId: PlatformConnectorId,
   enabled: boolean,
   addedAtMs: number
 ): PlatformLoginRegistryEntry {
   return {
+    instanceId,
     connectorId,
     enabled,
     addedAtMs,
   };
 }
 
+function normalizeString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function isPlatformInstanceRecordArray(
+  value: PlatformInstanceRecord[] | undefined
+): value is PlatformInstanceRecord[] {
+  return Array.isArray(value);
+}
+
+function createPlatformInstanceMap(
+  instances: PlatformInstanceRecord[] | undefined
+): Map<string, PlatformInstanceRecord> {
+  if (!isPlatformInstanceRecordArray(instances)) {
+    return new Map();
+  }
+  return new Map(instances.map((instance) => [instance.instanceId, instance] as const));
+}
+
+function createImportedInstanceIdSet(): Set<string> {
+  return new Set(
+    listPlatformImportedInstanceRecords().map((record) => record.instanceId)
+  );
+}
+
+function pickPreferredInstanceIdForConnector(
+  connectorId: PlatformConnectorId,
+  instances: PlatformInstanceRecord[] | undefined
+): string {
+  if (!isPlatformInstanceRecordArray(instances)) {
+    return '';
+  }
+
+  const candidates = instances.filter(
+    (instance) => instance.metadata?.connectorId === connectorId
+  );
+  if (candidates.length < 1) {
+    return '';
+  }
+
+  return candidates
+    .slice()
+    .sort((left, right) => {
+      const leftBuiltin = left.instanceId.endsWith(':builtin') ? 1 : 0;
+      const rightBuiltin = right.instanceId.endsWith(':builtin') ? 1 : 0;
+      if (leftBuiltin !== rightBuiltin) {
+        return rightBuiltin - leftBuiltin;
+      }
+      const updatedDiff =
+        (right.auth.cookieUpdatedAtMs ?? 0) - (left.auth.cookieUpdatedAtMs ?? 0);
+      if (updatedDiff !== 0) {
+        return updatedDiff;
+      }
+      return left.instanceId.localeCompare(right.instanceId, 'zh-CN');
+    })[0]?.instanceId;
+}
+
+function createLegacyRegistryInstancePlaceholder(
+  connectorId: PlatformConnectorId
+): string {
+  return `legacy:${connectorId}`;
+}
+
 export function createDefaultPlatformLoginRegistry(
   definitions: PlatformConnectorDefinition[],
-  preferredConnectorId?: PlatformConnectorId | null
+  preferredConnectorId?: PlatformConnectorId | null,
+  instances?: PlatformInstanceRecord[]
 ): PlatformLoginRegistryEntry[] {
   void definitions;
   void preferredConnectorId;
+  void instances;
   return [];
 }
 
 export function sanitizePlatformLoginRegistry(
   value: unknown,
   definitions: PlatformConnectorDefinition[],
-  preferredConnectorId?: PlatformConnectorId | null
+  preferredConnectorId?: PlatformConnectorId | null,
+  instances?: PlatformInstanceRecord[]
 ): PlatformLoginRegistryEntry[] {
   const definitionMap = buildDefinitionMap(definitions);
-  const fallback = createDefaultPlatformLoginRegistry(definitions, preferredConnectorId);
+  const instanceMap = createPlatformInstanceMap(instances);
+  const importedInstanceIds = createImportedInstanceIdSet();
+  const fallback = createDefaultPlatformLoginRegistry(
+    definitions,
+    preferredConnectorId,
+    instances
+  );
   if (!Array.isArray(value)) return fallback;
 
   const next: PlatformLoginRegistryEntry[] = [];
-  const seen = new Set<PlatformConnectorId>();
+  const seen = new Set<string>();
 
   for (const item of value) {
     if (!item || typeof item !== 'object') continue;
     const candidate = item as {
+      instanceId?: unknown;
       connectorId?: unknown;
       enabled?: unknown;
       addedAtMs?: unknown;
@@ -66,10 +144,34 @@ export function sanitizePlatformLoginRegistry(
 
     if (!isPlatformConnectorId(candidate.connectorId)) continue;
     if (!definitionMap.has(candidate.connectorId)) continue;
-    if (seen.has(candidate.connectorId)) continue;
+    const candidateInstanceId = normalizeString(candidate.instanceId);
+    const preferredInstanceId = pickPreferredInstanceIdForConnector(
+      candidate.connectorId,
+      instances
+    );
+    const candidateIsLegacyPlaceholder = candidateInstanceId.startsWith('legacy:');
+    const instanceId =
+      instanceMap.has(candidateInstanceId) ||
+      !candidateIsLegacyPlaceholder
+        ? candidateInstanceId || preferredInstanceId
+        : preferredInstanceId;
+    const hasResolvedInstance =
+      Boolean(instanceId) &&
+      (!isPlatformInstanceRecordArray(instances) ||
+        instanceMap.has(instanceId) ||
+        importedInstanceIds.has(instanceId));
+    if (!hasResolvedInstance) {
+      if (isPlatformInstanceRecordArray(instances)) {
+        continue;
+      }
+    }
+    const persistedInstanceId =
+      instanceId || createLegacyRegistryInstancePlaceholder(candidate.connectorId);
+    if (seen.has(persistedInstanceId)) continue;
 
     next.push(
       createEntry(
+        persistedInstanceId,
         candidate.connectorId,
         candidate.enabled !== false,
         typeof candidate.addedAtMs === 'number' && Number.isFinite(candidate.addedAtMs)
@@ -77,7 +179,7 @@ export function sanitizePlatformLoginRegistry(
           : Date.now()
       )
     );
-    seen.add(candidate.connectorId);
+    seen.add(persistedInstanceId);
   }
 
   return next;
@@ -85,10 +187,11 @@ export function sanitizePlatformLoginRegistry(
 
 export function readPlatformLoginRegistry(
   definitions: PlatformConnectorDefinition[],
-  preferredConnectorId?: PlatformConnectorId | null
+  preferredConnectorId?: PlatformConnectorId | null,
+  instances?: PlatformInstanceRecord[]
 ): PlatformLoginRegistryEntry[] {
   const raw = readJson<unknown>(STORAGE_KEYS.PLATFORM_LOGIN_REGISTRY_V1, null);
-  return sanitizePlatformLoginRegistry(raw, definitions, preferredConnectorId);
+  return sanitizePlatformLoginRegistry(raw, definitions, preferredConnectorId, instances);
 }
 
 export async function persistPlatformLoginRegistry(
@@ -113,17 +216,23 @@ export async function subscribePlatformLoginRegistry(
 
 export function upsertPlatformLoginRegistryEntry(
   entries: PlatformLoginRegistryEntry[],
-  connectorId: PlatformConnectorId,
+  entry: Pick<PlatformLoginRegistryEntry, 'instanceId' | 'connectorId'>,
   enabled: boolean
 ): PlatformLoginRegistryEntry[] {
-  const index = entries.findIndex((entry) => entry.connectorId === connectorId);
+  const normalizedInstanceId = normalizeString(entry.instanceId);
+  if (!normalizedInstanceId) {
+    return entries.slice();
+  }
+
+  const index = entries.findIndex((item) => item.instanceId === normalizedInstanceId);
   if (index < 0) {
-    return [...entries, createEntry(connectorId, enabled, Date.now())];
+    return [...entries, createEntry(normalizedInstanceId, entry.connectorId, enabled, Date.now())];
   }
 
   const next = entries.slice();
   next[index] = {
     ...next[index],
+    connectorId: entry.connectorId,
     enabled,
   };
   return next;
@@ -131,11 +240,11 @@ export function upsertPlatformLoginRegistryEntry(
 
 export function setPlatformLoginRegistryEntryEnabled(
   entries: PlatformLoginRegistryEntry[],
-  connectorId: PlatformConnectorId,
+  instanceId: string,
   enabled: boolean
 ): PlatformLoginRegistryEntry[] {
   return entries.map((entry) =>
-    entry.connectorId === connectorId
+    entry.instanceId === instanceId
       ? {
           ...entry,
           enabled,
@@ -146,7 +255,7 @@ export function setPlatformLoginRegistryEntryEnabled(
 
 export function removePlatformLoginRegistryEntry(
   entries: PlatformLoginRegistryEntry[],
-  connectorId: PlatformConnectorId
+  instanceId: string
 ): PlatformLoginRegistryEntry[] {
-  return entries.filter((entry) => entry.connectorId !== connectorId);
+  return entries.filter((entry) => entry.instanceId !== instanceId);
 }

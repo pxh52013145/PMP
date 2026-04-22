@@ -15,6 +15,7 @@ const INVOKE_TIMEOUT_MS = 30_000;
 const telemetry = getTelemetryLogger('music-platform', 'platformPackSidecarBridge');
 
 type SidecarBridgeEventPayload = {
+  sessionId?: string;
   runtimeInstanceId?: string;
   message?: unknown;
 };
@@ -143,6 +144,10 @@ class PlatformPackSidecarClient {
     this.unlisten = await listen<SidecarBridgeEventPayload>(SIDECAR_BRIDGE_MESSAGE_EVENT, (event) => {
       const payload = asRecord(event.payload) as SidecarBridgeEventPayload | null;
       if (!payload || payload.runtimeInstanceId !== this.runtimeInstanceId) {
+        return;
+      }
+      const payloadSessionId = normalizeString(payload.sessionId);
+      if (this.sessionId && payloadSessionId && payloadSessionId !== this.sessionId) {
         return;
       }
 

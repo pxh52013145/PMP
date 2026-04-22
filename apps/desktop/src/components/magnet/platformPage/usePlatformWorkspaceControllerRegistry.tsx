@@ -45,6 +45,7 @@ type ConnectorVisualMeta = {
 export interface UsePlatformWorkspaceControllerRegistryParams {
   activePage: PlatformPageView;
   settingsOpen: boolean;
+  activeWorkspacePath: 'legacy' | 'pack' | 'none';
   activeConnectorId: string | null;
   activeWorkspaceConnectorId: string | null;
   activeWorkspaceAdapterKind: PlatformWorkspaceAdapterKind | null;
@@ -93,6 +94,7 @@ export function usePlatformWorkspaceControllerRegistry(
   const {
     activePage,
     settingsOpen,
+    activeWorkspacePath,
     activeConnectorId,
     activeWorkspaceConnectorId,
     activeWorkspaceAdapterKind,
@@ -141,7 +143,7 @@ export function usePlatformWorkspaceControllerRegistry(
   );
 
   const bilibiliController = useBilibiliWorkspaceAdapterController({
-    workspaceVisible: activePage === 'instance',
+    workspaceVisible: activePage === 'instance' && activeWorkspacePath === 'legacy',
     activeWorkspaceConnectorId,
     activeVideoConnectorId: activeVideoItem?.entry.connectorId ?? null,
     activeVideoInstanceId: activeVideoItem?.instance?.instanceId ?? null,
@@ -175,7 +177,7 @@ export function usePlatformWorkspaceControllerRegistry(
   });
 
   const musicTemplateController = useMusicTemplateWorkspaceAdapterController({
-    workspaceVisible: activePage === 'instance',
+    workspaceVisible: activePage === 'instance' && activeWorkspacePath === 'legacy',
     activeWorkspaceConnectorId,
     activeMusicConnectorId,
     activeMusicDisplayName,

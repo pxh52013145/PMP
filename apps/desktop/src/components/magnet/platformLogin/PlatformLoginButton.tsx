@@ -14,6 +14,7 @@ import {
 
 import { CollisionAwarePopup } from '../../core/CollisionAwarePopup';
 import { useT } from '../../../i18n';
+import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import {
   beginPlatformInstanceQrLogin,
   clearPlatformInstanceAuthCookies,
@@ -48,10 +49,15 @@ import {
   upsertPlatformLoginRegistryEntry,
   type PlatformLoginRegistryEntry,
 } from '../../../modules/music-platform';
+import {
+  getMusicPlatformNowMs,
+  warnOnSlowMusicPlatformOperation,
+} from '../../../modules/music-platform/platformDiagnostics';
+import { normalizePlatformConnectorId } from '../../../modules/music-platform/platformConnectorModel';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import {
-  buildPlatformAuthSnapshotMapByConnectorId,
+  buildPlatformAuthSnapshotMapByInstanceId,
   resolvePlatformRegistrationState,
   type PlatformRegistrationVisualState,
 } from '../shared/platformRegistrationState';
@@ -73,6 +79,7 @@ type ConnectorVisualMeta = {
 };
 
 type ContextMenuState = {
+  instanceId: string;
   connectorId: PlatformConnectorId;
   x: number;
   y: number;
@@ -133,14 +140,14 @@ function resolvePreferredConnectorId(
   return exactMatch ?? definitions[0]?.connectorId ?? null;
 }
 
-function updateConnectorScopedValue<TRecord extends Record<string, unknown>>(
+function updateScopedValue<TRecord extends Record<string, unknown>>(
   setter: React.Dispatch<React.SetStateAction<TRecord>>,
-  connectorId: string,
+  scopedKey: string,
   value: TRecord[string]
 ): void {
   setter((prev) => ({
     ...prev,
-    [connectorId]: value,
+    [scopedKey]: value,
   } as TRecord));
 }
 
@@ -173,6 +180,24 @@ function resolveStateHintKey(state: PlatformRegistrationVisualState): string {
   }
 }
 
+async function waitForNextPaint(): Promise<void> {
+  if (typeof window === 'undefined') {
+    await Promise.resolve();
+    return;
+  }
+
+  if (typeof window.requestAnimationFrame !== 'function') {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
 function listCapabilityLabelKeys(contract: PlatformCompatContractFile | null): string[] {
   if (!contract) return [];
 
@@ -197,6 +222,31 @@ function listCapabilityLabelKeys(contract: PlatformCompatContractFile | null): s
   }
 
   return capabilityLabelKeys;
+}
+
+function buildPlatformLoginRegistryEntriesFingerprint(
+  entries: PlatformLoginRegistryEntry[]
+): string {
+  return JSON.stringify(
+    entries
+      .map((entry) => ({
+        instanceId: entry.instanceId,
+        connectorId: entry.connectorId,
+        enabled: entry.enabled !== false,
+        addedAtMs: Number.isFinite(entry.addedAtMs) ? entry.addedAtMs : 0,
+      }))
+      .sort((left, right) => {
+        const instanceCompare = left.instanceId.localeCompare(right.instanceId, 'zh-CN');
+        if (instanceCompare !== 0) {
+          return instanceCompare;
+        }
+        const connectorCompare = left.connectorId.localeCompare(right.connectorId, 'zh-CN');
+        if (connectorCompare !== 0) {
+          return connectorCompare;
+        }
+        return left.addedAtMs - right.addedAtMs;
+      })
+  );
 }
 
 function ConnectorGlyph({
@@ -261,6 +311,10 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
 }) => {
   const skinProps = useMemo(() => parsePlatformLoginSkinProps(rawSkinProps), [rawSkinProps]);
   const t = useT();
+  const telemetry = useMemo(
+    () => getTelemetryLogger('magnet.platform-login', 'PlatformLoginButton'),
+    []
+  );
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const triggerButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -272,13 +326,18 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   const contextAnchorRef = useRef<HTMLDivElement | null>(null);
   const connectorButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const platformPackInputRef = useRef<HTMLInputElement | null>(null);
+  const registryHydratedRef = useRef(false);
+  const registryEntriesFingerprintRef = useRef(
+    buildPlatformLoginRegistryEntriesFingerprint([])
+  );
+  const lastSyncedRegistryFingerprintRef = useRef<string | null>(null);
 
   const [stripOpen, setStripOpen] = useState(false);
   const [registerMenuOpen, setRegisterMenuOpen] = useState(false);
   const [authPopupOpen, setAuthPopupOpen] = useState(false);
-  const [selectedConnectorId, setSelectedConnectorId] = useState<PlatformConnectorId | null>(null);
+  const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(null);
   const [contextMenuState, setContextMenuState] = useState<ContextMenuState>(null);
-  const [busyConnectorId, setBusyConnectorId] = useState<string | null>(null);
+  const [busyInstanceId, setBusyInstanceId] = useState<string | null>(null);
   const [platformPackInstalling, setPlatformPackInstalling] = useState(false);
   const [platformPackInstallMessage, setPlatformPackInstallMessage] = useState<string | null>(null);
   const [platformDefinitions, setPlatformDefinitions] = useState<PlatformConnectorDefinition[]>([]);
@@ -300,11 +359,11 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   const [platformInstances, setPlatformInstances] = useState<PlatformInstanceRecord[]>([]);
   const [renderSelections, setRenderSelections] = useState<PlatformRenderSelectionRecord[]>([]);
 
-  const [authSnapshotsByConnectorId, setAuthSnapshotsByConnectorId] = useState<Record<string, PlatformInstanceAuthSnapshot | null>>({});
-  const [qrSessionsByConnectorId, setQrSessionsByConnectorId] = useState<Record<string, PlatformInstanceQrLoginSession | null>>({});
-  const [pollResultsByConnectorId, setPollResultsByConnectorId] = useState<Record<string, PlatformInstanceQrLoginPollResult | null>>({});
-  const [errorsByConnectorId, setErrorsByConnectorId] = useState<Record<string, string | null>>({});
-  const [statusMessagesByConnectorId, setStatusMessagesByConnectorId] = useState<Record<string, string | null>>({});
+  const [authSnapshotsByInstanceId, setAuthSnapshotsByInstanceId] = useState<Record<string, PlatformInstanceAuthSnapshot | null>>({});
+  const [qrSessionsByInstanceId, setQrSessionsByInstanceId] = useState<Record<string, PlatformInstanceQrLoginSession | null>>({});
+  const [pollResultsByInstanceId, setPollResultsByInstanceId] = useState<Record<string, PlatformInstanceQrLoginPollResult | null>>({});
+  const [errorsByInstanceId, setErrorsByInstanceId] = useState<Record<string, string | null>>({});
+  const [statusMessagesByInstanceId, setStatusMessagesByInstanceId] = useState<Record<string, string | null>>({});
 
   useEffect(() => {
     setPlatformDefinitions(listPlatformConnectorDefinitions());
@@ -326,23 +385,67 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     );
   }, []);
 
-  const persistRegistryState = useCallback(
-    (updater: (prev: PlatformLoginRegistryEntry[]) => PlatformLoginRegistryEntry[]) => {
-      setRegistryEntries((prev) => {
-        const next = updater(prev);
-        syncRegisteredContracts(next);
-        void persistPlatformLoginRegistry(next);
-        return next;
-      });
+  const flushRegistryStateSideEffects = useCallback(
+    (
+      entries: PlatformLoginRegistryEntry[],
+      fingerprint = buildPlatformLoginRegistryEntriesFingerprint(entries)
+    ) => {
+      if (lastSyncedRegistryFingerprintRef.current === fingerprint) {
+        return;
+      }
+      lastSyncedRegistryFingerprintRef.current = fingerprint;
+      syncRegisteredContracts(entries);
+      void persistPlatformLoginRegistry(entries);
     },
     [syncRegisteredContracts]
   );
 
+  const persistRegistryState = useCallback(
+    (updater: (prev: PlatformLoginRegistryEntry[]) => PlatformLoginRegistryEntry[]) => {
+      setRegistryEntries((prev) => {
+        const next = updater(prev);
+        const previousFingerprint = buildPlatformLoginRegistryEntriesFingerprint(prev);
+        const nextFingerprint = buildPlatformLoginRegistryEntriesFingerprint(next);
+        if (previousFingerprint === nextFingerprint) {
+          return prev;
+        }
+        registryEntriesFingerprintRef.current = nextFingerprint;
+        return next;
+      });
+    },
+    []
+  );
+
   const refreshRegistryState = useCallback(() => {
-    const nextRegistryEntries = readPlatformLoginRegistry(platformDefinitions, preferredConnectorId);
-    syncRegisteredContracts(nextRegistryEntries);
+    const nextRegistryEntries = readPlatformLoginRegistry(
+      platformDefinitions,
+      preferredConnectorId,
+      platformInstances
+    );
+    const nextFingerprint = buildPlatformLoginRegistryEntriesFingerprint(nextRegistryEntries);
+    const currentFingerprint = registryEntriesFingerprintRef.current;
+    registryHydratedRef.current = true;
+    if (nextFingerprint === currentFingerprint) {
+      flushRegistryStateSideEffects(nextRegistryEntries, nextFingerprint);
+      return;
+    }
+    registryEntriesFingerprintRef.current = nextFingerprint;
     setRegistryEntries(nextRegistryEntries);
-  }, [platformDefinitions, preferredConnectorId, syncRegisteredContracts]);
+  }, [
+    flushRegistryStateSideEffects,
+    platformDefinitions,
+    platformInstances,
+    preferredConnectorId,
+  ]);
+
+  useEffect(() => {
+    if (!registryHydratedRef.current) {
+      return;
+    }
+    const fingerprint = buildPlatformLoginRegistryEntriesFingerprint(registryEntries);
+    registryEntriesFingerprintRef.current = fingerprint;
+    flushRegistryStateSideEffects(registryEntries, fingerprint);
+  }, [flushRegistryStateSideEffects, registryEntries]);
 
   useEffect(() => {
     refreshRegistryState();
@@ -370,10 +473,11 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     };
   }, [refreshRegistryState]);
 
-  const refreshAuthSnapshot = useCallback(async (connectorId: PlatformConnectorId) => {
-    const instanceId = resolvePlatformInstanceId({ connectorId });
-    const snapshot = instanceId ? await refreshPlatformInstanceAuthSnapshot(instanceId) : null;
-    updateConnectorScopedValue(setAuthSnapshotsByConnectorId, connectorId, snapshot);
+  const refreshAuthSnapshot = useCallback(async (instanceId: string) => {
+    const normalizedInstanceId = instanceId.trim();
+    if (!normalizedInstanceId) return null;
+    const snapshot = await refreshPlatformInstanceAuthSnapshot(normalizedInstanceId);
+    updateScopedValue(setAuthSnapshotsByInstanceId, normalizedInstanceId, snapshot);
     return snapshot;
   }, []);
 
@@ -385,7 +489,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   }, []);
 
   useEffect(() => {
-    setAuthSnapshotsByConnectorId(buildPlatformAuthSnapshotMapByConnectorId(platformInstances));
+    setAuthSnapshotsByInstanceId(buildPlatformAuthSnapshotMapByInstanceId(platformInstances));
   }, [platformInstances]);
 
   useEffect(() => {
@@ -395,13 +499,17 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     });
   }, []);
 
-  const platformInstancesByConnectorId = useMemo(() => {
-    const next = new Map<string, PlatformInstanceRecord>();
+  const platformInstancesById = useMemo(
+    () => new Map(platformInstances.map((instance) => [instance.instanceId, instance] as const)),
+    [platformInstances]
+  );
+  const platformInstanceCountByConnectorId = useMemo(() => {
+    const next = new Map<string, number>();
     for (const instance of platformInstances) {
       const connectorId =
         typeof instance.metadata?.connectorId === 'string' ? instance.metadata.connectorId : '';
       if (!connectorId) continue;
-      next.set(connectorId, instance);
+      next.set(connectorId, (next.get(connectorId) ?? 0) + 1);
     }
     return next;
   }, [platformInstances]);
@@ -417,14 +525,14 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
         .map((entry) => {
           const definition = platformDefinitionsById.get(entry.connectorId);
           if (!definition) return null;
-          const instance = platformInstancesByConnectorId.get(entry.connectorId) ?? null;
+          const instance = platformInstancesById.get(entry.instanceId) ?? null;
           const renderSelection = instance
             ? renderSelectionsByInstanceId.get(instance.instanceId) ?? null
             : null;
           return {
             entry,
             definition,
-            snapshot: authSnapshotsByConnectorId[entry.connectorId] ?? null,
+            snapshot: authSnapshotsByInstanceId[entry.instanceId] ?? null,
             instance,
             renderSelection,
             builtinCompat: builtinCompatByConnectorId.get(entry.connectorId) ?? null,
@@ -443,10 +551,10 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
           } => Boolean(item)
         ),
     [
-      authSnapshotsByConnectorId,
+      authSnapshotsByInstanceId,
       builtinCompatByConnectorId,
       platformDefinitionsById,
-      platformInstancesByConnectorId,
+      platformInstancesById,
       registryEntries,
       renderSelectionsByInstanceId,
     ]
@@ -457,54 +565,64 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     return platformDefinitions.filter((definition) => !registeredIds.has(definition.connectorId));
   }, [platformDefinitions, registryEntries]);
 
-  const activeConnectorDefinition = selectedConnectorId
-    ? platformDefinitionsById.get(selectedConnectorId) ?? null
+  const preferredRegisteredInstanceId = useMemo(
+    () =>
+      registeredConnectors.find((item) => item.entry.connectorId === preferredConnectorId)?.entry
+        .instanceId ?? registeredConnectors[0]?.entry.instanceId ?? null,
+    [preferredConnectorId, registeredConnectors]
+  );
+  const activeRegisteredConnector =
+    (selectedInstanceId
+      ? registeredConnectors.find((item) => item.entry.instanceId === selectedInstanceId) ?? null
+      : null) ?? null;
+  const activeConnectorDefinition = activeRegisteredConnector
+    ? platformDefinitionsById.get(activeRegisteredConnector.entry.connectorId) ?? null
     : null;
   const activeAuthSnapshot =
-    (selectedConnectorId ? authSnapshotsByConnectorId[selectedConnectorId] : null) ?? null;
+    (selectedInstanceId ? authSnapshotsByInstanceId[selectedInstanceId] : null) ?? null;
   const activeQrSession =
-    (selectedConnectorId ? qrSessionsByConnectorId[selectedConnectorId] : null) ?? null;
+    (selectedInstanceId ? qrSessionsByInstanceId[selectedInstanceId] : null) ?? null;
   const activePollResult =
-    (selectedConnectorId ? pollResultsByConnectorId[selectedConnectorId] : null) ?? null;
-  const activeError = (selectedConnectorId ? errorsByConnectorId[selectedConnectorId] : null) ?? null;
+    (selectedInstanceId ? pollResultsByInstanceId[selectedInstanceId] : null) ?? null;
+  const activeError = (selectedInstanceId ? errorsByInstanceId[selectedInstanceId] : null) ?? null;
   const activeStatusMessage =
-    (selectedConnectorId ? statusMessagesByConnectorId[selectedConnectorId] : null) ?? null;
-  const activeBusy = selectedConnectorId ? busyConnectorId === selectedConnectorId : false;
+    (selectedInstanceId ? statusMessagesByInstanceId[selectedInstanceId] : null) ?? null;
+  const activeBusy = selectedInstanceId ? busyInstanceId === selectedInstanceId : false;
 
-  const setBuiltinConnectorMounted = useCallback(
-    (connectorId: PlatformConnectorId, mounted: boolean) => {
-      const builtinRegistration = builtinCompatByConnectorId.get(connectorId);
-      if (!builtinRegistration) return;
+  const setInstanceMounted = useCallback(
+    (instanceId: string, mounted: boolean) => {
+      const normalizedInstanceId = instanceId.trim();
+      if (!normalizedInstanceId) return;
 
-      setPlatformRenderSelectionMounted(`${builtinRegistration.platformId}:builtin`, mounted);
-      updateConnectorScopedValue(
-        setStatusMessagesByConnectorId,
-        connectorId,
+      setPlatformRenderSelectionMounted(normalizedInstanceId, mounted);
+      updateScopedValue(
+        setStatusMessagesByInstanceId,
+        normalizedInstanceId,
         t(mounted ? 'magnet.platform-login.tip.active' : 'magnet.platform-login.tip.inactive')
       );
     },
-    [builtinCompatByConnectorId, t]
+    [t]
   );
 
   useEffect(() => {
-    if (!selectedConnectorId) {
-      setSelectedConnectorId(preferredConnectorId);
+    if (!selectedInstanceId) {
+      setSelectedInstanceId(preferredRegisteredInstanceId);
       return;
     }
 
-    if (registryEntries.some((entry) => entry.connectorId === selectedConnectorId)) return;
+    if (registryEntries.some((entry) => entry.instanceId === selectedInstanceId)) return;
 
-    setSelectedConnectorId(registryEntries[0]?.connectorId ?? preferredConnectorId ?? null);
+    setSelectedInstanceId(preferredRegisteredInstanceId);
     setAuthPopupOpen(false);
     setContextMenuState(null);
-  }, [preferredConnectorId, registryEntries, selectedConnectorId]);
+  }, [preferredRegisteredInstanceId, registryEntries, selectedInstanceId]);
 
   useEffect(() => {
     for (const item of registeredConnectors) {
-      if (authSnapshotsByConnectorId[item.entry.connectorId] !== undefined) continue;
-      void refreshAuthSnapshot(item.entry.connectorId);
+      if (authSnapshotsByInstanceId[item.entry.instanceId] !== undefined) continue;
+      void refreshAuthSnapshot(item.entry.instanceId);
     }
-  }, [authSnapshotsByConnectorId, refreshAuthSnapshot, registeredConnectors]);
+  }, [authSnapshotsByInstanceId, refreshAuthSnapshot, registeredConnectors]);
 
   const closeMenus = useCallback(() => {
     setRegisterMenuOpen(false);
@@ -546,91 +664,92 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     };
   }, [authPopupOpen, closeAll, contextMenuState, registerMenuOpen, stripOpen]);
 
-  const setConnectorRegistered = useCallback(
-    (connectorId: PlatformConnectorId, enabled: boolean) => {
-      persistRegistryState((prev) => upsertPlatformLoginRegistryEntry(prev, connectorId, enabled));
+  const setRegistryEntryRegistered = useCallback(
+    (entry: Pick<PlatformLoginRegistryEntry, 'instanceId' | 'connectorId'>, enabled: boolean) => {
+      persistRegistryState((prev) => upsertPlatformLoginRegistryEntry(prev, entry, enabled));
     },
     [persistRegistryState]
   );
 
-  const removeConnectorRegistration = useCallback(
-    (connectorId: PlatformConnectorId) => {
-      persistRegistryState((prev) => removePlatformLoginRegistryEntry(prev, connectorId));
-      updateConnectorScopedValue(
-        setStatusMessagesByConnectorId,
-        connectorId,
+  const removeRegistryEntry = useCallback(
+    (entry: Pick<PlatformLoginRegistryEntry, 'instanceId' | 'connectorId'>) => {
+      persistRegistryState((prev) => removePlatformLoginRegistryEntry(prev, entry.instanceId));
+      updateScopedValue(
+        setStatusMessagesByInstanceId,
+        entry.instanceId,
         t('magnet.platform-login.status.registrationRemoved')
       );
-      if (selectedConnectorId === connectorId) {
+      if (selectedInstanceId === entry.instanceId) {
         setAuthPopupOpen(false);
         setContextMenuState(null);
       }
     },
-    [persistRegistryState, selectedConnectorId, t]
+    [persistRegistryState, selectedInstanceId, t]
   );
 
-  const openAuthPopup = useCallback((connectorId: PlatformConnectorId) => {
+  const openAuthPopup = useCallback((instanceId: string) => {
     setStripOpen(true);
     setRegisterMenuOpen(false);
     setContextMenuState(null);
-    setSelectedConnectorId(connectorId);
+    setSelectedInstanceId(instanceId);
     setAuthPopupOpen(true);
   }, []);
 
   const handleToggleStrip = useCallback(() => {
-    setStripOpen((prev) => {
-      const next = !prev;
-      if (next) {
-        if (skinProps.openAuthOnTrigger && preferredConnectorId) {
-          setSelectedConnectorId(preferredConnectorId);
-          setAuthPopupOpen(true);
-        }
-        return true;
-      }
+    const next = !stripOpen;
+    setStripOpen(next);
 
-      closeMenus();
-      return false;
-    });
-  }, [closeMenus, preferredConnectorId, skinProps.openAuthOnTrigger]);
+    if (next) {
+      if (skinProps.openAuthOnTrigger && preferredRegisteredInstanceId) {
+        setSelectedInstanceId(preferredRegisteredInstanceId);
+        setAuthPopupOpen(true);
+      }
+      return;
+    }
+
+    closeMenus();
+  }, [closeMenus, preferredRegisteredInstanceId, skinProps.openAuthOnTrigger, stripOpen]);
 
   const handleConnectorActivate = useCallback(
-    (definition: PlatformConnectorDefinition) => {
-      const snapshot = authSnapshotsByConnectorId[definition.connectorId] ?? null;
-      const instance = platformInstancesByConnectorId.get(definition.connectorId) ?? null;
-      const renderSelection = instance
-        ? renderSelectionsByInstanceId.get(instance.instanceId) ?? null
-        : null;
-      const state = resolvePlatformRegistrationState(definition, snapshot, renderSelection);
+    (item: {
+      entry: PlatformLoginRegistryEntry;
+      definition: PlatformConnectorDefinition;
+      snapshot: PlatformInstanceAuthSnapshot | null;
+      renderSelection: PlatformRenderSelectionRecord | null;
+    }) => {
+      const state = resolvePlatformRegistrationState(
+        item.definition,
+        item.snapshot,
+        item.renderSelection
+      );
 
       if (state === 'disabled') {
-        updateConnectorScopedValue(
-          setStatusMessagesByConnectorId,
-          definition.connectorId,
+        updateScopedValue(
+          setStatusMessagesByInstanceId,
+          item.entry.instanceId,
           t('magnet.platform-login.status.comingSoon')
         );
         return;
       }
 
-      openAuthPopup(definition.connectorId);
+      openAuthPopup(item.entry.instanceId);
     },
-    [
-      authSnapshotsByConnectorId,
-      openAuthPopup,
-      platformInstancesByConnectorId,
-      renderSelectionsByInstanceId,
-      t,
-    ]
+    [openAuthPopup, t]
   );
 
   const handleConnectorContextMenu = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>, connectorId: PlatformConnectorId) => {
+    (
+      event: React.MouseEvent<HTMLButtonElement>,
+      entry: Pick<PlatformLoginRegistryEntry, 'instanceId' | 'connectorId'>
+    ) => {
       event.preventDefault();
       setStripOpen(true);
       setRegisterMenuOpen(false);
       setAuthPopupOpen(false);
-      setSelectedConnectorId(connectorId);
+      setSelectedInstanceId(entry.instanceId);
       setContextMenuState({
-        connectorId,
+        instanceId: entry.instanceId,
+        connectorId: entry.connectorId,
         x: event.clientX,
         y: event.clientY,
       });
@@ -648,39 +767,53 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   const handleRegisterConnector = useCallback(
     async (definition: PlatformConnectorDefinition) => {
       if (!definition.enabled || definition.authFlow !== 'qr') {
-        updateConnectorScopedValue(
-          setStatusMessagesByConnectorId,
+        updateScopedValue(
+          setStatusMessagesByInstanceId,
           definition.connectorId,
           t('magnet.platform-login.status.comingSoon')
         );
         return;
       }
 
-      const existingSnapshot =
-        authSnapshotsByConnectorId[definition.connectorId] ?? (await refreshAuthSnapshot(definition.connectorId));
+      const builtinInstanceId = resolvePlatformInstanceId({
+        connectorId: definition.connectorId,
+      });
+      if (!builtinInstanceId) {
+        return;
+      }
 
-      setConnectorRegistered(definition.connectorId, true);
+      const existingSnapshot =
+        authSnapshotsByInstanceId[builtinInstanceId] ??
+        (await refreshAuthSnapshot(builtinInstanceId));
+
+      setRegistryEntryRegistered(
+        {
+          instanceId: builtinInstanceId,
+          connectorId: definition.connectorId,
+        },
+        true
+      );
       if (existingSnapshot?.authState === 'authorized') {
-        setBuiltinConnectorMounted(definition.connectorId, true);
+        setInstanceMounted(builtinInstanceId, true);
       } else {
-        updateConnectorScopedValue(
-          setStatusMessagesByConnectorId,
-          definition.connectorId,
+        updateScopedValue(
+          setStatusMessagesByInstanceId,
+          builtinInstanceId,
           t('magnet.platform-login.status.registrationAdded')
         );
       }
       setRegisterMenuOpen(false);
 
       if (existingSnapshot?.authState !== 'authorized') {
-        openAuthPopup(definition.connectorId);
+        openAuthPopup(builtinInstanceId);
       }
     },
     [
-      authSnapshotsByConnectorId,
+      authSnapshotsByInstanceId,
       openAuthPopup,
       refreshAuthSnapshot,
-      setBuiltinConnectorMounted,
-      setConnectorRegistered,
+      setInstanceMounted,
+      setRegistryEntryRegistered,
       t,
     ]
   );
@@ -692,269 +825,304 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
       input.value = '';
       if (!file) return;
 
+      const importStartedAtMs = getMusicPlatformNowMs();
       setPlatformPackInstalling(true);
       setPlatformPackInstallMessage(null);
+      await waitForNextPaint();
 
       try {
         const registration = await installPlatformPackFromFile(file);
-        setConnectorRegistered(registration.connectorId, true);
-        setPlatformPackInstallMessage(
-          t('magnet.platform-login.pack.import.success', {
-            name: registration.definition.displayName,
-          })
+        const importedInstanceId =
+          typeof registration.importedInstanceId === 'string'
+            ? registration.importedInstanceId
+            : resolvePlatformInstanceId({ connectorId: registration.connectorId });
+        if (!importedInstanceId) {
+          throw new Error('Imported platform instance registration is unavailable');
+        }
+        const connectorInstanceCount =
+          platformInstanceCountByConnectorId.get(registration.connectorId) ?? 0;
+        setRegistryEntryRegistered(
+          {
+            instanceId: importedInstanceId,
+            connectorId: registration.connectorId,
+          },
+          true
         );
-        setSelectedConnectorId(registration.connectorId);
+        const importedName =
+          registration.definition.displayName || registration.compat.contract.platform.displayName;
+        if (connectorInstanceCount > 1) {
+          setPlatformPackInstallMessage(
+            t('magnet.platform-login.pack.import.success', {
+              name: importedName,
+            })
+          );
+        } else {
+          setPlatformPackInstallMessage(
+            t('magnet.platform-login.pack.import.success', {
+              name: importedName,
+            })
+          );
+        }
+        setSelectedInstanceId(importedInstanceId);
         setRegisterMenuOpen(false);
 
-        const snapshot = await refreshAuthSnapshot(registration.connectorId);
+        const snapshot = await refreshAuthSnapshot(importedInstanceId);
         if (snapshot?.authState === 'authorized') {
-          setBuiltinConnectorMounted(registration.connectorId, true);
+          setInstanceMounted(importedInstanceId, true);
         } else {
-          openAuthPopup(registration.connectorId);
+          openAuthPopup(importedInstanceId);
         }
       } catch (error) {
+        telemetry.warn('platform-login.pack.import.failed', {
+          message: error instanceof Error ? error.message : String(error),
+          fields: {
+            fileName: file.name,
+            fileSize: file.size,
+          },
+        });
         setPlatformPackInstallMessage(
           t('magnet.platform-login.pack.import.failed', {
             message: error instanceof Error ? error.message : String(error),
           })
         );
       } finally {
+        warnOnSlowMusicPlatformOperation({
+          logger: telemetry,
+          event: 'platform-login.pack.import.slow',
+          startedAtMs: importStartedAtMs,
+          fields: {
+            fileName: file.name,
+            fileSize: file.size,
+          },
+        });
         setPlatformPackInstalling(false);
       }
     },
-    [openAuthPopup, refreshAuthSnapshot, setBuiltinConnectorMounted, setConnectorRegistered, t]
+    [
+      openAuthPopup,
+      platformInstanceCountByConnectorId,
+      refreshAuthSnapshot,
+      setInstanceMounted,
+      setRegistryEntryRegistered,
+      t,
+      telemetry,
+    ]
   );
 
   const runPoll = useCallback(
-    async (connectorId: PlatformConnectorId, sessionId?: string) => {
-      const targetSessionId = (sessionId ?? qrSessionsByConnectorId[connectorId]?.sessionId ?? '').trim();
-      if (!targetSessionId || busyConnectorId) return;
-      const instanceId = resolvePlatformInstanceId({ connectorId });
-      if (!instanceId) return;
+    async (instanceId: string, sessionId?: string) => {
+      const targetSessionId = (
+        sessionId ?? qrSessionsByInstanceId[instanceId]?.sessionId ?? ''
+      ).trim();
+      if (!targetSessionId || busyInstanceId) return;
 
-      setBusyConnectorId(connectorId);
+      setBusyInstanceId(instanceId);
       try {
         const result = await pollPlatformInstanceQrLogin(instanceId, targetSessionId);
-        updateConnectorScopedValue(setPollResultsByConnectorId, connectorId, result);
-        updateConnectorScopedValue(setErrorsByConnectorId, connectorId, null);
+        updateScopedValue(setPollResultsByInstanceId, instanceId, result);
+        updateScopedValue(setErrorsByInstanceId, instanceId, null);
 
         if (!result) {
-          updateConnectorScopedValue(
-            setErrorsByConnectorId,
-            connectorId,
+          updateScopedValue(
+            setErrorsByInstanceId,
+            instanceId,
             t('magnet.platform-login.error.pollFailed')
           );
           return;
         }
 
         if (result.authState === 'authorized') {
-          setConnectorRegistered(connectorId, true);
-          setBuiltinConnectorMounted(connectorId, true);
-          updateConnectorScopedValue(
-            setStatusMessagesByConnectorId,
-            connectorId,
+          const resolvedConnectorId =
+            normalizePlatformConnectorId(result.connectorId) ??
+            normalizePlatformConnectorId(
+              platformInstancesById.get(instanceId)?.metadata?.connectorId
+            );
+          if (resolvedConnectorId) {
+            setRegistryEntryRegistered(
+              {
+                instanceId,
+                connectorId: resolvedConnectorId,
+              },
+              true
+            );
+          }
+          setInstanceMounted(instanceId, true);
+          updateScopedValue(
+            setStatusMessagesByInstanceId,
+            instanceId,
             t('magnet.platform-login.status.authorized', {
               accountUid: result.accountUid ?? '-',
             })
           );
-          updateConnectorScopedValue(setQrSessionsByConnectorId, connectorId, null);
-          await refreshAuthSnapshot(connectorId);
+          updateScopedValue(setQrSessionsByInstanceId, instanceId, null);
+          await refreshAuthSnapshot(instanceId);
           return;
         }
 
         if (isTerminalPollState(result)) {
-          updateConnectorScopedValue(setQrSessionsByConnectorId, connectorId, null);
-          updateConnectorScopedValue(
-            setStatusMessagesByConnectorId,
-            connectorId,
+          updateScopedValue(setQrSessionsByInstanceId, instanceId, null);
+          updateScopedValue(
+            setStatusMessagesByInstanceId,
+            instanceId,
             t('magnet.platform-login.status.pollState', {
               state: result.state,
               message: result.stateMessage,
             })
           );
-          await refreshAuthSnapshot(connectorId);
+          await refreshAuthSnapshot(instanceId);
         }
       } catch (error) {
-        updateConnectorScopedValue(
-          setErrorsByConnectorId,
-          connectorId,
+        updateScopedValue(
+          setErrorsByInstanceId,
+          instanceId,
           error instanceof Error ? error.message : t('magnet.platform-login.error.pollFailed')
         );
       } finally {
-        setBusyConnectorId(null);
+        setBusyInstanceId(null);
       }
     },
     [
-      busyConnectorId,
-      qrSessionsByConnectorId,
+      busyInstanceId,
+      platformInstancesById,
+      qrSessionsByInstanceId,
       refreshAuthSnapshot,
-      setBuiltinConnectorMounted,
-      setConnectorRegistered,
+      setInstanceMounted,
+      setRegistryEntryRegistered,
       t,
     ]
   );
 
   useEffect(() => {
-    if (!authPopupOpen || !selectedConnectorId || !activeQrSession?.sessionId) return;
+    if (!authPopupOpen || !selectedInstanceId || !activeQrSession?.sessionId) return;
 
     const timer = window.setInterval(() => {
-      void runPoll(selectedConnectorId, activeQrSession.sessionId);
+      void runPoll(selectedInstanceId, activeQrSession.sessionId);
     }, skinProps.qrAutoPollIntervalMs || PLATFORM_LOGIN_DEFAULT_QR_AUTO_POLL_INTERVAL_MS);
 
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeQrSession?.sessionId, authPopupOpen, runPoll, selectedConnectorId, skinProps.qrAutoPollIntervalMs]);
+  }, [activeQrSession?.sessionId, authPopupOpen, runPoll, selectedInstanceId, skinProps.qrAutoPollIntervalMs]);
 
   const handleGenerateQr = useCallback(async () => {
-    if (!selectedConnectorId || activeBusy) return;
-    setBusyConnectorId(selectedConnectorId);
+    if (!selectedInstanceId || activeBusy) return;
+    setBusyInstanceId(selectedInstanceId);
 
     try {
-      const instanceId = resolvePlatformInstanceId({ connectorId: selectedConnectorId });
-      if (!instanceId) {
-        updateConnectorScopedValue(
-          setErrorsByConnectorId,
-          selectedConnectorId,
-          t('magnet.platform-login.error.generateFailed')
-        );
-        return;
-      }
-
-      const session = await beginPlatformInstanceQrLogin(instanceId);
+      const session = await beginPlatformInstanceQrLogin(selectedInstanceId);
       if (!session) {
-        updateConnectorScopedValue(
-          setErrorsByConnectorId,
-          selectedConnectorId,
+        updateScopedValue(
+          setErrorsByInstanceId,
+          selectedInstanceId,
           t('magnet.platform-login.error.generateFailed')
         );
         return;
       }
 
-      updateConnectorScopedValue(setQrSessionsByConnectorId, selectedConnectorId, session);
-      updateConnectorScopedValue(setPollResultsByConnectorId, selectedConnectorId, null);
-      updateConnectorScopedValue(setErrorsByConnectorId, selectedConnectorId, null);
-      updateConnectorScopedValue(
-        setStatusMessagesByConnectorId,
-        selectedConnectorId,
+      updateScopedValue(setQrSessionsByInstanceId, selectedInstanceId, session);
+      updateScopedValue(setPollResultsByInstanceId, selectedInstanceId, null);
+      updateScopedValue(setErrorsByInstanceId, selectedInstanceId, null);
+      updateScopedValue(
+        setStatusMessagesByInstanceId,
+        selectedInstanceId,
         t('magnet.platform-login.status.generated')
       );
-      await refreshAuthSnapshot(selectedConnectorId);
+      await refreshAuthSnapshot(selectedInstanceId);
     } catch (error) {
-      updateConnectorScopedValue(
-        setErrorsByConnectorId,
-        selectedConnectorId,
+      updateScopedValue(
+        setErrorsByInstanceId,
+        selectedInstanceId,
         error instanceof Error ? error.message : t('magnet.platform-login.error.generateFailed')
       );
     } finally {
-      setBusyConnectorId(null);
+      setBusyInstanceId(null);
     }
-  }, [activeBusy, refreshAuthSnapshot, selectedConnectorId, t]);
+  }, [activeBusy, refreshAuthSnapshot, selectedInstanceId, t]);
 
-  const handleRefreshConnector = useCallback(
-    async (connectorId: PlatformConnectorId) => {
-      if (busyConnectorId) return;
-      setBusyConnectorId(connectorId);
+  const handleRefreshInstance = useCallback(
+    async (instanceId: string) => {
+      if (busyInstanceId) return;
+      setBusyInstanceId(instanceId);
       try {
-        await refreshAuthSnapshot(connectorId);
-        updateConnectorScopedValue(
-          setStatusMessagesByConnectorId,
-          connectorId,
+        await refreshAuthSnapshot(instanceId);
+        updateScopedValue(
+          setStatusMessagesByInstanceId,
+          instanceId,
           t('magnet.platform-login.status.refreshed')
         );
       } catch (error) {
-        updateConnectorScopedValue(
-          setErrorsByConnectorId,
-          connectorId,
+        updateScopedValue(
+          setErrorsByInstanceId,
+          instanceId,
           error instanceof Error ? error.message : t('magnet.platform-login.error.refreshFailed')
         );
       } finally {
-        setBusyConnectorId(null);
+        setBusyInstanceId(null);
       }
     },
-    [busyConnectorId, refreshAuthSnapshot, t]
+    [busyInstanceId, refreshAuthSnapshot, t]
   );
 
   const handleLogout = useCallback(
-    async (connectorId: PlatformConnectorId) => {
-      if (busyConnectorId) return;
-      setBusyConnectorId(connectorId);
+    async (instanceId: string) => {
+      if (busyInstanceId) return;
+      setBusyInstanceId(instanceId);
 
       try {
-        const instanceId = resolvePlatformInstanceId({ connectorId });
-        if (!instanceId) {
-          updateConnectorScopedValue(
-            setErrorsByConnectorId,
-            connectorId,
-            t('magnet.platform-login.error.logoutFailed')
-          );
-          return;
-        }
-
         const snapshot = await logoutPlatformInstance(instanceId);
-        updateConnectorScopedValue(setAuthSnapshotsByConnectorId, connectorId, snapshot);
-        updateConnectorScopedValue(setQrSessionsByConnectorId, connectorId, null);
-        updateConnectorScopedValue(setPollResultsByConnectorId, connectorId, null);
-        updateConnectorScopedValue(setErrorsByConnectorId, connectorId, null);
-        updateConnectorScopedValue(
-          setStatusMessagesByConnectorId,
-          connectorId,
+        updateScopedValue(setAuthSnapshotsByInstanceId, instanceId, snapshot);
+        updateScopedValue(setQrSessionsByInstanceId, instanceId, null);
+        updateScopedValue(setPollResultsByInstanceId, instanceId, null);
+        updateScopedValue(setErrorsByInstanceId, instanceId, null);
+        updateScopedValue(
+          setStatusMessagesByInstanceId,
+          instanceId,
           t('magnet.platform-login.status.loggedOut')
         );
       } catch (error) {
-        updateConnectorScopedValue(
-          setErrorsByConnectorId,
-          connectorId,
+        updateScopedValue(
+          setErrorsByInstanceId,
+          instanceId,
           error instanceof Error ? error.message : t('magnet.platform-login.error.logoutFailed')
         );
       } finally {
-        setBusyConnectorId(null);
+        setBusyInstanceId(null);
       }
     },
-    [busyConnectorId, t]
+    [busyInstanceId, t]
   );
 
   const handleClearCookies = useCallback(
-    async (connectorId: PlatformConnectorId) => {
-      if (busyConnectorId) return;
-      setBusyConnectorId(connectorId);
+    async (instanceId: string) => {
+      if (busyInstanceId) return;
+      setBusyInstanceId(instanceId);
 
       try {
-        const instanceId = resolvePlatformInstanceId({ connectorId });
-        if (!instanceId) {
-          updateConnectorScopedValue(
-            setErrorsByConnectorId,
-            connectorId,
-            t('magnet.platform-login.error.clearCookiesFailed')
-          );
-          return;
-        }
-
         const snapshot = await clearPlatformInstanceAuthCookies(instanceId);
-        updateConnectorScopedValue(setAuthSnapshotsByConnectorId, connectorId, snapshot);
-        updateConnectorScopedValue(setQrSessionsByConnectorId, connectorId, null);
-        updateConnectorScopedValue(setPollResultsByConnectorId, connectorId, null);
-        updateConnectorScopedValue(setErrorsByConnectorId, connectorId, null);
-        updateConnectorScopedValue(
-          setStatusMessagesByConnectorId,
-          connectorId,
+        updateScopedValue(setAuthSnapshotsByInstanceId, instanceId, snapshot);
+        updateScopedValue(setQrSessionsByInstanceId, instanceId, null);
+        updateScopedValue(setPollResultsByInstanceId, instanceId, null);
+        updateScopedValue(setErrorsByInstanceId, instanceId, null);
+        updateScopedValue(
+          setStatusMessagesByInstanceId,
+          instanceId,
           t('magnet.platform-login.status.cookiesCleared')
         );
       } catch (error) {
-        updateConnectorScopedValue(
-          setErrorsByConnectorId,
-          connectorId,
+        updateScopedValue(
+          setErrorsByInstanceId,
+          instanceId,
           error instanceof Error ? error.message : t('magnet.platform-login.error.clearCookiesFailed')
         );
       } finally {
-        setBusyConnectorId(null);
+        setBusyInstanceId(null);
       }
     },
-    [busyConnectorId, t]
+    [busyInstanceId, t]
   );
 
   const activeConnectorLabel = activeConnectorDefinition
-    ? t(activeConnectorDefinition.labelKey)
+    ? activeRegisteredConnector?.instance?.displayName ?? t(activeConnectorDefinition.labelKey)
     : t('magnet.platform-login.trigger.title');
   const authStateLabel = useMemo(
     () => t(toAuthLabelKey(activeAuthSnapshot?.authState ?? 'unauthorized')),
@@ -966,7 +1134,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   );
 
   const contextMenuConnector = contextMenuState
-    ? registeredConnectors.find((item) => item.entry.connectorId === contextMenuState.connectorId) ?? null
+    ? registeredConnectors.find((item) => item.entry.instanceId === contextMenuState.instanceId) ?? null
     : null;
   const contextMenuStateType =
     contextMenuConnector &&
@@ -1003,30 +1171,33 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
         role="dialog"
       >
         <div className="platform-login-strip">
-          {registeredConnectors.map(({ definition, snapshot, renderSelection }) => {
+          {registeredConnectors.map((item) => {
+            const { definition, snapshot, renderSelection } = item;
             const visualState = resolvePlatformRegistrationState(
               definition,
               snapshot,
               renderSelection
             );
-            const tooltipTitle = `${t(definition.labelKey)}\n${t(resolveStateHintKey(visualState))}`;
+            const tooltipTitle = `${t(definition.labelKey)}\n${item.instance?.displayName ?? definition.displayName}\n${t(resolveStateHintKey(visualState))}`;
 
             return (
               <button
-                key={definition.connectorId}
+                key={item.entry.instanceId}
                 type="button"
                 ref={(node) => {
-                  connectorButtonRefs.current[definition.connectorId] = node;
+                  connectorButtonRefs.current[item.entry.instanceId] = node;
                 }}
                 className={`platform-login-connector-button platform-login-connector-button--${visualState}`}
                 title={tooltipTitle}
-                onClick={() => handleConnectorActivate(definition)}
-                onContextMenu={(event) => handleConnectorContextMenu(event, definition.connectorId)}
+                onClick={() => handleConnectorActivate(item)}
+                onContextMenu={(event) => handleConnectorContextMenu(event, item.entry)}
               >
                 <ConnectorGlyph definition={definition} />
                 <span className={`platform-login-connector-dot platform-login-connector-dot--${visualState}`} />
                 <span className="platform-login-connector-tooltip" role="tooltip">
-                  <span className="platform-login-connector-tooltip-title">{t(definition.labelKey)}</span>
+                  <span className="platform-login-connector-tooltip-title">
+                    {item.instance?.displayName ?? t(definition.labelKey)}
+                  </span>
                   <span className="platform-login-connector-tooltip-subtitle">
                     {t(resolveStateHintKey(visualState))}
                   </span>
@@ -1142,7 +1313,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
         open={authPopupOpen && Boolean(activeConnectorDefinition)}
         anchorRef={{
           current:
-            (selectedConnectorId ? connectorButtonRefs.current[selectedConnectorId] : null) ??
+            (selectedInstanceId ? connectorButtonRefs.current[selectedInstanceId] : null) ??
             triggerButtonRef.current ??
             rootRef.current,
         }}
@@ -1197,44 +1368,44 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
               <button
                 type="button"
                 onClick={() => {
-                  if (selectedConnectorId) {
-                    void runPoll(selectedConnectorId);
+                  if (selectedInstanceId) {
+                    void runPoll(selectedInstanceId);
                   }
                 }}
-                disabled={activeBusy || !activeQrSession || !selectedConnectorId}
+                disabled={activeBusy || !activeQrSession || !selectedInstanceId}
               >
                 {t('magnet.platform-login.action.poll')}
               </button>
               <button
                 type="button"
                 onClick={() => {
-                  if (selectedConnectorId) {
-                    void handleRefreshConnector(selectedConnectorId);
+                  if (selectedInstanceId) {
+                    void handleRefreshInstance(selectedInstanceId);
                   }
                 }}
-                disabled={activeBusy || !selectedConnectorId}
+                disabled={activeBusy || !selectedInstanceId}
               >
                 {t('magnet.platform-login.action.refresh')}
               </button>
               <button
                 type="button"
                 onClick={() => {
-                  if (selectedConnectorId) {
-                    void handleClearCookies(selectedConnectorId);
+                  if (selectedInstanceId) {
+                    void handleClearCookies(selectedInstanceId);
                   }
                 }}
-                disabled={activeBusy || !selectedConnectorId}
+                disabled={activeBusy || !selectedInstanceId}
               >
                 {t('magnet.platform-login.action.clearCookies')}
               </button>
               <button
                 type="button"
                 onClick={() => {
-                  if (selectedConnectorId) {
-                    void handleLogout(selectedConnectorId);
+                  if (selectedInstanceId) {
+                    void handleLogout(selectedInstanceId);
                   }
                 }}
-                disabled={activeBusy || !selectedConnectorId}
+                disabled={activeBusy || !selectedInstanceId}
               >
                 {t('magnet.platform-login.action.logout')}
               </button>
@@ -1311,14 +1482,14 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
               onClick={() => {
                 setContextMenuState(null);
                 if (contextMenuStateType === 'disabled') {
-                  updateConnectorScopedValue(
-                    setStatusMessagesByConnectorId,
-                    contextMenuConnector.definition.connectorId,
+                  updateScopedValue(
+                    setStatusMessagesByInstanceId,
+                    contextMenuConnector.entry.instanceId,
                     t('magnet.platform-login.status.comingSoon')
                   );
                   return;
                 }
-                openAuthPopup(contextMenuConnector.definition.connectorId);
+                openAuthPopup(contextMenuConnector.entry.instanceId);
               }}
             >
               <span className="platform-login-menu-action-icon" aria-hidden="true">
@@ -1338,7 +1509,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
               className="platform-login-menu-action"
               onClick={() => {
                 setContextMenuState(null);
-                void handleRefreshConnector(contextMenuConnector.definition.connectorId);
+                void handleRefreshInstance(contextMenuConnector.entry.instanceId);
               }}
             >
               <span className="platform-login-menu-action-icon" aria-hidden="true">
@@ -1353,8 +1524,8 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
                 className="platform-login-menu-action"
                 onClick={() => {
                   setContextMenuState(null);
-                  setBuiltinConnectorMounted(
-                    contextMenuConnector.definition.connectorId,
+                  setInstanceMounted(
+                    contextMenuConnector.entry.instanceId,
                     contextMenuStateType !== 'active'
                   );
                 }}
@@ -1381,7 +1552,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
               className="platform-login-menu-action"
               onClick={() => {
                 setContextMenuState(null);
-                void handleLogout(contextMenuConnector.definition.connectorId);
+                void handleLogout(contextMenuConnector.entry.instanceId);
               }}
             >
               <span className="platform-login-menu-action-icon" aria-hidden="true">
@@ -1395,7 +1566,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
               className="platform-login-menu-action"
               onClick={() => {
                 setContextMenuState(null);
-                void handleClearCookies(contextMenuConnector.definition.connectorId);
+                void handleClearCookies(contextMenuConnector.entry.instanceId);
               }}
             >
               <span className="platform-login-menu-action-icon" aria-hidden="true">
@@ -1411,7 +1582,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
               className="platform-login-menu-action platform-login-menu-action--danger"
               onClick={() => {
                 setContextMenuState(null);
-                removeConnectorRegistration(contextMenuConnector.definition.connectorId);
+                removeRegistryEntry(contextMenuConnector.entry);
               }}
             >
               <span className="platform-login-menu-action-icon" aria-hidden="true">

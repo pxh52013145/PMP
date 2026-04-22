@@ -48,6 +48,7 @@ function createRenderSelection(mounted: boolean): PlatformRenderSelectionRecord 
 function createRegisteredItem(connectorId: string, mounted: boolean) {
   return {
     entry: {
+      instanceId: `${connectorId}:instance`,
       connectorId,
     },
     renderSelection: createRenderSelection(mounted),
@@ -117,13 +118,13 @@ describe('mounted platform registration helpers', () => {
     const hiddenSelected = createRegisteredItem('connector.platform.hidden', false);
 
     expect(
-      resolveActiveMountedPlatformRegistrationItem(hiddenSelected.entry.connectorId, [
+      resolveActiveMountedPlatformRegistrationItem(hiddenSelected.entry.instanceId, [
         hiddenSelected,
         mountedFallback,
       ])
     ).toBe(mountedFallback);
     expect(
-      resolveActiveMountedPlatformRegistrationItem('connector.platform.none', [hiddenSelected])
+      resolveActiveMountedPlatformRegistrationItem('connector.platform.none:instance', [hiddenSelected])
     ).toBeNull();
   });
 });

@@ -47,6 +47,7 @@ export interface ParsedPlatformPack {
   manifest: PlatformPackManifestV1;
   contractPath: string;
   contract: PlatformCompatContractFile;
+  workspace: PlatformCompatContractFile['workspace'] | null;
   runtimePath: string;
   runtimeCode: string;
   runtimeImportUrl?: string;
@@ -431,6 +432,7 @@ export async function parsePlatformPackFromZipBytes(bytes: Uint8Array): Promise<
     manifest: manifestUnknown,
     contractPath,
     contract,
+    workspace: contract.workspace ?? null,
     runtimePath,
     runtimeCode,
     iconPath,

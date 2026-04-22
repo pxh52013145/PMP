@@ -37,6 +37,16 @@ export {
 } from './platformInstanceAuth';
 
 export {
+  createPlatformImportedInstanceId,
+  ensurePlatformImportedInstanceForInstallation,
+  getPlatformImportedInstanceRecord,
+  getPlatformImportedInstanceRecordByInstallationId,
+  listPlatformImportedInstanceRecords,
+  subscribePlatformImportedInstanceRecords,
+  type PlatformImportedInstanceRecord,
+} from './platformImportedInstanceRegistry';
+
+export {
   getPlatformRenderSelection,
   listPlatformRenderSelections,
   removePlatformRenderSelection,
@@ -87,45 +97,65 @@ export {
   awaitBuiltinPlatformPackRegistrationsReady,
   getPlatformPackStartupHealth,
   inspectBuiltinPlatformPackStoreState,
+  inspectPlatformPackWorkspaceReadiness,
+  inspectPlatformPackWorkspaceReadinessForInstallation,
   installPlatformPackFromFile,
   installPlatformPackFromZipBytes,
   listBuiltinPlatformPackAssets,
   listPlatformPackReadinessDiagnostics,
   listPlatformPackRegistrations,
+  listPlatformPackWorkspaceSurfaces,
   removePlatformPackRegistration,
+  resolvePlatformPackWorkspaceSurface,
+  resolvePlatformPackWorkspaceSurfaceForInstallation,
+  resolvePlatformPackWorkspaceSurfaceForInstance,
   subscribePlatformPackStartupHealth,
   subscribePlatformPackRegistrations,
   type BuiltinPlatformPackAssetDefinition,
   type BuiltinPlatformPackStoreInspection,
   type BuiltinPlatformPackStoreInspectionEntry,
   type PlatformPackBootStage,
+  type PlatformPackInstallResult,
   type PlatformPackReadinessDiagnostic,
   type PlatformPackReadinessDiagnosticPhase,
   type PlatformPackReadinessDiagnosticSeverity,
   type PlatformPackRegistrationRecord,
+  type PlatformPackWorkspaceReadiness,
+  type PlatformPackWorkspaceReadinessDiagnostic,
   type PlatformPackStartupHealth,
   type PlatformPackStartupStageRecord,
   type PlatformPackStartupState,
 } from './platformPackRegistry';
 
+export type {
+  PlatformPackWorkspaceSurfaceRecord,
+} from './platformWorkspaceSurface';
+
 export {
   listPlatformRuntimeDescriptors,
+  resolvePlatformWorkspaceRoutingForConnector,
+  resolvePlatformWorkspaceRoutingForInstanceId,
   resolveDefaultPlatformInstanceIdForConnector,
   resolvePlatformRuntimeDescriptorByInstanceId,
   resolvePreferredPlatformRuntimeDescriptorForConnector,
   type PlatformRuntimeDescriptor,
+  type PlatformRuntimeWorkspaceRouting,
 } from './platformRuntimeDescriptor';
 
 export {
   inspectPlatformPackDoctor,
   type PlatformPackDoctorConnectorReport,
+  type PlatformPackDoctorInstallationReport,
   type PlatformPackDoctorFlowStatus,
+  type PlatformPackDoctorInstanceReport,
   type PlatformPackDoctorIssue,
   type PlatformPackDoctorReport,
+  type PlatformPackDoctorResolvedAssetStatus,
   type PlatformPackDoctorRuntimeBucket,
   type PlatformPackDoctorRuntimeBucketCoverage,
   type PlatformPackDoctorSeverity,
   type PlatformPackDoctorStatus,
+  type PlatformPackDoctorWorkspaceSurfaceStatus,
 } from './platformPackDoctor';
 
 export {
@@ -146,8 +176,17 @@ export {
 
 export {
   getMusicPlatformGlobalCacheSettings,
+  getDefaultMusicPlatformWorkspaceOwnershipSettings,
+  persistMusicPlatformWorkspaceOwnershipSettings,
+  readMusicPlatformWorkspaceOwnershipSettings,
+  resolveMusicPlatformWorkspaceOwnershipMode,
+  setMusicPlatformConnectorWorkspaceOwnershipMode,
   setMusicPlatformGlobalCacheSettings,
+  subscribeMusicPlatformWorkspaceOwnershipSettings,
+  MUSIC_PLATFORM_WORKSPACE_OWNERSHIP_MODES,
   type MusicPlatformGlobalCacheSettings,
+  type MusicPlatformWorkspaceOwnershipMode,
+  type MusicPlatformWorkspaceOwnershipSettings,
 } from './globalSettings';
 
 export {

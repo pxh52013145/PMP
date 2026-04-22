@@ -13,6 +13,15 @@ import {
   subscribePlatformCompatRegistry,
   type PlatformCompatRegistryRecord,
 } from './contractRegistry';
+import {
+  listPlatformImportedInstanceRecords,
+  subscribePlatformImportedInstanceRecords,
+  type PlatformImportedInstanceRecord,
+} from './platformImportedInstanceRegistry';
+import {
+  getInstalledPlatformPackRecord,
+  subscribeInstalledPlatformPackRecords,
+} from './installedPlatformPacks';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import {
   getMusicPlatformDurationMs,
@@ -82,6 +91,20 @@ function clonePlatformInstanceRecord(record: PlatformInstanceRecord): PlatformIn
     availabilityMessage: record.availabilityMessage,
     metadata: record.metadata ? { ...record.metadata } : undefined,
   };
+}
+
+function serializePlatformInstanceRecord(record: PlatformInstanceRecord): string {
+  return JSON.stringify(clonePlatformInstanceRecord(record));
+}
+
+function arePlatformInstanceRecordsEqual(
+  left: PlatformInstanceRecord | null | undefined,
+  right: PlatformInstanceRecord | null | undefined
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+  return serializePlatformInstanceRecord(left) === serializePlatformInstanceRecord(right);
 }
 
 function sortPlatformInstances(left: PlatformInstanceRecord, right: PlatformInstanceRecord): number {
@@ -167,6 +190,76 @@ function buildDefaultPlatformInstanceRecord(
         typeof registryRecord.metadata?.connectorId === 'string'
           ? registryRecord.metadata.connectorId
           : undefined,
+    },
+  };
+}
+
+function createCompatRegistryRecordMap(): Map<string, PlatformCompatRegistryRecord> {
+  return new Map(
+    listPlatformCompatRegistryRecords().map((record) => [record.platformId, record] as const)
+  );
+}
+
+function buildImportedPlatformInstanceRecord(
+  importedRecord: PlatformImportedInstanceRecord,
+  options: {
+    installedRecord: NonNullable<ReturnType<typeof getInstalledPlatformPackRecord>>;
+    compatRegistryRecord: PlatformCompatRegistryRecord | null;
+    existingRecord?: PlatformInstanceRecord | null;
+  }
+): PlatformInstanceRecord {
+  const displayName =
+    importedRecord.displayName ||
+    importedRecord.instanceLabel ||
+    options.installedRecord.manifest.connector.displayName ||
+    options.installedRecord.contract.platform.displayName ||
+    importedRecord.platformId;
+  const staticIcon =
+    options.installedRecord.contract.platform.staticIcon ||
+    options.existingRecord?.staticIcon ||
+    '';
+
+  return {
+    instanceId: importedRecord.instanceId,
+    platformId: importedRecord.platformId,
+    instanceLabel: importedRecord.instanceLabel,
+    displayName,
+    staticIcon,
+    account: options.existingRecord?.account
+      ? { ...options.existingRecord.account }
+      : {},
+    auth: options.existingRecord?.auth
+      ? { ...options.existingRecord.auth }
+      : {
+          status: 'empty',
+        },
+    capabilities: {
+      ...(options.compatRegistryRecord?.contract.capabilities ??
+        options.installedRecord.contract.capabilities),
+    },
+    registrations: options.existingRecord?.registrations
+      ? {
+          navigationIds: options.existingRecord.registrations.navigationIds.slice(),
+          settingsIds: options.existingRecord.registrations.settingsIds.slice(),
+          pageIds: options.existingRecord.registrations.pageIds.slice(),
+        }
+      : {
+          navigationIds: [],
+          settingsIds: [],
+          pageIds: [],
+        },
+    availability: options.existingRecord?.availability ?? 'available',
+    availabilityMessage: options.existingRecord?.availabilityMessage,
+    metadata: {
+      ...options.existingRecord?.metadata,
+      autoManaged: false,
+      imported: true,
+      installationId: importedRecord.installationId,
+      connectorId: importedRecord.connectorId,
+      source: options.installedRecord.source,
+      sourceType: options.installedRecord.sourceType,
+      packId: options.installedRecord.packId,
+      packVersion: options.installedRecord.packVersion,
     },
   };
 }
@@ -257,13 +350,58 @@ function reconcileAutoManagedPlatformInstances(): boolean {
       },
     };
 
-    platformInstanceRegistry.set(instanceId, nextRecord);
-    changed = true;
+    if (!arePlatformInstanceRecordsEqual(existing, nextRecord)) {
+      platformInstanceRegistry.set(instanceId, nextRecord);
+      changed = true;
+    }
   }
 
   for (const [instanceId, record] of platformInstanceRegistry.entries()) {
     if (record.metadata?.autoManaged !== true) continue;
     if (autoManagedPlatformIds.has(record.platformId)) continue;
+    platformInstanceRegistry.delete(instanceId);
+    platformInstanceAuthHydrationScheduled.delete(instanceId);
+    changed = true;
+  }
+
+  return changed;
+}
+
+function reconcileImportedPlatformInstances(): boolean {
+  const importedRecords = listPlatformImportedInstanceRecords();
+  const compatRecordsByPlatformId = createCompatRegistryRecordMap();
+  const importedInstanceIds = new Set<string>();
+  let changed = false;
+
+  for (const importedRecord of importedRecords) {
+    importedInstanceIds.add(importedRecord.instanceId);
+    const installedRecord = getInstalledPlatformPackRecord(importedRecord.installationId);
+    if (!installedRecord) {
+      const deleted = platformInstanceRegistry.delete(importedRecord.instanceId);
+      if (deleted) {
+        platformInstanceAuthHydrationScheduled.delete(importedRecord.instanceId);
+        changed = true;
+      }
+      continue;
+    }
+
+    const compatRegistryRecord =
+      compatRecordsByPlatformId.get(importedRecord.platformId) ?? null;
+    const existingRecord = platformInstanceRegistry.get(importedRecord.instanceId) ?? null;
+    const nextRecord = buildImportedPlatformInstanceRecord(importedRecord, {
+      installedRecord,
+      compatRegistryRecord,
+      existingRecord,
+    });
+    if (!arePlatformInstanceRecordsEqual(existingRecord, nextRecord)) {
+      platformInstanceRegistry.set(importedRecord.instanceId, nextRecord);
+      changed = true;
+    }
+  }
+
+  for (const [instanceId, record] of platformInstanceRegistry.entries()) {
+    if (record.metadata?.imported !== true) continue;
+    if (importedInstanceIds.has(instanceId)) continue;
     platformInstanceRegistry.delete(instanceId);
     platformInstanceAuthHydrationScheduled.delete(instanceId);
     changed = true;
@@ -300,6 +438,15 @@ function scheduleAutoManagedPlatformInstanceAuthRefreshes(): void {
       toBuiltinPlatformInstanceId(record.platformId),
       record.runtime
     );
+  }
+}
+
+function scheduleImportedPlatformInstanceAuthRefreshes(): void {
+  for (const instance of platformInstanceRegistry.values()) {
+    if (instance.metadata?.imported !== true) continue;
+    const runtime = getPlatformCompatRuntimeApi(instance.platformId);
+    if (!runtime) continue;
+    scheduleAutoManagedPlatformInstanceAuthRefresh(instance.instanceId, runtime);
   }
 }
 
@@ -450,19 +597,42 @@ function initializePlatformInstanceRegistry(): void {
   if (platformInstanceRegistryInitialized) return;
   platformInstanceRegistryInitialized = true;
 
-  const changed = reconcileAutoManagedPlatformInstances();
+  const changed =
+    reconcileAutoManagedPlatformInstances() || reconcileImportedPlatformInstances();
   if (changed) {
     emitPlatformInstancesChanged();
   }
   scheduleAutoManagedPlatformInstanceAuthRefreshes();
+  scheduleImportedPlatformInstanceAuthRefreshes();
 
   subscribePlatformCompatRegistry((records) => {
     void records;
-    const nextChanged = reconcileAutoManagedPlatformInstances();
+    const nextChanged =
+      reconcileAutoManagedPlatformInstances() || reconcileImportedPlatformInstances();
     if (nextChanged) {
       emitPlatformInstancesChanged();
     }
     scheduleAutoManagedPlatformInstanceAuthRefreshes();
+    scheduleImportedPlatformInstanceAuthRefreshes();
+  });
+
+  void subscribePlatformImportedInstanceRecords(() => {
+    const nextChanged = reconcileImportedPlatformInstances();
+    if (nextChanged) {
+      emitPlatformInstancesChanged();
+    }
+    scheduleImportedPlatformInstanceAuthRefreshes();
+  }).catch(() => {
+    // Keep the registry usable in the current window even if imported instance sync fails.
+  });
+
+  void subscribeInstalledPlatformPackRecords(() => {
+    const nextChanged = reconcileImportedPlatformInstances();
+    if (nextChanged) {
+      emitPlatformInstancesChanged();
+    }
+  }).catch(() => {
+    // Keep the registry usable in the current window even if install record sync fails.
   });
 }
 

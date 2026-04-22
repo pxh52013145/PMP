@@ -385,16 +385,17 @@ async function flushBootLifecycle(): Promise<void> {
 async function bootPlatformPackRegistry() {
   const registry = await import('./platformPackRegistry');
   const windowCommunication = await import('../../utils/windowCommunication');
+  const expectedBuiltinCount = registry.listBuiltinPlatformPackAssets().length;
   registry.listPlatformPackRegistrations();
   await flushBootLifecycle();
   await registry.awaitBuiltinPlatformPackRegistrationsReady();
-  for (let attempt = 0; attempt < 8; attempt += 1) {
+  for (let attempt = 0; attempt < 16; attempt += 1) {
     await flushBootLifecycle();
-    if (registry.listPlatformPackRegistrations().length >= 2) {
+    if (registry.listPlatformPackRegistrations().length >= expectedBuiltinCount) {
       break;
     }
   }
-  if (registry.listPlatformPackRegistrations().length < 1) {
+  if (registry.listPlatformPackRegistrations().length < expectedBuiltinCount) {
     const directInstallErrors: string[] = [];
     for (const [assetUrl, bytes] of Object.entries(builtinPackAssetBytes)) {
       try {
@@ -405,10 +406,13 @@ async function bootPlatformPackRegistry() {
         directInstallErrors.push(`${assetUrl}: ${String(error)}`);
       }
     }
+    await flushBootLifecycle();
+  }
+  if (registry.listPlatformPackRegistrations().length < expectedBuiltinCount) {
     throw new Error(
       JSON.stringify(
         {
-          directInstallErrors,
+          directInstallErrors: [],
           fetchCalls:
             typeof globalThis.fetch === 'function' && 'mock' in globalThis.fetch
               ? (globalThis.fetch as unknown as { mock?: { calls?: unknown[] } }).mock?.calls
@@ -648,6 +652,65 @@ describe('platformPackRegistry builtin pack boot', () => {
     expect(fetchCalls).not.toContain('/resource/music-platform/packs/dist/builtin-netease.pmpp');
   });
 
+  it('treats an exact-match external install as current and skips builtin background reconcile', async () => {
+    const { registry, windowCommunication } = await bootPlatformPackRegistry();
+    expect(registry.listPlatformPackRegistrations()).toHaveLength(2);
+
+    const storedRecords = JSON.parse(
+      localStorage.getItem(windowCommunication.STORAGE_KEYS.PLATFORM_PACKS_V1) ?? '[]'
+    ) as Array<Record<string, unknown>>;
+    expect(storedRecords).toHaveLength(2);
+
+    const mutatedRecords = storedRecords.map((record) =>
+      record.connectorId === 'connector.platform.netease'
+        ? {
+            ...record,
+            sourceType: 'external',
+            source: 'file:netease-copy.pmpp',
+          }
+        : record
+    );
+    const mutatedNeteaseRecord = mutatedRecords.find(
+      (record) => record.connectorId === 'connector.platform.netease'
+    );
+    localStorage.setItem(
+      windowCommunication.STORAGE_KEYS.PLATFORM_PACKS_V1,
+      JSON.stringify(mutatedRecords)
+    );
+    fetchState.builtinPackIndexPayload = buildBuiltinPackIndexPayload(storedRecords);
+
+    resetBootTestEnvironment({
+      clearStorage: false,
+      clearFs: false,
+      clearBuiltinPackIndex: false,
+    });
+
+    const secondBoot = await bootPlatformPackRegistry();
+    const inspection = await secondBoot.registry.inspectBuiltinPlatformPackStoreState();
+    const neteaseEntry = inspection.entries.find(
+      (entry) => entry.connectorId === 'connector.platform.netease'
+    );
+    const health = secondBoot.registry.getPlatformPackStartupHealth();
+
+    expect(secondBoot.registry.listPlatformPackRegistrations().map((item) => item.connectorId)).toEqual([
+      'connector.platform.bilibili',
+      'connector.platform.netease',
+    ]);
+    expect(inspection.current).toBe(true);
+    expect(inspection.staleConnectorIds).toEqual([]);
+    expect(neteaseEntry).toMatchObject({
+      storedRecordFound: true,
+      storedSourceType: 'external',
+      storedPackId: mutatedNeteaseRecord?.packId,
+      storedPackVersion: mutatedNeteaseRecord?.packVersion,
+      effectiveReasonCodes: [],
+    });
+    expect(health.backgroundReconcileScheduled).toBe(false);
+    expect(
+      health.recentStages.some((entry) => entry.stage === 'background-reconcile')
+    ).toBe(false);
+  });
+
   it('keeps restored builtin packs when the lightweight index is temporarily unavailable', async () => {
     const { registry, windowCommunication } = await bootPlatformPackRegistry();
     expect(registry.listPlatformPackRegistrations()).toHaveLength(2);
@@ -762,6 +825,47 @@ describe('platformPackRegistry builtin pack boot', () => {
         }),
       })
     );
+  });
+
+  it('reports Phase 3 netease pack workspace readiness and resolves a mountable workspace surface', async () => {
+    const { registry } = await bootPlatformPackRegistry();
+
+    const readiness = registry.inspectPlatformPackWorkspaceReadiness(
+      'connector.platform.netease'
+    );
+    const surface = registry.resolvePlatformPackWorkspaceSurface(
+      'connector.platform.netease'
+    );
+
+    expect(readiness.hostRouterReady).toBe(true);
+    expect(readiness.ready).toBe(true);
+    expect(readiness.workspaceOwnershipDeclared).toBe(true);
+    expect(readiness.mountSurfaceDeclared).toBe(true);
+    expect(readiness.diagnostics).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'workspace.host-router.unavailable',
+        }),
+        expect.objectContaining({
+          code: 'workspace.pack-ownership.undeclared',
+        }),
+        expect.objectContaining({
+          code: 'workspace.pack-mount.undeclared',
+        }),
+      ])
+    );
+    expect(surface).toMatchObject({
+      connectorId: 'connector.platform.netease',
+      platformId: 'netease',
+      root: {
+        viewId: 'netease.workspace.root',
+        viewType: 'music-platform.workspace-root',
+      },
+      requiredRuntimeCarrier: 'webview-frame',
+      workspace: {
+        ownership: 'pack',
+      },
+    });
   });
 
   it('records background reconcile in startup health when the restored store is stale', async () => {
@@ -892,6 +996,45 @@ describe('platformPackRegistry external pack readiness', () => {
       ok: true,
     });
     expect(registry.listPlatformPackReadinessDiagnostics()).toEqual([]);
+  });
+
+  it('creates a distinct installation and imported instance for each repeated external import', async () => {
+    const registry = await import('./platformPackRegistry');
+    const installedPacks = await import('./installedPlatformPacks');
+    const importedInstances = await import('./platformImportedInstanceRegistry');
+    const bytes = decodePackArchive(EXTERNAL_PROVIDER_ONLY_PACK_BASE64);
+
+    const first = await registry.installPlatformPackFromZipBytes(bytes, {
+      source: 'file:qqmusic-a.pmpp',
+    });
+    await flushBootLifecycle();
+
+    const second = await registry.installPlatformPackFromZipBytes(bytes, {
+      source: 'file:qqmusic-b.pmpp',
+    });
+    await flushBootLifecycle();
+
+    expect(first.installationId).toBeTruthy();
+    expect(second.installationId).toBeTruthy();
+    expect(first.installationId).not.toBe(second.installationId);
+    expect(first.importedInstanceId).toBeTruthy();
+    expect(second.importedInstanceId).toBeTruthy();
+    expect(first.importedInstanceId).not.toBe(second.importedInstanceId);
+
+    const storedRecords = installedPacks
+      .loadInstalledPlatformPackRecords()
+      .filter((record) => record.connectorId === 'connector.platform.qqmusic');
+    expect(storedRecords).toHaveLength(2);
+    expect(new Set(storedRecords.map((record) => record.installationId)).size).toBe(2);
+
+    const importedRecords = importedInstances
+      .listPlatformImportedInstanceRecords()
+      .filter((record) => record.connectorId === 'connector.platform.qqmusic');
+    expect(importedRecords).toHaveLength(2);
+    expect(new Set(importedRecords.map((record) => record.instanceId)).size).toBe(2);
+    expect(
+      [...importedRecords.map((record) => record.installationId)].sort()
+    ).toEqual([...storedRecords.map((record) => record.installationId)].sort());
   });
 
   it('records structured diagnostics when an external pack has no compatible runtime path', async () => {
