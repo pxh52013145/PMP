@@ -1059,6 +1059,92 @@ describe('runtime bridge host session', () => {
     });
   });
 
+  it('ignores stale revoke acknowledgements without crashing an active session', async () => {
+    const telemetry = createTelemetryServiceSpy();
+    setGlobalTelemetryService(telemetry.service);
+
+    const api = createStubApi();
+    const harness = createPortHarness();
+    const onRuntimeCrash = vi.fn();
+    const session = createRuntimeBridgeHostSession({
+      pluginId: 'worker-plugin',
+      runtimeId: 'worker.main',
+      runtimeInstanceId: 'runtime-instance-1',
+      runtimeKind: 'extension-host',
+      carrier: 'dedicated-worker',
+      api,
+      permissions: new Set(['api:navigation']),
+      port: harness.port,
+      runtimeInit: createRuntimeInit({
+        grantedCapabilities: [
+          {
+            capabilityId: 'host.pmp.navigation',
+            version: '1.0.0',
+            mode: 'required',
+          },
+        ],
+      }),
+      runtimeActivate: createRuntimeActivate(),
+      onRuntimeCrash,
+      telemetry: {
+        sourceKind: 'extv2',
+        launcherId: 'pxp.extension-host.worker',
+        hostLabel: 'ExtensionStartupWorker',
+      },
+    });
+
+    const startPromise = session.start();
+    harness.emit(createRuntimeHello());
+    await flushMessages();
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.init.ack',
+      pluginId: 'worker-plugin',
+      runtimeId: 'worker.main',
+      runtimeInstanceId: 'runtime-instance-1',
+    });
+    await flushMessages();
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.activate.ack',
+      pluginId: 'worker-plugin',
+      runtimeId: 'worker.main',
+      runtimeInstanceId: 'runtime-instance-1',
+    });
+    await startPromise;
+
+    harness.emit({
+      bridgeVersion: '1.0',
+      op: 'runtime.capabilities.revoke.ack',
+      pluginId: 'worker-plugin',
+      runtimeId: 'worker.main',
+      runtimeInstanceId: 'runtime-instance-1',
+      requestId: 'runtime-revoke:runtime-instance-1:stale',
+      traceId: 'trace-stale-revoke',
+      ok: true,
+      ignored: true,
+      reason: 'runtime-dispose',
+    });
+    await flushMessages();
+
+    expect(session.getState()).toBe('active');
+    expect(onRuntimeCrash).not.toHaveBeenCalled();
+    expect(
+      telemetry.calls.find(
+        (entry) => entry.event === 'plugin.governance.control.revoke.ack.ignored'
+      )
+    ).toMatchObject({
+      level: 'debug',
+      fields: expect.objectContaining({
+        pluginId: 'worker-plugin',
+        requestId: 'runtime-revoke:runtime-instance-1:stale',
+        protocolOp: 'runtime.capabilities.revoke.ack',
+        status: 'ignored',
+        state: 'active',
+      }),
+    });
+  });
+
   it('emits a control-trace crash -> forced teardown timeline when runtime cleanup follows a fatal error', async () => {
     const telemetry = createTelemetryServiceSpy();
     setGlobalTelemetryService(telemetry.service);

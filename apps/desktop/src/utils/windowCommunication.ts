@@ -242,6 +242,7 @@ export const STORAGE_KEYS = {
   MUSIC_LIBRARY_FIELD_CAPABILITIES_V1:
     'pixel-matrix-music-library-field-capabilities-v1', // MusicLibraryExtensionFieldCapabilityInput[]
   PLATFORM_LOGIN_REGISTRY_V1: 'pixel-matrix-platform-login-registry-v1', // Registered platform login launcher entries
+  PLATFORM_RENDER_SELECTIONS_V1: 'pixel-matrix-platform-render-selections-v1', // Platform entry visibility / render selection state
   PLATFORM_IMPORTED_INSTANCES_V1: 'pixel-matrix-platform-imported-instances-v1', // Imported platform instance registrations
   PLATFORM_PACKS_V1: 'pixel-matrix-platform-packs-v1', // Installed platform packs (manifest + contract + unpacked artifacts)
 
@@ -356,6 +357,7 @@ export const TAURI_EVENTS = {
 
   // Platform Login
   PLATFORM_LOGIN_REGISTRY_UPDATED: 'platform-login-registry-updated',
+  PLATFORM_RENDER_SELECTIONS_UPDATED: 'platform-render-selections-updated',
   PLATFORM_IMPORTED_INSTANCES_UPDATED: 'platform-imported-instances-updated',
   PLATFORM_PACKS_UPDATED: 'platform-packs-updated',
 

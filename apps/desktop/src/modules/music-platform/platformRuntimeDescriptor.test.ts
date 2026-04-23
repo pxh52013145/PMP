@@ -5,6 +5,9 @@ import type {
   PlatformCompatRuntimeApi,
   PlatformInstanceRecord,
 } from '@pixel-matrix/plugin-platform-contracts';
+import type { InstalledPlatformPackRecord } from './installedPlatformPacks';
+import type { PlatformImportedInstanceRecord } from './platformImportedInstanceRegistry';
+import type { PlatformPackWorkspaceSurfaceRecord } from './platformWorkspaceSurface';
 
 type ConnectorDefinitionState = Array<Record<string, unknown>>;
 type PackRegistrationState = Array<Record<string, unknown>>;
@@ -15,7 +18,8 @@ const state = vi.hoisted(() => ({
   packRegistrations: [] as PackRegistrationState,
   compatRecords: [] as CompatRecordState,
   instances: [] as PlatformInstanceRecord[],
-  importedInstances: [] as Array<Record<string, unknown>>,
+  importedInstances: [] as PlatformImportedInstanceRecord[],
+  installedRecords: [] as InstalledPlatformPackRecord[],
   workspaceOwnershipModes: {} as Record<string, 'legacy' | 'pack' | 'auto'>,
   packWorkspaceReadyConnectorIds: [] as string[],
   packWorkspaceReadyInstallationIds: [] as string[],
@@ -27,6 +31,28 @@ vi.mock('./connectorAuth', () => ({
 
 vi.mock('./platformPackRegistry', () => ({
   listPlatformPackRegistrations: () => state.packRegistrations,
+  resolvePlatformPackRegistrationForInstallation: (installationId: string) =>
+    state.packRegistrations.find(
+      (record) => (record as { installationId?: unknown }).installationId === installationId
+    ) ?? null,
+  resolvePlatformPackWorkspaceSurface: (connectorId: string) => {
+    const installedRecord = state.installedRecords.find(
+      (record) => record.connectorId === connectorId
+    );
+    if (!installedRecord) {
+      return null;
+    }
+    return createWorkspaceSurfaceFromInstalledRecord(installedRecord);
+  },
+  resolvePlatformPackWorkspaceSurfaceForInstallation: (installationId: string) => {
+    const installedRecord =
+      state.installedRecords.find((record) => record.installationId === installationId) ??
+      null;
+    if (!installedRecord) {
+      return null;
+    }
+    return createWorkspaceSurfaceFromInstalledRecord(installedRecord);
+  },
   inspectPlatformPackWorkspaceReadiness: (connectorId: string) => {
     const ready = state.packWorkspaceReadyConnectorIds.includes(connectorId);
     return {
@@ -97,14 +123,21 @@ vi.mock('./instanceRegistry', () => ({
 }));
 
 vi.mock('./platformImportedInstanceRegistry', () => ({
+  listPlatformImportedInstanceRecords: () => state.importedInstances,
   getPlatformImportedInstanceRecord: (instanceId: string) =>
     state.importedInstances.find((instance) => instance.instanceId === instanceId) ?? null,
 }));
 
-function createRuntime(): PlatformCompatRuntimeApi {
+vi.mock('./installedPlatformPacks', () => ({
+  listInstalledPlatformPackRecords: () => state.installedRecords,
+  getInstalledPlatformPackRecord: (installationId: string) =>
+    state.installedRecords.find((record) => record.installationId === installationId) ?? null,
+}));
+
+function createRuntime(source = 'test'): PlatformCompatRuntimeApi {
   return {
     metadata: {
-      source: 'test',
+      source,
     },
   };
 }
@@ -187,6 +220,106 @@ function createInstanceRecord(input: {
   };
 }
 
+function createInstalledRecord(input: {
+  installationId: string;
+  connectorId: string;
+  platformId: string;
+  packId?: string;
+  packVersion?: string;
+  sourceType?: 'builtin' | 'external';
+  source?: string;
+  runtimePath?: string;
+  iconPath?: string;
+  artifactRootPath?: string;
+  installedAtMs?: number;
+}): InstalledPlatformPackRecord {
+  return {
+    installationId: input.installationId,
+    packId: input.packId ?? `${input.platformId}-pack`,
+    packVersion: input.packVersion ?? '1.0.0',
+    packageDigest: `${input.installationId}-digest`,
+    connectorId: input.connectorId as InstalledPlatformPackRecord['connectorId'],
+    platformId: input.platformId,
+    sourceType: input.sourceType ?? 'external',
+    source:
+      input.source ??
+      `installed-pack:${input.packId ?? `${input.platformId}-pack`}:${input.installationId}`,
+    installedAtMs: input.installedAtMs ?? 100,
+    manifest: {
+      formatVersion: '1.0',
+      type: 'platform-pack',
+      metadata: {
+        id: input.packId ?? `${input.platformId}-pack`,
+        name: input.platformId,
+        version: input.packVersion ?? '1.0.0',
+      },
+      connector: {
+        connectorId: input.connectorId,
+        displayName: input.platformId,
+        workspaceKind: input.platformId,
+      },
+      entry: {
+        contract: 'contract.json',
+        runtime: 'runtime.js',
+        icon: 'icon.svg',
+      },
+    },
+    contract: createContract(input.platformId, input.platformId),
+    artifactRootPath:
+      input.artifactRootPath ?? `D:/packs/${input.installationId}`,
+    manifestPath: `D:/packs/${input.installationId}/manifest.json`,
+    contractPath: `D:/packs/${input.installationId}/contract.json`,
+    runtimePath: input.runtimePath ?? `D:/packs/${input.installationId}/runtime.js`,
+    iconPath: input.iconPath ?? `D:/packs/${input.installationId}/icon.svg`,
+  };
+}
+
+function createWorkspaceSurfaceFromInstalledRecord(
+  record: InstalledPlatformPackRecord
+): PlatformPackWorkspaceSurfaceRecord {
+  return {
+    connectorId: record.connectorId,
+    platformId: record.platformId,
+    displayName: record.platformId,
+    packId: record.packId,
+    packVersion: record.packVersion,
+    source:
+      record.source ??
+      `installed-pack:${record.packId}:${record.installationId}`,
+    runtimeCode: 'export {}',
+    runtimeImportUrl: `asset://${record.runtimePath}`,
+    workspace: {
+      ownership: 'pack',
+      root: {
+        viewId: `${record.platformId}.workspace.root`,
+        viewType: 'music-platform.workspace-root',
+      },
+    },
+    root: {
+      viewId: `${record.platformId}.workspace.root`,
+      viewType: 'music-platform.workspace-root',
+    },
+    requiredRuntimeCarrier: 'webview-frame',
+  };
+}
+
+function createImportedInstanceRecord(input: {
+  instanceId: string;
+  installationId: string;
+  connectorId: string;
+  platformId: string;
+}): PlatformImportedInstanceRecord {
+  return {
+    instanceId: input.instanceId,
+    installationId: input.installationId,
+    connectorId: input.connectorId as PlatformImportedInstanceRecord['connectorId'],
+    platformId: input.platformId,
+    instanceLabel: input.instanceId,
+    displayName: input.instanceId,
+    createdAtMs: 100,
+  };
+}
+
 describe('platformRuntimeDescriptor', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -195,6 +328,7 @@ describe('platformRuntimeDescriptor', () => {
     state.compatRecords = [];
     state.instances = [];
     state.importedInstances = [];
+    state.installedRecords = [];
     state.workspaceOwnershipModes = {};
     state.packWorkspaceReadyConnectorIds = [];
     state.packWorkspaceReadyInstallationIds = [];
@@ -252,6 +386,16 @@ describe('platformRuntimeDescriptor', () => {
         updatedAtMs: 5,
       }),
     ];
+    state.installedRecords = [
+      createInstalledRecord({
+        installationId: 'installation-netease-builtin',
+        connectorId: 'connector.platform.netease',
+        platformId: 'netease',
+        packId: 'builtin-netease',
+        sourceType: 'builtin',
+        source: 'builtin-pack:netease',
+      }),
+    ];
     state.workspaceOwnershipModes['connector.platform.netease'] = 'auto';
 
     const runtimeDescriptor = await import('./platformRuntimeDescriptor');
@@ -264,10 +408,16 @@ describe('platformRuntimeDescriptor', () => {
     expect(descriptor?.authState).toBe('authorized');
     expect(descriptor?.sourceKind).toBe('pack');
     expect(descriptor?.runtime).toBeTruthy();
+    expect(descriptor?.workspaceMount.installationId).toBe(
+      'installation-netease-builtin'
+    );
+    expect(descriptor?.workspaceMount.resolutionSource).toBe('builtin-installation');
     expect(descriptor?.workspaceRouting.ownershipMode).toBe('auto');
     expect(descriptor?.workspaceRouting.path).toBe('legacy');
     expect(descriptor?.workspaceRouting.status).toBe('fallback');
-    expect(descriptor?.workspaceRouting.fallbackReasonCode).toBe('workspace.pack-root.missing');
+    expect(descriptor?.workspaceRouting.fallbackReasonCode).toBe(
+      'workspace.installation-registration.missing'
+    );
   });
 
   it('resolves exact instance descriptors by instance id', async () => {
@@ -307,6 +457,13 @@ describe('platformRuntimeDescriptor', () => {
         installationId: 'installation-bilibili-1',
       }),
     ];
+    state.installedRecords = [
+      createInstalledRecord({
+        installationId: 'installation-bilibili-1',
+        connectorId: 'connector.platform.bilibili',
+        platformId: 'bilibili',
+      }),
+    ];
     state.workspaceOwnershipModes['connector.platform.bilibili'] = 'legacy';
     state.packWorkspaceReadyInstallationIds = ['installation-bilibili-1'];
 
@@ -317,6 +474,10 @@ describe('platformRuntimeDescriptor', () => {
     expect(descriptor?.instanceRecord?.instanceId).toBe('bilibili:custom');
     expect(descriptor?.platformId).toBe('bilibili');
     expect(descriptor?.connectorId).toBe('connector.platform.bilibili');
+    expect(descriptor?.workspaceMount.installationId).toBe('installation-bilibili-1');
+    expect(descriptor?.workspaceMount.runtimeImportUrl).toBe(
+      'asset://D:/packs/installation-bilibili-1/runtime.js'
+    );
     expect(descriptor?.workspaceRouting.path).toBe('legacy');
     expect(descriptor?.workspaceRouting.status).toBe('active');
   });
@@ -358,6 +519,21 @@ describe('platformRuntimeDescriptor', () => {
         installationId: 'installation-bilibili-a',
       }),
     ];
+    state.importedInstances = [
+      createImportedInstanceRecord({
+        instanceId: 'bilibili:imported-a',
+        installationId: 'installation-bilibili-a',
+        connectorId: 'connector.platform.bilibili',
+        platformId: 'bilibili',
+      }),
+    ];
+    state.installedRecords = [
+      createInstalledRecord({
+        installationId: 'installation-bilibili-a',
+        connectorId: 'connector.platform.bilibili',
+        platformId: 'bilibili',
+      }),
+    ];
     state.workspaceOwnershipModes['connector.platform.bilibili'] = 'auto';
     state.packWorkspaceReadyConnectorIds = [];
     state.packWorkspaceReadyInstallationIds = ['installation-bilibili-a'];
@@ -370,9 +546,192 @@ describe('platformRuntimeDescriptor', () => {
 
     expect(descriptor?.workspaceRouting.path).toBe('pack');
     expect(descriptor?.workspaceRouting.status).toBe('active');
+    expect(descriptor?.workspaceMount.installationId).toBe('installation-bilibili-a');
+    expect(descriptor?.workspaceMount.resolutionSource).toBe('imported-instance');
     expect(descriptor?.workspaceRouting.packReadiness.source).toBe(
       'installed-pack:test-pack:installation-bilibili-a'
     );
+  });
+
+  it('pins builtin instances to builtin installations even when same-connector external installs exist', async () => {
+    state.connectorDefinitions = [
+      {
+        connectorId: 'connector.platform.netease',
+        displayName: 'Netease',
+        labelKey: 'netease',
+        iconKey: 'netease',
+        enabled: true,
+        authFlow: 'qr',
+        workspaceKind: 'netease',
+        workspaceMode: 'dedicated',
+        sortOrder: 20,
+        source: 'pack',
+      },
+    ];
+    state.compatRecords = [
+      {
+        platformId: 'netease',
+        contract: createContract('netease', 'Netease'),
+        runtime: createRuntime(),
+        source: 'platform-pack',
+        registeredAtMs: 1,
+        metadata: {
+          connectorId: 'connector.platform.netease',
+        },
+      },
+    ];
+    state.instances = [
+      createInstanceRecord({
+        instanceId: 'netease:builtin',
+        platformId: 'netease',
+        connectorId: 'connector.platform.netease',
+        displayName: 'Netease Builtin',
+        authStatus: 'authorized',
+        updatedAtMs: 20,
+      }),
+      createInstanceRecord({
+        instanceId: 'netease:imported-a',
+        platformId: 'netease',
+        connectorId: 'connector.platform.netease',
+        displayName: 'Netease Imported',
+        authStatus: 'authorized',
+        updatedAtMs: 10,
+        installationId: 'installation-netease-external',
+      }),
+    ];
+    state.importedInstances = [
+      createImportedInstanceRecord({
+        instanceId: 'netease:imported-a',
+        installationId: 'installation-netease-external',
+        connectorId: 'connector.platform.netease',
+        platformId: 'netease',
+      }),
+    ];
+    state.installedRecords = [
+      createInstalledRecord({
+        installationId: 'installation-netease-builtin',
+        connectorId: 'connector.platform.netease',
+        platformId: 'netease',
+        packId: 'builtin-netease',
+        sourceType: 'builtin',
+        source: 'builtin-pack:netease',
+        installedAtMs: 100,
+      }),
+      createInstalledRecord({
+        installationId: 'installation-netease-external',
+        connectorId: 'connector.platform.netease',
+        platformId: 'netease',
+        packId: 'external-netease',
+        sourceType: 'external',
+        source: 'file:netease.pmpp',
+        installedAtMs: 200,
+      }),
+    ];
+
+    const runtimeDescriptor = await import('./platformRuntimeDescriptor');
+    const descriptor =
+      runtimeDescriptor.resolvePreferredPlatformRuntimeDescriptorForConnector(
+        'connector.platform.netease'
+      );
+
+    expect(descriptor?.instanceRecord?.instanceId).toBe('netease:builtin');
+    expect(descriptor?.workspaceMount.installationId).toBe(
+      'installation-netease-builtin'
+    );
+    expect(descriptor?.workspaceMount.sourceType).toBe('builtin');
+    expect(descriptor?.workspaceMount.resolutionSource).toBe('builtin-installation');
+  });
+
+  it('prefers installation-scoped runtime over connector-level compat singleton for imported instances', async () => {
+    state.connectorDefinitions = [
+      {
+        connectorId: 'connector.platform.netease',
+        displayName: 'Netease',
+        labelKey: 'netease',
+        iconKey: 'netease',
+        enabled: true,
+        authFlow: 'qr',
+        workspaceKind: 'netease',
+        workspaceMode: 'dedicated',
+        sortOrder: 20,
+        source: 'pack',
+      },
+    ];
+    state.compatRecords = [
+      {
+        platformId: 'netease',
+        contract: createContract('netease', 'Netease'),
+        runtime: createRuntime('compat-singleton'),
+        source: 'platform-pack',
+        registeredAtMs: 1,
+        metadata: {
+          connectorId: 'connector.platform.netease',
+        },
+      },
+    ];
+    state.packRegistrations = [
+      {
+        connectorId: 'connector.platform.netease',
+        installationId: 'installation-netease-a',
+        platformId: 'netease',
+        definition: state.connectorDefinitions[0],
+        compat: {
+          runtime: createRuntime('installation-a-runtime'),
+        },
+      },
+      {
+        connectorId: 'connector.platform.netease',
+        installationId: 'installation-netease-b',
+        platformId: 'netease',
+        definition: state.connectorDefinitions[0],
+        compat: {
+          runtime: createRuntime('installation-b-runtime'),
+        },
+      },
+    ];
+    state.instances = [
+      createInstanceRecord({
+        instanceId: 'netease:imported-a',
+        platformId: 'netease',
+        connectorId: 'connector.platform.netease',
+        displayName: 'Netease Imported A',
+        authStatus: 'authorized',
+        installationId: 'installation-netease-a',
+      }),
+    ];
+    state.importedInstances = [
+      createImportedInstanceRecord({
+        instanceId: 'netease:imported-a',
+        installationId: 'installation-netease-a',
+        connectorId: 'connector.platform.netease',
+        platformId: 'netease',
+      }),
+    ];
+    state.installedRecords = [
+      createInstalledRecord({
+        installationId: 'installation-netease-a',
+        connectorId: 'connector.platform.netease',
+        platformId: 'netease',
+        installedAtMs: 100,
+      }),
+      createInstalledRecord({
+        installationId: 'installation-netease-b',
+        connectorId: 'connector.platform.netease',
+        platformId: 'netease',
+        installedAtMs: 200,
+      }),
+    ];
+
+    const runtimeDescriptor = await import('./platformRuntimeDescriptor');
+    const descriptor =
+      runtimeDescriptor.resolvePlatformRuntimeDescriptorByInstanceId(
+        'netease:imported-a'
+      );
+
+    expect((descriptor?.runtime as { metadata?: { source?: string } } | null)?.metadata?.source).toBe(
+      'installation-a-runtime'
+    );
+    expect(descriptor?.workspaceMount.installationId).toBe('installation-netease-a');
   });
 
   it('falls back to builtin instance id when compat runtime exists but no instance is created yet', async () => {

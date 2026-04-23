@@ -177,6 +177,7 @@ vi.mock('../../../magnet-system/plugins/pluginHostApi', () => ({
 }));
 
 import { PLUGIN_PERMISSIONS } from '../../../magnet-system/plugins/host-api/permissions';
+import type { PlatformRuntimeWorkspaceMount } from '../../../modules/music-platform/platformRuntimeDescriptor';
 import type { PlatformPackWorkspaceSurfaceRecord } from '../../../modules/music-platform/platformWorkspaceSurface';
 import { PackWorkspaceMount } from './PackWorkspaceMount';
 
@@ -211,6 +212,25 @@ function createSurface(): PlatformPackWorkspaceSurfaceRecord {
       viewType: 'music-platform.workspace-root',
     },
     requiredRuntimeCarrier: 'webview-frame' as const,
+  };
+}
+
+function createWorkspaceMount(
+  surface: PlatformPackWorkspaceSurfaceRecord
+): PlatformRuntimeWorkspaceMount {
+  return {
+    resolutionSource: 'imported-instance',
+    installationId: 'pack-install-builtin-netease-1',
+    sourceType: 'external',
+    source: 'file:builtin-netease.pmpp',
+    packId: surface.packId,
+    packVersion: surface.packVersion,
+    packageDigest: 'digest-1',
+    artifactRootPath: 'D:/packs/netease/install-1',
+    runtimePath: 'D:/packs/netease/install-1/runtime.js',
+    runtimeImportUrl: surface.runtimeImportUrl ?? null,
+    iconPath: 'D:/packs/netease/install-1/icon.svg',
+    workspaceSurface: surface,
   };
 }
 
@@ -552,5 +572,93 @@ describe('PackWorkspaceMount', () => {
     });
 
     mountedRoot = null;
+  });
+
+  it('does not restart the pack runtime when workspace mount props are recreated with the same values', async () => {
+    const surface = createSurface();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const workspaceMount = createWorkspaceMount(surface);
+
+    await act(async () => {
+      root.render(
+        <PackWorkspaceMount
+          connectorId="connector.platform.netease"
+          displayName="Netease"
+          instanceId="netease:imported-test"
+          surface={surface}
+          workspaceMount={workspaceMount}
+        />
+      );
+      await flushEffects();
+    });
+
+    mountedRoot = {
+      root,
+      container,
+    };
+
+    const iframe = container.querySelector('iframe');
+    expect(iframe).toBeTruthy();
+    const iframeWindow = {
+      postMessage: vi.fn(),
+    };
+    Object.defineProperty(iframe as HTMLIFrameElement, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow,
+    });
+
+    const frameId = testState.buildRuntimeSandboxSrcDoc.mock.calls[0]?.[0];
+    expect(frameId).toBeTruthy();
+
+    await dispatchFrameMessage(iframeWindow, {
+      frameId,
+      type: 'sandbox:iframe-ready',
+    });
+
+    expect(testState.createRuntimeBridgeHostSession).toHaveBeenCalledTimes(1);
+    expect(testState.runtimeSession.start).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      root.render(
+        <PackWorkspaceMount
+          connectorId="connector.platform.netease"
+          displayName="Netease"
+          instanceId="netease:imported-test"
+          surface={surface}
+          workspaceMount={{
+            ...workspaceMount,
+            workspaceSurface: workspaceMount.workspaceSurface
+              ? {
+                  ...workspaceMount.workspaceSurface,
+                  workspace: {
+                    ...workspaceMount.workspaceSurface.workspace,
+                    capabilityFamilies: workspaceMount.workspaceSurface.workspace.capabilityFamilies
+                      ? {
+                          required: [
+                            ...(workspaceMount.workspaceSurface.workspace.capabilityFamilies
+                              .required ?? []),
+                          ],
+                          optional: [
+                            ...(workspaceMount.workspaceSurface.workspace.capabilityFamilies
+                              .optional ?? []),
+                          ],
+                        }
+                      : undefined,
+                  },
+                  root: { ...workspaceMount.workspaceSurface.root },
+                }
+              : null,
+          }}
+        />
+      );
+      await flushEffects();
+    });
+
+    expect(testState.createRuntimeBridgeHostSession).toHaveBeenCalledTimes(1);
+    expect(testState.runtimeSession.start).toHaveBeenCalledTimes(1);
+    expect(testState.runtimeSession.revokeCapabilities).not.toHaveBeenCalled();
+    expect(testState.runtimeSession.dispose).not.toHaveBeenCalled();
   });
 });

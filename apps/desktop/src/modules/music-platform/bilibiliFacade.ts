@@ -123,6 +123,13 @@ function resolveBilibiliCacheScopeKey(instanceId?: string | null): string {
   );
 }
 
+export function clearBilibiliFacadeCaches(instanceId?: string | null): void {
+  const scopeKey = resolveBilibiliCacheScopeKey(instanceId);
+  BILIBILI_RESOURCE_BY_BVID_CACHE.clearConnector(scopeKey);
+  BILIBILI_PLAYBACK_QUALITY_CACHE.clearConnector(scopeKey);
+  BILIBILI_COVER_ASSET_CACHE.clearConnector(scopeKey);
+}
+
 export function normalizeBilibiliPlaybackQualityKey(
   value: string | null | undefined
 ): BilibiliPlaybackQualityKey {

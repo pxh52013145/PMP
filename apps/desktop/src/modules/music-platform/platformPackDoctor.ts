@@ -3,6 +3,7 @@ import {
   PlatformCompatContractFile,
   PlatformCompatRuntimeApi,
   type PlatformInstanceRecord,
+  type PlatformRenderSelectionRecord,
 } from '@pixel-matrix/plugin-platform-contracts';
 
 import { isTauriRuntime } from '../../utils/tauriRuntime';
@@ -52,8 +53,10 @@ import {
   resolvePlatformWorkspaceRoutingForConnector,
   resolvePlatformWorkspaceRoutingForInstanceId,
   type PlatformRuntimeDescriptor,
+  type PlatformRuntimeWorkspaceMount,
   type PlatformRuntimeWorkspaceRouting,
 } from './platformRuntimeDescriptor';
+import { inspectPlatformRenderSelectionPersistence } from './renderSelectionRegistry';
 
 export type PlatformPackDoctorSeverity = 'info' | 'warn' | 'error';
 export type PlatformPackDoctorStatus = 'ready' | 'degraded' | 'error';
@@ -92,7 +95,38 @@ export interface PlatformPackDoctorWorkspaceSurfaceStatus {
   rootViewId: string | null;
   viewType: string | null;
   requiredRuntimeCarrier: string | null;
-  runtimeImportUrlPresent: boolean;
+  runtimeImportUrl: string | null;
+}
+
+export interface PlatformPackDoctorInstanceWorkspaceMountStatus {
+  resolutionSource: string | null;
+  installationId: string | null;
+  sourceType: InstalledPlatformPackSourceType | null;
+  source: string | null;
+  packId: string | null;
+  packVersion: string | null;
+  packageDigest: string | null;
+  artifactRootPath: string | null;
+  runtimePath: string | null;
+  runtimeImportUrl: string | null;
+  iconPath: string | null;
+  surfaceResolved: boolean;
+  surfaceSource: string | null;
+  rootViewId: string | null;
+  viewType: string | null;
+}
+
+export interface PlatformPackDoctorRenderSelectionStatus {
+  registryInitialized: boolean;
+  currentPresent: boolean;
+  currentMounted: boolean | null;
+  currentMountedAtMs: number | null;
+  currentOrder: number | null;
+  persistedPresent: boolean;
+  persistedMounted: boolean | null;
+  persistedMountedAtMs: number | null;
+  persistedOrder: number | null;
+  inSync: boolean;
 }
 
 export interface PlatformPackDoctorInstallationReport {
@@ -104,6 +138,7 @@ export interface PlatformPackDoctorInstallationReport {
   sourceType: InstalledPlatformPackSourceType;
   source: string | null;
   installedAtMs: number;
+  packageDigest: string | null;
   status: PlatformPackDoctorStatus;
   artifactsPresent: boolean;
   registrationPresent: boolean;
@@ -134,6 +169,8 @@ export interface PlatformPackDoctorInstanceReport {
   availability: PlatformInstanceRecord['availability'] | null;
   status: PlatformPackDoctorStatus;
   workspaceRouting: PlatformRuntimeWorkspaceRouting;
+  workspaceMount: PlatformPackDoctorInstanceWorkspaceMountStatus;
+  renderSelection: PlatformPackDoctorRenderSelectionStatus;
   issues: PlatformPackDoctorIssue[];
 }
 
@@ -278,6 +315,76 @@ function createResolvedAssetStatus(
   };
 }
 
+function createInstanceWorkspaceMountStatus(
+  workspaceMount: PlatformRuntimeWorkspaceMount | null | undefined
+): PlatformPackDoctorInstanceWorkspaceMountStatus {
+  return {
+    resolutionSource: workspaceMount?.resolutionSource ?? null,
+    installationId: workspaceMount?.installationId ?? null,
+    sourceType: workspaceMount?.sourceType ?? null,
+    source: normalizeString(workspaceMount?.source) || null,
+    packId: normalizeString(workspaceMount?.packId) || null,
+    packVersion: normalizeString(workspaceMount?.packVersion) || null,
+    packageDigest: normalizeString(workspaceMount?.packageDigest) || null,
+    artifactRootPath: normalizeString(workspaceMount?.artifactRootPath) || null,
+    runtimePath: normalizeString(workspaceMount?.runtimePath) || null,
+    runtimeImportUrl: normalizeString(workspaceMount?.runtimeImportUrl) || null,
+    iconPath: normalizeString(workspaceMount?.iconPath) || null,
+    surfaceResolved: Boolean(workspaceMount?.workspaceSurface),
+    surfaceSource: normalizeString(workspaceMount?.workspaceSurface?.source) || null,
+    rootViewId: normalizeString(workspaceMount?.workspaceSurface?.root.viewId) || null,
+    viewType:
+      normalizeString(workspaceMount?.workspaceSurface?.root.viewType) || null,
+  };
+}
+
+function normalizeRenderSelectionNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  return Math.floor(value);
+}
+
+function createRenderSelectionDoctorStatus(input: {
+  initialized: boolean;
+  current: PlatformRenderSelectionRecord | null | undefined;
+  persisted: PlatformRenderSelectionRecord | null | undefined;
+}): PlatformPackDoctorRenderSelectionStatus {
+  const currentPresent = Boolean(input.current);
+  const persistedPresent = Boolean(input.persisted);
+  const currentMounted = currentPresent ? input.current?.mounted === true : null;
+  const currentMountedAtMs = currentPresent
+    ? normalizeRenderSelectionNumber(input.current?.mountedAtMs)
+    : null;
+  const currentOrder = currentPresent ? normalizeRenderSelectionNumber(input.current?.order) : null;
+  const persistedMounted = persistedPresent ? input.persisted?.mounted === true : null;
+  const persistedMountedAtMs = persistedPresent
+    ? normalizeRenderSelectionNumber(input.persisted?.mountedAtMs)
+    : null;
+  const persistedOrder = persistedPresent
+    ? normalizeRenderSelectionNumber(input.persisted?.order)
+    : null;
+  const inSync =
+    currentPresent === persistedPresent &&
+    (!currentPresent ||
+      (currentMounted === persistedMounted &&
+        currentMountedAtMs === persistedMountedAtMs &&
+        currentOrder === persistedOrder));
+
+  return {
+    registryInitialized: input.initialized,
+    currentPresent,
+    currentMounted,
+    currentMountedAtMs,
+    currentOrder,
+    persistedPresent,
+    persistedMounted,
+    persistedMountedAtMs,
+    persistedOrder,
+    inSync,
+  };
+}
+
 function toDoctorIssueFromWorkspaceDiagnostic(
   diagnostic: PlatformPackWorkspaceReadinessDiagnostic
 ): PlatformPackDoctorIssue {
@@ -404,10 +511,12 @@ function buildPlatformPackDoctorTelemetryFingerprint(
           status: installation.status,
           sourceType: installation.sourceType,
           source: installation.source,
+          packageDigest: installation.packageDigest,
           artifactsPresent: installation.artifactsPresent,
           registrationPresent: installation.registrationPresent,
           activeConnectorRegistration: installation.activeConnectorRegistration,
           workspaceSurfaceResolved: installation.workspaceSurface.resolved,
+          workspaceSurfaceRuntimeImportUrl: installation.workspaceSurface.runtimeImportUrl,
           workspaceReadinessReady: installation.workspaceReadiness.ready,
           issues: installation.issues.map((issue) => ({
             code: issue.code,
@@ -430,6 +539,23 @@ function buildPlatformPackDoctorTelemetryFingerprint(
             ownershipMode: instance.workspaceRouting.ownershipMode,
             packWorkspaceReady: instance.workspaceRouting.packWorkspaceReady,
             fallbackReasonCode: instance.workspaceRouting.fallbackReasonCode,
+          },
+          workspaceMount: {
+            resolutionSource: instance.workspaceMount.resolutionSource,
+            installationId: instance.workspaceMount.installationId,
+            sourceType: instance.workspaceMount.sourceType,
+            source: instance.workspaceMount.source,
+            packId: instance.workspaceMount.packId,
+            packVersion: instance.workspaceMount.packVersion,
+            packageDigest: instance.workspaceMount.packageDigest,
+            artifactRootPath: instance.workspaceMount.artifactRootPath,
+            runtimePath: instance.workspaceMount.runtimePath,
+            runtimeImportUrl: instance.workspaceMount.runtimeImportUrl,
+            iconPath: instance.workspaceMount.iconPath,
+            surfaceResolved: instance.workspaceMount.surfaceResolved,
+            surfaceSource: instance.workspaceMount.surfaceSource,
+            rootViewId: instance.workspaceMount.rootViewId,
+            viewType: instance.workspaceMount.viewType,
           },
           issues: instance.issues.map((issue) => ({
             code: issue.code,
@@ -683,6 +809,7 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
   const importedInstances = listPlatformImportedInstanceRecords();
   const platformInstances = listPlatformInstances();
   const readinessDiagnostics = listPlatformPackReadinessDiagnostics();
+  const renderSelectionInspection = inspectPlatformRenderSelectionPersistence();
   const reportIssues: PlatformPackDoctorIssue[] = [];
   let storeInspection: BuiltinPlatformPackStoreInspection | null = null;
 
@@ -775,6 +902,12 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
   >();
   const instanceRecordById = new Map(
     platformInstances.map((record) => [record.instanceId, record] as const)
+  );
+  const currentRenderSelectionByInstanceId = new Map(
+    renderSelectionInspection.live.map((record) => [record.instanceId, record] as const)
+  );
+  const persistedRenderSelectionByInstanceId = new Map(
+    renderSelectionInspection.persisted.map((record) => [record.instanceId, record] as const)
   );
   for (const record of platformInstances) {
     const connectorId = readConnectorIdFromInstanceRecord(record);
@@ -1049,6 +1182,7 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
           sourceType: record.sourceType,
           source: normalizeString(record.source) || source,
           installedAtMs: record.installedAtMs,
+          packageDigest: normalizeString(record.packageDigest) || null,
           status: resolveStatusWithWorkspaceDiagnostics({
             issues: installationIssues,
             workspaceDiagnostics: workspaceReadiness.diagnostics,
@@ -1074,8 +1208,7 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
             rootViewId: workspaceSurface?.root.viewId ?? null,
             viewType: workspaceSurface?.root.viewType ?? null,
             requiredRuntimeCarrier: workspaceSurface?.requiredRuntimeCarrier ?? null,
-            runtimeImportUrlPresent:
-              normalizeString(workspaceSurface?.runtimeImportUrl).length > 0,
+            runtimeImportUrl: normalizeString(workspaceSurface?.runtimeImportUrl) || null,
           },
           workspaceReadiness,
           issues: installationIssues.sort(sortIssues),
@@ -1098,12 +1231,21 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
         const runtimeDescriptor = resolvePlatformRuntimeDescriptorByInstanceId(instanceId);
         const installationId =
           importedRecord?.installationId ?? readInstallationIdFromInstanceRecord(instanceRecord);
-        const installationRecord =
-          installationId ? installedRecordByInstallationId.get(installationId) ?? null : null;
         const runtimeDescriptorRouting =
           runtimeDescriptor?.workspaceRouting ??
           resolvePlatformWorkspaceRoutingForInstanceId(instanceId) ??
           resolvePlatformWorkspaceRoutingForConnector(connectorId);
+        const runtimeDescriptorMount = runtimeDescriptor?.workspaceMount ?? null;
+        const resolvedInstallationId =
+          runtimeDescriptorMount?.installationId ?? installationId ?? null;
+        const installationRecord = resolvedInstallationId
+          ? installedRecordByInstallationId.get(resolvedInstallationId) ?? null
+          : null;
+        const renderSelection = createRenderSelectionDoctorStatus({
+          initialized: renderSelectionInspection.initialized,
+          current: currentRenderSelectionByInstanceId.get(instanceId),
+          persisted: persistedRenderSelectionByInstanceId.get(instanceId),
+        });
         const instanceIssues: PlatformPackDoctorIssue[] = [];
 
         if (importedRecord && !instanceRecord) {
@@ -1118,21 +1260,41 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
             connectorId,
           });
         }
-        if (installationId && !installationRecord) {
+        if (resolvedInstallationId && !installationRecord) {
           pushIssue(instanceIssues, 'instance.installation.missing', 'error', {
             instanceId,
-            installationId,
+            installationId: resolvedInstallationId,
+          });
+        }
+        if (renderSelection.registryInitialized && !renderSelection.currentPresent) {
+          pushIssue(instanceIssues, 'render-selection.current.missing', 'warn', {
+            instanceId,
+          });
+        }
+        if (renderSelection.registryInitialized && !renderSelection.inSync) {
+          pushIssue(instanceIssues, 'render-selection.persistence.mismatch', 'warn', {
+            instanceId,
+            currentPresent: renderSelection.currentPresent,
+            currentMounted: renderSelection.currentMounted,
+            currentMountedAtMs: renderSelection.currentMountedAtMs,
+            currentOrder: renderSelection.currentOrder,
+            persistedPresent: renderSelection.persistedPresent,
+            persistedMounted: renderSelection.persistedMounted,
+            persistedMountedAtMs: renderSelection.persistedMountedAtMs,
+            persistedOrder: renderSelection.persistedOrder,
           });
         }
         pushWorkspaceRoutingIssue(instanceIssues, runtimeDescriptorRouting);
 
         const metadataSourceType = normalizeString(instanceRecord?.metadata?.sourceType);
         const sourceType =
+          runtimeDescriptorMount?.sourceType ??
           installationRecord?.sourceType ??
           (metadataSourceType === 'builtin' || metadataSourceType === 'external'
             ? metadataSourceType
             : null);
         const source =
+          normalizeString(runtimeDescriptorMount?.source) ||
           normalizeString(installationRecord?.source) ||
           normalizeString(instanceRecord?.metadata?.source) ||
           null;
@@ -1155,7 +1317,7 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
 
         return {
           instanceId,
-          installationId: installationId ?? null,
+          installationId: resolvedInstallationId,
           connectorId,
           platformId,
           sourceType,
@@ -1167,7 +1329,7 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
           instanceRecordPresent: Boolean(instanceRecord),
           importedRegistryPresent: Boolean(importedRecord),
           descriptorPresent: Boolean(runtimeDescriptor),
-          installationPresent: installationId ? Boolean(installationRecord) : true,
+          installationPresent: resolvedInstallationId ? Boolean(installationRecord) : true,
           authState: instanceRecord?.auth.status ?? null,
           availability: instanceRecord?.availability ?? null,
           status: resolveStatusWithWorkspaceDiagnostics({
@@ -1176,6 +1338,8 @@ export async function inspectPlatformPackDoctor(): Promise<PlatformPackDoctorRep
           }),
           workspaceRouting:
             runtimeDescriptorRouting ?? resolvePlatformWorkspaceRoutingForConnector(connectorId)!,
+          workspaceMount: createInstanceWorkspaceMountStatus(runtimeDescriptorMount),
+          renderSelection,
           issues: instanceIssues.sort(sortIssues),
         } satisfies PlatformPackDoctorInstanceReport;
       })

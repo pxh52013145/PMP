@@ -73,6 +73,44 @@ describe('platformLoginRegistry', () => {
     ]);
   });
 
+  it('keeps imported instance entries even before external connector definitions finish restoring', async () => {
+    importedInstanceRecordsMock.list = [
+      {
+        instanceId: 'qqmusic:imported-a',
+        installationId: 'installation-a',
+        connectorId: 'connector.platform.qqmusic',
+        platformId: 'qqmusic',
+        instanceLabel: 'QQ Music',
+        displayName: 'QQ Music',
+        createdAtMs: 1,
+      },
+    ];
+
+    const { sanitizePlatformLoginRegistry } = await import('./platformLoginRegistry');
+    const entries = sanitizePlatformLoginRegistry(
+      [
+        {
+          instanceId: 'qqmusic:imported-a',
+          connectorId: 'connector.platform.qqmusic',
+          enabled: true,
+          addedAtMs: 123,
+        },
+      ],
+      [],
+      null,
+      []
+    );
+
+    expect(entries).toEqual([
+      {
+        instanceId: 'qqmusic:imported-a',
+        connectorId: 'connector.platform.qqmusic',
+        enabled: true,
+        addedAtMs: 123,
+      },
+    ]);
+  });
+
   it('drops stale concrete instance entries when they are neither materialized nor imported', async () => {
     const { sanitizePlatformLoginRegistry } = await import('./platformLoginRegistry');
     const entries = sanitizePlatformLoginRegistry(

@@ -42,17 +42,38 @@ export {
   getPlatformImportedInstanceRecord,
   getPlatformImportedInstanceRecordByInstallationId,
   listPlatformImportedInstanceRecords,
+  removePlatformImportedInstanceRecord,
+  removePlatformImportedInstanceRecordByInstallationId,
   subscribePlatformImportedInstanceRecords,
   type PlatformImportedInstanceRecord,
 } from './platformImportedInstanceRegistry';
 
 export {
+  getInstalledPlatformPackRecord,
+  listInstalledPlatformPackRecords,
+  listInstalledPlatformPackRecordsForConnector,
+  loadInstalledPlatformPackRecords,
+  removeInstalledPlatformPackRecord,
+  subscribeInstalledPlatformPackRecords,
+  type InstalledPlatformPackRecord,
+  type InstalledPlatformPackSourceType,
+} from './installedPlatformPacks';
+
+export {
+  clearInstalledPlatformPackCaches,
+  resetInstalledPlatformPackState,
+  unregisterInstalledPlatformPack,
+} from './platformPackMaintenance';
+
+export {
   getPlatformRenderSelection,
+  inspectPlatformRenderSelectionPersistence,
   listPlatformRenderSelections,
   removePlatformRenderSelection,
   setPlatformRenderSelectionMounted,
   subscribePlatformRenderSelections,
   upsertPlatformRenderSelection,
+  type PlatformRenderSelectionPersistenceInspection,
 } from './renderSelectionRegistry';
 
 export {
@@ -139,17 +160,21 @@ export {
   resolvePlatformRuntimeDescriptorByInstanceId,
   resolvePreferredPlatformRuntimeDescriptorForConnector,
   type PlatformRuntimeDescriptor,
+  type PlatformRuntimeWorkspaceMount,
+  type PlatformRuntimeWorkspaceMountResolutionSource,
   type PlatformRuntimeWorkspaceRouting,
 } from './platformRuntimeDescriptor';
 
 export {
   inspectPlatformPackDoctor,
   type PlatformPackDoctorConnectorReport,
+  type PlatformPackDoctorInstanceWorkspaceMountStatus,
   type PlatformPackDoctorInstallationReport,
   type PlatformPackDoctorFlowStatus,
   type PlatformPackDoctorInstanceReport,
   type PlatformPackDoctorIssue,
   type PlatformPackDoctorReport,
+  type PlatformPackDoctorRenderSelectionStatus,
   type PlatformPackDoctorResolvedAssetStatus,
   type PlatformPackDoctorRuntimeBucket,
   type PlatformPackDoctorRuntimeBucketCoverage,
@@ -190,6 +215,7 @@ export {
 } from './globalSettings';
 
 export {
+  clearBilibiliFacadeCaches,
   createDefaultBilibiliPlaybackQualityOptions,
   buildBilibiliPreparedResourceKey,
   buildBilibiliResourceIdentity,

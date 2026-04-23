@@ -11,11 +11,24 @@ import {
 } from './contractRegistry';
 import { listPlatformConnectorDefinitions } from './connectorAuth';
 import { getPlatformInstance, listPlatformInstances } from './instanceRegistry';
-import { getPlatformImportedInstanceRecord } from './platformImportedInstanceRegistry';
+import {
+  getPlatformImportedInstanceRecord,
+  listPlatformImportedInstanceRecords,
+  type PlatformImportedInstanceRecord,
+} from './platformImportedInstanceRegistry';
+import {
+  getInstalledPlatformPackRecord,
+  listInstalledPlatformPackRecords,
+  type InstalledPlatformPackRecord,
+  type InstalledPlatformPackSourceType,
+} from './installedPlatformPacks';
 import {
   listPlatformPackRegistrations,
   inspectPlatformPackWorkspaceReadiness,
   inspectPlatformPackWorkspaceReadinessForInstallation,
+  resolvePlatformPackRegistrationForInstallation,
+  resolvePlatformPackWorkspaceSurface,
+  resolvePlatformPackWorkspaceSurfaceForInstallation,
   type PlatformPackWorkspaceReadiness,
   type PlatformPackWorkspaceReadinessDiagnostic,
   type PlatformPackRegistrationRecord,
@@ -32,6 +45,7 @@ import {
   type PlatformConnectorTemplate,
   type PlatformConnectorWorkspaceMode,
 } from './platformConnectorModel';
+import type { PlatformPackWorkspaceSurfaceRecord } from './platformWorkspaceSurface';
 
 export type PlatformRuntimeWorkspacePath = 'legacy' | 'pack' | 'none';
 export type PlatformRuntimeWorkspacePathStatus = 'active' | 'fallback' | 'blocked';
@@ -46,6 +60,30 @@ export interface PlatformRuntimeWorkspaceRouting {
   fallbackReasonMessage: string | null;
   diagnostics: PlatformPackWorkspaceReadinessDiagnostic[];
   packReadiness: PlatformPackWorkspaceReadiness;
+}
+
+export type PlatformRuntimeWorkspaceMountResolutionSource =
+  | 'imported-instance'
+  | 'instance-metadata'
+  | 'builtin-installation'
+  | 'registration-installation'
+  | 'connector-installation'
+  | 'connector-surface'
+  | 'unresolved';
+
+export interface PlatformRuntimeWorkspaceMount {
+  resolutionSource: PlatformRuntimeWorkspaceMountResolutionSource;
+  installationId: string | null;
+  sourceType: InstalledPlatformPackSourceType | null;
+  source: string | null;
+  packId: string | null;
+  packVersion: string | null;
+  packageDigest: string | null;
+  artifactRootPath: string | null;
+  runtimePath: string | null;
+  runtimeImportUrl: string | null;
+  iconPath: string | null;
+  workspaceSurface: PlatformPackWorkspaceSurfaceRecord | null;
 }
 
 export interface PlatformRuntimeDescriptor {
@@ -67,6 +105,7 @@ export interface PlatformRuntimeDescriptor {
   instanceRecord: PlatformInstanceRecord | null;
   runtime: PlatformCompatRuntimeApi | null;
   workspaceRouting: PlatformRuntimeWorkspaceRouting;
+  workspaceMount: PlatformRuntimeWorkspaceMount;
 }
 
 function normalizeString(value: unknown): string {
@@ -93,6 +132,16 @@ function readInstallationIdFromMetadata(value: unknown): string | null {
   const installationId = normalizeString(
     (value as { installationId?: unknown }).installationId
   );
+  return installationId || null;
+}
+
+function readInstallationIdFromPackSource(value: unknown): string | null {
+  const source = normalizeString(value);
+  if (!source.startsWith('installed-pack:')) {
+    return null;
+  }
+  const segments = source.split(':');
+  const installationId = normalizeString(segments[segments.length - 1]);
   return installationId || null;
 }
 
@@ -276,6 +325,9 @@ type PlatformRuntimeDescriptorMaps = {
   packsByConnectorId: Map<PlatformConnectorId, PlatformPackRegistrationRecord>;
   compatByConnectorId: Map<PlatformConnectorId, PlatformCompatRegistryRecord>;
   compatByPlatformId: Map<string, PlatformCompatRegistryRecord>;
+  installedRecordsByInstallationId: Map<string, InstalledPlatformPackRecord>;
+  installedRecordsByConnectorId: Map<PlatformConnectorId, InstalledPlatformPackRecord[]>;
+  importedInstancesByInstanceId: Map<string, PlatformImportedInstanceRecord>;
   instancesByConnectorId: Map<PlatformConnectorId, PlatformInstanceRecord[]>;
   instancesByPlatformId: Map<string, PlatformInstanceRecord[]>;
 };
@@ -305,6 +357,23 @@ function createPlatformRuntimeDescriptorMaps(): PlatformRuntimeDescriptorMaps {
     }
   }
 
+  const installedRecordsByInstallationId = new Map<string, InstalledPlatformPackRecord>();
+  const installedRecordsByConnectorId = new Map<
+    PlatformConnectorId,
+    InstalledPlatformPackRecord[]
+  >();
+  for (const record of listInstalledPlatformPackRecords()) {
+    installedRecordsByInstallationId.set(record.installationId, record);
+    const connectorBucket = installedRecordsByConnectorId.get(record.connectorId) ?? [];
+    connectorBucket.push(record);
+    installedRecordsByConnectorId.set(record.connectorId, connectorBucket);
+  }
+
+  const importedInstancesByInstanceId = new Map<string, PlatformImportedInstanceRecord>();
+  for (const importedRecord of listPlatformImportedInstanceRecords()) {
+    importedInstancesByInstanceId.set(importedRecord.instanceId, importedRecord);
+  }
+
   const instancesByConnectorId = new Map<PlatformConnectorId, PlatformInstanceRecord[]>();
   const instancesByPlatformId = new Map<string, PlatformInstanceRecord[]>();
   for (const instance of listPlatformInstances()) {
@@ -328,9 +397,184 @@ function createPlatformRuntimeDescriptorMaps(): PlatformRuntimeDescriptorMaps {
     packsByConnectorId,
     compatByConnectorId,
     compatByPlatformId,
+    installedRecordsByInstallationId,
+    installedRecordsByConnectorId,
+    importedInstancesByInstanceId,
     instancesByConnectorId,
     instancesByPlatformId,
   };
+}
+
+function sortInstalledRecordsForMountSelection(
+  left: InstalledPlatformPackRecord,
+  right: InstalledPlatformPackRecord
+): number {
+  const installedAtDelta = right.installedAtMs - left.installedAtMs;
+  if (installedAtDelta !== 0) {
+    return installedAtDelta;
+  }
+  return right.installationId.localeCompare(left.installationId, 'zh-CN');
+}
+
+function pickInstalledRecordForConnector(
+  connectorId: PlatformConnectorId,
+  maps: PlatformRuntimeDescriptorMaps,
+  options: {
+    preferredSourceType?: InstalledPlatformPackSourceType | null;
+  } = {}
+): InstalledPlatformPackRecord | null {
+  const records = maps.installedRecordsByConnectorId.get(connectorId) ?? [];
+  if (records.length < 1) {
+    return null;
+  }
+
+  const preferredSourceType = options.preferredSourceType ?? null;
+  const preferredRecords =
+    preferredSourceType === null
+      ? records
+      : records.filter((record) => record.sourceType === preferredSourceType);
+  const candidates = preferredRecords.length > 0 ? preferredRecords : records;
+  return candidates.slice().sort(sortInstalledRecordsForMountSelection)[0] ?? null;
+}
+
+function createPlatformRuntimeWorkspaceMountFromInstallation(input: {
+  installationId: string;
+  resolutionSource: PlatformRuntimeWorkspaceMountResolutionSource;
+  maps: PlatformRuntimeDescriptorMaps;
+}): PlatformRuntimeWorkspaceMount {
+  const installedRecord =
+    input.maps.installedRecordsByInstallationId.get(input.installationId) ??
+    getInstalledPlatformPackRecord(input.installationId);
+  const workspaceSurface = resolvePlatformPackWorkspaceSurfaceForInstallation(
+    input.installationId
+  );
+
+  return {
+    resolutionSource: input.resolutionSource,
+    installationId: input.installationId,
+    sourceType: installedRecord?.sourceType ?? null,
+    source:
+      normalizeString(installedRecord?.source) ||
+      normalizeString(workspaceSurface?.source) ||
+      null,
+    packId:
+      normalizeString(installedRecord?.packId) ||
+      normalizeString(workspaceSurface?.packId) ||
+      null,
+    packVersion:
+      normalizeString(installedRecord?.packVersion) ||
+      normalizeString(workspaceSurface?.packVersion) ||
+      null,
+    packageDigest: normalizeString(installedRecord?.packageDigest) || null,
+    artifactRootPath: normalizeString(installedRecord?.artifactRootPath) || null,
+    runtimePath: normalizeString(installedRecord?.runtimePath) || null,
+    runtimeImportUrl: normalizeString(workspaceSurface?.runtimeImportUrl) || null,
+    iconPath: normalizeString(installedRecord?.iconPath) || null,
+    workspaceSurface,
+  };
+}
+
+function createPlatformRuntimeWorkspaceMountFromConnectorSurface(
+  connectorId: PlatformConnectorId
+): PlatformRuntimeWorkspaceMount {
+  const workspaceSurface = resolvePlatformPackWorkspaceSurface(connectorId);
+  return {
+    resolutionSource: workspaceSurface ? 'connector-surface' : 'unresolved',
+    installationId: null,
+    sourceType: null,
+    source: normalizeString(workspaceSurface?.source) || null,
+    packId: normalizeString(workspaceSurface?.packId) || null,
+    packVersion: normalizeString(workspaceSurface?.packVersion) || null,
+    packageDigest: null,
+    artifactRootPath: null,
+    runtimePath: null,
+    runtimeImportUrl: normalizeString(workspaceSurface?.runtimeImportUrl) || null,
+    iconPath: null,
+    workspaceSurface,
+  };
+}
+
+function resolvePlatformWorkspaceMount(input: {
+  connectorId: PlatformConnectorId;
+  instanceRecord: PlatformInstanceRecord | null;
+  packRegistration: PlatformPackRegistrationRecord | null;
+  maps: PlatformRuntimeDescriptorMaps;
+}): PlatformRuntimeWorkspaceMount {
+  const importedInstance =
+    input.instanceRecord
+      ? input.maps.importedInstancesByInstanceId.get(input.instanceRecord.instanceId) ?? null
+      : null;
+  const importedInstallationId = importedInstance?.installationId ?? null;
+  if (importedInstallationId) {
+    return createPlatformRuntimeWorkspaceMountFromInstallation({
+      installationId: importedInstallationId,
+      resolutionSource: 'imported-instance',
+      maps: input.maps,
+    });
+  }
+
+  const metadataInstallationId = readInstallationIdFromMetadata(input.instanceRecord?.metadata);
+  if (metadataInstallationId) {
+    return createPlatformRuntimeWorkspaceMountFromInstallation({
+      installationId: metadataInstallationId,
+      resolutionSource: 'instance-metadata',
+      maps: input.maps,
+    });
+  }
+
+  if (input.instanceRecord?.instanceId.endsWith(':builtin')) {
+    const builtinRecord = pickInstalledRecordForConnector(input.connectorId, input.maps, {
+      preferredSourceType: 'builtin',
+    });
+    if (builtinRecord) {
+      return createPlatformRuntimeWorkspaceMountFromInstallation({
+        installationId: builtinRecord.installationId,
+        resolutionSource: 'builtin-installation',
+        maps: input.maps,
+      });
+    }
+  }
+
+  const registrationInstallationId = readInstallationIdFromPackSource(
+    input.packRegistration?.source
+  );
+  if (registrationInstallationId) {
+    return createPlatformRuntimeWorkspaceMountFromInstallation({
+      installationId: registrationInstallationId,
+      resolutionSource: 'registration-installation',
+      maps: input.maps,
+    });
+  }
+
+  const connectorInstalledRecord = pickInstalledRecordForConnector(
+    input.connectorId,
+    input.maps,
+    {
+      preferredSourceType:
+        input.instanceRecord?.instanceId.endsWith(':builtin') === true ? 'builtin' : null,
+    }
+  );
+  if (connectorInstalledRecord) {
+    return createPlatformRuntimeWorkspaceMountFromInstallation({
+      installationId: connectorInstalledRecord.installationId,
+      resolutionSource: 'connector-installation',
+      maps: input.maps,
+    });
+  }
+
+  return createPlatformRuntimeWorkspaceMountFromConnectorSurface(input.connectorId);
+}
+
+function resolveEffectivePlatformPackRegistration(
+  workspaceMount: PlatformRuntimeWorkspaceMount,
+  fallback: PlatformPackRegistrationRecord | null
+): PlatformPackRegistrationRecord | null {
+  const installationId = normalizeString(workspaceMount.installationId);
+  if (!installationId) {
+    return fallback;
+  }
+
+  return resolvePlatformPackRegistrationForInstallation(installationId) ?? fallback;
 }
 
 function determineSourceKind(input: {
@@ -363,15 +607,13 @@ function buildPlatformRuntimeDescriptorForConnector(
   connectorId: PlatformConnectorId,
   maps: PlatformRuntimeDescriptorMaps
 ): PlatformRuntimeDescriptor {
-  const connectorDefinition =
-    maps.definitionsByConnectorId.get(connectorId) ??
-    maps.packsByConnectorId.get(connectorId)?.definition ??
-    null;
-  const packRegistration = maps.packsByConnectorId.get(connectorId) ?? null;
+  const connectorPackRegistration = maps.packsByConnectorId.get(connectorId) ?? null;
   const compatRegistryRecord =
     maps.compatByConnectorId.get(connectorId) ??
-    (packRegistration
-      ? maps.compatByPlatformId.get(normalizePlatformId(packRegistration.platformId)) ?? null
+    (connectorPackRegistration
+      ? maps.compatByPlatformId.get(
+          normalizePlatformId(connectorPackRegistration.platformId)
+        ) ?? null
       : null) ??
     null;
   const instanceRecord =
@@ -384,6 +626,18 @@ function buildPlatformRuntimeDescriptorForConnector(
         )
       : null) ??
     null;
+  const workspaceMount = resolvePlatformWorkspaceMount({
+    connectorId,
+    instanceRecord,
+    packRegistration: connectorPackRegistration,
+    maps,
+  });
+  const packRegistration = resolveEffectivePlatformPackRegistration(
+    workspaceMount,
+    connectorPackRegistration
+  );
+  const connectorDefinition =
+    maps.definitionsByConnectorId.get(connectorId) ?? packRegistration?.definition ?? null;
 
   const platformId =
     normalizePlatformId(instanceRecord?.platformId) ||
@@ -405,6 +659,9 @@ function buildPlatformRuntimeDescriptorForConnector(
     connectorDefinition?.workspaceMode ??
     packRegistration?.definition.workspaceMode ??
     null;
+  const workspaceRouting = workspaceMount.installationId
+    ? resolvePlatformWorkspaceRoutingForInstallation(connectorId, workspaceMount.installationId)
+    : resolvePlatformWorkspaceRoutingForNormalizedConnector(connectorId);
 
   return {
     connectorId,
@@ -432,8 +689,9 @@ function buildPlatformRuntimeDescriptorForConnector(
     packRegistration,
     compatRegistryRecord,
     instanceRecord,
-    runtime: compatRegistryRecord?.runtime ?? null,
-    workspaceRouting: resolvePlatformWorkspaceRoutingForNormalizedConnector(connectorId),
+    runtime: packRegistration?.compat?.runtime ?? compatRegistryRecord?.runtime ?? null,
+    workspaceRouting,
+    workspaceMount,
   };
 }
 
@@ -451,6 +709,28 @@ function buildPlatformRuntimeDescriptorForInstance(
   }
 
   const descriptor = buildPlatformRuntimeDescriptorForConnector(connectorId, maps);
+  const workspaceMount = resolvePlatformWorkspaceMount({
+    connectorId,
+    instanceRecord,
+    packRegistration: descriptor.packRegistration,
+    maps,
+  });
+  const packRegistration = resolveEffectivePlatformPackRegistration(
+    workspaceMount,
+    descriptor.packRegistration
+  );
+  const connectorDefinition =
+    descriptor.connectorDefinition ?? packRegistration?.definition ?? null;
+  const workspaceKind =
+    normalizeString(connectorDefinition?.workspaceKind) ||
+    normalizeString(packRegistration?.definition.workspaceKind) ||
+    descriptor.workspaceKind ||
+    null;
+  const workspaceMode =
+    connectorDefinition?.workspaceMode ??
+    packRegistration?.definition.workspaceMode ??
+    descriptor.workspaceMode ??
+    null;
   return {
     ...descriptor,
     platformId: normalizePlatformId(instanceRecord.platformId) || descriptor.platformId,
@@ -458,10 +738,30 @@ function buildPlatformRuntimeDescriptorForInstance(
     authState: mapInstanceAuthState(instanceRecord.auth.status),
     availability: instanceRecord.availability,
     availabilityMessage: instanceRecord.availabilityMessage,
+    workspaceKind,
+    workspaceMode,
+    platformTemplate: resolvePlatformConnectorTemplate({
+      platformTemplate:
+        connectorDefinition?.platformTemplate ?? packRegistration?.definition.platformTemplate,
+      workspaceKind: workspaceKind ?? 'generic',
+    }),
+    sourceKind: determineSourceKind({
+      connectorDefinition,
+      packRegistration,
+      compatRegistryRecord: descriptor.compatRegistryRecord,
+    }),
+    connectorDefinition,
+    packRegistration,
     instanceRecord,
-    workspaceRouting:
-      resolvePlatformWorkspaceRoutingForInstanceId(instanceRecord.instanceId) ??
-      descriptor.workspaceRouting,
+    runtime: packRegistration?.compat?.runtime ?? descriptor.runtime,
+    workspaceRouting: workspaceMount.installationId
+      ? resolvePlatformWorkspaceRoutingForInstallation(
+          connectorId,
+          workspaceMount.installationId
+        )
+      : resolvePlatformWorkspaceRoutingForInstanceId(instanceRecord.instanceId) ??
+        descriptor.workspaceRouting,
+    workspaceMount,
   };
 }
 
@@ -523,9 +823,18 @@ export function resolvePlatformWorkspaceRoutingForInstanceId(
     return null;
   }
 
-  const installationId = readInstallationIdFromMetadata(instanceRecord.metadata);
-  if (installationId) {
-    return resolvePlatformWorkspaceRoutingForInstallation(connectorId, installationId);
+  const maps = createPlatformRuntimeDescriptorMaps();
+  const workspaceMount = resolvePlatformWorkspaceMount({
+    connectorId,
+    instanceRecord,
+    packRegistration: maps.packsByConnectorId.get(connectorId) ?? null,
+    maps,
+  });
+  if (workspaceMount.installationId) {
+    return resolvePlatformWorkspaceRoutingForInstallation(
+      connectorId,
+      workspaceMount.installationId
+    );
   }
 
   return resolvePlatformWorkspaceRoutingForNormalizedConnector(connectorId);

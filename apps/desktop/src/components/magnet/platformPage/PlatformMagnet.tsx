@@ -44,9 +44,7 @@ import {
   listPlatformRenderSelections,
   pickMusicPlatformGlobalCacheDirectory,
   readPlatformLoginRegistry,
-  refreshAndEmitPlatformConnectorAuthSnapshot,
-  resolvePlatformPackWorkspaceSurface,
-  resolvePlatformPackWorkspaceSurfaceForInstallation,
+  refreshPlatformInstanceAuthSnapshot,
   resolvePlatformConnectorTemplate,
   resolvePlatformRuntimeDescriptorByInstanceId,
   setMusicPlatformConnectorWorkspaceOwnershipMode,
@@ -67,6 +65,7 @@ import {
   type MusicPlatformGlobalCacheSettings,
   type MusicPlatformWorkspaceOwnershipMode,
   type PlatformRuntimeDescriptor,
+  type PlatformRuntimeWorkspaceMount,
 } from '../../../modules/music-platform';
 import {
   getMusicPlatformNowMs,
@@ -77,7 +76,6 @@ import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import {
   buildPlatformAuthSnapshotMapByInstanceId,
   filterMountedPlatformRegistrationItems,
-  resolveActiveMountedPlatformRegistrationItem,
 } from '../shared/platformRegistrationState';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 import {
@@ -144,6 +142,10 @@ function cx(...values: Array<string | false | null | undefined>): string {
 function readTelemetryErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function normalizePlatformIdKey(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
 function formatTrackDuration(seconds: number | undefined): string {
@@ -313,6 +315,36 @@ function resolvePreferredInstanceId(
   }
 
   return items[0]?.entry.instanceId ?? null;
+}
+
+function resolvePreferredRegisteredItemForConnector(
+  connectorId: string | null | undefined,
+  items: RegisteredPlatformItem[],
+  preferredInstanceId?: string | null
+): RegisteredPlatformItem | null {
+  const normalizedConnectorId = typeof connectorId === 'string' ? connectorId.trim() : '';
+  if (!normalizedConnectorId) {
+    return null;
+  }
+
+  const candidates = items.filter((item) => item.entry.connectorId === normalizedConnectorId);
+  if (candidates.length < 1) {
+    return null;
+  }
+
+  if (preferredInstanceId) {
+    const preferred = candidates.find((item) => item.entry.instanceId === preferredInstanceId);
+    if (preferred) {
+      return preferred;
+    }
+  }
+
+  return (
+    candidates.find((item) => item.renderSelection?.mounted === true) ??
+    candidates.find((item) => item.snapshot?.authState === 'authorized') ??
+    candidates[0] ??
+    null
+  );
 }
 
 function getConnectorVisualMeta(
@@ -511,6 +543,21 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const [selectedLocalPlaylistId, setSelectedLocalPlaylistId] = useState<string | null>(null);
   const [playlistError, setPlaylistError] = useState<string | null>(null);
   const createNameInputRef = useRef<HTMLInputElement | null>(null);
+  const activePageRef = useRef(activePage);
+  const settingsOpenRef = useRef(settingsOpen);
+  const platformInstanceCountRef = useRef(platformInstances.length);
+
+  useEffect(() => {
+    activePageRef.current = activePage;
+  }, [activePage]);
+
+  useEffect(() => {
+    settingsOpenRef.current = settingsOpen;
+  }, [settingsOpen]);
+
+  useEffect(() => {
+    platformInstanceCountRef.current = platformInstances.length;
+  }, [platformInstances.length]);
 
   useEffect(() => {
     setPlatformDefinitions(listPlatformConnectorDefinitions());
@@ -568,9 +615,9 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
           requestId,
           refreshAuth: options?.refreshAuth === true,
           viewCount: nextViews.length,
-          platformInstanceCount: platformInstances.length,
-          activePage,
-          settingsOpen,
+          platformInstanceCount: platformInstanceCountRef.current,
+          activePage: activePageRef.current,
+          settingsOpen: settingsOpenRef.current,
         },
       });
     } catch (error) {
@@ -581,9 +628,9 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
           requestId,
           refreshAuth: options?.refreshAuth === true,
           durationMs: Math.max(0, Math.round(getMusicPlatformNowMs() - startedAtMs)),
-          platformInstanceCount: platformInstances.length,
-          activePage,
-          settingsOpen,
+          platformInstanceCount: platformInstanceCountRef.current,
+          activePage: activePageRef.current,
+          settingsOpen: settingsOpenRef.current,
         },
       });
     } finally {
@@ -591,7 +638,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
         setConnectorViewsLoading(false);
       }
     }
-  }, [activePage, platformInstances.length, settingsOpen, telemetry]);
+  }, [telemetry]);
 
   useEffect(() => {
     const syncWorkspacePlaylists = (playlists: AudioPlaylist[]): void => {
@@ -672,9 +719,18 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     });
   }, []);
 
+  const platformInstanceIdentityKey = useMemo(
+    () =>
+      platformInstances
+        .map((instance) => instance.instanceId)
+        .sort((left, right) => left.localeCompare(right, 'zh-CN'))
+        .join('\u001f'),
+    [platformInstances]
+  );
+
   useEffect(() => {
     void refreshConnectorViews();
-  }, [platformInstances, refreshConnectorViews]);
+  }, [platformInstanceIdentityKey, refreshConnectorViews]);
 
   useEffect(() => {
     if (!launcherOpen && !navOpen) return undefined;
@@ -703,7 +759,15 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     [renderSelections]
   );
   const contractRecordsByPlatformId = useMemo(
-    () => new Map(contractRecords.map((record) => [record.platformId, record])),
+    () =>
+      new Map(
+        contractRecords
+          .map((record) => [
+            normalizePlatformIdKey(record.platformId),
+            record,
+          ] as const)
+          .filter(([platformId]) => platformId.length > 0)
+      ),
     [contractRecords]
   );
   const platformInstancesById = useMemo(
@@ -722,7 +786,9 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             ? renderSelectionsByInstanceId.get(instance.instanceId) ?? null
             : null;
           const contractRecord = instance
-            ? contractRecordsByPlatformId.get(instance.platformId) ?? null
+            ? contractRecordsByPlatformId.get(
+                normalizePlatformIdKey(instance.platformId)
+              ) ?? null
             : null;
           const snapshot = authSnapshotsByInstanceId[entry.instanceId] ?? null;
 
@@ -748,6 +814,10 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   );
   const mountedRegisteredItems = useMemo(
     () => filterMountedPlatformRegistrationItems(registeredItems),
+    [registeredItems]
+  );
+  const registeredItemsByInstanceId = useMemo(
+    () => new Map(registeredItems.map((item) => [item.entry.instanceId, item] as const)),
     [registeredItems]
   );
 
@@ -805,11 +875,14 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     [runtimeDescriptors]
   );
   const activeItem = useMemo(
-    () => resolveActiveMountedPlatformRegistrationItem(selectedInstanceId, mountedRegisteredItems),
-    [mountedRegisteredItems, selectedInstanceId]
+    () =>
+      (selectedInstanceId
+        ? registeredItemsByInstanceId.get(selectedInstanceId) ?? null
+        : null) ??
+      registeredItems[0] ??
+      null,
+    [registeredItems, registeredItemsByInstanceId, selectedInstanceId]
   );
-  const activeDefinition = activeItem?.definition ?? null;
-  const activeContractRecord = activeItem?.contractRecord ?? null;
   const activeInstance = activeItem?.instance ?? null;
   const activeRenderSelection = activeItem?.renderSelection ?? null;
   const activeFacade = activeItem?.facade ?? null;
@@ -827,6 +900,15 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       ? runtimeDescriptorsByConnectorId.get(activeConnectorId as PlatformConnectorId) ?? null
       : null;
   }, [activeConnectorId, activeInstanceId, runtimeDescriptorsByConnectorId]);
+  const activeDefinition =
+    activeItem?.definition ??
+    activeRuntimeDescriptor?.connectorDefinition ??
+    activeRuntimeDescriptor?.packRegistration?.definition ??
+    null;
+  const activeContractRecord =
+    activeItem?.contractRecord ??
+    activeRuntimeDescriptor?.compatRegistryRecord ??
+    null;
   const activeWorkspaceRouteState = toPlatformWorkspaceRouteDisplayState(
     activeRuntimeDescriptor?.workspaceRouting
   );
@@ -839,25 +921,17 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const activeWorkspacePackBlocked = shouldRenderBlockedPackWorkspace(
     activeWorkspaceRouteState
   );
-  const activeInstallationId =
-    typeof activeRuntimeDescriptor?.instanceRecord?.metadata?.installationId === 'string' &&
-    activeRuntimeDescriptor.instanceRecord.metadata.installationId.trim().length > 0
-      ? activeRuntimeDescriptor.instanceRecord.metadata.installationId.trim()
-      : null;
+  const activeWorkspaceMount: PlatformRuntimeWorkspaceMount | null =
+    activeRuntimeDescriptor?.workspaceMount ?? null;
+  const activeInstallationId = activeWorkspaceMount?.installationId ?? null;
   const activePackWorkspaceSurface = useMemo(
     () => {
       if (!activePackWorkspacePath) {
         return null;
       }
-      if (activeInstallationId) {
-        return resolvePlatformPackWorkspaceSurfaceForInstallation(activeInstallationId);
-      }
-      if (activeConnectorId) {
-        return resolvePlatformPackWorkspaceSurface(activeConnectorId);
-      }
-      return null;
+      return activeWorkspaceMount?.workspaceSurface ?? null;
     },
-    [activeConnectorId, activeInstallationId, activePackWorkspacePath]
+    [activePackWorkspacePath, activeWorkspaceMount]
   );
   const activeWorkspaceConnectorId =
     activeRenderSelection?.mounted === true && activeConnectorId ? activeConnectorId : null;
@@ -1221,7 +1295,11 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
       // Local playlists should still land in a renderable workspace context.
       // If the resolved connector is authorized but not mounted yet, auto-mount it.
-      const targetItem = registeredItems.find((item) => item.entry.connectorId === targetConnectorId) ?? null;
+      const targetItem = resolvePreferredRegisteredItemForConnector(
+        targetConnectorId,
+        registeredItems,
+        selectedInstanceId
+      );
       const canAutoMount =
         connectorId === null &&
         Boolean(targetItem?.instance) &&
@@ -1236,7 +1314,14 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       setSubmittedQuery('');
       setDrawerOpen(false);
     },
-    [activeConnectorId, activePage, activeWorkspaceRuntimeAdapter, mountedRegisteredItems, registeredItems]
+    [
+      activeConnectorId,
+      activePage,
+      activeWorkspaceRuntimeAdapter,
+      mountedRegisteredItems,
+      registeredItems,
+      selectedInstanceId,
+    ]
   );
 
   const handleSelectWorkspaceDrawerFolder = useCallback(
@@ -1256,14 +1341,17 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
 
       selectDrawerFolder(folderId);
       setSelectedInstanceId(
-        registeredItems.find((item) => item.entry.connectorId === connectorId)?.entry.instanceId ??
-          null
+        resolvePreferredRegisteredItemForConnector(
+          connectorId,
+          registeredItems,
+          selectedInstanceId
+        )?.entry.instanceId ?? null
       );
       setActivePage('instance');
       setSubmittedQuery('');
       setDrawerOpen(false);
     },
-    [activeWorkspaceRuntimeAdapter, registeredItems]
+    [activeWorkspaceRuntimeAdapter, registeredItems, selectedInstanceId]
   );
 
   const handleCreateLocalPlaylist = useCallback(() => {
@@ -1316,8 +1404,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     try {
       await Promise.all(
         registeredItems.map(async (item) => {
-          if (!item.definition) return;
-          await refreshAndEmitPlatformConnectorAuthSnapshot(item.definition.connectorId);
+          await refreshPlatformInstanceAuthSnapshot(item.entry.instanceId);
         })
       );
       await refreshConnectorViews();
@@ -1447,7 +1534,10 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const activeConnectorLabel =
     activeDefinition?.labelKey
       ? t(activeDefinition.labelKey)
-      : activeFacade?.displayName ?? activeInstance?.displayName ?? '';
+      : activeFacade?.displayName ??
+        activeInstance?.displayName ??
+        activeRuntimeDescriptor?.displayName ??
+        '';
   const activeAuthLabel = t(toAuthLabelKey(resolveItemAuthState(activeItem)));
   const activeVisualMeta = resolveConnectorVisualMeta(activeConnectorId, activeDefinition);
   const activeMounted = activeRenderSelection?.mounted === true;
@@ -1632,22 +1722,29 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     if (!activeConnectorId || activePage === 'local') {
       return null;
     }
-    if (activeWorkspaceRouteState.status === 'active') {
+    const activePackWorkspace =
+      activeWorkspaceRouteState.status === 'active' && activePackWorkspacePath;
+    if (activeWorkspaceRouteState.status === 'active' && !activePackWorkspace) {
       return null;
     }
 
     const blocked = activeWorkspaceRouteState.status === 'blocked';
+    const active = activeWorkspaceRouteState.status === 'active';
     return (
       <div
         className={cx(
           'mb-3 rounded-[18px] border px-4 py-3 text-sm',
-          blocked
+          active
+            ? 'border-sky-300/20 bg-sky-300/10 text-sky-50'
+            : blocked
             ? 'border-rose-400/20 bg-rose-400/10 text-rose-100'
             : 'border-amber-300/20 bg-amber-300/10 text-amber-50'
         )}
       >
         <div className="font-medium">
-          {blocked
+          {active
+            ? t('magnet.platform.workspace.notice.activeTitle')
+            : blocked
             ? t('magnet.platform.workspace.notice.blockedTitle')
             : t('magnet.platform.workspace.notice.fallbackTitle')}
         </div>
@@ -1661,6 +1758,35 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             status: formatWorkspaceStatusLabel(activeWorkspaceRouteState.status, t),
           })}
         </div>
+        {activeWorkspaceMount ? (
+          <>
+            <div className="mt-1 text-xs opacity-80">
+              {t('magnet.platform.workspace.diagnostic.mountTarget', {
+                resolution: activeWorkspaceMount.resolutionSource,
+                installationId: activeInstallationId ?? t('common.state.unknown'),
+                sourceType: activeWorkspaceMount.sourceType ?? t('common.state.unknown'),
+                source: activeWorkspaceMount.source ?? t('common.state.unknown'),
+                pack:
+                  activeWorkspaceMount.packId && activeWorkspaceMount.packVersion
+                    ? `${activeWorkspaceMount.packId}@${activeWorkspaceMount.packVersion}`
+                    : activeWorkspaceMount.packId ??
+                      activeWorkspaceMount.packVersion ??
+                      t('common.state.unknown'),
+              })}
+            </div>
+            <div className="mt-1 break-all text-xs opacity-80">
+              {t('magnet.platform.workspace.diagnostic.mountPaths', {
+                artifactRoot:
+                  activeWorkspaceMount.artifactRootPath ?? t('common.state.unknown'),
+                runtimePath:
+                  activeWorkspaceMount.runtimePath ?? t('common.state.unknown'),
+                runtimeImportUrl:
+                  activeWorkspaceMount.runtimeImportUrl ??
+                  t('common.state.unknown'),
+              })}
+            </div>
+          </>
+        ) : null}
         {activeWorkspaceRouteState.fallbackReasonCode ||
         activeWorkspaceRouteState.fallbackReasonMessage ? (
           <div className="mt-1 text-xs opacity-80">
@@ -1727,6 +1853,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
           displayName={activeConnectorLabel}
           instanceId={activePackWorkspaceInstanceId}
           surface={activePackWorkspaceSurface}
+          workspaceMount={activeWorkspaceMount}
         />
       );
     }

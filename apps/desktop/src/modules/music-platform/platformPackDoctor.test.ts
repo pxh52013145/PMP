@@ -4,6 +4,7 @@ import type {
   PlatformCompatContractFile,
   PlatformCompatRuntimeApi,
   PlatformInstanceRecord,
+  PlatformRenderSelectionRecord,
 } from '@pixel-matrix/plugin-platform-contracts';
 import type { PlatformConnectorDefinition } from './connectorAuth';
 import type { InstalledPlatformPackRecord } from './installedPlatformPacks';
@@ -18,6 +19,7 @@ import type {
 } from './platformPackRegistry';
 import type {
   PlatformRuntimeDescriptor,
+  PlatformRuntimeWorkspaceMount,
   PlatformRuntimeWorkspaceRouting,
 } from './platformRuntimeDescriptor';
 import type { PlatformPackWorkspaceSurfaceRecord } from './platformWorkspaceSurface';
@@ -34,6 +36,7 @@ const {
   getPlatformPackStartupHealthMock,
   inspectBuiltinPlatformPackStoreStateMock,
   inspectPlatformPackWorkspaceReadinessForInstallationMock,
+  inspectPlatformRenderSelectionPersistenceMock,
   listBuiltinPlatformPackAssetsMock,
   listPlatformPackReadinessDiagnosticsMock,
   listPlatformPackRegistrationsMock,
@@ -108,6 +111,11 @@ const {
       diagnostics: [],
     })
   ),
+  inspectPlatformRenderSelectionPersistenceMock: vi.fn(() => ({
+    initialized: false,
+    live: [] as PlatformRenderSelectionRecord[],
+    persisted: [] as PlatformRenderSelectionRecord[],
+  })),
   listPlatformPackReadinessDiagnosticsMock: vi.fn(
     (): PlatformPackReadinessDiagnostic[] => []
   ),
@@ -208,6 +216,41 @@ const {
           diagnostics: [],
         },
       },
+      workspaceMount: {
+        resolutionSource: 'instance-metadata',
+        installationId: 'installation-netease-1',
+        sourceType: 'external',
+        source: 'file:netease.pmpp',
+        packId: 'builtin-netease',
+        packVersion: '1.0.0',
+        packageDigest: 'digest-1',
+        artifactRootPath: 'D:/app/netease',
+        runtimePath: 'D:/app/netease/runtime.js',
+        runtimeImportUrl: 'asset://runtime/installation-netease-1',
+        iconPath: 'D:/app/netease/icon.svg',
+        workspaceSurface: {
+          connectorId: 'connector.platform.netease',
+          platformId: 'netease',
+          displayName: 'Netease',
+          packId: 'builtin-netease',
+          packVersion: '1.0.0',
+          source: 'file:netease.pmpp',
+          runtimeCode: 'export {}',
+          runtimeImportUrl: 'asset://runtime/installation-netease-1',
+          workspace: {
+            ownership: 'pack',
+            root: {
+              viewId: 'workspace.root',
+              viewType: 'music-platform.workspace-root',
+            },
+          },
+          root: {
+            viewId: 'workspace.root',
+            viewType: 'music-platform.workspace-root',
+          },
+          requiredRuntimeCarrier: 'webview-frame',
+        },
+      },
     })
   ),
   resolvePlatformWorkspaceRoutingForConnectorMock: vi.fn(
@@ -300,6 +343,10 @@ vi.mock('./platformPackRegistry', () => ({
   listPlatformPackRegistrations: listPlatformPackRegistrationsMock,
   resolvePlatformPackWorkspaceSurfaceForInstallation:
     resolvePlatformPackWorkspaceSurfaceForInstallationMock,
+}));
+
+vi.mock('./renderSelectionRegistry', () => ({
+  inspectPlatformRenderSelectionPersistence: inspectPlatformRenderSelectionPersistenceMock,
 }));
 
 vi.mock('./platformRuntimeDescriptor', () => ({
@@ -490,6 +537,58 @@ function createDescriptor(runtime: PlatformCompatRuntimeApi): PlatformRuntimeDes
         diagnostics: [],
       },
     },
+    workspaceMount: createWorkspaceMount(),
+  };
+}
+
+function createWorkspaceMount(
+  overrides: Partial<PlatformRuntimeWorkspaceMount> = {}
+): PlatformRuntimeWorkspaceMount {
+  const hasRuntimeImportUrlOverride = Object.prototype.hasOwnProperty.call(
+    overrides,
+    'runtimeImportUrl'
+  );
+  const workspaceSurface =
+    overrides.workspaceSurface === undefined
+      ? ({
+          connectorId: 'connector.platform.netease',
+          platformId: 'netease',
+          displayName: 'Netease',
+          packId: 'builtin-netease',
+          packVersion: '1.0.0',
+          source: 'builtin-pack:netease',
+          runtimeCode: 'export {}',
+          runtimeImportUrl: 'asset://runtime/installation-netease-1',
+          workspace: {
+            ownership: 'pack' as const,
+            root: {
+              viewId: 'workspace.root',
+              viewType: 'music-platform.workspace-root',
+            },
+          },
+          root: {
+            viewId: 'workspace.root',
+            viewType: 'music-platform.workspace-root',
+          },
+          requiredRuntimeCarrier: 'webview-frame' as const,
+        } satisfies PlatformPackWorkspaceSurfaceRecord)
+      : overrides.workspaceSurface;
+
+  return {
+    resolutionSource: overrides.resolutionSource ?? 'builtin-installation',
+    installationId: overrides.installationId ?? 'installation-netease-1',
+    sourceType: overrides.sourceType ?? 'builtin',
+    source: overrides.source ?? 'builtin-pack:netease',
+    packId: overrides.packId ?? 'builtin-netease',
+    packVersion: overrides.packVersion ?? '1.0.0',
+    packageDigest: overrides.packageDigest ?? 'digest-1',
+    artifactRootPath: overrides.artifactRootPath ?? 'D:/app/netease',
+    runtimePath: overrides.runtimePath ?? 'D:/app/netease/runtime.js',
+    runtimeImportUrl: hasRuntimeImportUrlOverride
+      ? overrides.runtimeImportUrl ?? null
+      : 'asset://runtime/installation-netease-1',
+    iconPath: overrides.iconPath ?? 'D:/app/netease/icon.svg',
+    workspaceSurface,
   };
 }
 
@@ -693,6 +792,11 @@ describe('platformPackDoctor', () => {
       })
     );
     listPlatformPackReadinessDiagnosticsMock.mockReturnValue([]);
+    inspectPlatformRenderSelectionPersistenceMock.mockReturnValue({
+      initialized: false,
+      live: [],
+      persisted: [],
+    });
     inspectBuiltinPlatformPackStoreStateMock.mockResolvedValue({
       indexAvailable: true,
       current: true,
@@ -1242,11 +1346,91 @@ describe('platformPackDoctor', () => {
                 ],
               },
             },
+      workspaceMount:
+        instanceId === 'qqmusic:imported-a'
+          ? createWorkspaceMount({
+              resolutionSource: 'imported-instance',
+              installationId: 'installation-qqmusic-a',
+              sourceType: 'external',
+              source: 'file:qqmusic-a.pmpp',
+              packId: 'external-qqmusic',
+              packageDigest: 'digest-1',
+              artifactRootPath: 'D:/app/qqmusic/a',
+              runtimePath: 'D:/app/qqmusic/a/runtime.js',
+              runtimeImportUrl: 'asset://runtime/installation-qqmusic-a',
+              iconPath: 'D:/app/qqmusic/a/icon.svg',
+              workspaceSurface: {
+                connectorId: 'connector.platform.qqmusic',
+                platformId: 'qqmusic',
+                displayName: 'Qqmusic',
+                packId: 'external-qqmusic',
+                packVersion: '1.0.0',
+                source: 'installed-pack:external-qqmusic:installation-qqmusic-a',
+                runtimeCode: 'export {}',
+                runtimeImportUrl: 'asset://runtime/installation-qqmusic-a',
+                workspace: {
+                  ownership: 'pack',
+                  root: {
+                    viewId: 'qqmusic.workspace.root',
+                    viewType: 'music-platform.workspace-root',
+                  },
+                },
+                root: {
+                  viewId: 'qqmusic.workspace.root',
+                  viewType: 'music-platform.workspace-root',
+                },
+                requiredRuntimeCarrier: 'webview-frame',
+              },
+            })
+          : createWorkspaceMount({
+              resolutionSource: 'imported-instance',
+              installationId: 'installation-qqmusic-b',
+              sourceType: 'external',
+              source: 'file:qqmusic-b.pmpp',
+              packId: 'external-qqmusic',
+              packageDigest: 'digest-1',
+              artifactRootPath: 'D:/app/qqmusic/b',
+              runtimePath: 'D:/app/qqmusic/b/runtime.js',
+              runtimeImportUrl: null,
+              iconPath: 'D:/app/qqmusic/b/icon.svg',
+              workspaceSurface: null,
+            }),
     }) as PlatformRuntimeDescriptor);
     resolvePlatformWorkspaceRoutingForInstanceIdMock.mockImplementation(
       (instanceId: string): PlatformRuntimeWorkspaceRouting | null =>
         resolvePlatformRuntimeDescriptorByInstanceIdMock(instanceId)?.workspaceRouting ?? null
     );
+    inspectPlatformRenderSelectionPersistenceMock.mockReturnValue({
+      initialized: true,
+      live: [
+        {
+          instanceId: 'qqmusic:imported-a',
+          mounted: true,
+          mountedAtMs: 111,
+          order: 0,
+        },
+        {
+          instanceId: 'qqmusic:imported-b',
+          mounted: false,
+          mountedAtMs: 222,
+          order: 1,
+        },
+      ],
+      persisted: [
+        {
+          instanceId: 'qqmusic:imported-a',
+          mounted: true,
+          mountedAtMs: 111,
+          order: 0,
+        },
+        {
+          instanceId: 'qqmusic:imported-b',
+          mounted: true,
+          mountedAtMs: 222,
+          order: 1,
+        },
+      ],
+    });
 
     const report = await inspectPlatformPackDoctor();
     const connector = report.connectors[0];
@@ -1263,6 +1447,42 @@ describe('platformPackDoctor', () => {
     ]);
     expect(connector?.instances[0]?.workspaceRouting.path).toBe('pack');
     expect(connector?.instances[1]?.workspaceRouting.status).toBe('fallback');
+    expect(connector?.instances[0]?.workspaceMount.installationId).toBe(
+      'installation-qqmusic-a'
+    );
+    expect(connector?.instances[0]?.renderSelection).toEqual(
+      expect.objectContaining({
+        registryInitialized: true,
+        currentPresent: true,
+        currentMounted: true,
+        persistedPresent: true,
+        persistedMounted: true,
+        inSync: true,
+      })
+    );
+    expect(connector?.instances[1]?.renderSelection).toEqual(
+      expect.objectContaining({
+        registryInitialized: true,
+        currentPresent: true,
+        currentMounted: false,
+        persistedPresent: true,
+        persistedMounted: true,
+        inSync: false,
+      })
+    );
+    expect(connector?.instances[1]?.workspaceMount.runtimeImportUrl).toBeNull();
+    expect(connector?.instances[1]?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'render-selection.persistence.mismatch',
+          severity: 'warn',
+          fields: expect.objectContaining({
+            currentMounted: false,
+            persistedMounted: true,
+          }),
+        }),
+      ])
+    );
     expect(connector?.installations[0]?.workspaceSurface.resolved).toBe(true);
     expect(connector?.installations[1]?.workspaceSurface.resolved).toBe(false);
   });

@@ -4478,10 +4478,16 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
         return resultOk({
           definitions: listPlatformConnectorDefinitions(),
         });
-      case 'listAuthSnapshots':
+      case 'listAuthSnapshots': {
+        const payload = asObject(request.payload);
+        const forceRefresh =
+          payload?.refresh === true || payload?.forceRefresh === true;
         return resultOk({
-          snapshots: await listPlatformInstanceAuthSnapshots({ refresh: true }),
+          snapshots: await listPlatformInstanceAuthSnapshots({
+            refresh: forceRefresh,
+          }),
         });
+      }
       case 'getAuthSnapshot': {
         const payload = asObject(request.payload);
         const connectorId = asNonEmptyString(payload?.connectorId);
@@ -4489,12 +4495,15 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
           instanceId: asNonEmptyString(payload?.instanceId),
           connectorId,
         });
+        const forceRefresh =
+          payload?.refresh === true || payload?.forceRefresh === true;
         if (!instanceId) {
           return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
         }
-        const snapshot =
-          (await refreshPlatformInstanceAuthSnapshot(instanceId)) ??
-          getPlatformInstanceAuthSnapshot(instanceId);
+        const cachedSnapshot = getPlatformInstanceAuthSnapshot(instanceId);
+        const snapshot = forceRefresh
+          ? (await refreshPlatformInstanceAuthSnapshot(instanceId)) ?? cachedSnapshot
+          : cachedSnapshot ?? (await refreshPlatformInstanceAuthSnapshot(instanceId));
         return resultOk({
           connectorId,
           instanceId,

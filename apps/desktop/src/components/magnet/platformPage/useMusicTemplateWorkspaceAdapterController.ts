@@ -9,7 +9,6 @@ import type { MusicTemplatePlaybackSettingsContentProps } from './MusicTemplateP
 import type { MusicTemplateWorkspaceProps } from './MusicTemplateWorkspace';
 import type { MusicTemplateWorkspaceToolbarProps } from './MusicTemplateWorkspaceAdapter';
 import {
-  normalizeMusicTemplateQualityKey,
   resolveMusicTemplateQualityLabelKey,
   resolveMusicTemplateQualityProbeSourceLocator,
   type MusicTemplateRuntimeTarget,
@@ -20,6 +19,25 @@ import { useMusicTemplatePlaybackQuality } from './useMusicTemplatePlaybackQuali
 import { useMusicTemplateWorkspaceModel } from './useMusicTemplateWorkspaceModel';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
+
+function resolveMusicTemplateQualityDisplayLabel(
+  qualityKey: string,
+  qualityLabel: string | null | undefined,
+  t: Translator
+): string {
+  const normalizedKey = qualityKey.trim();
+  const normalizedLabel = qualityLabel?.trim();
+  if (normalizedLabel && normalizedLabel.toLowerCase() !== normalizedKey.toLowerCase()) {
+    return normalizedLabel;
+  }
+
+  const fallbackLabelKey = resolveMusicTemplateQualityLabelKey(qualityKey);
+  if (fallbackLabelKey) {
+    return t(fallbackLabelKey);
+  }
+
+  return normalizedLabel || normalizedKey || t('magnet.platform.music-template.quality.option.auto');
+}
 
 function formatDuration(seconds: number | undefined): string {
   if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
@@ -225,8 +243,8 @@ export function useMusicTemplateWorkspaceAdapterController(
     qualitySaving: quality.playbackQualitySaving,
     qualityError: quality.playbackQualityError,
     qualityState: quality.playbackQualityState,
-    qualityLabelForKey: (qualityKey) =>
-      t(resolveMusicTemplateQualityLabelKey(normalizeMusicTemplateQualityKey(qualityKey))),
+    qualityLabelForKey: (qualityKey, qualityLabel) =>
+      resolveMusicTemplateQualityDisplayLabel(qualityKey, qualityLabel, t),
     onQualityHintChange: (qualityKey) => {
       void quality.setPlaybackQualityPreference(qualityKey);
     },

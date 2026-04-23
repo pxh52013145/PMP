@@ -3618,6 +3618,16 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                                         })}
                                       </p>
                                       <p className="settings-card-note">
+                                        {t(
+                                          'debug.center.musicPlatformPack.doctor.installationPackageDigest',
+                                          {
+                                            packageDigest: formatOptionalText(
+                                              installation.packageDigest
+                                            ),
+                                          }
+                                        )}
+                                      </p>
+                                      <p className="settings-card-note">
                                         {t('debug.center.musicPlatformPack.doctor.installationArtifacts', {
                                           artifactRoot: formatOptionalText(
                                             installation.artifactRoot.path
@@ -3668,9 +3678,8 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                                           runtimeCarrier: formatOptionalText(
                                             installation.workspaceSurface.requiredRuntimeCarrier
                                           ),
-                                          runtimeImportUrl: formatNullableToggleState(
-                                            installation.workspaceSurface.runtimeImportUrlPresent,
-                                            t
+                                          runtimeImportUrl: formatOptionalText(
+                                            installation.workspaceSurface.runtimeImportUrl
                                           ),
                                         })}
                                       </p>
@@ -3891,6 +3900,113 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                                             t
                                           ),
                                         })}
+                                      </p>
+                                      <p className="settings-card-note">
+                                        {t('debug.center.musicPlatformPack.doctor.instanceMount', {
+                                          resolutionSource: formatOptionalText(
+                                            instance.workspaceMount.resolutionSource
+                                          ),
+                                          installationId: formatOptionalText(
+                                            instance.workspaceMount.installationId
+                                          ),
+                                          sourceType: formatOptionalText(
+                                            instance.workspaceMount.sourceType
+                                          ),
+                                          source: formatOptionalText(
+                                            instance.workspaceMount.source
+                                          ),
+                                          pack:
+                                            instance.workspaceMount.packId ||
+                                            instance.workspaceMount.packVersion
+                                              ? `${formatOptionalText(
+                                                  instance.workspaceMount.packId
+                                                )}@${formatOptionalText(
+                                                  instance.workspaceMount.packVersion
+                                                )}`
+                                              : '-',
+                                          packageDigest: formatOptionalText(
+                                            instance.workspaceMount.packageDigest
+                                          ),
+                                        })}
+                                      </p>
+                                      <p className="settings-card-note">
+                                        {t('debug.center.musicPlatformPack.doctor.instanceMountPaths', {
+                                          artifactRoot: formatOptionalText(
+                                            instance.workspaceMount.artifactRootPath
+                                          ),
+                                          runtimePath: formatOptionalText(
+                                            instance.workspaceMount.runtimePath
+                                          ),
+                                          runtimeImportUrl: formatOptionalText(
+                                            instance.workspaceMount.runtimeImportUrl
+                                          ),
+                                          iconPath: formatOptionalText(
+                                            instance.workspaceMount.iconPath
+                                          ),
+                                          surfaceResolved: formatNullableToggleState(
+                                            instance.workspaceMount.surfaceResolved,
+                                            t
+                                          ),
+                                          surfaceSource: formatOptionalText(
+                                            instance.workspaceMount.surfaceSource
+                                          ),
+                                          rootViewId: formatOptionalText(
+                                            instance.workspaceMount.rootViewId
+                                          ),
+                                          viewType: formatOptionalText(
+                                            instance.workspaceMount.viewType
+                                          ),
+                                        })}
+                                      </p>
+                                      <p className="settings-card-note">
+                                        {t(
+                                          'debug.center.musicPlatformPack.doctor.instanceRenderSelectionCurrent',
+                                          {
+                                            registryReady: formatNullableToggleState(
+                                              instance.renderSelection.registryInitialized,
+                                              t
+                                            ),
+                                            present: formatNullableToggleState(
+                                              instance.renderSelection.currentPresent,
+                                              t
+                                            ),
+                                            mounted: formatNullableToggleState(
+                                              instance.renderSelection.currentMounted,
+                                              t
+                                            ),
+                                            mountedAt: formatDebugTimestamp(
+                                              instance.renderSelection.currentMountedAtMs
+                                            ),
+                                            order: formatOptionalText(
+                                              instance.renderSelection.currentOrder
+                                            ),
+                                          }
+                                        )}
+                                      </p>
+                                      <p className="settings-card-note">
+                                        {t(
+                                          'debug.center.musicPlatformPack.doctor.instanceRenderSelectionPersisted',
+                                          {
+                                            present: formatNullableToggleState(
+                                              instance.renderSelection.persistedPresent,
+                                              t
+                                            ),
+                                            mounted: formatNullableToggleState(
+                                              instance.renderSelection.persistedMounted,
+                                              t
+                                            ),
+                                            mountedAt: formatDebugTimestamp(
+                                              instance.renderSelection.persistedMountedAtMs
+                                            ),
+                                            order: formatOptionalText(
+                                              instance.renderSelection.persistedOrder
+                                            ),
+                                            inSync: formatNullableToggleState(
+                                              instance.renderSelection.inSync,
+                                              t
+                                            ),
+                                          }
+                                        )}
                                       </p>
                                       {instance.workspaceRouting.fallbackReasonCode ||
                                       instance.workspaceRouting.fallbackReasonMessage ? (

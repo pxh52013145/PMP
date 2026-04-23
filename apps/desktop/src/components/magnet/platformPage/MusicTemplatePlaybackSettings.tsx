@@ -11,7 +11,7 @@ export type MusicTemplatePlaybackSettingsContentProps = {
   qualitySaving: boolean;
   qualityError: string | null;
   qualityState: MusicTemplatePlaybackQualityState | null;
-  qualityLabelForKey: (qualityKey: string) => string;
+  qualityLabelForKey: (qualityKey: string, qualityLabel?: string | null) => string;
   onQualityHintChange: (qualityKey: string) => void;
   onRefreshQualityState: () => void;
 };
@@ -32,8 +32,15 @@ export function MusicTemplatePlaybackSettingsContent(
     onRefreshQualityState,
   } = props;
 
-  const options = qualityState?.options ?? [{ key: 'auto', available: true }];
+  const options = qualityState?.options ?? [{ key: 'auto', label: '', available: true }];
   const currentKey = qualityState?.currentKey?.trim() || 'auto';
+  const currentOption =
+    options.find((option) => option.key.trim().toLowerCase() === currentKey.toLowerCase()) ?? null;
+  const currentSelectValue = currentOption?.key.trim() || currentKey;
+  const currentLabel = qualityLabelForKey(
+    currentSelectValue,
+    qualityState?.currentLabel ?? currentOption?.label
+  );
 
   return (
     <div className="platform-magnet-settings-section">
@@ -45,17 +52,17 @@ export function MusicTemplatePlaybackSettingsContent(
 
           <div className="platform-magnet-settings-row">
             <select
-              value={currentKey}
+              value={currentSelectValue}
               disabled={!authorized || qualityLoading || qualitySaving}
               onChange={(event) => {
                 onQualityHintChange(event.target.value);
               }}
             >
               {options.map((option) => {
-                const optionKey = option.key.trim().toLowerCase();
+                const optionKey = option.key.trim();
                 return (
                   <option key={option.key} value={optionKey} disabled={option.available === false}>
-                    {qualityLabelForKey(optionKey)}
+                    {qualityLabelForKey(optionKey, option.label)}
                   </option>
                 );
               })}
@@ -76,7 +83,7 @@ export function MusicTemplatePlaybackSettingsContent(
 
           <p className="platform-magnet-note">
             {t('magnet.platform.music-template.quality.current', {
-              quality: qualityLabelForKey(currentKey),
+              quality: currentLabel,
             })}
           </p>
           <p className="platform-magnet-note">

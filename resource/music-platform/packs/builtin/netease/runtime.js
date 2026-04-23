@@ -143,6 +143,10 @@ const CONNECTOR_AUTH_CAPABILITY_ID = 'host.pmp.connector-auth';
 const I18N_CAPABILITY_ID = 'host.pmp.i18n';
 const DEFAULT_LOCALE = 'zh-CN';
 const STYLE_ID = 'netease-pack-workspace-style';
+const MAX_RENDERED_PAGE_COUNT = 8;
+const MAX_RENDERED_COLLECTION_COUNT = 48;
+const MAX_RENDERED_RESOURCE_COUNT = 80;
+const MAX_RENDERED_QUALITY_OPTION_COUNT = 12;
 
 const MESSAGES = {
   'zh-CN': {
@@ -672,6 +676,95 @@ function createDiagnosticEntry(source, error) {
   };
 }
 
+function createDiagnosticMessageEntry(source, code, message) {
+  return {
+    id: `${source}:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`,
+    source,
+    code,
+    message,
+  };
+}
+
+function normalizeObjectArray(items) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return items.filter((item) => item && typeof item === 'object' && !Array.isArray(item));
+}
+
+function trimArrayForRender(items, limit, onTrimmed) {
+  const normalized = normalizeObjectArray(items);
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+
+  if (typeof onTrimmed === 'function') {
+    onTrimmed(normalized.length, limit);
+  }
+
+  return normalized.slice(0, limit);
+}
+
+function normalizeWorkspacePagesForRender(items, onTrimmed) {
+  const normalized = trimArrayForRender(items, MAX_RENDERED_PAGE_COUNT, onTrimmed).filter(
+    (item) => typeof item.pageId === 'string' && item.pageId.trim().length > 0
+  );
+  return normalized;
+}
+
+function normalizeCollectionsForRender(items, onTrimmed) {
+  return trimArrayForRender(items, MAX_RENDERED_COLLECTION_COUNT, onTrimmed).filter(
+    (item) => typeof item.collectionId === 'string' && item.collectionId.trim().length > 0
+  );
+}
+
+function normalizeResourcePageForRender(page, onTrimmed) {
+  if (!page || typeof page !== 'object' || Array.isArray(page)) {
+    return null;
+  }
+
+  const items = trimArrayForRender(page.items, MAX_RENDERED_RESOURCE_COUNT, onTrimmed).filter(
+    (item) =>
+      typeof item.resourceId === 'string' &&
+      item.resourceId.trim().length > 0 &&
+      typeof item.sourceLocator === 'string' &&
+      item.sourceLocator.trim().length > 0
+  );
+  const total =
+    typeof page.total === 'number' && Number.isFinite(page.total) && page.total > 0
+      ? page.total
+      : items.length;
+  const pageSize =
+    typeof page.pageSize === 'number' && Number.isFinite(page.pageSize) && page.pageSize > 0
+      ? page.pageSize
+      : Math.max(items.length, 1);
+
+  return {
+    ...page,
+    items,
+    total,
+    pageSize,
+    hasMore: page.hasMore === true || total > items.length,
+  };
+}
+
+function normalizeQualityStateForRender(state, onTrimmed) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) {
+    return null;
+  }
+
+  const options = trimArrayForRender(
+    state.options,
+    MAX_RENDERED_QUALITY_OPTION_COUNT,
+    onTrimmed
+  ).filter((item) => typeof item.key === 'string' && item.key.trim().length > 0);
+
+  return {
+    ...state,
+    options,
+  };
+}
+
 function formatDuration(seconds) {
   if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
     return '--:--';
@@ -687,6 +780,28 @@ function readAudioTrack(audioState) {
     return null;
   }
   return audioState.currentTrack || audioState.track || null;
+}
+
+function buildAudioRenderSignature(audioState) {
+  const track = readAudioTrack(audioState);
+  const trackId =
+    track &&
+    typeof track === 'object' &&
+    (track.resourceId || track.id || track.sourceLocator || track.title || '');
+  const title =
+    track && typeof track === 'object' && typeof track.title === 'string' ? track.title : '';
+  const artist =
+    track && typeof track === 'object'
+      ? track.artist || track.artistNames || track.ownerName || ''
+      : '';
+  const playbackState =
+    audioState &&
+    typeof audioState === 'object' &&
+    typeof audioState.playbackState === 'string'
+      ? audioState.playbackState
+      : '';
+
+  return [playbackState, trackId || '', title, artist].join('\u001f');
 }
 
 function readAuthLabelKey(authState) {
@@ -811,6 +926,10 @@ export function mountPage(container, api, pageId) {
   let disposed = false;
   let collectionRequestId = 0;
   let searchRequestId = 0;
+  let renderQueued = false;
+  let renderTimer = 0;
+  let audioRenderSignature = '';
+  let renderFailureReported = false;
 
   const state = {
     locale: DEFAULT_LOCALE,
@@ -841,16 +960,93 @@ export function mountPage(container, api, pageId) {
         : null,
   };
 
+  audioRenderSignature = buildAudioRenderSignature(state.audioState);
+
   const t = (key, params) => translate(state.locale, key, params);
+
+  const pushDiagnosticMessage = (source, code, message) => {
+    state.diagnostics = [
+      createDiagnosticMessageEntry(source, code, message),
+      ...state.diagnostics,
+    ].slice(0, 6);
+  };
 
   const pushDiagnostic = (source, error) => {
     state.diagnostics = [createDiagnosticEntry(source, error), ...state.diagnostics].slice(0, 6);
   };
 
-  const safeRender = () => {
-    if (!disposed) {
-      render();
+  const pushTrimmedPayloadDiagnostic = (source, label, receivedCount, limit) => {
+    pushDiagnosticMessage(
+      source,
+      'PAYLOAD_TRUNCATED',
+      `${label} trimmed to the first ${limit} items (received ${receivedCount}).`
+    );
+  };
+
+  const cancelScheduledRender = () => {
+    if (!renderTimer) {
+      return;
     }
+    const view = doc.defaultView;
+    if (view && typeof view.cancelAnimationFrame === 'function') {
+      view.cancelAnimationFrame(renderTimer);
+    } else {
+      clearTimeout(renderTimer);
+    }
+    renderTimer = 0;
+  };
+
+  const renderRuntimeFailure = (error) => {
+    const normalized = normalizeError(error, 'Workspace render failed');
+    clearNode(root);
+    const card = createElement(doc, 'section', 'netease-pack-card');
+    card.appendChild(createElement(doc, 'div', 'netease-pack-card-title', t('diagnosticsTitle')));
+    card.appendChild(
+      createElement(doc, 'div', 'netease-pack-diagnostic-title', normalized.message)
+    );
+    const meta = createElement(doc, 'div', 'netease-pack-diagnostic-meta');
+    meta.appendChild(createElement(doc, 'span', '', `${t('diagSource')}: render`));
+    meta.appendChild(createElement(doc, 'span', '', `${t('diagCode')}: ${normalized.code}`));
+    card.appendChild(meta);
+    root.appendChild(card);
+  };
+
+  const performRender = () => {
+    renderQueued = false;
+    renderTimer = 0;
+    if (disposed) {
+      return;
+    }
+
+    try {
+      render();
+      renderFailureReported = false;
+    } catch (error) {
+      if (!renderFailureReported) {
+        pushDiagnostic('music-platform.workspace.render', error);
+        renderFailureReported = true;
+      }
+      renderRuntimeFailure(error);
+    }
+  };
+
+  const safeRender = () => {
+    if (disposed || renderQueued) {
+      return;
+    }
+
+    renderQueued = true;
+    const view = doc.defaultView;
+    if (view && typeof view.requestAnimationFrame === 'function') {
+      renderTimer = view.requestAnimationFrame(() => {
+        performRender();
+      });
+      return;
+    }
+
+    renderTimer = setTimeout(() => {
+      performRender();
+    }, 0);
   };
 
   const callWorkspace = async (method, payload) =>
@@ -860,13 +1056,14 @@ export function mountPage(container, api, pageId) {
       ...payload,
     });
 
-  const refreshAuth = async () => {
+  const refreshAuth = async (forceRefresh) => {
     state.authRefreshing = true;
     safeRender();
     try {
       const payload = await invokeCapability(api, CONNECTOR_AUTH_CAPABILITY_ID, 'getAuthSnapshot', {
         connectorId: target.connectorId,
         instanceId: target.instanceId,
+        refresh: forceRefresh === true,
       });
       state.auth = payload && payload.snapshot ? payload.snapshot : null;
     } catch (error) {
@@ -898,7 +1095,17 @@ export function mountPage(container, api, pageId) {
       if (disposed || requestId !== collectionRequestId) {
         return;
       }
-      state.collectionResources = payload && payload.page ? payload.page : null;
+      state.collectionResources = normalizeResourcePageForRender(
+        payload && payload.page ? payload.page : null,
+        (receivedCount, limit) => {
+          pushTrimmedPayloadDiagnostic(
+            'music-platform.workspace.listCollectionResources',
+            'Playlist resources',
+            receivedCount,
+            limit
+          );
+        }
+      );
     } catch (error) {
       if (!disposed && requestId === collectionRequestId) {
         state.collectionResources = null;
@@ -931,7 +1138,17 @@ export function mountPage(container, api, pageId) {
       if (disposed || requestId !== searchRequestId) {
         return;
       }
-      state.searchResults = payload && payload.page ? payload.page : null;
+      state.searchResults = normalizeResourcePageForRender(
+        payload && payload.page ? payload.page : null,
+        (receivedCount, limit) => {
+          pushTrimmedPayloadDiagnostic(
+            'music-platform.workspace.searchResources',
+            'Search results',
+            receivedCount,
+            limit
+          );
+        }
+      );
     } catch (error) {
       if (!disposed && requestId === searchRequestId) {
         state.searchResults = null;
@@ -958,7 +1175,9 @@ export function mountPage(container, api, pageId) {
       const payload = await callWorkspace('setQualityPreference', {
         qualityKey: normalizedQualityKey,
       });
-      state.qualityState = payload && payload.state ? payload.state : state.qualityState;
+      state.qualityState =
+        normalizeQualityStateForRender(payload && payload.state ? payload.state : null) ??
+        state.qualityState;
     } catch (error) {
       pushDiagnostic('music-platform.workspace.setQualityPreference', error);
     } finally {
@@ -1051,28 +1270,75 @@ export function mountPage(container, api, pageId) {
       ]);
 
       state.model = modelPayload && modelPayload.model ? modelPayload.model : null;
-      state.pages =
-        (pagesPayload && Array.isArray(pagesPayload.items) && pagesPayload.items.length > 0
+      const defaultPages = defaultPageItems(state.locale);
+      const nextPages = normalizeWorkspacePagesForRender(
+        pagesPayload && Array.isArray(pagesPayload.items) && pagesPayload.items.length > 0
           ? pagesPayload.items
           : state.model && Array.isArray(state.model.pages) && state.model.pages.length > 0
             ? state.model.pages
-            : defaultPageItems(state.locale)) || defaultPageItems(state.locale);
+            : defaultPages,
+        (receivedCount, limit) => {
+          pushTrimmedPayloadDiagnostic(
+            'music-platform.workspace.listPages',
+            'Workspace pages',
+            receivedCount,
+            limit
+          );
+        }
+      );
+      state.pages = nextPages.length > 0 ? nextPages : defaultPages;
       state.activePageId = selectInitialPage(state);
-      state.collections =
+      state.collections = normalizeCollectionsForRender(
         collectionsPayload && Array.isArray(collectionsPayload.items)
           ? collectionsPayload.items
-          : [];
-      state.recommendedCollections =
+          : [],
+        (receivedCount, limit) => {
+          pushTrimmedPayloadDiagnostic(
+            'music-platform.workspace.listCollections',
+            'Collections',
+            receivedCount,
+            limit
+          );
+        }
+      );
+      state.recommendedCollections = normalizeCollectionsForRender(
         recommendedCollectionsPayload &&
-        Array.isArray(recommendedCollectionsPayload.items)
+          Array.isArray(recommendedCollectionsPayload.items)
           ? recommendedCollectionsPayload.items
-          : [];
-      state.recommendedResources =
+          : [],
+        (receivedCount, limit) => {
+          pushTrimmedPayloadDiagnostic(
+            'music-platform.workspace.listRecommendedCollections',
+            'Recommended collections',
+            receivedCount,
+            limit
+          );
+        }
+      );
+      state.recommendedResources = normalizeResourcePageForRender(
         recommendedResourcesPayload && recommendedResourcesPayload.page
           ? recommendedResourcesPayload.page
-          : null;
-      state.qualityState =
-        qualityPayload && qualityPayload.state ? qualityPayload.state : null;
+          : null,
+        (receivedCount, limit) => {
+          pushTrimmedPayloadDiagnostic(
+            'music-platform.workspace.listRecommendedResources',
+            'Recommended resources',
+            receivedCount,
+            limit
+          );
+        }
+      );
+      state.qualityState = normalizeQualityStateForRender(
+        qualityPayload && qualityPayload.state ? qualityPayload.state : null,
+        (receivedCount, limit) => {
+          pushTrimmedPayloadDiagnostic(
+            'music-platform.workspace.listQualityState',
+            'Quality options',
+            receivedCount,
+            limit
+          );
+        }
+      );
 
       if (!state.selectedCollectionId && state.collections[0]) {
         state.selectedCollectionId = state.collections[0].collectionId;
@@ -1089,9 +1355,14 @@ export function mountPage(container, api, pageId) {
 
   function createBanner() {
     const track = readAudioTrack(state.audioState);
-    const authState = state.auth ? state.auth.authState : 'unauthorized';
+    const authState = state.auth
+      ? state.auth.authState
+      : state.authRefreshing || state.loading
+        ? 'pending'
+        : 'unauthorized';
     const accountLabel =
-      (state.auth && (state.auth.accountUid || state.auth.accountName)) || '-';
+      (state.auth && (state.auth.accountUid || state.auth.accountName)) ||
+      (state.authRefreshing || state.loading ? '...' : '-');
 
     const title = createElement(doc, 'h1', 'netease-pack-title', t('title'));
     const subtitle = createElement(doc, 'p', 'netease-pack-subtitle', t('subtitle'));
@@ -1148,7 +1419,7 @@ export function mountPage(container, api, pageId) {
     refreshButton.type = 'button';
     refreshButton.disabled = state.authRefreshing;
     refreshButton.addEventListener('click', () => {
-      void refreshAuth();
+      void refreshAuth(true);
     });
 
     const authHint = createElement(doc, 'p', 'netease-pack-banner-note', t('authHint'));
@@ -1217,7 +1488,10 @@ export function mountPage(container, api, pageId) {
     refresh.type = 'button';
     refresh.disabled = state.loading;
     refresh.addEventListener('click', () => {
-      void Promise.all([refreshAuth(), loadWorkspace()]);
+      void (async () => {
+        await refreshAuth(true);
+        await loadWorkspace();
+      })();
     });
 
     appendChildren(toolbar, [form, refresh]);
@@ -1525,20 +1799,33 @@ export function mountPage(container, api, pageId) {
     typeof api.audio.onStateChange === 'function'
       ? api.audio.onStateChange((nextState) => {
           state.audioState = nextState;
+          const nextAudioRenderSignature = buildAudioRenderSignature(nextState);
+          if (nextAudioRenderSignature === audioRenderSignature) {
+            return;
+          }
+          audioRenderSignature = nextAudioRenderSignature;
           safeRender();
         })
       : () => {};
 
-  void Promise.all([refreshAuth(), loadWorkspace()]).catch((error) => {
+  void (async () => {
+    // Seed banner/account state from the cached host snapshot first so an already
+    // authorized instance does not sit in a long-lived "pending" badge while the
+    // slower sidecar refresh repopulates in-memory auth and workspace data.
+    await refreshAuth(false);
+    await refreshAuth(true);
+    await loadWorkspace();
+  })().catch((error) => {
     pushDiagnostic('music-platform.workspace.bootstrap', error);
     state.loading = false;
     safeRender();
   });
 
-  render();
+  performRender();
 
   return () => {
     disposed = true;
+    cancelScheduledRender();
     try {
       unsubscribeAudio();
     } catch {

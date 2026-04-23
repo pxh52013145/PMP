@@ -19,29 +19,34 @@ import {
   beginPlatformInstanceQrLogin,
   clearPlatformInstanceAuthCookies,
   installPlatformPackFromFile,
-  listBuiltinPlatformCompatRegistrations,
+  listInstalledPlatformPackRecords,
   listPlatformConnectorDefinitions,
+  listPlatformImportedInstanceRecords,
   listPlatformInstances,
   listPlatformRenderSelections,
   logoutPlatformInstance,
   pollPlatformInstanceQrLogin,
   refreshPlatformInstanceAuthSnapshot,
   reconcileBuiltinPlatformCompatRegistrations,
+  resetInstalledPlatformPackState,
   resolvePlatformInstanceId,
   resolvePlatformConnectorTemplate,
   setPlatformRenderSelectionMounted,
-  subscribePlatformConnectorCompatRegistrations,
   subscribePlatformConnectorDefinitions,
+  subscribeInstalledPlatformPackRecords,
+  subscribePlatformImportedInstanceRecords,
   subscribePlatformInstances,
   subscribePlatformRenderSelections,
+  unregisterInstalledPlatformPack,
   type PlatformInstanceAuthSnapshot,
   type PlatformConnectorDefinition,
   type PlatformConnectorId,
+  type InstalledPlatformPackRecord,
   type PlatformInstanceRecord,
+  type PlatformImportedInstanceRecord,
   type PlatformInstanceQrLoginPollResult,
   type PlatformInstanceQrLoginSession,
   type PlatformRenderSelectionRecord,
-  type PlatformCompatContractFile,
   persistPlatformLoginRegistry,
   readPlatformLoginRegistry,
   removePlatformLoginRegistryEntry,
@@ -84,6 +89,16 @@ type ContextMenuState = {
   x: number;
   y: number;
 } | null;
+
+type ImportedPackManagementItem = {
+  record: InstalledPlatformPackRecord;
+  importedInstance: PlatformImportedInstanceRecord | null;
+  definition: PlatformConnectorDefinition | null;
+  registryEntry: PlatformLoginRegistryEntry | null;
+  instanceRecord: PlatformInstanceRecord | null;
+  snapshot: PlatformInstanceAuthSnapshot | null;
+  renderSelection: PlatformRenderSelectionRecord | null;
+};
 
 const CONNECTOR_VISUAL_META_BY_ICON_KEY: Record<string, Omit<ConnectorVisualMeta, 'iconAssetUrl'>> = {
   netease: { Icon: Disc3, color: '#ff6b87' },
@@ -196,32 +211,6 @@ async function waitForNextPaint(): Promise<void> {
       window.requestAnimationFrame(() => resolve());
     });
   });
-}
-
-function listCapabilityLabelKeys(contract: PlatformCompatContractFile | null): string[] {
-  if (!contract) return [];
-
-  const capabilityLabelKeys: string[] = [];
-  if (contract.capabilities.playlists) {
-    capabilityLabelKeys.push('magnet.platform.compat.capability.playlists');
-  }
-  if (contract.capabilities.favorites) {
-    capabilityLabelKeys.push('magnet.platform.compat.capability.favorites');
-  }
-  if (contract.capabilities.dailyRecommendations) {
-    capabilityLabelKeys.push('magnet.platform.compat.capability.dailyRecommendations');
-  }
-  if (contract.capabilities.search) {
-    capabilityLabelKeys.push('magnet.platform.compat.capability.search');
-  }
-  if (contract.capabilities.quality) {
-    capabilityLabelKeys.push('magnet.platform.compat.capability.quality');
-  }
-  if (contract.capabilities.pages) {
-    capabilityLabelKeys.push('magnet.platform.compat.capability.pages');
-  }
-
-  return capabilityLabelKeys;
 }
 
 function buildPlatformLoginRegistryEntriesFingerprint(
@@ -339,9 +328,10 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   const [contextMenuState, setContextMenuState] = useState<ContextMenuState>(null);
   const [busyInstanceId, setBusyInstanceId] = useState<string | null>(null);
   const [platformPackInstalling, setPlatformPackInstalling] = useState(false);
+  const [platformPackMaintenanceInstallationId, setPlatformPackMaintenanceInstallationId] =
+    useState<string | null>(null);
   const [platformPackInstallMessage, setPlatformPackInstallMessage] = useState<string | null>(null);
   const [platformDefinitions, setPlatformDefinitions] = useState<PlatformConnectorDefinition[]>([]);
-  const [compatRegistrations, setCompatRegistrations] = useState<ReturnType<typeof listBuiltinPlatformCompatRegistrations>>([]);
   const preferredConnectorId = useMemo(
     () => resolvePreferredConnectorId(skinProps.defaultConnectorId, platformDefinitions),
     [platformDefinitions, skinProps.defaultConnectorId]
@@ -350,12 +340,10 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     () => new Map(platformDefinitions.map((definition) => [definition.connectorId, definition])),
     [platformDefinitions]
   );
-  const builtinCompatByConnectorId = useMemo(
-    () => new Map(compatRegistrations.map((registration) => [registration.connectorId, registration])),
-    [compatRegistrations]
-  );
 
   const [registryEntries, setRegistryEntries] = useState<PlatformLoginRegistryEntry[]>([]);
+  const [installedPackRecords, setInstalledPackRecords] = useState<InstalledPlatformPackRecord[]>([]);
+  const [importedInstanceRecords, setImportedInstanceRecords] = useState<PlatformImportedInstanceRecord[]>([]);
   const [platformInstances, setPlatformInstances] = useState<PlatformInstanceRecord[]>([]);
   const [renderSelections, setRenderSelections] = useState<PlatformRenderSelectionRecord[]>([]);
 
@@ -369,13 +357,6 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     setPlatformDefinitions(listPlatformConnectorDefinitions());
     return subscribePlatformConnectorDefinitions((definitions) => {
       setPlatformDefinitions(definitions);
-    });
-  }, []);
-
-  useEffect(() => {
-    setCompatRegistrations(listBuiltinPlatformCompatRegistrations());
-    return subscribePlatformConnectorCompatRegistrations((registrations) => {
-      setCompatRegistrations(registrations);
     });
   }, []);
 
@@ -489,6 +470,52 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   }, []);
 
   useEffect(() => {
+    setInstalledPackRecords(listInstalledPlatformPackRecords());
+    let disposed = false;
+    let unsubscribe = () => {};
+
+    void subscribeInstalledPlatformPackRecords(() => {
+      if (!disposed) {
+        setInstalledPackRecords(listInstalledPlatformPackRecords());
+      }
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+        return;
+      }
+      unsubscribe = cleanup;
+    });
+
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    setImportedInstanceRecords(listPlatformImportedInstanceRecords());
+    let disposed = false;
+    let unsubscribe = () => {};
+
+    void subscribePlatformImportedInstanceRecords(() => {
+      if (!disposed) {
+        setImportedInstanceRecords(listPlatformImportedInstanceRecords());
+      }
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+        return;
+      }
+      unsubscribe = cleanup;
+    });
+
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
     setAuthSnapshotsByInstanceId(buildPlatformAuthSnapshotMapByInstanceId(platformInstances));
   }, [platformInstances]);
 
@@ -503,20 +530,22 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     () => new Map(platformInstances.map((instance) => [instance.instanceId, instance] as const)),
     [platformInstances]
   );
-  const platformInstanceCountByConnectorId = useMemo(() => {
-    const next = new Map<string, number>();
-    for (const instance of platformInstances) {
-      const connectorId =
-        typeof instance.metadata?.connectorId === 'string' ? instance.metadata.connectorId : '';
-      if (!connectorId) continue;
-      next.set(connectorId, (next.get(connectorId) ?? 0) + 1);
-    }
-    return next;
-  }, [platformInstances]);
 
   const renderSelectionsByInstanceId = useMemo(
     () => new Map(renderSelections.map((record) => [record.instanceId, record])),
     [renderSelections]
+  );
+
+  const importedInstancesByInstallationId = useMemo(
+    () =>
+      new Map(
+        importedInstanceRecords.map((record) => [record.installationId, record] as const)
+      ),
+    [importedInstanceRecords]
+  );
+  const registryEntriesByInstanceId = useMemo(
+    () => new Map(registryEntries.map((entry) => [entry.instanceId, entry] as const)),
+    [registryEntries]
   );
 
   const registeredConnectors = useMemo(
@@ -535,7 +564,6 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
             snapshot: authSnapshotsByInstanceId[entry.instanceId] ?? null,
             instance,
             renderSelection,
-            builtinCompat: builtinCompatByConnectorId.get(entry.connectorId) ?? null,
           };
         })
         .filter(
@@ -547,12 +575,10 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
             snapshot: PlatformInstanceAuthSnapshot | null;
             instance: PlatformInstanceRecord | null;
             renderSelection: PlatformRenderSelectionRecord | null;
-            builtinCompat: (typeof compatRegistrations)[number] | null;
           } => Boolean(item)
         ),
     [
       authSnapshotsByInstanceId,
-      builtinCompatByConnectorId,
       platformDefinitionsById,
       platformInstancesById,
       registryEntries,
@@ -560,10 +586,42 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     ]
   );
 
-  const unregisteredDefinitions = useMemo(() => {
-    const registeredIds = new Set(registryEntries.map((entry) => entry.connectorId));
-    return platformDefinitions.filter((definition) => !registeredIds.has(definition.connectorId));
-  }, [platformDefinitions, registryEntries]);
+  const importedPackManagementItems = useMemo(
+    () =>
+      installedPackRecords
+        .filter((record) => record.sourceType === 'external')
+        .map((record) => {
+          const importedInstance =
+            importedInstancesByInstallationId.get(record.installationId) ?? null;
+          const importedInstanceId = importedInstance?.instanceId ?? null;
+          const definition = platformDefinitionsById.get(record.connectorId) ?? null;
+          const instanceRecord = importedInstanceId
+            ? platformInstancesById.get(importedInstanceId) ?? null
+            : null;
+          return {
+            record,
+            importedInstance,
+            definition,
+            registryEntry: importedInstanceId
+              ? registryEntriesByInstanceId.get(importedInstanceId) ?? null
+              : null,
+            instanceRecord,
+            snapshot: importedInstanceId ? authSnapshotsByInstanceId[importedInstanceId] ?? null : null,
+            renderSelection: importedInstanceId
+              ? renderSelectionsByInstanceId.get(importedInstanceId) ?? null
+              : null,
+          };
+        }),
+    [
+      authSnapshotsByInstanceId,
+      importedInstancesByInstallationId,
+      installedPackRecords,
+      platformDefinitionsById,
+      platformInstancesById,
+      registryEntriesByInstanceId,
+      renderSelectionsByInstanceId,
+    ]
+  );
 
   const preferredRegisteredInstanceId = useMemo(
     () =>
@@ -764,60 +822,6 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     setRegisterMenuOpen((prev) => !prev);
   }, []);
 
-  const handleRegisterConnector = useCallback(
-    async (definition: PlatformConnectorDefinition) => {
-      if (!definition.enabled || definition.authFlow !== 'qr') {
-        updateScopedValue(
-          setStatusMessagesByInstanceId,
-          definition.connectorId,
-          t('magnet.platform-login.status.comingSoon')
-        );
-        return;
-      }
-
-      const builtinInstanceId = resolvePlatformInstanceId({
-        connectorId: definition.connectorId,
-      });
-      if (!builtinInstanceId) {
-        return;
-      }
-
-      const existingSnapshot =
-        authSnapshotsByInstanceId[builtinInstanceId] ??
-        (await refreshAuthSnapshot(builtinInstanceId));
-
-      setRegistryEntryRegistered(
-        {
-          instanceId: builtinInstanceId,
-          connectorId: definition.connectorId,
-        },
-        true
-      );
-      if (existingSnapshot?.authState === 'authorized') {
-        setInstanceMounted(builtinInstanceId, true);
-      } else {
-        updateScopedValue(
-          setStatusMessagesByInstanceId,
-          builtinInstanceId,
-          t('magnet.platform-login.status.registrationAdded')
-        );
-      }
-      setRegisterMenuOpen(false);
-
-      if (existingSnapshot?.authState !== 'authorized') {
-        openAuthPopup(builtinInstanceId);
-      }
-    },
-    [
-      authSnapshotsByInstanceId,
-      openAuthPopup,
-      refreshAuthSnapshot,
-      setInstanceMounted,
-      setRegistryEntryRegistered,
-      t,
-    ]
-  );
-
   const handlePlatformPackFileChange = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
       const input = event.currentTarget;
@@ -839,8 +843,6 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
         if (!importedInstanceId) {
           throw new Error('Imported platform instance registration is unavailable');
         }
-        const connectorInstanceCount =
-          platformInstanceCountByConnectorId.get(registration.connectorId) ?? 0;
         setRegistryEntryRegistered(
           {
             instanceId: importedInstanceId,
@@ -850,19 +852,11 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
         );
         const importedName =
           registration.definition.displayName || registration.compat.contract.platform.displayName;
-        if (connectorInstanceCount > 1) {
-          setPlatformPackInstallMessage(
-            t('magnet.platform-login.pack.import.success', {
-              name: importedName,
-            })
-          );
-        } else {
-          setPlatformPackInstallMessage(
-            t('magnet.platform-login.pack.import.success', {
-              name: importedName,
-            })
-          );
-        }
+        setPlatformPackInstallMessage(
+          t('magnet.platform-login.pack.import.success', {
+            name: importedName,
+          })
+        );
         setSelectedInstanceId(importedInstanceId);
         setRegisterMenuOpen(false);
 
@@ -900,13 +894,147 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     },
     [
       openAuthPopup,
-      platformInstanceCountByConnectorId,
       refreshAuthSnapshot,
       setInstanceMounted,
       setRegistryEntryRegistered,
       t,
       telemetry,
     ]
+  );
+
+  const handleOpenImportedPack = useCallback(
+    async (item: ImportedPackManagementItem) => {
+      const importedInstanceId = item.importedInstance?.instanceId ?? null;
+      if (!importedInstanceId) {
+        setPlatformPackInstallMessage(t('magnet.platform-login.pack.manage.instancePending'));
+        return;
+      }
+
+      setPlatformPackInstallMessage(null);
+      setRegistryEntryRegistered(
+        {
+          instanceId: importedInstanceId,
+          connectorId: item.record.connectorId,
+        },
+        true
+      );
+      setSelectedInstanceId(importedInstanceId);
+      setRegisterMenuOpen(false);
+
+      const snapshot =
+        authSnapshotsByInstanceId[importedInstanceId] ??
+        (await refreshAuthSnapshot(importedInstanceId));
+      if (snapshot?.authState === 'authorized') {
+        setInstanceMounted(importedInstanceId, true);
+      } else {
+        openAuthPopup(importedInstanceId);
+      }
+    },
+    [
+      authSnapshotsByInstanceId,
+      openAuthPopup,
+      refreshAuthSnapshot,
+      setInstanceMounted,
+      setRegistryEntryRegistered,
+      t,
+    ]
+  );
+
+  const handleResetImportedPackState = useCallback(
+    async (item: ImportedPackManagementItem) => {
+      setPlatformPackMaintenanceInstallationId(item.record.installationId);
+      setPlatformPackInstallMessage(null);
+
+      try {
+        await resetInstalledPlatformPackState({
+          installationId: item.record.installationId,
+          instanceId: item.importedInstance?.instanceId ?? null,
+        });
+        const importedInstanceId = item.importedInstance?.instanceId ?? null;
+        if (importedInstanceId) {
+          updateScopedValue(setQrSessionsByInstanceId, importedInstanceId, null);
+          updateScopedValue(setPollResultsByInstanceId, importedInstanceId, null);
+          updateScopedValue(setErrorsByInstanceId, importedInstanceId, null);
+        }
+        setPlatformPackInstallMessage(
+          t('magnet.platform-login.pack.cache.success', {
+            name:
+              item.importedInstance?.displayName ||
+              item.record.manifest.connector.displayName ||
+              item.record.contract.platform.displayName,
+          })
+        );
+      } catch (error) {
+        telemetry.warn('platform-login.pack.cache-clear.failed', {
+          message: error instanceof Error ? error.message : String(error),
+          fields: {
+            connectorId: item.record.connectorId,
+            installationId: item.record.installationId,
+            instanceId: item.importedInstance?.instanceId ?? null,
+          },
+        });
+        setPlatformPackInstallMessage(
+          t('magnet.platform-login.pack.cache.failed', {
+            message: error instanceof Error ? error.message : String(error),
+          })
+        );
+      } finally {
+        setPlatformPackMaintenanceInstallationId(null);
+      }
+    },
+    [t, telemetry]
+  );
+
+  const handleUnregisterImportedPack = useCallback(
+    async (item: ImportedPackManagementItem) => {
+      setPlatformPackMaintenanceInstallationId(item.record.installationId);
+      setPlatformPackInstallMessage(null);
+
+      try {
+        const importedInstanceId = item.importedInstance?.instanceId ?? null;
+        if (importedInstanceId) {
+          updateScopedValue(setQrSessionsByInstanceId, importedInstanceId, null);
+          updateScopedValue(setPollResultsByInstanceId, importedInstanceId, null);
+          updateScopedValue(setErrorsByInstanceId, importedInstanceId, null);
+        }
+
+        await unregisterInstalledPlatformPack({
+          installationId: item.record.installationId,
+          instanceId: importedInstanceId,
+        });
+        if (importedInstanceId && selectedInstanceId === importedInstanceId) {
+          setSelectedInstanceId(null);
+          setAuthPopupOpen(false);
+          setContextMenuState(null);
+        }
+
+        setPlatformPackInstallMessage(
+          t('magnet.platform-login.pack.remove.success', {
+            name:
+              item.importedInstance?.displayName ||
+              item.record.manifest.connector.displayName ||
+              item.record.contract.platform.displayName,
+          })
+        );
+      } catch (error) {
+        telemetry.warn('platform-login.pack.remove.failed', {
+          message: error instanceof Error ? error.message : String(error),
+          fields: {
+            connectorId: item.record.connectorId,
+            installationId: item.record.installationId,
+            instanceId: item.importedInstance?.instanceId ?? null,
+          },
+        });
+        setPlatformPackInstallMessage(
+          t('magnet.platform-login.pack.remove.failed', {
+            message: error instanceof Error ? error.message : String(error),
+          })
+        );
+      } finally {
+        setPlatformPackMaintenanceInstallationId(null);
+      }
+    },
+    [selectedInstanceId, t, telemetry]
   );
 
   const runPoll = useCallback(
@@ -1210,7 +1338,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
             type="button"
             ref={moreButtonRef}
             className={`platform-login-more-button${registerMenuOpen ? ' platform-login-more-button--open' : ''}`}
-            title={t('magnet.platform-login.action.register')}
+            title={t('magnet.platform-login.pack.manage.title')}
             onClick={handleRegisterMenuToggle}
           >
             <MoreHorizontal className="platform-login-more-icon" />
@@ -1225,63 +1353,163 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
         placement="bottom-start"
         offset={10}
         viewportPadding={10}
-        className="platform-login-menu-popup"
+        className="platform-login-menu-popup platform-login-manage-popup"
         role="dialog"
       >
         {skinProps.showSelectorTitle ? (
-          <div className="platform-login-menu-title">{t('magnet.platform-login.add.title')}</div>
+          <div className="platform-login-menu-title">
+            {t('magnet.platform-login.pack.manage.title')}
+          </div>
         ) : null}
 
-        {unregisteredDefinitions.length > 0 ? (
-          <div className="platform-login-register-list">
-            {unregisteredDefinitions.map((definition) => (
-              <button
-                key={definition.connectorId}
-                type="button"
-                className="platform-login-register-item"
-                disabled={!definition.enabled || definition.authFlow !== 'qr'}
-                onClick={() => {
-                  void handleRegisterConnector(definition);
-                }}
-              >
-                <ConnectorGlyph definition={definition} compact />
-                <span className="platform-login-register-copy">
-                  <span className="platform-login-register-label">{t(definition.labelKey)}</span>
-                  <span className="platform-login-register-hint">
-                    {definition.enabled && definition.authFlow === 'qr'
-                      ? t('magnet.platform-login.add.ready')
-                      : t('magnet.platform-login.status.comingSoon')}
-                  </span>
-                  {(() => {
-                    const builtinCompat = builtinCompatByConnectorId.get(definition.connectorId) ?? null;
-                    const capabilityLabelKeys = listCapabilityLabelKeys(builtinCompat?.contract ?? null);
-                    if (!builtinCompat || capabilityLabelKeys.length === 0) return null;
+        <div className="platform-login-pack-section-title">
+          {t('magnet.platform-login.pack.manage.installedTitle')}
+        </div>
 
-                    return (
-                      <span className="platform-login-register-meta">
-                        <span className="platform-login-register-tag">
-                          {t('magnet.platform.contract.version', {
-                            version: builtinCompat.contract.contractVersion,
-                          })}
-                        </span>
-                        {capabilityLabelKeys.map((labelKey) => (
-                          <span
-                            key={`${definition.connectorId}:${labelKey}`}
-                            className="platform-login-register-tag"
-                          >
-                            {t(labelKey)}
-                          </span>
-                        ))}
+        {importedPackManagementItems.length > 0 ? (
+          <div className="platform-login-pack-list">
+            {importedPackManagementItems.map((item) => {
+              const displayName =
+                item.instanceRecord?.displayName ||
+                item.importedInstance?.displayName ||
+                item.record.manifest.connector.displayName ||
+                item.record.contract.platform.displayName ||
+                item.record.platformId;
+              const busy =
+                platformPackMaintenanceInstallationId === item.record.installationId;
+              const authLabel = t(
+                toAuthLabelKey(item.snapshot?.authState ?? 'unauthorized')
+              );
+              const visibilityLabel = item.registryEntry
+                ? t('magnet.platform-login.pack.manage.visible', {
+                    state: authLabel,
+                  })
+                : t('magnet.platform-login.pack.manage.hidden');
+              const mounted = item.renderSelection?.mounted === true;
+              const mountedLabel = mounted
+                ? t('magnet.platform-login.tip.active')
+                : t('magnet.platform-login.tip.inactive');
+              const packBadge = `${item.record.packId}@${item.record.packVersion}`;
+              const primaryActionLabel = item.registryEntry
+                ? t(
+                    item.snapshot?.authState === 'authorized'
+                      ? 'magnet.platform-login.action.viewStatus'
+                      : 'magnet.platform-login.action.login'
+                  )
+                : t('magnet.platform-login.pack.action.addToLauncher');
+
+              return (
+                <div
+                  key={item.record.installationId}
+                  className="platform-login-pack-item"
+                >
+                  <div className="platform-login-pack-item-head">
+                    {item.definition ? (
+                      <ConnectorGlyph definition={item.definition} compact />
+                    ) : (
+                      <Music
+                        className="platform-login-glyph platform-login-glyph--compact"
+                        style={{ color: 'rgba(255, 255, 255, 0.62)' }}
+                      />
+                    )}
+                    <div className="platform-login-pack-item-copy">
+                      <div className="platform-login-pack-item-label">{displayName}</div>
+                      <div className="platform-login-pack-item-hint">{visibilityLabel}</div>
+                    </div>
+                    <div className="platform-login-pack-item-chips">
+                      <span className="platform-login-pack-item-chip platform-login-pack-item-chip--strong">
+                        {authLabel}
                       </span>
-                    );
-                  })()}
-                </span>
-                <Plus className="platform-login-register-plus" />
-              </button>
-            ))}
+                      <span className="platform-login-pack-item-chip">{mountedLabel}</span>
+                      <span className="platform-login-pack-item-chip">{packBadge}</span>
+                    </div>
+                  </div>
+
+                  <div className="platform-login-pack-item-meta platform-login-pack-item-meta-grid">
+                    <span>
+                      {t('magnet.platform-login.pack.manage.meta.connectorId', {
+                        connectorId: item.record.connectorId,
+                      })}
+                    </span>
+                    <span>
+                      {t('magnet.platform-login.pack.manage.meta.platformId', {
+                        platformId: item.record.platformId,
+                      })}
+                    </span>
+                    <span>
+                      {t('magnet.platform-login.pack.manage.meta.installationId', {
+                        installationId: item.record.installationId,
+                      })}
+                    </span>
+                    <span>
+                      {t('magnet.platform-login.pack.manage.meta.instanceId', {
+                        instanceId: item.importedInstance?.instanceId ?? '-',
+                      })}
+                    </span>
+                    <span>
+                      {t('magnet.platform-login.pack.manage.meta.source', {
+                        source:
+                          item.record.source ??
+                          t('magnet.platform-login.pack.manage.sourceUnknown'),
+                      })}
+                    </span>
+                  </div>
+
+                  {item.importedInstance ? null : (
+                    <div className="platform-login-pack-item-warning">
+                      {t('magnet.platform-login.pack.manage.instancePending')}
+                    </div>
+                  )}
+
+                  <div className="platform-login-pack-item-actions">
+                    <button
+                      type="button"
+                      className="platform-login-pack-item-action platform-login-pack-item-action--primary"
+                      disabled={busy || !item.importedInstance}
+                      onClick={() => {
+                        void handleOpenImportedPack(item);
+                      }}
+                    >
+                      {item.registryEntry ? (
+                        <QrCode className="platform-login-pack-item-action-icon" />
+                      ) : (
+                        <Plus className="platform-login-pack-item-action-icon" />
+                      )}
+                      <span>{primaryActionLabel}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="platform-login-pack-item-action"
+                      disabled={busy}
+                      onClick={() => {
+                        void handleResetImportedPackState(item);
+                      }}
+                    >
+                      <RefreshCw className="platform-login-pack-item-action-icon" />
+                      <span>{t('magnet.platform-login.pack.action.clearCache')}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="platform-login-pack-item-action platform-login-pack-item-action--danger"
+                      disabled={busy}
+                      onClick={() => {
+                        void handleUnregisterImportedPack(item);
+                      }}
+                    >
+                      <X className="platform-login-pack-item-action-icon" />
+                      <span>{t('magnet.platform-login.pack.action.delete')}</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         ) : (
-          <div className="platform-login-empty-state">{t('magnet.platform-login.add.empty')}</div>
+          <div className="platform-login-empty-state">
+            {t('magnet.platform-login.pack.manage.empty')}
+          </div>
         )}
 
         <div className="platform-login-pack-import">

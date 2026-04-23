@@ -293,9 +293,11 @@ describe('musicTemplateRuntime', () => {
       enabledPageKinds: ['playlist', 'daily', 'search'],
     });
     expect(normalizeMusicTemplateQualityKey(' 320K ')).toBe('exhigh');
+    expect(normalizeMusicTemplateQualityKey('  hi-res-flac  ')).toBe('hi-res-flac');
     expect(resolveMusicTemplateQualityLabelKey('lossless')).toBe(
       'magnet.platform.music-template.quality.option.lossless'
     );
+    expect(resolveMusicTemplateQualityLabelKey('hi-res-flac')).toBeNull();
     expect(
       resolveMusicTemplateQualityProbeSourceLocator({
         sourceKind: 'search',
@@ -421,6 +423,36 @@ describe('musicTemplateRuntime', () => {
       ],
       currentKey: 'exhigh',
       currentLabel: '320K',
+    });
+  });
+
+  it('preserves runtime-defined quality keys instead of collapsing them to host presets', async () => {
+    const target = {
+      connectorId: 'connector.platform.qqmusic',
+      displayName: 'QQ Music',
+      instanceId: 'qqmusic:main',
+    };
+
+    setQualityPreferenceMock.mockResolvedValue({
+      options: [{ key: 'hi-res-flac', label: 'Hi-Res FLAC', available: true }],
+      currentKey: 'hi-res-flac',
+      currentLabel: 'Hi-Res FLAC',
+    });
+
+    const nextState = await setMusicTemplatePlaybackQualityPreference(target, ' hi-res-flac ', {
+      sourceLocator: ' qq://song/1 ',
+    });
+
+    expect(setQualityPreferenceMock).toHaveBeenCalledWith({
+      connectorId: 'connector.platform.qqmusic',
+      qualityKey: 'hi-res-flac',
+      sourceLocator: 'qq://song/1',
+      instanceId: 'qqmusic:main',
+    });
+    expect(nextState).toEqual({
+      options: [{ key: 'hi-res-flac', label: 'Hi-Res FLAC', available: true }],
+      currentKey: 'hi-res-flac',
+      currentLabel: 'Hi-Res FLAC',
     });
   });
 

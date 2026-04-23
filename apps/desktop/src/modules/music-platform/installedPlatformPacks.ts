@@ -93,6 +93,32 @@ function normalizeFsPath(value: string): string {
   return value.replace(/\\/g, '/');
 }
 
+function readRemoveDirErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  return String(error);
+}
+
+function shouldRetryDirectoryRemoval(error: unknown): boolean {
+  const message = readRemoveDirErrorMessage(error).toLowerCase();
+  return (
+    message.includes('access is denied') ||
+    message.includes('拒绝访问') ||
+    message.includes('os error 5') ||
+    message.includes('device or resource busy') ||
+    message.includes('resource busy') ||
+    message.includes('used by another process') ||
+    message.includes('ebusy')
+  );
+}
+
+async function waitForDirectoryRemovalRetry(delayMs: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    globalThis.setTimeout(resolve, delayMs);
+  });
+}
+
 function normalizeRelativeArtifactPath(value: string, label: string): string {
   const normalized = value
     .trim()
@@ -290,6 +316,59 @@ function upsertInstalledPlatformPackRecord(record: InstalledPlatformPackRecord):
   const next = records.filter((item) => item.installationId !== record.installationId);
   next.push(cloneInstalledPlatformPackRecord(record));
   saveInstalledPlatformPackRecords(next);
+}
+
+function deleteInstalledPlatformPackRecord(installationId: string): InstalledPlatformPackRecord | null {
+  const normalizedInstallationId = normalizeString(installationId);
+  if (!normalizedInstallationId) {
+    return null;
+  }
+
+  const records = loadInstalledPlatformPackRecords();
+  const matched = records.find((record) => record.installationId === normalizedInstallationId) ?? null;
+  if (!matched) {
+    return null;
+  }
+
+  saveInstalledPlatformPackRecords(
+    records.filter((record) => record.installationId !== normalizedInstallationId)
+  );
+  return cloneInstalledPlatformPackRecord(matched);
+}
+
+async function removeDirectoryIfExists(path: string): Promise<void> {
+  const normalizedPath = normalizeFsPath(path);
+  if (!normalizedPath || !isTauriRuntime()) {
+    return;
+  }
+
+  const fs = await import('@tauri-apps/api/fs');
+  const exists = await fs.exists(normalizedPath).catch(() => false);
+  if (!exists) {
+    return;
+  }
+
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      await fs.removeDir(normalizedPath, { recursive: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!shouldRetryDirectoryRemoval(error) || attempt >= 7) {
+        break;
+      }
+      await waitForDirectoryRemovalRetry(150 * (attempt + 1));
+    }
+  }
+
+  const detail = readRemoveDirErrorMessage(lastError);
+  throw new Error(
+    `Failed to remove installed platform pack artifacts at ${normalizedPath}. ` +
+      `The runtime or sidecar may still be active and locking the directory. ` +
+      `Current registration/auth state was preserved; close the platform workspace and retry unregister. ` +
+      `Original error: ${detail}`
+  );
 }
 
 async function sha256Hex(data: Uint8Array): Promise<string | undefined> {
@@ -570,6 +649,10 @@ export function loadInstalledPlatformPackRecords(): InstalledPlatformPackRecord[
     .sort(sortInstalledPlatformPackRecords);
 }
 
+export function listInstalledPlatformPackRecords(): InstalledPlatformPackRecord[] {
+  return loadInstalledPlatformPackRecords();
+}
+
 export function getInstalledPlatformPackRecord(
   installationId: string
 ): InstalledPlatformPackRecord | null {
@@ -594,6 +677,19 @@ export function listInstalledPlatformPackRecordsForConnector(
   return loadInstalledPlatformPackRecords().filter(
     (record) => record.connectorId === normalizedConnectorId
   );
+}
+
+export async function removeInstalledPlatformPackRecord(
+  installationId: string
+): Promise<InstalledPlatformPackRecord | null> {
+  const record = getInstalledPlatformPackRecord(installationId);
+  if (!record) {
+    return null;
+  }
+
+  await removeDirectoryIfExists(record.artifactRootPath);
+  deleteInstalledPlatformPackRecord(record.installationId);
+  return record;
 }
 
 export async function subscribeInstalledPlatformPackRecords(

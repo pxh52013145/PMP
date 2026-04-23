@@ -11,7 +11,7 @@ export type BilibiliPlaybackSettingsContentProps = {
   playbackQualityLoading: boolean;
   qualityProbeSourceLocator: string | null;
   availablePlaybackQualityLabel: string;
-  qualityLabelForKey: (qualityKey: string) => string;
+  qualityLabelForKey: (qualityKey: string, qualityLabel?: string | null) => string;
   onQualityHintChange: (qualityKey: string) => void;
   onRefreshQualityOptions: () => void;
 };
@@ -34,6 +34,10 @@ export function BilibiliPlaybackSettingsContent(props: BilibiliPlaybackSettingsC
     onQualityHintChange,
     onRefreshQualityOptions,
   } = props;
+  const selectedOption =
+    playbackQualityOptions.find(
+      (option) => option.key.trim().toLowerCase() === normalizedPlaybackQualityHint.toLowerCase()
+    ) ?? null;
 
   return (
     <>
@@ -47,7 +51,7 @@ export function BilibiliPlaybackSettingsContent(props: BilibiliPlaybackSettingsC
         >
           {playbackQualityOptions.map((option) => {
             const optionKey = option.key.trim().toLowerCase();
-            const label = qualityLabelForKey(optionKey);
+            const label = qualityLabelForKey(optionKey, option.label);
             return (
               <option key={option.key} value={optionKey}>
                 {label}
@@ -70,7 +74,7 @@ export function BilibiliPlaybackSettingsContent(props: BilibiliPlaybackSettingsC
 
       <p className="platform-magnet-note">
         {t('magnet.platform.bilibili.quality.current', {
-          quality: qualityLabelForKey(normalizedPlaybackQualityHint),
+          quality: qualityLabelForKey(normalizedPlaybackQualityHint, selectedOption?.label),
           available: availablePlaybackQualityLabel,
         })}
       </p>

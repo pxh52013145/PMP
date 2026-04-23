@@ -2844,6 +2844,20 @@ export function listPlatformPackRegistrations(): PlatformPackRegistrationRecord[
   return Array.from(platformPackRegistry.values()).map(cloneRecord);
 }
 
+export function resolvePlatformPackRegistrationForInstallation(
+  installationId: string
+): PlatformPackRegistrationRecord | null {
+  ensureBuiltinPlatformPackRegistrationsInitialized();
+  const normalizedInstallationId = normalizeString(installationId);
+  if (!normalizedInstallationId) {
+    return null;
+  }
+
+  const record =
+    platformPackRegistrationByInstallationId.get(normalizedInstallationId) ?? null;
+  return record ? cloneRecord(record) : null;
+}
+
 export function resolvePlatformPackWorkspaceSurface(
   connectorId: string
 ): PlatformPackWorkspaceSurfaceRecord | null {
@@ -3280,6 +3294,28 @@ export function listPlatformPackHostRuntimeSupports(): PlatformPackHostRuntimeSu
   return Array.from(platformPackHostRuntimeSupportRegistry.values()).map(
     cloneHostRuntimeSupport
   );
+}
+
+export function removePlatformPackRegistrationForInstallation(
+  installationId: string
+): boolean {
+  const normalizedInstallationId = normalizeString(installationId);
+  if (!normalizedInstallationId) {
+    return false;
+  }
+
+  const registration =
+    platformPackRegistrationByInstallationId.get(normalizedInstallationId) ?? null;
+  const surface =
+    platformPackWorkspaceSurfaceByInstallationId.get(normalizedInstallationId) ?? null;
+  if (!registration && !surface) {
+    return false;
+  }
+
+  platformPackRegistrationByInstallationId.delete(normalizedInstallationId);
+  platformPackWorkspaceSurfaceByInstallationId.delete(normalizedInstallationId);
+  emitRegistryChanged();
+  return true;
 }
 
 export function resolvePlatformPackAuthAdapter(

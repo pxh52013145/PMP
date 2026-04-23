@@ -9,7 +9,6 @@ import {
 } from '../../../modules/music-platform/platformDiagnostics';
 import {
   getMusicTemplatePlaybackQualityState,
-  normalizeMusicTemplateQualityKey,
   setMusicTemplatePlaybackQualityPreference,
   type MusicTemplatePlaybackQualityState,
   type MusicTemplateRuntimeTarget,
@@ -132,7 +131,7 @@ export function useMusicTemplatePlaybackQuality(
       try {
         const nextState = await setMusicTemplatePlaybackQualityPreference(
           musicRuntimeTarget,
-          normalizeMusicTemplateQualityKey(qualityKey),
+          qualityKey,
           {
             sourceLocator: qualityProbeSourceLocator,
           }

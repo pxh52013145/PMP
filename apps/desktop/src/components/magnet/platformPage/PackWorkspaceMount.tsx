@@ -34,6 +34,7 @@ import { createRuntimeBridgeHostSession } from '../../../magnet-system/plugins/r
 import { bindHostRuntimeEventChannel } from '../../../magnet-system/plugins/runtime/runtimeEventChannel';
 import { createPluginMountApi, type PluginNavigationSnapshot } from '../../../magnet-system/plugins/pluginHostApi';
 import { PLUGIN_PERMISSIONS } from '../../../magnet-system/plugins/host-api/permissions';
+import type { PlatformRuntimeWorkspaceMount } from '../../../modules/music-platform/platformRuntimeDescriptor';
 import { type PlatformPackWorkspaceSurfaceRecord } from '../../../modules/music-platform/platformWorkspaceSurface';
 
 const STARTUP_TIMEOUT_MS = 5_000;
@@ -108,6 +109,7 @@ export interface PackWorkspaceMountProps {
   displayName: string;
   instanceId?: string | null;
   surface: PlatformPackWorkspaceSurfaceRecord;
+  workspaceMount?: PlatformRuntimeWorkspaceMount | null;
 }
 
 export const PackWorkspaceMount: React.FC<PackWorkspaceMountProps> = ({
@@ -115,6 +117,7 @@ export const PackWorkspaceMount: React.FC<PackWorkspaceMountProps> = ({
   displayName,
   instanceId,
   surface,
+  workspaceMount,
 }) => {
   const t = useT();
   const kernel = useKernel();
@@ -187,6 +190,60 @@ export const PackWorkspaceMount: React.FC<PackWorkspaceMountProps> = ({
           }
         : undefined,
     [workspaceContextFields, workspaceContextScope]
+  );
+  const resolvedRuntimeImportUrl = useMemo(
+    () =>
+      workspaceMount?.runtimeImportUrl ??
+      (typeof surface.runtimeImportUrl === 'string' ? surface.runtimeImportUrl : null),
+    [surface.runtimeImportUrl, workspaceMount?.runtimeImportUrl]
+  );
+  const workspaceInstallationId = workspaceMount?.installationId ?? null;
+  const workspaceResolutionSource = workspaceMount?.resolutionSource ?? null;
+  const workspaceSourceType = workspaceMount?.sourceType ?? null;
+  const workspaceSource =
+    workspaceMount?.source ??
+    (typeof surface.source === 'string' ? surface.source : null);
+  const workspacePackageDigest = workspaceMount?.packageDigest ?? null;
+  const workspaceArtifactRootPath = workspaceMount?.artifactRootPath ?? null;
+  const workspaceRuntimePath = workspaceMount?.runtimePath ?? null;
+  const workspaceIconPath = workspaceMount?.iconPath ?? null;
+  const mountTelemetryFields = useMemo(
+    () => ({
+      connectorId,
+      instanceId: instanceId ?? null,
+      installationId: workspaceInstallationId,
+      resolutionSource: workspaceResolutionSource,
+      sourceType: workspaceSourceType,
+      source: workspaceSource,
+      packId: surfacePackId,
+      packVersion: surfacePackVersion,
+      packageDigest: workspacePackageDigest,
+      artifactRootPath: workspaceArtifactRootPath,
+      runtimePath: workspaceRuntimePath,
+      runtimeImportUrl: resolvedRuntimeImportUrl,
+      iconPath: workspaceIconPath,
+      viewId: surfaceRootViewId,
+      viewType: surfaceRootViewType,
+      requiredRuntimeCarrier: surfaceRequiredRuntimeCarrier,
+    }),
+    [
+      connectorId,
+      instanceId,
+      surfacePackId,
+      surfacePackVersion,
+      surfaceRequiredRuntimeCarrier,
+      surfaceRootViewId,
+      surfaceRootViewType,
+      workspaceArtifactRootPath,
+      workspaceIconPath,
+      workspaceInstallationId,
+      workspacePackageDigest,
+      workspaceResolutionSource,
+      workspaceRuntimePath,
+      workspaceSource,
+      workspaceSourceType,
+      resolvedRuntimeImportUrl,
+    ]
   );
 
   const pluginId = useMemo(() => buildPackWorkspacePluginId(surfacePackId), [surfacePackId]);
@@ -350,11 +407,7 @@ export const PackWorkspaceMount: React.FC<PackWorkspaceMountProps> = ({
       telemetry.warn('platform.pack-workspace.mount.boot-timeout', {
         message: 'Pack workspace webview boot timed out before iframe ready.',
         fields: {
-          connectorId,
-          instanceIdPresent: Boolean(instanceId),
-          packId: surfacePackId,
-          viewId: surfaceRootViewId,
-          requiredRuntimeCarrier: surfaceRequiredRuntimeCarrier,
+          ...mountTelemetryFields,
           permissionCount: permissions.size,
           audioVisualEnabled: permissions.has(PLUGIN_PERMISSIONS.audioVisual),
         },
@@ -370,15 +423,11 @@ export const PackWorkspaceMount: React.FC<PackWorkspaceMountProps> = ({
     };
   }, [
     api,
-    connectorId,
     frameId,
-    instanceId,
+    mountTelemetryFields,
     permissions,
     postToFrame,
     runtimeResources,
-    surfacePackId,
-    surfaceRequiredRuntimeCarrier,
-    surfaceRootViewId,
   ]);
 
   useEffect(() => {
@@ -427,11 +476,7 @@ export const PackWorkspaceMount: React.FC<PackWorkspaceMountProps> = ({
       try {
         telemetry.info('platform.pack-workspace.mount.start', {
           fields: {
-            connectorId,
-            instanceIdPresent: Boolean(instanceId),
-            packId: surfacePackId,
-            viewId: surfaceRootViewId,
-            requiredRuntimeCarrier: surfaceRequiredRuntimeCarrier,
+            ...mountTelemetryFields,
             permissionCount: permissions.size,
             audioVisualEnabled: permissions.has(PLUGIN_PERMISSIONS.audioVisual),
           },
@@ -492,8 +537,9 @@ export const PackWorkspaceMount: React.FC<PackWorkspaceMountProps> = ({
         });
 
         const entryUrl =
-          typeof surface.runtimeImportUrl === 'string' && surface.runtimeImportUrl.trim().length > 0
-            ? surface.runtimeImportUrl
+          typeof resolvedRuntimeImportUrl === 'string' &&
+          resolvedRuntimeImportUrl.trim().length > 0
+            ? resolvedRuntimeImportUrl
             : undefined;
         const entryCode = entryUrl ? '' : surface.runtimeCode;
         if (!entryUrl && !entryCode.trim()) {
@@ -573,10 +619,7 @@ export const PackWorkspaceMount: React.FC<PackWorkspaceMountProps> = ({
           telemetry.warn('platform.pack-workspace.mount.unresponsive', {
             message: `Pack workspace runtime became unresponsive after ${elapsed}ms.`,
             fields: {
-              connectorId,
-              instanceIdPresent: Boolean(instanceId),
-              packId: surfacePackId,
-              viewId: surfaceRootViewId,
+              ...mountTelemetryFields,
               elapsedMs: elapsed,
               permissionCount: permissions.size,
               audioVisualEnabled: permissions.has(PLUGIN_PERMISSIONS.audioVisual),
@@ -593,10 +636,7 @@ export const PackWorkspaceMount: React.FC<PackWorkspaceMountProps> = ({
         telemetry.warn('platform.pack-workspace.mount.failed', {
           message: readMountErrorMessage(bootError),
           fields: {
-            connectorId,
-            instanceIdPresent: Boolean(instanceId),
-            packId: surfacePackId,
-            viewId: surfaceRootViewId,
+            ...mountTelemetryFields,
             permissionCount: permissions.size,
             audioVisualEnabled: permissions.has(PLUGIN_PERMISSIONS.audioVisual),
           },
@@ -624,14 +664,15 @@ export const PackWorkspaceMount: React.FC<PackWorkspaceMountProps> = ({
     initialNavigation,
     instanceId,
     mountContext,
+    mountTelemetryFields,
     navigation,
     permissions,
     pluginId,
     postToFrame,
+    resolvedRuntimeImportUrl,
     runtimeId,
     runtimeResources,
     surface.runtimeCode,
-    surface.runtimeImportUrl,
     surfacePackId,
     surfacePlatformId,
     surfaceRequiredRuntimeCarrier,

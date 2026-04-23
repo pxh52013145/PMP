@@ -2454,11 +2454,26 @@ describe('host.pmp capabilities', () => {
       'host.pmp.connector-auth',
       'listAuthSnapshots'
     );
+    const refreshedSnapshotsResult = await api.host.invokeCapability(
+      'host.pmp.connector-auth',
+      'listAuthSnapshots',
+      {
+        refresh: true,
+      }
+    );
     const snapshotResult = await api.host.invokeCapability(
       'host.pmp.connector-auth',
       'getAuthSnapshot',
       {
         connectorId: 'connector.platform.bilibili',
+      }
+    );
+    const refreshedSnapshotResult = await api.host.invokeCapability(
+      'host.pmp.connector-auth',
+      'getAuthSnapshot',
+      {
+        connectorId: 'connector.platform.bilibili',
+        refresh: true,
       }
     );
     const beginResult = await api.host.invokeCapability('host.pmp.connector-auth', 'beginQrLogin', {
@@ -2490,7 +2505,31 @@ describe('host.pmp capabilities', () => {
         ],
       },
     });
+    expect(refreshedSnapshotsResult).toMatchObject({
+      ok: true,
+      data: {
+        snapshots: [
+          {
+            connectorId: 'connector.platform.bilibili',
+            instanceId: 'bilibili:builtin',
+            authState: 'authorized',
+          },
+        ],
+      },
+    });
     expect(snapshotResult).toMatchObject({
+      ok: true,
+      data: {
+        connectorId: 'connector.platform.bilibili',
+        instanceId: 'bilibili:builtin',
+        snapshot: {
+          connectorId: 'connector.platform.bilibili',
+          instanceId: 'bilibili:builtin',
+          authState: 'authorized',
+        },
+      },
+    });
+    expect(refreshedSnapshotResult).toMatchObject({
       ok: true,
       data: {
         connectorId: 'connector.platform.bilibili',
@@ -2528,7 +2567,10 @@ describe('host.pmp capabilities', () => {
       },
     });
     expect(musicPlatformModule.listPlatformConnectorDefinitions).toHaveBeenCalledTimes(1);
-    expect(musicPlatformModule.listPlatformInstanceAuthSnapshots).toHaveBeenCalledWith({
+    expect(musicPlatformModule.listPlatformInstanceAuthSnapshots).toHaveBeenNthCalledWith(1, {
+      refresh: false,
+    });
+    expect(musicPlatformModule.listPlatformInstanceAuthSnapshots).toHaveBeenNthCalledWith(2, {
       refresh: true,
     });
     expect(musicPlatformModule.resolvePlatformInstanceId).toHaveBeenCalledWith({

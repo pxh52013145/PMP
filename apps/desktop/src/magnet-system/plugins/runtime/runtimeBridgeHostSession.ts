@@ -515,7 +515,20 @@ export function createRuntimeBridgeHostSession(
         }
         const pending = revokePending.get(requestId);
         if (!pending) {
-          throw new Error(`Received unexpected runtime.capabilities.revoke.ack: ${requestId}`);
+          traceStep('plugin.governance.control.revoke.ack.ignored', {
+            direction: 'runtime->host',
+            requestId,
+            traceId: message.traceId,
+            protocolOp: message.op,
+            status: 'ignored',
+            extraFields: {
+              ok: message.ok,
+              ignored: message.ignored ?? null,
+              reason: message.reason ?? null,
+              state,
+            },
+          });
+          return;
         }
         revokePending.delete(requestId);
         pending.resolve(message);

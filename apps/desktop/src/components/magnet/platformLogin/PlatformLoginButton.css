@@ -19,6 +19,7 @@
 .platform-login-more-button,
 .platform-login-inline-close,
 .platform-login-menu-action,
+.platform-login-pack-item-action,
 .platform-login-register-item,
 .platform-login-actions button {
   appearance: none;
@@ -207,6 +208,13 @@
   padding: 10px;
 }
 
+.platform-login-manage-popup {
+  width: min(460px, calc(100vw - 20px));
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
 .platform-login-auth-popup {
   width: min(348px, calc(100vw - 20px));
   padding: 12px;
@@ -227,12 +235,170 @@
   gap: 4px;
 }
 
+.platform-login-pack-section-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.58);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.platform-login-pack-list {
+  display: grid;
+  gap: 10px;
+  max-height: min(360px, 52vh);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.platform-login-pack-item {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.025));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+    0 10px 24px rgba(0, 0, 0, 0.18);
+}
+
+.platform-login-pack-item-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.platform-login-pack-item-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  flex: 1;
+}
+
+.platform-login-pack-item-label {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.platform-login-pack-item-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.platform-login-pack-item-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.platform-login-pack-item-chip--strong {
+  color: rgba(12, 12, 14, 0.94);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: none;
+}
+
+.platform-login-pack-item-hint,
+.platform-login-pack-item-warning {
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.56);
+}
+
+.platform-login-pack-item-warning {
+  color: rgba(255, 206, 125, 0.94);
+}
+
+.platform-login-pack-item-meta {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.48);
+  word-break: break-all;
+}
+
+.platform-login-pack-item-meta-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.platform-login-pack-item-meta-grid > span {
+  min-width: 0;
+  padding: 8px 9px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.platform-login-pack-item-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.platform-login-pack-item-action {
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  padding: 7px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+  text-align: center;
+}
+
+.platform-login-pack-item-action:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.platform-login-pack-item-action:disabled {
+  opacity: 0.44;
+  cursor: not-allowed;
+}
+
+.platform-login-pack-item-action--danger {
+  color: rgba(255, 141, 141, 0.94);
+}
+
+.platform-login-pack-item-action--primary {
+  color: rgba(8, 10, 12, 0.92);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: none;
+}
+
+.platform-login-pack-item-action--primary:hover {
+  background: rgba(255, 255, 255, 1);
+}
+
+.platform-login-pack-item-action-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
 .platform-login-pack-import {
-  margin-top: 10px;
+  margin-top: 2px;
   padding-top: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .platform-login-pack-input {
@@ -248,10 +414,14 @@
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 10px;
   padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.05);
   color: rgba(255, 255, 255, 0.84);
   font-size: 12px;
   cursor: pointer;
+}
+
+.platform-login-pack-trigger:hover {
+  background: rgba(255, 255, 255, 0.09);
 }
 
 .platform-login-pack-trigger:disabled {
@@ -263,6 +433,22 @@
   font-size: 11px;
   line-height: 1.45;
   color: rgba(255, 255, 255, 0.56);
+}
+
+@media (max-width: 720px) {
+  .platform-login-pack-item-meta-grid,
+  .platform-login-pack-item-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-login-pack-item-head {
+    flex-wrap: wrap;
+  }
+
+  .platform-login-pack-item-chips {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 .platform-login-register-item,

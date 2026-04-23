@@ -45,6 +45,25 @@ export function resolveBilibiliPlaybackQualityLabelKey(key: string): string {
   }
 }
 
+export function resolveBilibiliPlaybackQualityDisplayLabel(
+  qualityKey: string,
+  qualityLabel: string | null | undefined,
+  t: Translator
+): string {
+  const normalizedKey = qualityKey.trim();
+  const normalizedLabel = qualityLabel?.trim();
+  if (normalizedLabel && normalizedLabel.toLowerCase() !== normalizedKey.toLowerCase()) {
+    return normalizedLabel;
+  }
+
+  const fallbackLabelKey = resolveBilibiliPlaybackQualityLabelKey(qualityKey);
+  if (fallbackLabelKey) {
+    return t(fallbackLabelKey);
+  }
+
+  return normalizedLabel || normalizedKey || t('magnet.platform.bilibili.quality.option.auto');
+}
+
 export interface UseBilibiliPlaybackQualityParams {
   controllerVisible: boolean;
   bilibiliRuntimeTarget: BilibiliWorkspaceRuntimeTarget | null;
@@ -90,17 +109,31 @@ export function useBilibiliPlaybackQuality(
     () => normalizeBilibiliPlaybackQualityKey(playbackQualityHint),
     [playbackQualityHint]
   );
+  const preferredPlaybackQualityOption = useMemo(
+    () =>
+      playbackQualityOptions.find(
+        (item) => normalizeBilibiliPlaybackQualityKey(item.key) === normalizedPlaybackQualityHint
+      ) ?? null,
+    [normalizedPlaybackQualityHint, playbackQualityOptions]
+  );
 
   const preferredPlaybackQualityLabel = useMemo(
-    () => t(resolveBilibiliPlaybackQualityLabelKey(normalizedPlaybackQualityHint)),
-    [normalizedPlaybackQualityHint, t]
+    () =>
+      resolveBilibiliPlaybackQualityDisplayLabel(
+        normalizedPlaybackQualityHint,
+        preferredPlaybackQualityOption?.label,
+        t
+      ),
+    [normalizedPlaybackQualityHint, preferredPlaybackQualityOption?.label, t]
   );
 
   const availablePlaybackQualityLabel = useMemo(() => {
-    const availableKeys = playbackQualityOptions.filter((item) => item.available).map((item) => item.key);
-    if (availableKeys.length === 0) return t('magnet.platform.bilibili.quality.none');
-    return availableKeys
-      .map((key) => t(resolveBilibiliPlaybackQualityLabelKey(key)))
+    const availableOptions = playbackQualityOptions.filter((item) => item.available);
+    if (availableOptions.length === 0) return t('magnet.platform.bilibili.quality.none');
+    return availableOptions
+      .map((option) =>
+        resolveBilibiliPlaybackQualityDisplayLabel(option.key, option.label, t)
+      )
       .join(' / ');
   }, [playbackQualityOptions, t]);
 

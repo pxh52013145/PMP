@@ -1037,6 +1037,76 @@ describe('platformPackRegistry external pack readiness', () => {
     ).toEqual([...storedRecords.map((record) => record.installationId)].sort());
   });
 
+  it('restores imported external packs and imported instances after a restart', async () => {
+    const registry = await import('./platformPackRegistry');
+    const windowCommunication = await import('../../utils/windowCommunication');
+    const importedInstances = await import('./platformImportedInstanceRegistry');
+    const bytes = decodePackArchive(EXTERNAL_PROVIDER_ONLY_PACK_BASE64);
+
+    const firstInstall = await registry.installPlatformPackFromZipBytes(bytes, {
+      source: 'file:qqmusic-restart.pmpp',
+    });
+    await flushBootLifecycle();
+
+    const storedBeforeRestart = JSON.parse(
+      localStorage.getItem(windowCommunication.STORAGE_KEYS.PLATFORM_PACKS_V1) ?? '[]'
+    ) as Array<Record<string, unknown>>;
+    expect(
+      storedBeforeRestart.some(
+        (record) => record.installationId === firstInstall.installationId
+      )
+    ).toBe(true);
+    expect(
+      importedInstances
+        .listPlatformImportedInstanceRecords()
+        .some((record) => record.instanceId === firstInstall.importedInstanceId)
+    ).toBe(true);
+
+    resetBootTestEnvironment({
+      clearStorage: false,
+      clearFs: false,
+      clearBuiltinPackIndex: false,
+    });
+
+    const secondBoot = await bootPlatformPackRegistry();
+    const restoredInstalledPacks = await import('./installedPlatformPacks');
+    const restoredImportedInstances = await import('./platformImportedInstanceRegistry');
+
+    expect(
+      secondBoot.registry
+        .listPlatformPackRegistrations()
+        .some((record) => record.connectorId === 'connector.platform.qqmusic')
+    ).toBe(true);
+
+    const restoredInstalledRecord =
+      restoredInstalledPacks
+        .loadInstalledPlatformPackRecords()
+        .find((record) => record.installationId === firstInstall.installationId) ?? null;
+    expect(restoredInstalledRecord).toMatchObject({
+      installationId: firstInstall.installationId,
+      connectorId: 'connector.platform.qqmusic',
+      sourceType: 'external',
+      source: 'file:qqmusic-restart.pmpp',
+    });
+
+    const restoredImportedRecord =
+      restoredImportedInstances
+        .listPlatformImportedInstanceRecords()
+        .find((record) => record.installationId === firstInstall.installationId) ?? null;
+    expect(restoredImportedRecord).toMatchObject({
+      installationId: firstInstall.installationId,
+      instanceId: firstInstall.importedInstanceId,
+      connectorId: 'connector.platform.qqmusic',
+      platformId: 'qqmusic',
+    });
+
+    expect(
+      Array.from(fsState.files.keys()).some((path) =>
+        path.includes(`/music-platform-packs/external-qqmusic/${firstInstall.installationId}/`)
+      )
+    ).toBe(true);
+  });
+
   it('records structured diagnostics when an external pack has no compatible runtime path', async () => {
     const registry = await import('./platformPackRegistry');
     const bytes = decodePackArchive(EXTERNAL_BROKEN_PACK_BASE64);

@@ -295,6 +295,64 @@ export function getPlatformImportedInstanceRecordByInstallationId(
   );
 }
 
+export async function persistPlatformImportedInstanceRecords(
+  records: PlatformImportedInstanceRecord[]
+): Promise<void> {
+  ensurePlatformImportedInstanceRegistryInitialized();
+  await broadcastDataUpdate(
+    STORAGE_KEYS.PLATFORM_IMPORTED_INSTANCES_V1,
+    records
+      .slice()
+      .sort(sortPlatformImportedInstanceRecords)
+      .map(clonePlatformImportedInstanceRecord),
+    TAURI_EVENTS.PLATFORM_IMPORTED_INSTANCES_UPDATED
+  );
+}
+
+export async function removePlatformImportedInstanceRecord(
+  instanceId: string
+): Promise<PlatformImportedInstanceRecord | null> {
+  ensurePlatformImportedInstanceRegistryInitialized();
+  const normalizedInstanceId = normalizeString(instanceId);
+  if (!normalizedInstanceId) {
+    return null;
+  }
+
+  const current = readStoredPlatformImportedInstanceRecords();
+  const matched =
+    current.find((record) => record.instanceId === normalizedInstanceId) ?? null;
+  if (!matched) {
+    return null;
+  }
+
+  await persistPlatformImportedInstanceRecords(
+    current.filter((record) => record.instanceId !== normalizedInstanceId)
+  );
+  return clonePlatformImportedInstanceRecord(matched);
+}
+
+export async function removePlatformImportedInstanceRecordByInstallationId(
+  installationId: string
+): Promise<PlatformImportedInstanceRecord | null> {
+  ensurePlatformImportedInstanceRegistryInitialized();
+  const normalizedInstallationId = normalizeString(installationId);
+  if (!normalizedInstallationId) {
+    return null;
+  }
+
+  const current = readStoredPlatformImportedInstanceRecords();
+  const matched =
+    current.find((record) => record.installationId === normalizedInstallationId) ?? null;
+  if (!matched) {
+    return null;
+  }
+
+  await persistPlatformImportedInstanceRecords(
+    current.filter((record) => record.installationId !== normalizedInstallationId)
+  );
+  return clonePlatformImportedInstanceRecord(matched);
+}
+
 export async function subscribePlatformImportedInstanceRecords(
   listener: () => void
 ): Promise<() => void> {

@@ -20,7 +20,10 @@ import {
 import type { BilibiliPlaybackSettingsContentProps } from './BilibiliPlaybackSettingsModal';
 import type { BilibiliWorkspaceProps } from './BilibiliWorkspace';
 import type { BilibiliWorkspaceRuntimeTarget } from './bilibiliWorkspaceRuntime';
-import { useBilibiliPlaybackQuality, resolveBilibiliPlaybackQualityLabelKey } from './useBilibiliPlaybackQuality';
+import {
+  useBilibiliPlaybackQuality,
+  resolveBilibiliPlaybackQualityDisplayLabel,
+} from './useBilibiliPlaybackQuality';
 import { useBilibiliResourceBrowser } from './useBilibiliResourceBrowser';
 import { useBilibiliResourceContextMenu } from './useBilibiliResourceContextMenu';
 import { useBilibiliResourceEnhancer } from './useBilibiliResourceEnhancer';
@@ -359,8 +362,12 @@ export function useBilibiliWorkspaceAdapterController(
     playbackQualityLoading: playbackQuality.playbackQualityLoading,
     qualityProbeSourceLocator,
     availablePlaybackQualityLabel: playbackQuality.availablePlaybackQualityLabel,
-    qualityLabelForKey: (qualityKey) =>
-      t(resolveBilibiliPlaybackQualityLabelKey(normalizeBilibiliPlaybackQualityKey(qualityKey))),
+    qualityLabelForKey: (qualityKey, qualityLabel) =>
+      resolveBilibiliPlaybackQualityDisplayLabel(
+        normalizeBilibiliPlaybackQualityKey(qualityKey),
+        qualityLabel,
+        t
+      ),
     onQualityHintChange: playbackQuality.handleQualityHintChange,
     onRefreshQualityOptions: () => {
       if (!qualityProbeSourceLocator) return;

@@ -38,12 +38,7 @@ export interface MusicTemplateRecommendationsResult {
 
 export type MusicTemplatePlaybackQualityOption = PlatformWorkspaceQualityState['options'][number];
 export type MusicTemplatePlaybackQualityState = PlatformWorkspaceQualityState;
-export type MusicTemplatePlaybackQualityKey =
-  | 'auto'
-  | 'standard'
-  | 'higher'
-  | 'exhigh'
-  | 'lossless';
+export type MusicTemplatePlaybackQualityKey = string;
 
 export type MusicTemplateWorkspaceModel = PlatformWorkspacePageModel;
 
@@ -99,15 +94,19 @@ const MUSIC_TEMPLATE_QUALITY_PAGE_KINDS = new Set(['quality']);
 export function normalizeMusicTemplateQualityKey(
   value: string
 ): MusicTemplatePlaybackQualityKey {
-  const normalized = value.trim().toLowerCase();
+  const trimmed = value.trim();
+  if (!trimmed) return 'auto';
+
+  const normalized = trimmed.toLowerCase();
+  if (normalized === 'auto') return 'auto';
   if (normalized === 'standard' || normalized === '128k') return 'standard';
   if (normalized === 'higher' || normalized === '192k') return 'higher';
   if (normalized === 'exhigh' || normalized === '320k') return 'exhigh';
   if (normalized === 'lossless' || normalized === '999k') return 'lossless';
-  return 'auto';
+  return trimmed;
 }
 
-export function resolveMusicTemplateQualityLabelKey(value: string): string {
+export function resolveMusicTemplateQualityLabelKey(value: string): string | null {
   switch (normalizeMusicTemplateQualityKey(value)) {
     case 'standard':
       return 'magnet.platform.music-template.quality.option.standard';
@@ -117,8 +116,10 @@ export function resolveMusicTemplateQualityLabelKey(value: string): string {
       return 'magnet.platform.music-template.quality.option.exhigh';
     case 'lossless':
       return 'magnet.platform.music-template.quality.option.lossless';
-    default:
+    case 'auto':
       return 'magnet.platform.music-template.quality.option.auto';
+    default:
+      return null;
   }
 }
 

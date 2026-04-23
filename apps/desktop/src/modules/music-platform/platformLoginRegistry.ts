@@ -143,7 +143,6 @@ export function sanitizePlatformLoginRegistry(
     };
 
     if (!isPlatformConnectorId(candidate.connectorId)) continue;
-    if (!definitionMap.has(candidate.connectorId)) continue;
     const candidateInstanceId = normalizeString(candidate.instanceId);
     const preferredInstanceId = pickPreferredInstanceIdForConnector(
       candidate.connectorId,
@@ -160,6 +159,9 @@ export function sanitizePlatformLoginRegistry(
       (!isPlatformInstanceRecordArray(instances) ||
         instanceMap.has(instanceId) ||
         importedInstanceIds.has(instanceId));
+    if (!definitionMap.has(candidate.connectorId) && !hasResolvedInstance) {
+      continue;
+    }
     if (!hasResolvedInstance) {
       if (isPlatformInstanceRecordArray(instances)) {
         continue;

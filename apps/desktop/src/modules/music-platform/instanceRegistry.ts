@@ -574,8 +574,12 @@ async function refreshPlatformInstanceAuthState(
         availability: nextRecord.availability ?? null,
       },
     });
-    platformInstanceRegistry.set(normalizedInstanceId, nextRecord);
-    emitPlatformInstancesChanged();
+    const latestRecord =
+      platformInstanceRegistry.get(normalizedInstanceId) ?? currentRecord;
+    if (!arePlatformInstanceRecordsEqual(latestRecord, nextRecord)) {
+      platformInstanceRegistry.set(normalizedInstanceId, nextRecord);
+      emitPlatformInstancesChanged();
+    }
     return clonePlatformInstanceRecord(nextRecord);
   })();
 
