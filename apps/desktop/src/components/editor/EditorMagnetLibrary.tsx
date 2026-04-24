@@ -777,9 +777,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                           ? t('editor.magnet-library.magnet.tooltip.creatorWindowOpen')
                           : t('editor.magnet-library.magnet.tooltip.edit')
                       }
-                      data-text="E"
+                      data-text="◈"
                     >
-                      E
+                      ◈
                     </button>
 
                     {/* 澶栨寮€鍏?*/}
@@ -797,7 +797,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                           : t('editor.magnet-library.magnet.tooltip.chrome.enable')
                       }
                     >
-                      {chromeEnabled ? 'C' : 'c'}
+                      {chromeEnabled ? '▣' : '▢'}
                     </button>
 
                     {/* 娣诲姞/绉婚櫎 */}
@@ -818,9 +818,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                             ? t('editor.magnet-library.magnet.tooltip.cannotRemoveRequired')
                             : t('editor.magnet-library.magnet.tooltip.removeFromMatrix')
                         }
-                        data-text="-"
+                        data-text="－"
                       >
-                        -
+                        －
                       </button>
                     ) : (
                       <button
@@ -828,7 +828,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                         onClick={() => void requestMagnetPlacement(magnet)}
                         title={t('editor.magnet-library.magnet.tooltip.addToMatrix')}
                       >
-                        +
+                        ＋
                       </button>
                     )}
 
@@ -839,7 +839,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                         onClick={() => onMagnetDeleteFromLibrary(magnet.id)}
                         title={t('editor.magnet-library.magnet.tooltip.deleteFromLibrary')}
                       >
-                        x
+                        ╳
                       </button>
                     )}
                   </div>
