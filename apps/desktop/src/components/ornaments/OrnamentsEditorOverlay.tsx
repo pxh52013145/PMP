@@ -10,6 +10,10 @@ import { offsetFromRect, ornamentRect, sortedOrnaments, type OrnamentRect } from
 import './OrnamentsEditorOverlay.css';
 
 const EDIT_MARGIN = 240;
+const TOOLBAR_WIDTH = 224;
+const TOOLBAR_HEIGHT = 38;
+const TOOLBAR_GAP = 12;
+const EDGE_PADDING = 12;
 
 function toEditorRect(rect: OrnamentRect): OrnamentRect {
   return { ...rect, left: rect.left + EDIT_MARGIN, top: rect.top + EDIT_MARGIN };
@@ -47,6 +51,56 @@ function updateItem(config: OrnamentsConfigV2, itemId: string, updater: (item: O
 
 function maxOrder(items: readonly OrnamentItem[], plane: number): number {
   return items.reduce((max, item) => (item.layer.plane === plane ? Math.max(max, item.layer.order) : max), 0);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+type ToolbarPlacement = {
+  className: string;
+  style: React.CSSProperties;
+};
+
+function toolbarPlacement(rect: OrnamentRect, overlayWidth: number, overlayHeight: number): ToolbarPlacement {
+  const centeredLeft = rect.left + rect.width / 2 - TOOLBAR_WIDTH / 2;
+  const clampedLeft = clamp(centeredLeft, EDGE_PADDING, Math.max(EDGE_PADDING, overlayWidth - TOOLBAR_WIDTH - EDGE_PADDING));
+  const bottomTop = rect.top + rect.height + TOOLBAR_GAP;
+  const topTop = rect.top - TOOLBAR_HEIGHT - TOOLBAR_GAP;
+
+  if (bottomTop + TOOLBAR_HEIGHT <= overlayHeight - EDGE_PADDING) {
+    return {
+      className: 'ornaments-editor-overlay__toolbar ornaments-editor-overlay__toolbar--bottom',
+      style: { left: clampedLeft, top: bottomTop },
+    };
+  }
+
+  if (topTop >= EDGE_PADDING) {
+    return {
+      className: 'ornaments-editor-overlay__toolbar ornaments-editor-overlay__toolbar--top',
+      style: { left: clampedLeft, top: topTop },
+    };
+  }
+
+  const rightLeft = rect.left + rect.width + TOOLBAR_GAP;
+  const leftLeft = rect.left - TOOLBAR_WIDTH - TOOLBAR_GAP;
+  const sideTop = clamp(
+    rect.top + rect.height / 2 - TOOLBAR_HEIGHT / 2,
+    EDGE_PADDING,
+    Math.max(EDGE_PADDING, overlayHeight - TOOLBAR_HEIGHT - EDGE_PADDING)
+  );
+
+  if (rightLeft + TOOLBAR_WIDTH <= overlayWidth - EDGE_PADDING) {
+    return {
+      className: 'ornaments-editor-overlay__toolbar ornaments-editor-overlay__toolbar--right',
+      style: { left: rightLeft, top: sideTop },
+    };
+  }
+
+  return {
+    className: 'ornaments-editor-overlay__toolbar ornaments-editor-overlay__toolbar--left',
+    style: { left: Math.max(EDGE_PADDING, leftLeft), top: sideTop },
+  };
 }
 
 export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
@@ -235,6 +289,7 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
       {orderedItems.map((item) => {
         const rect = toEditorRect(ornamentRect(item, viewportWidth, viewportHeight));
         const isSelected = item.id === selectedId;
+        const toolbar = toolbarPlacement(rect, window.innerWidth, window.innerHeight);
         return (
           <div
             key={item.id}
@@ -265,12 +320,27 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
                     onPointerDown={(event) => handleResizePointerDown(event, handle)}
                   />
                 ))}
-                <div className="ornaments-editor-overlay__toolbar">
-                  <button type="button" onClick={() => void changePlane(1)}>窗前</button>
-                  <button type="button" onClick={() => void changePlane(-1)}>窗后</button>
-                  <button type="button" onClick={() => void nudgeOrder(1)}>上移</button>
-                  <button type="button" onClick={() => void nudgeOrder(-1)}>下移</button>
-                  <button type="button" onClick={() => void deleteSelected()}>删除</button>
+                <div className={toolbar.className} style={toolbar.style}>
+                  <button type="button" title="置于窗前" onClick={() => void changePlane(1)}>
+                    <span className="ornaments-editor-overlay__toolbar-icon">⬆</span>
+                    <span>窗前</span>
+                  </button>
+                  <button type="button" title="置于窗后" onClick={() => void changePlane(-1)}>
+                    <span className="ornaments-editor-overlay__toolbar-icon">⬇</span>
+                    <span>窗后</span>
+                  </button>
+                  <button type="button" title="同层上移" onClick={() => void nudgeOrder(1)}>
+                    <span className="ornaments-editor-overlay__toolbar-icon">＋</span>
+                    <span>上移</span>
+                  </button>
+                  <button type="button" title="同层下移" onClick={() => void nudgeOrder(-1)}>
+                    <span className="ornaments-editor-overlay__toolbar-icon">－</span>
+                    <span>下移</span>
+                  </button>
+                  <button type="button" title="删除挂件" className="danger" onClick={() => void deleteSelected()}>
+                    <span className="ornaments-editor-overlay__toolbar-icon">×</span>
+                    <span>删除</span>
+                  </button>
                 </div>
               </>
             )}
