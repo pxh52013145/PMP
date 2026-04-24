@@ -47,6 +47,14 @@ import {
   supportsInstalledExtensionMagnetSurface,
 } from '../../magnet-system/plugins/installedExtensionHostPmp';
 import type { PluginRuntimeResolution, PluginRuntimeSurfaceKind } from '../../magnet-system/plugins/runtime';
+import {
+  detachPluginDevSession,
+  getPluginDevSessionsRevision,
+  loadPluginDevSessions,
+  refreshPluginDevSession,
+  subscribePluginDevSessions,
+  type PluginDevSessionRecord,
+} from '../../magnet-system/plugins/devSessionRegistry';
 
 function readInstalledExtensionDisplayName(record: InstalledHostExtensionRecord): string {
   return record.manifest.identity.displayName ?? record.manifest.identity.name;
@@ -145,7 +153,9 @@ function buildRuntimePresentation(
 } {
   const runtimeSourceLabel =
     runtimeResolution?.status === 'resolved'
-      ? t('settings.plugins.tag.runtimeSourceManifest')
+      ? runtimeResolution.source === 'dev-session'
+        ? t('settings.plugins.tag.runtimeSourceDev')
+        : t('settings.plugins.tag.runtimeSourceManifest')
       : null;
 
   if (!runtimeResolution) {
@@ -194,6 +204,28 @@ function buildRuntimePresentation(
   };
 }
 
+function formatSettingsTimestamp(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '-';
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return '-';
+  }
+}
+
+function formatDevSessionRestartSummary(
+  t: (key: string, params?: Record<string, unknown>) => string,
+  session: PluginDevSessionRecord
+): string {
+  if (!session.lastRestartReason) {
+    return '-';
+  }
+  return t('settings.plugins.devSession.lastRestartValue', {
+    reason: session.lastRestartReason,
+    at: formatSettingsTimestamp(session.lastRestartAt),
+  });
+}
+
 export function PluginsSettingsPanel() {
   const kernel = useKernel();
   const t = useT();
@@ -219,6 +251,11 @@ export function PluginsSettingsPanel() {
     getInstalledExtensionAuditRevision,
     getInstalledExtensionAuditRevision
   );
+  const devSessionRevision = useSyncExternalStore(
+    subscribePluginDevSessions,
+    getPluginDevSessionsRevision,
+    getPluginDevSessionsRevision
+  );
 
   const installedExtensionsV2 = useMemo(() => {
     void extensionStoreRevision;
@@ -229,8 +266,17 @@ export function PluginsSettingsPanel() {
     void extensionAuditRevision;
     return readInstalledExtensionAuditLog();
   }, [extensionAuditRevision]);
+  const pluginDevSessions = useMemo(() => {
+    void devSessionRevision;
+    return loadPluginDevSessions();
+  }, [devSessionRevision]);
+  const pluginDevSessionById = useMemo(
+    () => new Map(pluginDevSessions.map((session) => [session.pluginId, session] as const)),
+    [pluginDevSessions]
+  );
 
   const runtimeResolutionByExtensionId = useMemo(() => {
+    void devSessionRevision;
     return new Map(
       installedExtensionsV2.map((record) => {
         const surfaceKind = getInstalledExtensionPrimarySurfaceKind(record);
@@ -250,7 +296,7 @@ export function PluginsSettingsPanel() {
         ] as const;
       })
     );
-  }, [installedExtensionsV2]);
+  }, [devSessionRevision, installedExtensionsV2]);
 
   const restartInstalledExtensionRuntime = useCallback(
     (pluginId: string, reason: string) => {
@@ -562,6 +608,7 @@ export function PluginsSettingsPanel() {
           installedExtensionsV2.map((record) => {
             const identity = record.manifest.identity;
             const runtimeResolution = runtimeResolutionByExtensionId.get(identity.id) ?? null;
+            const devSession = pluginDevSessionById.get(identity.id) ?? null;
             const hostContributions = readInstalledExtensionPmpHostContributions(record);
             const capabilityBindings = listInstalledExtensionCapabilityBindings(record);
             const deniedCapabilities = record.deniedCapabilities ?? [];
@@ -712,6 +759,68 @@ export function PluginsSettingsPanel() {
                     )}
                   </div>
 
+                  {devSession ? (
+                    <div className="settings-plugin-permissions">
+                      <div>{t('settings.plugins.devSession.label')}</div>
+                      <div className="settings-row-desc-list settings-row-meta">
+                        <div>
+                          {t('settings.plugins.devSession.projectRoot', {
+                            path: devSession.projectRoot,
+                          })}
+                        </div>
+                        <div>
+                          {t('settings.plugins.devSession.mode', {
+                            mode:
+                              devSession.mode === 'entry-url'
+                                ? t('settings.plugins.devSession.mode.entryUrl')
+                                : t('settings.plugins.devSession.mode.entryPath'),
+                          })}
+                        </div>
+                        <div>
+                          {t('settings.plugins.devSession.runtimeKinds', {
+                            kinds: devSession.runtimeKinds.join(', '),
+                          })}
+                        </div>
+                        <div>
+                          {t('settings.plugins.devSession.effectiveSource', {
+                            source:
+                              runtimeSourceLabel ??
+                              (devSession
+                                ? t('settings.plugins.tag.runtimeSourceDev')
+                                : t('settings.plugins.tag.runtimeSourceManifest')),
+                          })}
+                        </div>
+                        {runtimeResolution?.status === 'resolved' ? (
+                          <div
+                            className="settings-row-desc"
+                            title={runtimeResolution.artifact.path}
+                          >
+                            {t('settings.plugins.devSession.effectivePath', {
+                              path: runtimeResolution.artifact.path,
+                            })}
+                          </div>
+                        ) : null}
+                        <div>
+                          {t('settings.plugins.devSession.lastRestart', {
+                            value: formatDevSessionRestartSummary(t, devSession),
+                          })}
+                        </div>
+                        <div>
+                          {t('settings.plugins.devSession.updatedAt', {
+                            value: formatSettingsTimestamp(devSession.updatedAt),
+                          })}
+                        </div>
+                        {devSession.lastError ? (
+                          <div className="settings-plugin-error" title={devSession.lastError}>
+                            {t('settings.plugins.devSession.lastError', {
+                              message: devSession.lastError,
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+
                   {record.lastError && (
                     <div className="settings-plugin-error" title={record.lastError}>
                       {record.lastError}
@@ -857,6 +966,32 @@ export function PluginsSettingsPanel() {
                   >
                     {t('common.action.restart')}
                   </PmpButton>
+
+                  {devSession ? (
+                    <PmpButton
+                      type="button"
+                      className="settings-action-btn"
+                      variant="default"
+                      disabled={busy}
+                      onClick={() => refreshPluginDevSession(identity.id)}
+                      title={t('settings.plugins.devSession.action.refresh.title')}
+                    >
+                      {t('settings.plugins.devSession.action.refresh')}
+                    </PmpButton>
+                  ) : null}
+
+                  {devSession ? (
+                    <PmpButton
+                      type="button"
+                      className="settings-action-btn"
+                      variant="danger"
+                      disabled={busy}
+                      onClick={() => detachPluginDevSession(identity.id)}
+                      title={t('settings.plugins.devSession.action.detach.title')}
+                    >
+                      {t('settings.plugins.devSession.action.detach')}
+                    </PmpButton>
+                  ) : null}
 
                   <PmpButton
                     type="button"

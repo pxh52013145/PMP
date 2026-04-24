@@ -3946,7 +3946,7 @@ function createPmpMagnetsRendererHandler(): PluginHostCapabilityHandler {
           rendererCount: renderers.length,
           variantRendererCount,
           variantCount,
-          systemSpaces: ['space1', 'space2'],
+          systemSpaces: ['space1', 'space2', 'space3'],
           fallbackScope: 'required',
         });
       }
@@ -4027,7 +4027,9 @@ function createPmpMagnetsRendererHandler(): PluginHostCapabilityHandler {
 
         const normalizedSpaceId = spaceId.trim();
         const knownSpace =
-          normalizedSpaceId === 'space1' || normalizedSpaceId === 'space2'
+          normalizedSpaceId === 'space1' ||
+          normalizedSpaceId === 'space2' ||
+          normalizedSpaceId === 'space3'
             ? normalizedSpaceId
             : null;
         const requiredAnchorsByMagnetId = cloneAnchorsByMagnetId(

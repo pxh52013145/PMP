@@ -216,7 +216,8 @@ function createSurface(): PlatformPackWorkspaceSurfaceRecord {
 }
 
 function createWorkspaceMount(
-  surface: PlatformPackWorkspaceSurfaceRecord
+  surface: PlatformPackWorkspaceSurfaceRecord,
+  overrides: Partial<PlatformRuntimeWorkspaceMount> = {}
 ): PlatformRuntimeWorkspaceMount {
   return {
     resolutionSource: 'imported-instance',
@@ -231,6 +232,7 @@ function createWorkspaceMount(
     runtimeImportUrl: surface.runtimeImportUrl ?? null,
     iconPath: 'D:/packs/netease/install-1/icon.svg',
     workspaceSurface: surface,
+    ...overrides,
   };
 }
 
@@ -660,5 +662,111 @@ describe('PackWorkspaceMount', () => {
     expect(testState.runtimeSession.start).toHaveBeenCalledTimes(1);
     expect(testState.runtimeSession.revokeCapabilities).not.toHaveBeenCalled();
     expect(testState.runtimeSession.dispose).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds frame and runtime identity when the mounted instance or installation changes', async () => {
+    const surface = createSurface();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const workspaceMount = createWorkspaceMount(surface);
+
+    await act(async () => {
+      root.render(
+        <PackWorkspaceMount
+          connectorId="connector.platform.netease"
+          displayName="Netease"
+          instanceId="netease:imported-a"
+          surface={surface}
+          workspaceMount={workspaceMount}
+        />
+      );
+      await flushEffects();
+    });
+
+    mountedRoot = {
+      root,
+      container,
+    };
+
+    const iframe = container.querySelector('iframe');
+    expect(iframe).toBeTruthy();
+    const iframeWindow = {
+      postMessage: vi.fn(),
+    };
+    Object.defineProperty(iframe as HTMLIFrameElement, 'contentWindow', {
+      configurable: true,
+      value: iframeWindow,
+    });
+
+    const runtimeSandboxCalls = testState.buildRuntimeSandboxSrcDoc.mock.calls as Array<[string]>;
+    const firstFrameId = runtimeSandboxCalls[0]?.[0] as
+      | string
+      | undefined;
+    expect(firstFrameId).toBeTruthy();
+    if (!firstFrameId) {
+      throw new Error('Expected initial frame id');
+    }
+
+    await dispatchFrameMessage(iframeWindow, {
+      frameId: firstFrameId,
+      type: 'sandbox:iframe-ready',
+    });
+
+    const runtimeBridgeCalls = testState.createRuntimeBridgeHostSession.mock.calls as unknown as Array<
+      [{ runtimeInstanceId: string; runtimeId: string }]
+    >;
+    const firstRuntimeCall = runtimeBridgeCalls[0]?.[0] as
+      | { runtimeInstanceId: string; runtimeId: string }
+      | undefined;
+    expect(firstRuntimeCall).toBeTruthy();
+    if (!firstRuntimeCall) {
+      throw new Error('Expected initial runtime bridge call');
+    }
+
+    await act(async () => {
+      root.render(
+        <PackWorkspaceMount
+          connectorId="connector.platform.netease"
+          displayName="Netease"
+          instanceId="netease:imported-b"
+          surface={surface}
+          workspaceMount={createWorkspaceMount(surface, {
+            installationId: 'pack-install-builtin-netease-2',
+            packageDigest: 'digest-2',
+            artifactRootPath: 'D:/packs/netease/install-2',
+            runtimePath: 'D:/packs/netease/install-2/runtime.js',
+            iconPath: 'D:/packs/netease/install-2/icon.svg',
+          })}
+        />
+      );
+      await flushEffects();
+    });
+
+    const secondFrameId = runtimeSandboxCalls.at(-1)?.[0] as
+      | string
+      | undefined;
+    expect(secondFrameId).toBeTruthy();
+    if (!secondFrameId) {
+      throw new Error('Expected refreshed frame id');
+    }
+    expect(secondFrameId).not.toBe(firstFrameId);
+
+    await dispatchFrameMessage(iframeWindow, {
+      frameId: secondFrameId,
+      type: 'sandbox:iframe-ready',
+    });
+
+    const secondRuntimeCall = runtimeBridgeCalls[1]?.[0] as
+      | { runtimeInstanceId: string; runtimeId: string }
+      | undefined;
+    expect(secondRuntimeCall).toBeTruthy();
+    if (!secondRuntimeCall) {
+      throw new Error('Expected refreshed runtime bridge call');
+    }
+    expect(secondRuntimeCall.runtimeInstanceId).not.toBe(firstRuntimeCall.runtimeInstanceId);
+    expect(secondRuntimeCall.runtimeId).not.toBe(firstRuntimeCall.runtimeId);
+    expect(testState.runtimeSession.revokeCapabilities).toHaveBeenCalled();
+    expect(testState.runtimeSession.dispose).toHaveBeenCalled();
   });
 });

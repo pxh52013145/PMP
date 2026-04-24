@@ -1,5 +1,6 @@
 import type { PlatformCompatRuntimeApi } from '@pixel-matrix/plugin-platform-contracts';
 
+import { getActiveMusicPlatformInstanceId } from './activeInstanceRegistry';
 import {
   resolveDefaultPlatformInstanceIdForConnector,
   resolvePlatformRuntimeDescriptorByInstanceId,
@@ -21,9 +22,11 @@ export function resolvePlatformRuntimeContext(options: {
   connectorId?: string | null;
 }): ResolvedPlatformRuntimeContext | null {
   const normalizedInstanceId = normalizeString(options.instanceId);
+  const normalizedConnectorId = normalizeString(options.connectorId);
   const resolvedInstanceId =
     normalizedInstanceId ||
-    resolveDefaultPlatformInstanceIdForConnector(normalizeString(options.connectorId));
+    getActiveMusicPlatformInstanceId({ connectorId: normalizedConnectorId }) ||
+    resolveDefaultPlatformInstanceIdForConnector(normalizedConnectorId);
   if (!resolvedInstanceId) return null;
 
   const descriptor = resolvePlatformRuntimeDescriptorByInstanceId(resolvedInstanceId);

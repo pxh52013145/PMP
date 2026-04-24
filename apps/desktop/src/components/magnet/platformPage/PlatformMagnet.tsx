@@ -35,6 +35,7 @@ import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService
 import { useSkinSurfaceModel } from '../../../themes/skinSurface';
 import { useConfirmDialog } from '../../core/ConfirmDialog';
 import {
+  getMusicPlatformActiveInstanceState,
   getMusicPlatformGlobalCacheSettings,
   listPlatformRuntimeDescriptors,
   listPlatformCompatRegistryRecords,
@@ -47,6 +48,7 @@ import {
   refreshPlatformInstanceAuthSnapshot,
   resolvePlatformConnectorTemplate,
   resolvePlatformRuntimeDescriptorByInstanceId,
+  setActiveMusicPlatformInstance,
   setMusicPlatformConnectorWorkspaceOwnershipMode,
   setMusicPlatformGlobalCacheSettings,
   setPlatformRenderSelectionMounted,
@@ -54,6 +56,7 @@ import {
   subscribePlatformConnectorDefinitions,
   subscribePlatformInstances,
   subscribePlatformLoginRegistry,
+  subscribeMusicPlatformActiveInstanceState,
   subscribeMusicPlatformWorkspaceOwnershipSettings,
   subscribePlatformRenderSelections,
   type PlatformCompatRegistryRecord,
@@ -62,6 +65,7 @@ import {
   type PlatformConnectorId,
   type PlatformInstanceAuthSnapshot,
   type PlatformLoginRegistryEntry,
+  type MusicPlatformActiveInstanceState,
   type MusicPlatformGlobalCacheSettings,
   type MusicPlatformWorkspaceOwnershipMode,
   type PlatformRuntimeDescriptor,
@@ -125,6 +129,7 @@ type RegisteredPlatformItem = {
   definition: PlatformConnectorDefinition | null;
   contractRecord: PlatformCompatRegistryRecord | null;
   instance: PlatformInstanceRecord | null;
+  runtimeDescriptor: PlatformRuntimeDescriptor | null;
   renderSelection: PlatformRenderSelectionRecord | null;
   snapshot: PlatformInstanceAuthSnapshot | null;
   facade: PlatformConnectorFacadeItem | null;
@@ -220,6 +225,89 @@ function resolveRegisteredItemAccountValue(item: RegisteredPlatformItem | null):
     item.instance?.account.accountName ??
     '-'
   );
+}
+
+function readPlatformInstanceAuthExpiresAtMs(
+  instance: PlatformInstanceRecord | null | undefined
+): number | undefined {
+  return typeof instance?.metadata?.authExpiresAtMs === 'number' &&
+    Number.isFinite(instance.metadata.authExpiresAtMs)
+    ? instance.metadata.authExpiresAtMs
+    : undefined;
+}
+
+function createEmptyFacadeCapabilities(): PlatformConnectorFacadeItem['capabilities'] {
+  return {
+    canSearchTracks: false,
+    canSearchAlbums: false,
+    canListPlaylists: false,
+    canEditPlaylists: false,
+    canFetchLyrics: false,
+    canFetchCovers: false,
+    canResolveStream: false,
+    canRunIncrementalSync: false,
+  };
+}
+
+function createInstanceFirstFacade(input: {
+  entry: PlatformLoginRegistryEntry;
+  connectorFacade: PlatformConnectorFacadeItem | null;
+  instance: PlatformInstanceRecord | null;
+  snapshot: PlatformInstanceAuthSnapshot | null;
+  runtimeDescriptor: PlatformRuntimeDescriptor | null;
+}): PlatformConnectorFacadeItem | null {
+  const { connectorFacade, entry, instance, runtimeDescriptor, snapshot } = input;
+  if (!connectorFacade && !instance && !snapshot && !runtimeDescriptor) {
+    return null;
+  }
+
+  const descriptorInstance = runtimeDescriptor?.instanceRecord ?? null;
+  return {
+    connectorId: entry.connectorId,
+    instanceId:
+      instance?.instanceId ??
+      snapshot?.instanceId ??
+      descriptorInstance?.instanceId ??
+      connectorFacade?.instanceId,
+    displayName:
+      snapshot?.displayName ??
+      instance?.displayName ??
+      descriptorInstance?.displayName ??
+      runtimeDescriptor?.displayName ??
+      connectorFacade?.displayName ??
+      entry.connectorId,
+    authState:
+      snapshot?.authState ??
+      runtimeDescriptor?.authState ??
+      connectorFacade?.authState ??
+      'unauthorized',
+    accountUid:
+      snapshot?.accountUid ??
+      instance?.account.accountId ??
+      descriptorInstance?.account.accountId ??
+      connectorFacade?.accountUid,
+    updatedAtMs:
+      snapshot?.updatedAtMs ??
+      instance?.auth.cookieUpdatedAtMs ??
+      descriptorInstance?.auth.cookieUpdatedAtMs ??
+      connectorFacade?.updatedAtMs,
+    expiresAtMs:
+      snapshot?.expiresAtMs ??
+      readPlatformInstanceAuthExpiresAtMs(instance) ??
+      readPlatformInstanceAuthExpiresAtMs(descriptorInstance) ??
+      connectorFacade?.expiresAtMs,
+    availability:
+      snapshot?.availability ??
+      runtimeDescriptor?.availability ??
+      connectorFacade?.availability,
+    availabilityMessage:
+      snapshot?.availabilityMessage ??
+      runtimeDescriptor?.availabilityMessage ??
+      connectorFacade?.availabilityMessage,
+    sourceIds: connectorFacade?.sourceIds ?? [],
+    sources: connectorFacade?.sources ?? [],
+    capabilities: connectorFacade?.capabilities ?? createEmptyFacadeCapabilities(),
+  };
 }
 
 function formatWorkspaceOwnershipModeLabel(
@@ -504,6 +592,9 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const [connectorViews, setConnectorViews] = useState<PlatformConnectorFacadeItem[]>([]);
   const [connectorViewsLoading, setConnectorViewsLoading] = useState(true);
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(null);
+  const [activeInstanceState, setActiveInstanceState] = useState<MusicPlatformActiveInstanceState>(() =>
+    getMusicPlatformActiveInstanceState()
+  );
   const [activePage, setActivePage] = useState<PlatformPageView>('daily');
   const [launcherOpen, setLauncherOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
@@ -719,6 +810,24 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     });
   }, []);
 
+  useEffect(() => {
+    setActiveInstanceState(getMusicPlatformActiveInstanceState());
+    return subscribeMusicPlatformActiveInstanceState((state) => {
+      setActiveInstanceState(state);
+    });
+  }, []);
+
+  const selectInstance = useCallback((instanceId: string | null, connectorId?: string | null) => {
+    setSelectedInstanceId(instanceId);
+    if (!instanceId) {
+      return;
+    }
+    void setActiveMusicPlatformInstance({
+      instanceId,
+      connectorId,
+    });
+  }, []);
+
   const platformInstanceIdentityKey = useMemo(
     () =>
       platformInstances
@@ -782,6 +891,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
         .map((entry) => {
           const definition = platformDefinitionsById.get(entry.connectorId) ?? null;
           const instance = platformInstancesById.get(entry.instanceId) ?? null;
+          const runtimeDescriptor = resolvePlatformRuntimeDescriptorByInstanceId(entry.instanceId);
           const renderSelection = instance
             ? renderSelectionsByInstanceId.get(instance.instanceId) ?? null
             : null;
@@ -797,9 +907,16 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
             definition,
             contractRecord,
             instance,
+            runtimeDescriptor,
             renderSelection,
             snapshot,
-            facade: connectorViewsById.get(entry.connectorId) ?? null,
+            facade: createInstanceFirstFacade({
+              entry,
+              connectorFacade: connectorViewsById.get(entry.connectorId) ?? null,
+              instance,
+              snapshot,
+              runtimeDescriptor,
+            }),
           };
         }),
     [
@@ -856,15 +973,32 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   ]);
 
   useEffect(() => {
+    const sharedSelectedInstanceId =
+      activeInstanceState.currentInstanceId &&
+      registeredItemsByInstanceId.has(activeInstanceState.currentInstanceId)
+        ? activeInstanceState.currentInstanceId
+        : null;
     const nextSelectedInstanceId = resolvePreferredInstanceId(
-      selectedInstanceId,
+      sharedSelectedInstanceId ?? selectedInstanceId,
       registeredItems,
       skinProps.defaultMode
     );
     if (nextSelectedInstanceId !== selectedInstanceId) {
-      setSelectedInstanceId(nextSelectedInstanceId);
+      selectInstance(
+        nextSelectedInstanceId,
+        nextSelectedInstanceId
+          ? registeredItemsByInstanceId.get(nextSelectedInstanceId)?.entry.connectorId ?? null
+          : null
+      );
     }
-  }, [registeredItems, selectedInstanceId, skinProps.defaultMode]);
+  }, [
+    activeInstanceState.currentInstanceId,
+    registeredItems,
+    registeredItemsByInstanceId,
+    selectInstance,
+    selectedInstanceId,
+    skinProps.defaultMode,
+  ]);
 
   const runtimeDescriptors: PlatformRuntimeDescriptor[] = listPlatformRuntimeDescriptors();
   const runtimeDescriptorsByConnectorId = useMemo(
@@ -908,6 +1042,10 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   const activeContractRecord =
     activeItem?.contractRecord ??
     activeRuntimeDescriptor?.compatRegistryRecord ??
+    null;
+  const activeContract =
+    activeContractRecord?.contract ??
+    activeRuntimeDescriptor?.packRegistration?.compat.contract ??
     null;
   const activeWorkspaceRouteState = toPlatformWorkspaceRouteDisplayState(
     activeRuntimeDescriptor?.workspaceRouting
@@ -1231,11 +1369,14 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   }, []);
 
   const handleSelectInstance = useCallback((instanceId: string) => {
-    setSelectedInstanceId(instanceId);
+    selectInstance(
+      instanceId,
+      registeredItemsByInstanceId.get(instanceId)?.entry.connectorId ?? null
+    );
     setActivePage('instance');
     setSubmittedQuery('');
     closeTopMenus();
-  }, [closeTopMenus]);
+  }, [closeTopMenus, registeredItemsByInstanceId, selectInstance]);
 
   const handleSearchSubmit = useCallback((event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1298,7 +1439,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       const targetItem = resolvePreferredRegisteredItemForConnector(
         targetConnectorId,
         registeredItems,
-        selectedInstanceId
+        activeInstanceState.connectorInstanceIds[targetConnectorId] ?? selectedInstanceId
       );
       const canAutoMount =
         connectorId === null &&
@@ -1309,7 +1450,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
         setPlatformRenderSelectionMounted(targetItem.instance.instanceId, true);
       }
 
-      setSelectedInstanceId(targetItem?.entry.instanceId ?? null);
+      selectInstance(targetItem?.entry.instanceId ?? null, targetItem?.entry.connectorId ?? null);
       setActivePage('instance');
       setSubmittedQuery('');
       setDrawerOpen(false);
@@ -1318,8 +1459,10 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       activeConnectorId,
       activePage,
       activeWorkspaceRuntimeAdapter,
+      activeInstanceState.connectorInstanceIds,
       mountedRegisteredItems,
       registeredItems,
+      selectInstance,
       selectedInstanceId,
     ]
   );
@@ -1340,18 +1483,23 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
       }
 
       selectDrawerFolder(folderId);
-      setSelectedInstanceId(
-        resolvePreferredRegisteredItemForConnector(
-          connectorId,
-          registeredItems,
-          selectedInstanceId
-        )?.entry.instanceId ?? null
+      const targetItem = resolvePreferredRegisteredItemForConnector(
+        connectorId,
+        registeredItems,
+        activeInstanceState.connectorInstanceIds[connectorId] ?? selectedInstanceId
       );
+      selectInstance(targetItem?.entry.instanceId ?? null, targetItem?.entry.connectorId ?? null);
       setActivePage('instance');
       setSubmittedQuery('');
       setDrawerOpen(false);
     },
-    [activeWorkspaceRuntimeAdapter, registeredItems, selectedInstanceId]
+    [
+      activeWorkspaceRuntimeAdapter,
+      activeInstanceState.connectorInstanceIds,
+      registeredItems,
+      selectInstance,
+      selectedInstanceId,
+    ]
   );
 
   const handleCreateLocalPlaylist = useCallback(() => {
@@ -1372,9 +1520,9 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
     const nextMounted = item.renderSelection?.mounted !== true;
     setPlatformRenderSelectionMounted(item.instance.instanceId, nextMounted);
     if (nextMounted) {
-      setSelectedInstanceId(item.entry.instanceId);
+      selectInstance(item.entry.instanceId, item.entry.connectorId);
     }
-  }, []);
+  }, [selectInstance]);
 
   const resolveItemAuthState = useCallback(
     (item: RegisteredPlatformItem | null | undefined): string | undefined =>
@@ -1994,7 +2142,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
   };
 
   const renderWorkspacePanel = () => {
-    if (!activeContractRecord || !activeDefinition) {
+    if (!activeContract || !activeDefinition) {
       return (
         <div className="flex min-h-[340px] flex-1 flex-col items-center justify-center gap-3 rounded-[22px] border border-dashed border-white/10 bg-black/10 px-6 text-center">
           <LayoutGrid className="h-8 w-8 text-white/24" />
@@ -2250,10 +2398,10 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                           state: activeAuthLabel,
                         })}
                       </span>
-                      {activeContractRecord ? (
+                      {activeContract ? (
                         <span className="platform-preview-channel-tag inline-flex items-center rounded-full px-3 py-1 text-xs text-white/62">
                           {t('magnet.platform.contract.version', {
-                            version: activeContractRecord.contract.contractVersion,
+                            version: activeContract.contractVersion,
                           })}
                         </span>
                       ) : null}
@@ -3943,7 +4091,7 @@ const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ 
                           <button
                             type="button"
                             className="min-w-0 flex-1 text-left"
-                            onClick={() => setSelectedInstanceId(item.entry.instanceId)}
+                            onClick={() => selectInstance(item.entry.instanceId, item.entry.connectorId)}
                           >
                             <div className="flex items-center gap-3">
                               <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/20">

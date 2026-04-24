@@ -201,7 +201,7 @@ function toAuthFlow(value: unknown, path: string): PlatformPackAuthFlow | undefi
   throw new Error(`${path} must be "qr" | "none"`);
 }
 
-function validatePlatformPackManifestV1(manifest: unknown): asserts manifest is PlatformPackManifestV1 {
+export function validatePlatformPackManifestV1(manifest: unknown): asserts manifest is PlatformPackManifestV1 {
   assertObject(manifest, 'manifest');
   if (manifest.formatVersion !== '1.0') {
     throw new Error('manifest.formatVersion must be "1.0"');

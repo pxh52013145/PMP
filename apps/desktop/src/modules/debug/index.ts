@@ -43,3 +43,14 @@ export {
   type TelemetryReadSessionResult,
 } from './telemetry';
 
+export {
+  buildMagnetTelemetryAiQuery,
+  getRegisteredMagnetTelemetryIds,
+  matchesMagnetTelemetryRecord,
+  resolveMagnetTelemetryProfile,
+  summarizeTelemetryRecords,
+  type MagnetTelemetryProfile,
+  type MagnetTelemetryProfileSource,
+  type TelemetryRecordSummary,
+} from './magnetTelemetry';
+

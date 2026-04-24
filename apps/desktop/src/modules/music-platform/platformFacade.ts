@@ -11,6 +11,7 @@ import {
   listPlatformInstanceAuthSnapshots,
   type PlatformInstanceAuthSnapshot,
 } from './platformInstanceAuth';
+import { getActiveMusicPlatformInstanceId } from './activeInstanceRegistry';
 import { listPlatformConnectorDefinitions } from './connectorAuth';
 import { invokePlatformRuntimeBinding } from './bindingRuntime';
 import {
@@ -19,6 +20,7 @@ import {
 } from './platformInstanceApiBinding';
 import {
   listPlatformRuntimeDescriptors,
+  resolvePlatformRuntimeDescriptorByInstanceId,
   resolvePreferredPlatformRuntimeDescriptorForConnector,
 } from './platformRuntimeDescriptor';
 import {
@@ -295,10 +297,57 @@ function mapToConnectorFacade(
   };
 }
 
+function readAuthStatePriority(value: PlatformCompatRuntimeAuthState | null | undefined): number {
+  switch (value) {
+    case 'authorized':
+      return 5;
+    case 'pending':
+      return 4;
+    case 'expired':
+      return 3;
+    case 'error':
+      return 2;
+    case 'revoked':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function pickPreferredAuthSnapshot(
+  snapshots: PlatformInstanceAuthSnapshot[],
+  preferredInstanceId?: string | null
+): PlatformInstanceAuthSnapshot | null {
+  const normalizedPreferredInstanceId = normalizeString(preferredInstanceId);
+  if (normalizedPreferredInstanceId) {
+    const preferred = snapshots.find((snapshot) => snapshot.instanceId === normalizedPreferredInstanceId);
+    if (preferred) {
+      return preferred;
+    }
+  }
+
+  return (
+    snapshots
+      .slice()
+      .sort((left, right) => {
+        const authPriorityDelta =
+          readAuthStatePriority(right.authState) - readAuthStatePriority(left.authState);
+        if (authPriorityDelta !== 0) {
+          return authPriorityDelta;
+        }
+        const updatedDelta = (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0);
+        if (updatedDelta !== 0) {
+          return updatedDelta;
+        }
+        return left.instanceId.localeCompare(right.instanceId, 'zh-CN');
+      })[0] ?? null
+  );
+}
+
 export async function listPlatformConnectorFacadeItems(
   options?: ListPlatformConnectorFacadeItemsOptions
 ): Promise<PlatformConnectorFacadeItem[]> {
-  const [, sourceItems] = await Promise.all([
+  const [authSnapshots, sourceItems] = await Promise.all([
     listPlatformInstanceAuthSnapshots({ refresh: options?.refresh === true }),
     listMusicSourceFacadeItems(),
   ]);
@@ -309,6 +358,7 @@ export async function listPlatformConnectorFacadeItems(
     runtimeDescriptors.map((descriptor) => [descriptor.connectorId, descriptor])
   );
   const sourceByConnectorId = new Map<string, MusicSourceFacadeItem[]>();
+  const authSnapshotsByConnectorId = new Map<string, PlatformInstanceAuthSnapshot[]>();
 
   for (const source of platformSourceItems) {
     const connectorId = byConnectorId(source);
@@ -318,8 +368,17 @@ export async function listPlatformConnectorFacadeItems(
     sourceByConnectorId.set(connectorId, bucket);
   }
 
+  for (const snapshot of authSnapshots) {
+    const connectorId = byConnectorId(snapshot);
+    if (!connectorId) continue;
+    const bucket = authSnapshotsByConnectorId.get(connectorId) ?? [];
+    bucket.push(snapshot);
+    authSnapshotsByConnectorId.set(connectorId, bucket);
+  }
+
   const connectorIds = new Set<string>([
     ...descriptorsByConnectorId.keys(),
+    ...authSnapshotsByConnectorId.keys(),
     ...sourceByConnectorId.keys(),
   ]);
 
@@ -330,24 +389,38 @@ export async function listPlatformConnectorFacadeItems(
         normalizePlatformConnectorId(connectorId) ?? ('__unknown__' as PlatformConnectorId)
       ) ?? null;
     const sources = sourceByConnectorId.get(connectorId) ?? [];
-    const authSnapshot: PlatformInstanceAuthSnapshot | null = descriptor
-      ? {
-          instanceId: descriptor.instanceRecord?.instanceId ?? `${descriptor.platformId ?? 'unknown'}:builtin`,
-          platformId: descriptor.platformId ?? 'unknown',
-          connectorId: descriptor.connectorId,
-          displayName: descriptor.displayName,
-          authState: descriptor.authState,
-          accountUid: descriptor.instanceRecord?.account.accountId,
-          updatedAtMs: descriptor.instanceRecord?.auth.cookieUpdatedAtMs,
-          expiresAtMs:
-            typeof descriptor.instanceRecord?.metadata?.authExpiresAtMs === 'number' &&
-            Number.isFinite(descriptor.instanceRecord.metadata.authExpiresAtMs)
-              ? descriptor.instanceRecord.metadata.authExpiresAtMs
-              : undefined,
-          availability: descriptor.availability ?? undefined,
-          availabilityMessage: descriptor.availabilityMessage,
-        }
-      : null;
+    const preferredInstanceId =
+      getActiveMusicPlatformInstanceId({ connectorId }) ??
+      descriptor?.instanceRecord?.instanceId ??
+      null;
+    const authSnapshot =
+      pickPreferredAuthSnapshot(
+        authSnapshotsByConnectorId.get(connectorId) ?? [],
+        preferredInstanceId
+      ) ??
+      (descriptor
+        ? {
+            instanceId:
+              descriptor.instanceRecord?.instanceId ??
+              `${descriptor.platformId ?? 'unknown'}:builtin`,
+            platformId: descriptor.platformId ?? 'unknown',
+            connectorId: descriptor.connectorId,
+            displayName:
+              resolvePlatformRuntimeDescriptorByInstanceId(
+                descriptor.instanceRecord?.instanceId ?? ''
+              )?.displayName ?? descriptor.displayName,
+            authState: descriptor.authState,
+            accountUid: descriptor.instanceRecord?.account.accountId,
+            updatedAtMs: descriptor.instanceRecord?.auth.cookieUpdatedAtMs,
+            expiresAtMs:
+              typeof descriptor.instanceRecord?.metadata?.authExpiresAtMs === 'number' &&
+              Number.isFinite(descriptor.instanceRecord.metadata.authExpiresAtMs)
+                ? descriptor.instanceRecord.metadata.authExpiresAtMs
+                : undefined,
+            availability: descriptor.availability ?? undefined,
+            availabilityMessage: descriptor.availabilityMessage,
+          }
+        : null);
     items.push(mapToConnectorFacade(connectorId, authSnapshot, sources));
   }
 

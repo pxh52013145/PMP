@@ -83,6 +83,12 @@ vi.mock('./installedPlatformPacks', () => ({
     subscribeInstalledPlatformPackRecordsMock(listener),
 }));
 
+vi.mock('./platformPackSidecarBridge', () => ({
+  isExpectedPlatformPackSidecarLifecycleError: (error: { message?: string } | null | undefined) =>
+    typeof error?.message === 'string' &&
+    error.message.toLowerCase().includes('session disposed'),
+}));
+
 function createCompatRecord(
   platformId: string,
   connectorId: string,
@@ -292,5 +298,53 @@ describe('instanceRegistry auth hydration', () => {
     expect(
       registry.getPlatformInstance('platform.netease:builtin')?.account.accountId
     ).toBe('user-3-refresh');
+  });
+
+  it('preserves the last authorized auth state when refresh hits a transient runtime reload failure', async () => {
+    const getSnapshot = vi.fn(async (_input: { instanceId: string }) => ({
+      ok: true as const,
+      data: {
+        authState: 'authorized' as const,
+        accountId: 'user-transient',
+        updatedAtMs: 1710000000000,
+      },
+    }));
+    const refreshSnapshot = vi.fn(async (_input: { instanceId: string }) => ({
+      ok: false as const,
+      error: {
+        code: 'API_UNAVAILABLE',
+        message: 'Platform pack binding auth.refreshSnapshot crashed',
+      },
+    }));
+
+    compatRecords = [
+      createCompatRecord('platform.netease', 'connector.platform.netease', {
+        getSnapshot,
+        refreshSnapshot,
+      }),
+    ];
+
+    const registry = await import('./instanceRegistry');
+    registry.listPlatformInstances();
+
+    await vi.waitFor(() => {
+      expect(getSnapshot).toHaveBeenCalledTimes(1);
+      expect(registry.getPlatformInstance('platform.netease:builtin')?.auth.status).toBe('authorized');
+    });
+
+    await registry.refreshPlatformInstance('platform.netease:builtin');
+
+    expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+    expect(registry.getPlatformInstance('platform.netease:builtin')).toEqual(
+      expect.objectContaining({
+        availability: 'available',
+        auth: expect.objectContaining({
+          status: 'authorized',
+        }),
+        account: expect.objectContaining({
+          accountId: 'user-transient',
+        }),
+      })
+    );
   });
 });

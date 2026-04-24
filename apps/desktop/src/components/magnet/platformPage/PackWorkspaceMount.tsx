@@ -104,6 +104,54 @@ function buildPackWorkspacePluginId(packId: string): string {
   return `platform-pack.${packId}`;
 }
 
+function hashPackWorkspaceIdentity(seed: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function buildPackWorkspaceRuntimeIdentity(input: {
+  connectorId: string;
+  instanceId: string | null;
+  installationId: string | null;
+  resolutionSource: string | null;
+  sourceType: string | null;
+  source: string | null;
+  packId: string;
+  packVersion: string;
+  packageDigest: string | null;
+  runtimePath: string | null;
+  runtimeImportUrl: string | null;
+  rootViewId: string;
+  rootViewType: string;
+  requiredRuntimeCarrier: string | null;
+  capabilityRequiredKey: string;
+  capabilityOptionalKey: string;
+}): string {
+  const stableSeed = JSON.stringify([
+    input.connectorId,
+    input.instanceId,
+    input.installationId,
+    input.resolutionSource,
+    input.sourceType,
+    input.source,
+    input.packId,
+    input.packVersion,
+    input.packageDigest,
+    input.runtimePath,
+    input.runtimeImportUrl,
+    input.rootViewId,
+    input.rootViewType,
+    input.requiredRuntimeCarrier,
+    input.capabilityRequiredKey,
+    input.capabilityOptionalKey,
+  ]);
+  return hashPackWorkspaceIdentity(stableSeed);
+}
+
 export interface PackWorkspaceMountProps {
   connectorId: string;
   displayName: string;
@@ -247,10 +295,48 @@ export const PackWorkspaceMount: React.FC<PackWorkspaceMountProps> = ({
   );
 
   const pluginId = useMemo(() => buildPackWorkspacePluginId(surfacePackId), [surfacePackId]);
-  const frameId = useMemo(
+  const runtimeIdentity = useMemo(
     () =>
-      `platform-pack-${surface.connectorId}-${Math.random().toString(16).slice(2)}`,
-    [surface.connectorId]
+      buildPackWorkspaceRuntimeIdentity({
+        connectorId,
+        instanceId: instanceId ?? null,
+        installationId: workspaceInstallationId,
+        resolutionSource: workspaceResolutionSource,
+        sourceType: workspaceSourceType,
+        source: workspaceSource,
+        packId: surfacePackId,
+        packVersion: surfacePackVersion,
+        packageDigest: workspacePackageDigest,
+        runtimePath: workspaceRuntimePath,
+        runtimeImportUrl: resolvedRuntimeImportUrl,
+        rootViewId: surfaceRootViewId,
+        rootViewType: surfaceRootViewType,
+        requiredRuntimeCarrier: surfaceRequiredRuntimeCarrier,
+        capabilityRequiredKey: workspaceCapabilityRequiredKey,
+        capabilityOptionalKey: workspaceCapabilityOptionalKey,
+      }),
+    [
+      connectorId,
+      instanceId,
+      resolvedRuntimeImportUrl,
+      surfacePackId,
+      surfacePackVersion,
+      surfaceRequiredRuntimeCarrier,
+      surfaceRootViewId,
+      surfaceRootViewType,
+      workspaceCapabilityOptionalKey,
+      workspaceCapabilityRequiredKey,
+      workspaceInstallationId,
+      workspacePackageDigest,
+      workspaceResolutionSource,
+      workspaceRuntimePath,
+      workspaceSource,
+      workspaceSourceType,
+    ]
+  );
+  const frameId = useMemo(
+    () => `platform-pack-${runtimeIdentity}`,
+    [runtimeIdentity]
   );
   const permissions = useMemo(
     () => resolvePackWorkspaceRuntimePermissions(workspaceCapabilityFamilies),
@@ -261,7 +347,10 @@ export const PackWorkspaceMount: React.FC<PackWorkspaceMountProps> = ({
     void frameId;
     return createRuntimeResourceRegistry();
   }, [frameId]);
-  const runtimeId = useMemo(() => `${pluginId}.workspace`, [pluginId]);
+  const runtimeId = useMemo(
+    () => `${pluginId}.workspace.${runtimeIdentity}`,
+    [pluginId, runtimeIdentity]
+  );
   const mountContext = useMemo(
     () => ({
       scope: 'music-platform-workspace',

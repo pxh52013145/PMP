@@ -1813,7 +1813,7 @@ describe('host.pmp capabilities', () => {
         rendererCount: 2,
         variantRendererCount: 2,
         variantCount: 3,
-        systemSpaces: ['space1', 'space2'],
+        systemSpaces: ['space1', 'space2', 'space3'],
         fallbackScope: 'required',
       },
     });

@@ -33,6 +33,8 @@ pub const MEDIA_COMMAND_NAMES: &[&str] = &["background_import_media", "ornament_
 
 pub const PLUGIN_COMMAND_NAMES: &[&str] = &[
     "plugin_read_install_source",
+    "plugin_allow_dev_project_asset_scope",
+    "plugin_read_platform_pack_dev_source",
     "plugin_sidecar_bridge_open",
     "plugin_sidecar_bridge_send",
     "plugin_sidecar_bridge_close",
@@ -327,6 +329,8 @@ macro_rules! pmp_generate_handler {
             crate::commands::media::background_import_media,
             crate::commands::media::ornament_import_media,
             crate::commands::plugins::plugin_read_install_source,
+            crate::commands::plugins::plugin_allow_dev_project_asset_scope,
+            crate::commands::plugins::plugin_read_platform_pack_dev_source,
             crate::commands::plugins::plugin_sidecar_bridge_open,
             crate::commands::plugins::plugin_sidecar_bridge_send,
             crate::commands::plugins::plugin_sidecar_bridge_close,

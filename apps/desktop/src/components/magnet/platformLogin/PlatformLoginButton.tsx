@@ -18,6 +18,7 @@ import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService
 import {
   beginPlatformInstanceQrLogin,
   clearPlatformInstanceAuthCookies,
+  getMusicPlatformActiveInstanceState,
   installPlatformPackFromFile,
   listInstalledPlatformPackRecords,
   listPlatformConnectorDefinitions,
@@ -31,7 +32,9 @@ import {
   resetInstalledPlatformPackState,
   resolvePlatformInstanceId,
   resolvePlatformConnectorTemplate,
+  setActiveMusicPlatformInstance,
   setPlatformRenderSelectionMounted,
+  subscribeMusicPlatformActiveInstanceState,
   subscribePlatformConnectorDefinitions,
   subscribeInstalledPlatformPackRecords,
   subscribePlatformImportedInstanceRecords,
@@ -47,6 +50,7 @@ import {
   type PlatformInstanceQrLoginPollResult,
   type PlatformInstanceQrLoginSession,
   type PlatformRenderSelectionRecord,
+  type MusicPlatformActiveInstanceState,
   persistPlatformLoginRegistry,
   readPlatformLoginRegistry,
   removePlatformLoginRegistryEntry,
@@ -325,6 +329,9 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   const [registerMenuOpen, setRegisterMenuOpen] = useState(false);
   const [authPopupOpen, setAuthPopupOpen] = useState(false);
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(null);
+  const [activeInstanceState, setActiveInstanceState] = useState<MusicPlatformActiveInstanceState>(() =>
+    getMusicPlatformActiveInstanceState()
+  );
   const [contextMenuState, setContextMenuState] = useState<ContextMenuState>(null);
   const [busyInstanceId, setBusyInstanceId] = useState<string | null>(null);
   const [platformPackInstalling, setPlatformPackInstalling] = useState(false);
@@ -526,6 +533,24 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     });
   }, []);
 
+  useEffect(() => {
+    setActiveInstanceState(getMusicPlatformActiveInstanceState());
+    return subscribeMusicPlatformActiveInstanceState((state) => {
+      setActiveInstanceState(state);
+    });
+  }, []);
+
+  const selectInstance = useCallback((instanceId: string | null, connectorId?: string | null) => {
+    setSelectedInstanceId(instanceId);
+    if (!instanceId) {
+      return;
+    }
+    void setActiveMusicPlatformInstance({
+      instanceId,
+      connectorId,
+    });
+  }, []);
+
   const platformInstancesById = useMemo(
     () => new Map(platformInstances.map((instance) => [instance.instanceId, instance] as const)),
     [platformInstances]
@@ -629,6 +654,24 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
         .instanceId ?? registeredConnectors[0]?.entry.instanceId ?? null,
     [preferredConnectorId, registeredConnectors]
   );
+  const sharedPreferredInstanceId = useMemo(() => {
+    const currentInstanceId = activeInstanceState.currentInstanceId;
+    if (currentInstanceId && registryEntriesByInstanceId.has(currentInstanceId)) {
+      return currentInstanceId;
+    }
+
+    const connectorScopedInstanceId = preferredConnectorId
+      ? activeInstanceState.connectorInstanceIds[preferredConnectorId] ?? null
+      : null;
+    return connectorScopedInstanceId && registryEntriesByInstanceId.has(connectorScopedInstanceId)
+      ? connectorScopedInstanceId
+      : null;
+  }, [
+    activeInstanceState.connectorInstanceIds,
+    activeInstanceState.currentInstanceId,
+    preferredConnectorId,
+    registryEntriesByInstanceId,
+  ]);
   const activeRegisteredConnector =
     (selectedInstanceId
       ? registeredConnectors.find((item) => item.entry.instanceId === selectedInstanceId) ?? null
@@ -663,17 +706,32 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
   );
 
   useEffect(() => {
-    if (!selectedInstanceId) {
-      setSelectedInstanceId(preferredRegisteredInstanceId);
-      return;
+    const nextSelectedInstanceId =
+      sharedPreferredInstanceId ??
+      (selectedInstanceId && registryEntriesByInstanceId.has(selectedInstanceId)
+        ? selectedInstanceId
+        : preferredRegisteredInstanceId);
+
+    if (nextSelectedInstanceId !== selectedInstanceId) {
+      selectInstance(
+        nextSelectedInstanceId,
+        nextSelectedInstanceId
+          ? registryEntriesByInstanceId.get(nextSelectedInstanceId)?.connectorId ?? null
+          : null
+      );
     }
 
-    if (registryEntries.some((entry) => entry.instanceId === selectedInstanceId)) return;
-
-    setSelectedInstanceId(preferredRegisteredInstanceId);
-    setAuthPopupOpen(false);
-    setContextMenuState(null);
-  }, [preferredRegisteredInstanceId, registryEntries, selectedInstanceId]);
+    if (selectedInstanceId && !registryEntriesByInstanceId.has(selectedInstanceId)) {
+      setAuthPopupOpen(false);
+      setContextMenuState(null);
+    }
+  }, [
+    preferredRegisteredInstanceId,
+    registryEntriesByInstanceId,
+    selectInstance,
+    selectedInstanceId,
+    sharedPreferredInstanceId,
+  ]);
 
   useEffect(() => {
     for (const item of registeredConnectors) {
@@ -749,9 +807,9 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     setStripOpen(true);
     setRegisterMenuOpen(false);
     setContextMenuState(null);
-    setSelectedInstanceId(instanceId);
+    selectInstance(instanceId, registryEntriesByInstanceId.get(instanceId)?.connectorId ?? null);
     setAuthPopupOpen(true);
-  }, []);
+  }, [registryEntriesByInstanceId, selectInstance]);
 
   const handleToggleStrip = useCallback(() => {
     const next = !stripOpen;
@@ -759,14 +817,24 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
 
     if (next) {
       if (skinProps.openAuthOnTrigger && preferredRegisteredInstanceId) {
-        setSelectedInstanceId(preferredRegisteredInstanceId);
+        selectInstance(
+          preferredRegisteredInstanceId,
+          registryEntriesByInstanceId.get(preferredRegisteredInstanceId)?.connectorId ?? null
+        );
         setAuthPopupOpen(true);
       }
       return;
     }
 
     closeMenus();
-  }, [closeMenus, preferredRegisteredInstanceId, skinProps.openAuthOnTrigger, stripOpen]);
+  }, [
+    closeMenus,
+    preferredRegisteredInstanceId,
+    registryEntriesByInstanceId,
+    selectInstance,
+    skinProps.openAuthOnTrigger,
+    stripOpen,
+  ]);
 
   const handleConnectorActivate = useCallback(
     (item: {
@@ -804,7 +872,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
       setStripOpen(true);
       setRegisterMenuOpen(false);
       setAuthPopupOpen(false);
-      setSelectedInstanceId(entry.instanceId);
+      selectInstance(entry.instanceId, entry.connectorId);
       setContextMenuState({
         instanceId: entry.instanceId,
         connectorId: entry.connectorId,
@@ -812,7 +880,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
         y: event.clientY,
       });
     },
-    []
+    [selectInstance]
   );
 
   const handleRegisterMenuToggle = useCallback(() => {
@@ -857,7 +925,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
             name: importedName,
           })
         );
-        setSelectedInstanceId(importedInstanceId);
+        selectInstance(importedInstanceId, registration.connectorId);
         setRegisterMenuOpen(false);
 
         const snapshot = await refreshAuthSnapshot(importedInstanceId);
@@ -895,6 +963,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
     [
       openAuthPopup,
       refreshAuthSnapshot,
+      selectInstance,
       setInstanceMounted,
       setRegistryEntryRegistered,
       t,
@@ -918,22 +987,23 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
         },
         true
       );
-      setSelectedInstanceId(importedInstanceId);
+      selectInstance(importedInstanceId, item.record.connectorId);
       setRegisterMenuOpen(false);
 
       const snapshot =
         authSnapshotsByInstanceId[importedInstanceId] ??
         (await refreshAuthSnapshot(importedInstanceId));
-      if (snapshot?.authState === 'authorized') {
-        setInstanceMounted(importedInstanceId, true);
-      } else {
-        openAuthPopup(importedInstanceId);
-      }
+        if (snapshot?.authState === 'authorized') {
+          setInstanceMounted(importedInstanceId, true);
+        } else {
+          openAuthPopup(importedInstanceId);
+        }
     },
     [
       authSnapshotsByInstanceId,
       openAuthPopup,
       refreshAuthSnapshot,
+      selectInstance,
       setInstanceMounted,
       setRegistryEntryRegistered,
       t,
@@ -1073,6 +1143,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
               },
               true
             );
+            selectInstance(instanceId, resolvedConnectorId);
           }
           setInstanceMounted(instanceId, true);
           updateScopedValue(
@@ -1114,6 +1185,7 @@ const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererPr
       platformInstancesById,
       qrSessionsByInstanceId,
       refreshAuthSnapshot,
+      selectInstance,
       setInstanceMounted,
       setRegistryEntryRegistered,
       t,

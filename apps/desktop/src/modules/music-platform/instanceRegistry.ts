@@ -29,6 +29,7 @@ import {
   readMusicPlatformDiagnosticErrorMessage,
   warnOnSlowMusicPlatformOperation,
 } from './platformDiagnostics';
+import { isExpectedPlatformPackSidecarLifecycleError } from './platformPackSidecarBridge';
 
 type PlatformInstanceRegistryListener = (instances: PlatformInstanceRecord[]) => void;
 
@@ -66,6 +67,57 @@ function readRuntimeErrorMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function shouldPreservePlatformAuthStateOnTransientFailure(
+  currentRecord: PlatformInstanceRecord
+): boolean {
+  return (
+    currentRecord.auth.status === 'authorized' ||
+    currentRecord.auth.status === 'authorizing' ||
+    currentRecord.auth.status === 'expired'
+  );
+}
+
+function isTransientPlatformAuthFailureMessage(message: string): boolean {
+  const normalizedMessage = message.trim().toLowerCase();
+  return (
+    normalizedMessage.includes('runtime is reloading') ||
+    normalizedMessage.includes('platform-pack-reload') ||
+    normalizedMessage.includes('runtime bridge session not found') ||
+    normalizedMessage.includes('platform pack binding auth.getsnapshot crashed') ||
+    normalizedMessage.includes('platform pack binding auth.refreshsnapshot crashed')
+  );
+}
+
+function isTransientPlatformAuthResult(
+  currentRecord: PlatformInstanceRecord,
+  result: Extract<PlatformApiResult<unknown>, { ok: false }>
+): boolean {
+  if (result.error.code === 'RUNTIME_RELOADING') {
+    return true;
+  }
+  if (!shouldPreservePlatformAuthStateOnTransientFailure(currentRecord)) {
+    return false;
+  }
+  return (
+    isExpectedPlatformPackSidecarLifecycleError({ message: result.error.message }) ||
+    isTransientPlatformAuthFailureMessage(result.error.message)
+  );
+}
+
+function isTransientPlatformAuthError(
+  currentRecord: PlatformInstanceRecord,
+  error: unknown
+): boolean {
+  if (!shouldPreservePlatformAuthStateOnTransientFailure(currentRecord)) {
+    return false;
+  }
+  const message = readRuntimeErrorMessage(error);
+  return (
+    isExpectedPlatformPackSidecarLifecycleError({ message }) ||
+    isTransientPlatformAuthFailureMessage(message)
+  );
 }
 
 function toBuiltinPlatformInstanceId(platformId: string): string {
@@ -520,14 +572,14 @@ async function refreshPlatformInstanceAuthState(
     let nextRecord: PlatformInstanceRecord;
     try {
       const result = await readAuthSnapshot({ instanceId: normalizedInstanceId });
-      if (!result.ok && result.error.code === 'RUNTIME_RELOADING') {
+      if (!result.ok && isTransientPlatformAuthResult(currentRecord, result)) {
         warnOnSlowMusicPlatformOperation({
           logger: telemetry,
           event: 'music-platform.instance-auth.read.slow',
           startedAtMs,
           fields: {
             ...diagnosticFields,
-            outcome: 'runtime-reloading',
+            outcome: 'transient-preserved',
           },
         });
         return clonePlatformInstanceRecord(currentRecord);
@@ -539,6 +591,7 @@ async function refreshPlatformInstanceAuthState(
             ...diagnosticFields,
             durationMs: getMusicPlatformDurationMs(startedAtMs),
             errorCode: result.error.code,
+            preservedCurrentState: false,
           },
         });
       }
@@ -546,6 +599,17 @@ async function refreshPlatformInstanceAuthState(
         ? applyPlatformAuthSuccessToRecord(currentRecord, result.data)
         : applyPlatformAuthErrorToRecord(currentRecord, result);
     } catch (error) {
+      if (isTransientPlatformAuthError(currentRecord, error)) {
+        telemetry.warn('music-platform.instance-auth.read.degraded', {
+          message: readMusicPlatformDiagnosticErrorMessage(error),
+          fields: {
+            ...diagnosticFields,
+            durationMs: getMusicPlatformDurationMs(startedAtMs),
+            preservedCurrentState: true,
+          },
+        });
+        return clonePlatformInstanceRecord(currentRecord);
+      }
       telemetry.warn('music-platform.instance-auth.read.failed', {
         message: readMusicPlatformDiagnosticErrorMessage(error),
         fields: {

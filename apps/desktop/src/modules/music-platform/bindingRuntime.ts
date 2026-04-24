@@ -13,6 +13,7 @@ import type {
   PlatformConnectorId,
   PlatformQrLoginPollResult,
 } from './connectorAuth';
+import { getActiveMusicPlatformInstanceId } from './activeInstanceRegistry';
 import { invokePlatformInstanceAuthBinding } from './platformInstanceAuthBinding';
 import { invokePlatformInstanceApiBinding } from './platformInstanceApiBinding';
 
@@ -110,6 +111,7 @@ function resolveDefaultInstanceId(
 function resolveBindingInstanceId(options: BindingInvokeOptions): string | undefined {
   return (
     normalizeString(options.payload?.instanceId) ||
+    getActiveMusicPlatformInstanceId({ connectorId: options.connectorId }) ||
     toDefaultInstanceIdForConnector(options.connectorId)
   );
 }

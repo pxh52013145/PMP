@@ -1,0 +1,182 @@
+.magnet-telemetry-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.magnet-telemetry-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+  margin-bottom: 12px;
+}
+
+.magnet-telemetry-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.magnet-telemetry-stat-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.magnet-telemetry-stat-label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.magnet-telemetry-main {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.9fr) minmax(360px, 1.1fr);
+  gap: 16px;
+}
+
+.magnet-telemetry-list-card,
+.magnet-telemetry-detail-card {
+  min-height: 0;
+}
+
+.magnet-telemetry-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  margin-bottom: 12px;
+}
+
+.magnet-telemetry-search {
+  width: 100%;
+  min-height: 40px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(255, 255, 255, 0.92);
+  outline: none;
+}
+
+.magnet-telemetry-search::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.magnet-telemetry-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 640px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.magnet-telemetry-entry {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.magnet-telemetry-entry:hover,
+.magnet-telemetry-entry.is-selected {
+  border-color: rgba(120, 215, 255, 0.42);
+  background: rgba(120, 215, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+.magnet-telemetry-entry-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.magnet-telemetry-entry-title,
+.magnet-telemetry-detail-name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.magnet-telemetry-entry-meta,
+.magnet-telemetry-detail-id {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.magnet-telemetry-entry-foot,
+.magnet-telemetry-detail-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.magnet-telemetry-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+}
+
+.magnet-telemetry-detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.magnet-telemetry-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.magnet-telemetry-pre {
+  margin-top: 8px;
+  margin-bottom: 0;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.2);
+  min-height: 92px;
+  white-space: pre-wrap;
+  overflow: auto;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.magnet-telemetry-pre--tall {
+  max-height: 280px;
+}
+
+@media (max-width: 1100px) {
+  .magnet-telemetry-main {
+    grid-template-columns: 1fr;
+  }
+
+  .magnet-telemetry-list {
+    max-height: 420px;
+  }
+}

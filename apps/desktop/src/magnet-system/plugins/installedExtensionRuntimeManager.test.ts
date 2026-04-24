@@ -17,6 +17,8 @@ const {
   recordInstalledExtensionCrashMock,
   loadInstalledExtensionsMock,
   subscribeInstalledExtensionsMock,
+  subscribePluginDevSessionsMock,
+  getPluginDevSessionRevisionTokenMock,
   readHostExtensionRuntimeRestartRequestMock,
   subscribeHostExtensionRuntimeRestartMock,
 } = vi.hoisted(() => ({
@@ -28,6 +30,8 @@ const {
   subscribeInstalledExtensionsMock: vi.fn<[() => void], () => void>(
     () => () => {}
   ),
+  subscribePluginDevSessionsMock: vi.fn<[() => void], () => void>(() => () => {}),
+  getPluginDevSessionRevisionTokenMock: vi.fn<[string], string | null>(() => null),
   readHostExtensionRuntimeRestartRequestMock: vi.fn(),
   subscribeHostExtensionRuntimeRestartMock: vi.fn<[() => void], () => void>(
     () => () => {}
@@ -62,6 +66,17 @@ vi.mock('./hostExtensionRuntimeSupervisor', async () => {
     ...actual,
     readHostExtensionRuntimeRestartRequest: readHostExtensionRuntimeRestartRequestMock,
     subscribeHostExtensionRuntimeRestart: subscribeHostExtensionRuntimeRestartMock,
+  };
+});
+
+vi.mock('./devSessionRegistry', async () => {
+  const actual = await vi.importActual<typeof import('./devSessionRegistry')>(
+    './devSessionRegistry'
+  );
+  return {
+    ...actual,
+    subscribePluginDevSessions: subscribePluginDevSessionsMock,
+    getPluginDevSessionRevisionToken: getPluginDevSessionRevisionTokenMock,
   };
 });
 
@@ -396,11 +411,15 @@ describe('DefaultInstalledExtensionRuntimeManager', () => {
     recordInstalledExtensionCrashMock.mockReset();
     loadInstalledExtensionsMock.mockReset();
     subscribeInstalledExtensionsMock.mockReset();
+    subscribePluginDevSessionsMock.mockReset();
+    getPluginDevSessionRevisionTokenMock.mockReset();
     readHostExtensionRuntimeRestartRequestMock.mockReset();
     subscribeHostExtensionRuntimeRestartMock.mockReset();
     readHostExtensionRuntimeRestartRequestMock.mockReturnValue(null);
     loadInstalledExtensionsMock.mockReturnValue([]);
     subscribeInstalledExtensionsMock.mockImplementation(() => () => {});
+    subscribePluginDevSessionsMock.mockImplementation(() => () => {});
+    getPluginDevSessionRevisionTokenMock.mockReturnValue(null);
     subscribeHostExtensionRuntimeRestartMock.mockImplementation(() => () => {});
   });
 
@@ -606,6 +625,70 @@ describe('DefaultInstalledExtensionRuntimeManager', () => {
 
     manager.dispose();
     await flushAsyncWork();
+  });
+
+  it('stops managed startup runtimes and bumps lifecycle restart tokens when dev sessions change', async () => {
+    const records = [createStartupRecord()];
+    let installedListener: (() => void) | null = null;
+    const devSessionListenerRef: { current: (() => void) | null } = { current: null };
+    let devSessionToken: string | null = null;
+    const firstDispose = vi.fn().mockResolvedValue(undefined);
+    const secondDispose = vi.fn().mockResolvedValue(undefined);
+
+    loadInstalledExtensionsMock.mockImplementation(() => records);
+    subscribeInstalledExtensionsMock.mockImplementation((listener: () => void) => {
+      installedListener = listener;
+      return () => {
+        if (installedListener === listener) {
+          installedListener = null;
+        }
+      };
+    });
+    subscribePluginDevSessionsMock.mockImplementation((listener: () => void) => {
+      devSessionListenerRef.current = listener;
+      return () => {
+        if (devSessionListenerRef.current === listener) {
+          devSessionListenerRef.current = null;
+        }
+      };
+    });
+    getPluginDevSessionRevisionTokenMock.mockImplementation((pluginId: string) =>
+      pluginId === 'demo-startup-extension' ? devSessionToken : null
+    );
+    startInstalledExtensionStartupRuntimeMock
+      .mockResolvedValueOnce({
+        runtimeInstanceId: 'startup-runtime-1',
+        dispose: firstDispose,
+      })
+      .mockResolvedValueOnce({
+        runtimeInstanceId: 'startup-runtime-2',
+        dispose: secondDispose,
+      });
+
+    const manager = createManager();
+    const restartListener = vi.fn();
+    manager.subscribeRestart(restartListener);
+
+    manager.start();
+    await flushAsyncWork();
+
+    expect(startInstalledExtensionStartupRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(manager.getRestartToken('demo-startup-extension')).toBe(0);
+
+    devSessionToken = 'entry-url::2::1710000000000';
+    if (devSessionListenerRef.current) {
+      devSessionListenerRef.current();
+    }
+    await flushAsyncWork();
+
+    expect(firstDispose).toHaveBeenCalledWith('dev-session-updated');
+    expect(startInstalledExtensionStartupRuntimeMock).toHaveBeenCalledTimes(2);
+    expect(manager.getRestartToken('demo-startup-extension')).toBeGreaterThan(0);
+    expect(restartListener).toHaveBeenCalledTimes(1);
+
+    manager.dispose();
+    await flushAsyncWork();
+    expect(secondDispose).toHaveBeenCalledWith('module-dispose');
   });
 
   it('starts background runtimes for matching capability activations', async () => {

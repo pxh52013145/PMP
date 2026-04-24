@@ -45,6 +45,7 @@ import {
   type PlatformConnectorTemplate,
   type PlatformConnectorWorkspaceMode,
 } from './platformConnectorModel';
+import { getActiveMusicPlatformInstanceId } from './activeInstanceRegistry';
 import type { PlatformPackWorkspaceSurfaceRecord } from './platformWorkspaceSurface';
 
 export type PlatformRuntimeWorkspacePath = 'legacy' | 'pack' | 'none';
@@ -445,6 +446,9 @@ function createPlatformRuntimeWorkspaceMountFromInstallation(input: {
   const installedRecord =
     input.maps.installedRecordsByInstallationId.get(input.installationId) ??
     getInstalledPlatformPackRecord(input.installationId);
+  const packRegistration = resolvePlatformPackRegistrationForInstallation(
+    input.installationId
+  );
   const workspaceSurface = resolvePlatformPackWorkspaceSurfaceForInstallation(
     input.installationId
   );
@@ -456,14 +460,17 @@ function createPlatformRuntimeWorkspaceMountFromInstallation(input: {
     source:
       normalizeString(installedRecord?.source) ||
       normalizeString(workspaceSurface?.source) ||
+      normalizeString(packRegistration?.source) ||
       null,
     packId:
       normalizeString(installedRecord?.packId) ||
       normalizeString(workspaceSurface?.packId) ||
+      normalizeString(packRegistration?.packId) ||
       null,
     packVersion:
       normalizeString(installedRecord?.packVersion) ||
       normalizeString(workspaceSurface?.packVersion) ||
+      normalizeString(packRegistration?.packVersion) ||
       null,
     packageDigest: normalizeString(installedRecord?.packageDigest) || null,
     artifactRootPath: normalizeString(installedRecord?.artifactRootPath) || null,
@@ -616,8 +623,20 @@ function buildPlatformRuntimeDescriptorForConnector(
         ) ?? null
       : null) ??
     null;
+  const activeInstanceId = getActiveMusicPlatformInstanceId({ connectorId });
+  const connectorInstances = maps.instancesByConnectorId.get(connectorId) ?? [];
+  const activeInstanceRecord =
+    connectorInstances.find((record) => record.instanceId === activeInstanceId) ??
+    (compatRegistryRecord
+      ? (
+          maps.instancesByPlatformId.get(
+            normalizePlatformId(compatRegistryRecord.platformId)
+          ) ?? []
+        ).find((record) => record.instanceId === activeInstanceId) ?? null
+      : null);
   const instanceRecord =
-    pickPreferredInstanceRecord(maps.instancesByConnectorId.get(connectorId) ?? []) ??
+    activeInstanceRecord ??
+    pickPreferredInstanceRecord(connectorInstances) ??
     (compatRegistryRecord
       ? pickPreferredInstanceRecord(
           maps.instancesByPlatformId.get(

@@ -496,8 +496,8 @@ Telemetry 不能反向伤害性能。
 ## 11. 旧文档定位
 
 以下文档仍可保留，但它们是历史方案或执行拆分，不再是权威说明：
-- `documents/desktop-telemetry-spec.md`
-- `documents/desktop-debug-telemetry-plan.md`
-- `documents/desktop-debug-telemetry-execution-plan.md`
+- `documents/telemetry/desktop-telemetry-spec.md`
+- `documents/telemetry/desktop-debug-telemetry-plan.md`
+- `documents/telemetry/desktop-debug-telemetry-execution-plan.md`
 
 后续如果实现发生变化，应先更新本文件，再决定是否回写历史文档。

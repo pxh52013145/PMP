@@ -1,6 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InstalledExtensionRecord, PxpManifestV2 } from '@pixel-matrix/plugin-platform-contracts';
 import { listPluginRuntimeLaunchers, resolveInstalledExtensionRuntime } from './runtime';
+
+const {
+  getPluginDevSessionRecordMock,
+  resolvePluginDevSessionEntryMock,
+} = vi.hoisted(() => ({
+  getPluginDevSessionRecordMock: vi.fn(),
+  resolvePluginDevSessionEntryMock: vi.fn(),
+}));
+
+vi.mock('./devSessionRegistry', () => ({
+  getPluginDevSessionRecord: getPluginDevSessionRecordMock,
+  resolvePluginDevSessionEntry: resolvePluginDevSessionEntryMock,
+}));
 
 function createRecord(manifest: PxpManifestV2): InstalledExtensionRecord<PxpManifestV2> {
   return {
@@ -34,6 +47,13 @@ function createBaseManifest(overrides: Partial<PxpManifestV2> = {}): PxpManifest
 }
 
 describe('plugin runtime resolver', () => {
+  beforeEach(() => {
+    getPluginDevSessionRecordMock.mockReset();
+    resolvePluginDevSessionEntryMock.mockReset();
+    getPluginDevSessionRecordMock.mockReturnValue(null);
+    resolvePluginDevSessionEntryMock.mockReturnValue(null);
+  });
+
   it('exposes the extv2 launcher registry', () => {
     expect(
       listPluginRuntimeLaunchers().map((launcher) => ({
@@ -106,6 +126,117 @@ describe('plugin runtime resolver', () => {
     if (resolution.status !== 'resolved') return;
     expect(resolution.runtime.runtimeId).toBe('webview.main');
     expect(resolution.launcher.id).toBe('pxp.webview.host-frame');
+  });
+
+  it('prefers the dev session overlay when a matching session is attached', () => {
+    const manifest = createBaseManifest({
+      runtimes: [
+        {
+          runtimeId: 'webview.main',
+          kind: 'webview',
+          entry: 'dist/view.html',
+          bridge: 'pxp.runtime.bridge.v1',
+        },
+      ],
+    });
+    const record: InstalledExtensionRecord<PxpManifestV2> = {
+      ...createRecord(manifest),
+      resolvedArtifacts: [
+        {
+          runtimeId: 'webview.main',
+          path: 'C:/plugins/demo-plugin/dist/view.html',
+        },
+      ],
+    };
+
+    getPluginDevSessionRecordMock.mockReturnValue({
+      pluginId: 'demo-plugin',
+      projectRoot: 'D:/plugin-project',
+      manifestPath: 'D:/plugin-project/manifest.v2.json',
+      mode: 'entry-url',
+      entryUrl: 'http://localhost:5173/plugin.html',
+      runtimeKinds: ['webview'],
+      revision: 2,
+      updatedAt: 1_710_000_000_001,
+    });
+    resolvePluginDevSessionEntryMock.mockReturnValue({
+      path: 'http://localhost:5173/plugin.html',
+      field: 'entryUrl',
+      usedFallback: false,
+    });
+
+    const resolution = resolveInstalledExtensionRuntime(record, {
+      hostId: 'pmp',
+      surfaceKind: 'page',
+    });
+
+    expect(resolution.status).toBe('resolved');
+    if (resolution.status !== 'resolved') return;
+    expect(resolution.source).toBe('dev-session');
+    expect(resolution.artifact.path).toBe('http://localhost:5173/plugin.html');
+    expect(resolution.devSession).toMatchObject({
+      pluginId: 'demo-plugin',
+      mode: 'entry-url',
+    });
+  });
+
+  it('falls back to installed artifacts when no dev session is attached', () => {
+    const record: InstalledExtensionRecord<PxpManifestV2> = {
+      ...createRecord(createBaseManifest()),
+      resolvedArtifacts: [
+        {
+          runtimeId: 'worker.main',
+          path: 'C:/plugins/demo-plugin/dist/index.js',
+        },
+      ],
+    };
+
+    const resolution = resolveInstalledExtensionRuntime(record, {
+      hostId: 'pmp',
+      surfaceKind: 'command',
+      preferCommandWorker: true,
+    });
+
+    expect(resolution.status).toBe('resolved');
+    if (resolution.status !== 'resolved') return;
+    expect(resolution.source).toBe('manifest-runtime');
+    expect(resolution.artifact.path).toBe('C:/plugins/demo-plugin/dist/index.js');
+    expect(resolution.devSession).toBeNull();
+  });
+
+  it('falls back to installed artifacts when a dev session is detached or does not match the runtime', () => {
+    const record: InstalledExtensionRecord<PxpManifestV2> = {
+      ...createRecord(createBaseManifest()),
+      resolvedArtifacts: [
+        {
+          runtimeId: 'worker.main',
+          path: 'C:/plugins/demo-plugin/dist/index.js',
+        },
+      ],
+    };
+
+    getPluginDevSessionRecordMock.mockReturnValue({
+      pluginId: 'demo-plugin',
+      projectRoot: 'D:/plugin-project',
+      manifestPath: 'D:/plugin-project/manifest.v2.json',
+      mode: 'entry-path',
+      entryPath: 'dist/dev.js',
+      runtimeKinds: ['webview'],
+      revision: 3,
+      updatedAt: 1_710_000_000_002,
+    });
+    resolvePluginDevSessionEntryMock.mockReturnValue(null);
+
+    const resolution = resolveInstalledExtensionRuntime(record, {
+      hostId: 'pmp',
+      surfaceKind: 'command',
+      preferCommandWorker: true,
+    });
+
+    expect(resolution.status).toBe('resolved');
+    if (resolution.status !== 'resolved') return;
+    expect(resolution.source).toBe('manifest-runtime');
+    expect(resolution.artifact.path).toBe('C:/plugins/demo-plugin/dist/index.js');
   });
 
   it('resolves sidecar command runtimes to the native-process launcher', () => {

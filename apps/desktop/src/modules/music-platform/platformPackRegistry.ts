@@ -56,6 +56,10 @@ import {
 } from './platformPackSidecarHostSupport';
 import { disposePlatformPackSidecar } from './platformPackSidecarBridge';
 import {
+  createParsedPlatformPackFromDevSource,
+  type PlatformPackDevSource,
+} from './platformPackDevSource';
+import {
   getMusicPlatformDurationMs,
   getMusicPlatformNowMs,
   readMusicPlatformDiagnosticErrorMessage,
@@ -1951,6 +1955,10 @@ function buildInstalledPackSource(record: InstalledPlatformPackRecord): string {
   );
 }
 
+function isPlatformPackDevInstallationId(installationId: string): boolean {
+  return normalizeString(installationId).startsWith('dev-');
+}
+
 async function buildParsedPlatformPackFromInstalledRecord(
   record: InstalledPlatformPackRecord
 ): Promise<ParsedPlatformPack> {
@@ -2047,11 +2055,13 @@ async function refreshInstalledPlatformPackRegistrationsFromStore(): Promise<voi
 
     for (const installationId of Array.from(platformPackRegistrationByInstallationId.keys())) {
       if (desiredInstallationIds.has(installationId)) continue;
+      if (isPlatformPackDevInstallationId(installationId)) continue;
       platformPackRegistrationByInstallationId.delete(installationId);
     }
 
     for (const installationId of Array.from(platformPackWorkspaceSurfaceByInstallationId.keys())) {
       if (desiredInstallationIds.has(installationId)) continue;
+      if (isPlatformPackDevInstallationId(installationId)) continue;
       platformPackWorkspaceSurfaceByInstallationId.delete(installationId);
     }
 
@@ -2152,6 +2162,44 @@ function upsertPlatformPackRecord(
   if (installationId) {
     platformPackRegistrationByInstallationId.set(installationId, cloneRecord(record));
   }
+  emitRegistryChanged();
+  return cloneRecord(record);
+}
+
+function upsertPlatformPackDevRegistrationRecord(
+  pack: ParsedPlatformPack,
+  definition: PlatformConnectorDefinition,
+  compatRegistration: BuiltinPlatformCompatRegistration,
+  options: {
+    source: string;
+    installedAtMs?: number;
+    installationId: string;
+  }
+): PlatformPackRegistrationRecord {
+  const record: PlatformPackRegistrationRecord = {
+    packId: pack.manifest.metadata.id,
+    packVersion: pack.manifest.metadata.version,
+    connectorId: definition.connectorId,
+    platformId: pack.contract.platform.platformId,
+    source: normalizeString(options.source) || 'platform-pack-dev',
+    installedAtMs:
+      typeof options.installedAtMs === 'number' && Number.isFinite(options.installedAtMs)
+        ? options.installedAtMs
+        : Date.now(),
+    definition,
+    compat: compatRegistration,
+  };
+
+  upsertPlatformPackWorkspaceSurfaceRecord(
+    pack,
+    definition,
+    record.source,
+    options.installationId
+  );
+  platformPackRegistrationByInstallationId.set(
+    options.installationId,
+    cloneRecord(record)
+  );
   emitRegistryChanged();
   return cloneRecord(record);
 }
@@ -2839,6 +2887,64 @@ export async function installPlatformPackFromFile(file: File): Promise<PlatformP
   }
 }
 
+export async function registerPlatformPackDevSource(
+  source: PlatformPackDevSource,
+  options: {
+    installationId: string;
+    source?: string;
+    installedAtMs?: number;
+  }
+): Promise<PlatformPackRegistrationRecord> {
+  const installationId = normalizeString(options.installationId);
+  if (!installationId) {
+    throw new Error('Platform pack dev registration requires an installation id');
+  }
+
+  const pack = createParsedPlatformPackFromDevSource(source);
+  const definition = buildDefinitionFromPack(pack);
+  const {
+    runtime,
+    runtimeAdapter,
+    connectorAdapterMode,
+  } = await resolveAdapterAndRuntime(pack, definition, null);
+  const compatRegistration = buildCompatRegistration(
+    pack,
+    definition,
+    runtime,
+    runtimeAdapter,
+    connectorAdapterMode
+  );
+
+  return upsertPlatformPackDevRegistrationRecord(
+    pack,
+    definition,
+    compatRegistration,
+    {
+      source: normalizeString(options.source) || `platform-pack-dev:${pack.manifest.metadata.id}`,
+      installedAtMs: options.installedAtMs,
+      installationId,
+    }
+  );
+}
+
+export function removePlatformPackDevRegistration(installationId: string): boolean {
+  const normalizedInstallationId = normalizeString(installationId);
+  if (!normalizedInstallationId) {
+    return false;
+  }
+
+  const removedRegistration = platformPackRegistrationByInstallationId.delete(
+    normalizedInstallationId
+  );
+  const removedSurface = platformPackWorkspaceSurfaceByInstallationId.delete(
+    normalizedInstallationId
+  );
+  if (removedRegistration || removedSurface) {
+    emitRegistryChanged();
+  }
+  return removedRegistration || removedSurface;
+}
+
 export function listPlatformPackRegistrations(): PlatformPackRegistrationRecord[] {
   ensureBuiltinPlatformPackRegistrationsInitialized();
   return Array.from(platformPackRegistry.values()).map(cloneRecord);
@@ -3202,6 +3308,32 @@ export function inspectPlatformPackWorkspaceReadinessForInstallation(
 
   const installedRecord = getInstalledPlatformPackRecord(normalizedInstallationId);
   if (!installedRecord) {
+    const registration =
+      platformPackRegistrationByInstallationId.get(normalizedInstallationId) ?? null;
+    const workspaceSurface =
+      platformPackWorkspaceSurfaceByInstallationId.get(normalizedInstallationId) ?? null;
+    if (registration || workspaceSurface) {
+      const connectorId =
+        registration?.connectorId ??
+        workspaceSurface?.connectorId ??
+        ('connector.platform.unknown' as PlatformConnectorId);
+      return inspectPlatformPackWorkspaceReadinessRecord({
+        connectorId,
+        registration,
+        contract: registration?.compat.contract ?? null,
+        runtimePresent: Boolean(registration?.compat.runtime),
+        workspaceSurface,
+        source: workspaceSurface?.source ?? registration?.source ?? null,
+        registrationMissingCode: 'workspace.dev-registration.missing',
+        registrationMissingMessage:
+          'The platform pack development binding has a workspace surface but no matching runtime registration yet.',
+        registrationMissingFields: {
+          installationId: normalizedInstallationId,
+          source: workspaceSurface?.source ?? null,
+        },
+      });
+    }
+
     return createEmptyPlatformPackWorkspaceReadiness(
       {
         connectorId: 'connector.platform.unknown' as PlatformConnectorId,

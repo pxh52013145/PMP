@@ -21,6 +21,10 @@ import {
   type InstalledHostExtensionRecord,
 } from './extensions';
 import {
+  getPluginDevSessionRevisionToken,
+  subscribePluginDevSessions,
+} from './devSessionRegistry';
+import {
   readHostExtensionRuntimeRestartRequest,
   subscribeHostExtensionRuntimeRestart,
 } from './hostExtensionRuntimeSupervisor';
@@ -268,10 +272,12 @@ export class DefaultInstalledExtensionRuntimeManager
   private readonly inflightStarts = new Map<string, Promise<void>>();
   private readonly lifecycleTokens = new Map<string, number>();
   private readonly lifecycleSnapshots = new Map<string, InstalledExtensionLifecycleSnapshot>();
+  private readonly devSessionTokens = new Map<string, string | null>();
   private restartRevision = 0;
   private lastRestartAt = 0;
   private lastLifecycleTokenAt = 0;
   private disposeInstalledSync: (() => void) | null = null;
+  private disposeDevSessionSync: (() => void) | null = null;
   private disposeRestartSync: (() => void) | null = null;
   private disposeHostEventSync: (() => void) | null = null;
   private started = false;
@@ -498,6 +504,7 @@ export class DefaultInstalledExtensionRuntimeManager
 
     this.syncStartupRuntimes();
     this.disposeInstalledSync = subscribeInstalledExtensions(this.syncStartupRuntimes);
+    this.disposeDevSessionSync = subscribePluginDevSessions(this.syncStartupRuntimes);
     this.disposeRestartSync = subscribeHostExtensionRuntimeRestart(this.handleRestartSignal);
     this.disposeHostEventSync = this.attachHostEventSources();
   };
@@ -515,6 +522,15 @@ export class DefaultInstalledExtensionRuntimeManager
       });
     }
     this.disposeInstalledSync = null;
+
+    try {
+      this.disposeDevSessionSync?.();
+    } catch (error) {
+      telemetry.warn('extension.runtime_manager.unsubscribe_dev_sessions_failed', {
+        message: readErrorMessage(error),
+      });
+    }
+    this.disposeDevSessionSync = null;
 
     try {
       this.disposeRestartSync?.();
@@ -892,6 +908,7 @@ export class DefaultInstalledExtensionRuntimeManager
     const installed = loadInstalledExtensions();
     const installedIds = new Set<string>();
     const nextLifecycleSnapshots = new Map<string, InstalledExtensionLifecycleSnapshot>();
+    const nextDevSessionTokens = new Map<string, string | null>();
     const lifecycleRestartReasons = new Map<string, string>();
 
     for (const record of installed) {
@@ -901,6 +918,8 @@ export class DefaultInstalledExtensionRuntimeManager
       const nextSnapshot = createLifecycleSnapshot(record);
       const previousSnapshot = this.lifecycleSnapshots.get(pluginId);
       nextLifecycleSnapshots.set(pluginId, nextSnapshot);
+      const nextDevSessionToken = getPluginDevSessionRevisionToken(pluginId);
+      nextDevSessionTokens.set(pluginId, nextDevSessionToken);
 
       if (!previousSnapshot) {
         continue;
@@ -908,11 +927,22 @@ export class DefaultInstalledExtensionRuntimeManager
 
       const reason = readLifecycleRestartReason(previousSnapshot, nextSnapshot);
       if (!reason) {
-        continue;
+        // Continue checking dev-session invalidations below.
+      } else {
+        lifecycleRestartReasons.set(pluginId, reason);
+        this.bumpLifecycleToken(pluginId);
       }
 
-      lifecycleRestartReasons.set(pluginId, reason);
-      this.bumpLifecycleToken(pluginId);
+      if (
+        this.devSessionTokens.has(pluginId) &&
+        this.devSessionTokens.get(pluginId) !== nextDevSessionToken
+      ) {
+        lifecycleRestartReasons.set(
+          pluginId,
+          nextDevSessionToken ? 'dev-session-updated' : 'dev-session-detached'
+        );
+        this.bumpLifecycleToken(pluginId);
+      }
     }
 
     for (const pluginId of Array.from(this.lifecycleSnapshots.keys())) {
@@ -923,6 +953,10 @@ export class DefaultInstalledExtensionRuntimeManager
     this.lifecycleSnapshots.clear();
     for (const [pluginId, snapshot] of nextLifecycleSnapshots.entries()) {
       this.lifecycleSnapshots.set(pluginId, snapshot);
+    }
+    this.devSessionTokens.clear();
+    for (const [pluginId, token] of nextDevSessionTokens.entries()) {
+      this.devSessionTokens.set(pluginId, token);
     }
 
     const startupEligibleIds = new Set(

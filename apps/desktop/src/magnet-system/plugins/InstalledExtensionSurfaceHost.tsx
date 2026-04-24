@@ -236,11 +236,12 @@ function InstalledExtensionSurfaceHost({
 
   const runtimeResolution = useMemo(() => {
     if (!record) return null;
+    void restartToken;
     return runtimeManager.resolveRuntime(record, {
       surfaceKind: surface.kind,
       supportedLauncherIds: [...INSTALLED_EXTENSION_VIEW_LAUNCHERS],
     });
-  }, [record, runtimeManager, surface.kind]);
+  }, [record, restartToken, runtimeManager, surface.kind]);
 
   const runtimeResolutionError =
     record && enabled

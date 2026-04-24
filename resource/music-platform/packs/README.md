@@ -2,6 +2,9 @@
 
 `platform-pack` is a zip-based capability package. The host accepts `.pmpp` and `.zip`.
 
+Canonical architecture:
+1. `documents/music-platform/music-platform-final-architecture.md`
+
 Minimal required contents:
 1. `manifest.json`
 2. The contract file referenced by `manifest.entry.contract`
@@ -32,6 +35,14 @@ Runtime rules:
 4. Runtime coverage must match the API buckets declared by the contract
 5. The host executes runtime artifacts, not source trees. TS/Rust source may be shipped as extra resources, but the host must not depend on compiling them dynamically
 6. Standard pack runtime code should depend on the public runtime context and binding contract only. Host-private helper injections such as `createDefaultRuntimeApi` / `createDefaultAuthBindingProvider` / `createDefaultBindingProvider` are not part of the pack contract
+
+Workspace UI rules:
+1. A pack-owned UI is declared from the contract `workspace` field, not by adding host React components
+2. Full workspace UI should declare `workspace.ownership = "pack"` and a `workspace.root.viewId`
+3. Slot-based UI can declare `workspace.shellSlots[]` for host shell reuse
+4. The host mounts the workspace into the Platform instance surface through the runtime bridge
+5. Pack UI must use host capabilities for audio, auth, storage, navigation, telemetry, and workspace/search/prepare access
+6. Pack UI must not call Tauri APIs or read arbitrary AppData paths directly
 
 Builtin source directories in this repo:
 1. `resource/music-platform/packs/builtin/bilibili/`
@@ -73,7 +84,7 @@ Current host model:
 4. Cookie/token/keyring state must stay bound to `instanceId`, not pack path
 
 Pack authoring workflow:
-1. Create a directory that follows the contract-only layout described above
+1. Create a directory that follows the contract-driven layout described above
 2. Put runtime artifacts and optional sidecar binaries into that directory
 3. Package it with:
 

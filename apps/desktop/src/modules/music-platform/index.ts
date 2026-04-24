@@ -66,6 +66,14 @@ export {
 } from './platformPackMaintenance';
 
 export {
+  getActiveMusicPlatformInstanceId,
+  getMusicPlatformActiveInstanceState,
+  setActiveMusicPlatformInstance,
+  subscribeMusicPlatformActiveInstanceState,
+  type MusicPlatformActiveInstanceState,
+} from './activeInstanceRegistry';
+
+export {
   getPlatformRenderSelection,
   inspectPlatformRenderSelectionPersistence,
   listPlatformRenderSelections,
@@ -130,6 +138,8 @@ export {
   resolvePlatformPackWorkspaceSurface,
   resolvePlatformPackWorkspaceSurfaceForInstallation,
   resolvePlatformPackWorkspaceSurfaceForInstance,
+  registerPlatformPackDevSource,
+  removePlatformPackDevRegistration,
   subscribePlatformPackStartupHealth,
   subscribePlatformPackRegistrations,
   type BuiltinPlatformPackAssetDefinition,
@@ -198,6 +208,27 @@ export {
 export {
   pickMusicPlatformGlobalCacheDirectory,
 } from './cacheDirectoryPicker';
+
+export {
+  bindPlatformPackDevInstance,
+  detachPlatformPackDevInstanceBinding,
+  getPlatformPackDevInstanceBinding,
+  getPlatformPackDevInstanceBindingsRevision,
+  listPlatformPackDevInstanceBindings,
+  reloadPlatformPackDevInstanceBinding,
+  resolvePlatformPackDevInstanceBindingForSource,
+  subscribePlatformPackDevInstanceBindings,
+  type PlatformPackDevInstanceBindResult,
+  type PlatformPackDevInstanceBindingRecord,
+  type PlatformPackDevInstanceBindingStatus,
+  type PlatformPackDevInstanceReloadHistoryEntry,
+  type PlatformPackDevInstanceReloadStatus,
+} from './platformPackDevBinding';
+
+export {
+  focusMusicPlatformWorkspaceInstance,
+  type FocusMusicPlatformWorkspaceResult,
+} from './platformWorkspaceFocus';
 
 export {
   getMusicPlatformGlobalCacheSettings,

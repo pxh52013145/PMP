@@ -11,6 +11,7 @@ import { NAVIGATION_PAGE_MAGNET } from '../../data/builtin/navigationPageMagnet'
 import { BACK_BUTTON_MAGNET } from '../../data/builtin/backButtonMagnet';
 import { AUDIO_VISUALIZER_MAGNET } from '../../data/builtin/audioVisualizerMagnet';
 import { PROCESS_PERF_MONITOR_MAGNET } from '../../data/builtin/processPerfMonitorMagnet';
+import { PLUGIN_DEVELOPMENT_WORKSPACE_MAGNET } from '../../data/builtin/pluginDevelopmentWorkspaceMagnet';
 import { DESKTOP_LYRICS_MAGNET } from '../../data/builtin/desktopLyricsMagnet';
 import {
   PLATFORM_LOGIN_MAGNET,
@@ -36,6 +37,7 @@ export function createDefaultMagnetLibrary(): Magnet[] {
     DESKTOP_LYRICS_MAGNET,
     AUDIO_VISUALIZER_MAGNET,
     PROCESS_PERF_MONITOR_MAGNET,
+    PLUGIN_DEVELOPMENT_WORKSPACE_MAGNET,
     EDITOR_BUTTON_MAGNET,
     DEBUG_BUTTON_MAGNET,
     MATRIX_CHANGE_MAGNET,

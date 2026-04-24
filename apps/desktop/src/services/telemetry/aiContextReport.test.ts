@@ -3,6 +3,7 @@ import type { TelemetryQueryResult, TelemetryStatus } from '../../contracts/tele
 import {
   buildTelemetryAiContextReport,
   getDefaultTelemetryAiQuery,
+  getMagnetTelemetryAiQuery,
   getPerformanceTelemetryAiQuery,
   getPluginTelemetryAiQuery,
   getTelemetryAiContextPreset,
@@ -62,8 +63,12 @@ describe('aiContextReport', () => {
     expect(getDefaultTelemetryAiQuery().moduleIds).toEqual(
       expect.arrayContaining(['plugins', 'performance', 'music-platform', 'magnet.platform'])
     );
+    expect(getMagnetTelemetryAiQuery().moduleIds).toEqual(
+      expect.arrayContaining(['magnet.platform', 'playlists', 'debug', 'vst'])
+    );
     expect(getPluginTelemetryAiQuery().eventPrefixes).toEqual(['plugin.']);
     expect(getPerformanceTelemetryAiQuery().eventPrefixes).toEqual(['performance.']);
+    expect(getTelemetryAiContextPreset('magnets').fileStem).toBe('magnet-context');
     expect(getTelemetryAiContextPreset('plugins').fileStem).toBe('plugin-context');
     expect(getTelemetryAiContextPreset('performance').fileStem).toBe('performance-context');
   });

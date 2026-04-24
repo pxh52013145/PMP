@@ -3,6 +3,11 @@ import type {
   PxpManifestV2,
   RuntimeEntryDescriptor,
 } from '@pixel-matrix/plugin-platform-contracts';
+import type { PluginDevSessionRecord } from '../devSessionRegistry';
+import {
+  getPluginDevSessionRecord,
+  resolvePluginDevSessionEntry,
+} from '../devSessionRegistry';
 import { listLaunchersForRuntimeKind } from './launcherRegistry';
 import type {
   BlockedPluginRuntime,
@@ -41,6 +46,50 @@ function resolveArtifact(
   return {
     runtimeId: runtime.runtimeId,
     path: runtime.entry,
+  };
+}
+
+function resolveArtifactWithDevOverlay(
+  record: InstalledExtensionRecord<PxpManifestV2>,
+  runtime: RuntimeEntryDescriptor
+): {
+  artifact: PluginRuntimeArtifactResolution;
+  source: 'manifest-runtime' | 'dev-session';
+  devSession: PluginDevSessionRecord | null;
+  overlayIssues: string[];
+} {
+  const devSession = getPluginDevSessionRecord(record.manifest.identity.id);
+  if (!devSession) {
+    return {
+      artifact: resolveArtifact(record, runtime),
+      source: 'manifest-runtime',
+      devSession: null,
+      overlayIssues: [],
+    };
+  }
+
+  const resolvedEntry = resolvePluginDevSessionEntry(devSession, runtime.kind);
+  if (!resolvedEntry) {
+    return {
+      artifact: resolveArtifact(record, runtime),
+      source: 'manifest-runtime',
+      devSession,
+      overlayIssues: [],
+    };
+  }
+
+  return {
+    artifact: {
+      runtimeId: runtime.runtimeId,
+      path: resolvedEntry.path,
+    },
+    source: 'dev-session',
+    devSession,
+    overlayIssues: resolvedEntry.usedFallback
+      ? [
+          `Dev session for "${record.manifest.identity.id}" fell back to ${resolvedEntry.field}`,
+        ]
+      : [],
   };
 }
 
@@ -94,7 +143,12 @@ function buildResolvedRuntime(
   hostId: string,
   runtime: RuntimeEntryDescriptor,
   launcher: PluginRuntimeLauncherDescriptor,
-  issues: string[]
+  issues: string[],
+  options: {
+    artifact: PluginRuntimeArtifactResolution;
+    source: 'manifest-runtime' | 'dev-session';
+    devSession?: PluginDevSessionRecord | null;
+  }
 ): ResolvedPluginRuntime {
   return {
     status: 'resolved',
@@ -105,8 +159,9 @@ function buildResolvedRuntime(
     issues,
     runtime,
     launcher,
-    artifact: resolveArtifact(record, runtime),
-    source: 'manifest-runtime',
+    artifact: options.artifact,
+    source: options.source,
+    devSession: options.devSession ?? null,
   };
 }
 
@@ -198,12 +253,18 @@ export function resolveInstalledExtensionRuntime(
       (launcher) => launcher.availability === 'available'
     );
     if (availableLauncher) {
+      const resolvedArtifact = resolveArtifactWithDevOverlay(record, runtime);
       return buildResolvedRuntime(
         record,
         resolvedContext.hostId,
         runtime,
         availableLauncher,
-        issues
+        [...issues, ...resolvedArtifact.overlayIssues],
+        {
+          artifact: resolvedArtifact.artifact,
+          source: resolvedArtifact.source,
+          devSession: resolvedArtifact.devSession,
+        }
       );
     }
 

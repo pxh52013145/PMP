@@ -169,7 +169,7 @@ function Show-HelpText() {
 Phase 0 desktop memory suite - scripts/perf-memory-phase0-suite.ps1
 
 Purpose:
-  Capture the six fixed Phase 0 scenarios from desktop-rust-memory-refactor-plan.md,
+  Capture the six fixed Phase 0 scenarios from documents/runtime/desktop-rust-memory-refactor-plan.md,
   emit per-scenario snapshots, a consolidated baseline table, and a regression summary.
 
 Scenarios:

@@ -36,6 +36,11 @@ type ParsedExtensionInstallSource = {
   manifestPath: string;
 };
 
+export type ParsedInstalledExtensionSource = Pick<
+  ParsedExtensionInstallSource,
+  'record' | 'rootDir' | 'manifestPath'
+>;
+
 type NativeInstalledExtensionInstallSource = {
   manifestPath: string;
   rootDir: string;
@@ -865,6 +870,17 @@ export async function parseInstalledExtensionFromFilePath(
 ): Promise<InstalledHostExtensionRecord> {
   const parsed = await parseInstalledExtensionInstallSourceFromFilePath(filePath);
   return parsed.record;
+}
+
+export async function parseInstalledExtensionSourceFromFilePath(
+  filePath: string
+): Promise<ParsedInstalledExtensionSource> {
+  const parsed = await parseInstalledExtensionInstallSourceFromFilePath(filePath);
+  return {
+    record: parsed.record,
+    rootDir: parsed.rootDir,
+    manifestPath: parsed.manifestPath,
+  };
 }
 
 export async function installInstalledExtensionFromFilePath(

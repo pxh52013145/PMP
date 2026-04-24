@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import './DebugCenter.css';
 import type { TelemetryQueryInput, TelemetryQueryResult, TelemetryRecord } from '../../contracts/telemetry';
 import { useKernel } from '../../contexts/KernelContext';
 import { getGlobalProcessPerfService } from '../../services/performance-control';
@@ -84,6 +85,7 @@ import {
   TAURI_EVENTS,
   setupTauriListenerWithPayload,
 } from '../../utils/windowCommunication';
+import { MagnetTelemetryWorkbench } from './MagnetTelemetryWorkbench';
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
 import { PmpButton, PmpCard, PmpCheckbox, PmpChoiceButton, PmpSegmented } from '../primitives';
 
@@ -196,6 +198,14 @@ type TelemetryArtifactFeedback = {
   tone: 'progress' | 'success' | 'error';
   message: string;
 };
+
+type DebugWorkspaceId =
+  | 'overview'
+  | 'platforms'
+  | 'runtime'
+  | 'telemetry'
+  | 'magnets'
+  | 'memory';
 
 const MEMORY_BASELINE_MAX_ENTRIES = 20;
 const THREE_STAGE_CAPTURE_PLAN: ReadonlyArray<{
@@ -770,6 +780,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [pendingRestart, setPendingRestart] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [activeWorkspace, setActiveWorkspace] = useState<DebugWorkspaceId>('overview');
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmRestartIntoDebug, setConfirmRestartIntoDebug] = useState(false);
   const [confirmDestroyEditorWindows, setConfirmDestroyEditorWindows] = useState(false);
@@ -837,6 +848,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const telemetryQueryPresetOptions = useMemo(
     () =>
       [
+        { id: 'magnets' as const, label: t('debug.center.telemetry.query.preset.magnets') },
         { id: 'plugins' as const, label: t('debug.center.telemetry.query.preset.plugins') },
         { id: 'performance' as const, label: t('debug.center.telemetry.query.preset.performance') },
         {
@@ -846,6 +858,46 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
         { id: 'general' as const, label: t('debug.center.telemetry.query.preset.general') },
       ] satisfies Array<{ id: TelemetryAiContextPresetId; label: string }>,
     [t]
+  );
+  const workspaceOptions = useMemo(
+    () =>
+      [
+        {
+          id: 'overview' as const,
+          label: t('debug.center.workspace.tab.overview'),
+          desc: t('debug.center.workspace.desc.overview'),
+        },
+        {
+          id: 'platforms' as const,
+          label: t('debug.center.workspace.tab.platforms'),
+          desc: t('debug.center.workspace.desc.platforms'),
+        },
+        {
+          id: 'runtime' as const,
+          label: t('debug.center.workspace.tab.runtime'),
+          desc: t('debug.center.workspace.desc.runtime'),
+        },
+        {
+          id: 'telemetry' as const,
+          label: t('debug.center.workspace.tab.telemetry'),
+          desc: t('debug.center.workspace.desc.telemetry'),
+        },
+        {
+          id: 'magnets' as const,
+          label: t('debug.center.workspace.tab.magnets'),
+          desc: t('debug.center.workspace.desc.magnets'),
+        },
+        {
+          id: 'memory' as const,
+          label: t('debug.center.workspace.tab.memory'),
+          desc: t('debug.center.workspace.desc.memory'),
+        },
+      ] satisfies Array<{ id: DebugWorkspaceId; label: string; desc: string }>,
+    [t]
+  );
+  const activeWorkspaceOption = useMemo(
+    () => workspaceOptions.find((option) => option.id === activeWorkspace) ?? workspaceOptions[0],
+    [activeWorkspace, workspaceOptions]
   );
   const qrAuthConnectorDefinitions = useMemo(
     () =>
@@ -2444,6 +2496,32 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
         <SettingsCard>
           <div className="settings-card-header">
             <div>
+              <p className="settings-card-label">{t('debug.center.workspace.label')}</p>
+              <p className="settings-card-desc">{t('debug.center.workspace.desc')}</p>
+            </div>
+            <span className="settings-card-badge">{activeWorkspaceOption?.label ?? '-'}</span>
+          </div>
+
+          <SettingsToggleGroup className="settings-toggle debug-center-workspace-toggle">
+            {workspaceOptions.map((option) => (
+              <SettingsToggleButton
+                key={option.id}
+                type="button"
+                active={activeWorkspace === option.id}
+                onClick={() => setActiveWorkspace(option.id)}
+              >
+                {option.label}
+              </SettingsToggleButton>
+            ))}
+          </SettingsToggleGroup>
+
+          <p className="settings-card-note">{activeWorkspaceOption?.desc ?? ''}</p>
+        </SettingsCard>
+
+        {activeWorkspace === 'overview' ? (
+          <SettingsCard>
+          <div className="settings-card-header">
+            <div>
               <p className="settings-card-label">{t('debug.center.mode.label')}</p>
               <p className="settings-card-desc">{t('debug.center.mode.desc')}</p>
             </div>
@@ -2477,9 +2555,11 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
             </p>
           ) : null}
           {error ? <p className="settings-card-note" style={{ color: 'rgba(255,120,120,0.9)' }}>{error}</p> : null}
-        </SettingsCard>
+          </SettingsCard>
+        ) : null}
 
-        <SettingsCard>
+        {activeWorkspace === 'platforms' ? (
+          <SettingsCard>
           <div className="settings-card-header">
             <div>
               <p className="settings-card-label">{t('debug.center.sourceFacade.title')}</p>
@@ -2676,9 +2756,11 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               </div>
             ) : null}
           </div>
-        </SettingsCard>
+          </SettingsCard>
+        ) : null}
 
-        <SettingsCard>
+        {activeWorkspace === 'platforms' ? (
+          <SettingsCard>
           <div className="settings-card-header">
             <div>
               <p className="settings-card-label">{t('debug.center.sync.title')}</p>
@@ -2883,9 +2965,11 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               )}
             </div>
           </div>
-        </SettingsCard>
+          </SettingsCard>
+        ) : null}
 
-        <SettingsCard>
+        {activeWorkspace === 'runtime' ? (
+          <SettingsCard>
           <div className="settings-card-header">
             <div>
               <p className="settings-card-label">{t('debug.center.vstBridge.title')}</p>
@@ -3101,9 +3185,11 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               </pre>
             </div>
           </div>
-        </SettingsCard>
+          </SettingsCard>
+        ) : null}
 
-        <SettingsCard>
+        {activeWorkspace === 'runtime' ? (
+          <SettingsCard>
           <div className="settings-card-header">
             <div>
               <p className="settings-card-label">{t('debug.center.windowComm.title')}</p>
@@ -3122,15 +3208,15 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
             </SettingsToggleButton>
           </SettingsToggleGroup>
           <p className="settings-card-note">{t('debug.center.windowComm.note')}</p>
-        </SettingsCard>
+          </SettingsCard>
+        ) : null}
 
-        <SettingsCard>
+        {activeWorkspace === 'telemetry' ? (
+          <SettingsCard>
           <div className="settings-card-header">
             <div>
-              <p className="settings-card-label">Telemetry / 遥测运行时</p>
-              <p className="settings-card-desc">
-                统一查看 console bridge、invoke wrapper、本地 flush 队列和最近 tail。
-              </p>
+              <p className="settings-card-label">{t('debug.center.telemetry.runtime.title')}</p>
+              <p className="settings-card-desc">{t('debug.center.telemetry.runtime.desc')}</p>
             </div>
             <span className="settings-card-badge">
               {telemetrySnapshot.transportAvailable ? 'transport:on' : 'transport:off'}
@@ -3139,13 +3225,13 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
             <SettingsActionButton type="button" onClick={() => void refreshTelemetryRuntime()}>
-              刷新 Telemetry
+              {t('debug.center.telemetry.runtime.action.refresh')}
             </SettingsActionButton>
             <SettingsActionButton type="button" onClick={() => void flushTelemetryRuntime()}>
-              Flush
+              {t('debug.center.telemetry.runtime.action.flush')}
             </SettingsActionButton>
             <SettingsActionButton type="button" onClick={() => void clearTelemetryRuntimeSession()}>
-              清空 Session
+              {t('debug.center.telemetry.runtime.action.clearSession')}
             </SettingsActionButton>
           </div>
 
@@ -3182,9 +3268,9 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
           </div>
 
           <div style={{ marginTop: 14 }}>
-            <p className="settings-card-label">Recent Tail</p>
+            <p className="settings-card-label">{t('debug.center.telemetry.runtime.recentTail')}</p>
             {telemetrySnapshot.tail.length === 0 ? (
-              <p className="settings-card-note">暂无最近记录。</p>
+              <p className="settings-card-note">{t('debug.center.telemetry.runtime.empty')}</p>
             ) : (
               <pre
                 style={{
@@ -4411,9 +4497,13 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               {telemetryArtifactFeedback.message}
             </p>
           ) : null}
-        </SettingsCard>
+          </SettingsCard>
+        ) : null}
 
-        <SettingsCard>
+        {activeWorkspace === 'magnets' ? <MagnetTelemetryWorkbench active /> : null}
+
+        {activeWorkspace === 'memory' ? (
+          <SettingsCard>
           <div className="settings-card-header">
             <div>
               <p className="settings-card-label">{t('debug.center.memory.title')}</p>
@@ -4678,9 +4768,11 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               )}
             </div>
           </div>
-        </SettingsCard>
+          </SettingsCard>
+        ) : null}
 
-        <SettingsCard>
+        {activeWorkspace === 'overview' ? (
+          <SettingsCard>
           <div className="settings-card-header">
             <div>
               <p className="settings-card-label">{t('debug.center.shortcuts.title')}</p>
@@ -4719,7 +4811,8 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               {t('debug.center.shortcuts.themeDebug')}
             </SettingsActionButton>
           </div>
-        </SettingsCard>
+          </SettingsCard>
+        ) : null}
       </div>
 
       <ConfirmDialog

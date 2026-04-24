@@ -20,6 +20,9 @@ const state = vi.hoisted(() => ({
   instances: [] as PlatformInstanceRecord[],
   importedInstances: [] as PlatformImportedInstanceRecord[],
   installedRecords: [] as InstalledPlatformPackRecord[],
+  workspaceSurfacesByInstallationId: {} as Record<string, PlatformPackWorkspaceSurfaceRecord>,
+  activeCurrentInstanceId: null as string | null,
+  activeConnectorInstanceIds: {} as Record<string, string>,
   workspaceOwnershipModes: {} as Record<string, 'legacy' | 'pack' | 'auto'>,
   packWorkspaceReadyConnectorIds: [] as string[],
   packWorkspaceReadyInstallationIds: [] as string[],
@@ -48,10 +51,9 @@ vi.mock('./platformPackRegistry', () => ({
     const installedRecord =
       state.installedRecords.find((record) => record.installationId === installationId) ??
       null;
-    if (!installedRecord) {
-      return null;
-    }
-    return createWorkspaceSurfaceFromInstalledRecord(installedRecord);
+    return installedRecord
+      ? createWorkspaceSurfaceFromInstalledRecord(installedRecord)
+      : state.workspaceSurfacesByInstallationId[installationId] ?? null;
   },
   inspectPlatformPackWorkspaceReadiness: (connectorId: string) => {
     const ready = state.packWorkspaceReadyConnectorIds.includes(connectorId);
@@ -132,6 +134,16 @@ vi.mock('./installedPlatformPacks', () => ({
   listInstalledPlatformPackRecords: () => state.installedRecords,
   getInstalledPlatformPackRecord: (installationId: string) =>
     state.installedRecords.find((record) => record.installationId === installationId) ?? null,
+}));
+
+vi.mock('./activeInstanceRegistry', () => ({
+  getActiveMusicPlatformInstanceId: (options?: { connectorId?: string | null }) => {
+    const connectorId = options?.connectorId?.trim();
+    if (connectorId) {
+      return state.activeConnectorInstanceIds[connectorId] ?? null;
+    }
+    return state.activeCurrentInstanceId;
+  },
 }));
 
 function createRuntime(source = 'test'): PlatformCompatRuntimeApi {
@@ -329,6 +341,9 @@ describe('platformRuntimeDescriptor', () => {
     state.instances = [];
     state.importedInstances = [];
     state.installedRecords = [];
+    state.workspaceSurfacesByInstallationId = {};
+    state.activeCurrentInstanceId = null;
+    state.activeConnectorInstanceIds = {};
     state.workspaceOwnershipModes = {};
     state.packWorkspaceReadyConnectorIds = [];
     state.packWorkspaceReadyInstallationIds = [];
@@ -732,6 +747,180 @@ describe('platformRuntimeDescriptor', () => {
       'installation-a-runtime'
     );
     expect(descriptor?.workspaceMount.installationId).toBe('installation-netease-a');
+  });
+
+  it('routes development platform pack instances through installation-scoped workspace surfaces without installed records', async () => {
+    const devInstallationId = 'dev-demo-abc123';
+    const connectorId = 'connector.platform.demo';
+    const definition = {
+      connectorId,
+      displayName: 'Demo Dev',
+      labelKey: 'demo',
+      iconKey: 'demo',
+      enabled: true,
+      authFlow: 'none',
+      workspaceKind: 'demo',
+      workspaceMode: 'dedicated',
+      sortOrder: 50,
+      source: 'pack',
+    };
+    state.connectorDefinitions = [definition];
+    state.packRegistrations = [
+      {
+        connectorId,
+        installationId: devInstallationId,
+        packId: 'demo-pack',
+        packVersion: '0.1.0',
+        platformId: 'demo',
+        source: 'platform-pack-dev:demo-pack:connector.platform.demo:abc123:r2',
+        definition,
+        compat: {
+          contract: createContract('demo', 'Demo Dev'),
+          runtime: createRuntime('dev-runtime'),
+        },
+      },
+    ];
+    state.workspaceSurfacesByInstallationId[devInstallationId] = {
+      connectorId: connectorId as PlatformPackWorkspaceSurfaceRecord['connectorId'],
+      platformId: 'demo',
+      displayName: 'Demo Dev',
+      packId: 'demo-pack',
+      packVersion: '0.1.0',
+      source: 'platform-pack-dev:demo-pack:connector.platform.demo:abc123:r2',
+      runtimeCode: 'export function mountPage() { return () => {}; }',
+      workspace: {
+        ownership: 'pack',
+        root: {
+          viewId: 'demo.workspace.root',
+          viewType: 'music-platform.workspace-root',
+        },
+      },
+      root: {
+        viewId: 'demo.workspace.root',
+        viewType: 'music-platform.workspace-root',
+      },
+      requiredRuntimeCarrier: 'webview-frame',
+    };
+    state.instances = [
+      createInstanceRecord({
+        instanceId: 'demo:dev-abc123',
+        platformId: 'demo',
+        connectorId,
+        displayName: 'Demo Dev',
+        authStatus: 'authorized',
+        installationId: devInstallationId,
+      }),
+    ];
+    state.workspaceOwnershipModes[connectorId] = 'pack';
+    state.packWorkspaceReadyInstallationIds = [devInstallationId];
+
+    const runtimeDescriptor = await import('./platformRuntimeDescriptor');
+    const descriptor =
+      runtimeDescriptor.resolvePlatformRuntimeDescriptorByInstanceId('demo:dev-abc123');
+
+    expect((descriptor?.runtime as { metadata?: { source?: string } } | null)?.metadata?.source).toBe(
+      'dev-runtime'
+    );
+    expect(descriptor?.workspaceMount).toMatchObject({
+      installationId: devInstallationId,
+      resolutionSource: 'instance-metadata',
+      sourceType: null,
+      source: 'platform-pack-dev:demo-pack:connector.platform.demo:abc123:r2',
+      packId: 'demo-pack',
+      packVersion: '0.1.0',
+      runtimeImportUrl: null,
+    });
+    expect(descriptor?.workspaceMount.workspaceSurface?.runtimeCode).toContain('mountPage');
+    expect(descriptor?.workspaceRouting.path).toBe('pack');
+    expect(descriptor?.workspaceRouting.status).toBe('active');
+  });
+
+  it('prefers the connector-scoped active instance before generic preferred-instance fallback', async () => {
+    state.connectorDefinitions = [
+      {
+        connectorId: 'connector.platform.netease',
+        displayName: 'Netease',
+        labelKey: 'netease',
+        iconKey: 'netease',
+        enabled: true,
+        authFlow: 'qr',
+        workspaceKind: 'netease',
+        workspaceMode: 'dedicated',
+        sortOrder: 20,
+        source: 'pack',
+      },
+    ];
+    state.compatRecords = [
+      {
+        platformId: 'netease',
+        contract: createContract('netease', 'Netease'),
+        runtime: createRuntime('compat-singleton'),
+        source: 'platform-pack',
+        registeredAtMs: 1,
+        metadata: {
+          connectorId: 'connector.platform.netease',
+        },
+      },
+    ];
+    state.instances = [
+      createInstanceRecord({
+        instanceId: 'netease:builtin',
+        platformId: 'netease',
+        connectorId: 'connector.platform.netease',
+        displayName: 'Netease Builtin',
+        authStatus: 'authorized',
+        updatedAtMs: 100,
+      }),
+      createInstanceRecord({
+        instanceId: 'netease:imported-a',
+        platformId: 'netease',
+        connectorId: 'connector.platform.netease',
+        displayName: 'Netease Imported A',
+        authStatus: 'empty',
+        updatedAtMs: 10,
+        installationId: 'installation-netease-imported-a',
+      }),
+    ];
+    state.importedInstances = [
+      createImportedInstanceRecord({
+        instanceId: 'netease:imported-a',
+        installationId: 'installation-netease-imported-a',
+        connectorId: 'connector.platform.netease',
+        platformId: 'netease',
+      }),
+    ];
+    state.installedRecords = [
+      createInstalledRecord({
+        installationId: 'installation-netease-builtin',
+        connectorId: 'connector.platform.netease',
+        platformId: 'netease',
+        packId: 'builtin-netease',
+        sourceType: 'builtin',
+        source: 'builtin-pack:netease',
+        installedAtMs: 100,
+      }),
+      createInstalledRecord({
+        installationId: 'installation-netease-imported-a',
+        connectorId: 'connector.platform.netease',
+        platformId: 'netease',
+        packId: 'external-netease',
+        sourceType: 'external',
+        source: 'file:netease-imported.pmpp',
+        installedAtMs: 200,
+      }),
+    ];
+    state.activeCurrentInstanceId = 'netease:imported-a';
+    state.activeConnectorInstanceIds['connector.platform.netease'] = 'netease:imported-a';
+
+    const runtimeDescriptor = await import('./platformRuntimeDescriptor');
+    const descriptor =
+      runtimeDescriptor.resolvePreferredPlatformRuntimeDescriptorForConnector(
+        'connector.platform.netease'
+      );
+
+    expect(descriptor?.instanceRecord?.instanceId).toBe('netease:imported-a');
+    expect(descriptor?.workspaceMount.installationId).toBe('installation-netease-imported-a');
+    expect(descriptor?.workspaceMount.resolutionSource).toBe('imported-instance');
   });
 
   it('falls back to builtin instance id when compat runtime exists but no instance is created yet', async () => {

@@ -13,6 +13,10 @@ const SPACE2_DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   'platform-magnet',
   'btn-platform-login',
 ]);
+const SPACE3_DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
+  ...REQUIRED_MAGNET_IDS,
+  'plugin-development-workspace',
+]);
 const telemetry = getTelemetryLogger('magnets', 'layoutStorage');
 
 function readErrorMessage(error: unknown): string {
@@ -142,6 +146,8 @@ export function createDefaultMagnetSpaceLayout(
       ? defaultActiveMagnetIds
       : normalized === 'space2'
         ? SPACE2_DEFAULT_ACTIVE_MAGNET_IDS
+        : normalized === 'space3'
+          ? SPACE3_DEFAULT_ACTIVE_MAGNET_IDS
         : REQUIRED_MAGNET_IDS;
   const active = new Set<string>();
   for (const id of seed) active.add(id);

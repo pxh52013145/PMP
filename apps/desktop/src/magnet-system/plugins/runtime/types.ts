@@ -3,6 +3,7 @@ import type {
   PxpManifestV2,
   RuntimeEntryDescriptor,
 } from '@pixel-matrix/plugin-platform-contracts';
+import type { PluginDevSessionRecord } from '../devSessionRegistry';
 
 export type PluginRuntimeSurfaceKind =
   | 'magnet'
@@ -64,7 +65,8 @@ export interface ResolvedPluginRuntime extends PluginRuntimeResolutionBase {
   runtime: RuntimeEntryDescriptor;
   launcher: PluginRuntimeLauncherDescriptor;
   artifact: PluginRuntimeArtifactResolution;
-  source: 'manifest-runtime';
+  source: 'manifest-runtime' | 'dev-session';
+  devSession?: PluginDevSessionRecord | null;
 }
 
 export interface BlockedPluginRuntime extends PluginRuntimeResolutionBase {

@@ -97,6 +97,10 @@ const DspVstMagnetLazy = React.lazy(async () => ({
 const ProcessPerfMonitorMagnetLazy = React.lazy(async () => ({
   default: (await import('../components/magnet/ProcessPerfMonitorMagnet')).ProcessPerfMonitorMagnet,
 }));
+const PluginDevelopmentWorkspaceMagnetLazy = React.lazy(async () => ({
+  default: (await import('../components/magnet/PluginDevelopmentWorkspaceMagnet'))
+    .PluginDevelopmentWorkspaceMagnet,
+}));
 const telemetry = getTelemetryLogger('magnets', 'builtinMagnetRenderersModule');
 
 function readErrorMessage(error: unknown): string {
@@ -285,6 +289,16 @@ function getBuiltinDefinitions(): MagnetRendererDefinition[] {
       description: t('magnet.renderers.audio-visualizer.description'),
       group: 'visualizer',
       tags: ['audio', 'fft', 'spectrum', 'visualizer', 'native'],
+      source: 'builtin',
+    },
+    {
+      id: 'plugin-development-workspace',
+      render: () => renderWithLazyBoundary(<PluginDevelopmentWorkspaceMagnetLazy />),
+      preview: () =>
+        createTextPreview(t('magnet.renderers.plugin-development-workspace.preview')),
+      description: t('magnet.renderers.plugin-development-workspace.description'),
+      group: 'debug',
+      tags: ['plugin', 'development', 'workspace', 'extv2'],
       source: 'builtin',
     },
   ];

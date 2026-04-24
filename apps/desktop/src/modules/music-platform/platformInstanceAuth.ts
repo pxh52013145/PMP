@@ -13,6 +13,7 @@ import {
   resolveDefaultPlatformInstanceIdForConnector,
   resolvePlatformRuntimeDescriptorByInstanceId,
 } from './platformRuntimeDescriptor';
+import { getActiveMusicPlatformInstanceId } from './activeInstanceRegistry';
 export interface PlatformInstanceAuthSnapshot {
   instanceId: string;
   platformId: string;
@@ -150,7 +151,11 @@ export function resolvePlatformInstanceId(options: {
 }): string | null {
   const explicitInstanceId = normalizeString(options.instanceId);
   if (explicitInstanceId) return explicitInstanceId;
-  return resolveDefaultPlatformInstanceIdForConnector(normalizeString(options.connectorId));
+  const connectorId = normalizeString(options.connectorId);
+  return (
+    getActiveMusicPlatformInstanceId({ connectorId }) ??
+    resolveDefaultPlatformInstanceIdForConnector(connectorId)
+  );
 }
 
 export function getPlatformInstanceAuthSnapshot(

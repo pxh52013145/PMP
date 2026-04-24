@@ -83,10 +83,21 @@ export const SYSTEM_SPACE2_DEFAULT_ANCHORS_BY_MAGNET_ID: Record<string, PixelAnc
   ],
 };
 
+export const SYSTEM_SPACE3_DEFAULT_ANCHORS_BY_MAGNET_ID: Record<string, PixelAnchor[]> = {
+  ...SYSTEM_REQUIRED_ANCHORS_BY_MAGNET_ID,
+  'plugin-development-workspace': [
+    { id: 'top-left', gridX: 0, gridY: 1, role: 'anchor' },
+    { id: 'top-right', gridX: 26, gridY: 1, role: 'boundary' },
+    { id: 'bottom-left', gridX: 0, gridY: 17, role: 'boundary' },
+    { id: 'bottom-right', gridX: 26, gridY: 17, role: 'boundary' },
+  ],
+};
+
 export function getSystemAnchorsByMagnetId(spaceId: string): Record<string, PixelAnchor[]> {
   const normalized = spaceId.trim();
   if (normalized === 'space1') return SYSTEM_SPACE1_DEFAULT_ANCHORS_BY_MAGNET_ID;
   if (normalized === 'space2') return SYSTEM_SPACE2_DEFAULT_ANCHORS_BY_MAGNET_ID;
+  if (normalized === 'space3') return SYSTEM_SPACE3_DEFAULT_ANCHORS_BY_MAGNET_ID;
   return SYSTEM_REQUIRED_ANCHORS_BY_MAGNET_ID;
 }
 

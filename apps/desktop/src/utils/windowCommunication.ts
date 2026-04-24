@@ -194,6 +194,7 @@ export const STORAGE_KEYS = {
   EXTENSIONS_V2: 'pixel-matrix-installed-extensions-v2', // 已安装 manifest-v2 扩展
   EXTENSIONS_V2_AUDIT_LOG_V1: 'pixel-matrix-installed-extensions-v2-audit-log-v1', // manifest-v2 governance audit log
   EXTENSIONS_V2_RUNTIME_RESTART_V1: 'pixel-matrix-installed-extensions-v2-runtime-restart-v1', // manifest-v2 runtime restart request
+  EXTENSIONS_V2_DEV_SESSIONS_V1: 'pixel-matrix-installed-extensions-v2-dev-sessions-v1', // manifest-v2 development sessions
 
   // === Shader Packs (.pmps) ===
   PMPS_SHADERS: 'pixel-matrix-pmps-shaders', // 已安装 shader pack（manifest + fragmentCode）
@@ -242,9 +243,11 @@ export const STORAGE_KEYS = {
   MUSIC_LIBRARY_FIELD_CAPABILITIES_V1:
     'pixel-matrix-music-library-field-capabilities-v1', // MusicLibraryExtensionFieldCapabilityInput[]
   PLATFORM_LOGIN_REGISTRY_V1: 'pixel-matrix-platform-login-registry-v1', // Registered platform login launcher entries
+  MUSIC_PLATFORM_ACTIVE_INSTANCE_V1: 'pixel-matrix-music-platform-active-instance-v1', // Shared active music platform instance selection
   PLATFORM_RENDER_SELECTIONS_V1: 'pixel-matrix-platform-render-selections-v1', // Platform entry visibility / render selection state
   PLATFORM_IMPORTED_INSTANCES_V1: 'pixel-matrix-platform-imported-instances-v1', // Imported platform instance registrations
   PLATFORM_PACKS_V1: 'pixel-matrix-platform-packs-v1', // Installed platform packs (manifest + contract + unpacked artifacts)
+  PLATFORM_PACK_DEV_BINDINGS_V1: 'pixel-matrix-platform-pack-dev-bindings-v1', // Host-managed platform pack development bindings
 
   // === Memory Governance ===
   MEMORY_GOVERNANCE_AUTO_ENABLED: 'pixel-matrix-memory-governance-auto-enabled', // boolean
@@ -357,13 +360,16 @@ export const TAURI_EVENTS = {
 
   // Platform Login
   PLATFORM_LOGIN_REGISTRY_UPDATED: 'platform-login-registry-updated',
+  MUSIC_PLATFORM_ACTIVE_INSTANCE_UPDATED: 'music-platform-active-instance-updated',
   PLATFORM_RENDER_SELECTIONS_UPDATED: 'platform-render-selections-updated',
   PLATFORM_IMPORTED_INSTANCES_UPDATED: 'platform-imported-instances-updated',
   PLATFORM_PACKS_UPDATED: 'platform-packs-updated',
+  PLATFORM_PACK_DEV_BINDINGS_UPDATED: 'platform-pack-dev-bindings-updated',
 
   // Extensions
   EXTENSIONS_V2_UPDATED: 'extensions-v2-updated',
   EXTENSIONS_CONFIG_UPDATED: 'extensions-config-updated',
+  EXTENSIONS_V2_DEV_SESSIONS_UPDATED: 'extensions-v2-dev-sessions-updated',
 
   // Shader Packs (.pmps)
   PMPS_SHADERS_UPDATED: 'pmps-shaders-updated',

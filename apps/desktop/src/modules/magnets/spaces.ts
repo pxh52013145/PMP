@@ -11,13 +11,20 @@ export type MagnetSpacesState = {
   spaces: MagnetSpace[];
 };
 
+const DEFAULT_SPACE_NAMES = {
+  space1: '\u7a7a\u95f41',
+  space2: '\u7a7a\u95f42',
+  space3: '\u7a7a\u95f43',
+} as const;
+
 export function createDefaultMagnetSpacesState(now: number = Date.now()): MagnetSpacesState {
   return {
     version: 1,
     activeSpaceId: 'space1',
     spaces: [
-      { id: 'space1', name: '空间1', order: 1, createdAt: now },
-      { id: 'space2', name: '空间2', order: 2, createdAt: now },
+      { id: 'space1', name: DEFAULT_SPACE_NAMES.space1, order: 1, createdAt: now },
+      { id: 'space2', name: DEFAULT_SPACE_NAMES.space2, order: 2, createdAt: now },
+      { id: 'space3', name: DEFAULT_SPACE_NAMES.space3, order: 3, createdAt: now },
     ],
   };
 }
@@ -60,13 +67,18 @@ export function sanitizeMagnetSpacesState(
     spaces.push(space);
   }
 
-  const ensureDefault = (id: 'space1' | 'space2', name: string, order: number) => {
+  const ensureDefault = (
+    id: keyof typeof DEFAULT_SPACE_NAMES,
+    name: string,
+    order: number
+  ) => {
     if (seen.has(id)) return;
     seen.add(id);
     spaces.push({ id, name, order, createdAt: now });
   };
-  ensureDefault('space1', '空间1', 1);
-  ensureDefault('space2', '空间2', 2);
+  ensureDefault('space1', DEFAULT_SPACE_NAMES.space1, 1);
+  ensureDefault('space2', DEFAULT_SPACE_NAMES.space2, 2);
+  ensureDefault('space3', DEFAULT_SPACE_NAMES.space3, 3);
 
   const withOrder = spaces.map((space, idx) => ({
     ...space,
@@ -74,10 +86,16 @@ export function sanitizeMagnetSpacesState(
     createdAt: space.createdAt > 0 ? space.createdAt : now,
   }));
 
-  withOrder.sort((a, b) => (a.order - b.order) || (a.createdAt - b.createdAt) || a.id.localeCompare(b.id));
+  withOrder.sort(
+    (a, b) => a.order - b.order || a.createdAt - b.createdAt || a.id.localeCompare(b.id)
+  );
 
-  const normalizedActiveSpaceId = typeof value.activeSpaceId === 'string' ? value.activeSpaceId.trim() : '';
-  const activeSpaceId = normalizedActiveSpaceId && seen.has(normalizedActiveSpaceId) ? normalizedActiveSpaceId : withOrder[0]!.id;
+  const normalizedActiveSpaceId =
+    typeof value.activeSpaceId === 'string' ? value.activeSpaceId.trim() : '';
+  const activeSpaceId =
+    normalizedActiveSpaceId && seen.has(normalizedActiveSpaceId)
+      ? normalizedActiveSpaceId
+      : withOrder[0]!.id;
 
   return {
     version: 1,
