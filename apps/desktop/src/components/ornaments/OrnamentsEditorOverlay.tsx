@@ -55,6 +55,12 @@ function maxOrder(items: readonly OrnamentItem[], plane: number): number {
   return items.reduce((max, item) => (item.layer.plane === plane ? Math.max(max, item.layer.order) : max), 0);
 }
 
+function editorZIndex(item: OrnamentItem, selectedId: string | null): number {
+  const planeRank = item.layer.plane === -1 ? 0 : 1;
+  const base = planeRank * 10_000 + item.layer.order;
+  return item.id === selectedId ? 1_000_000 + base : 10_000 + base;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
@@ -347,7 +353,7 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
               top: rect.top,
               width: rect.width,
               height: rect.height,
-              zIndex: item.layer.plane * 100000 + item.layer.order,
+              zIndex: editorZIndex(item, selectedId),
             }}
           >
             <img
