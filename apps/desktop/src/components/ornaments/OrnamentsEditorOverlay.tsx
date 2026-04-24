@@ -14,6 +14,7 @@ const TOOLBAR_WIDTH = 224;
 const TOOLBAR_HEIGHT = 38;
 const TOOLBAR_GAP = 12;
 const EDGE_PADDING = 12;
+const MIN_ORNAMENT_SIZE = 32;
 
 function toEditorRect(rect: OrnamentRect): OrnamentRect {
   return { ...rect, left: rect.left + EDIT_MARGIN, top: rect.top + EDIT_MARGIN };
@@ -103,12 +104,58 @@ function toolbarPlacement(rect: OrnamentRect, overlayWidth: number, overlayHeigh
   };
 }
 
+function editorBounds(overlayWidth: number, overlayHeight: number): OrnamentRect {
+  return {
+    left: EDGE_PADDING,
+    top: EDGE_PADDING,
+    width: Math.max(MIN_ORNAMENT_SIZE, overlayWidth - EDGE_PADDING * 2),
+    height: Math.max(MIN_ORNAMENT_SIZE, overlayHeight - EDGE_PADDING * 2),
+  };
+}
+
+function constrainMoveRect(rect: OrnamentRect, bounds: OrnamentRect): OrnamentRect {
+  const width = Math.min(rect.width, bounds.width);
+  const height = Math.min(rect.height, bounds.height);
+  return {
+    left: clamp(rect.left, bounds.left, bounds.left + bounds.width - width),
+    top: clamp(rect.top, bounds.top, bounds.top + bounds.height - height),
+    width,
+    height,
+  };
+}
+
+function constrainResizeRect(rect: OrnamentRect, bounds: OrnamentRect, handle: string): OrnamentRect {
+  const right = rect.left + rect.width;
+  const bottom = rect.top + rect.height;
+  let left = rect.left;
+  let top = rect.top;
+  let width = rect.width;
+  let height = rect.height;
+
+  if (handle.includes('w')) {
+    left = clamp(left, bounds.left, right - MIN_ORNAMENT_SIZE);
+    width = right - left;
+  } else {
+    width = Math.min(Math.max(width, MIN_ORNAMENT_SIZE), bounds.left + bounds.width - left);
+  }
+
+  if (handle.includes('n')) {
+    top = clamp(top, bounds.top, bottom - MIN_ORNAMENT_SIZE);
+    height = bottom - top;
+  } else {
+    height = Math.min(Math.max(height, MIN_ORNAMENT_SIZE), bounds.top + bounds.height - top);
+  }
+
+  return constrainMoveRect({ left, top, width, height }, bounds);
+}
+
 export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
   const [config, setConfig] = useOrnamentsConfig();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const viewportWidth = Math.max(1, window.innerWidth - EDIT_MARGIN * 2);
   const viewportHeight = Math.max(1, window.innerHeight - EDIT_MARGIN * 2);
+  const bounds = useMemo(() => editorBounds(window.innerWidth, window.innerHeight), []);
   const selected = config.items.find((item) => item.id === selectedId) ?? null;
 
   const orderedItems = useMemo(() => sortedOrnaments(config.items), [config.items]);
@@ -195,21 +242,21 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
 
       let rect: OrnamentRect = { ...dragState.startRect };
       if (dragState.kind === 'move') {
-        rect = { ...rect, left: rect.left + dx, top: rect.top + dy };
+        rect = constrainMoveRect({ ...rect, left: rect.left + dx, top: rect.top + dy }, bounds);
       } else {
-        const minSize = 32;
-        if (dragState.handle.includes('e')) rect.width = Math.max(minSize, rect.width + dx);
-        if (dragState.handle.includes('s')) rect.height = Math.max(minSize, rect.height + dy);
+        if (dragState.handle.includes('e')) rect.width = Math.max(MIN_ORNAMENT_SIZE, rect.width + dx);
+        if (dragState.handle.includes('s')) rect.height = Math.max(MIN_ORNAMENT_SIZE, rect.height + dy);
         if (dragState.handle.includes('w')) {
-          const width = Math.max(minSize, rect.width - dx);
+          const width = Math.max(MIN_ORNAMENT_SIZE, rect.width - dx);
           rect.left += rect.width - width;
           rect.width = width;
         }
         if (dragState.handle.includes('n')) {
-          const height = Math.max(minSize, rect.height - dy);
+          const height = Math.max(MIN_ORNAMENT_SIZE, rect.height - dy);
           rect.top += rect.height - height;
           rect.height = height;
         }
+        rect = constrainResizeRect(rect, bounds, dragState.handle);
       }
 
       const offset = offsetFromRect(item, toMainRect(rect), viewportWidth, viewportHeight);
@@ -223,7 +270,7 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
         },
       })));
     },
-    [config, dragState, setConfig, viewportHeight, viewportWidth]
+    [bounds, config, dragState, setConfig, viewportHeight, viewportWidth]
   );
 
   const handlePointerUp = useCallback(
