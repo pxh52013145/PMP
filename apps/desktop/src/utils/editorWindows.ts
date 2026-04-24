@@ -2,7 +2,7 @@
 import { isTauriRuntime } from './tauriRuntime';
 import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { invokeWithTelemetry } from '../services/telemetry/tauriInvokeTelemetry';
-import { readWindowPinState } from './windowPinState';
+import { getEffectiveWindowPinPolicy } from './windowPinRuntime';
 
 void invoke;
 
@@ -45,7 +45,7 @@ export async function openEditorWindow(config: EditorWindowConfig): Promise<void
     throw new Error('Editor windows require the Tauri runtime (use `pnpm dev:tauri`).');
   }
   try {
-    const alwaysOnTop = readWindowPinState();
+    const alwaysOnTop = getEffectiveWindowPinPolicy().editorWindowsPinned;
     telemetry.info('window.editor.open.requested', {
       fields: {
         windowType: config.type,
@@ -92,7 +92,12 @@ const WINDOW_HIERARCHY: Record<EditorWindowType, EditorWindowType[]> = {
   library: ['creator'], // library 关闭时关闭 creator
   background: ['custom-background'], // background 关闭时关闭 custom-background
   statistics: [],
-  style: ['style-pixel', 'style-cover-color', 'style-background-effect', 'style-border-effect'],
+  style: [
+    'style-pixel',
+    'style-cover-color',
+    'style-background-effect',
+    'style-border-effect',
+  ],
   'style-pixel': [],
   'style-cover-color': [],
   'style-background-effect': [],

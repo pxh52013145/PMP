@@ -1,5 +1,6 @@
 pub mod desktop_lyrics;
 pub mod editor;
+pub mod ornaments_editor_overlay;
 pub mod plugin;
 pub mod plugin_shell_surface;
 pub mod vst_manager;

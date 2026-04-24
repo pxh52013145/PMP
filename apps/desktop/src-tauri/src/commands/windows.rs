@@ -198,6 +198,31 @@ pub async fn set_editor_blur_enabled(
     windows::editor::set_editor_windows_blur_enabled(&app, enabled)
 }
 
+#[tauri::command]
+pub async fn ornaments_editor_overlay_open(app: tauri::AppHandle) -> Result<(), String> {
+    windows::ornaments_editor_overlay::open(&app)
+}
+
+#[tauri::command]
+pub async fn ornaments_editor_overlay_close(app: tauri::AppHandle) -> Result<(), String> {
+    windows::ornaments_editor_overlay::close(&app)
+}
+
+#[tauri::command]
+pub async fn ornaments_render_overlay_open(app: tauri::AppHandle) -> Result<(), String> {
+    windows::ornaments_editor_overlay::open_render(&app)
+}
+
+#[tauri::command]
+pub async fn ornaments_overlay_sync_geometry(app: tauri::AppHandle) -> Result<(), String> {
+    windows::ornaments_editor_overlay::sync_geometry(&app)
+}
+
+#[tauri::command]
+pub async fn ornaments_drag_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    windows::ornaments_editor_overlay::drag_main_window(&app)
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn desktop_lyrics_set_visible(
     app: tauri::AppHandle,

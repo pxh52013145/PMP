@@ -4,8 +4,12 @@ import { useT } from '../../i18n';
 import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
-import { TAURI_EVENTS, setupTauriListenerWithPayload } from '../../utils/windowCommunication';
+import { TAURI_EVENTS, setupTauriListener, setupTauriListenerWithPayload } from '../../utils/windowCommunication';
 import { setMagnetChromeOverrideMode, useMagnetChromeOverrideMode, type MagnetChromeOverrideMode } from '../../modules/magnets';
+import { endOrnamentsEditSession, startOrnamentsEditSession } from '../../modules/ornaments-v2/session';
+import { createOrnamentItem, readOrnamentsConfig, persistOrnamentsConfig } from '../../modules/ornaments-v2/store';
+import { importOrnamentImage } from '../../modules/ornaments-v2/import';
+import { StyleOrnamentsPage } from './style/StyleOrnamentsPage';
 import './StyleBar.css';
 
 const telemetry = getTelemetryLogger('editor', 'StyleBar');
@@ -33,7 +37,13 @@ export const StyleBar = memo(function StyleBar() {
     | 'style-border-effect';
 
   const popupTypes = useMemo(
-    () => ['style-pixel', 'style-cover-color', 'style-background-effect', 'style-border-effect'] as const,
+    () =>
+      [
+        'style-pixel',
+        'style-cover-color',
+        'style-background-effect',
+        'style-border-effect',
+      ] as const,
     []
   );
 
@@ -43,6 +53,7 @@ export const StyleBar = memo(function StyleBar() {
   );
 
   const [openPopups, setOpenPopups] = useState<Set<string>>(() => new Set());
+  const [ornamentsEditing, setOrnamentsEditing] = useState(false);
   const chromeOverrideMode = useMagnetChromeOverrideMode();
 
   const applyChromeMode = useCallback((mode: MagnetChromeOverrideMode) => {
@@ -122,6 +133,97 @@ export const StyleBar = memo(function StyleBar() {
     [commands, openPopups]
   );
 
+  const closeStylePopups = useCallback(async () => {
+    const { closeEditorWindow } = await import('../../utils/editorWindows');
+    await Promise.all(popupTypes.map((type) => closeEditorWindow(type)));
+  }, [popupTypes]);
+
+  const enterOrnamentsEditing = useCallback(async () => {
+    try {
+      await closeStylePopups();
+      await startOrnamentsEditSession();
+      setOrnamentsEditing(true);
+    } catch (error) {
+      telemetry.error('editor.style-ornaments.enter.failed', {
+        message: getErrorMessage(error),
+      });
+    }
+  }, [closeStylePopups]);
+
+  const leaveOrnamentsEditing = useCallback(async () => {
+    try {
+      await endOrnamentsEditSession();
+      setOrnamentsEditing(false);
+    } catch (error) {
+      telemetry.error('editor.style-ornaments.leave.failed', {
+        message: getErrorMessage(error),
+      });
+    }
+  }, []);
+
+  const addOrnament = useCallback(async () => {
+    try {
+      const imported = await importOrnamentImage();
+      if (!imported) return;
+      const config = readOrnamentsConfig();
+      const item = createOrnamentItem({
+        ...imported,
+        order: config.items.reduce((max, candidate) => Math.max(max, candidate.layer.order), 0) + 1,
+      });
+      await persistOrnamentsConfig({
+        ...config,
+        items: [...config.items, item],
+      });
+    } catch (error) {
+      telemetry.error('editor.style-ornaments.add.failed', {
+        message: getErrorMessage(error),
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (ornamentsEditing) {
+        void endOrnamentsEditSession();
+      }
+    };
+  }, [ornamentsEditing]);
+
+  useEffect(() => {
+    if (!ornamentsEditing || !isTauriMemo) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void setupTauriListener(TAURI_EVENTS.EDITOR_EXIT, () => {
+      if (disposed) return;
+      void leaveOrnamentsEditing();
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+        return;
+      }
+      unlisten = cleanup;
+    });
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, [isTauriMemo, leaveOrnamentsEditing, ornamentsEditing]);
+
+  if (ornamentsEditing) {
+    return (
+      <div className="style-bar-root style-bar-root--ornaments">
+        <div className="style-bar-header">
+          <span className="style-bar-header-icon">◥◤</span>
+          <span className="style-bar-header-title">
+            {t('editor.style-bar.ornaments.label')}
+          </span>
+          <div className="style-bar-grip" data-tauri-drag-region aria-label={t('common.drag')} title={t('common.drag')} />
+        </div>
+        <StyleOrnamentsPage onAddOrnament={() => void addOrnament()} onDone={() => void leaveOrnamentsEditing()} />
+      </div>
+    );
+  }
+
   return (
     <div className="style-bar-root">
       <div className="style-bar-header">
@@ -173,6 +275,16 @@ export const StyleBar = memo(function StyleBar() {
           aria-label={t('editor.style-bar.borderEffect.title')}
         >
           {t('editor.style-bar.borderEffect.label')}
+        </button>
+
+        <button
+          type="button"
+          className="style-bar-btn style-bar-btn--ornaments"
+          onClick={() => void enterOrnamentsEditing()}
+          title={t('editor.style-bar.ornaments.title')}
+          aria-label={t('editor.style-bar.ornaments.title')}
+        >
+          {t('editor.style-bar.ornaments.label')}
         </button>
 
         <div className="style-bar-chrome">

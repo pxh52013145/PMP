@@ -29,7 +29,7 @@ pub const DEBUG_COMMAND_NAMES: &[&str] = &[
     "debug_telemetry_query",
 ];
 
-pub const MEDIA_COMMAND_NAMES: &[&str] = &["background_import_media", "ornament_import_media"];
+pub const MEDIA_COMMAND_NAMES: &[&str] = &["background_import_media"];
 
 pub const PLUGIN_COMMAND_NAMES: &[&str] = &[
     "plugin_read_install_source",
@@ -327,7 +327,6 @@ macro_rules! pmp_generate_handler {
             crate::commands::debug::debug_telemetry_read_current_session,
             crate::commands::debug::debug_telemetry_query,
             crate::commands::media::background_import_media,
-            crate::commands::media::ornament_import_media,
             crate::commands::plugins::plugin_read_install_source,
             crate::commands::plugins::plugin_allow_dev_project_asset_scope,
             crate::commands::plugins::plugin_read_platform_pack_dev_source,
@@ -345,6 +344,11 @@ macro_rules! pmp_generate_handler {
             crate::commands::windows::open_vst_manager_window,
             crate::commands::windows::close_vst_manager_window,
             crate::commands::windows::set_editor_blur_enabled,
+            crate::commands::windows::ornaments_editor_overlay_open,
+            crate::commands::windows::ornaments_editor_overlay_close,
+            crate::commands::windows::ornaments_render_overlay_open,
+            crate::commands::windows::ornaments_overlay_sync_geometry,
+            crate::commands::windows::ornaments_drag_main_window,
             crate::commands::windows::desktop_lyrics_set_visible,
             crate::commands::windows::desktop_lyrics_toggle_visible,
             crate::commands::windows::desktop_lyrics_set_click_through,

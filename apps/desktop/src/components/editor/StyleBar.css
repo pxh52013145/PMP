@@ -142,3 +142,41 @@
 .style-bar-btn--ornaments {
   margin-left: auto;
 }
+
+.style-bar-root--ornaments .style-bar-actions {
+  flex: 1;
+}
+
+.style-ornaments-page {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.style-ornaments-page__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.style-ornaments-page__title {
+  color: rgba(0, 255, 255, 0.92);
+  font-size: 13px;
+  letter-spacing: 0.5px;
+}
+
+.style-ornaments-page__desc {
+  color: rgba(210, 255, 255, 0.68);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.style-ornaments-page__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}

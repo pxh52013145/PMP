@@ -152,10 +152,6 @@ export const STORAGE_KEYS = {
   BACKGROUND_THEME_COLOR: 'pixel-matrix-background-theme-color', // 背景效果主题颜色
   BORDER_THEME_COLOR: 'pixel-matrix-border-theme-color', // 边框效果主题颜色
 
-  // === Ornaments (挂件) ===
-  ORNAMENTS_V1: 'pixel-matrix-ornaments-v1',
-  ORNAMENTS_OVERLAY_EDITING: 'pixel-matrix-ornaments-overlay-editing',
-  ORNAMENTS_SELECTED_ID: 'pixel-matrix-ornaments-selected-id',
 
   // === 编辑器临时数据 ===
   MAGNET_EDITOR_DATA: 'magnet-editor-data', // 编辑中的 Magnet 数据
@@ -209,6 +205,8 @@ export const STORAGE_KEYS = {
 
   // === Window Pin ===
   WINDOW_PIN_STATE: 'pixel-matrix-window-pin-state',
+  WINDOW_PIN_RUNTIME_OVERRIDES: 'pixel-matrix-window-pin-runtime-overrides-v1',
+  ORNAMENTS_V2: 'pixel-matrix-ornaments-v2',
   DESKTOP_LYRICS_ENABLED: 'pixel-matrix-desktop-lyrics-enabled',
   DESKTOP_LYRICS_CLICK_THROUGH: 'pixel-matrix-desktop-lyrics-click-through',
   DESKTOP_LYRICS_FONT_SIZE: 'pixel-matrix-desktop-lyrics-font-size',
@@ -305,6 +303,10 @@ export const TAURI_EVENTS = {
   EDITOR_WINDOW_SHOWN: 'editor-window-shown', // Rust 侧 show/unminimize 后的通知
   EDITOR_LOW_PERFORMANCE_MODE_UPDATED: 'editor-low-performance-mode-updated',
   EDITOR_OVERLAY_PIXEL_HINTS_UPDATED: 'editor-overlay-pixel-hints-updated',
+  ORNAMENTS_UPDATED: 'ornaments-updated',
+  ORNAMENTS_EDIT_SESSION_STARTED: 'ornaments-edit-session-started',
+  ORNAMENTS_EDIT_SESSION_ENDED: 'ornaments-edit-session-ended',
+  ORNAMENTS_SELECTION_CHANGED: 'ornaments-selection-changed',
   CREATOR_WINDOW_OPENED: 'creator-window-opened',
   CREATOR_WINDOW_CLOSED: 'creator-window-closed',
 
@@ -350,10 +352,9 @@ export const TAURI_EVENTS = {
   // Theme
   THEME_UPDATED: 'theme-config-updated',
 
-  // Ornaments (挂件)
-  ORNAMENTS_UPDATED: 'ornaments-updated',
-  ORNAMENTS_OVERLAY_EDITING_UPDATED: 'ornaments-overlay-editing-updated',
-  ORNAMENTS_SELECTED_ID_UPDATED: 'ornaments-selected-id-updated',
+  // Window Pin
+  WINDOW_PIN_STATE_UPDATED: 'window-pin-state-updated',
+
 
   // i18n
   LOCALE_UPDATED: 'locale-updated',

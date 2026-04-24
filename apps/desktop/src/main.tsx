@@ -116,7 +116,9 @@ type RootAppResolveResult = {
     | 'plugin'
     | 'plugin-shell-surface'
     | 'vst-manager'
-    | 'desktop-lyrics-overlay';
+    | 'desktop-lyrics-overlay'
+    | 'ornaments-render-overlay'
+    | 'ornaments-editor-overlay';
 };
 
 async function resolveRootAppByHash(hash: string): Promise<RootAppResolveResult> {
@@ -145,6 +147,16 @@ async function resolveRootAppByHash(hash: string): Promise<RootAppResolveResult>
     return { component: mod.DesktopLyricsOverlayApp, kind: 'desktop-lyrics-overlay' };
   }
 
+  if (hash.startsWith('#/ornaments-editor-overlay')) {
+    const mod = await import('./components/ornaments/OrnamentsEditorOverlay');
+    return { component: mod.OrnamentsEditorOverlay, kind: 'ornaments-editor-overlay' };
+  }
+
+  if (hash.startsWith('#/ornaments-render-overlay')) {
+    const mod = await import('./components/ornaments/OrnamentsRenderOverlay');
+    return { component: mod.OrnamentsRenderOverlay, kind: 'ornaments-render-overlay' };
+  }
+
   const mod = await import('./App');
   return { component: mod.default, kind: 'main' };
 }
@@ -165,7 +177,9 @@ async function bootstrap(): Promise<void> {
   );
 
   const appContent =
-    rootApp.kind === 'desktop-lyrics-overlay' ? rootContent : <KernelProvider>{rootContent}</KernelProvider>;
+    rootApp.kind === 'desktop-lyrics-overlay'
+      ? rootContent
+      : <KernelProvider>{rootContent}</KernelProvider>;
 
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>

@@ -1,0 +1,100 @@
+﻿html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+.ornaments-editor-overlay {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.16);
+  cursor: move;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ornaments-editor-overlay__main-mask {
+  position: absolute;
+  inset: 240px;
+  background: transparent;
+  box-shadow: 0 0 0 9999px rgba(255, 255, 255, 0.18);
+  pointer-events: none;
+}
+
+.ornaments-editor-overlay__item-shell {
+  position: absolute;
+  box-sizing: border-box;
+  cursor: grab;
+}
+
+.ornaments-editor-overlay__item-shell.selected {
+  outline: 2px solid rgba(0, 210, 255, 0.95);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9), 0 0 20px rgba(0, 210, 255, 0.45);
+}
+
+.ornaments-editor-overlay__item {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  pointer-events: auto;
+}
+
+.ornaments-editor-overlay__resize {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  background: rgba(0, 210, 255, 0.95);
+  box-shadow: 0 0 8px rgba(0, 210, 255, 0.5);
+}
+
+.ornaments-editor-overlay__resize--nw { left: -6px; top: -6px; cursor: nwse-resize; }
+.ornaments-editor-overlay__resize--n { left: calc(50% - 5px); top: -6px; cursor: ns-resize; }
+.ornaments-editor-overlay__resize--ne { right: -6px; top: -6px; cursor: nesw-resize; }
+.ornaments-editor-overlay__resize--e { right: -6px; top: calc(50% - 5px); cursor: ew-resize; }
+.ornaments-editor-overlay__resize--se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.ornaments-editor-overlay__resize--s { left: calc(50% - 5px); bottom: -6px; cursor: ns-resize; }
+.ornaments-editor-overlay__resize--sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+.ornaments-editor-overlay__resize--w { left: -6px; top: calc(50% - 5px); cursor: ew-resize; }
+
+.ornaments-editor-overlay__toolbar {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 10px);
+  display: flex;
+  gap: 6px;
+  transform: translateX(-50%);
+  padding: 6px;
+  border: 1px solid rgba(0, 255, 255, 0.35);
+  background: rgba(8, 12, 20, 0.86);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.32);
+}
+
+.ornaments-editor-overlay__toolbar button {
+  border: 1px solid rgba(0, 255, 255, 0.28);
+  background: rgba(0, 255, 255, 0.08);
+  color: rgba(220, 255, 255, 0.92);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ornaments-editor-overlay__hint {
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  padding: 8px 12px;
+  border: 1px solid rgba(0, 255, 255, 0.35);
+  background: rgba(8, 12, 20, 0.72);
+  color: rgba(210, 255, 255, 0.92);
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  pointer-events: none;
+}

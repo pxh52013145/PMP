@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { appWindow, getAll } from '@tauri-apps/api/window';
-import { TAURI_EVENTS, setupTauriListener } from './utils/windowCommunication';
+import { setupConfigSync, TAURI_EVENTS, STORAGE_KEYS, setupTauriListener } from './utils/windowCommunication';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
 import { useKernel } from './contexts/KernelContext';
@@ -35,8 +35,11 @@ import {
   shouldRunPmpsDurableMigration,
 } from './modules/startup/durableMigrationGuards';
 import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
+import { applyWindowPinPolicy } from './utils/windowPinRuntime';
+import { readWindowPinState, writeWindowPinState } from './utils/windowPinState';
 import { MatrixWorkbench } from './workbenches/matrix/MatrixWorkbench';
 import { getTelemetryLogger } from './services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from './services/telemetry/tauriInvokeTelemetry';
 import './App.css';
 
 let coverDecodeReporter: ((src: string, width: number, height: number) => void) | null = null;
@@ -95,6 +98,38 @@ function AppContent() {
   useEffect(() => {
     void performanceControlService.syncEditorEffectsFromSettings();
   }, [performanceControlService, performanceSettings.editorLowPerformanceMode]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    void invokeWithTelemetry('ornaments_render_overlay_open', undefined, {
+      moduleId: 'ornaments',
+      component: 'AppContent',
+      event: 'ornaments.render-overlay.open',
+      successLevel: 'info',
+    });
+
+    const sync = () => {
+      void invokeWithTelemetry('ornaments_overlay_sync_geometry', undefined, {
+        moduleId: 'ornaments',
+        component: 'AppContent',
+        event: 'ornaments.overlay.sync-geometry',
+      });
+    };
+
+    let unlistenMove: (() => void) | null = null;
+    let unlistenResize: (() => void) | null = null;
+    void appWindow.onMoved(sync).then((unlisten) => {
+      unlistenMove = unlisten;
+    });
+    void appWindow.onResized(sync).then((unlisten) => {
+      unlistenResize = unlisten;
+    });
+
+    return () => {
+      if (unlistenMove) unlistenMove();
+      if (unlistenResize) unlistenResize();
+    };
+  }, [isTauri]);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -460,6 +495,48 @@ function AppContent() {
       cleanupPromise.then((cleanup) => cleanup());
     };
   }, [isTauri, telemetry]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+
+    let disposed = false;
+
+    const syncAndApplyPinPolicy = async () => {
+      const preferredPinned = readWindowPinState();
+      if (typeof preferredPinned === 'boolean') {
+        await applyWindowPinPolicy();
+        return;
+      }
+
+      try {
+        const resolvedPinned = await (
+          (appWindow as typeof appWindow & {
+            isAlwaysOnTop?: () => Promise<boolean>;
+          }).isAlwaysOnTop?.() ?? Promise.resolve(false)
+        ).catch(() => false);
+        if (disposed) return;
+        writeWindowPinState(Boolean(resolvedPinned));
+        await applyWindowPinPolicy();
+      } catch {
+        // best-effort: pin state sync is non-critical
+      }
+    };
+
+    void syncAndApplyPinPolicy();
+
+    const cleanupPromise = setupConfigSync(
+      [STORAGE_KEYS.WINDOW_PIN_STATE],
+      [TAURI_EVENTS.WINDOW_PIN_STATE_UPDATED],
+      () => {
+        void syncAndApplyPinPolicy();
+      }
+    );
+
+    return () => {
+      disposed = true;
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, [isTauri]);
 
   useEffect(() => {
     if (!isTauri || !editorState.isEditing || isMainWindowFocused) {
