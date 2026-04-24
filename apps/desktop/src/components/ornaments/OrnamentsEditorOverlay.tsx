@@ -15,6 +15,7 @@ const TOOLBAR_HEIGHT = 38;
 const TOOLBAR_GAP = 12;
 const EDGE_PADDING = 12;
 const MIN_ORNAMENT_SIZE = 32;
+const HANDLE_VISUAL_OUTSET = 6;
 
 function toEditorRect(rect: OrnamentRect): OrnamentRect {
   return { ...rect, left: rect.left + EDIT_MARGIN, top: rect.top + EDIT_MARGIN };
@@ -106,10 +107,10 @@ function toolbarPlacement(rect: OrnamentRect, overlayWidth: number, overlayHeigh
 
 function editorBounds(overlayWidth: number, overlayHeight: number): OrnamentRect {
   return {
-    left: EDGE_PADDING,
-    top: EDGE_PADDING,
-    width: Math.max(MIN_ORNAMENT_SIZE, overlayWidth - EDGE_PADDING * 2),
-    height: Math.max(MIN_ORNAMENT_SIZE, overlayHeight - EDGE_PADDING * 2),
+    left: HANDLE_VISUAL_OUTSET,
+    top: HANDLE_VISUAL_OUTSET,
+    width: Math.max(MIN_ORNAMENT_SIZE, overlayWidth - HANDLE_VISUAL_OUTSET * 2),
+    height: Math.max(MIN_ORNAMENT_SIZE, overlayHeight - HANDLE_VISUAL_OUTSET * 2),
   };
 }
 
