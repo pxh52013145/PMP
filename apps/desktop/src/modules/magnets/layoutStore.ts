@@ -47,9 +47,13 @@ export type MagnetLayoutStoreStateV1 = {
 export type MagnetLayoutStoreState = MagnetLayoutStoreStateV1;
 
 export type MagnetLayoutStoreBootstrapRequest = {
+  mode: MagnetLayoutStoreBootstrapMode;
+  activeSpaceId: string;
   spaces: MagnetSpacesState;
   layoutsBySpaceId: Record<string, MagnetSpaceLayout>;
 };
+
+export type MagnetLayoutStoreBootstrapMode = 'active-only' | 'all-known-spaces';
 
 export type MagnetLayoutStoreBootstrapResponse = {
   didBootstrap: boolean;
@@ -87,18 +91,22 @@ export type MagnetLayoutStoreApplyPatchResponse = {
 };
 
 export function buildMagnetLayoutStoreBootstrapRequest(
-  defaultActiveMagnetIds: ReadonlySet<string> = DEFAULT_ACTIVE_MAGNET_IDS
+  defaultActiveMagnetIds: ReadonlySet<string> = DEFAULT_ACTIVE_MAGNET_IDS,
+  mode: MagnetLayoutStoreBootstrapMode = 'active-only'
 ): MagnetLayoutStoreBootstrapRequest {
   const spacesRaw = readJson<unknown>(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState());
   const spaces = sanitizeMagnetSpacesState(spacesRaw);
 
   const layoutsBySpaceId: Record<string, MagnetSpaceLayout> = {};
-  for (const space of spaces.spaces) {
-    const { layout } = ensureMagnetSpaceLayout(space.id, { defaultActiveMagnetIds });
-    layoutsBySpaceId[space.id] = layout;
+  const spaceIdsToBootstrap =
+    mode === 'all-known-spaces' ? spaces.spaces.map((space) => space.id) : [spaces.activeSpaceId];
+
+  for (const spaceId of spaceIdsToBootstrap) {
+    const { layout } = ensureMagnetSpaceLayout(spaceId, { defaultActiveMagnetIds });
+    layoutsBySpaceId[spaceId] = layout;
   }
 
-  return { spaces, layoutsBySpaceId };
+  return { mode, activeSpaceId: spaces.activeSpaceId, spaces, layoutsBySpaceId };
 }
 
 export async function magnetLayoutStoreGetState(): Promise<MagnetLayoutStoreState | null> {
@@ -114,12 +122,13 @@ export async function magnetLayoutStoreGetState(): Promise<MagnetLayoutStoreStat
 }
 
 export async function magnetLayoutStoreBootstrap(
-  defaultActiveMagnetIds: ReadonlySet<string> = DEFAULT_ACTIVE_MAGNET_IDS
+  defaultActiveMagnetIds: ReadonlySet<string> = DEFAULT_ACTIVE_MAGNET_IDS,
+  mode: MagnetLayoutStoreBootstrapMode = 'active-only'
 ): Promise<MagnetLayoutStoreBootstrapResponse | null> {
   if (!isTauriRuntime()) return null;
 
   try {
-    const request = buildMagnetLayoutStoreBootstrapRequest(defaultActiveMagnetIds);
+    const request = buildMagnetLayoutStoreBootstrapRequest(defaultActiveMagnetIds, mode);
     return (await invoke('magnet_layout_store_bootstrap', { request })) as MagnetLayoutStoreBootstrapResponse;
   } catch (error) {
     telemetry.warn('layout_store.bootstrap.failed', {

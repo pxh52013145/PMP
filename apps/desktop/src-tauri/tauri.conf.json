@@ -87,7 +87,7 @@
       {
         "label": "main",
         "fullscreen": false,
-        "resizable": true,
+        "resizable": false,
         "title": "Pixel Matrix Player",
         "width": 972,
         "height": 720,

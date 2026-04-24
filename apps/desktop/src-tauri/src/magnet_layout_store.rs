@@ -237,8 +237,16 @@ pub type MagnetLayoutStoreState = MagnetLayoutStoreStateV1;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MagnetLayoutStoreBootstrapRequest {
+    #[serde(default = "default_bootstrap_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub active_space_id: String,
     pub spaces: MagnetSpacesState,
     pub layouts_by_space_id: HashMap<String, MagnetSpaceLayout>,
+}
+
+fn default_bootstrap_mode() -> String {
+    "all-known-spaces".to_string()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -730,6 +738,47 @@ fn sanitize_store_state(
     (spaces_clean, layouts_clean, presets_clean, history_clean)
 }
 
+fn sanitize_bootstrap_store_state(
+    request: &MagnetLayoutStoreBootstrapRequest,
+) -> (
+    MagnetSpacesState,
+    HashMap<String, MagnetSpaceLayout>,
+    HashMap<String, Vec<MagnetSpacePreset>>,
+    HashMap<String, Vec<MagnetSpaceHistoryItem>>,
+) {
+    if request.mode != "active-only" {
+        return sanitize_store_state(
+            &request.spaces,
+            &request.layouts_by_space_id,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+    }
+
+    let spaces_clean = sanitize_spaces_state(&request.spaces);
+    let active_space_id = if spaces_clean
+        .spaces
+        .iter()
+        .any(|space| space.id == spaces_clean.active_space_id)
+    {
+        spaces_clean.active_space_id.clone()
+    } else {
+        request.active_space_id.trim().to_string()
+    };
+
+    let mut layouts_clean: HashMap<String, MagnetSpaceLayout> = HashMap::new();
+    if !active_space_id.is_empty() {
+        let layout = request
+            .layouts_by_space_id
+            .get(&active_space_id)
+            .map(|value| sanitize_layout_for_space(&active_space_id, value))
+            .unwrap_or_else(|| default_layout_for_space(&active_space_id));
+        layouts_clean.insert(active_space_id, layout);
+    }
+
+    (spaces_clean, layouts_clean, HashMap::new(), HashMap::new())
+}
+
 fn resolve_store_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let base = app
         .path_resolver()
@@ -839,12 +888,7 @@ impl MagnetLayoutStore {
         }
 
         let (spaces, layouts_by_space_id, presets_by_space_id, history_by_space_id) =
-            sanitize_store_state(
-                &request.spaces,
-                &request.layouts_by_space_id,
-                &HashMap::new(),
-                &HashMap::new(),
-            );
+            sanitize_bootstrap_store_state(&request);
 
         let next_state = MagnetLayoutStoreState {
             version: STORE_VERSION,

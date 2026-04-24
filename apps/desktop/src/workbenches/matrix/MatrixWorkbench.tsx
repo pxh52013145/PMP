@@ -10,8 +10,8 @@ import {
 import Background from '../../components/core/Background';
 import PixelMatrixCanvas from '../../components/core/PixelMatrixCanvas';
 import WindowBorder from '../../components/core/WindowBorder';
+import WindowResizeHandles from '../../components/core/WindowResizeHandles';
 import MatrixRainEffect from '../../components/effects/MatrixRainEffect';
-import { OrnamentsLayer } from '../../components/ornaments/OrnamentsLayer';
 import { MagnetLayer } from '../../components/magnet/MagnetLayer';
 import { useEditor } from '../../contexts/EditorContext';
 import { PixelAnchor } from '../../types/pixel';
@@ -634,9 +634,6 @@ export function MatrixWorkbench({
       {/* Pixel Grid 层 */}
       {!disablePixelCanvasForPerf && <PixelMatrixCanvas onPixelPositionsUpdate={setPixelPositions} />}
 
-      {/* Ornaments overlay window renders in Tauri (supports extending outside main window). */}
-      {!isTauri && <OrnamentsLayer />}
-
       {/* Magnet 层 */}
       {!disableMagnetLayerForPerf && pixelPositions.size > 0 && (
         <MagnetLayer
@@ -671,6 +668,7 @@ export function MatrixWorkbench({
 
       {/* 窗口边框 */}
       {showWindowBorder && <WindowBorder />}
+      {showWindowBorder && <WindowResizeHandles />}
     </>
   );
 }

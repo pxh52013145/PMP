@@ -1,0 +1,83 @@
+.window-resize-handles {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10000;
+}
+
+.window-resize-handles__handle {
+  position: absolute;
+  pointer-events: auto;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.window-resize-handles__handle--n,
+.window-resize-handles__handle--s {
+  left: 10px;
+  right: 10px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.window-resize-handles__handle--n {
+  top: 0;
+}
+
+.window-resize-handles__handle--s {
+  bottom: 0;
+}
+
+.window-resize-handles__handle--e,
+.window-resize-handles__handle--w {
+  top: 10px;
+  bottom: 10px;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.window-resize-handles__handle--e {
+  right: 0;
+}
+
+.window-resize-handles__handle--w {
+  left: 0;
+}
+
+.window-resize-handles__handle--ne,
+.window-resize-handles__handle--nw,
+.window-resize-handles__handle--se,
+.window-resize-handles__handle--sw {
+  width: 14px;
+  height: 14px;
+}
+
+.window-resize-handles__handle--ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+
+.window-resize-handles__handle--nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.window-resize-handles__handle--se {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+}
+
+.window-resize-handles__handle--sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.window-resize-handles--resizing {
+  cursor: inherit;
+  -webkit-user-select: none;
+  user-select: none;
+}

@@ -52,6 +52,7 @@ import { readJson, usePersistentSetting } from '../storage';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { createDefaultMagnetSpacesState, sanitizeMagnetSpacesState } from './spaces';
 import { parsePerformanceRuntimeProfile } from '../../contracts/performanceControl';
+import type { SpaceRuntimeGovernanceService } from '../../services/governance';
 
 const telemetry = getTelemetryLogger('magnets', 'MagnetLibraryProvider');
 
@@ -65,6 +66,7 @@ export interface MagnetLibraryProviderProps {
   defaultActiveMagnetIds?: ReadonlySet<string>;
   autoSaveDebounceMs?: number;
   registerFlushHandler?: (handler: () => void) => () => void;
+  spaceRuntimeGovernance?: SpaceRuntimeGovernanceService | null;
 }
 
 export interface MagnetConfigContextValue {
@@ -150,6 +152,7 @@ export function MagnetLibraryProvider({
   defaultActiveMagnetIds = DEFAULT_ACTIVE_MAGNET_IDS,
   autoSaveDebounceMs = 500,
   registerFlushHandler,
+  spaceRuntimeGovernance = null,
 }: MagnetLibraryProviderProps) {
   const runtimeDefaultActiveMagnetIds = useMemo(
     () => resolveRuntimeDefaultActiveMagnetIds(defaultActiveMagnetIds),
@@ -173,6 +176,11 @@ export function MagnetLibraryProvider({
     return magnetSpacesFromStorage;
   }, [isTauri, layoutStoreState, magnetSpacesFromStorage]);
   const activeSpaceId = magnetSpaces.activeSpaceId;
+  useEffect(() => {
+    spaceRuntimeGovernance?.warmSpace(activeSpaceId);
+    spaceRuntimeGovernance?.activateSpace(activeSpaceId);
+  }, [activeSpaceId, spaceRuntimeGovernance]);
+
   const magnetConfigStorageKey = useMemo(
     () => resolveMagnetConfigStorageKey(activeSpaceId),
     [activeSpaceId]

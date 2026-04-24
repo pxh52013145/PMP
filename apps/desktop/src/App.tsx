@@ -23,6 +23,10 @@ import { isTauriRuntime } from './utils/tauriRuntime';
 import { WindowCloseProvider } from './contexts/WindowCloseContext';
 import { COMMANDS_SERVICE_TOKEN, dispatchCommandOrFallback } from './services/commands';
 import { KEYBINDINGS_SERVICE_TOKEN } from './services/keybindings';
+import {
+  SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN,
+  type SpaceRuntimeGovernanceService,
+} from './services/governance';
 import { getDebugConfig, setDebugConfig } from './modules/debug';
 import { INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN } from './magnet-system/plugins/installedExtensionRuntimeManager';
 import {
@@ -601,6 +605,9 @@ function AppContent() {
 function App() {
   const kernel = useKernel();
   const lifecycle = kernel.services.get(APP_LIFECYCLE_SERVICE_TOKEN);
+  const spaceRuntimeGovernance = kernel.services.getOptional(
+    SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN
+  ) as SpaceRuntimeGovernanceService | null;
   const registerFlushHandler = useCallback(
     (handler: () => void) => lifecycle.registerFlushHandler(() => handler()),
     [lifecycle]
@@ -623,6 +630,7 @@ function App() {
             <MagnetLibraryProvider
               gridSize={{ columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS }}
               registerFlushHandler={registerFlushHandler}
+              spaceRuntimeGovernance={spaceRuntimeGovernance}
             >
               <WindowCloseProvider>
                 <AppContent />

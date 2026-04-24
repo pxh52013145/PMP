@@ -20,6 +20,7 @@ import { getTelemetryLogger } from '../telemetry/TelemetryService';
 import { invokeWithTelemetry } from '../telemetry/tauriInvokeTelemetry';
 import { scheduleProcessWorkingSetTrim } from '../../utils/processWorkingSetTrim';
 import type { ProcessPerfService } from '../performance-control';
+import type { SpaceRuntimeGovernanceService } from './SpaceRuntimeGovernanceService';
 
 export type MemoryGovernanceAuditEntry = {
   atMs: number;
@@ -101,7 +102,8 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
   constructor(
     private readonly navigation: NavigationService,
     private readonly events: ScopedEventBus<AppEvents>,
-    private readonly processPerfService: ProcessPerfService
+    private readonly processPerfService: ProcessPerfService,
+    private readonly spaceRuntimeGovernance: SpaceRuntimeGovernanceService | null = null
   ) {}
 
   getLastResult(): MemoryGovernanceRunResult | null {
@@ -124,6 +126,24 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
     const executed: MemoryGovernanceAction[] = [];
 
     for (const action of plannedActions) {
+      if (action === 'teardown-reclaimable-spaces') {
+        const reclaimed = this.spaceRuntimeGovernance?.reclaim({
+          reason: `memory-governance:${reason}`,
+          minTier: plan.tier,
+        }) ?? [];
+        if (reclaimed.length > 0) {
+          executed.push(action);
+          this.telemetry.info('memory-governance.space.cleanup', {
+            fields: {
+              reason,
+              tier: plan.tier,
+              reclaimedSpaceIds: reclaimed,
+            },
+          });
+        }
+        continue;
+      }
+
       if (action === 'clear-cover-runtime-caches') {
         try {
           MusicLibraryService.getInstance().clearCoverRuntimeCaches();
@@ -259,6 +279,7 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
     })();
 
     const webview2 = await this.collectWebview2Snapshot(isTauri);
+    const spaceRuntimeSnapshot = this.spaceRuntimeGovernance?.collectSnapshot();
 
     return {
       atMs,
@@ -272,6 +293,15 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       coverUrlCacheEntries: coverStats.coverUrlCacheEntries,
       coverUrlInflight: coverStats.coverUrlInflight,
       albumCoverUrlCacheEntries: coverStats.albumCoverUrlCacheEntries,
+      spaceRuntime: spaceRuntimeSnapshot
+        ? {
+            activeSpaceId: spaceRuntimeSnapshot.activeSpaceId,
+            frozenSpaceIds: spaceRuntimeSnapshot.frozenSpaceIds,
+            heavySpaceIds: spaceRuntimeSnapshot.heavySpaceIds,
+            reclaimableSpaceIds: spaceRuntimeSnapshot.reclaimableSpaceIds,
+            lastSwitchAt: spaceRuntimeSnapshot.lastSwitchAt,
+          }
+        : undefined,
       webview2,
     };
   }

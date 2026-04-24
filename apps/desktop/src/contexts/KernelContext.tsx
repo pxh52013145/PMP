@@ -10,7 +10,7 @@ import { createBuiltinMagnetRenderersModule } from '../builtin-modules/builtinMa
 import { createBuiltinCommandsModule } from '../builtin-modules/builtinCommandsModule';
 import { createBuiltinKeybindingsModule } from '../builtin-modules/builtinKeybindingsModule';
 import { createKeybindingsModule } from '../services/keybindings';
-import { createMemoryGovernanceModule } from '../services/governance';
+import { createMemoryGovernanceModule, createSpaceRuntimeGovernanceModule } from '../services/governance';
 import { createQualityModule } from '../services/quality';
 import { createPerformanceControlModule } from '../services/performance-control';
 import { createTelemetryModule } from '../services/telemetry';
@@ -224,6 +224,7 @@ function createRuntime(): KernelRuntime {
   ];
 
   if (!isAuxWindow) {
+    modules.push(createSpaceRuntimeGovernanceModule());
     modules.push(createMemoryGovernanceModule());
   }
 

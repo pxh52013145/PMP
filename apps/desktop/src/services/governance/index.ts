@@ -7,3 +7,14 @@ export type {
 } from './MemoryGovernanceService';
 export { MEMORY_GOVERNANCE_SERVICE_TOKEN } from './MemoryGovernanceService';
 export { createMemoryGovernanceModule } from './memoryGovernanceModule';
+export {
+  DefaultSpaceRuntimeGovernanceService,
+  SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN,
+  type SpaceRuntimeDescriptor,
+  type SpaceRuntimeGovernanceService,
+  type SpaceRuntimeGovernanceSnapshot,
+  type SpaceRuntimeKind,
+  type SpaceRuntimeMemoryTier,
+  type SpaceRuntimeState,
+} from './SpaceRuntimeGovernanceService';
+export { createSpaceRuntimeGovernanceModule } from './spaceRuntimeGovernanceModule';

@@ -32,6 +32,10 @@ import {
 } from '../performance-control';
 import { QUALITY_SERVICE_TOKEN, type QualityService } from '../quality';
 import { TELEMETRY_SERVICE_TOKEN, type TelemetryService } from '../telemetry';
+import {
+  SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN,
+  type SpaceRuntimeGovernanceService,
+} from './SpaceRuntimeGovernanceService';
 
 function readEnabledSetting(): boolean {
   try {
@@ -68,11 +72,15 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
       ) as PerformanceControlService;
       const qualityService = services.get(QUALITY_SERVICE_TOKEN) as QualityService;
       const telemetryService = services.get(TELEMETRY_SERVICE_TOKEN) as TelemetryService;
+      const spaceRuntimeGovernance = services.getOptional(
+        SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN
+      ) as SpaceRuntimeGovernanceService | null;
 
       const service: MemoryGovernanceService = new DefaultMemoryGovernanceService(
         navigation,
         events,
-        processPerfService
+        processPerfService,
+        spaceRuntimeGovernance
       );
       const unregister = services.register(MEMORY_GOVERNANCE_SERVICE_TOKEN, service);
       const detachPerformanceObservability = attachPerformanceObservabilityBridge({

@@ -10,6 +10,7 @@ export type MemoryGovernanceReason =
   | 'manual';
 
 export type MemoryGovernanceAction =
+  | 'teardown-reclaimable-spaces'
   | 'clear-cover-runtime-caches'
   | 'tighten-cover-runtime-caches-watch'
   | 'tighten-cover-runtime-caches-high'
@@ -45,6 +46,13 @@ export type MemoryGovernanceSnapshot = {
   coverUrlCacheEntries: number;
   coverUrlInflight: number;
   albumCoverUrlCacheEntries: number;
+  spaceRuntime?: {
+    activeSpaceId: string | null;
+    frozenSpaceIds: string[];
+    heavySpaceIds: string[];
+    reclaimableSpaceIds: string[];
+    lastSwitchAt: number | null;
+  };
   webview2?: MemoryGovernanceWebview2Snapshot;
 };
 
@@ -93,6 +101,7 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
   const webview2WorkingSet = snapshot.webview2?.webview2WorkingSetBytes ?? 0;
   const webview2Cpu = snapshot.webview2?.webview2CpuPercent ?? 0;
   const treePrivate = snapshot.webview2?.treePrivateBytes ?? 0;
+  const reclaimableSpaceCount = snapshot.spaceRuntime?.reclaimableSpaceIds.length ?? 0;
 
   // Heuristic tiers (best-effort): we avoid aggressive actions by default and only reclaim when
   // multiple signals indicate pressure.
@@ -133,6 +142,10 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
   }
 
   const actions: MemoryGovernanceAction[] = [];
+
+  if (reclaimableSpaceCount > 0 && tier >= 1) {
+    actions.push('teardown-reclaimable-spaces');
+  }
 
   if (
     tier >= 1 &&
