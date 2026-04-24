@@ -3,10 +3,12 @@ import { ornamentMediaUrl, useOrnamentsConfig } from '../../modules/ornaments-v2
 import { ornamentRect, sortedOrnaments } from './ornamentLayout';
 import './OrnamentsRenderOverlay.css';
 
+const EDIT_MARGIN = 240;
+
 export const OrnamentsRenderOverlay = memo(function OrnamentsRenderOverlay() {
   const [config] = useOrnamentsConfig();
-  const width = window.innerWidth;
-  const height = window.innerHeight;
+  const width = Math.max(1, window.innerWidth - EDIT_MARGIN * 2);
+  const height = Math.max(1, window.innerHeight - EDIT_MARGIN * 2);
   const plane = window.location.hash.includes('/behind') ? -1 : 1;
 
   return (
@@ -21,11 +23,11 @@ export const OrnamentsRenderOverlay = memo(function OrnamentsRenderOverlay() {
             alt=""
             draggable={false}
             style={{
-              left: rect.left,
-              top: rect.top,
+              left: rect.left + EDIT_MARGIN,
+              top: rect.top + EDIT_MARGIN,
               width: rect.width,
               height: rect.height,
-              zIndex: item.layer.plane * 100000 + item.layer.order,
+              zIndex: item.layer.order,
             }}
           />
         );

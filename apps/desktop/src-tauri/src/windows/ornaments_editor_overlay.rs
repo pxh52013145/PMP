@@ -160,7 +160,7 @@ pub fn open(app: &AppHandle) -> Result<(), String> {
 }
 
 fn open_render_window(app: &AppHandle, label: &str, route: &str, above_main: bool) -> Result<(), String> {
-    let geometry = main_outer_geometry(app)?;
+    let geometry = overlay_geometry(app)?;
 
     if let Some(window) = app.get_window(label) {
         apply_geometry(&window, geometry)?;
@@ -233,13 +233,13 @@ pub fn open_render(app: &AppHandle) -> Result<(), String> {
 
 pub fn sync_geometry(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_window(ORNAMENTS_RENDER_OVERLAY_BEHIND_LABEL) {
-        apply_geometry(&window, main_outer_geometry(app)?)?;
+        apply_geometry(&window, overlay_geometry(app)?)?;
         if let Some(main) = app.get_window(MAIN_WINDOW_LABEL) {
             place_window_behind_main(&window, &main);
         }
     }
     if let Some(window) = app.get_window(ORNAMENTS_RENDER_OVERLAY_ABOVE_LABEL) {
-        apply_geometry(&window, main_outer_geometry(app)?)?;
+        apply_geometry(&window, overlay_geometry(app)?)?;
         if let Some(main) = app.get_window(MAIN_WINDOW_LABEL) {
             apply_windows_owner(&window, &main);
         }
