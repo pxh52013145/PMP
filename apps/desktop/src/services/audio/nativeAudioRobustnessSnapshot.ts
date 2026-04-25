@@ -88,6 +88,19 @@ type NativeAudioRobustnessSnapshotSourceRecord = {
   sharedRenderUnderrunFrames?: AudioRobustnessSnapshot['sharedRenderUnderrunFrames'];
   sharedRenderLowHitCount?: AudioRobustnessSnapshot['sharedRenderLowHitCount'];
   sharedRenderLowWatermarkSamples?: AudioRobustnessSnapshot['sharedRenderLowWatermarkSamples'];
+  memoryPoolF32GrowthEvents?: AudioRobustnessSnapshot['memoryPoolF32GrowthEvents'];
+  memoryPoolF32GrowthBytes?: AudioRobustnessSnapshot['memoryPoolF32GrowthBytes'];
+  memoryPoolF32PrewarmHits?: AudioRobustnessSnapshot['memoryPoolF32PrewarmHits'];
+  realtimeMemoryLockAttemptedBytes?: AudioRobustnessSnapshot['realtimeMemoryLockAttemptedBytes'];
+  realtimeMemoryLockSucceededBytes?: AudioRobustnessSnapshot['realtimeMemoryLockSucceededBytes'];
+  realtimeMemoryLockFailedBytes?: AudioRobustnessSnapshot['realtimeMemoryLockFailedBytes'];
+  realtimeMemoryLockSkippedBytes?: AudioRobustnessSnapshot['realtimeMemoryLockSkippedBytes'];
+  realtimeMemoryLockFailureCount?: AudioRobustnessSnapshot['realtimeMemoryLockFailureCount'];
+  realtimeMemoryLockSkippedCount?: AudioRobustnessSnapshot['realtimeMemoryLockSkippedCount'];
+  realtimeMemoryLockedRoleMask?: AudioRobustnessSnapshot['realtimeMemoryLockedRoleMask'];
+  realtimeMemoryFailedRoleMask?: AudioRobustnessSnapshot['realtimeMemoryFailedRoleMask'];
+  realtimeMemorySkippedRoleMask?: AudioRobustnessSnapshot['realtimeMemorySkippedRoleMask'];
+  realtimeMemoryPressureEvents?: AudioRobustnessSnapshot['realtimeMemoryPressureEvents'];
   controlQueueLockFree?: AudioRobustnessSnapshot['controlQueueLockFree'];
   controlQueueMode?: AudioRobustnessSnapshot['controlQueueMode'];
   controlQueueCapacity?: AudioRobustnessSnapshot['controlQueueCapacity'];
@@ -175,6 +188,15 @@ export function buildNativeAudioRobustnessSnapshot(
   );
   const vstBridgeWriteBackpressureEvents = vstBridgeFailureEvents.filter((event) => event.value === 1);
   const vstBridgeStallEvents = vstBridgeFailureEvents.filter((event) => event.value === 3);
+  const vstSidecarCallbackLockMissEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'vst.sidecar.callback_lock_miss'
+  );
+  const vstSidecarDryBypassEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'vst.sidecar.dry_bypass'
+  );
+  const vstSidecarOutputBackpressureEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'vst.sidecar.output_backpressure'
+  );
   const lastTrim = source.lastWorkingSetTrimEvent;
 
   return {
@@ -280,6 +302,19 @@ export function buildNativeAudioRobustnessSnapshot(
     sharedRenderUnderrunFrames: sourceRecord.sharedRenderUnderrunFrames,
     sharedRenderLowHitCount: sourceRecord.sharedRenderLowHitCount,
     sharedRenderLowWatermarkSamples: sourceRecord.sharedRenderLowWatermarkSamples,
+    memoryPoolF32GrowthEvents: sourceRecord.memoryPoolF32GrowthEvents,
+    memoryPoolF32GrowthBytes: sourceRecord.memoryPoolF32GrowthBytes,
+    memoryPoolF32PrewarmHits: sourceRecord.memoryPoolF32PrewarmHits,
+    realtimeMemoryLockAttemptedBytes: sourceRecord.realtimeMemoryLockAttemptedBytes,
+    realtimeMemoryLockSucceededBytes: sourceRecord.realtimeMemoryLockSucceededBytes,
+    realtimeMemoryLockFailedBytes: sourceRecord.realtimeMemoryLockFailedBytes,
+    realtimeMemoryLockSkippedBytes: sourceRecord.realtimeMemoryLockSkippedBytes,
+    realtimeMemoryLockFailureCount: sourceRecord.realtimeMemoryLockFailureCount,
+    realtimeMemoryLockSkippedCount: sourceRecord.realtimeMemoryLockSkippedCount,
+    realtimeMemoryLockedRoleMask: sourceRecord.realtimeMemoryLockedRoleMask,
+    realtimeMemoryFailedRoleMask: sourceRecord.realtimeMemoryFailedRoleMask,
+    realtimeMemorySkippedRoleMask: sourceRecord.realtimeMemorySkippedRoleMask,
+    realtimeMemoryPressureEvents: sourceRecord.realtimeMemoryPressureEvents,
     controlQueueLockFree: sourceRecord.controlQueueLockFree,
     controlQueueMode: sourceRecord.controlQueueMode,
     controlQueueCapacity: sourceRecord.controlQueueCapacity,
@@ -297,6 +332,26 @@ export function buildNativeAudioRobustnessSnapshot(
     vstBridgeWriteBackpressureCount: vstBridgeWriteBackpressureEvents.length,
     vstBridgeStallCount: vstBridgeStallEvents.length,
     vstBridgeRestartAttemptCount: vstBridgeRestartEvents.length,
+    vstSidecarCallbackLockMissCount: vstSidecarCallbackLockMissEvents.reduce(
+      (sum, event) => sum + event.value,
+      0
+    ),
+    vstSidecarCallbackLockMissFrames: vstSidecarCallbackLockMissEvents.reduce(
+      (sum, event) => sum + event.aux,
+      0
+    ),
+    vstSidecarDryBypassFrames: vstSidecarDryBypassEvents.reduce(
+      (sum, event) => sum + event.value,
+      0
+    ),
+    vstSidecarOutputBackpressureCount: vstSidecarOutputBackpressureEvents.reduce(
+      (sum, event) => sum + event.value,
+      0
+    ),
+    vstSidecarOutputBackpressureFrames: vstSidecarOutputBackpressureEvents.reduce(
+      (sum, event) => sum + event.aux,
+      0
+    ),
     lastWorkingSetTrimAtMs: lastTrim?.timestampMs ?? null,
     lastWorkingSetTrimTarget: lastTrim?.target ?? null,
     lastWorkingSetTrimReason: lastTrim?.reason ?? null,
