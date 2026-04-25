@@ -106,6 +106,7 @@ import { resolvePlaylistTrackIndexes } from '../../modules/playlists/runtimeProj
 import { readString, removeKey } from '../../modules/storage';
 import {
   cancelScheduledProcessWorkingSetTrim,
+  getLastProcessWorkingSetTrimEvent,
   scheduleProcessWorkingSetTrim,
 } from '../../utils/processWorkingSetTrim';
 import {
@@ -340,6 +341,8 @@ export class NativeAudioService implements IAudioService {
   private protectionWindowReason: string | null = null;
   private protectionWindowUntilMs = 0;
   private protectionWindowTimer: ReturnType<typeof setTimeout> | null = null;
+  private trackSwitchWorkingSetTrimRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private renderQueuePageLockProtectionUntilMs = 0;
   private availableOutputBackends: string[] = [];
   private currentOutputBackendId: string | null = null;
   private currentOutputDeviceId: string | null = null;
@@ -392,6 +395,10 @@ export class NativeAudioService implements IAudioService {
   private transferAdaptationLevel = 0;
   private transferOscillationStreak = 0;
   private renderQueuePageLocked = false;
+  private renderQueuePageLockFailureCount = 0;
+  private renderQueuePageLockAttemptedBytes = 0;
+  private renderQueuePageLockSucceededBytes = 0;
+  private renderQueuePageLockFailedBytes = 0;
   private transferMetricsValid = false;
   private sharedRenderAheadEnabled = false;
   private sharedRenderUnderrunEvents = 0;
@@ -434,6 +441,12 @@ export class NativeAudioService implements IAudioService {
   private static readonly AUTO_BACKEND_SWITCH_COOLDOWN_MS = 45_000;
   private static readonly PROTECTION_WINDOW_DEFAULT_MS = 20_000;
   private static readonly PROTECTION_WINDOW_MAX_MS = 120_000;
+  private static readonly TRACK_SWITCH_TRIM_MIN_BUFFERED_AHEAD_SECONDS = 3;
+  private static readonly TRACK_SWITCH_TRIM_MIN_OUTPUT_BUFFERED_AHEAD_SECONDS = 1;
+  private static readonly TRACK_SWITCH_TRIM_RETRY_MS = 2_500;
+  private static readonly TRACK_SWITCH_TRIM_MAX_DEFER_MS = 45_000;
+  private static readonly RENDER_QUEUE_PAGE_LOCK_PROTECTION_MS = 18_000;
+  private static readonly RENDER_QUEUE_PAGE_LOCK_PROTECTION_DEBOUNCE_MS = 12_000;
   private static readonly ROBUSTNESS_BUFFER_WINDOW_SIZE = 48;
   private static readonly SHARED_TIMELINE_STRESS_WINDOW_MS = 12_000;
   private static readonly SHARED_TIMELINE_LOW_WATERMARK_TRIGGER = 20;
@@ -3700,6 +3713,49 @@ export class NativeAudioService implements IAudioService {
     });
   }
 
+  handleRenderQueuePageLockStatus(pageLocked: boolean, nextPlaybackState?: PlaybackState): void {
+    if (pageLocked) return;
+
+    const playbackState = nextPlaybackState ?? this.state.playbackState;
+    if (
+      playbackState !== 'playing' &&
+      playbackState !== 'buffering' &&
+      playbackState !== 'loading'
+    ) {
+      return;
+    }
+
+    const nowMs = Date.now();
+    if (nowMs < this.renderQueuePageLockProtectionUntilMs) {
+      return;
+    }
+
+    this.renderQueuePageLockProtectionUntilMs =
+      nowMs + NativeAudioService.RENDER_QUEUE_PAGE_LOCK_PROTECTION_DEBOUNCE_MS;
+    this.protectionWindowReason = 'render-queue-page-lock-unavailable';
+    this.protectionWindowUntilMs = Math.max(
+      this.protectionWindowUntilMs,
+      nowMs + NativeAudioService.RENDER_QUEUE_PAGE_LOCK_PROTECTION_MS
+    );
+    this.scheduleProtectionWindowExpiry();
+    this.applyStreamingBufferPolicy(true);
+
+    const effective = this.getEffectiveDynamicSrcTiming(nowMs);
+    this.withDynamicSrcHold(
+      'render-queue-page-lock-unavailable',
+      Math.max(
+        NativeAudioService.RENDER_QUEUE_PAGE_LOCK_PROTECTION_MS,
+        effective.sharedStressHoldMs
+      )
+    );
+    this.evaluateDynamicSrcAutoDegradation({
+      nowMs,
+      stressScore: effective.stressScore,
+      triggerActions: true,
+    });
+    this.emitRobustnessSnapshot(true);
+  }
+
   private applyStreamingBufferPolicy(force: boolean = false): void {
     const nowMs = Date.now();
 
@@ -3861,6 +3917,10 @@ export class NativeAudioService implements IAudioService {
       record: this as unknown as Record<string, unknown>,
       state: this.state,
       estimatedAudioBufferBytes: this.estimatedAudioBufferBytes,
+      renderQueuePageLockFailureCount: this.renderQueuePageLockFailureCount,
+      renderQueuePageLockAttemptedBytes: this.renderQueuePageLockAttemptedBytes,
+      renderQueuePageLockSucceededBytes: this.renderQueuePageLockSucceededBytes,
+      renderQueuePageLockFailedBytes: this.renderQueuePageLockFailedBytes,
       bufferedAheadRollingWindow: this.bufferedAheadRollingWindow,
       bufferedAheadRollingSum: this.bufferedAheadRollingSum,
       underrunRecoveryUntilMs: this.underrunRecoveryUntilMs,
@@ -3873,6 +3933,7 @@ export class NativeAudioService implements IAudioService {
       getDynamicSrcLearningScale: () => this.getDynamicSrcLearningScale(),
       hasActiveProtectionWindow: (timestampMs) => this.hasActiveProtectionWindow(timestampMs),
       hasActiveSharedStressWindow: (timestampMs) => this.hasActiveSharedStressWindow(timestampMs),
+      lastWorkingSetTrimEvent: getLastProcessWorkingSetTrimEvent(),
     });
     return buildNativeAudioRobustnessSnapshot(source, nowMs);
   }
@@ -4036,10 +4097,65 @@ export class NativeAudioService implements IAudioService {
   }
 
   private scheduleTrackSwitchWorkingSetTrim(reason: string): void {
+    this.scheduleTrackSwitchWorkingSetTrimAttempt(reason, Date.now());
+  }
+
+  private scheduleTrackSwitchWorkingSetTrimAttempt(reason: string, requestedAtMs: number): void {
+    this.clearTrackSwitchWorkingSetTrimRetryTimer();
+
+    const playbackState = this.state.playbackState;
+    const bufferedAhead =
+      typeof this.state.bufferedAhead === 'number' && Number.isFinite(this.state.bufferedAhead)
+        ? Math.max(0, this.state.bufferedAhead)
+        : 0;
+    const outputBufferedAhead =
+      typeof this.state.outputBufferedAhead === 'number' && Number.isFinite(this.state.outputBufferedAhead)
+        ? Math.max(0, this.state.outputBufferedAhead)
+        : 0;
+    const fragilePlaybackWindow =
+      playbackState === 'loading' ||
+      playbackState === 'buffering' ||
+      (playbackState === 'playing' &&
+        (bufferedAhead < NativeAudioService.TRACK_SWITCH_TRIM_MIN_BUFFERED_AHEAD_SECONDS ||
+          outputBufferedAhead <
+            NativeAudioService.TRACK_SWITCH_TRIM_MIN_OUTPUT_BUFFERED_AHEAD_SECONDS));
+
+    if (fragilePlaybackWindow) {
+      const elapsedMs = Date.now() - requestedAtMs;
+      if (elapsedMs >= NativeAudioService.TRACK_SWITCH_TRIM_MAX_DEFER_MS) {
+        this.telemetry.warn('audio.working-set-trim.deferred-timeout', {
+          fields: {
+            reason,
+            playbackState,
+            bufferedAhead,
+            outputBufferedAhead,
+          },
+        });
+        return;
+      }
+
+      this.trackSwitchWorkingSetTrimRetryTimer = setTimeout(() => {
+        this.trackSwitchWorkingSetTrimRetryTimer = null;
+        this.scheduleTrackSwitchWorkingSetTrimAttempt(reason, requestedAtMs);
+      }, NativeAudioService.TRACK_SWITCH_TRIM_RETRY_MS);
+      return;
+    }
+
     scheduleProcessWorkingSetTrim('tree', {
-      delaysMs: [0, 1000, 3200],
+      delaysMs: [1000, 3200],
       reason,
     });
+  }
+
+  private clearTrackSwitchWorkingSetTrimRetryTimer(): void {
+    if (this.trackSwitchWorkingSetTrimRetryTimer === null) return;
+    clearTimeout(this.trackSwitchWorkingSetTrimRetryTimer);
+    this.trackSwitchWorkingSetTrimRetryTimer = null;
+  }
+
+  private cancelPlaybackWorkingSetTrim(): void {
+    this.clearTrackSwitchWorkingSetTrimRetryTimer();
+    cancelScheduledProcessWorkingSetTrim('tree');
   }
 
   private buildQueuePaths(queue: Track[]): string[] {
@@ -4671,7 +4787,7 @@ export class NativeAudioService implements IAudioService {
 
   // Track loading and native transport handoff.
   private async loadTrackInternal(track: Track): Promise<boolean> {
-    cancelScheduledProcessWorkingSetTrim('tree');
+    this.cancelPlaybackWorkingSetTrim();
     this.clearPendingSeek();
     if (!track) return false;
 
@@ -4727,7 +4843,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   private async loadAndPlayTrackInternal(track: Track): Promise<boolean> {
-    cancelScheduledProcessWorkingSetTrim('tree');
+    this.cancelPlaybackWorkingSetTrim();
     this.clearPendingSeek();
     if (!track) return false;
 
@@ -4769,7 +4885,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   async play(): Promise<void> {
-    cancelScheduledProcessWorkingSetTrim('tree');
+    this.cancelPlaybackWorkingSetTrim();
     try {
       if (!this.state.currentTrack) {
         const queue = this.state.queue;
@@ -5172,7 +5288,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   private async playTrackAtIndexOnce(index: number): Promise<void> {
-    cancelScheduledProcessWorkingSetTrim('tree');
+    this.cancelPlaybackWorkingSetTrim();
     if (index < 0 || index >= this.state.queue.length) return;
 
     const wasPlaying = this.state.playbackState === 'playing';
@@ -6160,7 +6276,7 @@ export class NativeAudioService implements IAudioService {
   // Lifecycle teardown.
   destroy(): void {
     this.disposed = true;
-    cancelScheduledProcessWorkingSetTrim('tree');
+    this.cancelPlaybackWorkingSetTrim();
     this.resetNativeQueueMirrorState();
     this.playlistHydrationPromises.clear();
     this.diagnosticTimelineIgnoreBeforeMs = 0;

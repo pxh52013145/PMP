@@ -1791,6 +1791,14 @@ export const NativeDebugPage: React.FC = () => {
     const formatUs = (value?: number) =>
       typeof value === 'number' && Number.isFinite(value) ? `${Math.max(0, Math.floor(value))} us` : unknown;
 
+    const formatBytes = (value?: number) => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return unknown;
+      const normalized = Math.max(0, value);
+      if (normalized >= 1024 * 1024) return `${(normalized / (1024 * 1024)).toFixed(2)} MiB`;
+      if (normalized >= 1024) return `${(normalized / 1024).toFixed(2)} KiB`;
+      return `${Math.floor(normalized)} B`;
+    };
+
     const outputMetric = (value?: number, unit: 'count' | 'us' = 'count') => {
       if (robustness.outputCallbackMetricsValid === false) {
         return outputMetricsUnavailableLabel;
@@ -1840,6 +1848,19 @@ export const NativeDebugPage: React.FC = () => {
       typeof robustness.controlQueueMode === 'string' && robustness.controlQueueMode.length > 0
         ? robustness.controlQueueMode
         : unknown;
+    const trimStateLabel =
+      robustness.lastWorkingSetTrimSucceeded === true
+        ? t('pages.native-debug.robustness.workingSetTrim.success')
+        : robustness.lastWorkingSetTrimSucceeded === false
+          ? t('pages.native-debug.robustness.workingSetTrim.failed')
+          : unknown;
+    const lastWorkingSetTrim =
+      typeof robustness.lastWorkingSetTrimAtMs === 'number' &&
+      Number.isFinite(robustness.lastWorkingSetTrimAtMs)
+        ? `${new Date(robustness.lastWorkingSetTrimAtMs).toLocaleTimeString(locale)} · ${
+            robustness.lastWorkingSetTrimTarget ?? unknown
+          } · ${trimStateLabel} · ${robustness.lastWorkingSetTrimReason ?? unknown}`
+        : unknown;
 
     return {
       backend: robustness.outputBackendId ?? unknown,
@@ -1869,6 +1890,10 @@ export const NativeDebugPage: React.FC = () => {
       transferLowWatermark: formatCount(robustness.transferLowWatermarkSamples),
       transferRenderLowHits: formatCount(robustness.transferRenderLowHitCount),
       transferDecodeLowHits: formatCount(robustness.transferDecodeLowHitCount),
+      pageLockAttemptedBytes: formatBytes(robustness.renderQueuePageLockAttemptedBytes),
+      pageLockSucceededBytes: formatBytes(robustness.renderQueuePageLockSucceededBytes),
+      pageLockFailedBytes: formatBytes(robustness.renderQueuePageLockFailedBytes),
+      pageLockFailureCount: formatCount(robustness.renderQueuePageLockFailureCount),
       controlQueueMode,
       controlQueueCapacity: formatCount(robustness.controlQueueCapacity),
       controlQueueOverwriteEvents: formatCount(robustness.controlQueueOverwriteEvents),
@@ -1877,8 +1902,25 @@ export const NativeDebugPage: React.FC = () => {
         robustness.controlQueueCoalescedOverflowEvents
       ),
       controlQueueCriticalOverflowEvents: formatCount(robustness.controlQueueCriticalOverflowEvents),
+      dspRefillBudgetExceededCount: formatCount(robustness.dspRefillBudgetExceededCount),
+      dspRefillBudgetExceededLast:
+        typeof robustness.dspRefillBudgetExceededLastUs === 'number' &&
+        Number.isFinite(robustness.dspRefillBudgetExceededLastUs) &&
+        typeof robustness.dspRefillBudgetExceededLastBudgetUs === 'number' &&
+        Number.isFinite(robustness.dspRefillBudgetExceededLastBudgetUs)
+          ? `${Math.max(0, Math.floor(robustness.dspRefillBudgetExceededLastUs))} / ${Math.max(
+              0,
+              Math.floor(robustness.dspRefillBudgetExceededLastBudgetUs)
+            )} us`
+          : unknown,
+      vstBridgeFailureCount: formatCount(robustness.vstBridgeFailureCount),
+      vstBridgeWriteBackpressureCount: formatCount(robustness.vstBridgeWriteBackpressureCount),
+      vstBridgeStallCount: formatCount(robustness.vstBridgeStallCount),
+      vstBridgeRestartAttemptCount: formatCount(robustness.vstBridgeRestartAttemptCount),
+      lastWorkingSetTrim,
     };
   }, [
+    locale,
     outputMetricsUnavailableLabel,
     outputMonitorStatusLabel,
     robustness,

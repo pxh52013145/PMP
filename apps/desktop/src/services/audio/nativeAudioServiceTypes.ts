@@ -47,6 +47,10 @@ export type NativeAudioStatePayload = {
   transferAdaptationLevel?: number;
   transferOscillationStreak?: number;
   renderQueuePageLocked?: boolean;
+  renderQueuePageLockFailureCount?: number;
+  renderQueuePageLockAttemptedBytes?: number;
+  renderQueuePageLockSucceededBytes?: number;
+  renderQueuePageLockFailedBytes?: number;
   sharedRenderAheadEnabled?: boolean;
   sharedRenderUnderrunEvents?: number;
   sharedRenderUnderrunFrames?: number;

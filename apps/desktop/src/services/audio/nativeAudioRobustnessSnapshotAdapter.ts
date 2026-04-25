@@ -3,6 +3,7 @@ import type {
   NativeAudioRobustnessSnapshotSource,
 } from './nativeAudioRobustnessSnapshot';
 import type { AudioState } from './types';
+import type { ProcessWorkingSetTrimEvent } from '../../utils/processWorkingSetTrim';
 
 type DynamicSrcAutoDegradationOptions = {
   nowMs: number;
@@ -14,6 +15,10 @@ export type NativeAudioRobustnessSnapshotAdapterInput = {
   record: Record<string, unknown>;
   state: AudioState;
   estimatedAudioBufferBytes: number;
+  renderQueuePageLockFailureCount: number;
+  renderQueuePageLockAttemptedBytes: number;
+  renderQueuePageLockSucceededBytes: number;
+  renderQueuePageLockFailedBytes: number;
   bufferedAheadRollingWindow: number[];
   bufferedAheadRollingSum: number;
   underrunRecoveryUntilMs: number;
@@ -26,6 +31,7 @@ export type NativeAudioRobustnessSnapshotAdapterInput = {
   getDynamicSrcLearningScale(): number;
   hasActiveProtectionWindow(nowMs: number): boolean;
   hasActiveSharedStressWindow(nowMs: number): boolean;
+  lastWorkingSetTrimEvent: ProcessWorkingSetTrimEvent | null;
 };
 
 export function createNativeAudioRobustnessSnapshotSource(
@@ -36,6 +42,10 @@ export function createNativeAudioRobustnessSnapshotSource(
 
   source.state = input.state;
   source.estimatedAudioBufferBytes = input.estimatedAudioBufferBytes;
+  source.renderQueuePageLockFailureCount = input.renderQueuePageLockFailureCount;
+  source.renderQueuePageLockAttemptedBytes = input.renderQueuePageLockAttemptedBytes;
+  source.renderQueuePageLockSucceededBytes = input.renderQueuePageLockSucceededBytes;
+  source.renderQueuePageLockFailedBytes = input.renderQueuePageLockFailedBytes;
   source.bufferedAheadRollingWindow = input.bufferedAheadRollingWindow;
   source.bufferedAheadRollingSum = input.bufferedAheadRollingSum;
   source.underrunRecoveryUntilMs = input.underrunRecoveryUntilMs;
@@ -48,6 +58,7 @@ export function createNativeAudioRobustnessSnapshotSource(
   source.getDynamicSrcLearningScale = input.getDynamicSrcLearningScale;
   source.hasActiveProtectionWindow = input.hasActiveProtectionWindow;
   source.hasActiveSharedStressWindow = input.hasActiveSharedStressWindow;
+  source.lastWorkingSetTrimEvent = input.lastWorkingSetTrimEvent;
 
   return source;
 }

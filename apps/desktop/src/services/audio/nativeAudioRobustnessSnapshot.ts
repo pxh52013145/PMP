@@ -2,6 +2,7 @@ import { getAudioPerformanceTelemetrySnapshot } from './audioPerformanceTelemetr
 import type { DynamicSrcEffectiveTiming } from './dynamicSrcAdaptiveTiming';
 import { toDynamicSrcAutoDegradationLabel } from './robustnessDegradation';
 import type { AudioRobustnessSnapshot, AudioState } from './types';
+import type { ProcessWorkingSetTrimEvent } from '../../utils/processWorkingSetTrim';
 
 type NativeAudioRobustnessSnapshotSourceRecord = {
   currentOutputBackendId: AudioRobustnessSnapshot['outputBackendId'];
@@ -77,6 +78,10 @@ type NativeAudioRobustnessSnapshotSourceRecord = {
   transferAdaptationLevel?: AudioRobustnessSnapshot['transferAdaptationLevel'];
   transferOscillationStreak?: AudioRobustnessSnapshot['transferOscillationStreak'];
   renderQueuePageLocked?: AudioRobustnessSnapshot['renderQueuePageLocked'];
+  renderQueuePageLockFailureCount?: AudioRobustnessSnapshot['renderQueuePageLockFailureCount'];
+  renderQueuePageLockAttemptedBytes?: AudioRobustnessSnapshot['renderQueuePageLockAttemptedBytes'];
+  renderQueuePageLockSucceededBytes?: AudioRobustnessSnapshot['renderQueuePageLockSucceededBytes'];
+  renderQueuePageLockFailedBytes?: AudioRobustnessSnapshot['renderQueuePageLockFailedBytes'];
   transferMetricsValid?: AudioRobustnessSnapshot['transferMetricsValid'];
   sharedRenderAheadEnabled?: AudioRobustnessSnapshot['sharedRenderAheadEnabled'];
   sharedRenderUnderrunEvents?: AudioRobustnessSnapshot['sharedRenderUnderrunEvents'];
@@ -115,6 +120,7 @@ export type NativeAudioRobustnessSnapshotSource = {
   underrunRecoveryUntilMs: number;
   dynamicSrcAdaptiveProfile: DynamicSrcEffectiveTiming['profile'];
   dynamicSrcLearningProfile: Record<string, { stressIndex: number } | undefined>;
+  lastWorkingSetTrimEvent: ProcessWorkingSetTrimEvent | null;
 };
 
 export function buildNativeAudioRobustnessSnapshot(
@@ -157,6 +163,19 @@ export function buildNativeAudioRobustnessSnapshot(
       : null;
   const recoveryActive = source.underrunRecoveryUntilMs > nowMs;
   const protectionActive = source.hasActiveProtectionWindow(nowMs);
+  const dspRefillBudgetEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'dsp.refill.budget_exceeded'
+  );
+  const latestDspRefillBudgetEvent = dspRefillBudgetEvents[dspRefillBudgetEvents.length - 1] ?? null;
+  const vstBridgeFailureEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'vst.bridge.failure'
+  );
+  const vstBridgeRestartEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'vst.bridge.restart_attempt'
+  );
+  const vstBridgeWriteBackpressureEvents = vstBridgeFailureEvents.filter((event) => event.value === 1);
+  const vstBridgeStallEvents = vstBridgeFailureEvents.filter((event) => event.value === 3);
+  const lastTrim = source.lastWorkingSetTrimEvent;
 
   return {
     outputBackendId: sourceRecord.currentOutputBackendId,
@@ -251,6 +270,10 @@ export function buildNativeAudioRobustnessSnapshot(
     transferAdaptationLevel: sourceRecord.transferAdaptationLevel,
     transferOscillationStreak: sourceRecord.transferOscillationStreak,
     renderQueuePageLocked: sourceRecord.renderQueuePageLocked,
+    renderQueuePageLockFailureCount: sourceRecord.renderQueuePageLockFailureCount,
+    renderQueuePageLockAttemptedBytes: sourceRecord.renderQueuePageLockAttemptedBytes,
+    renderQueuePageLockSucceededBytes: sourceRecord.renderQueuePageLockSucceededBytes,
+    renderQueuePageLockFailedBytes: sourceRecord.renderQueuePageLockFailedBytes,
     transferMetricsValid: sourceRecord.transferMetricsValid,
     sharedRenderAheadEnabled: sourceRecord.sharedRenderAheadEnabled,
     sharedRenderUnderrunEvents: sourceRecord.sharedRenderUnderrunEvents,
@@ -267,6 +290,20 @@ export function buildNativeAudioRobustnessSnapshot(
     estimatedAudioBufferBytes: sourceRecord.estimatedAudioBufferBytes,
     diagnosticTimelineDroppedEvents: sourceRecord.diagnosticTimelineDroppedEvents,
     diagnosticTimeline: [...sourceRecord.diagnosticTimeline],
+    dspRefillBudgetExceededCount: dspRefillBudgetEvents.length,
+    dspRefillBudgetExceededLastUs: latestDspRefillBudgetEvent?.value ?? null,
+    dspRefillBudgetExceededLastBudgetUs: latestDspRefillBudgetEvent?.aux ?? null,
+    vstBridgeFailureCount: vstBridgeFailureEvents.length,
+    vstBridgeWriteBackpressureCount: vstBridgeWriteBackpressureEvents.length,
+    vstBridgeStallCount: vstBridgeStallEvents.length,
+    vstBridgeRestartAttemptCount: vstBridgeRestartEvents.length,
+    lastWorkingSetTrimAtMs: lastTrim?.timestampMs ?? null,
+    lastWorkingSetTrimTarget: lastTrim?.target ?? null,
+    lastWorkingSetTrimReason: lastTrim?.reason ?? null,
+    lastWorkingSetTrimSucceeded: lastTrim?.succeeded ?? null,
+    lastWorkingSetTrimAttemptedCount: lastTrim?.attemptedCount ?? 0,
+    lastWorkingSetTrimTrimmedCount: lastTrim?.trimmedCount ?? 0,
+    lastWorkingSetTrimFailedCount: lastTrim?.failedCount ?? 0,
     recentPlaylistWriteScheduledCount: audioPerfTelemetry.recentPlaylistWriteScheduledCount,
     recentPlaylistWriteFlushCount: audioPerfTelemetry.recentPlaylistWriteFlushCount,
     recentPlaylistWriteEventCount: audioPerfTelemetry.recentPlaylistWriteEventCount,

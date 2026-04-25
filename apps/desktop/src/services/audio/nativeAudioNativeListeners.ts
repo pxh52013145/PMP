@@ -51,6 +51,10 @@ export type NativeAudioListenerHost = {
   transferAdaptationLevel: number;
   transferOscillationStreak: number;
   renderQueuePageLocked: boolean;
+  renderQueuePageLockFailureCount: number;
+  renderQueuePageLockAttemptedBytes: number;
+  renderQueuePageLockSucceededBytes: number;
+  renderQueuePageLockFailedBytes: number;
   transferMetricsValid: boolean;
   sharedRenderAheadEnabled: boolean;
   sharedRenderUnderrunEvents: number;
@@ -82,6 +86,7 @@ export type NativeAudioListenerHost = {
   spectrumFrames: Partial<Record<AudioSpectrumTap, AudioSpectrumFrame>>;
   shouldIgnoreBackendCurrentTime(nextTime: number): boolean;
   handleUnderrunSpike(...args: unknown[]): void;
+  handleRenderQueuePageLockStatus(...args: unknown[]): void;
   maybeReleaseUnderrunRecovery(...args: unknown[]): void;
   ensureFallbackTicker(): void;
   applyPlaybackStateSideEffects(...args: unknown[]): void;
@@ -335,6 +340,10 @@ export async function setupNativeListenersImpl(
           this.transferAdaptationLevel = 0;
           this.transferOscillationStreak = 0;
           this.renderQueuePageLocked = false;
+          this.renderQueuePageLockFailureCount = 0;
+          this.renderQueuePageLockAttemptedBytes = 0;
+          this.renderQueuePageLockSucceededBytes = 0;
+          this.renderQueuePageLockFailedBytes = 0;
         }
 
         if (
@@ -367,6 +376,47 @@ export async function setupNativeListenersImpl(
 
         if (typeof next.renderQueuePageLocked === 'boolean') {
           this.renderQueuePageLocked = next.renderQueuePageLocked;
+          this.handleRenderQueuePageLockStatus(next.renderQueuePageLocked, next.playbackState);
+        }
+
+        if (
+          typeof next.renderQueuePageLockFailureCount === 'number' &&
+          Number.isFinite(next.renderQueuePageLockFailureCount)
+        ) {
+          this.renderQueuePageLockFailureCount = Math.max(
+            0,
+            Math.floor(next.renderQueuePageLockFailureCount)
+          );
+        }
+
+        if (
+          typeof next.renderQueuePageLockAttemptedBytes === 'number' &&
+          Number.isFinite(next.renderQueuePageLockAttemptedBytes)
+        ) {
+          this.renderQueuePageLockAttemptedBytes = Math.max(
+            0,
+            Math.floor(next.renderQueuePageLockAttemptedBytes)
+          );
+        }
+
+        if (
+          typeof next.renderQueuePageLockSucceededBytes === 'number' &&
+          Number.isFinite(next.renderQueuePageLockSucceededBytes)
+        ) {
+          this.renderQueuePageLockSucceededBytes = Math.max(
+            0,
+            Math.floor(next.renderQueuePageLockSucceededBytes)
+          );
+        }
+
+        if (
+          typeof next.renderQueuePageLockFailedBytes === 'number' &&
+          Number.isFinite(next.renderQueuePageLockFailedBytes)
+        ) {
+          this.renderQueuePageLockFailedBytes = Math.max(
+            0,
+            Math.floor(next.renderQueuePageLockFailedBytes)
+          );
         }
 
         if (typeof next.sharedRenderAheadEnabled === 'boolean') {

@@ -1,4 +1,4 @@
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -13,6 +13,8 @@ const MIX_IN_RAMP_MS: u64 = 5;
 const RESTART_BACKOFF_BASE_MS: u64 = 500;
 const RESTART_BACKOFF_MAX_MS: u64 = 60_000;
 const DISABLE_AFTER_FAILURES: u32 = 8;
+static VST_FAILURE_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
+static VST_RESTART_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FailureReason {
@@ -447,6 +449,21 @@ impl VstDspNode {
 
     fn mark_failure(&mut self, reason: FailureReason) {
         self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        let failure_value = match reason {
+            FailureReason::Unknown => 0,
+            FailureReason::WriteBackpressure => 1,
+            FailureReason::PeerNotReady => 2,
+            FailureReason::HeartbeatStalled => 3,
+            FailureReason::TransportOpenFailed => 4,
+            FailureReason::RestartFailed => 5,
+        };
+        crate::audio::diagnostics::record_event_throttled(
+            "vst.bridge.failure",
+            failure_value,
+            self.consecutive_failures as u64,
+            &VST_FAILURE_TIMELINE_GATE_MS,
+            250,
+        );
         self.transport = None;
         self.restart_rx = None;
         self.mix_in_remaining_frames = 0;
@@ -542,6 +559,22 @@ impl VstDspNode {
         if vst_governance::is_plugin_disabled(plugin_id.as_str()) {
             return;
         }
+
+        let restart_reason_value = match reason {
+            FailureReason::Unknown => 0,
+            FailureReason::WriteBackpressure => 1,
+            FailureReason::PeerNotReady => 2,
+            FailureReason::HeartbeatStalled => 3,
+            FailureReason::TransportOpenFailed => 4,
+            FailureReason::RestartFailed => 5,
+        };
+        crate::audio::diagnostics::record_event_throttled(
+            "vst.bridge.restart_attempt",
+            restart_reason_value,
+            failures as u64,
+            &VST_RESTART_TIMELINE_GATE_MS,
+            500,
+        );
 
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {

@@ -28,12 +28,23 @@ export type NativeDebugRobustnessMetricsView = {
   transferLowWatermark: string;
   transferRenderLowHits: string;
   transferDecodeLowHits: string;
+  pageLockAttemptedBytes: string;
+  pageLockSucceededBytes: string;
+  pageLockFailedBytes: string;
+  pageLockFailureCount: string;
   controlQueueMode: string;
   controlQueueCapacity: string;
   controlQueueOverwriteEvents: string;
   controlQueueDropNewestEvents: string;
   controlQueueCoalescedOverflowEvents: string;
   controlQueueCriticalOverflowEvents: string;
+  dspRefillBudgetExceededCount: string;
+  dspRefillBudgetExceededLast: string;
+  vstBridgeFailureCount: string;
+  vstBridgeWriteBackpressureCount: string;
+  vstBridgeStallCount: string;
+  vstBridgeRestartAttemptCount: string;
+  lastWorkingSetTrim: string;
 };
 
 type TranslateFn = (key: string, params?: Record<string, unknown>) => string;
@@ -133,6 +144,30 @@ export function NativeDebugRobustnessPanel({
             <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.output.renderUnderrunFrames')}</span>
             <span className="native-debug-metrics-value">{robustnessMetricsView.outputUnderrunFrames}</span>
           </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.dsp.refillBudgetExceeded')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.dspRefillBudgetExceededCount}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.dsp.refillBudgetLast')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.dspRefillBudgetExceededLast}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.vst.failures')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.vstBridgeFailureCount}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.vst.writeBackpressure')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.vstBridgeWriteBackpressureCount}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.vst.stalls')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.vstBridgeStallCount}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.vst.restartAttempts')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.vstBridgeRestartAttemptCount}</span>
+          </div>
         </section>
 
         <div className="native-debug-metrics-divider" />
@@ -210,6 +245,26 @@ export function NativeDebugRobustnessPanel({
           <div className="native-debug-metrics-row">
             <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.transfer.decodeLowHits')}</span>
             <span className="native-debug-metrics-value">{robustnessMetricsView.transferDecodeLowHits}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.transfer.pageLockAttemptedBytes')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.pageLockAttemptedBytes}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.transfer.pageLockSucceededBytes')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.pageLockSucceededBytes}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.transfer.pageLockFailedBytes')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.pageLockFailedBytes}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.transfer.pageLockFailureCount')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.pageLockFailureCount}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.workingSetTrim.last')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.lastWorkingSetTrim}</span>
           </div>
           <div className="native-debug-metrics-row">
             <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.control.mode')}</span>

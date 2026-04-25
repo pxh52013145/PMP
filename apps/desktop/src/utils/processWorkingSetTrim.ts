@@ -10,11 +10,22 @@ type ProcessWorkingSetTrimScheduleOptions = {
   reason?: string;
 };
 
+export type ProcessWorkingSetTrimEvent = {
+  timestampMs: number;
+  target: ProcessWorkingSetTrimTarget;
+  reason: string | null;
+  succeeded: boolean;
+  attemptedCount: number;
+  trimmedCount: number;
+  failedCount: number;
+};
+
 const DEFAULT_DELAYS_MS = [1000, 3200] as const;
 const scheduledTrimTimers = new Map<
   ProcessWorkingSetTrimTarget,
   ReturnType<typeof setTimeout>[]
 >();
+let lastTrimEvent: ProcessWorkingSetTrimEvent | null = null;
 const telemetry = getTelemetryLogger('memory-governance', 'processWorkingSetTrim');
 
 function readErrorMessage(error: unknown): string {
@@ -26,6 +37,30 @@ function normalizeDelays(delaysMs?: readonly number[]): number[] {
   return [...new Set(source)]
     .map((value) => (Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0))
     .sort((left, right) => left - right);
+}
+
+function recordTrimEvent(
+  target: ProcessWorkingSetTrimTarget,
+  reason: string | null,
+  result: Awaited<ReturnType<typeof trimProcessWorkingSet>>,
+  fallbackSucceeded: boolean
+): void {
+  lastTrimEvent = {
+    timestampMs:
+      typeof result?.timestampMs === 'number' && Number.isFinite(result.timestampMs)
+        ? Math.max(0, Math.floor(result.timestampMs))
+        : Date.now(),
+    target,
+    reason,
+    succeeded: Boolean(result) && fallbackSucceeded,
+    attemptedCount: Array.isArray(result?.attemptedPids) ? result.attemptedPids.length : 0,
+    trimmedCount: Array.isArray(result?.trimmedPids) ? result.trimmedPids.length : 0,
+    failedCount: Array.isArray(result?.failedPids) ? result.failedPids.length : 0,
+  };
+}
+
+export function getLastProcessWorkingSetTrimEvent(): ProcessWorkingSetTrimEvent | null {
+  return lastTrimEvent ? { ...lastTrimEvent } : null;
 }
 
 function clearScheduledTarget(target: ProcessWorkingSetTrimTarget): void {
@@ -63,15 +98,28 @@ export function scheduleProcessWorkingSetTrim(
         scheduledTrimTimers.delete(target);
       }
 
-      void trimProcessWorkingSet(target).catch((error) => {
-        telemetry.warn('process_working_set_trim.failed', {
-          message: readErrorMessage(error),
-          fields: {
-            target,
-            reason: options?.reason ?? null,
-          },
+      void trimProcessWorkingSet(target)
+        .then((result) => {
+          recordTrimEvent(target, options?.reason ?? null, result, result !== null);
+          if (!result) {
+            telemetry.warn('process_working_set_trim.failed', {
+              fields: {
+                target,
+                reason: options?.reason ?? null,
+              },
+            });
+          }
+        })
+        .catch((error) => {
+          recordTrimEvent(target, options?.reason ?? null, null, false);
+          telemetry.warn('process_working_set_trim.failed', {
+            message: readErrorMessage(error),
+            fields: {
+              target,
+              reason: options?.reason ?? null,
+            },
+          });
         });
-      });
     }, delayMs)
   );
 

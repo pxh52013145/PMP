@@ -95,7 +95,7 @@ export function computeDynamicSrcStressScore(input: AudioStabilityScoreMetrics):
     if (input.transferDecodeLowHitCount > 0) {
       score += 1;
     }
-    if (input.renderQueuePageLocked) {
+    if (!input.renderQueuePageLocked) {
       score += 1;
     }
   }

@@ -25,6 +25,9 @@ static TRANSFER_RENDER_LOW_HIT_COUNT: AtomicU64 = AtomicU64::new(0);
 static TRANSFER_DECODE_LOW_HIT_COUNT: AtomicU64 = AtomicU64::new(0);
 static RENDER_QUEUE_PAGE_LOCK_SUCCESS: AtomicU64 = AtomicU64::new(0);
 static RENDER_QUEUE_PAGE_LOCK_FAILURE: AtomicU64 = AtomicU64::new(0);
+static RENDER_QUEUE_PAGE_LOCK_ATTEMPTED_BYTES: AtomicU64 = AtomicU64::new(0);
+static RENDER_QUEUE_PAGE_LOCK_SUCCEEDED_BYTES: AtomicU64 = AtomicU64::new(0);
+static RENDER_QUEUE_PAGE_LOCK_FAILED_BYTES: AtomicU64 = AtomicU64::new(0);
 static TRANSFER_ADAPTATION_LEVEL: AtomicU64 = AtomicU64::new(0);
 static TRANSFER_OSCILLATION_STREAK: AtomicU64 = AtomicU64::new(0);
 static TRANSFER_RENDER_LOW_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
@@ -82,16 +85,38 @@ fn transfer_target_samples(
     desired.max(min_quantum).max(channels).min(chunk_limit)
 }
 
-pub(crate) fn streaming_transfer_stats() -> (u64, u64, u64, bool, u64, u64) {
-    (
-        TRANSFER_LOW_WATERMARK_SAMPLES.load(Ordering::Relaxed),
-        TRANSFER_RENDER_LOW_HIT_COUNT.load(Ordering::Relaxed),
-        TRANSFER_DECODE_LOW_HIT_COUNT.load(Ordering::Relaxed),
-        RENDER_QUEUE_PAGE_LOCK_SUCCESS.load(Ordering::Relaxed)
-            > RENDER_QUEUE_PAGE_LOCK_FAILURE.load(Ordering::Relaxed),
-        TRANSFER_ADAPTATION_LEVEL.load(Ordering::Relaxed),
-        TRANSFER_OSCILLATION_STREAK.load(Ordering::Relaxed),
-    )
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StreamingTransferStats {
+    pub low_watermark_samples: u64,
+    pub render_low_hit_count: u64,
+    pub decode_low_hit_count: u64,
+    pub render_queue_page_locked: bool,
+    pub render_queue_page_lock_failure_count: u64,
+    pub render_queue_page_lock_attempted_bytes: u64,
+    pub render_queue_page_lock_succeeded_bytes: u64,
+    pub render_queue_page_lock_failed_bytes: u64,
+    pub adaptation_level: u64,
+    pub oscillation_streak: u64,
+}
+
+pub(crate) fn streaming_transfer_stats() -> StreamingTransferStats {
+    let lock_success_count = RENDER_QUEUE_PAGE_LOCK_SUCCESS.load(Ordering::Relaxed);
+    let lock_failure_count = RENDER_QUEUE_PAGE_LOCK_FAILURE.load(Ordering::Relaxed);
+    StreamingTransferStats {
+        low_watermark_samples: TRANSFER_LOW_WATERMARK_SAMPLES.load(Ordering::Relaxed),
+        render_low_hit_count: TRANSFER_RENDER_LOW_HIT_COUNT.load(Ordering::Relaxed),
+        decode_low_hit_count: TRANSFER_DECODE_LOW_HIT_COUNT.load(Ordering::Relaxed),
+        render_queue_page_locked: lock_success_count > lock_failure_count,
+        render_queue_page_lock_failure_count: lock_failure_count,
+        render_queue_page_lock_attempted_bytes: RENDER_QUEUE_PAGE_LOCK_ATTEMPTED_BYTES
+            .load(Ordering::Relaxed),
+        render_queue_page_lock_succeeded_bytes: RENDER_QUEUE_PAGE_LOCK_SUCCEEDED_BYTES
+            .load(Ordering::Relaxed),
+        render_queue_page_lock_failed_bytes: RENDER_QUEUE_PAGE_LOCK_FAILED_BYTES
+            .load(Ordering::Relaxed),
+        adaptation_level: TRANSFER_ADAPTATION_LEVEL.load(Ordering::Relaxed),
+        oscillation_streak: TRANSFER_OSCILLATION_STREAK.load(Ordering::Relaxed),
+    }
 }
 
 #[derive(Clone)]
@@ -229,10 +254,15 @@ pub(crate) fn try_lock_render_queue_hot_path(render_queue: &AudioRingBuffer) {
         return;
     }
 
+    let lock_bytes = render_queue.lock_bytes().min(u64::MAX as usize) as u64;
+    RENDER_QUEUE_PAGE_LOCK_ATTEMPTED_BYTES.fetch_add(lock_bytes, Ordering::Relaxed);
+
     if render_queue.try_lock_memory_pages() {
         RENDER_QUEUE_PAGE_LOCK_SUCCESS.fetch_add(1, Ordering::Relaxed);
+        RENDER_QUEUE_PAGE_LOCK_SUCCEEDED_BYTES.fetch_add(lock_bytes, Ordering::Relaxed);
     } else {
         RENDER_QUEUE_PAGE_LOCK_FAILURE.fetch_add(1, Ordering::Relaxed);
+        RENDER_QUEUE_PAGE_LOCK_FAILED_BYTES.fetch_add(lock_bytes, Ordering::Relaxed);
         if env_bool("PMP_AUDIO_LOG_PAGE_LOCK_FAILURE", false) {
             eprintln!("[NativeAudio][buffer] Failed to page-lock render queue (best effort).");
         }

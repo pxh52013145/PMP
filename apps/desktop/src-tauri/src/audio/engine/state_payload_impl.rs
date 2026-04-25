@@ -50,6 +50,10 @@ impl NativeAudioEngine {
         payload.transfer_adaptation_level = None;
         payload.transfer_oscillation_streak = None;
         payload.render_queue_page_locked = None;
+        payload.render_queue_page_lock_failure_count = None;
+        payload.render_queue_page_lock_attempted_bytes = None;
+        payload.render_queue_page_lock_succeeded_bytes = None;
+        payload.render_queue_page_lock_failed_bytes = None;
         payload.shared_render_ahead_enabled = None;
         payload.shared_render_underrun_events = None;
         payload.shared_render_underrun_frames = None;
@@ -110,14 +114,7 @@ pub(super) fn build_state_payload_with_options_impl(
     include_diagnostics: bool,
 ) -> NativeAudioStatePayload {
     let (underrun_events, underrun_frames) = crate::audio::input::streaming_underrun_stats();
-    let (
-        transfer_low_watermark_samples,
-        transfer_render_low_hit_count,
-        transfer_decode_low_hit_count,
-        render_queue_page_locked,
-        transfer_adaptation_level,
-        transfer_oscillation_streak,
-    ) = crate::audio::input::streaming_transfer_stats();
+    let transfer_stats = crate::audio::input::streaming_transfer_stats();
 
     #[cfg(target_os = "windows")]
     let output_metrics = crate::audio::output::output_callback_metrics();
@@ -303,32 +300,52 @@ pub(super) fn build_state_payload_with_options_impl(
             None
         },
         transfer_low_watermark_samples: if transfer_metrics_valid {
-            Some(transfer_low_watermark_samples)
+            Some(transfer_stats.low_watermark_samples)
         } else {
             None
         },
         transfer_render_low_hit_count: if transfer_metrics_valid {
-            Some(transfer_render_low_hit_count)
+            Some(transfer_stats.render_low_hit_count)
         } else {
             None
         },
         transfer_decode_low_hit_count: if transfer_metrics_valid {
-            Some(transfer_decode_low_hit_count)
+            Some(transfer_stats.decode_low_hit_count)
         } else {
             None
         },
         transfer_adaptation_level: if transfer_metrics_valid {
-            Some(transfer_adaptation_level)
+            Some(transfer_stats.adaptation_level)
         } else {
             None
         },
         transfer_oscillation_streak: if transfer_metrics_valid {
-            Some(transfer_oscillation_streak)
+            Some(transfer_stats.oscillation_streak)
         } else {
             None
         },
         render_queue_page_locked: if transfer_metrics_valid {
-            Some(render_queue_page_locked)
+            Some(transfer_stats.render_queue_page_locked)
+        } else {
+            None
+        },
+        render_queue_page_lock_failure_count: if transfer_metrics_valid {
+            Some(transfer_stats.render_queue_page_lock_failure_count)
+        } else {
+            None
+        },
+        render_queue_page_lock_attempted_bytes: if transfer_metrics_valid {
+            Some(transfer_stats.render_queue_page_lock_attempted_bytes)
+        } else {
+            None
+        },
+        render_queue_page_lock_succeeded_bytes: if transfer_metrics_valid {
+            Some(transfer_stats.render_queue_page_lock_succeeded_bytes)
+        } else {
+            None
+        },
+        render_queue_page_lock_failed_bytes: if transfer_metrics_valid {
+            Some(transfer_stats.render_queue_page_lock_failed_bytes)
         } else {
             None
         },

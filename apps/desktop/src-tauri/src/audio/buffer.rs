@@ -156,6 +156,10 @@ impl AudioRingBuffer {
         self.inner.capacity
     }
 
+    pub fn lock_bytes(&self) -> usize {
+        self.inner.lock_bytes
+    }
+
     pub fn wait_for_samples(&self, min_samples: usize, timeout: Duration) {
         if min_samples == 0 {
             return;
