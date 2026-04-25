@@ -18,6 +18,7 @@ use crate::audio::buffer_policy;
 use crate::audio::diagnostics;
 use crate::audio::memory_pool;
 use crate::audio::policy::{NativeAudioOutputQuantizationMode, NativeAudioTransportMode};
+use crate::audio::realtime_memory_guard::{new_guarded_ring_buffer, AudioRealtimeMemoryRole};
 use crate::audio::realtime_scheduler::{RealtimePressureProfile, SCHEDULER};
 
 pub const WASAPI_EXCLUSIVE_BACKEND_ID: &str = "wasapi-exclusive";
@@ -2161,8 +2162,10 @@ impl WasapiExclusiveSink {
             .ok()
             .and_then(|state| state.device_id.clone());
         reset_output_callback_metrics();
-        let render_queue = AudioRingBuffer::new(48_000 * 2 * 2);
-        render_queue.try_lock_memory_pages();
+        let render_queue = new_guarded_ring_buffer(
+            48_000 * 2 * 2,
+            AudioRealtimeMemoryRole::WasapiExclusiveRenderQueue,
+        );
         Self {
             inner: Arc::new(SinkInner {
                 backend_state,
@@ -2244,6 +2247,14 @@ impl WasapiExclusiveSink {
             };
 
             let channels = source.channels().max(1) as usize;
+            memory_pool::reserve_f32_capacity(
+                &mut local,
+                buffer_policy::hot_path_prewarm_chunk_samples(
+                    inner_clone.render_queue.capacity_samples(),
+                    channels,
+                ),
+                "exclusive.output.producer.local_prewarm_growth",
+            );
             let mut adaptive_state = buffer_policy::TransferAdaptiveState::default();
             let mut observed_flush_epoch = inner_clone.flush_epoch.load(Ordering::Acquire);
             let mut observed_render_clear_epoch = inner_clone.render_queue.clear_epoch();
@@ -2961,11 +2972,11 @@ impl WasapiSharedRawSink {
             .ok()
             .and_then(|state| state.device_id.clone());
         reset_output_callback_metrics();
-        let render_queue = AudioRingBuffer::new(
+        let render_queue = new_guarded_ring_buffer(
             buffer_policy::recommended_render_queue_capacity_samples(Some(48_000), 2)
                 .max(48_000 * 2 * 4),
+            AudioRealtimeMemoryRole::WasapiSharedRawRenderQueue,
         );
-        render_queue.try_lock_memory_pages();
         Self {
             inner: Arc::new(SharedRawSinkInner {
                 backend_state,
@@ -3049,6 +3060,14 @@ impl WasapiSharedRawSink {
             };
 
             let channels = source.channels().max(1) as usize;
+            memory_pool::reserve_f32_capacity(
+                &mut local,
+                buffer_policy::hot_path_prewarm_chunk_samples(
+                    inner_clone.render_queue.capacity_samples(),
+                    channels,
+                ),
+                "shared_raw.output.producer.local_prewarm_growth",
+            );
             let mut adaptive_state = buffer_policy::TransferAdaptiveState::default();
             let mut observed_flush_epoch = inner_clone.flush_epoch.load(Ordering::Acquire);
             let mut observed_render_clear_epoch = inner_clone.render_queue.clear_epoch();

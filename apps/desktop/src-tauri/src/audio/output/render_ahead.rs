@@ -13,6 +13,7 @@ use crate::audio::buffer_policy;
 use crate::audio::bulk_source::BulkSource;
 use crate::audio::diagnostics;
 use crate::audio::memory_pool;
+use crate::audio::realtime_memory_guard::{new_guarded_ring_buffer, AudioRealtimeMemoryRole};
 use crate::audio::realtime_scheduler::RealtimePressureProfile;
 
 use super::BoxedSource;
@@ -477,8 +478,10 @@ pub(crate) fn wrap_source_for_shared_backend(
         .max(scaled_policy_capacity)
         .clamp(16_384, 1_500_000);
 
-    let queue = AudioRingBuffer::new(capacity_samples.max(channels as usize * 256));
-    queue.try_lock_memory_pages();
+    let queue = new_guarded_ring_buffer(
+        capacity_samples.max(channels as usize * 256),
+        AudioRealtimeMemoryRole::SharedRenderQueue,
+    );
 
     let wrapper_id = SHARED_RENDER_WRAPPER_SEQ.fetch_add(1, Ordering::AcqRel);
     SHARED_RENDER_ACTIVE_WRAPPER_ID.store(wrapper_id, Ordering::Release);
@@ -573,6 +576,11 @@ fn spawn_producer_thread(
             let mut block = Vec::<f32>::with_capacity(producer_chunk_samples(
                 RealtimePressureProfile::Critical,
             ));
+            memory_pool::reserve_f32_capacity(
+                &mut block,
+                buffer_policy::hot_path_prewarm_chunk_samples(queue_capacity, channels),
+                "shared.render_ahead.block_prewarm_growth",
+            );
             let mut observed_seek_epoch = seek_epoch.load(Ordering::Acquire);
             let mut observed_queue_clear_epoch = queue.clear_epoch();
             invalidate_shared_render_ready_state(wrapper_id, observed_seek_epoch);
