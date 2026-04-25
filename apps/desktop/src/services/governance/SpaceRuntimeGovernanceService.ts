@@ -11,8 +11,12 @@ export interface SpaceRuntimeDescriptor {
   spaceId: string;
   state: SpaceRuntimeState;
   kind: SpaceRuntimeKind;
+  hasActivated: boolean;
   lastActivatedAt: number | null;
   lastFrozenAt: number | null;
+  lastAssociatedAt: number | null;
+  lastZeroAssociationAt: number | null;
+  activeAssociationCount: number;
   warmRetentionMs: number;
   memoryTier: SpaceRuntimeMemoryTier;
   estimatedBudgetBytes?: number;
@@ -24,6 +28,7 @@ export interface SpaceRuntimeGovernanceSnapshot {
   descriptors: SpaceRuntimeDescriptor[];
   frozenSpaceIds: string[];
   heavySpaceIds: string[];
+  zeroAssociationSpaceIds: string[];
   reclaimableSpaceIds: string[];
   lastSwitchAt: number | null;
 }
@@ -33,6 +38,8 @@ export interface SpaceRuntimeGovernanceService {
   warmSpace(spaceId: string): void;
   freezeSpace(spaceId: string): void;
   teardownSpace(spaceId: string, reason: string): void;
+  retainSpaceAssociation(spaceId: string, resourceId: string): () => void;
+  canRunBackground(spaceId: string): boolean;
   collectSnapshot(): SpaceRuntimeGovernanceSnapshot;
   reclaim(options: { reason: string; minTier: number }): string[];
 }
@@ -64,6 +71,7 @@ function classifySpace(spaceId: string): Pick<SpaceRuntimeDescriptor, 'kind' | '
 
 export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGovernanceService {
   private readonly descriptors = new Map<string, SpaceRuntimeDescriptor>();
+  private readonly associationsBySpaceId = new Map<string, Map<string, number>>();
   private activeSpaceId: string | null = null;
   private lastSwitchAt: number | null = null;
   private readonly telemetry = getTelemetryLogger('space-governance', 'SpaceRuntimeGovernanceService');
@@ -80,6 +88,7 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
 
     const descriptor = this.ensureDescriptor(normalized);
     descriptor.state = 'active';
+    descriptor.hasActivated = true;
     descriptor.lastActivatedAt = now;
     descriptor.lastFrozenAt = null;
     this.activeSpaceId = normalized;
@@ -110,6 +119,9 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
     if (!descriptor || descriptor.state === 'cold' || descriptor.state === 'frozen') return;
     descriptor.state = 'frozen';
     descriptor.lastFrozenAt = Date.now();
+    if (descriptor.activeAssociationCount === 0 && descriptor.lastZeroAssociationAt === null) {
+      descriptor.lastZeroAssociationAt = descriptor.lastFrozenAt;
+    }
     this.telemetry.info('space-governance.runtime.state', {
       fields: {
         spaceId: descriptor.spaceId,
@@ -136,6 +148,66 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
 
     descriptor.state = 'cold';
     descriptor.lastFrozenAt = null;
+    descriptor.lastZeroAssociationAt = null;
+    descriptor.activeAssociationCount = 0;
+    this.associationsBySpaceId.delete(descriptor.spaceId);
+  }
+
+  retainSpaceAssociation(spaceId: string, resourceId: string): () => void {
+    const normalizedSpaceId = spaceId.trim();
+    const normalizedResourceId = resourceId.trim();
+    if (!normalizedSpaceId || !normalizedResourceId) return () => undefined;
+
+    const descriptor = this.ensureDescriptor(normalizedSpaceId);
+    let associations = this.associationsBySpaceId.get(normalizedSpaceId);
+    if (!associations) {
+      associations = new Map();
+      this.associationsBySpaceId.set(normalizedSpaceId, associations);
+    }
+
+    associations.set(normalizedResourceId, (associations.get(normalizedResourceId) ?? 0) + 1);
+    descriptor.activeAssociationCount = this.countAssociations(normalizedSpaceId);
+    descriptor.lastAssociatedAt = Date.now();
+    descriptor.lastZeroAssociationAt = null;
+
+    this.telemetry.debug('space-governance.runtime.association', {
+      fields: {
+        spaceId: descriptor.spaceId,
+        resourceId: normalizedResourceId,
+        activeAssociationCount: descriptor.activeAssociationCount,
+      },
+    });
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+
+      const current = this.associationsBySpaceId.get(normalizedSpaceId);
+      if (!current) return;
+      const count = current.get(normalizedResourceId) ?? 0;
+      if (count <= 1) {
+        current.delete(normalizedResourceId);
+      } else {
+        current.set(normalizedResourceId, count - 1);
+      }
+      if (current.size === 0) {
+        this.associationsBySpaceId.delete(normalizedSpaceId);
+      }
+
+      const nextDescriptor = this.descriptors.get(normalizedSpaceId);
+      if (!nextDescriptor) return;
+      nextDescriptor.activeAssociationCount = this.countAssociations(normalizedSpaceId);
+      if (nextDescriptor.activeAssociationCount === 0) {
+        nextDescriptor.lastZeroAssociationAt = Date.now();
+      }
+    };
+  }
+
+  canRunBackground(spaceId: string): boolean {
+    const descriptor = this.descriptors.get(spaceId.trim());
+    if (!descriptor) return false;
+    return descriptor.hasActivated && descriptor.state !== 'cold' && descriptor.state !== 'tearing_down';
   }
 
   collectSnapshot(): SpaceRuntimeGovernanceSnapshot {
@@ -148,6 +220,9 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
         .map((descriptor) => descriptor.spaceId),
       heavySpaceIds: descriptors
         .filter((descriptor) => descriptor.memoryTier === 'heavy')
+        .map((descriptor) => descriptor.spaceId),
+      zeroAssociationSpaceIds: descriptors
+        .filter((descriptor) => descriptor.activeAssociationCount === 0)
         .map((descriptor) => descriptor.spaceId),
       reclaimableSpaceIds: this.getReclaimableDescriptors(descriptors).map(
         (descriptor) => descriptor.spaceId
@@ -179,8 +254,12 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
       spaceId: normalized,
       state: 'cold',
       kind: classification.kind,
+      hasActivated: false,
       lastActivatedAt: null,
       lastFrozenAt: null,
+      lastAssociatedAt: null,
+      lastZeroAssociationAt: null,
+      activeAssociationCount: 0,
       warmRetentionMs: classification.warmRetentionMs,
       memoryTier: classification.memoryTier,
       keepWarmOnBlur: classification.keepWarmOnBlur,
@@ -197,16 +276,30 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
     return descriptors
       .filter((descriptor) => descriptor.spaceId !== this.activeSpaceId)
       .filter((descriptor) => descriptor.state === 'frozen')
+      .filter((descriptor) => descriptor.hasActivated)
+      .filter((descriptor) => descriptor.activeAssociationCount === 0)
       .filter((descriptor) => descriptor.memoryTier === 'heavy' || !descriptor.keepWarmOnBlur)
       .filter((descriptor) => {
         if (options.bypassWarmRetention && descriptor.memoryTier === 'heavy') return true;
-        if (descriptor.lastFrozenAt === null) return true;
-        return now - descriptor.lastFrozenAt >= descriptor.warmRetentionMs;
+        const zeroAssociationAt = descriptor.lastZeroAssociationAt ?? descriptor.lastFrozenAt;
+        if (zeroAssociationAt === null) return false;
+        return now - zeroAssociationAt >= descriptor.warmRetentionMs;
       })
       .sort((a, b) => {
         const tierScore = (value: SpaceRuntimeMemoryTier) =>
           value === 'heavy' ? 2 : value === 'medium' ? 1 : 0;
         return tierScore(b.memoryTier) - tierScore(a.memoryTier);
       });
+  }
+
+  private countAssociations(spaceId: string): number {
+    const associations = this.associationsBySpaceId.get(spaceId);
+    if (!associations) return 0;
+
+    let total = 0;
+    for (const count of associations.values()) {
+      total += Math.max(0, count);
+    }
+    return total;
   }
 }

@@ -52,6 +52,13 @@ export const PLATFORM_MAGNET: Magnet = {
   ...PLATFORM_MAGNET_LAYOUT,
   content: '',
   style: PLATFORM_MAGNET_CHROME.style,
+  runtime: {
+    memoryTier: 'heavy',
+    spaceId: 'space2',
+    releaseOnSpaceExit: true,
+    backgroundCapable: false,
+    backgroundAfterFirstActivationOnly: true,
+  },
   animation: PLATFORM_MAGNET_CHROME.animation,
   state: 'idle',
   interactions: {

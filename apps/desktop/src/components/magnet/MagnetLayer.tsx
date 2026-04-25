@@ -88,6 +88,11 @@ function removeKeys<T>(record: Record<string, T>, keys: string[]): Record<string
   return next;
 }
 
+function shouldRetainForExitAnimation(magnet: Magnet): boolean {
+  const runtime = magnet.runtime;
+  return runtime?.releaseOnSpaceExit !== true && runtime?.memoryTier !== 'heavy';
+}
+
 export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOverrideMode }: MagnetLayerProps) {
   const { theme } = useTheme();
   const [viewportSize, setViewportSize] = useState(readViewportSize);
@@ -227,7 +232,11 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
     const previousIds = Object.keys(previousSnapshot.magnetsById);
     const enteringIds = nextIds.filter((id) => !previousSnapshot.magnetsById[id]);
     const persistentIds = nextIds.filter((id) => Boolean(previousSnapshot.magnetsById[id]));
-    const exitingIds = previousIds.filter((id) => !nextIdSet.has(id));
+    const exitingIds = previousIds.filter((id) => {
+      if (nextIdSet.has(id)) return false;
+      const magnet = previousSnapshot.magnetsById[id];
+      return magnet ? shouldRetainForExitAnimation(magnet) : false;
+    });
 
     if (spaceSwitchScene?.enter) {
       const { animationsById, maxTotalMs: enterMaxTotalMs } = buildMagnetSceneAnimations({

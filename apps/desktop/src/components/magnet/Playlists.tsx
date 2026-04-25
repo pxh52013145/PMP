@@ -18,11 +18,6 @@ import {
   type PlaylistCoverUrlKind,
 } from '../../modules/playlists/residencyTelemetry';
 import { musicLibraryService } from '../../services/audio/MusicLibraryService';
-import {
-  BILIBILI_CONNECTOR_ID,
-  resolvePlatformWorkspaceCoverAssetUrl,
-  resolvePlatformWorkspaceResource,
-} from '../../modules/music-platform';
 import { scheduleProcessWorkingSetTrim } from '../../utils/processWorkingSetTrim';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { captureTelemetryScenarioSnapshot } from '../../services/telemetry/scenarioSnapshots';
@@ -76,8 +71,18 @@ const EMPTY_PLAYLISTS: Playlist[] = [];
 const EMPTY_TRACKS: Track[] = [];
 const EMPTY_NUMBERS: number[] = [];
 const RECENT_SMART_PLAYLIST_ID = 'smart-recently-played';
+const BILIBILI_CONNECTOR_ID = 'connector.platform.bilibili';
 const PLAYLIST_FALLBACK_GLYPH = '\u266B';
 const PLAYLIST_CLOSE_GLYPH = '\u00D7';
+
+type MusicPlatformApi = typeof import('../../modules/music-platform');
+
+let musicPlatformApiPromise: Promise<MusicPlatformApi> | null = null;
+
+function loadMusicPlatformApi(): Promise<MusicPlatformApi> {
+  musicPlatformApiPromise ??= import('../../modules/music-platform');
+  return musicPlatformApiPromise;
+}
 const PLAYLIST_PLAY_GLYPH = '\u25B6';
 const EMPTY_SELECTED_PLAYLIST_HERO_COVER: SelectedPlaylistHeroCoverState = {
   playlistId: null,
@@ -1063,7 +1068,8 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
               )
               .find((value): value is string => Boolean(value));
             if (bvid) {
-              const resource = await resolvePlatformWorkspaceResource({
+              const platform = await loadMusicPlatformApi();
+              const resource = await platform.resolvePlatformWorkspaceResource({
                 connectorId: BILIBILI_CONNECTOR_ID,
                 query: bvid,
               }).catch(() => null);
@@ -1076,7 +1082,8 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
           }
 
           if (resolvedCoverUrl && isBilibiliPlaylist) {
-            const cachedBilibiliCover = await resolvePlatformWorkspaceCoverAssetUrl({
+            const platform = await loadMusicPlatformApi();
+            const cachedBilibiliCover = await platform.resolvePlatformWorkspaceCoverAssetUrl({
               connectorId: BILIBILI_CONNECTOR_ID,
               coverUrl: resolvedCoverUrl,
             });

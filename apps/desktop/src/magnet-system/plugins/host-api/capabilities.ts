@@ -37,31 +37,6 @@ import {
   getSystemAnchorsByMagnetId,
 } from '../../../modules/magnets/systemLayouts';
 import {
-  beginPlatformInstanceQrLogin,
-  clearPlatformInstanceAuthCookies,
-  getPlatformInstanceAuthSnapshot,
-  listPlatformConnectorDefinitions,
-  listPlatformInstanceAuthSnapshots,
-  listPlatformConnectorFacadeItems,
-  listPlatformWorkspaceCollections,
-  listPlatformWorkspaceCollectionResources,
-  listPlatformWorkspacePages,
-  listPlatformWorkspaceQualityState,
-  listPlatformWorkspaceRecommendedCollections,
-  listPlatformWorkspaceRecommendedResources,
-  logoutPlatformInstance,
-  getPlatformWorkspacePageModel,
-  pollPlatformInstanceQrLogin,
-  preparePlatformPlayback,
-  preparePlatformWorkspacePlayback,
-  refreshPlatformInstanceAuthSnapshot,
-  resolvePlatformInstanceId,
-  resolvePlatformWorkspaceCoverAssetUrl,
-  searchPlatformWorkspaceResources,
-  searchPlatformTracks,
-  setPlatformWorkspaceQualityPreference,
-} from '../../../modules/music-platform';
-import {
   FALLBACK_LOCALE,
   SUPPORTED_LOCALES,
   getLocale,
@@ -132,6 +107,15 @@ type PluginHostCapabilityEntry = PluginHostCapabilityRegistration & {
 
 const entries = new Map<string, PluginHostCapabilityEntry>();
 let initialized = false;
+
+type MusicPlatformApi = typeof import('../../../modules/music-platform');
+
+let musicPlatformApiPromise: Promise<MusicPlatformApi> | null = null;
+
+function loadMusicPlatformApi(): Promise<MusicPlatformApi> {
+  musicPlatformApiPromise ??= import('../../../modules/music-platform');
+  return musicPlatformApiPromise;
+}
 
 const AI_ADAPTER_CAPABILITY_ID = 'foundation.ai-adapter';
 const AI_ADAPTER_CAPABILITY_VERSION = '0.4.0';
@@ -4074,7 +4058,8 @@ function createPmpMusicPlatformCatalogHandler(): PluginHostCapabilityHandler {
           methods: ['describe', 'listConnectors'],
         });
       case 'listConnectors': {
-        const connectors = await listPlatformConnectorFacadeItems();
+        const platform = await loadMusicPlatformApi();
+        const connectors = await platform.listPlatformConnectorFacadeItems();
         return resultOk({
           connectorCount: connectors.length,
           connectors,
@@ -4096,7 +4081,8 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
   };
 
   const readWorkspaceTarget = (
-    payload: Record<string, unknown> | null
+    payload: Record<string, unknown> | null,
+    platform: MusicPlatformApi
   ): WorkspaceTarget | PluginHostCapabilityResult => {
     const connectorId = asNonEmptyString(payload?.connectorId);
     if (!connectorId || !connectorId.startsWith('connector.platform.')) {
@@ -4107,7 +4093,7 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
       connectorId: connectorId as WorkspaceTarget['connectorId'],
       instanceId:
         asNonEmptyString(payload?.instanceId) ??
-        resolvePlatformInstanceId({
+        platform.resolvePlatformInstanceId({
           connectorId: connectorId as WorkspaceTarget['connectorId'],
         }) ??
         undefined,
@@ -4144,11 +4130,12 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
           ],
         });
       case 'getWorkspaceModel': {
-        const target = readWorkspaceTarget(payload);
+        const platform = await loadMusicPlatformApi();
+        const target = readWorkspaceTarget(payload, platform);
         if ('ok' in target) {
           return target;
         }
-        const model = await getPlatformWorkspacePageModel(target);
+        const model = await platform.getPlatformWorkspacePageModel(target);
         return resultOk({
           connectorId: target.connectorId,
           instanceId: target.instanceId ?? null,
@@ -4156,11 +4143,12 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'listPages': {
-        const target = readWorkspaceTarget(payload);
+        const platform = await loadMusicPlatformApi();
+        const target = readWorkspaceTarget(payload, platform);
         if ('ok' in target) {
           return target;
         }
-        const items = await listPlatformWorkspacePages(target);
+        const items = await platform.listPlatformWorkspacePages(target);
         return resultOk({
           connectorId: target.connectorId,
           instanceId: target.instanceId ?? null,
@@ -4168,11 +4156,12 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'listCollections': {
-        const target = readWorkspaceTarget(payload);
+        const platform = await loadMusicPlatformApi();
+        const target = readWorkspaceTarget(payload, platform);
         if ('ok' in target) {
           return target;
         }
-        const items = await listPlatformWorkspaceCollections({
+        const items = await platform.listPlatformWorkspaceCollections({
           ...target,
           forceRefresh: payload?.forceRefresh === true,
         });
@@ -4183,7 +4172,8 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'listCollectionResources': {
-        const target = readWorkspaceTarget(payload);
+        const platform = await loadMusicPlatformApi();
+        const target = readWorkspaceTarget(payload, platform);
         if ('ok' in target) {
           return target;
         }
@@ -4193,7 +4183,7 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         if (!collectionId) {
           return resultError('INVALID_PAYLOAD', 'payload.collectionId is required');
         }
-        const page = await listPlatformWorkspaceCollectionResources({
+        const page = await platform.listPlatformWorkspaceCollectionResources({
           ...target,
           collectionId,
           pageNum: asNonNegativeInt(payload?.pageNum) ?? undefined,
@@ -4208,11 +4198,12 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'listRecommendedCollections': {
-        const target = readWorkspaceTarget(payload);
+        const platform = await loadMusicPlatformApi();
+        const target = readWorkspaceTarget(payload, platform);
         if ('ok' in target) {
           return target;
         }
-        const items = await listPlatformWorkspaceRecommendedCollections({
+        const items = await platform.listPlatformWorkspaceRecommendedCollections({
           ...target,
           forceRefresh: payload?.forceRefresh === true,
         });
@@ -4223,11 +4214,12 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'listRecommendedResources': {
-        const target = readWorkspaceTarget(payload);
+        const platform = await loadMusicPlatformApi();
+        const target = readWorkspaceTarget(payload, platform);
         if ('ok' in target) {
           return target;
         }
-        const page = await listPlatformWorkspaceRecommendedResources({
+        const page = await platform.listPlatformWorkspaceRecommendedResources({
           ...target,
           forceRefresh: payload?.forceRefresh === true,
         });
@@ -4238,7 +4230,8 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'searchResources': {
-        const target = readWorkspaceTarget(payload);
+        const platform = await loadMusicPlatformApi();
+        const target = readWorkspaceTarget(payload, platform);
         if ('ok' in target) {
           return target;
         }
@@ -4247,7 +4240,7 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         if (!query) {
           return resultError('INVALID_PAYLOAD', 'payload.query is required');
         }
-        const page = await searchPlatformWorkspaceResources({
+        const page = await platform.searchPlatformWorkspaceResources({
           ...target,
           keyword: query,
           pageNum: asNonNegativeInt(payload?.pageNum) ?? undefined,
@@ -4262,7 +4255,8 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'preparePlayback': {
-        const target = readWorkspaceTarget(payload);
+        const platform = await loadMusicPlatformApi();
+        const target = readWorkspaceTarget(payload, platform);
         if ('ok' in target) {
           return target;
         }
@@ -4270,7 +4264,7 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         if (!sourceLocator) {
           return resultError('INVALID_PAYLOAD', 'payload.sourceLocator is required');
         }
-        const prepared = await preparePlatformWorkspacePlayback({
+        const prepared = await platform.preparePlatformWorkspacePlayback({
           ...target,
           sourceLocator,
           qualityHint: asNonEmptyString(payload?.qualityHint) ?? undefined,
@@ -4284,11 +4278,12 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'listQualityState': {
-        const target = readWorkspaceTarget(payload);
+        const platform = await loadMusicPlatformApi();
+        const target = readWorkspaceTarget(payload, platform);
         if ('ok' in target) {
           return target;
         }
-        const state = await listPlatformWorkspaceQualityState({
+        const state = await platform.listPlatformWorkspaceQualityState({
           ...target,
           sourceLocator: asNonEmptyString(payload?.sourceLocator) ?? undefined,
           forceRefresh: payload?.forceRefresh === true,
@@ -4300,7 +4295,8 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'setQualityPreference': {
-        const target = readWorkspaceTarget(payload);
+        const platform = await loadMusicPlatformApi();
+        const target = readWorkspaceTarget(payload, platform);
         if ('ok' in target) {
           return target;
         }
@@ -4311,7 +4307,7 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         if (!qualityKey) {
           return resultError('INVALID_PAYLOAD', 'payload.qualityKey is required');
         }
-        const state = await setPlatformWorkspaceQualityPreference({
+        const state = await platform.setPlatformWorkspaceQualityPreference({
           ...target,
           qualityKey,
           sourceLocator: asNonEmptyString(payload?.sourceLocator) ?? undefined,
@@ -4323,7 +4319,8 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'resolveCoverAssetUrl': {
-        const target = readWorkspaceTarget(payload);
+        const platform = await loadMusicPlatformApi();
+        const target = readWorkspaceTarget(payload, platform);
         if ('ok' in target) {
           return target;
         }
@@ -4331,7 +4328,7 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         if (!coverUrl) {
           return resultError('INVALID_PAYLOAD', 'payload.coverUrl is required');
         }
-        const assetUrl = await resolvePlatformWorkspaceCoverAssetUrl({
+        const assetUrl = await platform.resolvePlatformWorkspaceCoverAssetUrl({
           ...target,
           coverUrl,
         });
@@ -4375,7 +4372,8 @@ function createPmpMusicPlatformSearchHandler(): PluginHostCapabilityHandler {
 
         const limit = asNonNegativeInt(payload?.limit) ?? undefined;
         const connectorIds = asStringArray(payload?.connectorIds);
-        const result = await searchPlatformTracks({
+        const platform = await loadMusicPlatformApi();
+        const result = await platform.searchPlatformTracks({
           query,
           limit,
           connectorIds,
@@ -4411,9 +4409,8 @@ function createPmpMusicPlatformPrepareHandler(): PluginHostCapabilityHandler {
           stage: 'host-pack',
           implementation: 'platform-facade',
           methods: ['describe', 'preparePlayback'],
-          supportedConnectorIds: listPlatformConnectorDefinitions().map(
-            (definition) => definition.connectorId
-          ),
+          supportedConnectorIds: [],
+          connectorDiscovery: 'on-demand',
         });
       case 'preparePlayback': {
         const payload = asObject(request.payload);
@@ -4422,7 +4419,8 @@ function createPmpMusicPlatformPrepareHandler(): PluginHostCapabilityHandler {
           return resultError('INVALID_PAYLOAD', 'payload.sourceLocator is required');
         }
 
-        const prepared = await preparePlatformPlayback({
+        const platform = await loadMusicPlatformApi();
+        const prepared = await platform.preparePlatformPlayback({
           sourceLocator,
           connectorId: asNonEmptyString(payload?.connectorId) ?? undefined,
           qualityHint: asNonEmptyString(payload?.qualityHint) ?? undefined,
@@ -4476,24 +4474,28 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
             'clearAuthCookies',
           ],
         });
-      case 'listDefinitions':
+      case 'listDefinitions': {
+        const definitionsPlatform = await loadMusicPlatformApi();
         return resultOk({
-          definitions: listPlatformConnectorDefinitions(),
+          definitions: definitionsPlatform.listPlatformConnectorDefinitions(),
         });
+      }
       case 'listAuthSnapshots': {
+        const platform = await loadMusicPlatformApi();
         const payload = asObject(request.payload);
         const forceRefresh =
           payload?.refresh === true || payload?.forceRefresh === true;
         return resultOk({
-          snapshots: await listPlatformInstanceAuthSnapshots({
+          snapshots: await platform.listPlatformInstanceAuthSnapshots({
             refresh: forceRefresh,
           }),
         });
       }
       case 'getAuthSnapshot': {
+        const platform = await loadMusicPlatformApi();
         const payload = asObject(request.payload);
         const connectorId = asNonEmptyString(payload?.connectorId);
-        const instanceId = resolvePlatformInstanceId({
+        const instanceId = platform.resolvePlatformInstanceId({
           instanceId: asNonEmptyString(payload?.instanceId),
           connectorId,
         });
@@ -4502,10 +4504,10 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
         if (!instanceId) {
           return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
         }
-        const cachedSnapshot = getPlatformInstanceAuthSnapshot(instanceId);
+        const cachedSnapshot = platform.getPlatformInstanceAuthSnapshot(instanceId);
         const snapshot = forceRefresh
-          ? (await refreshPlatformInstanceAuthSnapshot(instanceId)) ?? cachedSnapshot
-          : cachedSnapshot ?? (await refreshPlatformInstanceAuthSnapshot(instanceId));
+          ? (await platform.refreshPlatformInstanceAuthSnapshot(instanceId)) ?? cachedSnapshot
+          : cachedSnapshot ?? (await platform.refreshPlatformInstanceAuthSnapshot(instanceId));
         return resultOk({
           connectorId,
           instanceId,
@@ -4513,16 +4515,17 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'beginQrLogin': {
+        const platform = await loadMusicPlatformApi();
         const payload = asObject(request.payload);
         const connectorId = asNonEmptyString(payload?.connectorId);
-        const instanceId = resolvePlatformInstanceId({
+        const instanceId = platform.resolvePlatformInstanceId({
           instanceId: asNonEmptyString(payload?.instanceId),
           connectorId,
         });
         if (!instanceId) {
           return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
         }
-        const session = await beginPlatformInstanceQrLogin(instanceId);
+        const session = await platform.beginPlatformInstanceQrLogin(instanceId);
         return resultOk({
           connectorId: connectorId ?? session?.connectorId,
           instanceId,
@@ -4530,9 +4533,10 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'pollQrLogin': {
+        const platform = await loadMusicPlatformApi();
         const payload = asObject(request.payload);
         const connectorId = asNonEmptyString(payload?.connectorId);
-        const instanceId = resolvePlatformInstanceId({
+        const instanceId = platform.resolvePlatformInstanceId({
           instanceId: asNonEmptyString(payload?.instanceId),
           connectorId,
         });
@@ -4543,7 +4547,7 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
         if (!sessionId) {
           return resultError('INVALID_PAYLOAD', 'payload.sessionId is required');
         }
-        const result = await pollPlatformInstanceQrLogin(instanceId, sessionId);
+        const result = await platform.pollPlatformInstanceQrLogin(instanceId, sessionId);
         return resultOk({
           connectorId: connectorId ?? result?.connectorId,
           instanceId,
@@ -4552,16 +4556,17 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'logout': {
+        const platform = await loadMusicPlatformApi();
         const payload = asObject(request.payload);
         const connectorId = asNonEmptyString(payload?.connectorId);
-        const instanceId = resolvePlatformInstanceId({
+        const instanceId = platform.resolvePlatformInstanceId({
           instanceId: asNonEmptyString(payload?.instanceId),
           connectorId,
         });
         if (!instanceId) {
           return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
         }
-        const snapshot = await logoutPlatformInstance(instanceId);
+        const snapshot = await platform.logoutPlatformInstance(instanceId);
         return resultOk({
           connectorId,
           instanceId,
@@ -4569,16 +4574,17 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'clearAuthCookies': {
+        const platform = await loadMusicPlatformApi();
         const payload = asObject(request.payload);
         const connectorId = asNonEmptyString(payload?.connectorId);
-        const instanceId = resolvePlatformInstanceId({
+        const instanceId = platform.resolvePlatformInstanceId({
           instanceId: asNonEmptyString(payload?.instanceId),
           connectorId,
         });
         if (!instanceId) {
           return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
         }
-        const snapshot = await clearPlatformInstanceAuthCookies(instanceId);
+        const snapshot = await platform.clearPlatformInstanceAuthCookies(instanceId);
         return resultOk({
           connectorId,
           instanceId,

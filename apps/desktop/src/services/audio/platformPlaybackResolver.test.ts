@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../modules/music-platform/connectorAuth', () => ({
-  listPlatformConnectorDefinitions: vi.fn(() => [
+const listPlatformConnectorDefinitionsMock = vi.hoisted(() =>
+  vi.fn(() => [
     {
       connectorId: 'connector.platform.bilibili',
       workspaceKind: 'bilibili',
@@ -17,7 +17,11 @@ vi.mock('../../modules/music-platform/connectorAuth', () => ({
       workspaceKind: 'videohub',
       enabled: true,
     },
-  ]),
+  ])
+);
+
+vi.mock('../../modules/music-platform/connectorAuth', () => ({
+  listPlatformConnectorDefinitions: listPlatformConnectorDefinitionsMock,
 }));
 
 import type { Track } from './types';
@@ -40,6 +44,10 @@ function createTrack(input: Partial<Track>): Track {
 }
 
 describe('platformPlaybackResolver', () => {
+  beforeEach(() => {
+    listPlatformConnectorDefinitionsMock.mockClear();
+  });
+
   it('resolves bilibili playback identity from prefixed ids and remote locators', () => {
     const identity = resolvePlatformPlaybackIdentity(
       createTrack({
@@ -52,6 +60,7 @@ describe('platformPlaybackResolver', () => {
       connectorId: BILIBILI_PLATFORM_CONNECTOR_ID,
       sourceLocator: 'https://www.bilibili.com/video/BV1-test',
     });
+    expect(listPlatformConnectorDefinitionsMock).not.toHaveBeenCalled();
   });
 
   it('resolves netease playback identity from custom locator schemes', () => {
@@ -66,9 +75,10 @@ describe('platformPlaybackResolver', () => {
       connectorId: NETEASE_PLATFORM_CONNECTOR_ID,
       sourceLocator: 'netease://song/1',
     });
+    expect(listPlatformConnectorDefinitionsMock).not.toHaveBeenCalled();
   });
 
-  it('resolves generic pack connectors from registered workspace kinds', () => {
+  it('does not consult registered workspace kinds on the default playback path', () => {
     const identity = resolvePlatformPlaybackIdentity(
       createTrack({
         id: 'episode-42',
@@ -76,10 +86,24 @@ describe('platformPlaybackResolver', () => {
       })
     );
 
+    expect(identity).toBeNull();
+    expect(listPlatformConnectorDefinitionsMock).not.toHaveBeenCalled();
+  });
+
+  it('resolves generic pack connectors from registered workspace kinds when requested', () => {
+    const identity = resolvePlatformPlaybackIdentity(
+      createTrack({
+        id: 'episode-42',
+        originalPath: 'videohub://episode/42',
+      }),
+      { includeRegistry: true }
+    );
+
     expect(identity).toMatchObject({
       connectorId: 'connector.platform.videohub',
       sourceLocator: 'videohub://episode/42',
     });
+    expect(listPlatformConnectorDefinitionsMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not misclassify local files as platform playback', () => {

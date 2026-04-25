@@ -50,6 +50,7 @@ export type MemoryGovernanceSnapshot = {
     activeSpaceId: string | null;
     frozenSpaceIds: string[];
     heavySpaceIds: string[];
+    zeroAssociationSpaceIds?: string[];
     reclaimableSpaceIds: string[];
     lastSwitchAt: number | null;
   };
@@ -143,7 +144,7 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
 
   const actions: MemoryGovernanceAction[] = [];
 
-  if (reclaimableSpaceCount > 0 && tier >= 1) {
+  if (reclaimableSpaceCount > 0) {
     actions.push('teardown-reclaimable-spaces');
   }
 

@@ -146,6 +146,43 @@ function normalizeSpaceLayoutWithSystemAnchors(
   };
 }
 
+type MagnetRuntimeAssociation = {
+  spaceId: string;
+  resourceId: string;
+  isBackground: boolean;
+  requireActivatedBackground: boolean;
+};
+
+function resolveMagnetRuntimeAssociation(
+  magnet: Magnet,
+  activeSpaceId: string
+): MagnetRuntimeAssociation | null {
+  const runtime = magnet.runtime;
+  if (!runtime) return null;
+  if (
+    runtime.memoryTier !== 'heavy' &&
+    runtime.releaseOnSpaceExit !== true &&
+    runtime.backgroundCapable !== true
+  ) {
+    return null;
+  }
+
+  const spaceId = (runtime.spaceId ?? activeSpaceId).trim();
+  if (!spaceId) return null;
+
+  const isBackground = spaceId !== activeSpaceId;
+  if (isBackground && runtime.backgroundCapable !== true) {
+    return null;
+  }
+
+  return {
+    spaceId,
+    resourceId: `magnet:${magnet.id}`,
+    isBackground,
+    requireActivatedBackground: runtime.backgroundAfterFirstActivationOnly !== false,
+  };
+}
+
 export function MagnetLibraryProvider({
   children,
   gridSize,
@@ -286,6 +323,42 @@ export function MagnetLibraryProvider({
   const activeMagnets = useMemo(() => {
     return magnetLibrary.filter((m) => activeMagnetIds.has(m.id));
   }, [magnetLibrary, activeMagnetIds]);
+
+  const activeRuntimeAssociations = useMemo(
+    () =>
+      activeMagnets
+        .map((magnet) => resolveMagnetRuntimeAssociation(magnet, activeSpaceId))
+        .filter((association): association is MagnetRuntimeAssociation => association !== null),
+    [activeMagnets, activeSpaceId]
+  );
+
+  useEffect(() => {
+    if (!spaceRuntimeGovernance || activeRuntimeAssociations.length === 0) return;
+
+    const releases: Array<() => void> = [];
+    for (const association of activeRuntimeAssociations) {
+      if (
+        association.isBackground &&
+        association.requireActivatedBackground &&
+        !spaceRuntimeGovernance.canRunBackground(association.spaceId)
+      ) {
+        continue;
+      }
+
+      releases.push(
+        spaceRuntimeGovernance.retainSpaceAssociation(
+          association.spaceId,
+          association.resourceId
+        )
+      );
+    }
+
+    return () => {
+      for (const release of releases) {
+        release();
+      }
+    };
+  }, [activeRuntimeAssociations, spaceRuntimeGovernance]);
 
   const buildLayoutSnapshot = useCallback(
     (library: Magnet[], activeIds: Set<string>): MagnetSpaceLayout => {

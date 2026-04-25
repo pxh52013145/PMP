@@ -150,6 +150,16 @@ export interface MagnetChromeConfig {
   outset?: MagnetInsetConfig;
 }
 
+export type MagnetRuntimeMemoryTier = 'light' | 'medium' | 'heavy';
+
+export interface MagnetRuntimeConfig {
+  memoryTier?: MagnetRuntimeMemoryTier;
+  spaceId?: string;
+  releaseOnSpaceExit?: boolean;
+  backgroundCapable?: boolean;
+  backgroundAfterFirstActivationOnly?: boolean;
+}
+
 /**
  * Magnet（磁性组件）
  * 核心设计：通过锚点（PixelAnchor）吸附到 Pixel 上，实现响应式布局
@@ -189,6 +199,9 @@ export interface Magnet {
 
   // Host-managed visual chrome. Inset affects the internal frame; outset only expands visual chrome.
   chrome?: MagnetChromeConfig;
+
+  // Host runtime hints for space-scoped heavy renderers and background eligibility.
+  runtime?: MagnetRuntimeConfig;
 
   // 动画配置（可选）
   animation?: MagnetAnimation;

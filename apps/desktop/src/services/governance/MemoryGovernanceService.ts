@@ -129,7 +129,7 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       if (action === 'teardown-reclaimable-spaces') {
         const reclaimed = this.spaceRuntimeGovernance?.reclaim({
           reason: `memory-governance:${reason}`,
-          minTier: plan.tier,
+          minTier: Math.max(1, plan.tier),
         }) ?? [];
         if (reclaimed.length > 0) {
           executed.push(action);
@@ -298,6 +298,7 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
             activeSpaceId: spaceRuntimeSnapshot.activeSpaceId,
             frozenSpaceIds: spaceRuntimeSnapshot.frozenSpaceIds,
             heavySpaceIds: spaceRuntimeSnapshot.heavySpaceIds,
+            zeroAssociationSpaceIds: spaceRuntimeSnapshot.zeroAssociationSpaceIds,
             reclaimableSpaceIds: spaceRuntimeSnapshot.reclaimableSpaceIds,
             lastSwitchAt: spaceRuntimeSnapshot.lastSwitchAt,
           }

@@ -101,7 +101,6 @@ import {
   type NativeLibraryPlaylistItemRecord,
   type NativeLibraryPlaylistRecord,
 } from '../../modules/music-library';
-import { preparePlatformPlayback } from '../../modules/music-platform/platformFacade';
 import { resolvePlaylistTrackIndexes } from '../../modules/playlists/runtimeProjection';
 import { readString, removeKey } from '../../modules/storage';
 import {
@@ -609,6 +608,7 @@ export class NativeAudioService implements IAudioService {
     const sourceLocator = identity.sourceLocator;
 
     try {
+      const { preparePlatformPlayback } = await import('../../modules/music-platform/platformFacade');
       const preparedResult = await preparePlatformPlayback({
         connectorId: identity.connectorId,
         sourceLocator,

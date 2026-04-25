@@ -9,6 +9,10 @@ type PlatformPlaybackConnectorHint = {
   tokens: string[];
 };
 
+export type ResolvePlatformPlaybackIdentityOptions = {
+  includeRegistry?: boolean;
+};
+
 export type PlatformPlaybackIdentity = {
   connectorId: string;
   sourceLocator: string | null;
@@ -43,11 +47,20 @@ function readBuiltinConnectorHints(): PlatformPlaybackConnectorHint[] {
   ];
 }
 
-function listPlatformPlaybackConnectorHints(): PlatformPlaybackConnectorHint[] {
+function listPlatformPlaybackConnectorHints(
+  options: ResolvePlatformPlaybackIdentityOptions = {}
+): PlatformPlaybackConnectorHint[] {
   const merged = new Map<string, Set<string>>();
 
   for (const builtin of readBuiltinConnectorHints()) {
     merged.set(builtin.connectorId, new Set(builtin.tokens));
+  }
+
+  if (!options.includeRegistry) {
+    return Array.from(merged.entries()).map(([connectorId, tokens]) => ({
+      connectorId,
+      tokens: Array.from(tokens.values()).filter((token) => token.length > 0),
+    }));
   }
 
   try {
@@ -187,23 +200,30 @@ function resolvePlatformSourceLocatorFromTrack(
   return null;
 }
 
-export function isBilibiliSourceLocator(value: string | null | undefined): boolean {
-  const hint = findConnectorHintBySourceLocator(value, listPlatformPlaybackConnectorHints());
+export function isBilibiliSourceLocator(
+  value: string | null | undefined,
+  options: ResolvePlatformPlaybackIdentityOptions = {}
+): boolean {
+  const hint = findConnectorHintBySourceLocator(value, listPlatformPlaybackConnectorHints(options));
   return hint?.connectorId === BILIBILI_PLATFORM_CONNECTOR_ID;
 }
 
-export function resolveBilibiliSourceLocatorFromTrack(track: Track): string | null {
-  const hints = listPlatformPlaybackConnectorHints();
+export function resolveBilibiliSourceLocatorFromTrack(
+  track: Track,
+  options: ResolvePlatformPlaybackIdentityOptions = {}
+): string | null {
+  const hints = listPlatformPlaybackConnectorHints(options);
   const hintedConnector = findConnectorHintByTrackId(track.id, hints);
   const sourceLocator = resolvePlatformSourceLocatorFromTrack(track, hints, hintedConnector);
-  return isBilibiliSourceLocator(sourceLocator) ? sourceLocator : null;
+  return isBilibiliSourceLocator(sourceLocator, options) ? sourceLocator : null;
 }
 
 export function inferPlatformConnectorIdFromTrack(
   track: Track,
-  sourceLocator: string | null
+  sourceLocator: string | null,
+  options: ResolvePlatformPlaybackIdentityOptions = {}
 ): string | null {
-  const hints = listPlatformPlaybackConnectorHints();
+  const hints = listPlatformPlaybackConnectorHints(options);
   const trackIdHint = findConnectorHintByTrackId(track.id, hints);
   if (trackIdHint) {
     return trackIdHint.connectorId;
@@ -224,8 +244,11 @@ export function buildStablePlatformEntryId(connectorId: string, sourceKey: strin
   return `entry::platform::${safeConnectorId}::${hashHex}`;
 }
 
-export function resolvePlatformPlaybackIdentity(track: Track): PlatformPlaybackIdentity | null {
-  const hints = listPlatformPlaybackConnectorHints();
+export function resolvePlatformPlaybackIdentity(
+  track: Track,
+  options: ResolvePlatformPlaybackIdentityOptions = {}
+): PlatformPlaybackIdentity | null {
+  const hints = listPlatformPlaybackConnectorHints(options);
   const hintedConnector = findConnectorHintByTrackId(track.id, hints);
   const sourceLocator = resolvePlatformSourceLocatorFromTrack(track, hints, hintedConnector);
   const connectorId =
