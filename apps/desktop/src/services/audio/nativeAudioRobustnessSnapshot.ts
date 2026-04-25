@@ -8,6 +8,7 @@ type NativeAudioRobustnessSnapshotSourceRecord = {
   currentOutputBackendId: AudioRobustnessSnapshot['outputBackendId'];
   availableOutputBackends: AudioRobustnessSnapshot['outputBackends'];
   lastSchedulerProfile?: AudioRobustnessSnapshot['schedulerProfile'];
+  stabilityProfile?: AudioRobustnessSnapshot['stabilityProfile'];
   transportMode?: AudioRobustnessSnapshot['transportMode'];
   hqSrcPhaseMode?: AudioRobustnessSnapshot['hqSrcPhaseMode'];
   srcMode?: AudioRobustnessSnapshot['srcMode'];
@@ -203,6 +204,7 @@ export function buildNativeAudioRobustnessSnapshot(
     outputBackendId: sourceRecord.currentOutputBackendId,
     outputBackends: [...sourceRecord.availableOutputBackends],
     schedulerProfile: sourceRecord.lastSchedulerProfile,
+    stabilityProfile: sourceRecord.stabilityProfile,
     transportMode: sourceRecord.transportMode,
     hqSrcPhaseMode: sourceRecord.hqSrcPhaseMode,
     srcMode: sourceRecord.srcMode,

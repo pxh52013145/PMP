@@ -297,6 +297,7 @@ pub async fn native_audio_get_engine_policy(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn native_audio_set_engine_policy(
     app: tauri::AppHandle,
+    stability_profile: Option<native_audio::NativeAudioStabilityProfile>,
     transport_mode: Option<native_audio::NativeAudioTransportMode>,
     hq_src_enabled: Option<bool>,
     hq_src_phase_mode: Option<native_audio::NativeAudioHqSrcPhaseMode>,
@@ -307,6 +308,7 @@ pub async fn native_audio_set_engine_policy(
 ) -> Result<native_audio::NativeAudioEnginePolicyPayload, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let patch = native_audio::NativeAudioEnginePolicyPatch {
+            stability_profile,
             transport_mode,
             hq_src_enabled,
             hq_src_phase_mode,

@@ -114,7 +114,15 @@ export interface AudioProtectionWindowOptions {
   durationMs?: number;
 }
 
+export type AudioStabilityProfile =
+  | 'low-latency'
+  | 'balanced'
+  | 'stable'
+  | 'game-safe'
+  | 'safe-mode';
+
 export interface AudioEnginePolicyPatch {
+  stabilityProfile?: AudioStabilityProfile;
   transportMode?: 'robust' | 'transport-exact';
   hqSrcEnabled?: boolean;
   hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
@@ -187,6 +195,7 @@ export interface AudioRobustnessSnapshot {
   outputBackendId: string | null;
   outputBackends: string[];
   schedulerProfile?: 'normal' | 'guarded' | 'critical';
+  stabilityProfile?: AudioStabilityProfile;
   transportMode?: 'robust' | 'transport-exact';
   hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
   srcMode?: 'source-native' | 'match-output' | 'target-rate';

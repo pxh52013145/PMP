@@ -25,6 +25,7 @@ pub(crate) mod realtime_scheduler;
 pub(crate) mod resample;
 pub(crate) mod retire_plane;
 pub(crate) mod spectrum;
+pub(crate) mod stability;
 pub(crate) mod threading;
 
 pub(crate) fn shutdown() {

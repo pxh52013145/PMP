@@ -35,7 +35,7 @@ use crate::audio::pipeline::{boxed_with_dsp, DspNodeConfig, DspRuntime, Spectrum
 use crate::audio::policy::{
     NativeAudioEnginePolicyPatch, NativeAudioEnginePolicyPayload, NativeAudioHqSrcPhaseMode,
     NativeAudioOutputQuantizationMode, NativeAudioSrcBackend, NativeAudioSrcMode,
-    NativeAudioTransportMode,
+    NativeAudioStabilityProfile, NativeAudioTransportMode,
 };
 use crate::audio::realtime_scheduler::{RealtimePressureProfile, SCHEDULER};
 
@@ -627,6 +627,7 @@ pub(crate) struct NativeAudioEngine {
     streaming_decode_mode: AudioInputDecodeMode,
     streaming_interactive_profile: InteractivePrebufferProfile,
     transport_mode: NativeAudioTransportMode,
+    stability_profile: NativeAudioStabilityProfile,
     hq_src_enabled: bool,
     hq_src_phase_mode: NativeAudioHqSrcPhaseMode,
     src_mode: NativeAudioSrcMode,
@@ -900,6 +901,7 @@ impl NativeAudioEngine {
     fn new_with_backend(output_backend: Arc<dyn AudioOutputBackend>) -> Self {
         output_backend.set_transport_mode(NativeAudioTransportMode::Robust);
         output_backend.set_output_quantization_mode(NativeAudioOutputQuantizationMode::Round);
+        crate::audio::stability::set_stability_profile(NativeAudioStabilityProfile::Balanced);
         let shared_output_backend = is_shared_output_backend(output_backend.id());
         info_log(format!(
             "[NativeAudio] Output backend: {}",
@@ -974,6 +976,7 @@ impl NativeAudioEngine {
             streaming_decode_mode: AudioInputDecodeMode::Streaming,
             streaming_interactive_profile: parse_interactive_prebuffer_profile(),
             transport_mode: NativeAudioTransportMode::Robust,
+            stability_profile: NativeAudioStabilityProfile::Balanced,
             hq_src_enabled: default_hq_src_enabled,
             hq_src_phase_mode: NativeAudioHqSrcPhaseMode::Linear,
             src_mode: NativeAudioSrcMode::MatchOutput,
@@ -4885,6 +4888,7 @@ mod tests {
     fn transport_exact_policy_patch_updates_mode_and_phase() {
         let mut engine = NativeAudioEngine::new();
         let patch = NativeAudioEnginePolicyPatch {
+            stability_profile: Some(NativeAudioStabilityProfile::Stable),
             transport_mode: Some(NativeAudioTransportMode::TransportExact),
             hq_src_enabled: Some(true),
             hq_src_phase_mode: Some(NativeAudioHqSrcPhaseMode::Linear),
@@ -4895,6 +4899,10 @@ mod tests {
         };
 
         let (next, _) = engine.apply_engine_policy_patch(patch);
+        assert!(matches!(
+            next.stability_profile,
+            NativeAudioStabilityProfile::Stable
+        ));
         assert!(matches!(
             next.transport_mode,
             NativeAudioTransportMode::TransportExact

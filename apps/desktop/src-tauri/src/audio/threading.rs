@@ -143,7 +143,7 @@ pub(crate) fn promote_current_thread_for_audio_output() -> ThreadPriorityGuard {
         use windows::core::w;
         use windows::Win32::System::Threading::{
             AvSetMmThreadCharacteristicsW, AvSetMmThreadPriority, GetCurrentThread,
-            SetThreadPriority, AVRT_PRIORITY_HIGH, THREAD_PRIORITY_HIGHEST,
+            SetThreadPriority, AVRT_PRIORITY_CRITICAL, THREAD_PRIORITY_HIGHEST,
         };
 
         unsafe {
@@ -159,7 +159,7 @@ pub(crate) fn promote_current_thread_for_audio_output() -> ThreadPriorityGuard {
 
         if let Some(handle) = handle {
             unsafe {
-                let _ = AvSetMmThreadPriority(handle, AVRT_PRIORITY_HIGH);
+                let _ = AvSetMmThreadPriority(handle, AVRT_PRIORITY_CRITICAL);
             }
         }
 

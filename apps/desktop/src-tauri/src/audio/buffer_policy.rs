@@ -1,10 +1,11 @@
 use once_cell::sync::Lazy;
 use std::time::Duration;
 
+use crate::audio::policy::NativeAudioStabilityProfile;
 use crate::audio::realtime_scheduler::RealtimePressureProfile;
+use crate::audio::stability;
 
 const DEFAULT_SAMPLE_RATE: u32 = 48_000;
-const DEFAULT_RENDER_QUEUE_SECONDS: f64 = 1.5;
 const MIN_RENDER_QUEUE_SECONDS: f64 = 0.2;
 const MAX_RENDER_QUEUE_SECONDS: f64 = 4.0;
 const MIN_RENDER_QUEUE_SAMPLES: usize = 16_384;
@@ -107,18 +108,7 @@ fn backend_buffer_policy_pack(output_backend_id: &str) -> BackendBufferPolicyPac
             rebuffer_enter_floor_frames: 48,
             rebuffer_resume_floor_frames: 96,
         },
-        "wasapi-shared-raw" => BackendBufferPolicyPack {
-            start_seek_prebuffer_seconds: 0.40,
-            crossfade_prebuffer_seconds: 0.92,
-            min_start_cap_seconds: 0.48,
-            min_start_floor_seconds: 0.17,
-            recovery_cap_seconds: 1.10,
-            recovery_floor_seconds: 0.42,
-            rebuffer_enter_divisor: 3,
-            rebuffer_resume_divisor: 2,
-            rebuffer_enter_floor_frames: 80,
-            rebuffer_resume_floor_frames: 160,
-        },
+        "wasapi-shared-raw" => wasapi_shared_raw_policy_pack(stability::current_stability_profile()),
         "rodio-cpal" => BackendBufferPolicyPack {
             start_seek_prebuffer_seconds: 0.55,
             crossfade_prebuffer_seconds: 0.95,
@@ -154,6 +144,73 @@ fn backend_buffer_policy_pack(output_backend_id: &str) -> BackendBufferPolicyPac
             rebuffer_resume_divisor: 2,
             rebuffer_enter_floor_frames: 64,
             rebuffer_resume_floor_frames: 128,
+        },
+    }
+}
+
+fn wasapi_shared_raw_policy_pack(
+    profile: NativeAudioStabilityProfile,
+) -> BackendBufferPolicyPack {
+    match profile {
+        NativeAudioStabilityProfile::LowLatency => BackendBufferPolicyPack {
+            start_seek_prebuffer_seconds: 0.36,
+            crossfade_prebuffer_seconds: 0.90,
+            min_start_cap_seconds: 0.44,
+            min_start_floor_seconds: 0.16,
+            recovery_cap_seconds: 1.00,
+            recovery_floor_seconds: 0.36,
+            rebuffer_enter_divisor: 3,
+            rebuffer_resume_divisor: 2,
+            rebuffer_enter_floor_frames: 80,
+            rebuffer_resume_floor_frames: 160,
+        },
+        NativeAudioStabilityProfile::Balanced => BackendBufferPolicyPack {
+            start_seek_prebuffer_seconds: 0.52,
+            crossfade_prebuffer_seconds: 1.05,
+            min_start_cap_seconds: 0.62,
+            min_start_floor_seconds: 0.24,
+            recovery_cap_seconds: 1.55,
+            recovery_floor_seconds: 0.70,
+            rebuffer_enter_divisor: 3,
+            rebuffer_resume_divisor: 2,
+            rebuffer_enter_floor_frames: 80,
+            rebuffer_resume_floor_frames: 160,
+        },
+        NativeAudioStabilityProfile::Stable => BackendBufferPolicyPack {
+            start_seek_prebuffer_seconds: 0.72,
+            crossfade_prebuffer_seconds: 1.35,
+            min_start_cap_seconds: 0.85,
+            min_start_floor_seconds: 0.36,
+            recovery_cap_seconds: 2.20,
+            recovery_floor_seconds: 1.10,
+            rebuffer_enter_divisor: 3,
+            rebuffer_resume_divisor: 2,
+            rebuffer_enter_floor_frames: 96,
+            rebuffer_resume_floor_frames: 192,
+        },
+        NativeAudioStabilityProfile::GameSafe => BackendBufferPolicyPack {
+            start_seek_prebuffer_seconds: 0.95,
+            crossfade_prebuffer_seconds: 1.60,
+            min_start_cap_seconds: 1.10,
+            min_start_floor_seconds: 0.50,
+            recovery_cap_seconds: 2.80,
+            recovery_floor_seconds: 1.40,
+            rebuffer_enter_divisor: 2,
+            rebuffer_resume_divisor: 1,
+            rebuffer_enter_floor_frames: 128,
+            rebuffer_resume_floor_frames: 256,
+        },
+        NativeAudioStabilityProfile::SafeMode => BackendBufferPolicyPack {
+            start_seek_prebuffer_seconds: 1.20,
+            crossfade_prebuffer_seconds: 1.90,
+            min_start_cap_seconds: 1.40,
+            min_start_floor_seconds: 0.70,
+            recovery_cap_seconds: 3.20,
+            recovery_floor_seconds: 1.70,
+            rebuffer_enter_divisor: 2,
+            rebuffer_resume_divisor: 1,
+            rebuffer_enter_floor_frames: 160,
+            rebuffer_resume_floor_frames: 320,
         },
     }
 }
@@ -289,7 +346,7 @@ pub(crate) fn recommended_render_queue_capacity_samples(
 ) -> usize {
     let seconds = parse_env_f64(
         "PMP_AUDIO_RENDER_QUEUE_SECONDS",
-        DEFAULT_RENDER_QUEUE_SECONDS,
+        stability::render_queue_seconds_default(),
         MIN_RENDER_QUEUE_SECONDS,
         MAX_RENDER_QUEUE_SECONDS,
     );
@@ -374,7 +431,12 @@ pub(crate) fn wasapi_start_prefill_samples(
     shared_raw: bool,
 ) -> usize {
     let target_ms = if shared_raw {
-        parse_env_u64("PMP_AUDIO_WASAPI_SHARED_RAW_PREFILL_MS", 240, 20, 2000)
+        parse_env_u64(
+            "PMP_AUDIO_WASAPI_SHARED_RAW_PREFILL_MS",
+            stability::wasapi_shared_raw_prefill_ms_default(),
+            20,
+            2000,
+        )
     } else {
         parse_env_u64("PMP_AUDIO_WASAPI_EXCLUSIVE_PREFILL_MS", 150, 20, 2000)
     };
@@ -404,7 +466,7 @@ pub(crate) fn wasapi_start_prefill_timeout(shared_raw: bool) -> Duration {
     let timeout_ms = if shared_raw {
         parse_env_u64(
             "PMP_AUDIO_WASAPI_SHARED_RAW_PREFILL_TIMEOUT_MS",
-            320,
+            stability::wasapi_shared_raw_prefill_timeout_ms_default(),
             40,
             3000,
         )

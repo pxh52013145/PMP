@@ -461,8 +461,12 @@ pub(crate) fn wrap_source_for_shared_backend(
     let sample_rate = source.sample_rate().max(1);
     let duration = source.total_duration();
 
-    let prebuffer_seconds =
-        parse_env_seconds("PMP_AUDIO_SHARED_RENDER_AHEAD_SECONDS", 0.65, 0.2, 8.0);
+    let prebuffer_seconds = parse_env_seconds(
+        "PMP_AUDIO_SHARED_RENDER_AHEAD_SECONDS",
+        crate::audio::stability::shared_render_ahead_seconds_default(),
+        0.2,
+        8.0,
+    );
     let prebuffer_samples =
         ((sample_rate as f64) * (channels as f64) * prebuffer_seconds).ceil() as usize;
     let policy_capacity_scale = parse_env_seconds(
@@ -502,7 +506,7 @@ pub(crate) fn wrap_source_for_shared_backend(
 
     let prebuffer_target_seconds = parse_env_seconds(
         "PMP_AUDIO_SHARED_RENDER_AHEAD_PREROLL_SECONDS",
-        0.20,
+        crate::audio::stability::shared_render_ahead_preroll_seconds_default(),
         0.02,
         1.2,
     );

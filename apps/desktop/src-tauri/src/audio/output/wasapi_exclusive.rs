@@ -2136,7 +2136,7 @@ impl MmcssRegistration {
 
             let _ = AvSetMmThreadPriority(
                 handle,
-                windows::Win32::System::Threading::AVRT_PRIORITY_HIGH,
+                windows::Win32::System::Threading::AVRT_PRIORITY_CRITICAL,
             );
             Some(Self { handle })
         }

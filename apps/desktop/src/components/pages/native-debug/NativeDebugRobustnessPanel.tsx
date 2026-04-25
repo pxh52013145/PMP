@@ -3,6 +3,7 @@ import { AudioRobustnessSnapshot } from '../../../services/audio';
 export type NativeDebugRobustnessMetricsView = {
   backend: string;
   scheduler: string;
+  stability: string;
   transport: string;
   srcBackend: string;
   quantization: string;
@@ -105,6 +106,12 @@ export function NativeDebugRobustnessPanel({
           <div className="native-debug-metrics-row">
             <span className="native-debug-metrics-label">{t('settings.audioAdvanced.monitor.scheduler')}</span>
             <span className="native-debug-metrics-value">{robustnessMetricsView.scheduler}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">
+              {t('settings.audioAdvanced.enginePolicy.stabilityProfile.label')}
+            </span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.stability}</span>
           </div>
           <div className="native-debug-metrics-row">
             <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.transport.mode')}</span>
@@ -407,6 +414,10 @@ export function NativeDebugRobustnessPanel({
           <p className="device-value">
             {robustness.underrunRecoveryActive ? t('common.state.on') : t('common.state.off')}
           </p>
+        </div>
+        <div className="robustness-item">
+          <p className="device-label">{t('settings.audioAdvanced.enginePolicy.stabilityProfile.label')}</p>
+          <p className="device-value">{robustnessMetricsView.stability}</p>
         </div>
         <div className="robustness-item">
           <p className="device-label">{t('pages.native-debug.robustness.transport.mode')}</p>

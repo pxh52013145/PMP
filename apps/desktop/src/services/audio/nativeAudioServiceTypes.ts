@@ -1,6 +1,7 @@
 import type {
   AudioEnginePolicyPatch,
   AudioRobustnessSnapshot,
+  AudioStabilityProfile,
   AudioState,
   PlaybackState,
 } from './types';
@@ -23,6 +24,7 @@ export type NativeAudioStatePayload = {
   underrunEvents?: number;
   underrunFrames?: number;
   schedulerProfile?: 'normal' | 'guarded' | 'critical';
+  stabilityProfile?: AudioStabilityProfile;
   transportMode?: 'robust' | 'transport-exact';
   hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
   srcMode?: 'source-native' | 'match-output' | 'target-rate';
@@ -96,6 +98,7 @@ export type NativeAudioStatePayload = {
 };
 
 export type NativeAudioEnginePolicyPayload = {
+  stabilityProfile?: AudioStabilityProfile;
   transportMode?: 'robust' | 'transport-exact';
   hqSrcEnabled?: boolean;
   hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';

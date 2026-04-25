@@ -8,6 +8,7 @@ import {
   AudioDynamicSrcAutoSettings,
   AudioProtectionWindowOptions,
   AudioRobustnessSnapshot,
+  AudioStabilityProfile,
   AudioTuningAutoSettings,
   AudioTuningAutoSettingsPatch,
   AudioTuningProfileId,
@@ -351,6 +352,7 @@ export class NativeAudioService implements IAudioService {
   private lastAutoBackendSwitchAtMs: number | null = null;
   private lastAutoBackendSwitchReason: string | null = null;
   private lastSchedulerProfile: 'normal' | 'guarded' | 'critical' = 'normal';
+  private stabilityProfile: AudioStabilityProfile = 'balanced';
   private transportMode: 'robust' | 'transport-exact' = 'robust';
   private hqSrcPhaseMode: 'linear' | 'minimum' | 'intermediate' = 'linear';
   private srcMode: 'source-native' | 'match-output' | 'target-rate' = 'match-output';
@@ -2148,6 +2150,16 @@ export class NativeAudioService implements IAudioService {
       const record = parsed as Record<string, unknown>;
       const patch: NativeAudioEnginePolicyPatch = {};
 
+      if (
+        record.stabilityProfile === 'low-latency' ||
+        record.stabilityProfile === 'balanced' ||
+        record.stabilityProfile === 'stable' ||
+        record.stabilityProfile === 'game-safe' ||
+        record.stabilityProfile === 'safe-mode'
+      ) {
+        patch.stabilityProfile = record.stabilityProfile;
+      }
+
       if (record.transportMode === 'robust' || record.transportMode === 'transport-exact') {
         patch.transportMode = record.transportMode;
       }
@@ -2198,6 +2210,7 @@ export class NativeAudioService implements IAudioService {
 
   private buildPersistedEnginePolicyPayload(): NativeAudioEnginePolicyPatch {
     return {
+      stabilityProfile: this.stabilityProfile,
       transportMode: this.transportMode,
       hqSrcPhaseMode: this.hqSrcPhaseMode,
       srcMode: this.srcMode,
@@ -3197,6 +3210,16 @@ export class NativeAudioService implements IAudioService {
     if (!payload || typeof payload !== 'object') return;
     const policy = payload as NativeAudioEnginePolicyPayload;
 
+    if (
+      policy.stabilityProfile === 'low-latency' ||
+      policy.stabilityProfile === 'balanced' ||
+      policy.stabilityProfile === 'stable' ||
+      policy.stabilityProfile === 'game-safe' ||
+      policy.stabilityProfile === 'safe-mode'
+    ) {
+      this.stabilityProfile = policy.stabilityProfile;
+    }
+
     if (policy.transportMode === 'robust' || policy.transportMode === 'transport-exact') {
       this.transportMode = policy.transportMode;
     }
@@ -3258,6 +3281,15 @@ export class NativeAudioService implements IAudioService {
     options?: { fromDynamicAuto?: boolean }
   ): Promise<void> {
     const normalized: NativeAudioEnginePolicyPatch = {};
+    if (
+      patch.stabilityProfile === 'low-latency' ||
+      patch.stabilityProfile === 'balanced' ||
+      patch.stabilityProfile === 'stable' ||
+      patch.stabilityProfile === 'game-safe' ||
+      patch.stabilityProfile === 'safe-mode'
+    ) {
+      normalized.stabilityProfile = patch.stabilityProfile;
+    }
     if (patch.transportMode === 'robust' || patch.transportMode === 'transport-exact') {
       normalized.transportMode = patch.transportMode;
     }

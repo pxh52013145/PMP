@@ -143,6 +143,7 @@ const PROFILE_DEFINITIONS: Record<AudioTuningProfileId, ProfileDefinition> = {
       },
     },
     enginePolicy: {
+      stabilityProfile: 'low-latency',
       transportMode: 'robust',
       srcMode: 'match-output',
       srcBackend: 'rubato',
@@ -185,6 +186,7 @@ const PROFILE_DEFINITIONS: Record<AudioTuningProfileId, ProfileDefinition> = {
       },
     },
     enginePolicy: {
+      stabilityProfile: 'balanced',
       transportMode: 'robust',
       srcMode: 'match-output',
       srcBackend: 'rubato',
@@ -227,6 +229,7 @@ const PROFILE_DEFINITIONS: Record<AudioTuningProfileId, ProfileDefinition> = {
       },
     },
     enginePolicy: {
+      stabilityProfile: 'game-safe',
       transportMode: 'robust',
       srcMode: 'match-output',
       srcBackend: 'rubato',

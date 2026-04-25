@@ -40,6 +40,7 @@ pub struct NativeAudioStatePayload {
     pub underrun_events: u64,
     pub underrun_frames: u64,
     pub scheduler_profile: Option<String>,
+    pub stability_profile: Option<String>,
     pub transport_mode: Option<String>,
     pub hq_src_phase_mode: Option<String>,
     pub src_mode: Option<String>,

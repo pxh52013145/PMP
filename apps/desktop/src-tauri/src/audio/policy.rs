@@ -18,6 +18,39 @@ impl NativeAudioTransportMode {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+#[repr(u8)]
+pub enum NativeAudioStabilityProfile {
+    LowLatency = 0,
+    Balanced = 1,
+    Stable = 2,
+    GameSafe = 3,
+    SafeMode = 4,
+}
+
+impl NativeAudioStabilityProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LowLatency => "low-latency",
+            Self::Balanced => "balanced",
+            Self::Stable => "stable",
+            Self::GameSafe => "game-safe",
+            Self::SafeMode => "safe-mode",
+        }
+    }
+
+    pub(crate) fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::LowLatency,
+            2 => Self::Stable,
+            3 => Self::GameSafe,
+            4 => Self::SafeMode,
+            _ => Self::Balanced,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum NativeAudioHqSrcPhaseMode {
     Linear,
@@ -88,6 +121,7 @@ impl NativeAudioOutputQuantizationMode {
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeAudioEnginePolicyPayload {
+    pub stability_profile: NativeAudioStabilityProfile,
     pub transport_mode: NativeAudioTransportMode,
     pub hq_src_enabled: bool,
     pub hq_src_phase_mode: NativeAudioHqSrcPhaseMode,
@@ -102,6 +136,7 @@ pub struct NativeAudioEnginePolicyPayload {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeAudioEnginePolicyPatch {
+    pub stability_profile: Option<NativeAudioStabilityProfile>,
     pub transport_mode: Option<NativeAudioTransportMode>,
     pub hq_src_enabled: Option<bool>,
     pub hq_src_phase_mode: Option<NativeAudioHqSrcPhaseMode>,
@@ -113,7 +148,8 @@ pub struct NativeAudioEnginePolicyPatch {
 
 impl NativeAudioEnginePolicyPatch {
     pub fn is_noop(&self) -> bool {
-        self.transport_mode.is_none()
+        self.stability_profile.is_none()
+            && self.transport_mode.is_none()
             && self.hq_src_enabled.is_none()
             && self.hq_src_phase_mode.is_none()
             && self.src_mode.is_none()

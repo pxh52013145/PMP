@@ -77,6 +77,7 @@ impl NativeAudioEngine {
 
     pub(crate) fn engine_policy_payload(&self) -> NativeAudioEnginePolicyPayload {
         NativeAudioEnginePolicyPayload {
+            stability_profile: self.stability_profile,
             transport_mode: self.transport_mode,
             hq_src_enabled: self.hq_src_enabled,
             hq_src_phase_mode: self.hq_src_phase_mode,
@@ -95,6 +96,10 @@ impl NativeAudioEngine {
     ) -> (NativeAudioEnginePolicyPayload, bool) {
         let mut src_changed = false;
 
+        if let Some(profile) = patch.stability_profile {
+            self.stability_profile = profile;
+            crate::audio::stability::set_stability_profile(profile);
+        }
         if let Some(mode) = patch.transport_mode {
             self.transport_mode = mode;
             self.output_backend.set_transport_mode(mode);

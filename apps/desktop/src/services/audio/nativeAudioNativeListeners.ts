@@ -1,5 +1,10 @@
 ﻿import { listen } from '@tauri-apps/api/event';
-import type { AudioSpectrumFrame, AudioSpectrumTap, AudioState } from './types';
+import type {
+  AudioSpectrumFrame,
+  AudioSpectrumTap,
+  AudioStabilityProfile,
+  AudioState,
+} from './types';
 import type {
   NativeAudioErrorPayload,
   NativeAudioSpectrumPayload,
@@ -25,6 +30,7 @@ export type NativeAudioListenerHost = {
   lastUnderrunFrames: number;
   lastNativeErrorSeq: number;
   lastSchedulerProfile?: 'normal' | 'guarded' | 'critical';
+  stabilityProfile?: AudioStabilityProfile;
   transportMode?: 'robust' | 'transport-exact';
   hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
   srcMode?: 'source-native' | 'match-output' | 'target-rate';
@@ -192,6 +198,16 @@ export async function setupNativeListenersImpl(
           next.schedulerProfile === 'critical'
         ) {
           this.lastSchedulerProfile = next.schedulerProfile;
+        }
+
+        if (
+          next.stabilityProfile === 'low-latency' ||
+          next.stabilityProfile === 'balanced' ||
+          next.stabilityProfile === 'stable' ||
+          next.stabilityProfile === 'game-safe' ||
+          next.stabilityProfile === 'safe-mode'
+        ) {
+          this.stabilityProfile = next.stabilityProfile;
         }
 
         if (next.transportMode === 'robust' || next.transportMode === 'transport-exact') {

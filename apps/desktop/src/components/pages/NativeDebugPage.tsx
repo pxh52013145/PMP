@@ -1813,6 +1813,19 @@ export const NativeDebugPage: React.FC = () => {
           ? t('pages.native-debug.src.backend.linear-simd')
           : unknown;
 
+    const stability =
+      robustness.stabilityProfile === 'low-latency'
+        ? t('settings.audioAdvanced.enginePolicy.stabilityProfile.lowLatency')
+        : robustness.stabilityProfile === 'balanced'
+          ? t('settings.audioAdvanced.enginePolicy.stabilityProfile.balanced')
+          : robustness.stabilityProfile === 'stable'
+            ? t('settings.audioAdvanced.enginePolicy.stabilityProfile.stable')
+            : robustness.stabilityProfile === 'game-safe'
+              ? t('settings.audioAdvanced.enginePolicy.stabilityProfile.gameSafe')
+              : robustness.stabilityProfile === 'safe-mode'
+                ? t('settings.audioAdvanced.enginePolicy.stabilityProfile.safeMode')
+                : unknown;
+
     const quantization =
       robustness.outputQuantizationMode === 'tpdf'
         ? 'TPDF Dither'
@@ -1865,6 +1878,7 @@ export const NativeDebugPage: React.FC = () => {
     return {
       backend: robustness.outputBackendId ?? unknown,
       scheduler: robustness.schedulerProfile ?? unknown,
+      stability,
       transport: robustness.transportMode ?? unknown,
       srcBackend,
       quantization,

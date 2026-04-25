@@ -31,7 +31,7 @@ pub use crate::audio::engine::NativeAudioStreamingBufferSettingsPayload;
 pub use crate::audio::policy::{
     NativeAudioEnginePolicyPatch, NativeAudioEnginePolicyPayload, NativeAudioHqSrcPhaseMode,
     NativeAudioOutputQuantizationMode, NativeAudioSrcBackend, NativeAudioSrcMode,
-    NativeAudioTransportMode,
+    NativeAudioStabilityProfile, NativeAudioTransportMode,
 };
 
 pub use crate::audio::pipeline::{DspNodeConfig, EqBandConfig};

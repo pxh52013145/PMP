@@ -35,6 +35,12 @@ function invokeAudioAdvanced<T>(
 }
 
 type ReplayGainMode = 'track' | 'album';
+type NativeAudioStabilityProfile =
+  | 'low-latency'
+  | 'balanced'
+  | 'stable'
+  | 'game-safe'
+  | 'safe-mode';
 type NativeAudioSrcMode = 'source-native' | 'match-output' | 'target-rate';
 type NativeAudioSrcBackend = 'rubato' | 'linear-simd';
 type NativeAudioOutputQuantizationMode = 'round' | 'tpdf';
@@ -81,6 +87,7 @@ type DynamicSrcSettings = {
 };
 
 type EnginePolicyState = {
+  stabilityProfile: NativeAudioStabilityProfile;
   transportMode: 'robust' | 'transport-exact';
   srcMode: NativeAudioSrcMode;
   srcBackend: NativeAudioSrcBackend;
@@ -135,6 +142,7 @@ const AUDIO_TUNING_PROFILE_IDS: AudioTuningProfileId[] = [
 ];
 
 const DEFAULT_ENGINE_POLICY: EnginePolicyState = {
+  stabilityProfile: 'balanced',
   transportMode: 'robust',
   srcMode: 'match-output',
   srcBackend: 'rubato',
@@ -327,6 +335,15 @@ function parseAudioTuningAutoSettings(raw: unknown): AudioTuningAutoSettings {
 function parseEnginePolicy(raw: unknown): EnginePolicyState {
   const record = toRecord(raw);
 
+  const stabilityProfile: NativeAudioStabilityProfile =
+    record?.stabilityProfile === 'low-latency' ||
+    record?.stabilityProfile === 'balanced' ||
+    record?.stabilityProfile === 'stable' ||
+    record?.stabilityProfile === 'game-safe' ||
+    record?.stabilityProfile === 'safe-mode'
+      ? record.stabilityProfile
+      : DEFAULT_ENGINE_POLICY.stabilityProfile;
+
   const transportMode =
     record?.transportMode === 'transport-exact' || record?.transportMode === 'robust'
       ? record.transportMode
@@ -355,6 +372,7 @@ function parseEnginePolicy(raw: unknown): EnginePolicyState {
       : DEFAULT_ENGINE_POLICY.outputQuantizationMode;
 
   return {
+    stabilityProfile,
     transportMode,
     srcMode,
     srcBackend,
@@ -386,6 +404,7 @@ function isSameCrossfadeSettings(a: CrossfadeSettings, b: CrossfadeSettings): bo
 
 function isSameEnginePolicyState(a: EnginePolicyState, b: EnginePolicyState): boolean {
   return (
+    a.stabilityProfile === b.stabilityProfile &&
     a.transportMode === b.transportMode &&
     a.srcMode === b.srcMode &&
     a.srcBackend === b.srcBackend &&
@@ -433,6 +452,8 @@ function resolveAudioTuningProfileId(
     });
 
     const enginePolicyMatches =
+      (typeof profile.enginePolicy.stabilityProfile === 'undefined' ||
+        profile.enginePolicy.stabilityProfile === policy.stabilityProfile) &&
       (typeof profile.enginePolicy.transportMode === 'undefined' ||
         profile.enginePolicy.transportMode === policy.transportMode) &&
       (typeof profile.enginePolicy.srcMode === 'undefined' ||
@@ -483,6 +504,23 @@ function normalizeRange(value: number, min: number, max: number): number {
 
 function estimateEnginePolicyCost(policy: EnginePolicyState): number {
   let cost = policy.transportMode === 'robust' ? 12 : 8;
+
+  switch (policy.stabilityProfile) {
+    case 'low-latency':
+      break;
+    case 'balanced':
+      cost += 4;
+      break;
+    case 'stable':
+      cost += 10;
+      break;
+    case 'game-safe':
+      cost += 16;
+      break;
+    case 'safe-mode':
+      cost += 22;
+      break;
+  }
 
   if (policy.srcMode === 'source-native') {
     cost += 6;
@@ -894,6 +932,7 @@ export function AudioEngineAdvancedSettingsPanel() {
     setError(null);
     try {
       await audioService.setEnginePolicy({
+        stabilityProfile: enginePolicy.stabilityProfile,
         transportMode: enginePolicy.transportMode,
         srcMode: enginePolicy.srcMode,
         srcBackend: enginePolicy.srcBackend,
@@ -1584,6 +1623,63 @@ export function AudioEngineAdvancedSettingsPanel() {
                 <p className="settings-inline-row-title">{t('settings.audioAdvanced.enginePolicy.section.title')}</p>
                 <p className="settings-inline-row-note">{t('settings.audioAdvanced.enginePolicy.section.note')}</p>
               </div>
+            </div>
+
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <SettingHelpLabel
+                  title={t('settings.audioAdvanced.enginePolicy.stabilityProfile.label')}
+                  help={t('settings.audioAdvanced.enginePolicy.help.stabilityProfile')}
+                />
+              </div>
+              <SettingsChoiceGroup>
+                <SettingsChoiceButton
+                  type="button"
+                  active={enginePolicy.stabilityProfile === 'low-latency'}
+                  onClick={() =>
+                    setEnginePolicy((prev) => ({ ...prev, stabilityProfile: 'low-latency' }))
+                  }
+                  disabled={busy}
+                >
+                  {t('settings.audioAdvanced.enginePolicy.stabilityProfile.lowLatency')}
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
+                  type="button"
+                  active={enginePolicy.stabilityProfile === 'balanced'}
+                  onClick={() =>
+                    setEnginePolicy((prev) => ({ ...prev, stabilityProfile: 'balanced' }))
+                  }
+                  disabled={busy}
+                >
+                  {t('settings.audioAdvanced.enginePolicy.stabilityProfile.balanced')}
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
+                  type="button"
+                  active={enginePolicy.stabilityProfile === 'stable'}
+                  onClick={() => setEnginePolicy((prev) => ({ ...prev, stabilityProfile: 'stable' }))}
+                  disabled={busy}
+                >
+                  {t('settings.audioAdvanced.enginePolicy.stabilityProfile.stable')}
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
+                  type="button"
+                  active={enginePolicy.stabilityProfile === 'game-safe'}
+                  onClick={() =>
+                    setEnginePolicy((prev) => ({ ...prev, stabilityProfile: 'game-safe' }))
+                  }
+                  disabled={busy}
+                >
+                  {t('settings.audioAdvanced.enginePolicy.stabilityProfile.gameSafe')}
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
+                  type="button"
+                  active={enginePolicy.stabilityProfile === 'safe-mode'}
+                  onClick={() => setEnginePolicy((prev) => ({ ...prev, stabilityProfile: 'safe-mode' }))}
+                  disabled={busy}
+                >
+                  {t('settings.audioAdvanced.enginePolicy.stabilityProfile.safeMode')}
+                </SettingsChoiceButton>
+              </SettingsChoiceGroup>
             </div>
 
             <div className="settings-inline-row">
