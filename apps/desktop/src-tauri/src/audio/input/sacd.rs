@@ -12,6 +12,7 @@ use crate::audio::dsd2pcm::Dsd2PcmContext;
 use crate::audio::buffer::AudioRingBuffer;
 use crate::audio::buffer_policy;
 use crate::audio::control_plane::command_channel;
+use crate::audio::realtime_memory_guard::{new_guarded_ring_buffer, AudioRealtimeMemoryRole};
 
 use super::streaming::{
     drain_decoder_commands, spawn_render_transfer_worker, try_lock_render_queue_hot_path,
@@ -202,10 +203,10 @@ fn start_dsf_stream(
     output_sample_rate: Option<u32>,
     src_policy: AudioInputSrcPolicy,
 ) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
-    let buffer = AudioRingBuffer::new(AudioRingBuffer::recommended_capacity_samples(
-        output_sample_rate,
-        2,
-    ));
+    let buffer = new_guarded_ring_buffer(
+        AudioRingBuffer::recommended_capacity_samples(output_sample_rate, 2),
+        AudioRealtimeMemoryRole::DecodeReservoir,
+    );
     let render_queue_capacity =
         buffer_policy::recommended_render_queue_capacity_samples(output_sample_rate, 2)
             .min(buffer.capacity_samples().max(16_384));

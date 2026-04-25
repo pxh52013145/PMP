@@ -26,6 +26,7 @@ use crate::audio::buffer::AudioRingBuffer;
 use crate::audio::buffer_policy;
 use crate::audio::control_plane::command_channel;
 use crate::audio::diagnostics;
+use crate::audio::realtime_memory_guard::{new_guarded_ring_buffer, AudioRealtimeMemoryRole};
 
 use super::streaming::{
     drain_decoder_commands, spawn_render_transfer_worker, try_lock_render_queue_hot_path,
@@ -240,7 +241,7 @@ fn start_symphonia_stream(
     let decode_capacity = decode_reservoir_capacity_samples
         .unwrap_or(default_capacity)
         .clamp(default_capacity, max_capacity);
-    let buffer = AudioRingBuffer::new(decode_capacity);
+    let buffer = new_guarded_ring_buffer(decode_capacity, AudioRealtimeMemoryRole::DecodeReservoir);
     let render_queue_capacity =
         buffer_policy::recommended_render_queue_capacity_samples(output_sample_rate, 2)
             .min(buffer.capacity_samples().max(16_384));

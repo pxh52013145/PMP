@@ -15,6 +15,7 @@ use crate::audio::control_plane::{
 };
 use crate::audio::diagnostics;
 use crate::audio::memory_pool;
+use crate::audio::realtime_memory_guard::{guard_ring_buffer, AudioRealtimeMemoryRole};
 use crate::audio::realtime_scheduler::RealtimePressureProfile;
 
 static STREAMING_UNDERRUN_EVENTS: AtomicU64 = AtomicU64::new(0);
@@ -254,15 +255,18 @@ pub(crate) fn try_lock_render_queue_hot_path(render_queue: &AudioRingBuffer) {
         return;
     }
 
-    let lock_bytes = render_queue.lock_bytes().min(u64::MAX as usize) as u64;
-    RENDER_QUEUE_PAGE_LOCK_ATTEMPTED_BYTES.fetch_add(lock_bytes, Ordering::Relaxed);
+    let result = guard_ring_buffer(AudioRealtimeMemoryRole::StreamingRenderQueue, render_queue);
+    RENDER_QUEUE_PAGE_LOCK_ATTEMPTED_BYTES.fetch_add(result.attempted_bytes, Ordering::Relaxed);
 
-    if render_queue.try_lock_memory_pages() {
+    if result.locked {
         RENDER_QUEUE_PAGE_LOCK_SUCCESS.fetch_add(1, Ordering::Relaxed);
-        RENDER_QUEUE_PAGE_LOCK_SUCCEEDED_BYTES.fetch_add(lock_bytes, Ordering::Relaxed);
+        RENDER_QUEUE_PAGE_LOCK_SUCCEEDED_BYTES.fetch_add(result.succeeded_bytes, Ordering::Relaxed);
     } else {
         RENDER_QUEUE_PAGE_LOCK_FAILURE.fetch_add(1, Ordering::Relaxed);
-        RENDER_QUEUE_PAGE_LOCK_FAILED_BYTES.fetch_add(lock_bytes, Ordering::Relaxed);
+        RENDER_QUEUE_PAGE_LOCK_FAILED_BYTES.fetch_add(
+            result.failed_bytes.saturating_add(result.skipped_bytes),
+            Ordering::Relaxed,
+        );
         if env_bool("PMP_AUDIO_LOG_PAGE_LOCK_FAILURE", false) {
             eprintln!("[NativeAudio][buffer] Failed to page-lock render queue (best effort).");
         }
@@ -295,21 +299,12 @@ pub(crate) fn spawn_render_transfer_worker(
             let _priority_guard =
                 crate::audio::threading::promote_current_thread_for_audio_transfer();
             let mut transfer_block: Vec<f32> = Vec::with_capacity(8_192);
-            let mut adaptive_state = buffer_policy::TransferAdaptiveState::default();
-            let warmup_strategy = buffer_policy::adaptive_transfer_strategy(
-                capacity,
-                channels,
-                RealtimePressureProfile::Critical,
-                0,
-                0,
-                &mut adaptive_state,
-            );
             memory_pool::reserve_f32_capacity(
                 &mut transfer_block,
-                warmup_strategy.chunk_limit.max(8_192),
+                buffer_policy::hot_path_prewarm_chunk_samples(capacity, channels).max(8_192),
                 "streaming.transfer.block_prewarm_growth",
             );
-            adaptive_state = buffer_policy::TransferAdaptiveState::default();
+            let mut adaptive_state = buffer_policy::TransferAdaptiveState::default();
             let burst_policy = BurstFillPolicy::from_env();
             let mut burst_loops_remaining = 0u32;
             let mut starvation_hits = 0u32;
