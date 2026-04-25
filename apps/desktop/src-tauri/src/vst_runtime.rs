@@ -11,6 +11,7 @@ use crate::dsp_graph::VstParamValue;
 use crate::vst_audit::{self, VstAuditEventKind};
 use crate::vst_bridge::{
     BridgeClient, BridgeOpenEditorOptions, BridgeParamValue, BridgePluginDescriptor,
+    BridgeRealtimeMetrics,
 };
 use crate::vst_governance;
 use crate::vst_shm::ShmRing;
@@ -44,6 +45,11 @@ pub struct VstSessionStatus {
     pub native_editor_open: bool,
     pub heartbeat_in: Option<u32>,
     pub heartbeat_out: Option<u32>,
+    pub callback_lock_miss_blocks: u64,
+    pub callback_lock_miss_frames: u64,
+    pub dry_bypass_frames: u64,
+    pub shm_output_backpressure_blocks: u64,
+    pub shm_output_backpressure_frames: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,6 +61,11 @@ struct VstSessionStatusCore {
     processing_active: bool,
     plugin_error: bool,
     native_editor_open: bool,
+    callback_lock_miss_blocks: u64,
+    callback_lock_miss_frames: u64,
+    dry_bypass_frames: u64,
+    shm_output_backpressure_blocks: u64,
+    shm_output_backpressure_frames: u64,
 }
 
 impl VstSessionStatusCore {
@@ -67,6 +78,11 @@ impl VstSessionStatusCore {
             processing_active: status.processing_active,
             plugin_error: status.plugin_error,
             native_editor_open: status.native_editor_open,
+            callback_lock_miss_blocks: status.callback_lock_miss_blocks,
+            callback_lock_miss_frames: status.callback_lock_miss_frames,
+            dry_bypass_frames: status.dry_bypass_frames,
+            shm_output_backpressure_blocks: status.shm_output_backpressure_blocks,
+            shm_output_backpressure_frames: status.shm_output_backpressure_frames,
         }
     }
 }
@@ -98,6 +114,8 @@ static SESSION_STATUS_BROADCAST_STARTED: AtomicBool = AtomicBool::new(false);
 static SESSION_STATUS_BROADCAST_APP: Lazy<Mutex<Option<AppHandle>>> =
     Lazy::new(|| Mutex::new(None));
 static SESSION_STATUS_BROADCAST_STOP: AtomicBool = AtomicBool::new(false);
+static LAST_REPORTED_BRIDGE_METRICS: Lazy<Mutex<HashMap<String, BridgeRealtimeMetrics>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone, Copy, Debug)]
 struct EditorOpenCacheEntry {
@@ -112,6 +130,7 @@ static EDITOR_OPEN_PING_TIMEOUT_LOG_AT_MS: Lazy<Mutex<HashMap<String, u64>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 const EVENT_VST_SESSION_STATUSES: &str = "vst-session-statuses";
+const SESSION_STATUS_METRICS_PING_TIMEOUT_MS: u64 = 30;
 
 fn editor_open_cache_ttl() -> Duration {
     Duration::from_millis(900)
@@ -122,6 +141,68 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn empty_bridge_realtime_metrics() -> BridgeRealtimeMetrics {
+    BridgeRealtimeMetrics::default()
+}
+
+fn record_bridge_metric_delta(
+    kind: &'static str,
+    current: u64,
+    previous: u64,
+    aux_current: u64,
+    aux_previous: u64,
+) {
+    if current <= previous && aux_current <= aux_previous {
+        return;
+    }
+
+    crate::audio::diagnostics::record_event(
+        kind,
+        current.saturating_sub(previous),
+        aux_current.saturating_sub(aux_previous),
+    );
+}
+
+fn record_bridge_metrics_if_changed(node_id: &str, metrics: &BridgeRealtimeMetrics) {
+    let mut last_map = match LAST_REPORTED_BRIDGE_METRICS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let previous = last_map.get(node_id).cloned().unwrap_or_default();
+
+    record_bridge_metric_delta(
+        "vst.sidecar.callback_lock_miss",
+        metrics.callback_lock_miss_blocks,
+        previous.callback_lock_miss_blocks,
+        metrics.callback_lock_miss_frames,
+        previous.callback_lock_miss_frames,
+    );
+    record_bridge_metric_delta(
+        "vst.sidecar.dry_bypass",
+        metrics.dry_bypass_frames,
+        previous.dry_bypass_frames,
+        0,
+        0,
+    );
+    record_bridge_metric_delta(
+        "vst.sidecar.output_backpressure",
+        metrics.shm_output_backpressure_blocks,
+        previous.shm_output_backpressure_blocks,
+        metrics.shm_output_backpressure_frames,
+        previous.shm_output_backpressure_frames,
+    );
+
+    last_map.insert(node_id.to_string(), metrics.clone());
+}
+
+fn prune_bridge_metrics(active_node_ids: &HashSet<String>) {
+    let mut last_map = match LAST_REPORTED_BRIDGE_METRICS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    last_map.retain(|node_id, _| active_node_ids.contains(node_id));
 }
 
 fn maybe_log_editor_open_ping_timeout(node_id: &str, plugin_id: &str, err: &str) {
@@ -924,27 +1005,46 @@ pub fn raise_visible_editors_above_main(app: &AppHandle) -> Result<u32, String> 
 }
 
 pub fn list_session_statuses() -> Vec<VstSessionStatus> {
-    let sessions = {
+    let node_ids = {
         let map = match SESSIONS.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        map.iter()
-            .map(|(node_id, session)| {
-                (
-                    node_id.clone(),
-                    session.plugin_id.clone(),
-                    session.shm_in_name.clone(),
-                    session.shm_out_name.clone(),
-                )
-            })
-            .collect::<Vec<_>>()
+        map.keys().cloned().collect::<Vec<_>>()
     };
+    let active_node_ids = node_ids.iter().cloned().collect::<HashSet<_>>();
+    prune_bridge_metrics(&active_node_ids);
 
-    let mut out = Vec::with_capacity(sessions.len());
-    for (node_id, plugin_id, shm_in_name, shm_out_name) in sessions {
+    let mut out = Vec::with_capacity(node_ids.len());
+    for node_id in node_ids {
+        let session = {
+            let mut map = match SESSIONS.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            map.remove(node_id.as_str())
+        };
+
+        let Some(mut session) = session else {
+            continue;
+        };
+
+        let plugin_id = session.plugin_id.clone();
+        let shm_in_name = session.shm_in_name.clone();
+        let shm_out_name = session.shm_out_name.clone();
         let in_ring = ShmRing::open(shm_in_name.as_str()).ok();
         let out_ring = ShmRing::open(shm_out_name.as_str()).ok();
+        let metrics = session
+            .client
+            .ping_with_timeout(Duration::from_millis(
+                SESSION_STATUS_METRICS_PING_TIMEOUT_MS,
+            ))
+            .ok()
+            .and_then(|response| response.metrics);
+        if let Some(metrics) = metrics.as_ref() {
+            record_bridge_metrics_if_changed(node_id.as_str(), metrics);
+        }
+        let metrics = metrics.unwrap_or_else(empty_bridge_realtime_metrics);
 
         let (
             peer_ready,
@@ -969,9 +1069,19 @@ pub fn list_session_statuses() -> Vec<VstSessionStatus> {
             _ => (false, false, false, false, None, None),
         };
 
+        {
+            let mut map = match SESSIONS.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            map.insert(node_id.clone(), session);
+        }
+
+        let native_editor_open = is_editor_open_cached(node_id.as_str());
+
         out.push(VstSessionStatus {
-            native_editor_open: is_editor_open_cached(node_id.as_str()),
-            node_id,
+            native_editor_open,
+            node_id: node_id.clone(),
             plugin_id,
             peer_ready,
             plugin_loaded,
@@ -979,6 +1089,11 @@ pub fn list_session_statuses() -> Vec<VstSessionStatus> {
             plugin_error,
             heartbeat_in,
             heartbeat_out,
+            callback_lock_miss_blocks: metrics.callback_lock_miss_blocks,
+            callback_lock_miss_frames: metrics.callback_lock_miss_frames,
+            dry_bypass_frames: metrics.dry_bypass_frames,
+            shm_output_backpressure_blocks: metrics.shm_output_backpressure_blocks,
+            shm_output_backpressure_frames: metrics.shm_output_backpressure_frames,
         });
     }
 
