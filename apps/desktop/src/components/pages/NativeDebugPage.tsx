@@ -1894,6 +1894,19 @@ export const NativeDebugPage: React.FC = () => {
       pageLockSucceededBytes: formatBytes(robustness.renderQueuePageLockSucceededBytes),
       pageLockFailedBytes: formatBytes(robustness.renderQueuePageLockFailedBytes),
       pageLockFailureCount: formatCount(robustness.renderQueuePageLockFailureCount),
+      memoryPoolF32GrowthEvents: formatCount(robustness.memoryPoolF32GrowthEvents),
+      memoryPoolF32GrowthBytes: formatBytes(robustness.memoryPoolF32GrowthBytes),
+      memoryPoolF32PrewarmHits: formatCount(robustness.memoryPoolF32PrewarmHits),
+      realtimeMemoryLockAttemptedBytes: formatBytes(robustness.realtimeMemoryLockAttemptedBytes),
+      realtimeMemoryLockSucceededBytes: formatBytes(robustness.realtimeMemoryLockSucceededBytes),
+      realtimeMemoryLockFailedBytes: formatBytes(robustness.realtimeMemoryLockFailedBytes),
+      realtimeMemoryLockSkippedBytes: formatBytes(robustness.realtimeMemoryLockSkippedBytes),
+      realtimeMemoryLockFailureCount: formatCount(robustness.realtimeMemoryLockFailureCount),
+      realtimeMemoryLockSkippedCount: formatCount(robustness.realtimeMemoryLockSkippedCount),
+      realtimeMemoryRoleMasks: `${formatCount(robustness.realtimeMemoryLockedRoleMask)} / ${formatCount(
+        robustness.realtimeMemoryFailedRoleMask
+      )} / ${formatCount(robustness.realtimeMemorySkippedRoleMask)}`,
+      realtimeMemoryPressureEvents: formatCount(robustness.realtimeMemoryPressureEvents),
       controlQueueMode,
       controlQueueCapacity: formatCount(robustness.controlQueueCapacity),
       controlQueueOverwriteEvents: formatCount(robustness.controlQueueOverwriteEvents),
@@ -1917,6 +1930,17 @@ export const NativeDebugPage: React.FC = () => {
       vstBridgeWriteBackpressureCount: formatCount(robustness.vstBridgeWriteBackpressureCount),
       vstBridgeStallCount: formatCount(robustness.vstBridgeStallCount),
       vstBridgeRestartAttemptCount: formatCount(robustness.vstBridgeRestartAttemptCount),
+      vstSidecarCallbackLockMiss: `${formatCount(
+        robustness.vstSidecarCallbackLockMissCount
+      )} / ${formatCount(robustness.vstSidecarCallbackLockMissFrames)} ${t(
+        'pages.native-debug.robustness.unit.frames'
+      )}`,
+      vstSidecarDryBypassFrames: formatCount(robustness.vstSidecarDryBypassFrames),
+      vstSidecarOutputBackpressure: `${formatCount(
+        robustness.vstSidecarOutputBackpressureCount
+      )} / ${formatCount(robustness.vstSidecarOutputBackpressureFrames)} ${t(
+        'pages.native-debug.robustness.unit.frames'
+      )}`,
       lastWorkingSetTrim,
     };
   }, [

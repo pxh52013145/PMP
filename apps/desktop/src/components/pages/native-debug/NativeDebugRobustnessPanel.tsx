@@ -32,6 +32,17 @@ export type NativeDebugRobustnessMetricsView = {
   pageLockSucceededBytes: string;
   pageLockFailedBytes: string;
   pageLockFailureCount: string;
+  memoryPoolF32GrowthEvents: string;
+  memoryPoolF32GrowthBytes: string;
+  memoryPoolF32PrewarmHits: string;
+  realtimeMemoryLockAttemptedBytes: string;
+  realtimeMemoryLockSucceededBytes: string;
+  realtimeMemoryLockFailedBytes: string;
+  realtimeMemoryLockSkippedBytes: string;
+  realtimeMemoryLockFailureCount: string;
+  realtimeMemoryLockSkippedCount: string;
+  realtimeMemoryRoleMasks: string;
+  realtimeMemoryPressureEvents: string;
   controlQueueMode: string;
   controlQueueCapacity: string;
   controlQueueOverwriteEvents: string;
@@ -44,6 +55,9 @@ export type NativeDebugRobustnessMetricsView = {
   vstBridgeWriteBackpressureCount: string;
   vstBridgeStallCount: string;
   vstBridgeRestartAttemptCount: string;
+  vstSidecarCallbackLockMiss: string;
+  vstSidecarDryBypassFrames: string;
+  vstSidecarOutputBackpressure: string;
   lastWorkingSetTrim: string;
 };
 
@@ -168,6 +182,18 @@ export function NativeDebugRobustnessPanel({
             <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.vst.restartAttempts')}</span>
             <span className="native-debug-metrics-value">{robustnessMetricsView.vstBridgeRestartAttemptCount}</span>
           </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.vst.callbackLockMiss')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.vstSidecarCallbackLockMiss}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.vst.dryBypassFrames')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.vstSidecarDryBypassFrames}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.vst.outputBackpressure')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.vstSidecarOutputBackpressure}</span>
+          </div>
         </section>
 
         <div className="native-debug-metrics-divider" />
@@ -261,6 +287,50 @@ export function NativeDebugRobustnessPanel({
           <div className="native-debug-metrics-row">
             <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.transfer.pageLockFailureCount')}</span>
             <span className="native-debug-metrics-value">{robustnessMetricsView.pageLockFailureCount}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.memory.f32GrowthEvents')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.memoryPoolF32GrowthEvents}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.memory.f32GrowthBytes')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.memoryPoolF32GrowthBytes}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.memory.f32PrewarmHits')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.memoryPoolF32PrewarmHits}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.memory.lockAttemptedBytes')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.realtimeMemoryLockAttemptedBytes}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.memory.lockSucceededBytes')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.realtimeMemoryLockSucceededBytes}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.memory.lockFailedBytes')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.realtimeMemoryLockFailedBytes}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.memory.lockSkippedBytes')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.realtimeMemoryLockSkippedBytes}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.memory.lockFailureCount')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.realtimeMemoryLockFailureCount}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.memory.lockSkippedCount')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.realtimeMemoryLockSkippedCount}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.memory.roleMasks')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.realtimeMemoryRoleMasks}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.memory.pressureEvents')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.realtimeMemoryPressureEvents}</span>
           </div>
           <div className="native-debug-metrics-row">
             <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.workingSetTrim.last')}</span>
