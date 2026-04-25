@@ -4,6 +4,9 @@ export type NativeDebugRobustnessMetricsView = {
   backend: string;
   scheduler: string;
   stability: string;
+  stabilityActionProfile: string;
+  stabilityPrimaryReason: string;
+  stabilityReasonCodes: string;
   transport: string;
   srcBackend: string;
   quantization: string;
@@ -112,6 +115,30 @@ export function NativeDebugRobustnessPanel({
               {t('settings.audioAdvanced.enginePolicy.stabilityProfile.label')}
             </span>
             <span className="native-debug-metrics-value">{robustnessMetricsView.stability}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">
+              {t('pages.native-debug.robustness.stability.actionProfile')}
+            </span>
+            <span className="native-debug-metrics-value">
+              {robustnessMetricsView.stabilityActionProfile}
+            </span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">
+              {t('pages.native-debug.robustness.stability.primaryReason')}
+            </span>
+            <span className="native-debug-metrics-value">
+              {robustnessMetricsView.stabilityPrimaryReason}
+            </span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">
+              {t('pages.native-debug.robustness.stability.reasonCodes')}
+            </span>
+            <span className="native-debug-metrics-value">
+              {robustnessMetricsView.stabilityReasonCodes}
+            </span>
           </div>
           <div className="native-debug-metrics-row">
             <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.transport.mode')}</span>

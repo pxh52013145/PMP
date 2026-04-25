@@ -1821,10 +1821,68 @@ export const NativeDebugPage: React.FC = () => {
           : robustness.stabilityProfile === 'stable'
             ? t('settings.audioAdvanced.enginePolicy.stabilityProfile.stable')
             : robustness.stabilityProfile === 'game-safe'
-              ? t('settings.audioAdvanced.enginePolicy.stabilityProfile.gameSafe')
+            ? t('settings.audioAdvanced.enginePolicy.stabilityProfile.gameSafe')
               : robustness.stabilityProfile === 'safe-mode'
                 ? t('settings.audioAdvanced.enginePolicy.stabilityProfile.safeMode')
                 : unknown;
+
+    const stabilityActionProfile =
+      robustness.stabilityActionProfile === 'guarded'
+        ? t('pages.native-debug.robustness.stability.action.guarded')
+        : robustness.stabilityActionProfile === 'critical'
+          ? t('pages.native-debug.robustness.stability.action.critical')
+          : robustness.stabilityActionProfile === 'normal'
+            ? t('pages.native-debug.robustness.stability.action.normal')
+            : unknown;
+
+    const formatStabilityReason = (reason?: string | null) => {
+      if (typeof reason !== 'string' || reason.length === 0) {
+        return t('pages.native-debug.robustness.stability.reason.none');
+      }
+
+      switch (reason) {
+        case 'buffer-critical':
+          return t('pages.native-debug.robustness.stability.reason.buffer-critical');
+        case 'buffer-guarded':
+          return t('pages.native-debug.robustness.stability.reason.buffer-guarded');
+        case 'underrun-recovery':
+          return t('pages.native-debug.robustness.stability.reason.underrun-recovery');
+        case 'shared-stress':
+          return t('pages.native-debug.robustness.stability.reason.shared-stress');
+        case 'output-wait-timeout':
+          return t('pages.native-debug.robustness.stability.reason.output-wait-timeout');
+        case 'output-render-underrun':
+          return t('pages.native-debug.robustness.stability.reason.output-render-underrun');
+        case 'output-callback-overrun':
+          return t('pages.native-debug.robustness.stability.reason.output-callback-overrun');
+        case 'shared-render-underrun':
+          return t('pages.native-debug.robustness.stability.reason.shared-render-underrun');
+        case 'shared-render-low-watermark':
+          return t('pages.native-debug.robustness.stability.reason.shared-render-low-watermark');
+        case 'shared-render-jitter':
+          return t('pages.native-debug.robustness.stability.reason.shared-render-jitter');
+        case 'transfer-low-watermark':
+          return t('pages.native-debug.robustness.stability.reason.transfer-low-watermark');
+        case 'control-queue-overflow':
+          return t('pages.native-debug.robustness.stability.reason.control-queue-overflow');
+        case 'memory-pressure':
+          return t('pages.native-debug.robustness.stability.reason.memory-pressure');
+        case 'memory-lock-failure':
+          return t('pages.native-debug.robustness.stability.reason.memory-lock-failure');
+        case 'memory-lock-skipped':
+          return t('pages.native-debug.robustness.stability.reason.memory-lock-skipped');
+        case 'memory-pool-growth':
+          return t('pages.native-debug.robustness.stability.reason.memory-pool-growth');
+        default:
+          return reason;
+      }
+    };
+
+    const stabilityPrimaryReason = formatStabilityReason(robustness.stabilityPrimaryReason);
+    const stabilityReasonCodes =
+      Array.isArray(robustness.stabilityReasonCodes) && robustness.stabilityReasonCodes.length > 0
+        ? robustness.stabilityReasonCodes.map((reason) => formatStabilityReason(reason)).join(', ')
+        : t('pages.native-debug.robustness.stability.reason.none');
 
     const quantization =
       robustness.outputQuantizationMode === 'tpdf'
@@ -1879,6 +1937,9 @@ export const NativeDebugPage: React.FC = () => {
       backend: robustness.outputBackendId ?? unknown,
       scheduler: robustness.schedulerProfile ?? unknown,
       stability,
+      stabilityActionProfile,
+      stabilityPrimaryReason,
+      stabilityReasonCodes,
       transport: robustness.transportMode ?? unknown,
       srcBackend,
       quantization,

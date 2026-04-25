@@ -1,4 +1,5 @@
 import type {
+  AudioStabilityActionProfile,
   AudioEnginePolicyPatch,
   AudioRobustnessSnapshot,
   AudioStabilityProfile,
@@ -24,7 +25,10 @@ export type NativeAudioStatePayload = {
   underrunEvents?: number;
   underrunFrames?: number;
   schedulerProfile?: 'normal' | 'guarded' | 'critical';
+  stabilityActionProfile?: AudioStabilityActionProfile;
   stabilityProfile?: AudioStabilityProfile;
+  stabilityPrimaryReason?: string | null;
+  stabilityReasonCodes?: string[];
   transportMode?: 'robust' | 'transport-exact';
   hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
   srcMode?: 'source-native' | 'match-output' | 'target-rate';

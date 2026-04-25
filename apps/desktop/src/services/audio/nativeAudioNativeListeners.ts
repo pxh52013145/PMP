@@ -2,6 +2,7 @@
 import type {
   AudioSpectrumFrame,
   AudioSpectrumTap,
+  AudioStabilityActionProfile,
   AudioStabilityProfile,
   AudioState,
 } from './types';
@@ -30,7 +31,10 @@ export type NativeAudioListenerHost = {
   lastUnderrunFrames: number;
   lastNativeErrorSeq: number;
   lastSchedulerProfile?: 'normal' | 'guarded' | 'critical';
+  stabilityActionProfile?: AudioStabilityActionProfile;
   stabilityProfile?: AudioStabilityProfile;
+  stabilityPrimaryReason?: string | null;
+  stabilityReasonCodes?: string[];
   transportMode?: 'robust' | 'transport-exact';
   hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
   srcMode?: 'source-native' | 'match-output' | 'target-rate';
@@ -201,6 +205,14 @@ export async function setupNativeListenersImpl(
         }
 
         if (
+          next.stabilityActionProfile === 'normal' ||
+          next.stabilityActionProfile === 'guarded' ||
+          next.stabilityActionProfile === 'critical'
+        ) {
+          this.stabilityActionProfile = next.stabilityActionProfile;
+        }
+
+        if (
           next.stabilityProfile === 'low-latency' ||
           next.stabilityProfile === 'balanced' ||
           next.stabilityProfile === 'stable' ||
@@ -208,6 +220,18 @@ export async function setupNativeListenersImpl(
           next.stabilityProfile === 'safe-mode'
         ) {
           this.stabilityProfile = next.stabilityProfile;
+        }
+
+        if (typeof next.stabilityPrimaryReason === 'string') {
+          this.stabilityPrimaryReason = next.stabilityPrimaryReason;
+        } else if (next.stabilityPrimaryReason === null) {
+          this.stabilityPrimaryReason = null;
+        }
+
+        if (Array.isArray(next.stabilityReasonCodes)) {
+          this.stabilityReasonCodes = next.stabilityReasonCodes.filter(
+            (reason): reason is string => typeof reason === 'string' && reason.length > 0
+          );
         }
 
         if (next.transportMode === 'robust' || next.transportMode === 'transport-exact') {

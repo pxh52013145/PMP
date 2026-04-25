@@ -1,4 +1,5 @@
 use super::*;
+use crate::audio::stability_controller::AudioStabilityContext;
 
 impl NativeAudioEngine {
     pub(super) fn update_shared_timeline_stress_window(&mut self) {
@@ -73,6 +74,58 @@ impl NativeAudioEngine {
         self.shared_timeline_stress_ignore_before_ms =
             crate::audio::diagnostics::current_timestamp_ms()
                 .saturating_add(SHARED_TIMELINE_STRESS_RESET_GRACE_MS);
+    }
+
+    pub(super) fn update_stability_pressure_state(
+        &mut self,
+        buffered_ahead_seconds: f64,
+        underrun_recovery_active: bool,
+        shared_timeline_stress_active: bool,
+    ) {
+        let output_metrics = crate::audio::output::output_callback_metrics();
+        let shared_render_metrics = crate::audio::output::shared_render_ahead_metrics();
+        let transfer_stats = crate::audio::input::streaming_transfer_stats();
+        let control_plane_stats = crate::audio::control_plane::control_plane_stats_snapshot();
+        let memory_pool_stats = crate::audio::memory_pool::stats_snapshot();
+        let realtime_memory_stats = crate::audio::realtime_memory_guard::snapshot();
+
+        let decision = self.stability_controller.evaluate(AudioStabilityContext {
+            buffered_ahead_seconds,
+            underrun_recovery_active,
+            shared_timeline_stress_active,
+            output_wait_timeout_count: output_metrics.wait_timeout_count,
+            output_render_underrun_events: output_metrics.render_underrun_events,
+            output_callback_interval_overrun_count: output_metrics.interval_overrun_count,
+            shared_render_underrun_events: shared_render_metrics.render_underrun_events,
+            shared_render_low_hit_count: shared_render_metrics.render_low_hit_count,
+            shared_render_jitter_anomaly_count: shared_render_metrics.jitter_anomaly_count,
+            transfer_render_low_hit_count: transfer_stats.render_low_hit_count,
+            transfer_decode_low_hit_count: transfer_stats.decode_low_hit_count,
+            control_queue_overwrite_events: control_plane_stats.overwrite_events,
+            control_queue_drop_newest_events: control_plane_stats.drop_newest_events,
+            control_queue_coalesced_overflow_events: control_plane_stats.coalesced_overflow_events,
+            control_queue_critical_overflow_events: control_plane_stats.critical_overflow_events,
+            memory_pressure_events: SCHEDULER.memory_pressure_events(),
+            memory_lock_failure_count: realtime_memory_stats.lock_failure_count,
+            memory_lock_skipped_count: realtime_memory_stats.lock_skipped_count,
+            memory_pool_growth_events: memory_pool_stats.f32_growth_events,
+        });
+
+        if let Some(hint) = decision.transient_hint {
+            SCHEDULER.record_pressure_hint(hint.minimum_profile, hint.hold_ms);
+        }
+    }
+
+    pub(super) fn stability_action_profile(&self) -> RealtimePressureProfile {
+        self.stability_controller.current_action_profile()
+    }
+
+    pub(super) fn stability_primary_reason(&self) -> Option<&'static str> {
+        self.stability_controller.current_primary_reason()
+    }
+
+    pub(super) fn stability_reason_codes(&self) -> Vec<&'static str> {
+        self.stability_controller.current_reason_codes()
     }
 
     pub(crate) fn engine_policy_payload(&self) -> NativeAudioEnginePolicyPayload {

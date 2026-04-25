@@ -26,7 +26,10 @@ impl NativeAudioEngine {
         payload.queue = None;
         payload.current_index = None;
         payload.scheduler_profile = None;
+        payload.stability_action_profile = None;
         payload.stability_profile = None;
+        payload.stability_primary_reason = None;
+        payload.stability_reason_codes = None;
         payload.transport_mode = None;
         payload.hq_src_phase_mode = None;
         payload.src_mode = None;
@@ -255,7 +258,18 @@ pub(super) fn build_state_payload_with_options_impl(
             RealtimePressureProfile::Guarded => "guarded".to_string(),
             RealtimePressureProfile::Critical => "critical".to_string(),
         }),
+        stability_action_profile: Some(engine.stability_action_profile().as_str().to_string()),
         stability_profile: Some(engine.stability_profile.as_str().to_string()),
+        stability_primary_reason: engine
+            .stability_primary_reason()
+            .map(|reason| reason.to_string()),
+        stability_reason_codes: Some(
+            engine
+                .stability_reason_codes()
+                .into_iter()
+                .map(|reason| reason.to_string())
+                .collect(),
+        ),
         hq_src_active: Some(
             matches!(engine.src_mode, NativeAudioSrcMode::SourceNative)
                 || engine.hq_src_enabled

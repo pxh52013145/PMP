@@ -26,7 +26,15 @@ impl RealtimePressureProfile {
         }
     }
 
-    fn max(self, other: Self) -> Self {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Guarded => "guarded",
+            Self::Critical => "critical",
+        }
+    }
+
+    pub(crate) fn max(self, other: Self) -> Self {
         if self as u8 >= other as u8 {
             self
         } else {
@@ -119,7 +127,10 @@ impl RealtimeScheduler {
 
     pub(crate) fn record_memory_pressure_signal(&self, minimum_profile: RealtimePressureProfile) {
         self.memory_pressure_events.fetch_add(1, Ordering::Relaxed);
-        self.extend_pressure_hold(minimum_profile);
+        self.record_pressure_hint(
+            minimum_profile,
+            crate::audio::stability::memory_pressure_hold_ms(),
+        );
         let minimum = minimum_profile as u8;
         let mut current = self.profile.load(Ordering::Acquire);
         while current < minimum {
@@ -135,7 +146,15 @@ impl RealtimeScheduler {
         }
     }
 
-    fn extend_pressure_hold(&self, minimum_profile: RealtimePressureProfile) {
+    pub(crate) fn record_pressure_hint(
+        &self,
+        minimum_profile: RealtimePressureProfile,
+        hold_ms: u64,
+    ) {
+        self.extend_pressure_hold(minimum_profile, hold_ms);
+    }
+
+    fn extend_pressure_hold(&self, minimum_profile: RealtimePressureProfile, hold_ms: u64) {
         let minimum = minimum_profile as u8;
         let mut current_hold = self.pressure_hold_profile.load(Ordering::Acquire);
         while current_hold < minimum {
@@ -150,8 +169,7 @@ impl RealtimeScheduler {
             }
         }
 
-        let until_ms =
-            current_time_ms().saturating_add(crate::audio::stability::memory_pressure_hold_ms());
+        let until_ms = current_time_ms().saturating_add(hold_ms);
         let mut current_until = self.pressure_hold_until_ms.load(Ordering::Acquire);
         while current_until < until_ms {
             match self.pressure_hold_until_ms.compare_exchange(

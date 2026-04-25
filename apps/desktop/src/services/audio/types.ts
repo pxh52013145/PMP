@@ -121,6 +121,8 @@ export type AudioStabilityProfile =
   | 'game-safe'
   | 'safe-mode';
 
+export type AudioStabilityActionProfile = 'normal' | 'guarded' | 'critical';
+
 export interface AudioEnginePolicyPatch {
   stabilityProfile?: AudioStabilityProfile;
   transportMode?: 'robust' | 'transport-exact';
@@ -196,6 +198,9 @@ export interface AudioRobustnessSnapshot {
   outputBackends: string[];
   schedulerProfile?: 'normal' | 'guarded' | 'critical';
   stabilityProfile?: AudioStabilityProfile;
+  stabilityActionProfile?: AudioStabilityActionProfile;
+  stabilityPrimaryReason?: string | null;
+  stabilityReasonCodes?: string[];
   transportMode?: 'robust' | 'transport-exact';
   hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
   srcMode?: 'source-native' | 'match-output' | 'target-rate';

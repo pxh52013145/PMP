@@ -2,7 +2,7 @@ import type { DynamicSrcEffectiveTiming } from './dynamicSrcAdaptiveTiming';
 import type {
   NativeAudioRobustnessSnapshotSource,
 } from './nativeAudioRobustnessSnapshot';
-import type { AudioState } from './types';
+import type { AudioRobustnessSnapshot, AudioState } from './types';
 import type { ProcessWorkingSetTrimEvent } from '../../utils/processWorkingSetTrim';
 
 type DynamicSrcAutoDegradationOptions = {
@@ -14,6 +14,9 @@ type DynamicSrcAutoDegradationOptions = {
 export type NativeAudioRobustnessSnapshotAdapterInput = {
   record: Record<string, unknown>;
   state: AudioState;
+  stabilityActionProfile?: AudioRobustnessSnapshot['stabilityActionProfile'];
+  stabilityPrimaryReason?: AudioRobustnessSnapshot['stabilityPrimaryReason'];
+  stabilityReasonCodes?: AudioRobustnessSnapshot['stabilityReasonCodes'];
   estimatedAudioBufferBytes: number;
   renderQueuePageLockFailureCount: number;
   renderQueuePageLockAttemptedBytes: number;
@@ -54,6 +57,9 @@ export function createNativeAudioRobustnessSnapshotSource(
     Record<string, unknown>;
 
   source.state = input.state;
+  source.stabilityActionProfile = input.stabilityActionProfile;
+  source.stabilityPrimaryReason = input.stabilityPrimaryReason;
+  source.stabilityReasonCodes = input.stabilityReasonCodes;
   source.estimatedAudioBufferBytes = input.estimatedAudioBufferBytes;
   source.renderQueuePageLockFailureCount = input.renderQueuePageLockFailureCount;
   source.renderQueuePageLockAttemptedBytes = input.renderQueuePageLockAttemptedBytes;

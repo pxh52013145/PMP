@@ -353,6 +353,9 @@ export class NativeAudioService implements IAudioService {
   private lastAutoBackendSwitchReason: string | null = null;
   private lastSchedulerProfile: 'normal' | 'guarded' | 'critical' = 'normal';
   private stabilityProfile: AudioStabilityProfile = 'balanced';
+  private stabilityActionProfile: 'normal' | 'guarded' | 'critical' = 'normal';
+  private stabilityPrimaryReason: string | null = null;
+  private stabilityReasonCodes: string[] = [];
   private transportMode: 'robust' | 'transport-exact' = 'robust';
   private hqSrcPhaseMode: 'linear' | 'minimum' | 'intermediate' = 'linear';
   private srcMode: 'source-native' | 'match-output' | 'target-rate' = 'match-output';
@@ -3961,6 +3964,9 @@ export class NativeAudioService implements IAudioService {
     const source = createNativeAudioRobustnessSnapshotSource({
       record: this as unknown as Record<string, unknown>,
       state: this.state,
+      stabilityActionProfile: this.stabilityActionProfile,
+      stabilityPrimaryReason: this.stabilityPrimaryReason,
+      stabilityReasonCodes: this.stabilityReasonCodes,
       estimatedAudioBufferBytes: this.estimatedAudioBufferBytes,
       renderQueuePageLockFailureCount: this.renderQueuePageLockFailureCount,
       renderQueuePageLockAttemptedBytes: this.renderQueuePageLockAttemptedBytes,

@@ -38,6 +38,7 @@ use crate::audio::policy::{
     NativeAudioStabilityProfile, NativeAudioTransportMode,
 };
 use crate::audio::realtime_scheduler::{RealtimePressureProfile, SCHEDULER};
+use crate::audio::stability_controller::AudioStabilityController;
 
 const SHARED_TIMELINE_STRESS_WINDOW: Duration = Duration::from_secs(12);
 const SHARED_TIMELINE_STRESS_EXTENSION: Duration = Duration::from_secs(16);
@@ -628,6 +629,7 @@ pub(crate) struct NativeAudioEngine {
     streaming_interactive_profile: InteractivePrebufferProfile,
     transport_mode: NativeAudioTransportMode,
     stability_profile: NativeAudioStabilityProfile,
+    stability_controller: AudioStabilityController,
     hq_src_enabled: bool,
     hq_src_phase_mode: NativeAudioHqSrcPhaseMode,
     src_mode: NativeAudioSrcMode,
@@ -977,6 +979,7 @@ impl NativeAudioEngine {
             streaming_interactive_profile: parse_interactive_prebuffer_profile(),
             transport_mode: NativeAudioTransportMode::Robust,
             stability_profile: NativeAudioStabilityProfile::Balanced,
+            stability_controller: AudioStabilityController::default(),
             hq_src_enabled: default_hq_src_enabled,
             hq_src_phase_mode: NativeAudioHqSrcPhaseMode::Linear,
             src_mode: NativeAudioSrcMode::MatchOutput,
@@ -2260,6 +2263,11 @@ impl NativeAudioEngine {
         } else {
             0.0
         };
+        self.update_stability_pressure_state(
+            buffered_ahead_seconds,
+            self.underrun_recovery_until.is_some(),
+            self.shared_timeline_stress_until.is_some(),
+        );
         let profile = SCHEDULER.update(buffered_ahead_seconds, robust_recovery_active);
         min_start_samples = clamp_min_start_samples_to_reachable(
             min_start_samples,
@@ -3059,7 +3067,7 @@ impl NativeAudioEngine {
             return true;
         }
 
-        if let (Some(sink), Some(streaming)) = (&self.sink, &self.streaming) {
+        let streaming_runtime = self.streaming.as_ref().map(|streaming| {
             let channels = self.decoded_channels.max(1) as usize;
             let remaining_duration = if self.duration.is_finite() && self.duration > 0.0 {
                 (self.duration - self.current_position).max(0.0)
@@ -3075,103 +3083,207 @@ impl NativeAudioEngine {
                 StreamingPrebufferKind::StartOrSeek,
                 self.streaming_prebuffer_start_or_seek_seconds,
             );
+            let sample_rate = self.decoded_sample_rate.max(1) as f64;
+            let channels_f64 = channels.max(1) as f64;
+            let buffered_ahead_seconds = if sample_rate > 0.0 && channels_f64 > 0.0 {
+                (streaming.render_queue.len_samples() as f64) / (sample_rate * channels_f64)
+            } else {
+                0.0
+            };
+            (
+                channels,
+                target_samples,
+                sample_rate,
+                channels_f64,
+                buffered_ahead_seconds,
+            )
+        });
 
+        if let Some((channels, target_samples, sample_rate, channels_f64, buffered_ahead_seconds)) =
+            streaming_runtime
+        {
             if target_samples > 0 {
-                let sample_rate = self.decoded_sample_rate.max(1) as f64;
-                let channels_f64 = channels.max(1) as f64;
-                let target_seconds = target_samples as f64 / (sample_rate * channels_f64);
-                let (min_seconds_cap, min_seconds_floor) =
-                    streaming_min_start_bounds(self.output_backend.id(), robust_recovery_active);
-                let min_start_seconds = target_seconds
-                    .min(min_seconds_cap)
-                    .max(min_seconds_floor)
-                    .min(target_seconds);
-                let mut min_start_samples =
-                    ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
-                        .clamp(1, target_samples);
-                let buffered_ahead_seconds = if sample_rate > 0.0 && channels_f64 > 0.0 {
-                    (streaming.render_queue.len_samples() as f64) / (sample_rate * channels_f64)
-                } else {
-                    0.0
-                };
-                let profile = SCHEDULER.update(buffered_ahead_seconds, robust_recovery_active);
-                min_start_samples = clamp_min_start_samples_to_reachable(
-                    min_start_samples,
-                    target_samples,
-                    streaming.render_queue.capacity_samples(),
-                    channels,
-                    profile,
+                self.update_stability_pressure_state(
+                    buffered_ahead_seconds,
+                    underrun_recovery_active,
+                    shared_stress_active,
                 );
+            }
 
-                if matches!(self.desired_playback_state, PlaybackState::Playing)
-                    && matches!(self.playback_state, PlaybackState::Playing)
-                {
-                    let available = streaming.render_queue.len_samples();
-                    let (rebuffer_enter_samples, rebuffer_resume_samples) =
-                        runtime_rebuffer_threshold_samples(
-                            self.output_backend.id(),
-                            min_start_samples,
-                            channels,
-                        );
-                    // During interactive seek we keep the sink running (the streaming source emits
-                    // silence) and avoid entering the buffering state, otherwise shared backends
-                    // can "pause then resume" with large perceived latency.
-                    if self.playback_started_at.is_some()
-                        && available < rebuffer_enter_samples
-                        && !self.streaming_is_finished(streaming)
+            if let (Some(sink), Some(streaming)) = (&self.sink, &self.streaming) {
+                if target_samples > 0 {
+                    let target_seconds = target_samples as f64 / (sample_rate * channels_f64);
+                    let (min_seconds_cap, min_seconds_floor) = streaming_min_start_bounds(
+                        self.output_backend.id(),
+                        robust_recovery_active,
+                    );
+                    let min_start_seconds = target_seconds
+                        .min(min_seconds_cap)
+                        .max(min_seconds_floor)
+                        .min(target_seconds);
+                    let mut min_start_samples = ((sample_rate * channels_f64 * min_start_seconds)
+                        .ceil() as usize)
+                        .clamp(1, target_samples);
+                    let profile = SCHEDULER.update(buffered_ahead_seconds, robust_recovery_active);
+                    min_start_samples = clamp_min_start_samples_to_reachable(
+                        min_start_samples,
+                        target_samples,
+                        streaming.render_queue.capacity_samples(),
+                        channels,
+                        profile,
+                    );
+
+                    if matches!(self.desired_playback_state, PlaybackState::Playing)
+                        && matches!(self.playback_state, PlaybackState::Playing)
                     {
-                        sink.pause();
-                        self.sync_clock();
-                        self.playback_state = PlaybackState::Buffering;
+                        let available = streaming.render_queue.len_samples();
+                        let (rebuffer_enter_samples, rebuffer_resume_samples) =
+                            runtime_rebuffer_threshold_samples(
+                                self.output_backend.id(),
+                                min_start_samples,
+                                channels,
+                            );
+                        // During interactive seek we keep the sink running (the streaming source emits
+                        // silence) and avoid entering the buffering state, otherwise shared backends
+                        // can "pause then resume" with large perceived latency.
+                        if self.playback_started_at.is_some()
+                            && available < rebuffer_enter_samples
+                            && !self.streaming_is_finished(streaming)
+                        {
+                            sink.pause();
+                            self.sync_clock();
+                            self.playback_state = PlaybackState::Buffering;
+                            let now = Instant::now();
+                            self.buffering_started_at = Some(now);
+                            self.buffering_last_progress_at = Some(now);
+                            self.buffering_last_samples = available;
+                            self.buffering_resume_samples = rebuffer_resume_samples;
+                            return true;
+                        }
+                    }
+
+                    if matches!(self.desired_playback_state, PlaybackState::Playing)
+                        && matches!(self.playback_state, PlaybackState::Playing)
+                        && self.playback_started_at.is_none()
+                    {
+                        // Seek-in-flight: keep playing (silence) but still detect a decoder stall.
+                        let available = streaming.render_queue.len_samples();
+                        let finished = self.streaming_is_finished(streaming);
                         let now = Instant::now();
-                        self.buffering_started_at = Some(now);
-                        self.buffering_last_progress_at = Some(now);
-                        self.buffering_last_samples = available;
-                        self.buffering_resume_samples = rebuffer_resume_samples;
-                        return true;
+
+                        if self.buffering_started_at.is_none() {
+                            self.buffering_started_at = Some(now);
+                            self.buffering_last_progress_at = Some(now);
+                            self.buffering_last_samples = available;
+                        } else if available != self.buffering_last_samples {
+                            self.buffering_last_samples = available;
+                            self.buffering_last_progress_at = Some(now);
+                        }
+
+                        let stall_timeout = Duration::from_secs(15);
+                        let no_progress_for = self
+                            .buffering_last_progress_at
+                            .map(|instant| now.saturating_duration_since(instant))
+                            .unwrap_or(Duration::from_secs(0));
+                        if !finished
+                            && available < min_start_samples
+                            && no_progress_for >= stall_timeout
+                        {
+                            let decode_available = streaming.buffer.len_samples();
+                            sink.pause();
+                            self.sync_clock();
+                            self.buffering_started_at = None;
+                            self.buffering_last_progress_at = None;
+                            self.buffering_last_samples = 0;
+                            self.buffering_resume_samples = 0;
+                            self.set_error(
+                                "NATIVE_AUDIO_SEEK_STALLED",
+                                format!(
+                                    "Audio seek stalled (no decoder progress): available={available} minStart={min_start_samples} target={target_samples} decodeAvailable={decode_available}"
+                                ),
+                            );
+                            return true;
+                        }
                     }
-                }
 
-                if matches!(self.desired_playback_state, PlaybackState::Playing)
-                    && matches!(self.playback_state, PlaybackState::Playing)
-                    && self.playback_started_at.is_none()
-                {
-                    // Seek-in-flight: keep playing (silence) but still detect a decoder stall.
-                    let available = streaming.render_queue.len_samples();
-                    let finished = self.streaming_is_finished(streaming);
-                    let now = Instant::now();
-
-                    if self.buffering_started_at.is_none() {
-                        self.buffering_started_at = Some(now);
-                        self.buffering_last_progress_at = Some(now);
-                        self.buffering_last_samples = available;
-                    } else if available != self.buffering_last_samples {
-                        self.buffering_last_samples = available;
-                        self.buffering_last_progress_at = Some(now);
-                    }
-
-                    let stall_timeout = Duration::from_secs(15);
-                    let no_progress_for = self
-                        .buffering_last_progress_at
-                        .map(|instant| now.saturating_duration_since(instant))
-                        .unwrap_or(Duration::from_secs(0));
-                    if !finished
-                        && available < min_start_samples
-                        && no_progress_for >= stall_timeout
+                    if matches!(self.desired_playback_state, PlaybackState::Playing)
+                        && matches!(self.playback_state, PlaybackState::Buffering)
                     {
-                        let decode_available = streaming.buffer.len_samples();
-                        sink.pause();
-                        self.sync_clock();
-                        self.buffering_started_at = None;
-                        self.buffering_last_progress_at = None;
-                        self.buffering_last_samples = 0;
-                        self.buffering_resume_samples = 0;
-                        self.set_error(
-                            "NATIVE_AUDIO_SEEK_STALLED",
-                            format!(
-                                "Audio seek stalled (no decoder progress): available={available} minStart={min_start_samples} target={target_samples} decodeAvailable={decode_available}"
-                            ),
-                        );
+                        let available = streaming.render_queue.len_samples();
+                        let finished = self.streaming_is_finished(streaming);
+                        let now = Instant::now();
+                        if available != self.buffering_last_samples {
+                            self.buffering_last_samples = available;
+                            self.buffering_last_progress_at = Some(now);
+                        }
+
+                        if self.streaming_is_finished_and_empty(streaming) {
+                            self.buffering_started_at = None;
+                            self.buffering_last_progress_at = None;
+                            self.buffering_last_samples = 0;
+                            self.buffering_resume_samples = 0;
+                            self.current_position = self.duration;
+                            self.base_position = self.current_position;
+                            self.playback_started_at = None;
+                            self.set_state(PlaybackState::Stopped);
+                            if self.should_release_cached_audio_on_stop() {
+                                self.release_cached_audio_pipeline();
+                            }
+                            return true;
+                        }
+
+                        if finished && available > 0 {
+                            self.play_sink_with_shared_guard(&sink);
+                            self.buffering_started_at = None;
+                            self.buffering_last_progress_at = None;
+                            self.buffering_last_samples = 0;
+                            self.buffering_resume_samples = 0;
+                            self.set_state(PlaybackState::Playing);
+                            self.base_position = self.current_position;
+                            self.playback_started_at = Some(now);
+                            return true;
+                        }
+
+                        let resume_samples = self
+                            .buffering_resume_samples
+                            .max((channels.max(1)).saturating_mul(32))
+                            .min(min_start_samples.max(1));
+                        let ready_min = available >= resume_samples;
+
+                        let stall_timeout = Duration::from_secs(15);
+                        let no_progress_for = self
+                            .buffering_last_progress_at
+                            .map(|instant| now.saturating_duration_since(instant))
+                            .unwrap_or(Duration::from_secs(0));
+                        if !ready_min && no_progress_for >= stall_timeout && !finished {
+                            let decode_available = streaming.buffer.len_samples();
+                            sink.pause();
+                            self.sync_clock();
+                            self.buffering_started_at = None;
+                            self.buffering_last_progress_at = None;
+                            self.buffering_last_samples = 0;
+                            self.set_error(
+                                "NATIVE_AUDIO_BUFFERING_TIMEOUT",
+                                format!(
+                                    "Audio buffering stalled (no decoder progress): available={available} minStart={min_start_samples} target={target_samples} decodeAvailable={decode_available} profile={profile:?}"
+                                ),
+                            );
+                            self.buffering_resume_samples = 0;
+                            return true;
+                        }
+
+                        if ready_min {
+                            self.play_sink_with_shared_guard(&sink);
+                            self.buffering_started_at = None;
+                            self.buffering_last_progress_at = None;
+                            self.buffering_last_samples = 0;
+                            self.buffering_resume_samples = 0;
+                            self.set_state(PlaybackState::Playing);
+                            self.base_position = self.current_position;
+                            self.playback_started_at = Some(Instant::now());
+                            return true;
+                        }
+
                         return true;
                     }
                 }
@@ -3179,97 +3291,16 @@ impl NativeAudioEngine {
                 if matches!(self.desired_playback_state, PlaybackState::Playing)
                     && matches!(self.playback_state, PlaybackState::Buffering)
                 {
-                    let available = streaming.render_queue.len_samples();
-                    let finished = self.streaming_is_finished(streaming);
-                    let now = Instant::now();
-                    if available != self.buffering_last_samples {
-                        self.buffering_last_samples = available;
-                        self.buffering_last_progress_at = Some(now);
-                    }
-
-                    if self.streaming_is_finished_and_empty(streaming) {
-                        self.buffering_started_at = None;
-                        self.buffering_last_progress_at = None;
-                        self.buffering_last_samples = 0;
-                        self.buffering_resume_samples = 0;
-                        self.current_position = self.duration;
-                        self.base_position = self.current_position;
-                        self.playback_started_at = None;
-                        self.set_state(PlaybackState::Stopped);
-                        if self.should_release_cached_audio_on_stop() {
-                            self.release_cached_audio_pipeline();
-                        }
-                        return true;
-                    }
-
-                    if finished && available > 0 {
-                        self.play_sink_with_shared_guard(&sink);
-                        self.buffering_started_at = None;
-                        self.buffering_last_progress_at = None;
-                        self.buffering_last_samples = 0;
-                        self.buffering_resume_samples = 0;
-                        self.set_state(PlaybackState::Playing);
-                        self.base_position = self.current_position;
-                        self.playback_started_at = Some(now);
-                        return true;
-                    }
-
-                    let resume_samples = self
-                        .buffering_resume_samples
-                        .max((channels.max(1)).saturating_mul(32))
-                        .min(min_start_samples.max(1));
-                    let ready_min = available >= resume_samples;
-
-                    let stall_timeout = Duration::from_secs(15);
-                    let no_progress_for = self
-                        .buffering_last_progress_at
-                        .map(|instant| now.saturating_duration_since(instant))
-                        .unwrap_or(Duration::from_secs(0));
-                    if !ready_min && no_progress_for >= stall_timeout && !finished {
-                        let decode_available = streaming.buffer.len_samples();
-                        sink.pause();
-                        self.sync_clock();
-                        self.buffering_started_at = None;
-                        self.buffering_last_progress_at = None;
-                        self.buffering_last_samples = 0;
-                        self.set_error(
-                            "NATIVE_AUDIO_BUFFERING_TIMEOUT",
-                            format!(
-                                "Audio buffering stalled (no decoder progress): available={available} minStart={min_start_samples} target={target_samples} decodeAvailable={decode_available} profile={profile:?}"
-                            ),
-                        );
-                        self.buffering_resume_samples = 0;
-                        return true;
-                    }
-
-                    if ready_min {
-                        self.play_sink_with_shared_guard(&sink);
-                        self.buffering_started_at = None;
-                        self.buffering_last_progress_at = None;
-                        self.buffering_last_samples = 0;
-                        self.buffering_resume_samples = 0;
-                        self.set_state(PlaybackState::Playing);
-                        self.base_position = self.current_position;
-                        self.playback_started_at = Some(Instant::now());
-                        return true;
-                    }
-
+                    self.play_sink_with_shared_guard(&sink);
+                    self.buffering_started_at = None;
+                    self.buffering_last_progress_at = None;
+                    self.buffering_last_samples = 0;
+                    self.buffering_resume_samples = 0;
+                    self.set_state(PlaybackState::Playing);
+                    self.base_position = self.current_position;
+                    self.playback_started_at = Some(Instant::now());
                     return true;
                 }
-            }
-
-            if matches!(self.desired_playback_state, PlaybackState::Playing)
-                && matches!(self.playback_state, PlaybackState::Buffering)
-            {
-                self.play_sink_with_shared_guard(&sink);
-                self.buffering_started_at = None;
-                self.buffering_last_progress_at = None;
-                self.buffering_last_samples = 0;
-                self.buffering_resume_samples = 0;
-                self.set_state(PlaybackState::Playing);
-                self.base_position = self.current_position;
-                self.playback_started_at = Some(Instant::now());
-                return true;
             }
         }
 

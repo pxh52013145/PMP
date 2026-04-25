@@ -7,6 +7,16 @@ const DEFAULT_MEMORY_PRESSURE_HOLD_MS_BALANCED: u64 = 12_000;
 const DEFAULT_MEMORY_PRESSURE_HOLD_MS_STABLE: u64 = 22_000;
 const DEFAULT_MEMORY_PRESSURE_HOLD_MS_GAME_SAFE: u64 = 30_000;
 const DEFAULT_MEMORY_PRESSURE_HOLD_MS_SAFE_MODE: u64 = 45_000;
+const DEFAULT_GUARDED_PRESSURE_HOLD_MS_LOW_LATENCY: u64 = 4_000;
+const DEFAULT_GUARDED_PRESSURE_HOLD_MS_BALANCED: u64 = 8_000;
+const DEFAULT_GUARDED_PRESSURE_HOLD_MS_STABLE: u64 = 14_000;
+const DEFAULT_GUARDED_PRESSURE_HOLD_MS_GAME_SAFE: u64 = 20_000;
+const DEFAULT_GUARDED_PRESSURE_HOLD_MS_SAFE_MODE: u64 = 28_000;
+const DEFAULT_CRITICAL_PRESSURE_HOLD_MS_LOW_LATENCY: u64 = 6_000;
+const DEFAULT_CRITICAL_PRESSURE_HOLD_MS_BALANCED: u64 = 12_000;
+const DEFAULT_CRITICAL_PRESSURE_HOLD_MS_STABLE: u64 = 18_000;
+const DEFAULT_CRITICAL_PRESSURE_HOLD_MS_GAME_SAFE: u64 = 26_000;
+const DEFAULT_CRITICAL_PRESSURE_HOLD_MS_SAFE_MODE: u64 = 34_000;
 const MIN_MEMORY_PRESSURE_HOLD_MS: u64 = 500;
 const MAX_MEMORY_PRESSURE_HOLD_MS: u64 = 120_000;
 
@@ -43,6 +53,42 @@ pub(crate) fn memory_pressure_hold_ms() -> u64 {
         NativeAudioStabilityProfile::Stable => DEFAULT_MEMORY_PRESSURE_HOLD_MS_STABLE,
         NativeAudioStabilityProfile::GameSafe => DEFAULT_MEMORY_PRESSURE_HOLD_MS_GAME_SAFE,
         NativeAudioStabilityProfile::SafeMode => DEFAULT_MEMORY_PRESSURE_HOLD_MS_SAFE_MODE,
+    }
+}
+
+pub(crate) fn guarded_pressure_hold_ms() -> u64 {
+    if let Some(value) = parse_env_u64(
+        "PMP_AUDIO_GUARDED_PRESSURE_HOLD_MS",
+        MIN_MEMORY_PRESSURE_HOLD_MS,
+        MAX_MEMORY_PRESSURE_HOLD_MS,
+    ) {
+        return value;
+    }
+
+    match current_stability_profile() {
+        NativeAudioStabilityProfile::LowLatency => DEFAULT_GUARDED_PRESSURE_HOLD_MS_LOW_LATENCY,
+        NativeAudioStabilityProfile::Balanced => DEFAULT_GUARDED_PRESSURE_HOLD_MS_BALANCED,
+        NativeAudioStabilityProfile::Stable => DEFAULT_GUARDED_PRESSURE_HOLD_MS_STABLE,
+        NativeAudioStabilityProfile::GameSafe => DEFAULT_GUARDED_PRESSURE_HOLD_MS_GAME_SAFE,
+        NativeAudioStabilityProfile::SafeMode => DEFAULT_GUARDED_PRESSURE_HOLD_MS_SAFE_MODE,
+    }
+}
+
+pub(crate) fn critical_pressure_hold_ms() -> u64 {
+    if let Some(value) = parse_env_u64(
+        "PMP_AUDIO_CRITICAL_PRESSURE_HOLD_MS",
+        MIN_MEMORY_PRESSURE_HOLD_MS,
+        MAX_MEMORY_PRESSURE_HOLD_MS,
+    ) {
+        return value;
+    }
+
+    match current_stability_profile() {
+        NativeAudioStabilityProfile::LowLatency => DEFAULT_CRITICAL_PRESSURE_HOLD_MS_LOW_LATENCY,
+        NativeAudioStabilityProfile::Balanced => DEFAULT_CRITICAL_PRESSURE_HOLD_MS_BALANCED,
+        NativeAudioStabilityProfile::Stable => DEFAULT_CRITICAL_PRESSURE_HOLD_MS_STABLE,
+        NativeAudioStabilityProfile::GameSafe => DEFAULT_CRITICAL_PRESSURE_HOLD_MS_GAME_SAFE,
+        NativeAudioStabilityProfile::SafeMode => DEFAULT_CRITICAL_PRESSURE_HOLD_MS_SAFE_MODE,
     }
 }
 
@@ -95,4 +141,3 @@ pub(crate) fn wasapi_shared_raw_prefill_timeout_ms_default() -> u64 {
         NativeAudioStabilityProfile::SafeMode => 1200,
     }
 }
-
