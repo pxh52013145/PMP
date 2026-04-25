@@ -2,6 +2,7 @@ use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::audio::diagnostics;
+use crate::audio::realtime_scheduler::{RealtimePressureProfile, SCHEDULER};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct MemoryPoolStatsSnapshot {
@@ -37,6 +38,7 @@ pub(crate) fn reserve_f32_capacity(
         (grown_samples.saturating_mul(mem::size_of::<f32>())) as u64,
         Ordering::Relaxed,
     );
+    SCHEDULER.record_memory_pressure_signal(RealtimePressureProfile::Guarded);
     diagnostics::record_event_throttled(
         growth_event_kind,
         required_capacity as u64,

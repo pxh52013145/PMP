@@ -325,6 +325,15 @@ pub(crate) fn output_producer_chunk_samples(profile: RealtimePressureProfile) ->
     }
 }
 
+pub(crate) fn hot_path_prewarm_chunk_samples(capacity_samples: usize, channels: usize) -> usize {
+    let channels = channels.max(1);
+    let capacity = capacity_samples.max(channels);
+    output_producer_chunk_samples(RealtimePressureProfile::Critical)
+        .saturating_add(channels.saturating_mul(2048))
+        .min(capacity)
+        .max(channels)
+}
+
 pub(crate) fn output_producer_backoff(profile: RealtimePressureProfile) -> Duration {
     match profile {
         RealtimePressureProfile::Normal => Duration::from_millis(1),
@@ -492,6 +501,16 @@ mod tests {
         assert!(normal_low <= guarded_low && guarded_low <= critical_low);
         assert!(normal_high <= guarded_high && guarded_high <= critical_high);
         assert!(critical_high <= capacity);
+    }
+
+    #[test]
+    fn hot_path_prewarm_chunk_covers_critical_adaptive_boost() {
+        let capacity = 96_000usize;
+        let channels = 2usize;
+        let prewarm = hot_path_prewarm_chunk_samples(capacity, channels);
+        let expected =
+            output_producer_chunk_samples(RealtimePressureProfile::Critical) + channels * 2048;
+        assert_eq!(prewarm, expected);
     }
 
     #[test]
