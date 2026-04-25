@@ -20,6 +20,7 @@ pub(crate) mod nn_runtime;
 pub mod output;
 pub(crate) mod pipeline;
 pub(crate) mod policy;
+pub(crate) mod realtime_memory_guard;
 pub(crate) mod realtime_scheduler;
 pub(crate) mod resample;
 pub(crate) mod retire_plane;

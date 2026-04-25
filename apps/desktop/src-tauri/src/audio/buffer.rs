@@ -160,6 +160,26 @@ impl AudioRingBuffer {
         self.inner.lock_bytes
     }
 
+    pub(crate) fn pre_touch_pages(&self) {
+        let capacity = self.inner.capacity;
+        if capacity == 0 {
+            return;
+        }
+
+        let stride = (4096 / std::mem::size_of::<f32>()).max(1);
+        let mut index = 0usize;
+        while index < capacity {
+            unsafe {
+                let _ = ptr::read_volatile(self.inner.data_ptr.add(index));
+            }
+            index = index.saturating_add(stride);
+        }
+
+        unsafe {
+            let _ = ptr::read_volatile(self.inner.data_ptr.add(capacity - 1));
+        }
+    }
+
     pub fn wait_for_samples(&self, min_samples: usize, timeout: Duration) {
         if min_samples == 0 {
             return;

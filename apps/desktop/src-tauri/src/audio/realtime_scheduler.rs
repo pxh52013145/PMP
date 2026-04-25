@@ -1,5 +1,5 @@
 use once_cell::sync::Lazy;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -21,6 +21,7 @@ impl RealtimePressureProfile {
 
 pub(crate) struct RealtimeScheduler {
     profile: AtomicU8,
+    memory_pressure_events: AtomicU64,
 }
 
 impl RealtimeScheduler {
@@ -32,6 +33,7 @@ impl RealtimeScheduler {
     pub(crate) fn new() -> Self {
         Self {
             profile: AtomicU8::new(RealtimePressureProfile::Normal as u8),
+            memory_pressure_events: AtomicU64::new(0),
         }
     }
 
@@ -93,6 +95,27 @@ impl RealtimeScheduler {
         self.profile.store(next as u8, Ordering::Release);
         next
     }
+
+    pub(crate) fn record_memory_pressure_signal(&self, minimum_profile: RealtimePressureProfile) {
+        self.memory_pressure_events.fetch_add(1, Ordering::Relaxed);
+        let minimum = minimum_profile as u8;
+        let mut current = self.profile.load(Ordering::Acquire);
+        while current < minimum {
+            match self.profile.compare_exchange(
+                current,
+                minimum,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(next) => current = next,
+            }
+        }
+    }
+
+    pub(crate) fn memory_pressure_events(&self) -> u64 {
+        self.memory_pressure_events.load(Ordering::Relaxed)
+    }
 }
 
 pub(crate) static SCHEDULER: Lazy<RealtimeScheduler> = Lazy::new(RealtimeScheduler::new);
@@ -143,5 +166,16 @@ mod tests {
             scheduler.update(0.70, false),
             RealtimePressureProfile::Normal
         );
+    }
+
+    #[test]
+    fn memory_pressure_signal_promotes_profile() {
+        let scheduler = RealtimeScheduler::new();
+
+        assert_eq!(scheduler.profile(), RealtimePressureProfile::Normal);
+        scheduler.record_memory_pressure_signal(RealtimePressureProfile::Guarded);
+
+        assert_eq!(scheduler.profile(), RealtimePressureProfile::Guarded);
+        assert_eq!(scheduler.memory_pressure_events(), 1);
     }
 }
