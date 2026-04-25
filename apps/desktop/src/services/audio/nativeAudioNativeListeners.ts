@@ -524,6 +524,133 @@ export async function setupNativeListenersImpl(
         }
 
         if (
+          typeof next.memoryPoolF32GrowthEvents === 'number' &&
+          Number.isFinite(next.memoryPoolF32GrowthEvents)
+        ) {
+          this.memoryPoolF32GrowthEvents = Math.max(
+            0,
+            Math.floor(next.memoryPoolF32GrowthEvents)
+          );
+        }
+
+        if (
+          typeof next.memoryPoolF32GrowthBytes === 'number' &&
+          Number.isFinite(next.memoryPoolF32GrowthBytes)
+        ) {
+          this.memoryPoolF32GrowthBytes = Math.max(0, Math.floor(next.memoryPoolF32GrowthBytes));
+        }
+
+        if (
+          typeof next.memoryPoolF32PrewarmHits === 'number' &&
+          Number.isFinite(next.memoryPoolF32PrewarmHits)
+        ) {
+          this.memoryPoolF32PrewarmHits = Math.max(
+            0,
+            Math.floor(next.memoryPoolF32PrewarmHits)
+          );
+        }
+
+        if (
+          typeof next.realtimeMemoryLockAttemptedBytes === 'number' &&
+          Number.isFinite(next.realtimeMemoryLockAttemptedBytes)
+        ) {
+          this.realtimeMemoryLockAttemptedBytes = Math.max(
+            0,
+            Math.floor(next.realtimeMemoryLockAttemptedBytes)
+          );
+        }
+
+        if (
+          typeof next.realtimeMemoryLockSucceededBytes === 'number' &&
+          Number.isFinite(next.realtimeMemoryLockSucceededBytes)
+        ) {
+          this.realtimeMemoryLockSucceededBytes = Math.max(
+            0,
+            Math.floor(next.realtimeMemoryLockSucceededBytes)
+          );
+        }
+
+        if (
+          typeof next.realtimeMemoryLockFailedBytes === 'number' &&
+          Number.isFinite(next.realtimeMemoryLockFailedBytes)
+        ) {
+          this.realtimeMemoryLockFailedBytes = Math.max(
+            0,
+            Math.floor(next.realtimeMemoryLockFailedBytes)
+          );
+        }
+
+        if (
+          typeof next.realtimeMemoryLockSkippedBytes === 'number' &&
+          Number.isFinite(next.realtimeMemoryLockSkippedBytes)
+        ) {
+          this.realtimeMemoryLockSkippedBytes = Math.max(
+            0,
+            Math.floor(next.realtimeMemoryLockSkippedBytes)
+          );
+        }
+
+        if (
+          typeof next.realtimeMemoryLockFailureCount === 'number' &&
+          Number.isFinite(next.realtimeMemoryLockFailureCount)
+        ) {
+          this.realtimeMemoryLockFailureCount = Math.max(
+            0,
+            Math.floor(next.realtimeMemoryLockFailureCount)
+          );
+        }
+
+        if (
+          typeof next.realtimeMemoryLockSkippedCount === 'number' &&
+          Number.isFinite(next.realtimeMemoryLockSkippedCount)
+        ) {
+          this.realtimeMemoryLockSkippedCount = Math.max(
+            0,
+            Math.floor(next.realtimeMemoryLockSkippedCount)
+          );
+        }
+
+        if (
+          typeof next.realtimeMemoryLockedRoleMask === 'number' &&
+          Number.isFinite(next.realtimeMemoryLockedRoleMask)
+        ) {
+          this.realtimeMemoryLockedRoleMask = Math.max(
+            0,
+            Math.floor(next.realtimeMemoryLockedRoleMask)
+          );
+        }
+
+        if (
+          typeof next.realtimeMemoryFailedRoleMask === 'number' &&
+          Number.isFinite(next.realtimeMemoryFailedRoleMask)
+        ) {
+          this.realtimeMemoryFailedRoleMask = Math.max(
+            0,
+            Math.floor(next.realtimeMemoryFailedRoleMask)
+          );
+        }
+
+        if (
+          typeof next.realtimeMemorySkippedRoleMask === 'number' &&
+          Number.isFinite(next.realtimeMemorySkippedRoleMask)
+        ) {
+          this.realtimeMemorySkippedRoleMask = Math.max(
+            0,
+            Math.floor(next.realtimeMemorySkippedRoleMask)
+          );
+        }
+
+        if (
+          typeof next.realtimeMemoryPressureEvents === 'number' &&
+          Number.isFinite(next.realtimeMemoryPressureEvents)
+        ) {
+          this.realtimeMemoryPressureEvents = Math.max(
+            0,
+            Math.floor(next.realtimeMemoryPressureEvents)
+          );
+        }
+
+        if (
           typeof next.diagnosticTimelineDroppedEvents === 'number' &&
           Number.isFinite(next.diagnosticTimelineDroppedEvents)
         ) {

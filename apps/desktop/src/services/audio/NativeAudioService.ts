@@ -405,6 +405,19 @@ export class NativeAudioService implements IAudioService {
   private sharedRenderUnderrunFrames = 0;
   private sharedRenderLowHitCount = 0;
   private sharedRenderLowWatermarkSamples = 0;
+  private memoryPoolF32GrowthEvents = 0;
+  private memoryPoolF32GrowthBytes = 0;
+  private memoryPoolF32PrewarmHits = 0;
+  private realtimeMemoryLockAttemptedBytes = 0;
+  private realtimeMemoryLockSucceededBytes = 0;
+  private realtimeMemoryLockFailedBytes = 0;
+  private realtimeMemoryLockSkippedBytes = 0;
+  private realtimeMemoryLockFailureCount = 0;
+  private realtimeMemoryLockSkippedCount = 0;
+  private realtimeMemoryLockedRoleMask = 0;
+  private realtimeMemoryFailedRoleMask = 0;
+  private realtimeMemorySkippedRoleMask = 0;
+  private realtimeMemoryPressureEvents = 0;
   private controlQueueLockFree = false;
   private controlQueueMode = 'unknown';
   private controlQueueCapacity = 0;
@@ -3921,6 +3934,19 @@ export class NativeAudioService implements IAudioService {
       renderQueuePageLockAttemptedBytes: this.renderQueuePageLockAttemptedBytes,
       renderQueuePageLockSucceededBytes: this.renderQueuePageLockSucceededBytes,
       renderQueuePageLockFailedBytes: this.renderQueuePageLockFailedBytes,
+      memoryPoolF32GrowthEvents: this.memoryPoolF32GrowthEvents,
+      memoryPoolF32GrowthBytes: this.memoryPoolF32GrowthBytes,
+      memoryPoolF32PrewarmHits: this.memoryPoolF32PrewarmHits,
+      realtimeMemoryLockAttemptedBytes: this.realtimeMemoryLockAttemptedBytes,
+      realtimeMemoryLockSucceededBytes: this.realtimeMemoryLockSucceededBytes,
+      realtimeMemoryLockFailedBytes: this.realtimeMemoryLockFailedBytes,
+      realtimeMemoryLockSkippedBytes: this.realtimeMemoryLockSkippedBytes,
+      realtimeMemoryLockFailureCount: this.realtimeMemoryLockFailureCount,
+      realtimeMemoryLockSkippedCount: this.realtimeMemoryLockSkippedCount,
+      realtimeMemoryLockedRoleMask: this.realtimeMemoryLockedRoleMask,
+      realtimeMemoryFailedRoleMask: this.realtimeMemoryFailedRoleMask,
+      realtimeMemorySkippedRoleMask: this.realtimeMemorySkippedRoleMask,
+      realtimeMemoryPressureEvents: this.realtimeMemoryPressureEvents,
       bufferedAheadRollingWindow: this.bufferedAheadRollingWindow,
       bufferedAheadRollingSum: this.bufferedAheadRollingSum,
       underrunRecoveryUntilMs: this.underrunRecoveryUntilMs,
