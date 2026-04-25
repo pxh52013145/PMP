@@ -5,7 +5,6 @@ const mocks = vi.hoisted(() => ({
   instance: null as PlatformInstanceRecord | null,
   setActiveMusicPlatformInstance: vi.fn(async () => undefined),
   setPlatformRenderSelectionMounted: vi.fn(),
-  broadcastSignal: vi.fn(async () => undefined),
 }));
 
 vi.mock('../../utils/tauriRuntime', () => ({
@@ -19,12 +18,10 @@ vi.mock('../../utils/windowCommunication', () => ({
   },
   TAURI_EVENTS: {
     MAGNET_SPACES_UPDATED: 'magnet-spaces-updated',
-    MAGNET_ACTIVATED: 'magnet-activated',
   },
   broadcastDataUpdate: async (key: string, data: unknown) => {
     localStorage.setItem(key, JSON.stringify(data));
   },
-  broadcastSignal: mocks.broadcastSignal,
 }));
 
 vi.mock('./instanceRegistry', () => ({
@@ -79,7 +76,6 @@ describe('platform workspace focus', () => {
     mocks.instance = createPlatformInstance();
     mocks.setActiveMusicPlatformInstance.mockClear();
     mocks.setPlatformRenderSelectionMounted.mockClear();
-    mocks.broadcastSignal.mockClear();
   });
 
   it('mounts the instance and switches to the existing platform workspace space', async () => {
@@ -109,12 +105,5 @@ describe('platform workspace focus', () => {
       localStorage.getItem('pixel-matrix-magnet-spaces-v1') ?? '{}'
     ) as { activeSpaceId?: string };
     expect(spaces.activeSpaceId).toBe('space2');
-
-    const space2Layout = JSON.parse(
-      localStorage.getItem('pixel-matrix-magnet-space-layout-v1:space2') ?? '{}'
-    ) as { activeMagnetIds?: string[] };
-    expect(space2Layout.activeMagnetIds).toEqual(
-      expect.arrayContaining(['platform-magnet', 'btn-platform-login'])
-    );
   });
 });

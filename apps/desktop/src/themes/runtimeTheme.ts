@@ -1,6 +1,7 @@
 import { DEFAULT_BACKGROUND_SETTINGS } from '../constants/defaultBackground';
 import { readJson } from '../modules/storage';
 import { STORAGE_KEYS } from '../utils/windowCommunication';
+import { DEFAULT_THEME_MOTION } from './motion';
 import { normalizeTheme } from './normalizeTheme';
 import type { Theme } from './types/theme';
 import type { ThemeImportCandidate } from './types/themeImport';
@@ -24,6 +25,7 @@ export const DEFAULT_THEME: Theme = {
   fonts: {
     primary: 'Inter, sans-serif',
   },
+  motion: DEFAULT_THEME_MOTION,
   bindings: {
     'magnet.track-info': {
       variant: 'spinning-vinyl',

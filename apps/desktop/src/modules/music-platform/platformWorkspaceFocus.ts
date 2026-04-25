@@ -4,12 +4,6 @@ import { setActiveMusicPlatformInstance } from './activeInstanceRegistry';
 import { setPlatformRenderSelectionMounted } from './renderSelectionRegistry';
 import { createDefaultMagnetSpacesState, sanitizeMagnetSpacesState } from '../magnets/spaces';
 import {
-  createDefaultMagnetSpaceLayout,
-  ensureMagnetSpaceLayout,
-  saveMagnetSpaceLayout,
-} from '../magnets/layoutStorage';
-import { resolveMagnetLayoutStorageKey } from '../magnets/layout';
-import {
   magnetLayoutStoreApplyPatchWithRetry,
   magnetLayoutStoreGetState,
   type MagnetLayoutStorePatch,
@@ -18,7 +12,6 @@ import {
   STORAGE_KEYS,
   TAURI_EVENTS,
   broadcastDataUpdate,
-  broadcastSignal,
 } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 
@@ -29,7 +22,6 @@ export interface FocusMusicPlatformWorkspaceResult {
 }
 
 const PLATFORM_WORKSPACE_SPACE_ID = 'space2';
-const PLATFORM_WORKSPACE_MAGNET_IDS = ['platform-magnet', 'btn-platform-login'] as const;
 
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -46,24 +38,10 @@ async function focusPlatformWorkspaceSpaceViaLayoutStore(): Promise<boolean> {
   const store = await magnetLayoutStoreGetState();
   if (!store) return false;
 
-  const layout =
-    store.layoutsBySpaceId[PLATFORM_WORKSPACE_SPACE_ID] ??
-    createDefaultMagnetSpaceLayout(PLATFORM_WORKSPACE_SPACE_ID);
-  const active = new Set(layout.activeMagnetIds);
   const patches: MagnetLayoutStorePatch[] = [];
 
   if (store.spaces.activeSpaceId !== PLATFORM_WORKSPACE_SPACE_ID) {
     patches.push({ kind: 'setActiveSpaceId', spaceId: PLATFORM_WORKSPACE_SPACE_ID });
-  }
-
-  for (const magnetId of PLATFORM_WORKSPACE_MAGNET_IDS) {
-    if (active.has(magnetId)) continue;
-    patches.push({
-      kind: 'setMagnetActive',
-      spaceId: PLATFORM_WORKSPACE_SPACE_ID,
-      magnetId,
-      active: true,
-    });
   }
 
   if (patches.length === 0) return true;
@@ -96,25 +74,6 @@ async function focusPlatformWorkspaceSpaceViaStorage(): Promise<void> {
       TAURI_EVENTS.MAGNET_SPACES_UPDATED
     );
   }
-
-  const { layout, storageKey } = ensureMagnetSpaceLayout(PLATFORM_WORKSPACE_SPACE_ID);
-  const active = new Set(layout.activeMagnetIds);
-  let changed = false;
-  for (const magnetId of PLATFORM_WORKSPACE_MAGNET_IDS) {
-    if (active.has(magnetId)) continue;
-    active.add(magnetId);
-    changed = true;
-  }
-  if (!changed) return;
-
-  saveMagnetSpaceLayout(
-    {
-      ...layout,
-      activeMagnetIds: Array.from(active),
-    },
-    storageKey ?? resolveMagnetLayoutStorageKey(PLATFORM_WORKSPACE_SPACE_ID)
-  );
-  await broadcastSignal(TAURI_EVENTS.MAGNET_ACTIVATED);
 }
 
 async function focusPlatformWorkspaceSpace(): Promise<void> {

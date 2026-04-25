@@ -56,6 +56,7 @@ import {
   setupTauriListenerWithPayload,
 } from './utils/windowCommunication';
 import { readJson, readString, removeKey, writeJson } from './modules/storage';
+import { applyWindowPinPolicy, updateWindowPinPreference } from './utils/windowPinRuntime';
 import { readWindowPinState, writeWindowPinState } from './utils/windowPinState';
 import {
   resolveEditorSkinVariant,
@@ -115,34 +116,6 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
     theme: false,
     background: false,
   });
-
-  const applyEditorWindowsAlwaysOnTop = useCallback(async (value: boolean) => {
-    const { appWindow, getAll } = await import('@tauri-apps/api/window');
-
-    // Keep current control window strongly consistent with the toggle state.
-    await appWindow.setAlwaysOnTop(value);
-
-    const allWindows = getAll();
-
-    for (const window of allWindows) {
-      if (!window.label.startsWith('editor-') || window.label === appWindow.label) {
-        continue;
-      }
-
-      try {
-        await window.setAlwaysOnTop(value);
-      } catch (error) {
-        // Best-effort for auxiliary windows; the current control window state is authoritative.
-        editorControlTelemetry.warn('editor.window.always-on-top.sync.failed', {
-          message: getErrorMessage(error),
-          fields: {
-            targetWindow: window.label,
-            value,
-          },
-        });
-      }
-    }
-  }, []);
 
   const runWindowToggle = useCallback(
     async (type: ControlPanelToggleType, isOpen: boolean, setOpen: (open: boolean) => void) => {
@@ -353,7 +326,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         }
 
         try {
-          await applyEditorWindowsAlwaysOnTop(preferredPinned);
+          await applyWindowPinPolicy();
         } catch (error) {
           editorControlTelemetry.warn('editor.window.always-on-top.persisted-apply.failed', {
             message: getErrorMessage(error),
@@ -376,6 +349,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
           setIsAlwaysOnTop(Boolean(resolvedPinned));
         }
         writeWindowPinState(Boolean(resolvedPinned));
+        await applyWindowPinPolicy();
       } catch {
         // best-effort: pin state sync is non-critical
       }
@@ -383,10 +357,19 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
 
     void syncAndApplyPinnedPreference();
 
+    const cleanupPromise = setupConfigSync(
+      [STORAGE_KEYS.WINDOW_PIN_STATE],
+      [TAURI_EVENTS.WINDOW_PIN_STATE_UPDATED],
+      () => {
+        void syncAndApplyPinnedPreference();
+      }
+    );
+
     return () => {
       disposed = true;
+      cleanupPromise.then((cleanup) => cleanup());
     };
-  }, [applyEditorWindowsAlwaysOnTop]);
+  }, []);
 
   const handleToggleStatistics = () => {
     void runWindowToggle('statistics', statisticsOpen, setStatisticsOpen);
@@ -440,9 +423,8 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
     e.currentTarget.blur();
 
     try {
-      await applyEditorWindowsAlwaysOnTop(newState);
-
-      writeWindowPinState(newState);
+      const policy = await updateWindowPinPreference(newState);
+      setIsAlwaysOnTop(policy.preferredPinned);
     } catch (error) {
       setIsAlwaysOnTop(previousState);
       editorControlTelemetry.error('editor.window.always-on-top.toggle.failed', {
@@ -1477,8 +1459,6 @@ export function EditorWindowApp() {
             {windowType === 'style-cover-color' && <StyleCoverColorPopup />}
             {windowType === 'style-background-effect' && <StyleBackgroundEffectPopup />}
             {windowType === 'style-border-effect' && <StyleBorderEffectPopup />}
-
-
             {windowType === 'creator' && (
               <MagnetCreator
                 mode={creatorMode}

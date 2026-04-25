@@ -7,6 +7,7 @@ import type {
   ThemeBindingMotionLayoutPolicy,
   ThemeMotionChannelMap,
   ThemeMotionChannelSpec,
+  ThemeMotionDocument,
   ThemeMotionReference,
   ThemeMotionSceneSpec,
   ThemeTokenAssignments,
@@ -14,6 +15,72 @@ import type {
 } from './types/theme';
 
 const TOKEN_REFERENCE_PATTERN = /^\{([^}]+)\}$/;
+
+const DEFAULT_SPACE_SWITCH_DURATION = '170ms';
+const DEFAULT_SPACE_SWITCH_EXIT_DURATION = '130ms';
+const DEFAULT_SPACE_SWITCH_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
+const DEFAULT_SPACE_SWITCH_EXIT_EASING = 'cubic-bezier(0.4, 0, 1, 1)';
+
+export const DEFAULT_THEME_MOTION: ThemeMotionDocument = {
+  presets: {
+    'magnet-space-enter': {
+      preset: 'scale-in',
+      duration: DEFAULT_SPACE_SWITCH_DURATION,
+      easing: DEFAULT_SPACE_SWITCH_EASING,
+      scale: 0.96,
+    },
+    'magnet-space-exit': {
+      preset: 'scale-out',
+      duration: DEFAULT_SPACE_SWITCH_EXIT_DURATION,
+      easing: DEFAULT_SPACE_SWITCH_EXIT_EASING,
+      scale: 1.035,
+    },
+    'magnet-space-slide-forward': {
+      preset: 'shared-axis',
+      duration: '190ms',
+      easing: DEFAULT_SPACE_SWITCH_EASING,
+      distance: '18px',
+      scale: 0.985,
+    },
+  },
+  scenes: {
+    spaceSwitch: {
+      enter: 'magnet-space-enter',
+      exit: 'magnet-space-exit',
+      stagger: {
+        by: 'grid',
+        from: 'center',
+        step: '14ms',
+      },
+      match: {
+        by: 'magnet-id',
+      },
+    },
+  },
+};
+
+export function mergeDefaultThemeMotion(motion: ThemeMotionDocument | undefined): ThemeMotionDocument {
+  const presets = {
+    ...(DEFAULT_THEME_MOTION.presets ?? {}),
+    ...(motion?.presets ?? {}),
+  };
+  const scenes = {
+    ...(DEFAULT_THEME_MOTION.scenes ?? {}),
+    ...(motion?.scenes ?? {}),
+  };
+
+  return {
+    ...(Object.keys(presets).length > 0 ? { presets } : {}),
+    ...(Object.keys(scenes).length > 0 ? { scenes } : {}),
+  };
+}
+
+export function withDefaultThemeMotion(theme: Theme): Theme {
+  return {
+    ...theme,
+    motion: mergeDefaultThemeMotion(theme.motion),
+  };
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);

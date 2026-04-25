@@ -5,5 +5,5 @@ pub const DESCRIPTOR: BackendModuleDescriptor = BackendModuleDescriptor {
     version: "1.0.0",
     display_name: "Customization Module",
     depends_on: &["windowing"],
-    command_domains: &["background_import_media", "ornament_import_media"],
+    command_domains: &["background_import_media"],
 };

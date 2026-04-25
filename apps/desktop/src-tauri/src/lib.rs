@@ -17,7 +17,6 @@ pub mod music_library_sync;
 pub mod music_platform_runtime;
 pub mod music_platform_settings;
 pub mod native_audio;
-pub mod ornament_media;
 pub mod perf_monitor;
 pub mod sidecar_bridge;
 pub mod telemetry;

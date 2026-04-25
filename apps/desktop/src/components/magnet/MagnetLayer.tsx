@@ -4,7 +4,8 @@ import type { MagnetChromeOverrideMode } from '../../modules/magnets';
 import type { MagnetBounds } from '../../modules/magnets/geometry';
 import { buildAdaptiveMagnetLayout, type MagnetJoinEdges } from '../../modules/magnets/layoutAdaptive';
 import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
-import { resolveThemeMotionScene } from '../../themes/motion';
+import { resolveThemeMotionScene, withDefaultThemeMotion } from '../../themes/motion';
+import { readThemePrefersReducedMotion } from '../../themes/surfaceMotion';
 import type { ThemeMotionChannelSpec } from '../../themes/types/theme';
 import type { Magnet } from '../../types/pixel';
 import { MagnetComponent } from './Magnet';
@@ -51,6 +52,30 @@ function toMagnetMap(magnets: Magnet[]): Record<string, Magnet> {
   return Object.fromEntries(magnets.map((magnet) => [magnet.id, magnet]));
 }
 
+function usePrefersReducedMotion() {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(readThemePrefersReducedMotion);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const sync = () => setPrefersReducedMotion(mediaQuery.matches);
+    sync();
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', sync);
+      return () => mediaQuery.removeEventListener('change', sync);
+    }
+
+    mediaQuery.addListener(sync);
+    return () => mediaQuery.removeListener(sync);
+  }, []);
+
+  return prefersReducedMotion;
+}
+
 function removeKeys<T>(record: Record<string, T>, keys: string[]): Record<string, T> {
   if (keys.length === 0) {
     return record;
@@ -66,6 +91,7 @@ function removeKeys<T>(record: Record<string, T>, keys: string[]): Record<string
 export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOverrideMode }: MagnetLayerProps) {
   const { theme } = useTheme();
   const [viewportSize, setViewportSize] = useState(readViewportSize);
+  const prefersReducedMotion = usePrefersReducedMotion();
   const [sceneAnimationsById, setSceneAnimationsById] = useState<Record<string, MagnetSceneAnimation>>({});
   const [layoutChannelsById, setLayoutChannelsById] = useState<Record<string, ThemeMotionChannelSpec>>({});
   const [exitingEntries, setExitingEntries] = useState<ExitingMagnetEntry[]>([]);
@@ -128,8 +154,10 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
     () => buildAdaptiveMagnetLayout(magnets, pixelPositions, viewportSize),
     [magnets, pixelPositions, viewportSize]
   );
-  const appBootScene = useMemo(() => resolveThemeMotionScene(theme, 'appBoot'), [theme]);
-  const spaceSwitchScene = useMemo(() => resolveThemeMotionScene(theme, 'spaceSwitch'), [theme]);
+  const motionTheme = useMemo(() => withDefaultThemeMotion(theme), [theme]);
+  const appBootScene = useMemo(() => resolveThemeMotionScene(motionTheme, 'appBoot'), [motionTheme]);
+  const spaceSwitchScene = useMemo(() => resolveThemeMotionScene(motionTheme, 'spaceSwitch'), [motionTheme]);
+  const sceneMotionDisabled = prefersReducedMotion || import.meta.env.VITE_PERF_NEXT_LOW_RENDER === '1';
 
   useEffect(() => {
     if (appBootPlayedRef.current || magnets.length === 0) {
@@ -137,6 +165,10 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
     }
 
     appBootPlayedRef.current = true;
+    if (sceneMotionDisabled) {
+      return;
+    }
+
     if (!appBootScene?.enter) {
       return;
     }
@@ -160,7 +192,7 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
       sceneAnimationTimerRef.current = null;
       setSceneAnimationsById((current) => removeKeys(current, ids));
     }, Math.max(0, maxTotalMs));
-  }, [adaptiveLayout.layoutBoundsByMagnetId, appBootScene, magnets]);
+  }, [adaptiveLayout.layoutBoundsByMagnetId, appBootScene, magnets, sceneMotionDisabled]);
 
   useEffect(() => {
     const nextSnapshot: MagnetSnapshot = {
@@ -180,17 +212,22 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
       return;
     }
 
+    clearSceneAnimationTimer();
+    clearLayoutChannelTimer();
+    setSceneAnimationsById({});
+    setLayoutChannelsById({});
+
+    if (sceneMotionDisabled) {
+      setExitingEntries([]);
+      return;
+    }
+
     const nextIds = magnets.map((magnet) => magnet.id);
     const nextIdSet = new Set(nextIds);
     const previousIds = Object.keys(previousSnapshot.magnetsById);
     const enteringIds = nextIds.filter((id) => !previousSnapshot.magnetsById[id]);
     const persistentIds = nextIds.filter((id) => Boolean(previousSnapshot.magnetsById[id]));
     const exitingIds = previousIds.filter((id) => !nextIdSet.has(id));
-
-    clearSceneAnimationTimer();
-    clearLayoutChannelTimer();
-    setSceneAnimationsById({});
-    setLayoutChannelsById({});
 
     if (spaceSwitchScene?.enter) {
       const { animationsById, maxTotalMs: enterMaxTotalMs } = buildMagnetSceneAnimations({
@@ -266,6 +303,7 @@ export function MagnetLayer({ magnets, pixelPositions, activeSpaceId, chromeOver
     adaptiveLayout.layoutBoundsByMagnetId,
     adaptiveLayout.joinsByMagnetId,
     magnets,
+    sceneMotionDisabled,
     spaceSwitchScene,
   ]);
 

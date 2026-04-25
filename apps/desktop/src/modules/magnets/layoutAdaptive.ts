@@ -7,6 +7,8 @@ const ITERATION_LIMIT = 4;
 const CONFLICT_OVERLAP_DEADZONE_PX = 0;
 // Edge comparisons still keep a small tolerance for float→int rounding, but joins must never bridge a visible gap.
 const EDGE_TOLERANCE_PX = 1;
+// Only close tiny residual seams. Matrix gutters are layout intent, not a collision artifact.
+const MAX_SEAM_SNAP_GAP_PX = 4;
 
 export type MagnetAdaptiveLayoutMode = 'normal' | 'compact' | 'constrained';
 
@@ -90,6 +92,31 @@ function collectHorizontallyAlignedBounds(options: {
   return group.length > 0 ? group : [options.referenceBounds];
 }
 
+function collectVerticallyAlignedBounds(options: {
+  referenceId: string;
+  referenceBounds: MagnetBounds;
+  boundsByMagnetId: Record<string, MagnetBounds>;
+  magnetsById: Record<string, Magnet>;
+}): MagnetBounds[] {
+  const referenceMagnet = options.magnetsById[options.referenceId];
+  if (!referenceMagnet || referenceMagnet.anchorType !== 'rectangular') {
+    return [options.referenceBounds];
+  }
+
+  const targetY = options.referenceBounds.y;
+  const targetHeight = options.referenceBounds.height;
+  const group: MagnetBounds[] = [];
+  for (const [magnetId, bounds] of Object.entries(options.boundsByMagnetId)) {
+    const magnet = options.magnetsById[magnetId];
+    if (!magnet || magnet.anchorType !== referenceMagnet.anchorType) continue;
+    if (Math.abs(bounds.y - targetY) > EDGE_TOLERANCE_PX) continue;
+    if (Math.abs(bounds.height - targetHeight) > EDGE_TOLERANCE_PX) continue;
+    group.push(bounds);
+  }
+
+  return group.length > 0 ? group : [options.referenceBounds];
+}
+
 function shiftVertically(
   topBounds: MagnetBounds,
   bottomBounds: MagnetBounds,
@@ -165,6 +192,98 @@ function shiftHorizontally(
   return resolved;
 }
 
+function pullHorizontally(
+  leftBounds: MagnetBounds[],
+  rightBounds: MagnetBounds[],
+  viewportWidth: number,
+  gapPx: number
+): number {
+  const leftViewportSlack = leftBounds.reduce((min, bounds) => Math.min(min, Math.max(0, bounds.x)), Number.POSITIVE_INFINITY);
+  const rightViewportSlack = rightBounds.reduce(
+    (min, bounds) => Math.min(min, Math.max(0, viewportWidth - (bounds.x + bounds.width))),
+    Number.POSITIVE_INFINITY
+  );
+  const leftMoveCapacity = leftBounds.reduce(
+    (min, bounds) => Math.min(min, Math.max(0, viewportWidth - (bounds.x + bounds.width))),
+    Number.POSITIVE_INFINITY
+  );
+  const rightMoveCapacity = rightBounds.reduce((min, bounds) => Math.min(min, Math.max(0, bounds.x)), Number.POSITIVE_INFINITY);
+  let remaining = Math.max(0, Math.ceil(gapPx));
+  let moveLeftGroupRight = 0;
+  let moveRightGroupLeft = 0;
+
+  const pullRightGroupFirst = leftViewportSlack <= rightViewportSlack;
+  if (pullRightGroupFirst) {
+    moveRightGroupLeft = Math.min(remaining, rightMoveCapacity);
+    remaining -= moveRightGroupLeft;
+    moveLeftGroupRight = Math.min(remaining, leftMoveCapacity);
+  } else {
+    moveLeftGroupRight = Math.min(remaining, leftMoveCapacity);
+    remaining -= moveLeftGroupRight;
+    moveRightGroupLeft = Math.min(remaining, rightMoveCapacity);
+  }
+
+  if (moveLeftGroupRight > 0) {
+    for (const bounds of leftBounds) {
+      bounds.x += moveLeftGroupRight;
+    }
+  }
+
+  if (moveRightGroupLeft > 0) {
+    for (const bounds of rightBounds) {
+      bounds.x -= moveRightGroupLeft;
+    }
+  }
+
+  return moveLeftGroupRight + moveRightGroupLeft;
+}
+
+function pullVertically(
+  topBounds: MagnetBounds[],
+  bottomBounds: MagnetBounds[],
+  viewportHeight: number,
+  gapPx: number
+): number {
+  const topViewportSlack = topBounds.reduce((min, bounds) => Math.min(min, Math.max(0, bounds.y)), Number.POSITIVE_INFINITY);
+  const bottomViewportSlack = bottomBounds.reduce(
+    (min, bounds) => Math.min(min, Math.max(0, viewportHeight - (bounds.y + bounds.height))),
+    Number.POSITIVE_INFINITY
+  );
+  const topMoveCapacity = topBounds.reduce(
+    (min, bounds) => Math.min(min, Math.max(0, viewportHeight - (bounds.y + bounds.height))),
+    Number.POSITIVE_INFINITY
+  );
+  const bottomMoveCapacity = bottomBounds.reduce((min, bounds) => Math.min(min, Math.max(0, bounds.y)), Number.POSITIVE_INFINITY);
+  let remaining = Math.max(0, Math.ceil(gapPx));
+  let moveTopGroupDown = 0;
+  let moveBottomGroupUp = 0;
+
+  const pullBottomGroupFirst = topViewportSlack <= bottomViewportSlack;
+  if (pullBottomGroupFirst) {
+    moveBottomGroupUp = Math.min(remaining, bottomMoveCapacity);
+    remaining -= moveBottomGroupUp;
+    moveTopGroupDown = Math.min(remaining, topMoveCapacity);
+  } else {
+    moveTopGroupDown = Math.min(remaining, topMoveCapacity);
+    remaining -= moveTopGroupDown;
+    moveBottomGroupUp = Math.min(remaining, bottomMoveCapacity);
+  }
+
+  if (moveTopGroupDown > 0) {
+    for (const bounds of topBounds) {
+      bounds.y += moveTopGroupDown;
+    }
+  }
+
+  if (moveBottomGroupUp > 0) {
+    for (const bounds of bottomBounds) {
+      bounds.y -= moveBottomGroupUp;
+    }
+  }
+
+  return moveTopGroupDown + moveBottomGroupUp;
+}
+
 function detectPairConflict(
   firstId: string,
   secondId: string,
@@ -195,6 +314,136 @@ function detectPairConflict(
   }
 
   return null;
+}
+
+interface AnchorSpan {
+  leftCol: number;
+  rightCol: number;
+  topRow: number;
+  bottomRow: number;
+}
+
+function resolveAnchorSpan(magnet: Magnet): AnchorSpan | null {
+  const anchors = Array.isArray(magnet.anchors) ? magnet.anchors : [];
+  if (anchors.length < 1) return null;
+
+  return {
+    leftCol: Math.min(...anchors.map((anchor) => anchor.gridX)),
+    rightCol: Math.max(...anchors.map((anchor) => anchor.gridX)),
+    topRow: Math.min(...anchors.map((anchor) => anchor.gridY)),
+    bottomRow: Math.max(...anchors.map((anchor) => anchor.gridY)),
+  };
+}
+
+function spansOverlap(firstStart: number, firstEnd: number, secondStart: number, secondEnd: number): boolean {
+  return Math.min(firstEnd, secondEnd) - Math.max(firstStart, secondStart) > 0;
+}
+
+function isRectangularGridNeighbor(
+  firstMagnet: Magnet,
+  secondMagnet: Magnet,
+  axis: 'horizontal' | 'vertical'
+): boolean {
+  if (firstMagnet.anchorType !== 'rectangular' || secondMagnet.anchorType !== 'rectangular') {
+    return false;
+  }
+
+  const firstSpan = resolveAnchorSpan(firstMagnet);
+  const secondSpan = resolveAnchorSpan(secondMagnet);
+  if (!firstSpan || !secondSpan) {
+    return false;
+  }
+
+  if (axis === 'horizontal') {
+    const adjacent =
+      firstSpan.rightCol + 1 === secondSpan.leftCol ||
+      secondSpan.rightCol + 1 === firstSpan.leftCol;
+    return adjacent && spansOverlap(firstSpan.topRow, firstSpan.bottomRow + 1, secondSpan.topRow, secondSpan.bottomRow + 1);
+  }
+
+  const adjacent =
+    firstSpan.bottomRow + 1 === secondSpan.topRow ||
+    secondSpan.bottomRow + 1 === firstSpan.topRow;
+  return adjacent && spansOverlap(firstSpan.leftCol, firstSpan.rightCol + 1, secondSpan.leftCol, secondSpan.rightCol + 1);
+}
+
+function snapRectangularNeighborSeams(options: {
+  boundsByMagnetId: Record<string, MagnetBounds>;
+  magnetsById: Record<string, Magnet>;
+  viewport: { width: number; height: number };
+}): number {
+  const entries = Object.entries(options.boundsByMagnetId);
+  let maxSnapPx = 0;
+
+  for (let index = 0; index < entries.length; index++) {
+    const [firstId] = entries[index];
+    const firstMagnet = options.magnetsById[firstId];
+    if (!firstMagnet) continue;
+
+    for (let nextIndex = index + 1; nextIndex < entries.length; nextIndex++) {
+      const [secondId] = entries[nextIndex];
+      const secondMagnet = options.magnetsById[secondId];
+      if (!secondMagnet) continue;
+
+      const firstBounds = options.boundsByMagnetId[firstId];
+      const secondBounds = options.boundsByMagnetId[secondId];
+      const yOverlap = getOverlap(firstBounds.y, firstBounds.height, secondBounds.y, secondBounds.height);
+      if (yOverlap > 0 && isRectangularGridNeighbor(firstMagnet, secondMagnet, 'horizontal')) {
+        const [leftId, rightId] = firstBounds.x <= secondBounds.x ? [firstId, secondId] : [secondId, firstId];
+        const leftBounds = options.boundsByMagnetId[leftId];
+        const rightBounds = options.boundsByMagnetId[rightId];
+        const gap = rightBounds.x - (leftBounds.x + leftBounds.width);
+        if (gap > EDGE_TOLERANCE_PX && gap <= MAX_SEAM_SNAP_GAP_PX) {
+          const snapPx = pullHorizontally(
+            collectHorizontallyAlignedBounds({
+              referenceId: leftId,
+              referenceBounds: leftBounds,
+              boundsByMagnetId: options.boundsByMagnetId,
+              magnetsById: options.magnetsById,
+            }),
+            collectHorizontallyAlignedBounds({
+              referenceId: rightId,
+              referenceBounds: rightBounds,
+              boundsByMagnetId: options.boundsByMagnetId,
+              magnetsById: options.magnetsById,
+            }),
+            options.viewport.width,
+            gap
+          );
+          maxSnapPx = Math.max(maxSnapPx, snapPx);
+        }
+      }
+
+      const xOverlap = getOverlap(firstBounds.x, firstBounds.width, secondBounds.x, secondBounds.width);
+      if (xOverlap > 0 && isRectangularGridNeighbor(firstMagnet, secondMagnet, 'vertical')) {
+        const [topId, bottomId] = firstBounds.y <= secondBounds.y ? [firstId, secondId] : [secondId, firstId];
+        const topBounds = options.boundsByMagnetId[topId];
+        const bottomBounds = options.boundsByMagnetId[bottomId];
+        const gap = bottomBounds.y - (topBounds.y + topBounds.height);
+        if (gap > EDGE_TOLERANCE_PX && gap <= MAX_SEAM_SNAP_GAP_PX) {
+          const snapPx = pullVertically(
+            collectVerticallyAlignedBounds({
+              referenceId: topId,
+              referenceBounds: topBounds,
+              boundsByMagnetId: options.boundsByMagnetId,
+              magnetsById: options.magnetsById,
+            }),
+            collectVerticallyAlignedBounds({
+              referenceId: bottomId,
+              referenceBounds: bottomBounds,
+              boundsByMagnetId: options.boundsByMagnetId,
+              magnetsById: options.magnetsById,
+            }),
+            options.viewport.height,
+            gap
+          );
+          maxSnapPx = Math.max(maxSnapPx, snapPx);
+        }
+      }
+    }
+  }
+
+  return maxSnapPx;
 }
 
 function detectMagnetJoins(boundsByMagnetId: Record<string, MagnetBounds>): Record<string, MagnetJoinEdges> {
@@ -388,6 +637,13 @@ export function buildAdaptiveMagnetLayout(
 
     if (!movedInIteration) break;
   }
+
+  const snapAdjustmentPx = snapRectangularNeighborSeams({
+    boundsByMagnetId: layoutBoundsByMagnetId,
+    magnetsById,
+    viewport,
+  });
+  maxAdjustmentPx = Math.max(maxAdjustmentPx, snapAdjustmentPx);
 
   const unresolvedConflicts: MagnetAdaptiveConflict[] = [];
   for (let index = 0; index < rawBoundsEntries.length; index++) {

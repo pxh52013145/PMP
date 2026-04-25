@@ -5,16 +5,12 @@
 
 import { useState, useEffect } from 'react';
 import { WindowPinData } from './WindowPinTypes';
-import { readWindowPinState, writeWindowPinState } from '../../../utils/windowPinState';
+import { readWindowPinPreference } from '../../../utils/windowPinState';
+import { setupConfigSync, STORAGE_KEYS, TAURI_EVENTS } from '../../../utils/windowCommunication';
 
 function readStoredPinState(): boolean {
   if (typeof window === 'undefined') return false;
-  return readWindowPinState() ?? false;
-}
-
-function persistPinState(value: boolean) {
-  if (typeof window === 'undefined') return;
-  writeWindowPinState(value);
+  return readWindowPinPreference();
 }
 
 export function useWindowPinData(): WindowPinData {
@@ -29,8 +25,20 @@ export function useWindowPinDataWithSetter(): [
   const [isPinned, setIsPinned] = useState<boolean>(() => readStoredPinState());
 
   useEffect(() => {
-    persistPinState(isPinned);
-  }, [isPinned]);
+    const reload = () => {
+      setIsPinned(readStoredPinState());
+    };
+
+    const cleanupPromise = setupConfigSync(
+      [STORAGE_KEYS.WINDOW_PIN_STATE],
+      [TAURI_EVENTS.WINDOW_PIN_STATE_UPDATED],
+      reload
+    );
+
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, []);
 
   return [{ isPinned }, setIsPinned];
 }

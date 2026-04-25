@@ -71,19 +71,6 @@
 }
 
 /* 仅图标的卡片样式 */
-.style-ornaments-entry-btn {
-  width: 100%;
-  appearance: none;
-  text-align: left;
-}
-
-.style-ornaments-entry-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
-}
-
 .preset-card-icon-only {
   justify-content: center;
   gap: 8px;
