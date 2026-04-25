@@ -423,6 +423,43 @@ constexpr uint32_t SHM_FLAG_PLUGIN_LOADED = 1u << 2;
 constexpr uint32_t SHM_FLAG_PROCESSING_ACTIVE = 1u << 3;
 constexpr uint32_t SHM_FLAG_PLUGIN_ERROR = 1u << 4;
 
+struct BridgeRealtimeMetricsSnapshot {
+  uint64_t callbackLockMissBlocks = 0;
+  uint64_t callbackLockMissFrames = 0;
+  uint64_t dryBypassFrames = 0;
+  uint64_t shmOutputBackpressureBlocks = 0;
+  uint64_t shmOutputBackpressureFrames = 0;
+};
+
+std::atomic<uint64_t> gCallbackLockMissBlocks{0};
+std::atomic<uint64_t> gCallbackLockMissFrames{0};
+std::atomic<uint64_t> gDryBypassFrames{0};
+std::atomic<uint64_t> gShmOutputBackpressureBlocks{0};
+std::atomic<uint64_t> gShmOutputBackpressureFrames{0};
+
+BridgeRealtimeMetricsSnapshot snapshotBridgeRealtimeMetrics() {
+  return BridgeRealtimeMetricsSnapshot{
+      gCallbackLockMissBlocks.load(std::memory_order_relaxed),
+      gCallbackLockMissFrames.load(std::memory_order_relaxed),
+      gDryBypassFrames.load(std::memory_order_relaxed),
+      gShmOutputBackpressureBlocks.load(std::memory_order_relaxed),
+      gShmOutputBackpressureFrames.load(std::memory_order_relaxed),
+  };
+}
+
+void recordCallbackLockMiss(size_t frames) {
+  gCallbackLockMissBlocks.fetch_add(1, std::memory_order_relaxed);
+  gCallbackLockMissFrames.fetch_add(static_cast<uint64_t>(frames), std::memory_order_relaxed);
+  gDryBypassFrames.fetch_add(static_cast<uint64_t>(frames), std::memory_order_relaxed);
+}
+
+void recordSidecarOutputWrite(size_t requestedFrames, size_t writtenFrames) {
+  if (writtenFrames >= requestedFrames) return;
+  gShmOutputBackpressureBlocks.fetch_add(1, std::memory_order_relaxed);
+  gShmOutputBackpressureFrames.fetch_add(
+      static_cast<uint64_t>(requestedFrames - writtenFrames), std::memory_order_relaxed);
+}
+
 struct ShmRingHeaderV1 {
   char magic[8];
   uint32_t version;
@@ -615,10 +652,20 @@ std::vector<uint8_t> encodeErrorPayload(const std::string& message) {
 }
 
 std::vector<uint8_t> encodePingPayload(const std::string& pluginId, bool editorOpen) {
+  const auto metrics = snapshotBridgeRealtimeMetrics();
   auto* obj = new juce::DynamicObject();
   obj->setProperty("protocolVersion", static_cast<int>(BRIDGE_PROTOCOL_VERSION));
   obj->setProperty("pluginId", juce::String(pluginId));
   obj->setProperty("editorOpen", editorOpen);
+  auto* metricsObj = new juce::DynamicObject();
+  metricsObj->setProperty("callbackLockMissBlocks", static_cast<juce::int64>(metrics.callbackLockMissBlocks));
+  metricsObj->setProperty("callbackLockMissFrames", static_cast<juce::int64>(metrics.callbackLockMissFrames));
+  metricsObj->setProperty("dryBypassFrames", static_cast<juce::int64>(metrics.dryBypassFrames));
+  metricsObj->setProperty(
+      "shmOutputBackpressureBlocks", static_cast<juce::int64>(metrics.shmOutputBackpressureBlocks));
+  metricsObj->setProperty(
+      "shmOutputBackpressureFrames", static_cast<juce::int64>(metrics.shmOutputBackpressureFrames));
+  obj->setProperty("metrics", juce::var(metricsObj));
   return encodeJsonPayload(juce::var(obj));
 }
 
@@ -960,7 +1007,8 @@ class AudioShmBypass {
         }
       }
 
-      (void)ringTryWrite(outView_, outBuffer.data(), framesRead);
+      const size_t framesWritten = ringTryWrite(outView_, outBuffer.data(), framesRead);
+      recordSidecarOutputWrite(framesRead, framesWritten);
     }
   }
 
@@ -1365,6 +1413,7 @@ class AudioShmVstProcessor {
         }
       }
       if (!processed) {
+        recordCallbackLockMiss(framesRead);
         const size_t outSamples = framesRead * shmOutChannels;
         std::copy(dryOutInterleaved.begin(), dryOutInterleaved.begin() + outSamples, outInterleaved.begin());
       }
@@ -1384,7 +1433,8 @@ class AudioShmVstProcessor {
           }
         }
 
-      (void)ringTryWrite(outView_, outInterleaved.data(), framesRead);
+      const size_t framesWritten = ringTryWrite(outView_, outInterleaved.data(), framesRead);
+      recordSidecarOutputWrite(framesRead, framesWritten);
     }
   }
 

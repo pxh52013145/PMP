@@ -65,6 +65,21 @@ pub struct BridgeParamValue {
     pub value: f32,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeRealtimeMetrics {
+    #[serde(default)]
+    pub callback_lock_miss_blocks: u64,
+    #[serde(default)]
+    pub callback_lock_miss_frames: u64,
+    #[serde(default)]
+    pub dry_bypass_frames: u64,
+    #[serde(default)]
+    pub shm_output_backpressure_blocks: u64,
+    #[serde(default)]
+    pub shm_output_backpressure_frames: u64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgePingResponse {
@@ -72,6 +87,8 @@ pub struct BridgePingResponse {
     pub plugin_id: Option<String>,
     #[serde(default)]
     pub editor_open: Option<bool>,
+    #[serde(default)]
+    pub metrics: Option<BridgeRealtimeMetrics>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -784,6 +801,7 @@ impl BridgeClient {
                 protocol_version: BRIDGE_PROTOCOL_VERSION,
                 plugin_id: None,
                 editor_open: None,
+                metrics: None,
             });
         }
 
