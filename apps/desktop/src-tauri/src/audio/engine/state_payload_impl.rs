@@ -62,6 +62,16 @@ impl NativeAudioEngine {
         payload.memory_pool_f32_growth_events = None;
         payload.memory_pool_f32_growth_bytes = None;
         payload.memory_pool_f32_prewarm_hits = None;
+        payload.realtime_memory_lock_attempted_bytes = None;
+        payload.realtime_memory_lock_succeeded_bytes = None;
+        payload.realtime_memory_lock_failed_bytes = None;
+        payload.realtime_memory_lock_skipped_bytes = None;
+        payload.realtime_memory_lock_failure_count = None;
+        payload.realtime_memory_lock_skipped_count = None;
+        payload.realtime_memory_locked_role_mask = None;
+        payload.realtime_memory_failed_role_mask = None;
+        payload.realtime_memory_skipped_role_mask = None;
+        payload.realtime_memory_pressure_events = None;
         payload.control_queue_lock_free = None;
         payload.control_queue_mode = None;
         payload.control_queue_capacity = None;
@@ -147,6 +157,7 @@ pub(super) fn build_state_payload_with_options_impl(
     let shared_render_backend = is_shared_output_backend(engine.output_backend.id());
     let shared_render_metrics = crate::audio::output::shared_render_ahead_metrics();
     let memory_pool_stats = crate::audio::memory_pool::stats_snapshot();
+    let realtime_memory_stats = crate::audio::realtime_memory_guard::snapshot();
     let control_plane_stats = crate::audio::control_plane::control_plane_stats_snapshot();
     let retire_plane_stats = crate::audio::retire_plane::stats_snapshot();
     let diagnostics_timeline = if include_diagnostics {
@@ -373,6 +384,16 @@ pub(super) fn build_state_payload_with_options_impl(
         memory_pool_f32_growth_events: Some(memory_pool_stats.f32_growth_events),
         memory_pool_f32_growth_bytes: Some(memory_pool_stats.f32_growth_bytes),
         memory_pool_f32_prewarm_hits: Some(memory_pool_stats.f32_prewarm_hits),
+        realtime_memory_lock_attempted_bytes: Some(realtime_memory_stats.lock_attempted_bytes),
+        realtime_memory_lock_succeeded_bytes: Some(realtime_memory_stats.lock_succeeded_bytes),
+        realtime_memory_lock_failed_bytes: Some(realtime_memory_stats.lock_failed_bytes),
+        realtime_memory_lock_skipped_bytes: Some(realtime_memory_stats.lock_skipped_bytes),
+        realtime_memory_lock_failure_count: Some(realtime_memory_stats.lock_failure_count),
+        realtime_memory_lock_skipped_count: Some(realtime_memory_stats.lock_skipped_count),
+        realtime_memory_locked_role_mask: Some(realtime_memory_stats.locked_role_mask),
+        realtime_memory_failed_role_mask: Some(realtime_memory_stats.failed_role_mask),
+        realtime_memory_skipped_role_mask: Some(realtime_memory_stats.skipped_role_mask),
+        realtime_memory_pressure_events: Some(SCHEDULER.memory_pressure_events()),
         control_queue_lock_free: Some(control_plane_stats.mode_lock_free),
         control_queue_mode: Some(control_plane_stats.mode_name.to_string()),
         control_queue_capacity: Some(control_plane_stats.queue_capacity),
