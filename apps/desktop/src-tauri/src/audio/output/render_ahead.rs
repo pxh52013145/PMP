@@ -32,6 +32,7 @@ static SHARED_RENDER_ACTIVE_WRAPPER_ID: AtomicU64 = AtomicU64::new(0);
 static SHARED_RENDER_READY_WRAPPER_ID: AtomicU64 = AtomicU64::new(0);
 static SHARED_RENDER_READY_SEEK_EPOCH: AtomicU64 = AtomicU64::new(0);
 static SHARED_RENDER_AVAILABLE_SAMPLES: AtomicU64 = AtomicU64::new(0);
+static SHARED_RENDER_CHANNELS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Default)]
 #[allow(dead_code)]
@@ -90,7 +91,15 @@ pub(crate) fn wait_for_shared_render_ahead_ready(
             return true;
         }
 
-        let required_samples = min_samples.max(snapshot.low_watermark_samples.max(1));
+        let channels = SHARED_RENDER_CHANNELS.load(Ordering::Relaxed).max(1) as usize;
+        let extra_ready_samples = channels
+            .saturating_mul(crate::audio::stability::source_prepare_shared_ready_extra_frames());
+        let required_samples = min_samples.max(
+            snapshot
+                .low_watermark_samples
+                .max(1)
+                .saturating_add(extra_ready_samples),
+        );
         if snapshot.ready_wrapper_id == snapshot.active_wrapper_id
             && snapshot.ready_seek_epoch >= seek_epoch
             && snapshot.available_samples >= required_samples
@@ -152,6 +161,7 @@ fn reset_shared_render_ahead_metrics() {
     SHARED_RENDER_READY_WRAPPER_ID.store(0, Ordering::Relaxed);
     SHARED_RENDER_READY_SEEK_EPOCH.store(0, Ordering::Relaxed);
     SHARED_RENDER_AVAILABLE_SAMPLES.store(0, Ordering::Relaxed);
+    SHARED_RENDER_CHANNELS.store(0, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -313,11 +323,15 @@ fn render_watermark_samples(
     profile: RealtimePressureProfile,
 ) -> (usize, usize) {
     let capacity = capacity_samples.max(channels.max(1));
-    let (low_percent, high_percent) = match profile {
+    let (mut low_percent, mut high_percent) = match profile {
         RealtimePressureProfile::Normal => (40usize, 86usize),
         RealtimePressureProfile::Guarded => (56usize, 92usize),
         RealtimePressureProfile::Critical => (68usize, 96usize),
     };
+    let (low_boost, high_boost) =
+        crate::audio::stability::source_prepare_shared_render_watermark_boost();
+    low_percent = low_percent.saturating_add(low_boost).min(92);
+    high_percent = high_percent.saturating_add(high_boost).min(99);
 
     let low = ((capacity * low_percent) / 100)
         .max(channels * 128)
@@ -471,7 +485,7 @@ pub(crate) fn wrap_source_for_shared_backend(
         ((sample_rate as f64) * (channels as f64) * prebuffer_seconds).ceil() as usize;
     let policy_capacity_scale = parse_env_seconds(
         "PMP_AUDIO_SHARED_RENDER_AHEAD_POLICY_CAPACITY_SCALE",
-        1.20,
+        crate::audio::stability::shared_render_ahead_capacity_scale_default(),
         1.0,
         4.0,
     );
@@ -489,8 +503,11 @@ pub(crate) fn wrap_source_for_shared_backend(
 
     let wrapper_id = SHARED_RENDER_WRAPPER_SEQ.fetch_add(1, Ordering::AcqRel);
     SHARED_RENDER_ACTIVE_WRAPPER_ID.store(wrapper_id, Ordering::Release);
+    SHARED_RENDER_CHANNELS.store(channels as u64, Ordering::Relaxed);
 
-    let initial_profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+    let initial_profile = crate::audio::realtime_scheduler::SCHEDULER
+        .profile()
+        .max(crate::audio::stability::current_runtime_action_profile());
     let (initial_low_watermark, _) =
         render_watermark_samples(queue.capacity_samples(), channels as usize, initial_profile);
     SHARED_RENDER_LOW_WATERMARK_SAMPLES.store(initial_low_watermark as u64, Ordering::Relaxed);
@@ -516,7 +533,9 @@ pub(crate) fn wrap_source_for_shared_backend(
         prebuffer_target
             .max(initial_low_watermark)
             .max(channels as usize * 32),
-        Duration::from_millis(450),
+        Duration::from_millis(
+            crate::audio::stability::shared_render_ahead_preroll_timeout_ms_default(),
+        ),
     );
 
     let observed_seek_epoch = seek_epoch.load(Ordering::Acquire);
@@ -613,12 +632,15 @@ fn spawn_producer_thread(
                 }
 
                 let render_len = queue.len_samples();
-                let current_profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+                let current_profile = crate::audio::realtime_scheduler::SCHEDULER
+                    .profile()
+                    .max(crate::audio::stability::current_runtime_action_profile());
                 let (mut base_low_watermark, mut _base_high_watermark) =
                     render_watermark_samples(queue_capacity, channels, current_profile);
                 let buffered_ahead_seconds = (render_len as f64) / (sample_rate * channels as f64);
                 let profile = crate::audio::realtime_scheduler::SCHEDULER
-                    .update(buffered_ahead_seconds, render_len <= base_low_watermark);
+                    .update(buffered_ahead_seconds, render_len <= base_low_watermark)
+                    .max(crate::audio::stability::current_runtime_action_profile());
                 if profile != current_profile {
                     (base_low_watermark, _base_high_watermark) =
                         render_watermark_samples(queue_capacity, channels, profile);
@@ -772,11 +794,17 @@ struct RenderAheadSource {
 
 impl RenderAheadSource {
     fn pop_chunk_samples() -> usize {
-        match crate::audio::realtime_scheduler::SCHEDULER.profile() {
+        let profile = crate::audio::realtime_scheduler::SCHEDULER
+            .profile()
+            .max(crate::audio::stability::current_runtime_action_profile());
+        let base = match profile {
             RealtimePressureProfile::Normal => 4096,
             RealtimePressureProfile::Guarded => 6144,
             RealtimePressureProfile::Critical => 8192,
-        }
+        };
+        (((base as f64) * crate::audio::stability::source_prepare_consumer_chunk_scale_factor())
+            .ceil() as usize)
+            .clamp(4096, 24_576)
     }
 
     fn track_sample_history(&mut self, sample: f32) {
@@ -843,7 +871,9 @@ impl RenderAheadSource {
             );
         }
 
-        let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+        let profile = crate::audio::realtime_scheduler::SCHEDULER
+            .profile()
+            .max(crate::audio::stability::current_runtime_action_profile());
         let chunk_samples = Self::pop_chunk_samples();
         let retry_attempts = render_pop_retry_attempts(profile, self.underrun_streak).max(1);
         let retry_spins = render_pop_retry_spins(profile);

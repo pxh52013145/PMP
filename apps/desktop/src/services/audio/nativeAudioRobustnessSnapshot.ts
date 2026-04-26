@@ -10,8 +10,12 @@ type NativeAudioRobustnessSnapshotSourceRecord = {
   lastSchedulerProfile?: AudioRobustnessSnapshot['schedulerProfile'];
   stabilityProfile?: AudioRobustnessSnapshot['stabilityProfile'];
   stabilityActionProfile?: AudioRobustnessSnapshot['stabilityActionProfile'];
+  sourcePrepareProfile?: AudioRobustnessSnapshot['sourcePrepareProfile'];
   stabilityPrimaryReason?: AudioRobustnessSnapshot['stabilityPrimaryReason'];
   stabilityReasonCodes?: AudioRobustnessSnapshot['stabilityReasonCodes'];
+  stabilityHintProfile?: AudioRobustnessSnapshot['stabilityHintProfile'];
+  stabilityHintPrimaryReason?: AudioRobustnessSnapshot['stabilityHintPrimaryReason'];
+  stabilityHintReasonCodes?: AudioRobustnessSnapshot['stabilityHintReasonCodes'];
   transportMode?: AudioRobustnessSnapshot['transportMode'];
   hqSrcPhaseMode?: AudioRobustnessSnapshot['hqSrcPhaseMode'];
   srcMode?: AudioRobustnessSnapshot['srcMode'];
@@ -209,9 +213,15 @@ export function buildNativeAudioRobustnessSnapshot(
     schedulerProfile: sourceRecord.lastSchedulerProfile,
     stabilityProfile: sourceRecord.stabilityProfile,
     stabilityActionProfile: sourceRecord.stabilityActionProfile,
+    sourcePrepareProfile: sourceRecord.sourcePrepareProfile,
     stabilityPrimaryReason: sourceRecord.stabilityPrimaryReason,
     stabilityReasonCodes: sourceRecord.stabilityReasonCodes
       ? [...sourceRecord.stabilityReasonCodes]
+      : undefined,
+    stabilityHintProfile: sourceRecord.stabilityHintProfile,
+    stabilityHintPrimaryReason: sourceRecord.stabilityHintPrimaryReason,
+    stabilityHintReasonCodes: sourceRecord.stabilityHintReasonCodes
+      ? [...sourceRecord.stabilityHintReasonCodes]
       : undefined,
     transportMode: sourceRecord.transportMode,
     hqSrcPhaseMode: sourceRecord.hqSrcPhaseMode,

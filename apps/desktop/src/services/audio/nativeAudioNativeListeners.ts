@@ -1,5 +1,6 @@
 ﻿import { listen } from '@tauri-apps/api/event';
 import type {
+  AudioSourcePrepareProfile,
   AudioSpectrumFrame,
   AudioSpectrumTap,
   AudioStabilityActionProfile,
@@ -33,8 +34,12 @@ export type NativeAudioListenerHost = {
   lastSchedulerProfile?: 'normal' | 'guarded' | 'critical';
   stabilityActionProfile?: AudioStabilityActionProfile;
   stabilityProfile?: AudioStabilityProfile;
+  sourcePrepareProfile?: AudioSourcePrepareProfile;
   stabilityPrimaryReason?: string | null;
   stabilityReasonCodes?: string[];
+  stabilityHintProfile?: AudioStabilityActionProfile;
+  stabilityHintPrimaryReason?: string | null;
+  stabilityHintReasonCodes?: string[];
   transportMode?: 'robust' | 'transport-exact';
   hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
   srcMode?: 'source-native' | 'match-output' | 'target-rate';
@@ -222,6 +227,15 @@ export async function setupNativeListenersImpl(
           this.stabilityProfile = next.stabilityProfile;
         }
 
+        if (
+          next.sourcePrepareProfile === 'baseline' ||
+          next.sourcePrepareProfile === 'steady' ||
+          next.sourcePrepareProfile === 'aggressive' ||
+          next.sourcePrepareProfile === 'failsafe'
+        ) {
+          this.sourcePrepareProfile = next.sourcePrepareProfile;
+        }
+
         if (typeof next.stabilityPrimaryReason === 'string') {
           this.stabilityPrimaryReason = next.stabilityPrimaryReason;
         } else if (next.stabilityPrimaryReason === null) {
@@ -232,6 +246,30 @@ export async function setupNativeListenersImpl(
           this.stabilityReasonCodes = next.stabilityReasonCodes.filter(
             (reason): reason is string => typeof reason === 'string' && reason.length > 0
           );
+        }
+
+        if (
+          next.stabilityHintProfile === 'normal' ||
+          next.stabilityHintProfile === 'guarded' ||
+          next.stabilityHintProfile === 'critical'
+        ) {
+          this.stabilityHintProfile = next.stabilityHintProfile;
+        } else if (next.stabilityHintProfile === null) {
+          this.stabilityHintProfile = undefined;
+        }
+
+        if (typeof next.stabilityHintPrimaryReason === 'string') {
+          this.stabilityHintPrimaryReason = next.stabilityHintPrimaryReason;
+        } else if (next.stabilityHintPrimaryReason === null) {
+          this.stabilityHintPrimaryReason = null;
+        }
+
+        if (Array.isArray(next.stabilityHintReasonCodes)) {
+          this.stabilityHintReasonCodes = next.stabilityHintReasonCodes.filter(
+            (reason): reason is string => typeof reason === 'string' && reason.length > 0
+          );
+        } else if (next.stabilityHintReasonCodes === null) {
+          this.stabilityHintReasonCodes = [];
         }
 
         if (next.transportMode === 'robust' || next.transportMode === 'transport-exact') {

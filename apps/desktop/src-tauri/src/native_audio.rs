@@ -23,6 +23,7 @@ use crate::audio::output::{
     wasapi_backend, wasapi_exclusive_backend, wasapi_shared_raw_backend, WASAPI_BACKEND_ID,
     WASAPI_EXCLUSIVE_BACKEND_ID, WASAPI_SHARED_RAW_BACKEND_ID,
 };
+pub use crate::audio::source::NativeAudioSourcePayload;
 use crate::dsp_graph::DspGraphNode;
 use crate::vst_shm::ShmRing;
 
@@ -1362,6 +1363,17 @@ pub fn load(app_handle: &AppHandle, path: Option<String>) -> Result<(), String> 
     emit_transport_execution(app_handle, execution)
 }
 
+pub fn load_source(
+    app_handle: &AppHandle,
+    source: NativeAudioSourcePayload,
+) -> Result<String, String> {
+    emitter::ensure_started(app_handle);
+    let track_path = source.materialize_transport_path(app_handle)?;
+    let execution = crate::audio::kernel::execute_load(track_path.clone())?;
+    emit_transport_execution(app_handle, execution)?;
+    Ok(track_path.to_string_lossy().to_string())
+}
+
 pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> Result<(), String> {
     emitter::ensure_started(app_handle);
     let track_path = PathBuf::from(path);
@@ -1378,6 +1390,19 @@ pub fn load_and_play(
     let track_path = PathBuf::from(path);
     let execution = crate::audio::kernel::execute_load_and_play(track_path, replay_gain_db)?;
     emit_transport_execution(app_handle, execution)
+}
+
+pub fn load_and_play_source(
+    app_handle: &AppHandle,
+    source: NativeAudioSourcePayload,
+    replay_gain_db: Option<f32>,
+) -> Result<String, String> {
+    emitter::ensure_started(app_handle);
+    let track_path = source.materialize_transport_path(app_handle)?;
+    let execution =
+        crate::audio::kernel::execute_load_and_play(track_path.clone(), replay_gain_db)?;
+    emit_transport_execution(app_handle, execution)?;
+    Ok(track_path.to_string_lossy().to_string())
 }
 
 pub fn play(app_handle: &AppHandle) -> Result<(), String> {
@@ -2273,6 +2298,45 @@ pub fn set_streaming_buffer_settings(
 pub fn set_spectrum_enabled(app_handle: &AppHandle, enabled: bool) -> Result<(), String> {
     emitter::ensure_started(app_handle);
     emitter::set_spectrum_enabled(enabled);
+    Ok(())
+}
+
+fn parse_realtime_pressure_profile(
+    value: &str,
+) -> Option<crate::audio::realtime_scheduler::RealtimePressureProfile> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(crate::audio::realtime_scheduler::RealtimePressureProfile::Normal),
+        "guarded" => Some(crate::audio::realtime_scheduler::RealtimePressureProfile::Guarded),
+        "critical" => Some(crate::audio::realtime_scheduler::RealtimePressureProfile::Critical),
+        _ => None,
+    }
+}
+
+pub fn record_stability_hint(
+    app_handle: &AppHandle,
+    reason: String,
+    minimum_profile: Option<String>,
+    hold_ms: Option<u64>,
+) -> Result<(), String> {
+    emitter::ensure_started(app_handle);
+
+    let reason = crate::audio::stability::AudioStabilityHintReason::from_str(&reason)
+        .ok_or_else(|| format!("Unknown audio stability hint reason: {reason}"))?;
+    let minimum_profile = match minimum_profile.as_deref() {
+        Some(value) => parse_realtime_pressure_profile(value)
+            .ok_or_else(|| format!("Unknown audio stability hint profile: {value}"))?,
+        None => crate::audio::stability::default_external_hint_profile(reason),
+    };
+    let hold_ms =
+        hold_ms.unwrap_or_else(|| crate::audio::stability::default_external_hint_hold_ms(reason));
+
+    crate::audio::stability::record_external_hint(reason, minimum_profile, hold_ms);
+
+    if let Ok(engine) = ENGINE.lock() {
+        let payload = engine.build_transport_state_payload(false);
+        let _ = emitter::emit_state(app_handle, payload);
+    }
+
     Ok(())
 }
 

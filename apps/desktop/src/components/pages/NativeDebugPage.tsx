@@ -1835,6 +1835,26 @@ export const NativeDebugPage: React.FC = () => {
             ? t('pages.native-debug.robustness.stability.action.normal')
             : unknown;
 
+    const sourcePrepareProfile =
+      robustness.sourcePrepareProfile === 'steady'
+        ? t('pages.native-debug.robustness.stability.sourcePrepare.steady')
+        : robustness.sourcePrepareProfile === 'aggressive'
+          ? t('pages.native-debug.robustness.stability.sourcePrepare.aggressive')
+          : robustness.sourcePrepareProfile === 'failsafe'
+            ? t('pages.native-debug.robustness.stability.sourcePrepare.failsafe')
+            : robustness.sourcePrepareProfile === 'baseline'
+              ? t('pages.native-debug.robustness.stability.sourcePrepare.baseline')
+              : unknown;
+
+    const stabilityHintProfile =
+      robustness.stabilityHintProfile === 'guarded'
+        ? t('pages.native-debug.robustness.stability.action.guarded')
+        : robustness.stabilityHintProfile === 'critical'
+          ? t('pages.native-debug.robustness.stability.action.critical')
+          : robustness.stabilityHintProfile === 'normal'
+            ? t('pages.native-debug.robustness.stability.action.normal')
+            : t('pages.native-debug.robustness.stability.reason.none');
+
     const formatStabilityReason = (reason?: string | null) => {
       if (typeof reason !== 'string' || reason.length === 0) {
         return t('pages.native-debug.robustness.stability.reason.none');
@@ -1873,6 +1893,12 @@ export const NativeDebugPage: React.FC = () => {
           return t('pages.native-debug.robustness.stability.reason.memory-lock-skipped');
         case 'memory-pool-growth':
           return t('pages.native-debug.robustness.stability.reason.memory-pool-growth');
+        case 'source-prepare-warmup':
+          return t('pages.native-debug.robustness.stability.reason.source-prepare-warmup');
+        case 'platform-cache-materializing':
+          return t('pages.native-debug.robustness.stability.reason.platform-cache-materializing');
+        case 'foreground-heavy-app-start':
+          return t('pages.native-debug.robustness.stability.reason.foreground-heavy-app-start');
         default:
           return reason;
       }
@@ -1882,6 +1908,14 @@ export const NativeDebugPage: React.FC = () => {
     const stabilityReasonCodes =
       Array.isArray(robustness.stabilityReasonCodes) && robustness.stabilityReasonCodes.length > 0
         ? robustness.stabilityReasonCodes.map((reason) => formatStabilityReason(reason)).join(', ')
+        : t('pages.native-debug.robustness.stability.reason.none');
+    const stabilityHintPrimaryReason = formatStabilityReason(robustness.stabilityHintPrimaryReason);
+    const stabilityHintReasonCodes =
+      Array.isArray(robustness.stabilityHintReasonCodes) &&
+      robustness.stabilityHintReasonCodes.length > 0
+        ? robustness.stabilityHintReasonCodes
+            .map((reason) => formatStabilityReason(reason))
+            .join(', ')
         : t('pages.native-debug.robustness.stability.reason.none');
 
     const quantization =
@@ -1938,8 +1972,12 @@ export const NativeDebugPage: React.FC = () => {
       scheduler: robustness.schedulerProfile ?? unknown,
       stability,
       stabilityActionProfile,
+      sourcePrepareProfile,
+      stabilityHintProfile,
       stabilityPrimaryReason,
       stabilityReasonCodes,
+      stabilityHintPrimaryReason,
+      stabilityHintReasonCodes,
       transport: robustness.transportMode ?? unknown,
       srcBackend,
       quantization,

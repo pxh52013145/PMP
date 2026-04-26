@@ -35,6 +35,10 @@ fn parse_env_u64(key: &str, default_value: u64, min: u64, max: u64) -> u64 {
         .clamp(min, max)
 }
 
+fn scale_samples(value: usize, scale: f64, min: usize, max: usize) -> usize {
+    (((value as f64) * scale).ceil() as usize).clamp(min, max)
+}
+
 static SOURCE_POP_WAIT_POLICY: Lazy<SourcePopWaitPolicy> = Lazy::new(|| SourcePopWaitPolicy {
     normal_ms: parse_env_u64("PMP_AUDIO_SOURCE_POP_WAIT_NORMAL_MS", 2, 0, 16),
     guarded_ms: parse_env_u64("PMP_AUDIO_SOURCE_POP_WAIT_GUARDED_MS", 4, 0, 16),
@@ -108,7 +112,9 @@ fn backend_buffer_policy_pack(output_backend_id: &str) -> BackendBufferPolicyPac
             rebuffer_enter_floor_frames: 48,
             rebuffer_resume_floor_frames: 96,
         },
-        "wasapi-shared-raw" => wasapi_shared_raw_policy_pack(stability::current_stability_profile()),
+        "wasapi-shared-raw" => {
+            wasapi_shared_raw_policy_pack(stability::current_stability_profile())
+        }
         "rodio-cpal" => BackendBufferPolicyPack {
             start_seek_prebuffer_seconds: 0.55,
             crossfade_prebuffer_seconds: 0.95,
@@ -148,9 +154,7 @@ fn backend_buffer_policy_pack(output_backend_id: &str) -> BackendBufferPolicyPac
     }
 }
 
-fn wasapi_shared_raw_policy_pack(
-    profile: NativeAudioStabilityProfile,
-) -> BackendBufferPolicyPack {
+fn wasapi_shared_raw_policy_pack(profile: NativeAudioStabilityProfile) -> BackendBufferPolicyPack {
     match profile {
         NativeAudioStabilityProfile::LowLatency => BackendBufferPolicyPack {
             start_seek_prebuffer_seconds: 0.36,
@@ -217,11 +221,12 @@ fn wasapi_shared_raw_policy_pack(
 
 pub(crate) fn streaming_prebuffer_default_seconds(output_backend_id: &str, crossfade: bool) -> f64 {
     let pack = backend_buffer_policy_pack(output_backend_id);
-    if crossfade {
+    let base = if crossfade {
         pack.crossfade_prebuffer_seconds
     } else {
         pack.start_seek_prebuffer_seconds
-    }
+    };
+    (base * stability::source_prepare_prebuffer_scale()).clamp(0.0, 4.0)
 }
 
 fn classify_transfer_pressure_band(
@@ -363,37 +368,53 @@ pub(crate) fn source_pop_wait_timeout(profile: RealtimePressureProfile) -> Durat
         RealtimePressureProfile::Guarded => policy.guarded_ms,
         RealtimePressureProfile::Critical => policy.critical_ms,
     };
-    Duration::from_millis(wait_ms)
+    let scaled_ms =
+        ((wait_ms as f64) * stability::source_prepare_wait_scale_factor()).round() as u64;
+    Duration::from_millis(scaled_ms.clamp(0, 24))
 }
 
 pub(crate) fn decode_push_backoff(profile: RealtimePressureProfile) -> Duration {
     match profile {
-        RealtimePressureProfile::Normal => Duration::from_millis(1),
+        RealtimePressureProfile::Normal => match stability::current_source_prepare_profile() {
+            stability::AudioSourcePrepareProfile::Aggressive
+            | stability::AudioSourcePrepareProfile::Failsafe => Duration::ZERO,
+            _ => Duration::from_millis(1),
+        },
         RealtimePressureProfile::Guarded => Duration::from_millis(0),
         RealtimePressureProfile::Critical => Duration::from_millis(0),
     }
 }
 
 pub(crate) fn output_producer_chunk_samples(profile: RealtimePressureProfile) -> usize {
-    match profile {
+    let base = match profile {
         RealtimePressureProfile::Normal => 12_288,
         RealtimePressureProfile::Guarded => 18_432,
         RealtimePressureProfile::Critical => 24_576,
-    }
+    };
+    scale_samples(
+        base,
+        stability::source_prepare_chunk_scale_factor(),
+        4_096,
+        196_608,
+    )
 }
 
 pub(crate) fn hot_path_prewarm_chunk_samples(capacity_samples: usize, channels: usize) -> usize {
     let channels = channels.max(1);
     let capacity = capacity_samples.max(channels);
     output_producer_chunk_samples(RealtimePressureProfile::Critical)
-        .saturating_add(channels.saturating_mul(2048))
+        .saturating_add(channels.saturating_mul(stability::source_prepare_hot_path_extra_frames()))
         .min(capacity)
         .max(channels)
 }
 
 pub(crate) fn output_producer_backoff(profile: RealtimePressureProfile) -> Duration {
     match profile {
-        RealtimePressureProfile::Normal => Duration::from_millis(1),
+        RealtimePressureProfile::Normal => match stability::current_source_prepare_profile() {
+            stability::AudioSourcePrepareProfile::Aggressive
+            | stability::AudioSourcePrepareProfile::Failsafe => Duration::ZERO,
+            _ => Duration::from_millis(1),
+        },
         RealtimePressureProfile::Guarded => Duration::from_millis(0),
         RealtimePressureProfile::Critical => Duration::from_millis(0),
     }
@@ -405,11 +426,14 @@ pub(crate) fn streaming_transfer_watermarks(
     profile: RealtimePressureProfile,
 ) -> (usize, usize) {
     let capacity = capacity_samples.max(channels.max(1));
-    let (low_percent, high_percent) = match profile {
+    let (mut low_percent, mut high_percent) = match profile {
         RealtimePressureProfile::Normal => (36usize, 88usize),
         RealtimePressureProfile::Guarded => (52usize, 94usize),
         RealtimePressureProfile::Critical => (64usize, 97usize),
     };
+    let (low_boost, high_boost) = stability::source_prepare_transfer_watermark_boost();
+    low_percent = low_percent.saturating_add(low_boost).min(92);
+    high_percent = high_percent.saturating_add(high_boost).min(99);
 
     let low = ((capacity * low_percent) / 100)
         .max(channels * 128)
@@ -487,9 +511,19 @@ pub(crate) fn streaming_min_start_bounds(
 ) -> (f64, f64) {
     let pack = backend_buffer_policy_pack(output_backend_id);
     if underrun_recovery_active {
-        (pack.recovery_cap_seconds, pack.recovery_floor_seconds)
+        (
+            (pack.recovery_cap_seconds * stability::source_prepare_recovery_threshold_scale())
+                .clamp(pack.recovery_floor_seconds, 4.0),
+            (pack.recovery_floor_seconds * stability::source_prepare_recovery_threshold_scale())
+                .clamp(0.08, 3.5),
+        )
     } else {
-        (pack.min_start_cap_seconds, pack.min_start_floor_seconds)
+        (
+            (pack.min_start_cap_seconds * stability::source_prepare_min_start_scale())
+                .clamp(pack.min_start_floor_seconds, 3.0),
+            (pack.min_start_floor_seconds * stability::source_prepare_min_start_scale())
+                .clamp(0.05, 2.5),
+        )
     }
 }
 
@@ -517,7 +551,22 @@ pub(crate) fn runtime_rebuffer_threshold_samples(
         .min(min_start_samples)
         .max(enter);
 
-    (enter, resume)
+    let scaled_enter = scale_samples(
+        enter,
+        stability::source_prepare_rebuffer_threshold_scale(),
+        hard_floor_enter,
+        min_start_samples,
+    )
+    .max(enter);
+    let scaled_resume = scale_samples(
+        resume,
+        stability::source_prepare_rebuffer_threshold_scale(),
+        scaled_enter,
+        min_start_samples,
+    )
+    .max(scaled_enter);
+
+    (scaled_enter, scaled_resume)
 }
 
 #[cfg(test)]

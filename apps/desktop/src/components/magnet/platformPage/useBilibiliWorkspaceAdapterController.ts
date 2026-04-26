@@ -70,13 +70,18 @@ function buildTrackFromPreparedPlayback(
   coverUrl?: string
 ): Track {
   const stableIdentity = buildBilibiliResourceIdentity(item);
+  const cachePath =
+    typeof prepared.cachePath === 'string' && prepared.cachePath.trim().length > 0
+      ? prepared.cachePath.trim()
+      : undefined;
+  const preferredPath = cachePath || item.sourceLocator;
   return {
     id: `bilibili:${stableIdentity}`,
     title: item.title,
     artist: item.ownerName ?? 'Bilibili',
     duration: item.durationSeconds ?? prepared.durationSeconds,
-    filePath: prepared.cachePath,
-    path: prepared.cachePath,
+    filePath: cachePath,
+    path: preferredPath,
     originalPath: item.sourceLocator,
     coverUrl: coverUrl ?? item.coverUrl,
     genre: 'Bilibili',

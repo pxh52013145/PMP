@@ -55,8 +55,8 @@ export interface NeteaseSongPage {
 
 export interface NeteasePreparedPlayback {
   sourceLocator: string;
-  streamUrl: string;
-  cachePath: string;
+  streamUrl?: string;
+  cachePath?: string;
   mimeType?: string;
   durationSeconds?: number;
   songId: string;

@@ -49,14 +49,19 @@ function buildTrackFromPreparedPlayback(
   prepared: MusicTemplatePreparedPlayback,
   platformLabel: string
 ): Track {
+  const cachePath =
+    typeof prepared.cachePath === 'string' && prepared.cachePath.trim().length > 0
+      ? prepared.cachePath.trim()
+      : undefined;
+  const preferredPath = cachePath || item.sourceLocator;
   return {
     id: `${item.resourceId}:${item.sourceLocator}`,
     title: item.title,
     artist: item.artistNames || platformLabel,
     album: item.albumName,
     duration: item.durationSeconds ?? prepared.durationSeconds,
-    filePath: prepared.cachePath,
-    path: prepared.cachePath,
+    filePath: cachePath,
+    path: preferredPath,
     originalPath: item.sourceLocator,
     coverUrl: item.coverUrl,
     genre: platformLabel,

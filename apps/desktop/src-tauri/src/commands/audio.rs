@@ -8,6 +8,16 @@ pub async fn native_audio_load(app: tauri::AppHandle, path: Option<String>) -> R
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_load_source(
+    app: tauri::AppHandle,
+    source: native_audio::NativeAudioSourcePayload,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::load_source(&app, source))
+        .await
+        .map_err(|e| format!("Native audio load source task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn native_audio_load_and_play(
     app: tauri::AppHandle,
     path: String,
@@ -18,6 +28,19 @@ pub async fn native_audio_load_and_play(
     })
     .await
     .map_err(|e| format!("Native audio load+play task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_load_and_play_source(
+    app: tauri::AppHandle,
+    source: native_audio::NativeAudioSourcePayload,
+    replay_gain_db: Option<f32>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::load_and_play_source(&app, source, replay_gain_db)
+    })
+    .await
+    .map_err(|e| format!("Native audio load+play source task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -58,6 +81,20 @@ pub async fn native_audio_stop(app: tauri::AppHandle) -> Result<(), String> {
 pub fn native_audio_mark_seek_seq(seek_seq: Option<u64>) -> Result<(), String> {
     native_audio::mark_latest_seek_sequence(seek_seq);
     Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_record_stability_hint(
+    app: tauri::AppHandle,
+    reason: String,
+    minimum_profile: Option<String>,
+    hold_ms: Option<u64>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::record_stability_hint(&app, reason, minimum_profile, hold_ms)
+    })
+    .await
+    .map_err(|e| format!("Native audio record stability hint task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]

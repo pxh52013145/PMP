@@ -42,6 +42,11 @@ import {
   resolvePlatformPlaybackIdentity,
 } from './platformPlaybackResolver';
 import {
+  AudioPlaybackSourceResolver,
+  type PreparedAudioSource,
+  toNativeAudioSourcePayload,
+} from './audioPlaybackSourceResolver';
+import {
   computeDynamicSrcStressScore,
   resolveDynamicSrcDegradationTransition,
 } from './audioStabilityController';
@@ -245,6 +250,7 @@ export class NativeAudioService implements IAudioService {
     'pixel-matrix-native-audio-output-device';
 
   private readonly telemetry = getTelemetryLogger('audio', 'NativeAudioService');
+  private readonly playbackSourceResolver = new AudioPlaybackSourceResolver();
   private state: AudioState;
   private timeUpdateCallbacks: Set<(time: number) => void> = new Set();
   private endedCallbacks: Set<() => void> = new Set();
@@ -354,8 +360,12 @@ export class NativeAudioService implements IAudioService {
   private lastSchedulerProfile: 'normal' | 'guarded' | 'critical' = 'normal';
   private stabilityProfile: AudioStabilityProfile = 'balanced';
   private stabilityActionProfile: 'normal' | 'guarded' | 'critical' = 'normal';
+  private sourcePrepareProfile: 'baseline' | 'steady' | 'aggressive' | 'failsafe' = 'baseline';
   private stabilityPrimaryReason: string | null = null;
   private stabilityReasonCodes: string[] = [];
+  private stabilityHintProfile: 'normal' | 'guarded' | 'critical' | undefined;
+  private stabilityHintPrimaryReason: string | null = null;
+  private stabilityHintReasonCodes: string[] = [];
   private transportMode: 'robust' | 'transport-exact' = 'robust';
   private hqSrcPhaseMode: 'linear' | 'minimum' | 'intermediate' = 'linear';
   private srcMode: 'source-native' | 'match-output' | 'target-rate' = 'match-output';
@@ -602,45 +612,178 @@ export class NativeAudioService implements IAudioService {
       });
   }
 
-  private async resolveTrackForNativePlayback(track: Track): Promise<Track> {
-    if (!isTauriRuntime()) return track;
+  private async prepareSourceForNativePlayback(track: Track): Promise<PreparedAudioSource> {
+    if (!isTauriRuntime()) {
+      return {
+        kind: 'local-file',
+        track,
+        path: getTrackPathForIdentity(track),
+      };
+    }
 
-    const identity = resolvePlatformPlaybackIdentity(track);
-    if (!identity?.sourceLocator) {
+    return this.playbackSourceResolver.prepare(track, {
+      recordStabilityHint: (reason, options) => {
+        this.recordNativeStabilityHintBestEffort(reason, options);
+      },
+    });
+  }
+
+  private resolveTrackForPreparedSource(source: PreparedAudioSource): Track {
+    switch (source.kind) {
+      case 'cache-file':
+      case 'local-file':
+        return source.track;
+      case 'remote-stream':
+        return source.track;
+      case 'deferred':
+        if (!source.sourceLocator) {
+          return source.track;
+        }
+        return {
+          ...source.track,
+          originalPath:
+            typeof source.track.originalPath === 'string' && source.track.originalPath.trim().length > 0
+              ? source.track.originalPath
+              : source.sourceLocator,
+          comment:
+            typeof source.track.comment === 'string' && source.track.comment.trim().length > 0
+              ? source.track.comment
+              : source.sourceLocator,
+        };
+    }
+  }
+
+  private resolvePreparedSourceIdentityPath(source: PreparedAudioSource, track: Track): string | null {
+    switch (source.kind) {
+      case 'local-file':
+      case 'cache-file':
+        return source.path;
+      case 'remote-stream':
+        return source.sourceLocator || source.streamUrl;
+      case 'deferred':
+        return source.sourceLocator ?? this.getTrackPath(track);
+      default:
+        return this.getTrackPath(track);
+    }
+  }
+
+  private resolvePreparedSourcePathForNativeTransport(source: PreparedAudioSource): string | null {
+    switch (source.kind) {
+      case 'local-file':
+      case 'cache-file':
+        return source.path;
+      default:
+        return null;
+    }
+  }
+
+  private emitUnsupportedNativePreparedSourceError(source: PreparedAudioSource, track: Track): void {
+    const error = new Error(
+      'Native audio could not resolve a playable source for this track.'
+    ) as Error & { code?: string };
+    error.code =
+      source.kind === 'deferred' ? 'NATIVE_TRACK_SOURCE_DEFERRED' : 'NATIVE_TRACK_SOURCE_UNSUPPORTED';
+    this.emitError(error);
+    this.telemetry.warn('audio.source.prepare.unsupported', {
+      fields: {
+        sourceKind: source.kind,
+        deferredReason: source.kind === 'deferred' ? source.reason : null,
+        ...buildTrackTelemetryFields(track),
+      },
+    });
+  }
+
+  private applyPreparedSourceMaterializedPath(
+    source: PreparedAudioSource,
+    track: Track,
+    materializedPath: string | null | undefined
+  ): Track {
+    if (!materializedPath || !this.isProbablyAbsolutePath(materializedPath)) {
       return track;
     }
 
-    const sourceLocator = identity.sourceLocator;
+    switch (source.kind) {
+      case 'remote-stream':
+        return {
+          ...track,
+          filePath: materializedPath,
+          path: materializedPath,
+          originalPath: source.sourceLocator,
+          comment:
+            typeof track.comment === 'string' && track.comment.trim().length > 0
+              ? track.comment
+              : source.sourceLocator,
+        };
+      case 'cache-file':
+      case 'local-file':
+        return {
+          ...track,
+          filePath: materializedPath,
+          path: materializedPath,
+        };
+      default:
+        return track;
+    }
+  }
+
+  private async invokePreparedSourceLoadCommand(
+    source: PreparedAudioSource,
+    options?: {
+      play?: boolean;
+      replayGainDb?: number;
+    }
+  ): Promise<string | null> {
+    const transportPath = this.resolvePreparedSourcePathForNativeTransport(source);
+    if (transportPath && !this.isProbablyAbsolutePath(transportPath)) {
+      const error = new Error(
+        'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
+      ) as Error & { code?: string };
+      error.code = 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
+      this.emitError(error);
+      return null;
+    }
+
+    const payload = toNativeAudioSourcePayload(source);
+    if (!payload) {
+      this.emitUnsupportedNativePreparedSourceError(source, this.resolveTrackForPreparedSource(source));
+      return null;
+    }
 
     try {
-      const { preparePlatformPlayback } = await import('../../modules/music-platform/platformFacade');
-      const preparedResult = await preparePlatformPlayback({
-        connectorId: identity.connectorId,
-        sourceLocator,
-      });
-      const prepared = preparedResult?.prepared;
-      const cachePath = typeof prepared?.cachePath === 'string' ? prepared.cachePath.trim() : '';
-      if (!cachePath || !this.isProbablyAbsolutePath(cachePath)) {
-        return track;
+      if (options?.play) {
+        return await this.invokeCommand<string>('native_audio_load_and_play_source', {
+          source: payload,
+          replayGainDb: options.replayGainDb,
+        });
       }
 
-      return {
-        ...track,
-        filePath: cachePath,
-        path: cachePath,
-        originalPath: sourceLocator,
-        duration:
-          typeof track.duration === 'number' && Number.isFinite(track.duration)
-            ? track.duration
-            : prepared?.durationSeconds,
-        comment:
-          typeof track.comment === 'string' && track.comment.trim().length > 0
-            ? track.comment
-            : sourceLocator,
-      };
+      return await this.invokeCommand<string>('native_audio_load_source', {
+        source: payload,
+      });
     } catch {
-      return track;
+      return null;
     }
+  }
+
+  private async syncMaterializedQueueItemPathIfNeeded(
+    index: number,
+    previousQueuePath: string | null | undefined,
+    materializedPath: string | null | undefined
+  ): Promise<void> {
+    if (!materializedPath || !this.isProbablyAbsolutePath(materializedPath)) {
+      return;
+    }
+    if (index < 0 || index >= this.state.queue.length) {
+      return;
+    }
+
+    const normalizedPreviousPath = this.normalizeTrackPathForCompare(previousQueuePath);
+    const normalizedMaterializedPath = this.normalizeTrackPathForCompare(materializedPath);
+    if (!normalizedMaterializedPath || normalizedPreviousPath === normalizedMaterializedPath) {
+      return;
+    }
+
+    await this.replaceQueueItemPathInNative(index, materializedPath);
   }
 
   private markTrackPlayedBestEffort(track: Track): void {
@@ -3965,8 +4108,12 @@ export class NativeAudioService implements IAudioService {
       record: this as unknown as Record<string, unknown>,
       state: this.state,
       stabilityActionProfile: this.stabilityActionProfile,
+      sourcePrepareProfile: this.sourcePrepareProfile,
       stabilityPrimaryReason: this.stabilityPrimaryReason,
       stabilityReasonCodes: this.stabilityReasonCodes,
+      stabilityHintProfile: this.stabilityHintProfile,
+      stabilityHintPrimaryReason: this.stabilityHintPrimaryReason,
+      stabilityHintReasonCodes: this.stabilityHintReasonCodes,
       estimatedAudioBufferBytes: this.estimatedAudioBufferBytes,
       renderQueuePageLockFailureCount: this.renderQueuePageLockFailureCount,
       renderQueuePageLockAttemptedBytes: this.renderQueuePageLockAttemptedBytes,
@@ -4004,6 +4151,45 @@ export class NativeAudioService implements IAudioService {
 
   private emitRobustnessSnapshot(force: boolean = false): void {
     this.robustnessController.emit(force);
+  }
+
+  private recordNativeStabilityHintBestEffort(
+    reason:
+      | 'source-prepare-warmup'
+      | 'platform-cache-materializing'
+      | 'foreground-heavy-app-start',
+    options?: {
+      holdMs?: number;
+      minimumProfile?: 'normal' | 'guarded' | 'critical';
+      event?: string;
+    }
+  ): void {
+    if (!isTauriRuntime()) return;
+
+    const payload: Record<string, unknown> = { reason };
+    if (
+      options?.minimumProfile === 'normal' ||
+      options?.minimumProfile === 'guarded' ||
+      options?.minimumProfile === 'critical'
+    ) {
+      payload.minimumProfile = options.minimumProfile;
+    }
+    if (
+      typeof options?.holdMs === 'number' &&
+      Number.isFinite(options.holdMs) &&
+      options.holdMs > 0
+    ) {
+      payload.holdMs = Math.max(250, Math.floor(options.holdMs));
+    }
+
+    void invokeWithTelemetry('native_audio_record_stability_hint', payload, {
+      moduleId: 'audio',
+      component: 'NativeAudioService',
+      event: options?.event ?? 'audio.stability.hint.native',
+      failureLevel: 'warn',
+    }).catch(() => {
+      // Best-effort: stability hints should never block playback control flow.
+    });
   }
 
   // ===== Helpers =====
@@ -4103,20 +4289,6 @@ export class NativeAudioService implements IAudioService {
       (candidateTrack) =>
         this.normalizeTrackIdentityForCompare(candidateTrack) === normalizedTargetIdentity
     );
-  }
-
-  private resolveAbsoluteTrackPathOrEmitError(track: Track): string | null {
-    const trackPath = this.getTrackPath(track);
-    if (trackPath && this.isProbablyAbsolutePath(trackPath)) {
-      return trackPath;
-    }
-
-    const error = new Error(
-      'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
-    ) as Error & { code?: string };
-    error.code = !trackPath ? 'NATIVE_TRACK_PATH_MISSING' : 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
-    this.emitError(error);
-    return null;
   }
 
   private ensureTrackInQueue(
@@ -4747,6 +4919,10 @@ export class NativeAudioService implements IAudioService {
     this.protectionWindowRefCount += 1;
     this.protectionWindowReason = reason;
     this.protectionWindowUntilMs = Math.max(this.protectionWindowUntilMs, nowMs + durationMsRaw);
+    this.recordNativeStabilityHintBestEffort('foreground-heavy-app-start', {
+      holdMs: durationMsRaw,
+      event: 'audio.stability.hint.protection-window',
+    });
     this.applyStreamingBufferPolicy(true);
     this.withDynamicSrcHold(`protection-window:${reason}`, durationMsRaw);
     this.emitRobustnessSnapshot(true);
@@ -4856,43 +5032,84 @@ export class NativeAudioService implements IAudioService {
     if (!track) return false;
 
     const previousQueue = this.state.queue;
-    const resolvedTrack = await this.resolveTrackForNativePlayback(track);
-
-    const trackPath = this.resolveAbsoluteTrackPathOrEmitError(resolvedTrack);
+    const preparedSource = await this.prepareSourceForNativePlayback(track);
+    const resolvedTrack = this.resolveTrackForPreparedSource(preparedSource);
+    const trackPath = this.resolvePreparedSourceIdentityPath(preparedSource, resolvedTrack);
     if (!trackPath) return false;
 
-    const { track: stateTrack, queue, index } = this.ensureTrackInQueue(resolvedTrack, trackPath);
+    const ensuredTrack = this.ensureTrackInQueue(resolvedTrack, trackPath);
+    let stateTrack = ensuredTrack.track;
+    let queue = ensuredTrack.queue;
+    const index = ensuredTrack.index;
     this.applyTrackLoadingState(stateTrack, queue, index);
 
+    const transportPath = this.resolvePreparedSourcePathForNativeTransport(preparedSource);
     const canUseQueueIndexLoad =
       queue.length === previousQueue.length &&
-      this.isProbablyAbsolutePath(trackPath) &&
+      !!transportPath &&
+      this.isProbablyAbsolutePath(transportPath) &&
       this.canUseQueueIndexTransport(queue, index);
     const previousTrackPath =
       index >= 0 && index < previousQueue.length ? this.getTrackPath(previousQueue[index]) : null;
 
     let usedQueueIndexLoad = false;
+    let loaded = false;
+    let materializedPath: string | null = null;
     try {
       await this.applyRuntimeControlSettingsToBackend();
       await this.applyReplayGainForTrack(resolvedTrack);
       if (canUseQueueIndexLoad) {
         const pathPatched =
           this.normalizeTrackPathForCompare(previousTrackPath) ===
-            this.normalizeTrackPathForCompare(trackPath) ||
-          (await this.replaceQueueItemPathInNative(index, trackPath));
+            this.normalizeTrackPathForCompare(transportPath) ||
+          (await this.replaceQueueItemPathInNative(index, transportPath));
         if (pathPatched) {
           await this.invokeCommand('native_audio_load_queue_index', { index });
           this.markNativeQueueMutationSynced(queue, index);
           usedQueueIndexLoad = true;
+          loaded = true;
         } else {
-          await this.invokeCommand('native_audio_load', { path: trackPath });
+          materializedPath = await this.invokePreparedSourceLoadCommand(preparedSource);
+          loaded = typeof materializedPath === 'string' && materializedPath.trim().length > 0;
         }
       } else {
-        await this.invokeCommand('native_audio_load', { path: trackPath });
+        materializedPath = await this.invokePreparedSourceLoadCommand(preparedSource);
+        loaded = typeof materializedPath === 'string' && materializedPath.trim().length > 0;
       }
     } catch {
       // invokeCommand already emits error; report failure to callers so they can avoid follow-up commands.
       return false;
+    }
+
+    if (!loaded) {
+      return false;
+    }
+
+    if (materializedPath) {
+      const previousQueueTrackPath = index >= 0 && index < queue.length ? this.getTrackPath(queue[index]) : null;
+      const materializedTrack = this.applyPreparedSourceMaterializedPath(
+        preparedSource,
+        resolvedTrack,
+        materializedPath
+      );
+      if (materializedTrack !== resolvedTrack) {
+        stateTrack = compactTrackForState(materializedTrack);
+        const queueTrack = compactTrackForQueueState(materializedTrack);
+        if (index >= 0 && index < queue.length && queue[index] !== queueTrack) {
+          queue = [...queue];
+          queue[index] = queueTrack;
+        }
+        this.updateState({
+          currentTrack: stateTrack,
+          queue,
+          currentIndex: index,
+        });
+        await this.syncMaterializedQueueItemPathIfNeeded(
+          index,
+          previousQueueTrackPath,
+          materializedPath
+        );
+      }
     }
 
     if (!usedQueueIndexLoad && queue.length > previousQueue.length && !this.nativeQueueMirrorDirty) {
@@ -4912,29 +5129,69 @@ export class NativeAudioService implements IAudioService {
     if (!track) return false;
 
     const previousQueue = this.state.queue;
-    const resolvedTrack = await this.resolveTrackForNativePlayback(track);
-
-    const trackPath = this.resolveAbsoluteTrackPathOrEmitError(resolvedTrack);
+    const preparedSource = await this.prepareSourceForNativePlayback(track);
+    const resolvedTrack = this.resolveTrackForPreparedSource(preparedSource);
+    const trackPath = this.resolvePreparedSourceIdentityPath(preparedSource, resolvedTrack);
     if (!trackPath) return false;
 
-    const { track: stateTrack, queue, index } = this.ensureTrackInQueue(resolvedTrack, trackPath);
+    const ensuredTrack = this.ensureTrackInQueue(resolvedTrack, trackPath);
+    let stateTrack = ensuredTrack.track;
+    let queue = ensuredTrack.queue;
+    const index = ensuredTrack.index;
     this.applyTrackLoadingState(stateTrack, queue, index);
 
     const replayGainDb = this.computeReplayGainDbForTrack(resolvedTrack);
 
+    let loaded = false;
+    let materializedPath: string | null = null;
     try {
       await this.applyRuntimeControlSettingsToBackend();
-      await this.invokeCommand('native_audio_load_and_play', { path: trackPath, replayGainDb });
+      materializedPath = await this.invokePreparedSourceLoadCommand(preparedSource, {
+        play: true,
+        replayGainDb,
+      });
+      loaded = typeof materializedPath === 'string' && materializedPath.trim().length > 0;
     } catch {
-      // invokeCommand already emits error; report failure to callers so they can avoid follow-up commands.
+      loaded = false;
+    }
+    if (!loaded) {
       return false;
+    }
+
+    let playedTrack = resolvedTrack;
+    if (materializedPath) {
+      const previousQueueTrackPath = index >= 0 && index < queue.length ? this.getTrackPath(queue[index]) : null;
+      const materializedTrack = this.applyPreparedSourceMaterializedPath(
+        preparedSource,
+        resolvedTrack,
+        materializedPath
+      );
+      if (materializedTrack !== resolvedTrack) {
+        playedTrack = materializedTrack;
+        stateTrack = compactTrackForState(materializedTrack);
+        const queueTrack = compactTrackForQueueState(materializedTrack);
+        if (index >= 0 && index < queue.length && queue[index] !== queueTrack) {
+          queue = [...queue];
+          queue[index] = queueTrack;
+        }
+        this.updateState({
+          currentTrack: stateTrack,
+          queue,
+          currentIndex: index,
+        });
+        await this.syncMaterializedQueueItemPathIfNeeded(
+          index,
+          previousQueueTrackPath,
+          materializedPath
+        );
+      }
     }
 
     if (queue.length > previousQueue.length && !this.nativeQueueMirrorDirty) {
       this.markNativeQueueMutationSynced(queue, index);
     }
 
-    this.markTrackPlayedBestEffort(resolvedTrack);
+    this.markTrackPlayedBestEffort(playedTrack);
     this.scheduleTrackSwitchWorkingSetTrim('native-audio-track-switch');
 
     return true;
@@ -5369,7 +5626,8 @@ export class NativeAudioService implements IAudioService {
     });
 
     try {
-      const track = await this.resolveTrackForNativePlayback(originalTrack);
+      const preparedSource = await this.prepareSourceForNativePlayback(originalTrack);
+      const track = this.resolveTrackForPreparedSource(preparedSource);
       const stateTrack = compactTrackForState(track);
       let playbackQueue = this.state.queue;
       if (track !== originalTrack) {
@@ -5384,22 +5642,13 @@ export class NativeAudioService implements IAudioService {
       const shouldCrossfade =
         wasPlaying && crossfade.enabled && crossfade.durationMs > 0 && index !== previousIndex;
 
-      const trackPath = this.getTrackPath(track);
+      const trackPath = this.resolvePreparedSourcePathForNativeTransport(preparedSource);
       const canUseQueueIndexTransport =
         !!trackPath &&
         this.isProbablyAbsolutePath(trackPath) &&
         this.canUseQueueIndexTransport(playbackQueue, index);
 
-      if (shouldCrossfade) {
-        if (!trackPath || !this.isProbablyAbsolutePath(trackPath)) {
-          const error = new Error(
-            'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
-          ) as Error & { code?: string };
-          error.code = !trackPath ? 'NATIVE_TRACK_PATH_MISSING' : 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
-          this.emitError(error);
-          return;
-        }
-
+      if (shouldCrossfade && trackPath && this.isProbablyAbsolutePath(trackPath)) {
         const nextState = this.updateState({
           currentTrack: stateTrack,
           playbackState: 'loading',
@@ -5455,6 +5704,16 @@ export class NativeAudioService implements IAudioService {
           minIntervalMs: 250,
         });
         return;
+      } else if (shouldCrossfade) {
+        this.telemetry.info('audio.track.switch.crossfade.fallback', {
+          fields: {
+            requestedIndex: index,
+            previousIndex,
+            queueLength: this.state.queue.length,
+            sourceKind: preparedSource.kind,
+            ...buildTrackTelemetryFields(track),
+          },
+        });
       }
 
       let loaded = false;

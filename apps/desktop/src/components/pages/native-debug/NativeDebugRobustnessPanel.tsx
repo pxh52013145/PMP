@@ -5,8 +5,12 @@ export type NativeDebugRobustnessMetricsView = {
   scheduler: string;
   stability: string;
   stabilityActionProfile: string;
+  sourcePrepareProfile: string;
+  stabilityHintProfile: string;
   stabilityPrimaryReason: string;
   stabilityReasonCodes: string;
+  stabilityHintPrimaryReason: string;
+  stabilityHintReasonCodes: string;
   transport: string;
   srcBackend: string;
   quantization: string;
@@ -126,6 +130,22 @@ export function NativeDebugRobustnessPanel({
           </div>
           <div className="native-debug-metrics-row">
             <span className="native-debug-metrics-label">
+              {t('pages.native-debug.robustness.stability.sourcePrepareProfile')}
+            </span>
+            <span className="native-debug-metrics-value">
+              {robustnessMetricsView.sourcePrepareProfile}
+            </span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">
+              {t('pages.native-debug.robustness.stability.hintProfile')}
+            </span>
+            <span className="native-debug-metrics-value">
+              {robustnessMetricsView.stabilityHintProfile}
+            </span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">
               {t('pages.native-debug.robustness.stability.primaryReason')}
             </span>
             <span className="native-debug-metrics-value">
@@ -138,6 +158,22 @@ export function NativeDebugRobustnessPanel({
             </span>
             <span className="native-debug-metrics-value">
               {robustnessMetricsView.stabilityReasonCodes}
+            </span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">
+              {t('pages.native-debug.robustness.stability.hintPrimaryReason')}
+            </span>
+            <span className="native-debug-metrics-value">
+              {robustnessMetricsView.stabilityHintPrimaryReason}
+            </span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">
+              {t('pages.native-debug.robustness.stability.hintReasonCodes')}
+            </span>
+            <span className="native-debug-metrics-value">
+              {robustnessMetricsView.stabilityHintReasonCodes}
             </span>
           </div>
           <div className="native-debug-metrics-row">

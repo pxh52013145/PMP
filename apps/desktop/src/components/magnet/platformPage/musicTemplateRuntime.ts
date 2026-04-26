@@ -265,14 +265,14 @@ function withMusicTemplatePreparedPlaybackFallback(
 
   const streamUrl = normalizeString(cloned.streamUrl);
   const cachePath = normalizeString(cloned.cachePath);
-  if (!streamUrl || !cachePath) {
+  if (!streamUrl && !cachePath) {
     return null;
   }
 
   return {
     sourceLocator: normalizeString(cloned.sourceLocator) || item.sourceLocator,
-    streamUrl,
-    cachePath,
+    streamUrl: streamUrl || undefined,
+    cachePath: cachePath || undefined,
     mimeType: normalizeString(cloned.mimeType) || undefined,
     durationSeconds:
       typeof cloned.durationSeconds === 'number' && Number.isFinite(cloned.durationSeconds)

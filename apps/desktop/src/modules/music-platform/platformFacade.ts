@@ -56,9 +56,13 @@ export interface PlatformTrackSearchResult {
 
 export interface PlatformPreparedPlayback {
   sourceLocator: string;
-  streamUrl: string;
-  cachePath: string;
+  streamUrl?: string;
+  cachePath?: string;
   mimeType?: string;
+  headers?: Record<string, string>;
+  expiresAtMs?: number;
+  seekable?: boolean;
+  rangeRequests?: boolean;
   durationSeconds?: number;
   resourceId?: string;
   songId?: string;
@@ -96,6 +100,24 @@ function readFiniteNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function readBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function readStringRecord(value: unknown): Record<string, string> | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+
+  const entries = Object.entries(record)
+    .map(([key, entryValue]) => [normalizeString(key), normalizeString(entryValue)] as const)
+    .filter(([key, entryValue]) => key.length > 0 && entryValue.length > 0);
+  if (entries.length < 1) {
+    return undefined;
+  }
+
+  return Object.fromEntries(entries);
+}
+
 function readConnectorSuffix(connectorId: string): string {
   return normalizeString(connectorId).replace(/^connector\.platform\./, '');
 }
@@ -115,15 +137,19 @@ function mapPreparedPlayback(value: unknown): PlatformPreparedPlayback | null {
   const sourceLocator = normalizeString(record.sourceLocator);
   const streamUrl = normalizeString(record.streamUrl);
   const cachePath = normalizeString(record.cachePath);
-  if (!sourceLocator || !streamUrl || !cachePath) {
+  if (!sourceLocator || (!streamUrl && !cachePath)) {
     return null;
   }
 
   return {
     sourceLocator,
-    streamUrl,
-    cachePath,
+    streamUrl: streamUrl || undefined,
+    cachePath: cachePath || undefined,
     mimeType: normalizeString(record.mimeType) || undefined,
+    headers: readStringRecord(record.headers),
+    expiresAtMs: readFiniteNumber(record.expiresAtMs),
+    seekable: readBoolean(record.seekable),
+    rangeRequests: readBoolean(record.rangeRequests),
     durationSeconds: readFiniteNumber(record.durationSeconds),
     resourceId: normalizeString(record.resourceId) || undefined,
     songId: normalizeString(record.songId) || undefined,

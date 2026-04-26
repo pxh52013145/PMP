@@ -15,8 +15,12 @@ export type NativeAudioRobustnessSnapshotAdapterInput = {
   record: Record<string, unknown>;
   state: AudioState;
   stabilityActionProfile?: AudioRobustnessSnapshot['stabilityActionProfile'];
+  sourcePrepareProfile?: AudioRobustnessSnapshot['sourcePrepareProfile'];
   stabilityPrimaryReason?: AudioRobustnessSnapshot['stabilityPrimaryReason'];
   stabilityReasonCodes?: AudioRobustnessSnapshot['stabilityReasonCodes'];
+  stabilityHintProfile?: AudioRobustnessSnapshot['stabilityHintProfile'];
+  stabilityHintPrimaryReason?: AudioRobustnessSnapshot['stabilityHintPrimaryReason'];
+  stabilityHintReasonCodes?: AudioRobustnessSnapshot['stabilityHintReasonCodes'];
   estimatedAudioBufferBytes: number;
   renderQueuePageLockFailureCount: number;
   renderQueuePageLockAttemptedBytes: number;
@@ -58,8 +62,12 @@ export function createNativeAudioRobustnessSnapshotSource(
 
   source.state = input.state;
   source.stabilityActionProfile = input.stabilityActionProfile;
+  source.sourcePrepareProfile = input.sourcePrepareProfile;
   source.stabilityPrimaryReason = input.stabilityPrimaryReason;
   source.stabilityReasonCodes = input.stabilityReasonCodes;
+  source.stabilityHintProfile = input.stabilityHintProfile;
+  source.stabilityHintPrimaryReason = input.stabilityHintPrimaryReason;
+  source.stabilityHintReasonCodes = input.stabilityHintReasonCodes;
   source.estimatedAudioBufferBytes = input.estimatedAudioBufferBytes;
   source.renderQueuePageLockFailureCount = input.renderQueuePageLockFailureCount;
   source.renderQueuePageLockAttemptedBytes = input.renderQueuePageLockAttemptedBytes;

@@ -117,8 +117,8 @@ export interface PlatformWorkspaceResolvedResourceResult {
 
 export interface PlatformWorkspacePreparedPlayback {
   sourceLocator: string;
-  streamUrl: string;
-  cachePath: string;
+  streamUrl?: string;
+  cachePath?: string;
   mimeType?: string;
   durationSeconds?: number;
   resourceId?: string;

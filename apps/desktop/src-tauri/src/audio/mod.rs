@@ -24,6 +24,7 @@ pub(crate) mod realtime_memory_guard;
 pub(crate) mod realtime_scheduler;
 pub(crate) mod resample;
 pub(crate) mod retire_plane;
+pub(crate) mod source;
 pub(crate) mod spectrum;
 pub(crate) mod stability;
 pub(crate) mod stability_controller;

@@ -28,8 +28,12 @@ impl NativeAudioEngine {
         payload.scheduler_profile = None;
         payload.stability_action_profile = None;
         payload.stability_profile = None;
+        payload.source_prepare_profile = None;
         payload.stability_primary_reason = None;
         payload.stability_reason_codes = None;
+        payload.stability_hint_profile = None;
+        payload.stability_hint_primary_reason = None;
+        payload.stability_hint_reason_codes = None;
         payload.transport_mode = None;
         payload.hq_src_phase_mode = None;
         payload.src_mode = None;
@@ -160,6 +164,9 @@ pub(super) fn build_state_payload_with_options_impl(
         || engine.output_backend.id() == "wasapi-shared-raw";
     let shared_render_backend = is_shared_output_backend(engine.output_backend.id());
     let shared_render_metrics = crate::audio::output::shared_render_ahead_metrics();
+    let stability_hint = crate::audio::stability::current_external_hint_snapshot();
+    let stability_hint_active =
+        stability_hint.primary_reason.is_some() || !stability_hint.reason_codes.is_empty();
     let memory_pool_stats = crate::audio::memory_pool::stats_snapshot();
     let realtime_memory_stats = crate::audio::realtime_memory_guard::snapshot();
     let control_plane_stats = crate::audio::control_plane::control_plane_stats_snapshot();
@@ -260,12 +267,32 @@ pub(super) fn build_state_payload_with_options_impl(
         }),
         stability_action_profile: Some(engine.stability_action_profile().as_str().to_string()),
         stability_profile: Some(engine.stability_profile.as_str().to_string()),
+        source_prepare_profile: Some(
+            crate::audio::stability::current_source_prepare_profile()
+                .as_str()
+                .to_string(),
+        ),
         stability_primary_reason: engine
             .stability_primary_reason()
             .map(|reason| reason.to_string()),
         stability_reason_codes: Some(
             engine
                 .stability_reason_codes()
+                .into_iter()
+                .map(|reason| reason.to_string())
+                .collect(),
+        ),
+        stability_hint_profile: if stability_hint_active {
+            Some(stability_hint.minimum_profile.as_str().to_string())
+        } else {
+            None
+        },
+        stability_hint_primary_reason: stability_hint
+            .primary_reason
+            .map(|reason| reason.to_string()),
+        stability_hint_reason_codes: Some(
+            stability_hint
+                .reason_codes
                 .into_iter()
                 .map(|reason| reason.to_string())
                 .collect(),

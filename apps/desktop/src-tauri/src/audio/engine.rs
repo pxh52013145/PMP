@@ -413,6 +413,8 @@ pub(crate) fn streaming_prebuffer_target_samples(
         })
         .unwrap_or(default_seconds)
         .clamp(0.0, 10.0);
+    let seconds =
+        (seconds * crate::audio::stability::source_prepare_prebuffer_scale()).clamp(0.0, 10.0);
 
     if seconds <= 0.0 {
         return (0, Duration::from_millis(0));
@@ -486,7 +488,7 @@ pub(crate) fn streaming_prebuffer_interactive_wait_with_policy(
     let shared_cap_scale = if is_shared_output_backend(output_backend_id) {
         parse_env_f64(
             "PMP_AUDIO_STREAM_INTERACTIVE_SHARED_CAP_SCALE",
-            1.8,
+            crate::audio::stability::interactive_shared_cap_scale_default(),
             1.0,
             6.0,
         )
@@ -496,7 +498,7 @@ pub(crate) fn streaming_prebuffer_interactive_wait_with_policy(
     let shared_timeout_scale = if is_shared_output_backend(output_backend_id) {
         parse_env_f64(
             "PMP_AUDIO_STREAM_INTERACTIVE_SHARED_TIMEOUT_SCALE",
-            1.6,
+            crate::audio::stability::interactive_shared_timeout_scale_default(),
             1.0,
             6.0,
         )
@@ -904,6 +906,8 @@ impl NativeAudioEngine {
         output_backend.set_transport_mode(NativeAudioTransportMode::Robust);
         output_backend.set_output_quantization_mode(NativeAudioOutputQuantizationMode::Round);
         crate::audio::stability::set_stability_profile(NativeAudioStabilityProfile::Balanced);
+        crate::audio::stability::set_runtime_action_profile(RealtimePressureProfile::Normal);
+        crate::audio::stability::clear_external_hints();
         let shared_output_backend = is_shared_output_backend(output_backend.id());
         info_log(format!(
             "[NativeAudio] Output backend: {}",
@@ -1693,6 +1697,8 @@ impl NativeAudioEngine {
                 })
                 .unwrap_or(48_000)
                 .max(1);
+            let source_prepare_reason =
+                crate::audio::stability::AudioStabilityHintReason::SourcePrepareWarmup;
 
             let (inner_resume_target, inner_resume_timeout) = self
                 .streaming_prebuffer_interactive_wait(
@@ -1704,6 +1710,13 @@ impl NativeAudioEngine {
                     self.streaming_prebuffer_start_or_seek_seconds,
                 );
             if inner_resume_target > 0 && inner_resume_timeout > Duration::ZERO {
+                crate::audio::stability::record_external_hint(
+                    source_prepare_reason,
+                    crate::audio::stability::default_external_hint_profile(source_prepare_reason),
+                    crate::audio::stability::source_prepare_warmup_hold_ms_for(
+                        inner_resume_timeout,
+                    ),
+                );
                 if streaming.render_queue.len_samples() < inner_resume_target {
                     streaming
                         .render_queue
@@ -1712,14 +1725,29 @@ impl NativeAudioEngine {
             }
 
             if should_wrap_source_for_shared_backend(self.output_backend.id()) {
-                let guard_timeout_seconds =
-                    parse_env_f64("PMP_AUDIO_SHARED_RESUME_GUARD_SECONDS", 0.24, 0.0, 2.0);
-                let guard_min_seconds =
-                    parse_env_f64("PMP_AUDIO_SHARED_RESUME_GUARD_MIN_SECONDS", 0.08, 0.0, 0.8);
+                let guard_timeout_seconds = parse_env_f64(
+                    "PMP_AUDIO_SHARED_RESUME_GUARD_SECONDS",
+                    crate::audio::stability::shared_resume_guard_seconds_default(),
+                    0.0,
+                    2.0,
+                );
+                let guard_min_seconds = parse_env_f64(
+                    "PMP_AUDIO_SHARED_RESUME_GUARD_MIN_SECONDS",
+                    crate::audio::stability::shared_resume_guard_min_seconds_default(),
+                    0.0,
+                    0.8,
+                );
                 let guard_timeout = Duration::from_secs_f64(guard_timeout_seconds);
                 let guard_state = shared_render_ahead_ready_snapshot();
 
                 if guard_state.active_wrapper_id > 0 && guard_timeout > Duration::ZERO {
+                    crate::audio::stability::record_external_hint(
+                        source_prepare_reason,
+                        crate::audio::stability::default_external_hint_profile(
+                            source_prepare_reason,
+                        ),
+                        crate::audio::stability::source_prepare_warmup_hold_ms_for(guard_timeout),
+                    );
                     let sample_rate = sample_rate as f64;
                     let outer_resume_target = ((sample_rate * channels as f64 * guard_min_seconds)
                         .ceil() as usize)
@@ -1762,8 +1790,17 @@ impl NativeAudioEngine {
         let resume_samples = target_samples
             .max(floor_samples)
             .clamp(channels.max(1), capacity.max(1));
+        let resume_timeout = timeout.max(Duration::from_millis(120));
 
-        (resume_samples, timeout.max(Duration::from_millis(120)))
+        crate::audio::stability::record_external_hint(
+            crate::audio::stability::AudioStabilityHintReason::SourcePrepareWarmup,
+            crate::audio::stability::default_external_hint_profile(
+                crate::audio::stability::AudioStabilityHintReason::SourcePrepareWarmup,
+            ),
+            crate::audio::stability::source_prepare_warmup_hold_ms_for(resume_timeout),
+        );
+
+        (resume_samples, resume_timeout)
     }
 
     fn stop_and_release_sink(&self, sink: Arc<dyn AudioSink>, mode: RuntimeReleaseMode) {

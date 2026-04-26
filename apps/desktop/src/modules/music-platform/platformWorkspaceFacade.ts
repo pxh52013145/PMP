@@ -621,12 +621,12 @@ function mapPreparedPlayback(
   const sourceLocator = normalizePlatformFacadeString(record.sourceLocator);
   const streamUrl = normalizePlatformFacadeString(record.streamUrl);
   const cachePath = normalizePlatformFacadeString(record.cachePath);
-  if (!sourceLocator || !streamUrl || !cachePath) return undefined;
+  if (!sourceLocator || (!streamUrl && !cachePath)) return undefined;
 
   return {
     sourceLocator,
-    streamUrl,
-    cachePath,
+    streamUrl: streamUrl || undefined,
+    cachePath: cachePath || undefined,
     mimeType: normalizePlatformFacadeString(record.mimeType) || undefined,
     durationSeconds: mapDurationSeconds(record),
     resourceId:

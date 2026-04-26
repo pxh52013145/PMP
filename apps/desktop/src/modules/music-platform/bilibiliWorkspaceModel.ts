@@ -48,8 +48,8 @@ export interface BilibiliLyricLocatorResolved {
 
 export interface BilibiliPreparedPlayback {
   sourceLocator: string;
-  streamUrl: string;
-  cachePath: string;
+  streamUrl?: string;
+  cachePath?: string;
   mimeType?: string;
   durationSeconds?: number;
   contentKind: string;

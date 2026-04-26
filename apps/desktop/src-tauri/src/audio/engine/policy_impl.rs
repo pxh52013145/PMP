@@ -110,6 +110,7 @@ impl NativeAudioEngine {
             memory_lock_skipped_count: realtime_memory_stats.lock_skipped_count,
             memory_pool_growth_events: memory_pool_stats.f32_growth_events,
         });
+        crate::audio::stability::set_runtime_action_profile(decision.minimum_profile);
 
         if let Some(hint) = decision.transient_hint {
             SCHEDULER.record_pressure_hint(hint.minimum_profile, hint.hold_ms);
