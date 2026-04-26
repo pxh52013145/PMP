@@ -10,6 +10,7 @@ const MIN_RENDER_QUEUE_SECONDS: f64 = 0.2;
 const MAX_RENDER_QUEUE_SECONDS: f64 = 4.0;
 const MIN_RENDER_QUEUE_SAMPLES: usize = 16_384;
 const MAX_RENDER_QUEUE_SAMPLES: usize = 786_432;
+const PRESSURE_PRODUCER_BACKOFF_FLOOR_MS: u64 = 1;
 
 #[derive(Clone, Copy, Debug)]
 struct SourcePopWaitPolicy {
@@ -323,7 +324,8 @@ pub(crate) fn adaptive_transfer_strategy(
         .max(channels);
 
     let producer_backoff = if state.adaptation_level > 0 {
-        Duration::from_millis(0)
+        output_producer_backoff(profile)
+            .max(Duration::from_millis(PRESSURE_PRODUCER_BACKOFF_FLOOR_MS))
     } else {
         output_producer_backoff(profile)
     };
@@ -380,8 +382,9 @@ pub(crate) fn decode_push_backoff(profile: RealtimePressureProfile) -> Duration 
             | stability::AudioSourcePrepareProfile::Failsafe => Duration::ZERO,
             _ => Duration::from_millis(1),
         },
-        RealtimePressureProfile::Guarded => Duration::from_millis(0),
-        RealtimePressureProfile::Critical => Duration::from_millis(0),
+        RealtimePressureProfile::Guarded | RealtimePressureProfile::Critical => {
+            Duration::from_millis(PRESSURE_PRODUCER_BACKOFF_FLOOR_MS)
+        }
     }
 }
 
@@ -415,8 +418,9 @@ pub(crate) fn output_producer_backoff(profile: RealtimePressureProfile) -> Durat
             | stability::AudioSourcePrepareProfile::Failsafe => Duration::ZERO,
             _ => Duration::from_millis(1),
         },
-        RealtimePressureProfile::Guarded => Duration::from_millis(0),
-        RealtimePressureProfile::Critical => Duration::from_millis(0),
+        RealtimePressureProfile::Guarded | RealtimePressureProfile::Critical => {
+            Duration::from_millis(PRESSURE_PRODUCER_BACKOFF_FLOOR_MS)
+        }
     }
 }
 
@@ -615,6 +619,14 @@ mod tests {
     }
 
     #[test]
+    fn pressure_backoffs_do_not_collapse_to_zero() {
+        assert!(decode_push_backoff(RealtimePressureProfile::Guarded) > Duration::ZERO);
+        assert!(decode_push_backoff(RealtimePressureProfile::Critical) > Duration::ZERO);
+        assert!(output_producer_backoff(RealtimePressureProfile::Guarded) > Duration::ZERO);
+        assert!(output_producer_backoff(RealtimePressureProfile::Critical) > Duration::ZERO);
+    }
+
+    #[test]
     fn hot_path_prewarm_chunk_covers_critical_adaptive_boost() {
         let capacity = 96_000usize;
         let channels = 2usize;
@@ -749,6 +761,7 @@ mod tests {
         assert!(
             strategy.chunk_limit >= output_producer_chunk_samples(RealtimePressureProfile::Guarded)
         );
+        assert!(strategy.producer_backoff > Duration::ZERO);
     }
 
     #[test]

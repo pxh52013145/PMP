@@ -1,7 +1,7 @@
 use std::f32::consts::FRAC_PI_2;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -33,6 +33,8 @@ static SHARED_RENDER_READY_WRAPPER_ID: AtomicU64 = AtomicU64::new(0);
 static SHARED_RENDER_READY_SEEK_EPOCH: AtomicU64 = AtomicU64::new(0);
 static SHARED_RENDER_AVAILABLE_SAMPLES: AtomicU64 = AtomicU64::new(0);
 static SHARED_RENDER_CHANNELS: AtomicU64 = AtomicU64::new(0);
+static SHARED_RENDER_READY_SIGNAL: Lazy<(Mutex<u64>, Condvar)> =
+    Lazy::new(|| (Mutex::new(0), Condvar::new()));
 
 #[derive(Clone, Copy, Debug, Default)]
 #[allow(dead_code)]
@@ -83,41 +85,63 @@ pub(crate) fn wait_for_shared_render_ahead_ready(
     timeout: Duration,
 ) -> bool {
     let start = Instant::now();
-    let mut spin_budget = 128u32;
+    let (signal_lock, signal) = &*SHARED_RENDER_READY_SIGNAL;
+    let mut signal_generation = match signal_lock.lock() {
+        Ok(guard) => guard,
+        Err(_) => return shared_render_ahead_ready_for(min_samples, seek_epoch),
+    };
 
     loop {
-        let snapshot = shared_render_ahead_ready_snapshot();
-        if snapshot.active_wrapper_id == 0 {
+        if shared_render_ahead_ready_for(min_samples, seek_epoch) {
             return true;
         }
 
-        let channels = SHARED_RENDER_CHANNELS.load(Ordering::Relaxed).max(1) as usize;
-        let extra_ready_samples = channels
-            .saturating_mul(crate::audio::stability::source_prepare_shared_ready_extra_frames());
-        let required_samples = min_samples.max(
-            snapshot
-                .low_watermark_samples
-                .max(1)
-                .saturating_add(extra_ready_samples),
-        );
-        if snapshot.ready_wrapper_id == snapshot.active_wrapper_id
-            && snapshot.ready_seek_epoch >= seek_epoch
-            && snapshot.available_samples >= required_samples
-        {
-            return true;
-        }
-
-        if start.elapsed() >= timeout {
+        let elapsed = start.elapsed();
+        if elapsed >= timeout {
             return false;
         }
 
-        if spin_budget > 0 {
-            spin_budget -= 1;
-            std::hint::spin_loop();
-            continue;
-        }
+        let observed_generation = *signal_generation;
+        let wait_window = timeout
+            .saturating_sub(elapsed)
+            .min(Duration::from_millis(250));
 
-        thread::sleep(Duration::from_millis(1));
+        let wait_result = signal.wait_timeout_while(signal_generation, wait_window, |generation| {
+            *generation == observed_generation
+        });
+        signal_generation = match wait_result {
+            Ok((guard, _)) => guard,
+            Err(_) => return shared_render_ahead_ready_for(min_samples, seek_epoch),
+        };
+    }
+}
+
+fn shared_render_ahead_ready_for(min_samples: usize, seek_epoch: u64) -> bool {
+    let snapshot = shared_render_ahead_ready_snapshot();
+    if snapshot.active_wrapper_id == 0 {
+        return true;
+    }
+
+    let channels = SHARED_RENDER_CHANNELS.load(Ordering::Relaxed).max(1) as usize;
+    let extra_ready_samples = channels
+        .saturating_mul(crate::audio::stability::source_prepare_shared_ready_extra_frames());
+    let required_samples = min_samples.max(
+        snapshot
+            .low_watermark_samples
+            .max(1)
+            .saturating_add(extra_ready_samples),
+    );
+
+    snapshot.ready_wrapper_id == snapshot.active_wrapper_id
+        && snapshot.ready_seek_epoch >= seek_epoch
+        && snapshot.available_samples >= required_samples
+}
+
+fn notify_shared_render_ready_signal() {
+    let (signal_lock, signal) = &*SHARED_RENDER_READY_SIGNAL;
+    if let Ok(mut generation) = signal_lock.lock() {
+        *generation = generation.wrapping_add(1);
+        signal.notify_all();
     }
 }
 
@@ -135,6 +159,7 @@ fn set_shared_render_ready_state(
     if available_samples >= low_watermark.max(1) {
         SHARED_RENDER_READY_WRAPPER_ID.store(wrapper_id, Ordering::Release);
         SHARED_RENDER_READY_SEEK_EPOCH.store(seek_epoch, Ordering::Release);
+        notify_shared_render_ready_signal();
     }
 }
 
@@ -146,6 +171,7 @@ fn invalidate_shared_render_ready_state(wrapper_id: u64, seek_epoch: u64) {
     SHARED_RENDER_AVAILABLE_SAMPLES.store(0, Ordering::Relaxed);
     SHARED_RENDER_READY_WRAPPER_ID.store(wrapper_id, Ordering::Release);
     SHARED_RENDER_READY_SEEK_EPOCH.store(seek_epoch.saturating_sub(1), Ordering::Release);
+    notify_shared_render_ready_signal();
 }
 
 #[cfg(test)]
@@ -162,6 +188,7 @@ fn reset_shared_render_ahead_metrics() {
     SHARED_RENDER_READY_SEEK_EPOCH.store(0, Ordering::Relaxed);
     SHARED_RENDER_AVAILABLE_SAMPLES.store(0, Ordering::Relaxed);
     SHARED_RENDER_CHANNELS.store(0, Ordering::Relaxed);
+    notify_shared_render_ready_signal();
 }
 
 #[cfg(test)]
@@ -177,6 +204,7 @@ fn set_shared_render_ready_state_for_test(
     SHARED_RENDER_READY_SEEK_EPOCH.store(ready_seek_epoch, Ordering::Relaxed);
     SHARED_RENDER_AVAILABLE_SAMPLES.store(available_samples as u64, Ordering::Relaxed);
     SHARED_RENDER_LOW_WATERMARK_SAMPLES.store(low_watermark_samples as u64, Ordering::Relaxed);
+    notify_shared_render_ready_signal();
 }
 
 fn parse_env_seconds(key: &str, default_value: f64, min: f64, max: f64) -> f64 {
@@ -504,6 +532,7 @@ pub(crate) fn wrap_source_for_shared_backend(
     let wrapper_id = SHARED_RENDER_WRAPPER_SEQ.fetch_add(1, Ordering::AcqRel);
     SHARED_RENDER_ACTIVE_WRAPPER_ID.store(wrapper_id, Ordering::Release);
     SHARED_RENDER_CHANNELS.store(channels as u64, Ordering::Relaxed);
+    notify_shared_render_ready_signal();
 
     let initial_profile = crate::audio::realtime_scheduler::SCHEDULER
         .profile()
@@ -1020,6 +1049,7 @@ impl Drop for RenderAheadSource {
             SHARED_RENDER_READY_WRAPPER_ID.store(0, Ordering::Release);
             SHARED_RENDER_READY_SEEK_EPOCH.store(0, Ordering::Release);
             SHARED_RENDER_AVAILABLE_SAMPLES.store(0, Ordering::Relaxed);
+            notify_shared_render_ready_signal();
         }
         if let Some(tx) = self.stop_tx.take() {
             let _ = tx.send(());
@@ -1258,6 +1288,25 @@ mod tests {
             3,
             Duration::from_millis(1)
         ));
+    }
+
+    #[test]
+    fn shared_render_ahead_ready_wait_wakes_when_ready_state_changes() {
+        let _guard = lock_shared_render_ahead_test_state();
+        reset_shared_render_ahead_metrics();
+        let wrapper_id = u64::MAX - 32;
+        set_shared_render_ready_state_for_test(wrapper_id, 0, 0, 0, 128);
+
+        let started = Instant::now();
+        let waiter = thread::spawn(move || {
+            wait_for_shared_render_ahead_ready(128, 5, Duration::from_millis(500))
+        });
+
+        thread::sleep(Duration::from_millis(20));
+        set_shared_render_ready_state_for_test(wrapper_id, wrapper_id, 5, 512, 128);
+
+        assert!(waiter.join().expect("ready waiter should not panic"));
+        assert!(started.elapsed() < Duration::from_millis(250));
     }
 
     #[test]
