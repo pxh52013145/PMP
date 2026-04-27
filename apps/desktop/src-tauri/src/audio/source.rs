@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
-    io::{ErrorKind, Read, Write},
+    io::{ErrorKind, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use symphonia::core::{
     formats::FormatOptions,
-    io::{MediaSourceStream, MediaSourceStreamOptions},
+    io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
     meta::MetadataOptions,
     probe::Hint,
 };
@@ -35,6 +35,8 @@ const REMOTE_STREAM_COMPLETE_MARKER_VERSION: u8 = 1;
 const REMOTE_STREAM_EXPIRY_SAFETY_MS: u64 = 60_000;
 const REMOTE_STREAM_CONNECT_TIMEOUT_MS: u64 = 10_000;
 const REMOTE_STREAM_READ_STALL_TIMEOUT_MS: u64 = 30_000;
+const REMOTE_STREAM_GROWING_CACHE_WAIT_MS: u64 = 250;
+const REMOTE_STREAM_REBUFFER_DIAGNOSTIC_THROTTLE_MS: u64 = 2_000;
 const REMOTE_STREAM_CANCEL_REASON_MATERIALIZE_ABORTED: u64 = 1;
 pub(crate) const REMOTE_STREAM_CANCEL_REASON_TRANSPORT_REPLACED: u64 = 2;
 pub(crate) const REMOTE_STREAM_CANCEL_REASON_TRANSPORT_STOPPED: u64 = 3;
@@ -43,6 +45,8 @@ static REMOTE_STREAM_IN_FLIGHT: Lazy<Mutex<HashMap<PathBuf, Arc<RemoteStreamDown
     Lazy::new(|| Mutex::new(HashMap::new()));
 static REMOTE_STREAM_INPUT_LOCATORS: Lazy<Mutex<HashMap<PathBuf, RemoteStreamInputLocator>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static REMOTE_STREAM_REBUFFER_WAIT_THROTTLE: AtomicU64 = AtomicU64::new(0);
+static REMOTE_STREAM_REBUFFER_TIMEOUT_THROTTLE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(
@@ -107,6 +111,21 @@ struct RemoteStreamCacheEntry {
     cache_path: PathBuf,
     part_marker_path: PathBuf,
     complete_marker_path: PathBuf,
+}
+
+struct RemoteStreamCacheBacking {
+    cache_path: PathBuf,
+    job: Option<Arc<RemoteStreamDownloadJob>>,
+    seekable: bool,
+    complete_len: Option<u64>,
+}
+
+struct RemoteGrowingCacheMediaSource {
+    cache_path: PathBuf,
+    job: Option<Arc<RemoteStreamDownloadJob>>,
+    position: u64,
+    seekable: bool,
+    complete_len: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -589,6 +608,171 @@ fn finalize_remote_stream_cache(
     Ok(())
 }
 
+fn remote_stream_cache_len(path: &Path) -> u64 {
+    fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
+fn wait_for_remote_stream_cache_growth(
+    job: &Arc<RemoteStreamDownloadJob>,
+    position: u64,
+) -> std::io::Result<bool> {
+    let started_at = Instant::now();
+    let state_guard = job
+        .state
+        .lock()
+        .map_err(|_| std::io::Error::new(ErrorKind::Other, "Remote stream state is poisoned"))?;
+    if state_guard.bytes_written > position {
+        return Ok(true);
+    }
+    if let Some(error) = state_guard.last_error.clone() {
+        return Err(std::io::Error::new(ErrorKind::Other, error));
+    }
+    if state_guard.completed {
+        return Ok(false);
+    }
+
+    let (state_guard, wait_result) = job
+        .signal
+        .wait_timeout(
+            state_guard,
+            Duration::from_millis(REMOTE_STREAM_GROWING_CACHE_WAIT_MS),
+        )
+        .map_err(|_| std::io::Error::new(ErrorKind::Other, "Remote stream wait failed"))?;
+    let waited_ms = started_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    crate::audio::diagnostics::record_event_throttled(
+        "transport.source.remote.rebuffer_wait",
+        waited_ms,
+        position,
+        &REMOTE_STREAM_REBUFFER_WAIT_THROTTLE,
+        REMOTE_STREAM_REBUFFER_DIAGNOSTIC_THROTTLE_MS,
+    );
+
+    if let Some(error) = state_guard.last_error.clone() {
+        return Err(std::io::Error::new(ErrorKind::Other, error));
+    }
+    if state_guard.bytes_written > position {
+        return Ok(true);
+    }
+    if state_guard.completed {
+        return Ok(false);
+    }
+    if wait_result.timed_out() {
+        crate::audio::diagnostics::record_event_throttled(
+            "transport.source.remote.rebuffer_timeout",
+            waited_ms,
+            position,
+            &REMOTE_STREAM_REBUFFER_TIMEOUT_THROTTLE,
+            REMOTE_STREAM_REBUFFER_DIAGNOSTIC_THROTTLE_MS,
+        );
+    }
+    Ok(true)
+}
+
+impl RemoteGrowingCacheMediaSource {
+    fn new(backing: RemoteStreamCacheBacking) -> Self {
+        Self {
+            cache_path: backing.cache_path,
+            job: backing.job,
+            position: 0,
+            seekable: backing.seekable,
+            complete_len: backing.complete_len,
+        }
+    }
+
+    fn read_from_cache_at_position(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut file = fs::File::open(&self.cache_path)?;
+        file.seek(SeekFrom::Start(self.position))?;
+        file.read(buf)
+    }
+}
+
+impl Read for RemoteGrowingCacheMediaSource {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        loop {
+            match self.read_from_cache_at_position(buf) {
+                Ok(read) if read > 0 => {
+                    self.position = self.position.saturating_add(read as u64);
+                    return Ok(read);
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+
+            let Some(job) = &self.job else {
+                return Ok(0);
+            };
+            if !wait_for_remote_stream_cache_growth(job, self.position)? {
+                return Ok(0);
+            }
+        }
+    }
+}
+
+impl Seek for RemoteGrowingCacheMediaSource {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        if !self.seekable {
+            return Err(std::io::Error::new(
+                ErrorKind::Unsupported,
+                "Remote stream is not seekable",
+            ));
+        }
+
+        let target = match pos {
+            SeekFrom::Start(position) => position,
+            SeekFrom::Current(delta) => {
+                if delta < 0 {
+                    self.position.saturating_sub(delta.unsigned_abs())
+                } else {
+                    self.position.saturating_add(delta as u64)
+                }
+            }
+            SeekFrom::End(delta) => {
+                let len = self.byte_len().ok_or_else(|| {
+                    std::io::Error::new(
+                        ErrorKind::Unsupported,
+                        "Remote stream length is not known yet",
+                    )
+                })?;
+                if delta < 0 {
+                    len.saturating_sub(delta.unsigned_abs())
+                } else {
+                    len.saturating_add(delta as u64)
+                }
+            }
+        };
+
+        self.position = target;
+        crate::audio::diagnostics::record_event("transport.source.remote.seek", target, 0);
+        Ok(self.position)
+    }
+}
+
+impl MediaSource for RemoteGrowingCacheMediaSource {
+    fn is_seekable(&self) -> bool {
+        self.seekable
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        self.complete_len.or_else(|| {
+            self.job.as_ref().and_then(|job| {
+                job.state.lock().ok().and_then(|state| {
+                    state
+                        .finalized
+                        .then_some(state.bytes_written)
+                        .filter(|bytes| *bytes > 0)
+                })
+            })
+        })
+    }
+}
+
 fn wait_for_remote_stream_probe_ready(
     job: &Arc<RemoteStreamDownloadJob>,
     entry: &RemoteStreamCacheEntry,
@@ -904,23 +1088,69 @@ fn materialize_remote_stream_to_cache(
     )
 }
 
-pub(crate) fn materialize_remote_stream_input_locator(
+pub(crate) fn open_remote_stream_media_source(
     locator: &RemoteStreamInputLocator,
-) -> Result<PathBuf, String> {
+) -> Result<(Box<dyn MediaSource>, Option<String>), String> {
     let normalized_url = normalize_string(&locator.stream_url);
     if normalized_url.is_empty() {
         return Err("Remote stream url is empty".to_string());
     }
-    materialize_remote_stream_to_cache_root(
+
+    let entry = build_remote_stream_cache_entry(
         &locator.cache_root,
         &normalized_url,
         locator.source_locator.as_deref(),
         locator.connector_id.as_deref(),
         locator.mime_type.as_deref(),
         locator.headers.as_ref(),
-        locator.expires_at_ms,
-        locator.range_requests,
-    )
+    );
+    let extension = entry
+        .cache_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_string);
+
+    let backing = if remote_stream_complete_cache_is_valid(&entry, locator.expires_at_ms) {
+        crate::audio::diagnostics::record_event("transport.source.remote.cache_hit", 1, 2);
+        RemoteStreamCacheBacking {
+            cache_path: entry.cache_path.clone(),
+            job: None,
+            seekable: true,
+            complete_len: fs::metadata(&entry.cache_path)
+                .ok()
+                .map(|metadata| metadata.len()),
+        }
+    } else {
+        let request_headers = build_request_headers(locator.headers.as_ref())?;
+        let in_flight_key = remote_stream_in_flight_key(&entry);
+        cancel_remote_stream_downloads_matching(
+            Some(in_flight_key.as_path()),
+            REMOTE_STREAM_CANCEL_REASON_TRANSPORT_REPLACED,
+        );
+        let job = get_or_spawn_remote_stream_download(
+            &entry,
+            &normalized_url,
+            request_headers,
+            locator.expires_at_ms,
+            locator.range_requests,
+        )?;
+        crate::audio::diagnostics::record_event(
+            "transport.source.remote.growing_cache_open",
+            remote_stream_cache_len(&entry.cache_path),
+            (locator.range_requests == Some(true)) as u64,
+        );
+        RemoteStreamCacheBacking {
+            cache_path: entry.cache_path.clone(),
+            job: Some(job),
+            seekable: locator.seekable.unwrap_or(false) || locator.range_requests.unwrap_or(false),
+            complete_len: None,
+        }
+    };
+
+    Ok((
+        Box::new(RemoteGrowingCacheMediaSource::new(backing)),
+        extension,
+    ))
 }
 
 impl NativeAudioSourcePayload {
@@ -1015,7 +1245,7 @@ impl NativeAudioSourcePayload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::{io::Write, thread};
 
     #[test]
     fn infer_remote_stream_extension_prefers_mime_type() {
@@ -1296,6 +1526,63 @@ mod tests {
         if let Ok(mut locators) = REMOTE_STREAM_INPUT_LOCATORS.lock() {
             locators.remove(&identity_path);
         }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn remote_growing_cache_media_source_reads_newly_available_bytes() {
+        let root = test_cache_root("growing-read");
+        let cache_path = root.join("growing.bin");
+        let job = Arc::new(RemoteStreamDownloadJob {
+            state: Mutex::new(RemoteStreamDownloadState::default()),
+            signal: Condvar::new(),
+            cancel_requested: AtomicBool::new(false),
+            cancel_reason: AtomicU64::new(0),
+        });
+        let mut source = RemoteGrowingCacheMediaSource::new(RemoteStreamCacheBacking {
+            cache_path: cache_path.clone(),
+            job: Some(job.clone()),
+            seekable: true,
+            complete_len: None,
+        });
+
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            fs::write(&cache_path, b"remote").expect("write growing bytes");
+            if let Ok(mut state) = job.state.lock() {
+                state.bytes_written = 6;
+                job.signal.notify_all();
+            }
+        });
+
+        let mut buf = [0u8; 6];
+        let read = source.read(&mut buf).expect("read growing cache");
+        writer.join().expect("writer");
+
+        assert_eq!(read, 6);
+        assert_eq!(&buf, b"remote");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn remote_growing_cache_media_source_returns_eof_after_completed_cache() {
+        let root = test_cache_root("growing-eof");
+        let cache_path = root.join("complete.bin");
+        fs::write(&cache_path, b"done").expect("write complete bytes");
+        let mut source = RemoteGrowingCacheMediaSource::new(RemoteStreamCacheBacking {
+            cache_path,
+            job: None,
+            seekable: true,
+            complete_len: Some(4),
+        });
+
+        let mut buf = [0u8; 8];
+        assert_eq!(source.read(&mut buf).expect("read complete cache"), 4);
+        assert_eq!(source.read(&mut buf).expect("read eof"), 0);
+        assert_eq!(source.seek(SeekFrom::Start(1)).expect("seek"), 1);
+        assert_eq!(source.read(&mut buf[..2]).expect("read after seek"), 2);
+        assert_eq!(&buf[..2], b"on");
+        assert_eq!(source.byte_len(), Some(4));
         let _ = fs::remove_dir_all(root);
     }
 

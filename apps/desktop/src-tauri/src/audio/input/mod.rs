@@ -17,7 +17,9 @@ pub(crate) use streaming::{
     streaming_transfer_stats, streaming_underrun_stats, DecoderCommand, SharedSamplesSource,
     StreamingPlayback, StreamingSamplesSource, StreamingShutdownTx,
 };
-pub(crate) use symphonia::SymphoniaInput;
+pub(crate) use symphonia::{
+    open_streaming_media_source, SymphoniaInput, SymphoniaStreamingMediaSource,
+};
 
 pub(crate) const SYMPHONIA_INPUT_ID: &str = "symphonia";
 pub(crate) const RODIO_INPUT_ID: &str = "rodio";

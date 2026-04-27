@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -11,7 +12,7 @@ use symphonia::core::{
     errors::Error as SymphoniaError,
     formats::FormatOptions,
     formats::{FormatReader, SeekMode, SeekTo, Track},
-    io::{MediaSourceStream, MediaSourceStreamOptions},
+    io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
     meta::MetadataOptions,
     probe::Hint,
     units::Time,
@@ -78,6 +79,50 @@ fn stream_init_timeout() -> Duration {
         .unwrap_or(DEFAULT_TIMEOUT_MS)
         .clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
     Duration::from_millis(timeout_ms)
+}
+
+fn remote_stream_init_timeout() -> Duration {
+    const DEFAULT_TIMEOUT_MS: u64 = 12_000;
+    const MIN_TIMEOUT_MS: u64 = 1_000;
+    const MAX_TIMEOUT_MS: u64 = 30_000;
+
+    let timeout_ms = std::env::var("PMP_AUDIO_REMOTE_STREAM_INIT_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_TIMEOUT_MS)
+        .clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
+    Duration::from_millis(timeout_ms)
+}
+
+pub(crate) struct SymphoniaStreamingMediaSource {
+    pub source: Box<dyn MediaSource>,
+    pub extension: Option<String>,
+}
+
+enum SymphoniaStreamInput {
+    Path(PathBuf),
+    MediaSource(SymphoniaStreamingMediaSource),
+}
+
+impl SymphoniaStreamInput {
+    fn into_media_source_stream(self) -> Result<(MediaSourceStream, Option<String>), String> {
+        match self {
+            Self::Path(path) => {
+                let file = File::open(&path).map_err(|e| format!("Failed to open file: {e}"))?;
+                let extension = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(str::to_string);
+                let mss =
+                    MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
+                Ok((mss, extension))
+            }
+            Self::MediaSource(input) => {
+                let mss = MediaSourceStream::new(input.source, MediaSourceStreamOptions::default());
+                Ok((mss, input.extension))
+            }
+        }
+    }
 }
 
 fn streaming_full_track_initial_capacity_samples(
@@ -235,6 +280,22 @@ fn start_symphonia_stream(
     src_policy: AudioInputSrcPolicy,
     decode_reservoir_capacity_samples: Option<usize>,
 ) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
+    start_symphonia_stream_from_input(
+        SymphoniaStreamInput::Path(path.to_path_buf()),
+        output_sample_rate,
+        src_policy,
+        decode_reservoir_capacity_samples,
+        None,
+    )
+}
+
+fn start_symphonia_stream_from_input(
+    input: SymphoniaStreamInput,
+    output_sample_rate: Option<u32>,
+    src_policy: AudioInputSrcPolicy,
+    decode_reservoir_capacity_samples: Option<usize>,
+    init_timeout_override: Option<Duration>,
+) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
     let open_started_at = Instant::now();
     let default_capacity = AudioRingBuffer::recommended_capacity_samples(output_sample_rate, 2);
     let max_capacity = full_track_buffer_budget_samples().max(default_capacity);
@@ -257,7 +318,6 @@ fn start_symphonia_stream(
     let (transfer_tx, transfer_rx) = command_channel::<TransferCommand>();
     let (meta_tx, meta_rx) = mpsc::channel::<Result<AudioInputMeta, String>>();
 
-    let path = path.to_path_buf();
     let buffer_clone = buffer.clone();
     let render_queue_clone = render_queue.clone();
     let error = Arc::new(Mutex::new(None::<String>));
@@ -272,10 +332,9 @@ fn start_symphonia_stream(
             );
 
         let init = (|| -> Result<(Box<dyn FormatReader>, Track), String> {
-            let file = File::open(&path).map_err(|e| format!("Failed to open file: {e}"))?;
-            let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
+            let (mss, extension) = input.into_media_source_stream()?;
             let mut hint = Hint::new();
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if let Some(ext) = extension.as_deref() {
                 hint.with_extension(ext);
             }
             let format_options = FormatOptions {
@@ -867,7 +926,7 @@ fn start_symphonia_stream(
             )
         })?;
 
-    let init_timeout = stream_init_timeout();
+    let init_timeout = init_timeout_override.unwrap_or_else(stream_init_timeout);
     let meta = match meta_rx.recv_timeout(init_timeout) {
         Ok(value) => value.map_err(|message| {
             AudioInputError::new("AUDIO_INPUT_SYMPHONIA_OPEN_FAILED", message)
@@ -1178,6 +1237,36 @@ fn decode_track_to_buffer(
 
 #[derive(Default)]
 pub(crate) struct SymphoniaInput;
+
+pub(crate) fn open_streaming_media_source(
+    input: SymphoniaStreamingMediaSource,
+    output_sample_rate: Option<u32>,
+    src_policy: AudioInputSrcPolicy,
+) -> Result<AudioInputOpenResult, AudioInputError> {
+    let budget_samples = full_track_buffer_budget_samples();
+    let default_streaming_capacity =
+        AudioRingBuffer::recommended_capacity_samples(output_sample_rate, 2);
+    let streaming_default_capacity = Some(streaming_default_capacity_samples(
+        output_sample_rate,
+        default_streaming_capacity,
+        budget_samples,
+    ));
+
+    let (source, meta, streaming) = start_symphonia_stream_from_input(
+        SymphoniaStreamInput::MediaSource(input),
+        output_sample_rate,
+        src_policy,
+        streaming_default_capacity,
+        Some(remote_stream_init_timeout()),
+    )?;
+
+    Ok(AudioInputOpenResult {
+        input_id: SYMPHONIA_INPUT_ID,
+        meta,
+        kind: AudioInputKind::Streaming(streaming),
+        source: Box::new(source),
+    })
+}
 
 impl AudioInput for SymphoniaInput {
     fn id(&self) -> &'static str {
