@@ -14,7 +14,7 @@ tauri-build = { version = "1.5", features = [] }
 zerovec = { version = "0.11.4", features = ["alloc"] }
 
 [dependencies]
-tauri = { version = "1.5", features = [ "path-all", "protocol-asset", "system-tray", "dialog-confirm", "dialog-message", "dialog-ask", "fs-all", "dialog-open", "window-all", "shell-open"] }
+tauri = { version = "1.5", features = [ "path-all", "protocol-asset", "system-tray", "fs-all", "window-all", "shell-open"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 window-shadows = "0.2"
@@ -64,6 +64,21 @@ default = []
 custom-protocol = ["tauri/custom-protocol"]
 asio-sdk = ["dep:asio-sys", "dep:cpal"]
 nn-cuda = []
+
+[[bin]]
+name = "pixel-matrix-player"
+path = "src/main.rs"
+test = false
+
+[[bin]]
+name = "pmp-platform-bilibili-sidecar"
+path = "src/bin/pmp-platform-bilibili-sidecar.rs"
+test = false
+
+[[bin]]
+name = "pmp-platform-netease-sidecar"
+path = "src/bin/pmp-platform-netease-sidecar.rs"
+test = false
 
 [patch.crates-io]
 asio-sys = { path = "crates/asio-sys" }

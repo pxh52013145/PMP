@@ -6,15 +6,6 @@ use std::sync::Arc;
 
 pub use pixel_matrix_player::{commands, magnet_layout_store};
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn greet_returns_expected_message() {
-        let message = pixel_matrix_player::commands::app::greet("Tester");
-        assert_eq!(message, "Hello, Tester! Welcome to Pixel Matrix Player!");
-    }
-}
-
 fn is_minimal_boot_enabled() -> bool {
     std::env::var("PMP_MINIMAL_BOOT")
         .map(|value| {

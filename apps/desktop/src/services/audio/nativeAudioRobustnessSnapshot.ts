@@ -234,8 +234,14 @@ export function buildNativeAudioRobustnessSnapshot(
   const vstSidecarDryBypassEvents = sourceRecord.diagnosticTimeline.filter(
     (event) => event.kind === 'vst.sidecar.dry_bypass'
   );
+  const vstSidecarProcessBlockDeadlineMissEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'vst.sidecar.process_block_deadline_miss'
+  );
   const vstSidecarOutputBackpressureEvents = sourceRecord.diagnosticTimeline.filter(
     (event) => event.kind === 'vst.sidecar.output_backpressure'
+  );
+  const vstSidecarRuntimeResizeEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'vst.sidecar.runtime_resize'
   );
   const lastTrim = source.lastWorkingSetTrimEvent;
 
@@ -409,11 +415,27 @@ export function buildNativeAudioRobustnessSnapshot(
       (sum, event) => sum + event.value,
       0
     ),
+    vstSidecarProcessBlockDeadlineMissCount: vstSidecarProcessBlockDeadlineMissEvents.reduce(
+      (sum, event) => sum + event.value,
+      0
+    ),
+    vstSidecarProcessBlockDeadlineMissFrames: vstSidecarProcessBlockDeadlineMissEvents.reduce(
+      (sum, event) => sum + event.aux,
+      0
+    ),
     vstSidecarOutputBackpressureCount: vstSidecarOutputBackpressureEvents.reduce(
       (sum, event) => sum + event.value,
       0
     ),
     vstSidecarOutputBackpressureFrames: vstSidecarOutputBackpressureEvents.reduce(
+      (sum, event) => sum + event.aux,
+      0
+    ),
+    vstSidecarRuntimeResizeEvents: vstSidecarRuntimeResizeEvents.reduce(
+      (sum, event) => sum + event.value,
+      0
+    ),
+    vstSidecarRuntimeResizeBytes: vstSidecarRuntimeResizeEvents.reduce(
       (sum, event) => sum + event.aux,
       0
     ),

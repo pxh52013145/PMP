@@ -46,11 +46,11 @@
       },
       "dialog": {
         "all": false,
-        "open": true,
+        "open": false,
         "save": false,
-        "message": true,
-        "ask": true,
-        "confirm": true
+        "message": false,
+        "ask": false,
+        "confirm": false
       },
       "fs": {
         "all": true,

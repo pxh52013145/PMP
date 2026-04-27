@@ -351,8 +351,12 @@ export interface AudioRobustnessSnapshot {
   vstSidecarCallbackLockMissCount?: number;
   vstSidecarCallbackLockMissFrames?: number;
   vstSidecarDryBypassFrames?: number;
+  vstSidecarProcessBlockDeadlineMissCount?: number;
+  vstSidecarProcessBlockDeadlineMissFrames?: number;
   vstSidecarOutputBackpressureCount?: number;
   vstSidecarOutputBackpressureFrames?: number;
+  vstSidecarRuntimeResizeEvents?: number;
+  vstSidecarRuntimeResizeBytes?: number;
   lastWorkingSetTrimAtMs?: number | null;
   lastWorkingSetTrimTarget?: string | null;
   lastWorkingSetTrimReason?: string | null;

@@ -48,3 +48,14 @@ pub fn app_consume_pending_host_file_opens(
 
     payloads
 }
+
+#[cfg(test)]
+mod tests {
+    use super::greet;
+
+    #[test]
+    fn greet_returns_expected_message() {
+        let message = greet("Tester");
+        assert_eq!(message, "Hello, Tester! Welcome to Pixel Matrix Player!");
+    }
+}
