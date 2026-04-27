@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::time::Duration;
 
@@ -275,7 +277,6 @@ pub(crate) fn current_external_hint_snapshot() -> AudioStabilityHintSnapshot {
 
 pub(crate) fn current_runtime_action_profile() -> RealtimePressureProfile {
     pressure_profile_from_u8(CURRENT_RUNTIME_ACTION_PROFILE.load(Ordering::Acquire))
-        .max(current_external_hint_profile_only())
 }
 
 pub(crate) fn source_prepare_profile_for(
@@ -712,7 +713,7 @@ mod tests {
     }
 
     #[test]
-    fn external_hint_lifts_runtime_action_profile() {
+    fn external_hint_is_reported_without_mutating_runtime_action_profile() {
         clear_external_hints();
         set_stability_profile(NativeAudioStabilityProfile::Balanced);
         set_runtime_action_profile(RealtimePressureProfile::Normal);
@@ -737,7 +738,7 @@ mod tests {
             .contains(&"platform-cache-materializing"));
         assert!(matches!(
             current_runtime_action_profile(),
-            RealtimePressureProfile::Critical
+            RealtimePressureProfile::Normal
         ));
 
         clear_external_hints();

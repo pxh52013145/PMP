@@ -15,7 +15,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use once_cell::sync::Lazy;
 use reqwest::{
     blocking::Client,
-    header::{HeaderMap, HeaderName, HeaderValue, CONTENT_RANGE},
+    header::{HeaderMap, HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE},
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -29,20 +29,19 @@ use tauri::AppHandle;
 use url::Url;
 
 const REMOTE_STREAM_CACHE_DIR: &str = "native-audio/remote-stream-cache";
-const REMOTE_STREAM_PROBE_HARD_WAIT_MS: u64 = 12_000;
-const REMOTE_STREAM_PROBE_RETRY_WAIT_MS: u64 = 120;
 const REMOTE_STREAM_COMPLETE_MARKER_VERSION: u8 = 1;
+const REMOTE_STREAM_PART_MARKER_VERSION: u8 = 2;
+const REMOTE_STREAM_PART_MARKER_MODE_PREFIX: &str = "contiguous-prefix";
 const REMOTE_STREAM_EXPIRY_SAFETY_MS: u64 = 60_000;
 const REMOTE_STREAM_CONNECT_TIMEOUT_MS: u64 = 10_000;
 const REMOTE_STREAM_READ_STALL_TIMEOUT_MS: u64 = 30_000;
-const REMOTE_STREAM_HTTP_SLICE_TIMEOUT_MS: u64 = 5_000;
 const REMOTE_STREAM_GROWING_CACHE_WAIT_MS: u64 = 250;
 const REMOTE_STREAM_REBUFFER_DIAGNOSTIC_THROTTLE_MS: u64 = 2_000;
+const REMOTE_STREAM_RANGE_SLICE_BYTES: u64 = 1_048_576;
+const REMOTE_STREAM_HTTP_RETRY_LIMIT: u64 = 8;
 const REMOTE_STREAM_CANCEL_REASON_MATERIALIZE_ABORTED: u64 = 1;
 pub(crate) const REMOTE_STREAM_CANCEL_REASON_TRANSPORT_REPLACED: u64 = 2;
 pub(crate) const REMOTE_STREAM_CANCEL_REASON_TRANSPORT_STOPPED: u64 = 3;
-const REMOTE_STREAM_CANCEL_REASON_RANGE_SEEK: u64 = 4;
-const REMOTE_STREAM_PART_MARKER_VERSION: u8 = 1;
 
 static REMOTE_STREAM_IN_FLIGHT: Lazy<Mutex<HashMap<PathBuf, Arc<RemoteStreamDownloadJob>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -83,7 +82,6 @@ pub enum NativeAudioSourcePayload {
 #[derive(Default)]
 struct RemoteStreamDownloadState {
     bytes_written: u64,
-    ranges: Vec<RemoteStreamByteRange>,
     total_len: Option<u64>,
     completed: bool,
     finalized: bool,
@@ -95,12 +93,6 @@ struct RemoteStreamDownloadJob {
     signal: Condvar,
     cancel_requested: AtomicBool,
     cancel_reason: AtomicU64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-struct RemoteStreamByteRange {
-    start: u64,
-    end: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -129,16 +121,6 @@ struct RemoteStreamCacheBacking {
     job: Option<Arc<RemoteStreamDownloadJob>>,
     seekable: bool,
     complete_len: Option<u64>,
-    range_context: Option<RemoteStreamRangeContext>,
-}
-
-#[derive(Clone)]
-struct RemoteStreamRangeContext {
-    entry: RemoteStreamCacheEntry,
-    stream_url: String,
-    request_headers: HeaderMap,
-    expires_at_ms: Option<u64>,
-    range_requests: Option<bool>,
 }
 
 struct RemoteGrowingCacheMediaSource {
@@ -147,7 +129,6 @@ struct RemoteGrowingCacheMediaSource {
     position: u64,
     seekable: bool,
     complete_len: Option<u64>,
-    range_context: Option<RemoteStreamRangeContext>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -164,7 +145,7 @@ struct RemoteStreamPartMarker {
     version: u8,
     cache_key: String,
     started_at_ms: u64,
-    range_start: u64,
+    mode: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,13 +190,13 @@ fn remote_stream_read_stall_timeout() -> Duration {
     ))
 }
 
-fn remote_stream_http_slice_timeout() -> Duration {
-    Duration::from_millis(parse_env_u64(
-        "PMP_AUDIO_REMOTE_STREAM_HTTP_SLICE_TIMEOUT_MS",
-        REMOTE_STREAM_HTTP_SLICE_TIMEOUT_MS,
-        1_000,
-        30_000,
-    ))
+fn remote_stream_range_slice_bytes() -> u64 {
+    parse_env_u64(
+        "PMP_AUDIO_REMOTE_STREAM_RANGE_SLICE_BYTES",
+        REMOTE_STREAM_RANGE_SLICE_BYTES,
+        128 * 1024,
+        8 * 1024 * 1024,
+    )
 }
 
 fn is_remote_stream_read_timeout(error: &std::io::Error) -> bool {
@@ -390,18 +371,12 @@ pub(crate) fn lookup_remote_stream_input_locator(path: &Path) -> Option<RemoteSt
         .and_then(|locators| locators.get(path).cloned())
 }
 
-fn build_http_client(range_requests: Option<bool>) -> Result<Client, String> {
-    let request_timeout = if range_requests == Some(true) {
-        remote_stream_http_slice_timeout()
-    } else {
-        remote_stream_read_stall_timeout()
-    };
+fn build_http_client() -> Result<Client, String> {
     Client::builder()
         .connect_timeout(Duration::from_millis(REMOTE_STREAM_CONNECT_TIMEOUT_MS))
-        // reqwest 0.11 blocking cannot abort an in-progress read from another
-        // thread. Range-capable sources therefore use short HTTP slices and
-        // resume from the last written byte, which bounds cancellation latency.
-        .timeout(request_timeout)
+        // reqwest 0.11 blocking applies this timeout to connect/read/write
+        // operations, which gives the materializer a read-stall watchdog.
+        .timeout(remote_stream_read_stall_timeout())
         .build()
         .map_err(|error| format!("Failed to create remote stream HTTP client: {error}"))
 }
@@ -423,23 +398,46 @@ fn build_request_headers(entries: Option<&HashMap<String, String>>) -> Result<He
     Ok(headers)
 }
 
+fn header_map_contains(headers: &HeaderMap, name: &'static str) -> bool {
+    headers.contains_key(HeaderName::from_static(name))
+}
+
 fn apply_remote_stream_range_header(
     headers: &mut HeaderMap,
     range_requests: Option<bool>,
     range_start: u64,
+    range_end: Option<u64>,
 ) -> Result<bool, String> {
     if range_requests != Some(true) {
         return Ok(false);
     }
-    let value = HeaderValue::from_str(&format!("bytes={range_start}-"))
+    if header_map_contains(headers, "range") {
+        return Ok(true);
+    }
+
+    let value = match range_end {
+        Some(end) => format!("bytes={range_start}-{end}"),
+        None => format!("bytes={range_start}-"),
+    };
+    let header_value = HeaderValue::from_str(&value)
         .map_err(|error| format!("Failed to build remote stream range header: {error}"))?;
-    headers.insert(HeaderName::from_static("range"), value);
+    headers.insert(HeaderName::from_static("range"), header_value);
     crate::audio::diagnostics::record_event(
         "transport.source.remote.range_request",
         range_start,
-        0,
+        range_end.unwrap_or(0),
     );
     Ok(true)
+}
+
+fn parse_remote_stream_content_length(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get(CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
 }
 
 fn parse_remote_stream_content_range(value: &str) -> Option<RemoteStreamContentRange> {
@@ -455,11 +453,9 @@ fn parse_remote_stream_content_range(value: &str) -> Option<RemoteStreamContentR
     let total = if total_part.trim() == "*" {
         None
     } else {
-        Some(total_part.trim().parse::<u64>().ok()?)
+        let parsed = total_part.trim().parse::<u64>().ok()?;
+        (parsed > 0).then_some(parsed)
     };
-    if total.is_some_and(|total| end >= total) {
-        return None;
-    }
     Some(RemoteStreamContentRange { start, end, total })
 }
 
@@ -540,22 +536,6 @@ fn remote_stream_cache_expired(expires_at_ms: Option<u64>) -> bool {
         return false;
     };
     expires_at_ms <= now_millis().saturating_add(REMOTE_STREAM_EXPIRY_SAFETY_MS)
-}
-
-fn record_remote_stream_url_refresh_boundary(expires_at_ms: Option<u64>) {
-    if !remote_stream_cache_expired(expires_at_ms) {
-        return;
-    }
-    crate::audio::diagnostics::record_event(
-        "transport.source.remote.url_refresh_needed",
-        expires_at_ms.unwrap_or(0),
-        0,
-    );
-    crate::audio::diagnostics::record_event(
-        "transport.source.remote.url_refresh_unavailable",
-        expires_at_ms.unwrap_or(0),
-        0,
-    );
 }
 
 fn read_remote_stream_complete_marker(
@@ -644,62 +624,11 @@ fn remote_stream_in_flight_key(entry: &RemoteStreamCacheEntry) -> PathBuf {
     entry.cache_path.clone()
 }
 
-fn merge_remote_stream_byte_range(ranges: &mut Vec<RemoteStreamByteRange>, start: u64, end: u64) {
-    if end <= start {
-        return;
-    }
-    ranges.push(RemoteStreamByteRange { start, end });
-    ranges.sort_by(|left, right| left.start.cmp(&right.start).then(left.end.cmp(&right.end)));
-
-    let mut merged: Vec<RemoteStreamByteRange> = Vec::with_capacity(ranges.len());
-    for range in ranges.drain(..) {
-        if let Some(last) = merged.last_mut() {
-            if range.start <= last.end {
-                last.end = last.end.max(range.end);
-                continue;
-            }
-        }
-        merged.push(range);
-    }
-    *ranges = merged;
-}
-
-fn remote_stream_available_range_end(
-    ranges: &[RemoteStreamByteRange],
-    position: u64,
-) -> Option<u64> {
-    ranges
-        .iter()
-        .find(|range| range.start <= position && position < range.end)
-        .map(|range| range.end)
-}
-
-fn remote_stream_ranges_cover(ranges: &[RemoteStreamByteRange], start: u64, end: u64) -> bool {
-    if end <= start {
-        return true;
-    }
-    let mut cursor = start;
-    for range in ranges {
-        if range.end <= cursor {
-            continue;
-        }
-        if range.start > cursor {
-            return false;
-        }
-        cursor = cursor.max(range.end);
-        if cursor >= end {
-            return true;
-        }
-    }
-    false
-}
-
 fn remote_stream_download_cancel_message(reason: u64) -> String {
     let reason_label = match reason {
         REMOTE_STREAM_CANCEL_REASON_MATERIALIZE_ABORTED => "materialize-aborted",
         REMOTE_STREAM_CANCEL_REASON_TRANSPORT_REPLACED => "transport-replaced",
         REMOTE_STREAM_CANCEL_REASON_TRANSPORT_STOPPED => "transport-stopped",
-        REMOTE_STREAM_CANCEL_REASON_RANGE_SEEK => "range-seek",
         _ => "unknown",
     };
     format!("Remote stream download cancelled ({reason_label})")
@@ -774,47 +703,40 @@ pub(crate) fn cancel_remote_stream_downloads(reason: u64) -> usize {
     cancel_remote_stream_downloads_matching(None, reason)
 }
 
-fn read_remote_stream_part_marker(
+fn remote_stream_part_marker_allows_prefix_resume(
     entry: &RemoteStreamCacheEntry,
-) -> Option<RemoteStreamPartMarker> {
-    let bytes = fs::read(&entry.part_marker_path).ok()?;
-    if let Ok(marker) = serde_json::from_slice::<RemoteStreamPartMarker>(&bytes) {
-        return Some(marker);
+    bytes: &[u8],
+) -> bool {
+    if let Ok(marker) = serde_json::from_slice::<RemoteStreamPartMarker>(bytes) {
+        return marker.version == REMOTE_STREAM_PART_MARKER_VERSION
+            && marker.cache_key == entry.key
+            && marker.mode == REMOTE_STREAM_PART_MARKER_MODE_PREFIX;
     }
 
-    let text = String::from_utf8(bytes).ok()?;
-    let mut cache_key: Option<String> = None;
-    let mut started_at_ms: Option<u64> = None;
+    let text = match String::from_utf8(bytes.to_vec()) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    let mut cache_key: Option<&str> = None;
     for line in text.lines() {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        match key.trim() {
-            "cache_key" => cache_key = Some(value.trim().to_string()),
-            "started_at_ms" => started_at_ms = value.trim().parse::<u64>().ok(),
-            _ => {}
+        if key.trim() == "cache_key" {
+            cache_key = Some(value.trim());
         }
     }
-    Some(RemoteStreamPartMarker {
-        version: REMOTE_STREAM_PART_MARKER_VERSION,
-        cache_key: cache_key?,
-        started_at_ms: started_at_ms.unwrap_or(0),
-        range_start: 0,
-    })
+    cache_key == Some(entry.key.as_str())
 }
 
-fn mark_remote_stream_part_started(
-    entry: &RemoteStreamCacheEntry,
-    range_start: u64,
-) -> Result<(), String> {
-    let marker = RemoteStreamPartMarker {
+fn mark_remote_stream_part_started(entry: &RemoteStreamCacheEntry) -> Result<(), String> {
+    let payload = serde_json::to_vec(&RemoteStreamPartMarker {
         version: REMOTE_STREAM_PART_MARKER_VERSION,
         cache_key: entry.key.clone(),
         started_at_ms: now_millis(),
-        range_start,
-    };
-    let payload = serde_json::to_vec(&marker)
-        .map_err(|error| format!("Failed to serialize remote stream partial marker: {error}"))?;
+        mode: REMOTE_STREAM_PART_MARKER_MODE_PREFIX.to_string(),
+    })
+    .map_err(|error| format!("Failed to serialize remote stream partial marker: {error}"))?;
     fs::write(&entry.part_marker_path, payload)
         .map_err(|error| format!("Failed to write remote stream partial marker: {error}"))
 }
@@ -826,13 +748,11 @@ fn remote_stream_resume_offset(
     if range_requests != Some(true) {
         return 0;
     }
-    let Some(marker) = read_remote_stream_part_marker(entry) else {
-        return 0;
+    let bytes = match fs::read(&entry.part_marker_path) {
+        Ok(value) => value,
+        Err(_) => return 0,
     };
-    if marker.version != REMOTE_STREAM_PART_MARKER_VERSION || marker.cache_key != entry.key {
-        return 0;
-    }
-    if marker.range_start != 0 {
+    if !remote_stream_part_marker_allows_prefix_resume(entry, &bytes) {
         return 0;
     }
     fs::metadata(&entry.cache_path)
@@ -875,9 +795,7 @@ fn wait_for_remote_stream_cache_growth(
         .state
         .lock()
         .map_err(|_| std::io::Error::new(ErrorKind::Other, "Remote stream state is poisoned"))?;
-    if remote_stream_available_range_end(&state_guard.ranges, position).is_some()
-        || (state_guard.ranges.is_empty() && state_guard.bytes_written > position)
-    {
+    if state_guard.bytes_written > position {
         return Ok(true);
     }
     if let Some(error) = state_guard.last_error.clone() {
@@ -906,9 +824,7 @@ fn wait_for_remote_stream_cache_growth(
     if let Some(error) = state_guard.last_error.clone() {
         return Err(std::io::Error::new(ErrorKind::Other, error));
     }
-    if remote_stream_available_range_end(&state_guard.ranges, position).is_some()
-        || (state_guard.ranges.is_empty() && state_guard.bytes_written > position)
-    {
+    if state_guard.bytes_written > position {
         return Ok(true);
     }
     if state_guard.completed {
@@ -934,63 +850,13 @@ impl RemoteGrowingCacheMediaSource {
             position: 0,
             seekable: backing.seekable,
             complete_len: backing.complete_len,
-            range_context: backing.range_context,
         }
-    }
-
-    fn available_range_end_at_position(&self) -> std::io::Result<Option<u64>> {
-        if let Some(complete_len) = self.complete_len {
-            return Ok((self.position < complete_len).then_some(complete_len));
-        }
-        let Some(job) = &self.job else {
-            return Ok(None);
-        };
-        let state = job.state.lock().map_err(|_| {
-            std::io::Error::new(ErrorKind::Other, "Remote stream state is poisoned")
-        })?;
-        if let Some(end) = remote_stream_available_range_end(&state.ranges, self.position) {
-            return Ok(Some(end));
-        }
-        if state.ranges.is_empty() && state.bytes_written > self.position {
-            return Ok(Some(state.bytes_written));
-        }
-        Ok(None)
     }
 
     fn read_from_cache_at_position(&self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let Some(range_end) = self.available_range_end_at_position()? else {
-            return Ok(0);
-        };
-        let max_len = range_end
-            .saturating_sub(self.position)
-            .min(buf.len() as u64) as usize;
-        if max_len == 0 {
-            return Ok(0);
-        }
         let mut file = fs::File::open(&self.cache_path)?;
         file.seek(SeekFrom::Start(self.position))?;
-        file.read(&mut buf[..max_len])
-    }
-
-    fn ensure_range_download_for_position(&mut self, position: u64) -> std::io::Result<()> {
-        if self.complete_len.is_some() || self.available_range_end_at_position()?.is_some() {
-            return Ok(());
-        }
-        let Some(context) = self.range_context.clone() else {
-            return Ok(());
-        };
-        if context.range_requests != Some(true) {
-            return Ok(());
-        }
-        let seed_ranges = self
-            .job
-            .as_ref()
-            .and_then(|job| job.state.lock().ok().map(|state| state.ranges.clone()))
-            .unwrap_or_default();
-        let job = restart_remote_stream_download_from_offset(&context, position, seed_ranges)
-            .map_err(|error| std::io::Error::new(ErrorKind::Other, error))?;
-        self.job = Some(job);
-        Ok(())
+        file.read(buf)
     }
 }
 
@@ -1056,7 +922,6 @@ impl Seek for RemoteGrowingCacheMediaSource {
 
         self.position = target;
         crate::audio::diagnostics::record_event("transport.source.remote.seek", target, 0);
-        self.ensure_range_download_for_position(target)?;
         Ok(self.position)
     }
 }
@@ -1082,126 +947,46 @@ impl MediaSource for RemoteGrowingCacheMediaSource {
     }
 }
 
-fn wait_for_remote_stream_probe_ready(
+fn wait_for_remote_stream_cache_complete(
     job: &Arc<RemoteStreamDownloadJob>,
     entry: &RemoteStreamCacheEntry,
     expires_at_ms: Option<u64>,
 ) -> Result<(), String> {
-    if remote_stream_complete_cache_is_valid(entry, expires_at_ms)
-        || can_probe_remote_stream_cache(&entry.cache_path)
-    {
+    if remote_stream_complete_cache_is_valid(entry, expires_at_ms) {
         return Ok(());
     }
-
-    let started_at = Instant::now();
-    let deadline = started_at + Duration::from_millis(REMOTE_STREAM_PROBE_HARD_WAIT_MS);
 
     loop {
         if let Some(cancel_error) = remote_stream_download_cancel_error(job) {
             return Err(cancel_error);
         }
 
-        let now = Instant::now();
-        if now >= deadline {
-            let bytes_written = fs::metadata(&entry.cache_path)
-                .ok()
-                .map(|meta| meta.len())
-                .unwrap_or(0);
-            return Err(format!(
-                "Remote stream cache is not ready for decoding within timeout (bytes={bytes_written})"
-            ));
-        }
-
-        let remaining = deadline.saturating_duration_since(now);
-        let wait_window = Duration::from_millis(REMOTE_STREAM_PROBE_RETRY_WAIT_MS).min(remaining);
         let state_guard = job
             .state
             .lock()
             .map_err(|_| "Remote stream download state is poisoned".to_string())?;
-        let (state_guard, _) = job
-            .signal
-            .wait_timeout(state_guard, wait_window)
-            .map_err(|_| "Remote stream probe wait failed".to_string())?;
 
         if let Some(error) = state_guard.last_error.clone() {
             return Err(error);
         }
-        if remote_stream_complete_cache_is_valid(entry, expires_at_ms)
-            || can_probe_remote_stream_cache(&entry.cache_path)
-        {
-            crate::audio::diagnostics::record_event(
-                "transport.source.remote.probe_wait",
-                started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
-                state_guard.bytes_written,
-            );
+        if remote_stream_complete_cache_is_valid(entry, expires_at_ms) {
             return Ok(());
         }
         if state_guard.completed {
             return Err(format!(
-                "Remote stream cache download completed but remains undecodable (bytes={})",
+                "Remote stream cache download completed but cache is incomplete or invalid (bytes={})",
                 state_guard.bytes_written
             ));
         }
-    }
-}
 
-fn record_remote_stream_download_progress(
-    job: &Arc<RemoteStreamDownloadJob>,
-    start: u64,
-    end: u64,
-    total_len: Option<u64>,
-) {
-    if let Ok(mut state) = job.state.lock() {
-        state.bytes_written = state.bytes_written.max(end);
-        if let Some(total_len) = total_len {
-            state.total_len = Some(total_len);
-        }
-        merge_remote_stream_byte_range(&mut state.ranges, start, end);
-        job.signal.notify_all();
+        let _ = job
+            .signal
+            .wait_timeout(
+                state_guard,
+                Duration::from_millis(REMOTE_STREAM_GROWING_CACHE_WAIT_MS),
+            )
+            .map_err(|_| "Remote stream complete wait failed".to_string())?;
     }
-}
-
-fn replace_remote_stream_download_ranges(
-    job: &Arc<RemoteStreamDownloadJob>,
-    ranges: Vec<RemoteStreamByteRange>,
-) {
-    if let Ok(mut state) = job.state.lock() {
-        state.ranges = ranges;
-        state.bytes_written = state
-            .ranges
-            .iter()
-            .map(|range| range.end)
-            .max()
-            .unwrap_or(0);
-        job.signal.notify_all();
-    }
-}
-
-fn remote_stream_ranges_complete(
-    ranges: &[RemoteStreamByteRange],
-    total_len: Option<u64>,
-    fallback_written: u64,
-) -> bool {
-    if let Some(total_len) = total_len {
-        total_len > 0 && remote_stream_ranges_cover(ranges, 0, total_len)
-    } else {
-        ranges.len() == 1 && ranges[0].start == 0 && ranges[0].end == fallback_written
-    }
-}
-
-fn remote_stream_part_marker_range_start(
-    job: &Arc<RemoteStreamDownloadJob>,
-    request_start: u64,
-) -> u64 {
-    if request_start == 0 {
-        return 0;
-    }
-    job.state
-        .lock()
-        .ok()
-        .filter(|state| remote_stream_ranges_cover(&state.ranges, 0, request_start))
-        .map(|_| 0)
-        .unwrap_or(request_start)
 }
 
 fn spawn_remote_stream_download(
@@ -1210,15 +995,11 @@ fn spawn_remote_stream_download(
     headers: HeaderMap,
     expires_at_ms: Option<u64>,
     range_requests: Option<bool>,
-    range_start: u64,
-    seed_ranges: Vec<RemoteStreamByteRange>,
-    truncate_before_write: bool,
+    resume_offset: u64,
 ) -> Arc<RemoteStreamDownloadJob> {
-    let seed_bytes_written = seed_ranges.iter().map(|range| range.end).max().unwrap_or(0);
     let job = Arc::new(RemoteStreamDownloadJob {
         state: Mutex::new(RemoteStreamDownloadState {
-            ranges: seed_ranges,
-            bytes_written: seed_bytes_written,
+            bytes_written: resume_offset,
             ..RemoteStreamDownloadState::default()
         }),
         signal: Condvar::new(),
@@ -1233,30 +1014,38 @@ fn spawn_remote_stream_download(
             if let Some(cancel_error) = remote_stream_download_cancel_error(&job_for_thread) {
                 return Err(cancel_error);
             }
-            let mut request_start = range_start;
-            let read_stall_timeout = remote_stream_read_stall_timeout();
-            let mut last_progress_at = Instant::now();
+            let mut request_start = resume_offset;
+            let mut total_len: Option<u64> = None;
+            let mut range_capable = range_requests == Some(true);
             let mut retry_count = 0u64;
-            let mut final_total_len: Option<u64> = None;
-            let mut last_written_end = range_start;
-            let mut truncate_next_write = truncate_before_write;
-
             loop {
                 if let Some(cancel_error) = remote_stream_download_cancel_error(&job_for_thread) {
                     return Err(cancel_error);
                 }
+                if total_len.is_some_and(|known_total| request_start >= known_total) {
+                    let complete_len = total_len.unwrap_or(request_start);
+                    finalize_remote_stream_cache(&entry, complete_len, expires_at_ms)?;
+                    return Ok(complete_len);
+                }
+                mark_remote_stream_part_started(&entry)?;
+                let request_end = if range_capable {
+                    Some(
+                        request_start
+                            .saturating_add(remote_stream_range_slice_bytes().saturating_sub(1)),
+                    )
+                } else {
+                    None
+                };
+                let requested_end_exclusive = request_end.and_then(|end| end.checked_add(1));
 
-                mark_remote_stream_part_started(
-                    &entry,
-                    remote_stream_part_marker_range_start(&job_for_thread, request_start),
-                )?;
-                let client = build_http_client(range_requests)?;
+                let client = build_http_client()?;
                 let mut request = client.get(&stream_url);
                 let mut attempt_headers = headers.clone();
                 let range_header_sent = apply_remote_stream_range_header(
                     &mut attempt_headers,
-                    range_requests,
+                    if range_capable { Some(true) } else { None },
                     request_start,
+                    request_end,
                 )?;
                 if !attempt_headers.is_empty() {
                     request = request.headers(attempt_headers);
@@ -1264,23 +1053,19 @@ fn spawn_remote_stream_download(
                 if let Some(cancel_error) = remote_stream_download_cancel_error(&job_for_thread) {
                     return Err(cancel_error);
                 }
+
                 let mut response = match request.send() {
                     Ok(response) => response,
                     Err(error)
-                        if range_requests == Some(true)
+                        if range_capable
                             && error.is_timeout()
-                            && last_progress_at.elapsed() < read_stall_timeout =>
+                            && retry_count < REMOTE_STREAM_HTTP_RETRY_LIMIT =>
                     {
-                        if let Some(cancel_error) =
-                            remote_stream_download_cancel_error(&job_for_thread)
-                        {
-                            return Err(cancel_error);
-                        }
                         retry_count = retry_count.saturating_add(1);
                         crate::audio::diagnostics::record_event(
                             "transport.source.remote.http_retry",
                             retry_count,
-                            last_written_end,
+                            request_start,
                         );
                         continue;
                     }
@@ -1288,53 +1073,52 @@ fn spawn_remote_stream_download(
                         return Err(format!("Failed to start remote stream download: {error}"));
                     }
                 };
+
                 let status = response.status();
                 if !status.is_success() {
-                    if matches!(status.as_u16(), 401 | 403) {
-                        crate::audio::diagnostics::record_event(
-                            "transport.source.remote.url_refresh_needed",
-                            status.as_u16() as u64,
-                            last_written_end,
-                        );
-                        crate::audio::diagnostics::record_event(
-                            "transport.source.remote.url_refresh_unavailable",
-                            status.as_u16() as u64,
-                            last_written_end,
-                        );
-                    }
                     return Err(format!(
                         "Remote stream returned non-success status: {status}"
                     ));
                 }
 
                 let mut write_start = request_start;
-                let mut attempt_content_range: Option<RemoteStreamContentRange> = None;
+                let mut content_range: Option<RemoteStreamContentRange> = None;
+                let mut response_is_range = false;
                 if status.as_u16() == 206 {
-                    let content_range =
+                    let validated =
                         validate_remote_stream_content_range(response.headers(), request_start)?;
-                    final_total_len = content_range.total.or(final_total_len);
-                    attempt_content_range = Some(content_range);
+                    total_len = validated.total.or(total_len);
+                    content_range = Some(validated);
+                    response_is_range = true;
                     crate::audio::diagnostics::record_event(
                         "transport.source.remote.range_response",
                         206,
-                        content_range.total.unwrap_or(0),
+                        total_len.unwrap_or(0),
                     );
-                } else if request_start > 0 && range_header_sent {
-                    crate::audio::diagnostics::record_event(
-                        "transport.source.remote.range_ignored",
-                        request_start,
-                        status.as_u16() as u64,
-                    );
-                    write_start = 0;
-                    truncate_next_write = true;
-                    replace_remote_stream_download_ranges(&job_for_thread, Vec::new());
-                    mark_remote_stream_part_started(&entry, 0)?;
-                } else if range_header_sent {
-                    crate::audio::diagnostics::record_event(
-                        "transport.source.remote.range_response",
-                        status.as_u16() as u64,
-                        0,
-                    );
+                } else {
+                    total_len =
+                        parse_remote_stream_content_length(response.headers()).or(total_len);
+                    if range_header_sent && request_start > 0 {
+                        crate::audio::diagnostics::record_event(
+                            "transport.source.remote.range_ignored",
+                            request_start,
+                            status.as_u16() as u64,
+                        );
+                        write_start = 0;
+                        range_capable = false;
+                        if let Ok(mut state) = job_for_thread.state.lock() {
+                            state.bytes_written = 0;
+                            state.total_len = total_len;
+                            job_for_thread.signal.notify_all();
+                        }
+                    } else if range_header_sent {
+                        crate::audio::diagnostics::record_event(
+                            "transport.source.remote.range_response",
+                            status.as_u16() as u64,
+                            0,
+                        );
+                        range_capable = false;
+                    }
                 }
 
                 let mut file = fs::OpenOptions::new()
@@ -1343,17 +1127,20 @@ fn spawn_remote_stream_download(
                     .write(true)
                     .open(&entry.cache_path)
                     .map_err(|error| format!("Failed to open remote stream cache file: {error}"))?;
-                if truncate_next_write {
+                if write_start == 0 {
                     file.set_len(0).map_err(|error| {
                         format!("Failed to reset remote stream cache file: {error}")
                     })?;
-                    truncate_next_write = false;
                 }
                 file.seek(SeekFrom::Start(write_start))
                     .map_err(|error| format!("Failed to seek remote stream cache file: {error}"))?;
 
-                let mut bytes_this_attempt = 0u64;
                 let mut buf = [0u8; 64 * 1024];
+                let mut bytes_this_attempt = 0u64;
+                let mut last_written_end = write_start;
+                let read_stall_timeout = remote_stream_read_stall_timeout();
+                let mut should_retry = false;
+
                 loop {
                     if let Some(cancel_error) = remote_stream_download_cancel_error(&job_for_thread)
                     {
@@ -1361,26 +1148,21 @@ fn spawn_remote_stream_download(
                     }
                     let read = match response.read(&mut buf) {
                         Ok(read) => read,
+                        Err(error)
+                            if range_capable
+                                && is_remote_stream_read_timeout(&error)
+                                && retry_count < REMOTE_STREAM_HTTP_RETRY_LIMIT =>
+                        {
+                            retry_count = retry_count.saturating_add(1);
+                            crate::audio::diagnostics::record_event(
+                                "transport.source.remote.http_retry",
+                                retry_count,
+                                last_written_end,
+                            );
+                            should_retry = true;
+                            break;
+                        }
                         Err(error) if is_remote_stream_read_timeout(&error) => {
-                            if let Some(cancel_error) =
-                                remote_stream_download_cancel_error(&job_for_thread)
-                            {
-                                return Err(cancel_error);
-                            }
-                            let no_progress_ms =
-                                last_progress_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
-                            if range_requests == Some(true)
-                                && no_progress_ms
-                                    < read_stall_timeout.as_millis().min(u64::MAX as u128) as u64
-                            {
-                                retry_count = retry_count.saturating_add(1);
-                                crate::audio::diagnostics::record_event(
-                                    "transport.source.remote.http_retry",
-                                    retry_count,
-                                    last_written_end,
-                                );
-                                break;
-                            }
                             crate::audio::diagnostics::record_event(
                                 "transport.source.remote.read_stall",
                                 last_written_end,
@@ -1396,28 +1178,7 @@ fn spawn_remote_stream_download(
                         }
                     };
                     if read == 0 {
-                        let _ = file.flush();
-                        drop(file);
-                        if let Some(content_range) = attempt_content_range {
-                            let actual_end = write_start.saturating_add(bytes_this_attempt);
-                            validate_remote_stream_content_range_body(content_range, actual_end)?;
-                        }
-                        let (ranges, total_len, bytes_written) = job_for_thread
-                            .state
-                            .lock()
-                            .map(|state| {
-                                (
-                                    state.ranges.clone(),
-                                    state.total_len.or(final_total_len),
-                                    state.bytes_written,
-                                )
-                            })
-                            .unwrap_or_default();
-                        if remote_stream_ranges_complete(&ranges, total_len, bytes_written) {
-                            let complete_len = total_len.unwrap_or(bytes_written);
-                            finalize_remote_stream_cache(&entry, complete_len, expires_at_ms)?;
-                        }
-                        return Ok(bytes_written);
+                        break;
                     }
                     if let Some(cancel_error) = remote_stream_download_cancel_error(&job_for_thread)
                     {
@@ -1428,20 +1189,45 @@ fn spawn_remote_stream_download(
                     })?;
                     bytes_this_attempt = bytes_this_attempt.saturating_add(read as u64);
                     last_written_end = write_start.saturating_add(bytes_this_attempt);
-                    last_progress_at = Instant::now();
+                    retry_count = 0;
                     if bytes_this_attempt % (512 * 1024) < read as u64 {
                         let _ = file.flush();
                     }
-                    record_remote_stream_download_progress(
-                        &job_for_thread,
-                        write_start,
-                        last_written_end,
-                        final_total_len,
-                    );
+                    if let Ok(mut state) = job_for_thread.state.lock() {
+                        state.bytes_written = last_written_end;
+                        state.total_len = total_len;
+                        job_for_thread.signal.notify_all();
+                    }
                 }
 
                 let _ = file.flush();
                 drop(file);
+
+                if should_retry {
+                    request_start = last_written_end;
+                    continue;
+                }
+
+                if let Some(content_range) = content_range {
+                    validate_remote_stream_content_range_body(content_range, last_written_end)?;
+                }
+
+                let complete_now = if let Some(known_total) = total_len {
+                    last_written_end >= known_total
+                } else if response_is_range {
+                    requested_end_exclusive
+                        .map(|expected_end| last_written_end < expected_end)
+                        .unwrap_or(true)
+                } else {
+                    true
+                };
+
+                if complete_now {
+                    let complete_len = total_len.unwrap_or(last_written_end);
+                    finalize_remote_stream_cache(&entry, complete_len, expires_at_ms)?;
+                    return Ok(complete_len);
+                }
+
                 request_start = last_written_end;
             }
         })();
@@ -1450,6 +1236,7 @@ fn spawn_remote_stream_download(
             match result {
                 Ok(bytes_written) => {
                     state.bytes_written = bytes_written;
+                    state.total_len = Some(bytes_written);
                     state.completed = true;
                     state.finalized = remote_stream_complete_cache_is_valid(&entry, expires_at_ms);
                     state.last_error = None;
@@ -1483,8 +1270,6 @@ fn get_or_spawn_remote_stream_download(
     headers: HeaderMap,
     expires_at_ms: Option<u64>,
     range_requests: Option<bool>,
-    preferred_start: Option<u64>,
-    seed_ranges: Vec<RemoteStreamByteRange>,
 ) -> Result<Arc<RemoteStreamDownloadJob>, String> {
     let mut in_flight = REMOTE_STREAM_IN_FLIGHT
         .lock()
@@ -1495,22 +1280,15 @@ fn get_or_spawn_remote_stream_download(
         return Ok(job.clone());
     }
 
-    let resume_offset =
-        preferred_start.unwrap_or_else(|| remote_stream_resume_offset(entry, range_requests));
-    let mut seed_ranges = seed_ranges;
-    let mut truncate_before_write = false;
-    if preferred_start.is_none() {
-        if resume_offset > 0 {
-            merge_remote_stream_byte_range(&mut seed_ranges, 0, resume_offset);
-            crate::audio::diagnostics::record_event(
-                "transport.source.remote.resume_part",
-                resume_offset,
-                0,
-            );
-        } else {
-            clear_stale_remote_stream_cache(entry);
-            truncate_before_write = true;
-        }
+    let resume_offset = remote_stream_resume_offset(entry, range_requests);
+    if resume_offset > 0 {
+        crate::audio::diagnostics::record_event(
+            "transport.source.remote.resume_part",
+            resume_offset,
+            0,
+        );
+    } else {
+        clear_stale_remote_stream_cache(entry);
     }
     let job = spawn_remote_stream_download(
         entry.clone(),
@@ -1519,8 +1297,6 @@ fn get_or_spawn_remote_stream_download(
         expires_at_ms,
         range_requests,
         resume_offset,
-        seed_ranges,
-        truncate_before_write,
     );
     in_flight.insert(in_flight_key.clone(), job.clone());
     drop(in_flight);
@@ -1544,54 +1320,29 @@ fn get_or_spawn_remote_stream_download(
     Ok(job)
 }
 
-fn restart_remote_stream_download_from_offset(
-    context: &RemoteStreamRangeContext,
-    range_start: u64,
-    mut seed_ranges: Vec<RemoteStreamByteRange>,
+fn ensure_remote_stream_download_for_entry(
+    entry: &RemoteStreamCacheEntry,
+    stream_url: &str,
+    headers: Option<&HashMap<String, String>>,
+    expires_at_ms: Option<u64>,
+    range_requests: Option<bool>,
 ) -> Result<Arc<RemoteStreamDownloadJob>, String> {
-    let in_flight_key = remote_stream_in_flight_key(&context.entry);
-    if seed_ranges.is_empty() {
-        let prefix_len = remote_stream_resume_offset(&context.entry, context.range_requests);
-        if prefix_len > 0 {
-            merge_remote_stream_byte_range(&mut seed_ranges, 0, prefix_len);
-        }
-    }
-
-    if remote_stream_available_range_end(&seed_ranges, range_start).is_some() {
-        if let Ok(in_flight) = REMOTE_STREAM_IN_FLIGHT.lock() {
-            if let Some(job) = in_flight.get(&in_flight_key) {
-                return Ok(job.clone());
-            }
-        }
-    }
-
-    if let Ok(mut in_flight) = REMOTE_STREAM_IN_FLIGHT.lock() {
-        if let Some(job) = in_flight.remove(&in_flight_key) {
-            request_remote_stream_download_cancel(&job, REMOTE_STREAM_CANCEL_REASON_RANGE_SEEK);
-        }
-        let job = spawn_remote_stream_download(
-            context.entry.clone(),
-            context.stream_url.clone(),
-            context.request_headers.clone(),
-            context.expires_at_ms,
-            context.range_requests,
-            range_start,
-            seed_ranges,
-            false,
-        );
-        in_flight.insert(in_flight_key, job.clone());
-        crate::audio::diagnostics::record_event(
-            "transport.source.remote.range_seek",
-            range_start,
-            0,
-        );
-        Ok(job)
-    } else {
-        Err("Remote stream in-flight registry is poisoned".to_string())
-    }
+    let request_headers = build_request_headers(headers)?;
+    let in_flight_key = remote_stream_in_flight_key(entry);
+    cancel_remote_stream_downloads_matching(
+        Some(in_flight_key.as_path()),
+        REMOTE_STREAM_CANCEL_REASON_TRANSPORT_REPLACED,
+    );
+    get_or_spawn_remote_stream_download(
+        entry,
+        stream_url,
+        request_headers,
+        expires_at_ms,
+        range_requests,
+    )
 }
 
-fn materialize_remote_stream_to_cache_root(
+fn materialize_remote_stream_to_complete_cache_root(
     cache_root: &Path,
     stream_url: &str,
     source_locator: Option<&str>,
@@ -1601,7 +1352,6 @@ fn materialize_remote_stream_to_cache_root(
     expires_at_ms: Option<u64>,
     range_requests: Option<bool>,
 ) -> Result<PathBuf, String> {
-    record_remote_stream_url_refresh_boundary(expires_at_ms);
     let entry = build_remote_stream_cache_entry(
         cache_root,
         stream_url,
@@ -1612,42 +1362,22 @@ fn materialize_remote_stream_to_cache_root(
     );
 
     if remote_stream_complete_cache_is_valid(&entry, expires_at_ms) {
-        crate::audio::diagnostics::record_event("transport.source.remote.cache_hit", 1, 1);
+        crate::audio::diagnostics::record_event("transport.source.remote.cache_hit", 1, 3);
         return Ok(entry.cache_path);
     }
 
-    let request_headers = build_request_headers(headers)?;
-    let started_at = Instant::now();
-    let in_flight_key = remote_stream_in_flight_key(&entry);
-    cancel_remote_stream_downloads_matching(
-        Some(in_flight_key.as_path()),
-        REMOTE_STREAM_CANCEL_REASON_TRANSPORT_REPLACED,
-    );
-    let job = get_or_spawn_remote_stream_download(
+    let job = ensure_remote_stream_download_for_entry(
         &entry,
         stream_url,
-        request_headers,
+        headers,
         expires_at_ms,
         range_requests,
-        None,
-        Vec::new(),
     )?;
-    let result = wait_for_remote_stream_probe_ready(&job, &entry, expires_at_ms);
-    crate::audio::diagnostics::record_event(
-        "transport.source.remote.materialize",
-        started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
-        result.is_ok() as u64,
-    );
-    if result.is_err() {
-        request_remote_stream_download_cancel(
-            &job,
-            REMOTE_STREAM_CANCEL_REASON_MATERIALIZE_ABORTED,
-        );
-    }
-    result.map(|_| entry.cache_path)
+    wait_for_remote_stream_cache_complete(&job, &entry, expires_at_ms)?;
+    Ok(entry.cache_path)
 }
 
-fn materialize_remote_stream_to_cache(
+fn materialize_remote_stream_to_complete_cache(
     app_handle: &AppHandle,
     stream_url: &str,
     source_locator: Option<&str>,
@@ -1658,7 +1388,7 @@ fn materialize_remote_stream_to_cache(
     range_requests: Option<bool>,
 ) -> Result<PathBuf, String> {
     let cache_root = build_remote_stream_cache_root(app_handle)?;
-    materialize_remote_stream_to_cache_root(
+    materialize_remote_stream_to_complete_cache_root(
         &cache_root,
         stream_url,
         source_locator,
@@ -1670,6 +1400,43 @@ fn materialize_remote_stream_to_cache(
     )
 }
 
+pub(crate) fn remote_stream_locator_has_complete_cache(locator: &RemoteStreamInputLocator) -> bool {
+    let normalized_url = normalize_string(&locator.stream_url);
+    if normalized_url.is_empty() {
+        return false;
+    }
+
+    let entry = build_remote_stream_cache_entry(
+        &locator.cache_root,
+        &normalized_url,
+        locator.source_locator.as_deref(),
+        locator.connector_id.as_deref(),
+        locator.mime_type.as_deref(),
+        locator.headers.as_ref(),
+    );
+    remote_stream_complete_cache_is_valid(&entry, locator.expires_at_ms)
+}
+
+pub(crate) fn materialize_remote_stream_input_locator_complete(
+    locator: &RemoteStreamInputLocator,
+) -> Result<PathBuf, String> {
+    let normalized_url = normalize_string(&locator.stream_url);
+    if normalized_url.is_empty() {
+        return Err("Remote stream url is empty".to_string());
+    }
+
+    materialize_remote_stream_to_complete_cache_root(
+        &locator.cache_root,
+        &normalized_url,
+        locator.source_locator.as_deref(),
+        locator.connector_id.as_deref(),
+        locator.mime_type.as_deref(),
+        locator.headers.as_ref(),
+        locator.expires_at_ms,
+        locator.range_requests,
+    )
+}
+
 pub(crate) fn open_remote_stream_media_source(
     locator: &RemoteStreamInputLocator,
 ) -> Result<(Box<dyn MediaSource>, Option<String>), String> {
@@ -1677,7 +1444,6 @@ pub(crate) fn open_remote_stream_media_source(
     if normalized_url.is_empty() {
         return Err("Remote stream url is empty".to_string());
     }
-    record_remote_stream_url_refresh_boundary(locator.expires_at_ms);
 
     let entry = build_remote_stream_cache_entry(
         &locator.cache_root,
@@ -1702,23 +1468,14 @@ pub(crate) fn open_remote_stream_media_source(
             complete_len: fs::metadata(&entry.cache_path)
                 .ok()
                 .map(|metadata| metadata.len()),
-            range_context: None,
         }
     } else {
-        let request_headers = build_request_headers(locator.headers.as_ref())?;
-        let in_flight_key = remote_stream_in_flight_key(&entry);
-        cancel_remote_stream_downloads_matching(
-            Some(in_flight_key.as_path()),
-            REMOTE_STREAM_CANCEL_REASON_TRANSPORT_REPLACED,
-        );
-        let job = get_or_spawn_remote_stream_download(
+        let job = ensure_remote_stream_download_for_entry(
             &entry,
             &normalized_url,
-            request_headers.clone(),
+            locator.headers.as_ref(),
             locator.expires_at_ms,
             locator.range_requests,
-            None,
-            Vec::new(),
         )?;
         crate::audio::diagnostics::record_event(
             "transport.source.remote.growing_cache_open",
@@ -1728,15 +1485,8 @@ pub(crate) fn open_remote_stream_media_source(
         RemoteStreamCacheBacking {
             cache_path: entry.cache_path.clone(),
             job: Some(job),
-            seekable: locator.seekable.unwrap_or(false) || locator.range_requests.unwrap_or(false),
+            seekable: false,
             complete_len: None,
-            range_context: Some(RemoteStreamRangeContext {
-                entry: entry.clone(),
-                stream_url: normalized_url.clone(),
-                request_headers,
-                expires_at_ms: locator.expires_at_ms,
-                range_requests: locator.range_requests,
-            }),
         }
     };
 
@@ -1820,7 +1570,7 @@ impl NativeAudioSourcePayload {
                 if normalized_url.is_empty() {
                     return Err("Remote stream url is empty".to_string());
                 }
-                materialize_remote_stream_to_cache(
+                materialize_remote_stream_to_complete_cache(
                     app_handle,
                     &normalized_url,
                     source_locator.as_deref(),
@@ -2047,6 +1797,110 @@ mod tests {
     }
 
     #[test]
+    fn remote_stream_resume_offset_accepts_v2_prefix_marker() {
+        let root = test_cache_root("resume-v2");
+        let entry = build_remote_stream_cache_entry(
+            &root,
+            "https://cdn.example.com/audio/test-track.wav",
+            Some("netease://song/resume-v2"),
+            Some("netease"),
+            Some("audio/wav"),
+            None,
+        );
+        fs::write(&entry.cache_path, b"prefix").expect("write prefix");
+        mark_remote_stream_part_started(&entry).expect("write part marker");
+
+        assert_eq!(remote_stream_resume_offset(&entry, Some(true)), 6);
+        assert_eq!(remote_stream_resume_offset(&entry, Some(false)), 0);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn remote_stream_resume_offset_accepts_legacy_prefix_marker() {
+        let root = test_cache_root("resume-legacy");
+        let entry = build_remote_stream_cache_entry(
+            &root,
+            "https://cdn.example.com/audio/test-track.wav",
+            Some("netease://song/resume-legacy"),
+            Some("netease"),
+            Some("audio/wav"),
+            None,
+        );
+        fs::write(&entry.cache_path, b"prefix").expect("write prefix");
+        fs::write(
+            &entry.part_marker_path,
+            format!("cache_key={}\nstarted_at_ms={}\n", entry.key, now_millis()),
+        )
+        .expect("write legacy part marker");
+
+        assert_eq!(remote_stream_resume_offset(&entry, Some(true)), 6);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn remote_stream_resume_offset_rejects_sparse_legacy_marker() {
+        let root = test_cache_root("resume-sparse");
+        let entry = build_remote_stream_cache_entry(
+            &root,
+            "https://cdn.example.com/audio/test-track.wav",
+            Some("netease://song/resume-sparse"),
+            Some("netease"),
+            Some("audio/wav"),
+            None,
+        );
+        fs::write(&entry.cache_path, b"prefix").expect("write prefix");
+        let marker = serde_json::json!({
+            "version": 1u8,
+            "cache_key": entry.key,
+            "started_at_ms": now_millis(),
+            "range_start": 128u64
+        });
+        fs::write(
+            &entry.part_marker_path,
+            serde_json::to_vec(&marker).expect("serialize legacy marker"),
+        )
+        .expect("write sparse marker");
+
+        assert_eq!(remote_stream_resume_offset(&entry, Some(true)), 0);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn remote_stream_content_range_validation_accepts_matching_prefix() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_RANGE,
+            HeaderValue::from_static("bytes 128-255/1024"),
+        );
+
+        let parsed =
+            validate_remote_stream_content_range(&headers, 128).expect("validate content-range");
+        assert_eq!(
+            parsed,
+            RemoteStreamContentRange {
+                start: 128,
+                end: 255,
+                total: Some(1024),
+            }
+        );
+        validate_remote_stream_content_range_body(parsed, 256).expect("validate body length");
+    }
+
+    #[test]
+    fn remote_stream_content_range_validation_rejects_mismatched_start() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_RANGE,
+            HeaderValue::from_static("bytes 128-255/1024"),
+        );
+
+        assert!(validate_remote_stream_content_range(&headers, 64).is_err());
+    }
+
+    #[test]
     fn remote_stream_download_registry_joins_existing_job() {
         let root = test_cache_root("single-flight");
         let entry = build_remote_stream_cache_entry(
@@ -2075,8 +1929,6 @@ mod tests {
             HeaderMap::new(),
             None,
             None,
-            None,
-            Vec::new(),
         )
         .expect("join existing");
         assert!(Arc::ptr_eq(&existing, &joined));
@@ -2085,65 +1937,6 @@ mod tests {
             let mut in_flight = REMOTE_STREAM_IN_FLIGHT.lock().expect("registry");
             in_flight.remove(&remote_stream_in_flight_key(&entry));
         }
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn remote_stream_content_range_requires_matching_start() {
-        let parsed =
-            parse_remote_stream_content_range("bytes 1024-2047/4096").expect("parse content range");
-        assert_eq!(
-            parsed,
-            RemoteStreamContentRange {
-                start: 1024,
-                end: 2047,
-                total: Some(4096)
-            }
-        );
-
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_RANGE, HeaderValue::from_static("bytes 5-9/20"));
-        assert!(validate_remote_stream_content_range(&headers, 5).is_ok());
-        assert!(validate_remote_stream_content_range(&headers, 4).is_err());
-        assert!(parse_remote_stream_content_range("bytes 5-4/20").is_none());
-        assert!(parse_remote_stream_content_range("bytes 20-29/20").is_none());
-
-        let content_range = parse_remote_stream_content_range("bytes 5-9/20").expect("range");
-        assert!(validate_remote_stream_content_range_body(content_range, 10).is_ok());
-        assert!(validate_remote_stream_content_range_body(content_range, 9).is_err());
-    }
-
-    #[test]
-    fn remote_stream_byte_ranges_merge_and_report_coverage() {
-        let mut ranges = Vec::new();
-        merge_remote_stream_byte_range(&mut ranges, 10, 20);
-        merge_remote_stream_byte_range(&mut ranges, 0, 5);
-        merge_remote_stream_byte_range(&mut ranges, 5, 12);
-
-        assert_eq!(ranges, vec![RemoteStreamByteRange { start: 0, end: 20 }]);
-        assert_eq!(remote_stream_available_range_end(&ranges, 7), Some(20));
-        assert!(remote_stream_ranges_cover(&ranges, 0, 20));
-        assert!(!remote_stream_ranges_cover(&ranges, 0, 21));
-    }
-
-    #[test]
-    fn remote_stream_part_resume_reuses_only_prefix_markers() {
-        let root = test_cache_root("part-resume");
-        let entry = build_remote_stream_cache_entry(
-            &root,
-            "https://cdn.example.com/audio/test-track.wav",
-            Some("netease://song/part-resume"),
-            Some("netease"),
-            Some("audio/wav"),
-            None,
-        );
-        fs::write(&entry.cache_path, b"prefix").expect("write prefix");
-        mark_remote_stream_part_started(&entry, 0).expect("write prefix marker");
-        assert_eq!(remote_stream_resume_offset(&entry, Some(true)), 6);
-
-        mark_remote_stream_part_started(&entry, 128).expect("write range marker");
-        assert_eq!(remote_stream_resume_offset(&entry, Some(true)), 0);
-        assert_eq!(remote_stream_resume_offset(&entry, Some(false)), 0);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2184,53 +1977,6 @@ mod tests {
     }
 
     #[test]
-    fn remote_growing_cache_media_source_does_not_read_sparse_gaps() {
-        let root = test_cache_root("growing-sparse");
-        let cache_path = root.join("sparse.bin");
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .read(true)
-            .open(&cache_path)
-            .expect("open sparse");
-        file.write_all(b"hello").expect("write prefix");
-        file.seek(SeekFrom::Start(10)).expect("seek sparse");
-        file.write_all(b"tail").expect("write tail");
-        drop(file);
-
-        let job = Arc::new(RemoteStreamDownloadJob {
-            state: Mutex::new(RemoteStreamDownloadState {
-                bytes_written: 14,
-                ranges: vec![
-                    RemoteStreamByteRange { start: 0, end: 5 },
-                    RemoteStreamByteRange { start: 10, end: 14 },
-                ],
-                completed: true,
-                ..RemoteStreamDownloadState::default()
-            }),
-            signal: Condvar::new(),
-            cancel_requested: AtomicBool::new(false),
-            cancel_reason: AtomicU64::new(0),
-        });
-        let mut source = RemoteGrowingCacheMediaSource::new(RemoteStreamCacheBacking {
-            cache_path,
-            job: Some(job),
-            seekable: true,
-            complete_len: None,
-            range_context: None,
-        });
-
-        let mut buf = [0u8; 8];
-        assert_eq!(source.read(&mut buf).expect("read prefix"), 5);
-        assert_eq!(&buf[..5], b"hello");
-        assert_eq!(source.read(&mut buf).expect("gap is not readable"), 0);
-        assert_eq!(source.seek(SeekFrom::Start(10)).expect("seek tail"), 10);
-        assert_eq!(source.read(&mut buf[..4]).expect("read tail"), 4);
-        assert_eq!(&buf[..4], b"tail");
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
     fn remote_growing_cache_media_source_reads_newly_available_bytes() {
         let root = test_cache_root("growing-read");
         let cache_path = root.join("growing.bin");
@@ -2245,7 +1991,6 @@ mod tests {
             job: Some(job.clone()),
             seekable: true,
             complete_len: None,
-            range_context: None,
         });
 
         let writer = thread::spawn(move || {
@@ -2276,7 +2021,6 @@ mod tests {
             job: None,
             seekable: true,
             complete_len: Some(4),
-            range_context: None,
         });
 
         let mut buf = [0u8; 8];

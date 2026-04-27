@@ -89,7 +89,7 @@ impl NativeAudioEngine {
         let memory_pool_stats = crate::audio::memory_pool::stats_snapshot();
         let realtime_memory_stats = crate::audio::realtime_memory_guard::snapshot();
 
-        let decision = self.stability_controller.evaluate(AudioStabilityContext {
+        let _decision = self.stability_controller.evaluate(AudioStabilityContext {
             buffered_ahead_seconds,
             underrun_recovery_active,
             shared_timeline_stress_active,
@@ -110,11 +110,6 @@ impl NativeAudioEngine {
             memory_lock_skipped_count: realtime_memory_stats.lock_skipped_count,
             memory_pool_growth_events: memory_pool_stats.f32_growth_events,
         });
-        crate::audio::stability::set_runtime_action_profile(decision.minimum_profile);
-
-        if let Some(hint) = decision.transient_hint {
-            SCHEDULER.record_pressure_hint(hint.minimum_profile, hint.hold_ms);
-        }
     }
 
     pub(super) fn stability_action_profile(&self) -> RealtimePressureProfile {

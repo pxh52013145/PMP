@@ -19,8 +19,8 @@ use crate::audio::events::NativeAudioStatePayload;
 use crate::audio::input::{
     open_rodio_source_at, resolve_audio_input_target_sample_rate, AudioInputDecodeMode,
     AudioInputRegistry, AudioInputSrcPolicy, DecoderCommand, SharedSamplesSource,
-    StreamingPlayback, StreamingSamplesSource, StreamingShutdownTx, SACD_INPUT_ID,
-    SYMPHONIA_INPUT_ID,
+    StreamingPlayback, StreamingSamplesSource, StreamingShutdownTx, REMOTE_STREAM_INPUT_ID,
+    SACD_INPUT_ID, SYMPHONIA_INPUT_ID,
 };
 use crate::audio::mixer::{coerce_source_format, PlaybackMixerController, PlaybackMixerSource};
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
@@ -413,8 +413,6 @@ pub(crate) fn streaming_prebuffer_target_samples(
         })
         .unwrap_or(default_seconds)
         .clamp(0.0, 10.0);
-    let seconds =
-        (seconds * crate::audio::stability::source_prepare_prebuffer_scale()).clamp(0.0, 10.0);
 
     if seconds <= 0.0 {
         return (0, Duration::from_millis(0));
@@ -488,7 +486,7 @@ pub(crate) fn streaming_prebuffer_interactive_wait_with_policy(
     let shared_cap_scale = if is_shared_output_backend(output_backend_id) {
         parse_env_f64(
             "PMP_AUDIO_STREAM_INTERACTIVE_SHARED_CAP_SCALE",
-            crate::audio::stability::interactive_shared_cap_scale_default(),
+            1.8,
             1.0,
             6.0,
         )
@@ -498,7 +496,7 @@ pub(crate) fn streaming_prebuffer_interactive_wait_with_policy(
     let shared_timeout_scale = if is_shared_output_backend(output_backend_id) {
         parse_env_f64(
             "PMP_AUDIO_STREAM_INTERACTIVE_SHARED_TIMEOUT_SCALE",
-            crate::audio::stability::interactive_shared_timeout_scale_default(),
+            1.6,
             1.0,
             6.0,
         )
@@ -1697,9 +1695,6 @@ impl NativeAudioEngine {
                 })
                 .unwrap_or(48_000)
                 .max(1);
-            let source_prepare_reason =
-                crate::audio::stability::AudioStabilityHintReason::SourcePrepareWarmup;
-
             let (inner_resume_target, inner_resume_timeout) = self
                 .streaming_prebuffer_interactive_wait(
                     sample_rate,
@@ -1710,13 +1705,6 @@ impl NativeAudioEngine {
                     self.streaming_prebuffer_start_or_seek_seconds,
                 );
             if inner_resume_target > 0 && inner_resume_timeout > Duration::ZERO {
-                crate::audio::stability::record_external_hint(
-                    source_prepare_reason,
-                    crate::audio::stability::default_external_hint_profile(source_prepare_reason),
-                    crate::audio::stability::source_prepare_warmup_hold_ms_for(
-                        inner_resume_timeout,
-                    ),
-                );
                 if streaming.render_queue.len_samples() < inner_resume_target {
                     streaming
                         .render_queue
@@ -1725,29 +1713,14 @@ impl NativeAudioEngine {
             }
 
             if should_wrap_source_for_shared_backend(self.output_backend.id()) {
-                let guard_timeout_seconds = parse_env_f64(
-                    "PMP_AUDIO_SHARED_RESUME_GUARD_SECONDS",
-                    crate::audio::stability::shared_resume_guard_seconds_default(),
-                    0.0,
-                    2.0,
-                );
-                let guard_min_seconds = parse_env_f64(
-                    "PMP_AUDIO_SHARED_RESUME_GUARD_MIN_SECONDS",
-                    crate::audio::stability::shared_resume_guard_min_seconds_default(),
-                    0.0,
-                    0.8,
-                );
+                let guard_timeout_seconds =
+                    parse_env_f64("PMP_AUDIO_SHARED_RESUME_GUARD_SECONDS", 0.24, 0.0, 2.0);
+                let guard_min_seconds =
+                    parse_env_f64("PMP_AUDIO_SHARED_RESUME_GUARD_MIN_SECONDS", 0.08, 0.0, 0.8);
                 let guard_timeout = Duration::from_secs_f64(guard_timeout_seconds);
                 let guard_state = shared_render_ahead_ready_snapshot();
 
                 if guard_state.active_wrapper_id > 0 && guard_timeout > Duration::ZERO {
-                    crate::audio::stability::record_external_hint(
-                        source_prepare_reason,
-                        crate::audio::stability::default_external_hint_profile(
-                            source_prepare_reason,
-                        ),
-                        crate::audio::stability::source_prepare_warmup_hold_ms_for(guard_timeout),
-                    );
                     let sample_rate = sample_rate as f64;
                     let outer_resume_target = ((sample_rate * channels as f64 * guard_min_seconds)
                         .ceil() as usize)
@@ -1791,14 +1764,6 @@ impl NativeAudioEngine {
             .max(floor_samples)
             .clamp(channels.max(1), capacity.max(1));
         let resume_timeout = timeout.max(Duration::from_millis(120));
-
-        crate::audio::stability::record_external_hint(
-            crate::audio::stability::AudioStabilityHintReason::SourcePrepareWarmup,
-            crate::audio::stability::default_external_hint_profile(
-                crate::audio::stability::AudioStabilityHintReason::SourcePrepareWarmup,
-            ),
-            crate::audio::stability::source_prepare_warmup_hold_ms_for(resume_timeout),
-        );
 
         (resume_samples, resume_timeout)
     }
@@ -2657,6 +2622,24 @@ impl NativeAudioEngine {
         }
         let resume_playing = matches!(self.desired_playback_state, PlaybackState::Playing);
         let mut force_non_streaming_seek = false;
+        let remote_seek_requires_materialized_reload = self
+            .active_input_id
+            .as_deref()
+            .is_some_and(|id| id == REMOTE_STREAM_INPUT_ID)
+            && crate::audio::source::lookup_remote_stream_input_locator(&track_path)
+                .as_ref()
+                .is_some_and(|locator| {
+                    !crate::audio::source::remote_stream_locator_has_complete_cache(locator)
+                });
+
+        if remote_seek_requires_materialized_reload {
+            let previous_decode_mode = self.streaming_decode_mode;
+            self.streaming_decode_mode = AudioInputDecodeMode::FullTrack;
+            let reload_result = self.reload_track_for_seek_recovery(track_path.clone());
+            self.streaming_decode_mode = previous_decode_mode;
+            reload_result?;
+            force_non_streaming_seek = true;
+        }
 
         let apply_streaming_seek_state =
             |engine: &mut NativeAudioEngine,

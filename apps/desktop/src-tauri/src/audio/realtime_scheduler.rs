@@ -1,13 +1,5 @@
 use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn current_time_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-        .unwrap_or(0)
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -46,8 +38,6 @@ impl RealtimePressureProfile {
 pub(crate) struct RealtimeScheduler {
     profile: AtomicU8,
     memory_pressure_events: AtomicU64,
-    pressure_hold_profile: AtomicU8,
-    pressure_hold_until_ms: AtomicU64,
 }
 
 impl RealtimeScheduler {
@@ -60,8 +50,6 @@ impl RealtimeScheduler {
         Self {
             profile: AtomicU8::new(RealtimePressureProfile::Normal as u8),
             memory_pressure_events: AtomicU64::new(0),
-            pressure_hold_profile: AtomicU8::new(RealtimePressureProfile::Normal as u8),
-            pressure_hold_until_ms: AtomicU64::new(0),
         }
     }
 
@@ -82,7 +70,7 @@ impl RealtimeScheduler {
 
         let current = self.profile();
 
-        let computed = match current {
+        let next = match current {
             RealtimePressureProfile::Normal => {
                 if buffered_ahead_seconds <= Self::CRITICAL_ENTER_SECONDS {
                     RealtimePressureProfile::Critical
@@ -120,98 +108,24 @@ impl RealtimeScheduler {
             }
         };
 
-        let next = computed.max(self.active_pressure_hold_profile());
         self.profile.store(next as u8, Ordering::Release);
         next
     }
 
-    pub(crate) fn record_memory_pressure_signal(&self, minimum_profile: RealtimePressureProfile) {
+    pub(crate) fn record_memory_pressure_signal(&self, _minimum_profile: RealtimePressureProfile) {
         self.memory_pressure_events.fetch_add(1, Ordering::Relaxed);
-        self.record_pressure_hint(
-            minimum_profile,
-            crate::audio::stability::memory_pressure_hold_ms(),
-        );
-        let minimum = minimum_profile as u8;
-        let mut current = self.profile.load(Ordering::Acquire);
-        while current < minimum {
-            match self.profile.compare_exchange(
-                current,
-                minimum,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(next) => current = next,
-            }
-        }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn record_pressure_hint(
         &self,
-        minimum_profile: RealtimePressureProfile,
-        hold_ms: u64,
+        _minimum_profile: RealtimePressureProfile,
+        _hold_ms: u64,
     ) {
-        self.extend_pressure_hold(minimum_profile, hold_ms);
-    }
-
-    fn extend_pressure_hold(&self, minimum_profile: RealtimePressureProfile, hold_ms: u64) {
-        let minimum = minimum_profile as u8;
-        let mut current_hold = self.pressure_hold_profile.load(Ordering::Acquire);
-        while current_hold < minimum {
-            match self.pressure_hold_profile.compare_exchange(
-                current_hold,
-                minimum,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(next) => current_hold = next,
-            }
-        }
-
-        let until_ms = current_time_ms().saturating_add(hold_ms);
-        let mut current_until = self.pressure_hold_until_ms.load(Ordering::Acquire);
-        while current_until < until_ms {
-            match self.pressure_hold_until_ms.compare_exchange(
-                current_until,
-                until_ms,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(next) => current_until = next,
-            }
-        }
-    }
-
-    fn active_pressure_hold_profile(&self) -> RealtimePressureProfile {
-        let until_ms = self.pressure_hold_until_ms.load(Ordering::Acquire);
-        if until_ms == 0 {
-            return RealtimePressureProfile::Normal;
-        }
-
-        let now_ms = current_time_ms();
-        if until_ms > now_ms {
-            return RealtimePressureProfile::from_u8(
-                self.pressure_hold_profile.load(Ordering::Acquire),
-            );
-        }
-
-        self.pressure_hold_profile
-            .store(RealtimePressureProfile::Normal as u8, Ordering::Release);
-        self.pressure_hold_until_ms.store(0, Ordering::Release);
-        RealtimePressureProfile::Normal
     }
 
     pub(crate) fn memory_pressure_events(&self) -> u64 {
         self.memory_pressure_events.load(Ordering::Relaxed)
-    }
-
-    #[cfg(test)]
-    fn clear_pressure_hold_for_tests(&self) {
-        self.pressure_hold_profile
-            .store(RealtimePressureProfile::Normal as u8, Ordering::Release);
-        self.pressure_hold_until_ms.store(0, Ordering::Release);
     }
 }
 
@@ -266,43 +180,16 @@ mod tests {
     }
 
     #[test]
-    fn memory_pressure_signal_promotes_profile() {
-        let scheduler = RealtimeScheduler::new();
-
-        assert_eq!(scheduler.profile(), RealtimePressureProfile::Normal);
-        scheduler.record_memory_pressure_signal(RealtimePressureProfile::Guarded);
-
-        assert_eq!(scheduler.profile(), RealtimePressureProfile::Guarded);
-        assert_eq!(scheduler.memory_pressure_events(), 1);
-    }
-
-    #[test]
-    fn memory_pressure_hold_prevents_immediate_recovery() {
-        let scheduler = RealtimeScheduler::new();
-
-        scheduler.record_memory_pressure_signal(RealtimePressureProfile::Guarded);
-
-        assert_eq!(
-            scheduler.update(2.0, false),
-            RealtimePressureProfile::Guarded
-        );
-
-        scheduler.clear_pressure_hold_for_tests();
-        assert_eq!(
-            scheduler.update(2.0, false),
-            RealtimePressureProfile::Normal
-        );
-    }
-
-    #[test]
-    fn critical_memory_pressure_hold_is_not_demoted_by_full_buffer() {
+    fn memory_pressure_signal_is_observable_but_does_not_override_buffer_hysteresis() {
         let scheduler = RealtimeScheduler::new();
 
         scheduler.record_memory_pressure_signal(RealtimePressureProfile::Critical);
 
+        assert_eq!(scheduler.memory_pressure_events(), 1);
+        assert_eq!(scheduler.profile(), RealtimePressureProfile::Normal);
         assert_eq!(
             scheduler.update(2.0, false),
-            RealtimePressureProfile::Critical
+            RealtimePressureProfile::Normal
         );
     }
 }

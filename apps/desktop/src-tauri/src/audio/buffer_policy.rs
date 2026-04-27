@@ -1,16 +1,14 @@
 use once_cell::sync::Lazy;
 use std::time::Duration;
 
-use crate::audio::policy::NativeAudioStabilityProfile;
 use crate::audio::realtime_scheduler::RealtimePressureProfile;
-use crate::audio::stability;
 
 const DEFAULT_SAMPLE_RATE: u32 = 48_000;
+const DEFAULT_RENDER_QUEUE_SECONDS: f64 = 1.5;
 const MIN_RENDER_QUEUE_SECONDS: f64 = 0.2;
 const MAX_RENDER_QUEUE_SECONDS: f64 = 4.0;
 const MIN_RENDER_QUEUE_SAMPLES: usize = 16_384;
 const MAX_RENDER_QUEUE_SAMPLES: usize = 786_432;
-const PRESSURE_PRODUCER_BACKOFF_FLOOR_MS: u64 = 1;
 
 #[derive(Clone, Copy, Debug)]
 struct SourcePopWaitPolicy {
@@ -34,10 +32,6 @@ fn parse_env_u64(key: &str, default_value: u64, min: u64, max: u64) -> u64 {
         .and_then(|value| value.trim().parse::<u64>().ok())
         .unwrap_or(default_value)
         .clamp(min, max)
-}
-
-fn scale_samples(value: usize, scale: f64, min: usize, max: usize) -> usize {
-    (((value as f64) * scale).ceil() as usize).clamp(min, max)
 }
 
 static SOURCE_POP_WAIT_POLICY: Lazy<SourcePopWaitPolicy> = Lazy::new(|| SourcePopWaitPolicy {
@@ -113,9 +107,18 @@ fn backend_buffer_policy_pack(output_backend_id: &str) -> BackendBufferPolicyPac
             rebuffer_enter_floor_frames: 48,
             rebuffer_resume_floor_frames: 96,
         },
-        "wasapi-shared-raw" => {
-            wasapi_shared_raw_policy_pack(stability::current_stability_profile())
-        }
+        "wasapi-shared-raw" => BackendBufferPolicyPack {
+            start_seek_prebuffer_seconds: 0.40,
+            crossfade_prebuffer_seconds: 0.92,
+            min_start_cap_seconds: 0.48,
+            min_start_floor_seconds: 0.17,
+            recovery_cap_seconds: 1.10,
+            recovery_floor_seconds: 0.42,
+            rebuffer_enter_divisor: 3,
+            rebuffer_resume_divisor: 2,
+            rebuffer_enter_floor_frames: 80,
+            rebuffer_resume_floor_frames: 160,
+        },
         "rodio-cpal" => BackendBufferPolicyPack {
             start_seek_prebuffer_seconds: 0.55,
             crossfade_prebuffer_seconds: 0.95,
@@ -155,79 +158,13 @@ fn backend_buffer_policy_pack(output_backend_id: &str) -> BackendBufferPolicyPac
     }
 }
 
-fn wasapi_shared_raw_policy_pack(profile: NativeAudioStabilityProfile) -> BackendBufferPolicyPack {
-    match profile {
-        NativeAudioStabilityProfile::LowLatency => BackendBufferPolicyPack {
-            start_seek_prebuffer_seconds: 0.36,
-            crossfade_prebuffer_seconds: 0.90,
-            min_start_cap_seconds: 0.44,
-            min_start_floor_seconds: 0.16,
-            recovery_cap_seconds: 1.00,
-            recovery_floor_seconds: 0.36,
-            rebuffer_enter_divisor: 3,
-            rebuffer_resume_divisor: 2,
-            rebuffer_enter_floor_frames: 80,
-            rebuffer_resume_floor_frames: 160,
-        },
-        NativeAudioStabilityProfile::Balanced => BackendBufferPolicyPack {
-            start_seek_prebuffer_seconds: 0.52,
-            crossfade_prebuffer_seconds: 1.05,
-            min_start_cap_seconds: 0.62,
-            min_start_floor_seconds: 0.24,
-            recovery_cap_seconds: 1.55,
-            recovery_floor_seconds: 0.70,
-            rebuffer_enter_divisor: 3,
-            rebuffer_resume_divisor: 2,
-            rebuffer_enter_floor_frames: 80,
-            rebuffer_resume_floor_frames: 160,
-        },
-        NativeAudioStabilityProfile::Stable => BackendBufferPolicyPack {
-            start_seek_prebuffer_seconds: 0.72,
-            crossfade_prebuffer_seconds: 1.35,
-            min_start_cap_seconds: 0.85,
-            min_start_floor_seconds: 0.36,
-            recovery_cap_seconds: 2.20,
-            recovery_floor_seconds: 1.10,
-            rebuffer_enter_divisor: 3,
-            rebuffer_resume_divisor: 2,
-            rebuffer_enter_floor_frames: 96,
-            rebuffer_resume_floor_frames: 192,
-        },
-        NativeAudioStabilityProfile::GameSafe => BackendBufferPolicyPack {
-            start_seek_prebuffer_seconds: 0.95,
-            crossfade_prebuffer_seconds: 1.60,
-            min_start_cap_seconds: 1.10,
-            min_start_floor_seconds: 0.50,
-            recovery_cap_seconds: 2.80,
-            recovery_floor_seconds: 1.40,
-            rebuffer_enter_divisor: 2,
-            rebuffer_resume_divisor: 1,
-            rebuffer_enter_floor_frames: 128,
-            rebuffer_resume_floor_frames: 256,
-        },
-        NativeAudioStabilityProfile::SafeMode => BackendBufferPolicyPack {
-            start_seek_prebuffer_seconds: 1.20,
-            crossfade_prebuffer_seconds: 1.90,
-            min_start_cap_seconds: 1.40,
-            min_start_floor_seconds: 0.70,
-            recovery_cap_seconds: 3.20,
-            recovery_floor_seconds: 1.70,
-            rebuffer_enter_divisor: 2,
-            rebuffer_resume_divisor: 1,
-            rebuffer_enter_floor_frames: 160,
-            rebuffer_resume_floor_frames: 320,
-        },
-    }
-}
-
 pub(crate) fn streaming_prebuffer_default_seconds(output_backend_id: &str, crossfade: bool) -> f64 {
     let pack = backend_buffer_policy_pack(output_backend_id);
-    let base = if crossfade {
+    if crossfade {
         pack.crossfade_prebuffer_seconds
     } else {
         pack.start_seek_prebuffer_seconds
-    };
-    (base * stability::source_prepare_prebuffer_scale()).clamp(0.0, 4.0)
+    }
 }
 
 fn classify_transfer_pressure_band(
@@ -324,8 +261,7 @@ pub(crate) fn adaptive_transfer_strategy(
         .max(channels);
 
     let producer_backoff = if state.adaptation_level > 0 {
-        output_producer_backoff(profile)
-            .max(Duration::from_millis(PRESSURE_PRODUCER_BACKOFF_FLOOR_MS))
+        Duration::ZERO
     } else {
         output_producer_backoff(profile)
     };
@@ -353,7 +289,7 @@ pub(crate) fn recommended_render_queue_capacity_samples(
 ) -> usize {
     let seconds = parse_env_f64(
         "PMP_AUDIO_RENDER_QUEUE_SECONDS",
-        stability::render_queue_seconds_default(),
+        DEFAULT_RENDER_QUEUE_SECONDS,
         MIN_RENDER_QUEUE_SECONDS,
         MAX_RENDER_QUEUE_SECONDS,
     );
@@ -370,57 +306,39 @@ pub(crate) fn source_pop_wait_timeout(profile: RealtimePressureProfile) -> Durat
         RealtimePressureProfile::Guarded => policy.guarded_ms,
         RealtimePressureProfile::Critical => policy.critical_ms,
     };
-    let scaled_ms =
-        ((wait_ms as f64) * stability::source_prepare_wait_scale_factor()).round() as u64;
-    Duration::from_millis(scaled_ms.clamp(0, 24))
+    Duration::from_millis(wait_ms)
 }
 
 pub(crate) fn decode_push_backoff(profile: RealtimePressureProfile) -> Duration {
     match profile {
-        RealtimePressureProfile::Normal => match stability::current_source_prepare_profile() {
-            stability::AudioSourcePrepareProfile::Aggressive
-            | stability::AudioSourcePrepareProfile::Failsafe => Duration::ZERO,
-            _ => Duration::from_millis(1),
-        },
-        RealtimePressureProfile::Guarded | RealtimePressureProfile::Critical => {
-            Duration::from_millis(PRESSURE_PRODUCER_BACKOFF_FLOOR_MS)
-        }
+        RealtimePressureProfile::Normal => Duration::from_millis(1),
+        RealtimePressureProfile::Guarded => Duration::ZERO,
+        RealtimePressureProfile::Critical => Duration::ZERO,
     }
 }
 
 pub(crate) fn output_producer_chunk_samples(profile: RealtimePressureProfile) -> usize {
-    let base = match profile {
+    match profile {
         RealtimePressureProfile::Normal => 12_288,
         RealtimePressureProfile::Guarded => 18_432,
         RealtimePressureProfile::Critical => 24_576,
-    };
-    scale_samples(
-        base,
-        stability::source_prepare_chunk_scale_factor(),
-        4_096,
-        196_608,
-    )
+    }
 }
 
 pub(crate) fn hot_path_prewarm_chunk_samples(capacity_samples: usize, channels: usize) -> usize {
     let channels = channels.max(1);
     let capacity = capacity_samples.max(channels);
     output_producer_chunk_samples(RealtimePressureProfile::Critical)
-        .saturating_add(channels.saturating_mul(stability::source_prepare_hot_path_extra_frames()))
+        .saturating_add(channels.saturating_mul(2048))
         .min(capacity)
         .max(channels)
 }
 
 pub(crate) fn output_producer_backoff(profile: RealtimePressureProfile) -> Duration {
     match profile {
-        RealtimePressureProfile::Normal => match stability::current_source_prepare_profile() {
-            stability::AudioSourcePrepareProfile::Aggressive
-            | stability::AudioSourcePrepareProfile::Failsafe => Duration::ZERO,
-            _ => Duration::from_millis(1),
-        },
-        RealtimePressureProfile::Guarded | RealtimePressureProfile::Critical => {
-            Duration::from_millis(PRESSURE_PRODUCER_BACKOFF_FLOOR_MS)
-        }
+        RealtimePressureProfile::Normal => Duration::from_millis(1),
+        RealtimePressureProfile::Guarded => Duration::ZERO,
+        RealtimePressureProfile::Critical => Duration::ZERO,
     }
 }
 
@@ -430,14 +348,11 @@ pub(crate) fn streaming_transfer_watermarks(
     profile: RealtimePressureProfile,
 ) -> (usize, usize) {
     let capacity = capacity_samples.max(channels.max(1));
-    let (mut low_percent, mut high_percent) = match profile {
+    let (low_percent, high_percent) = match profile {
         RealtimePressureProfile::Normal => (36usize, 88usize),
         RealtimePressureProfile::Guarded => (52usize, 94usize),
         RealtimePressureProfile::Critical => (64usize, 97usize),
     };
-    let (low_boost, high_boost) = stability::source_prepare_transfer_watermark_boost();
-    low_percent = low_percent.saturating_add(low_boost).min(92);
-    high_percent = high_percent.saturating_add(high_boost).min(99);
 
     let low = ((capacity * low_percent) / 100)
         .max(channels * 128)
@@ -459,12 +374,7 @@ pub(crate) fn wasapi_start_prefill_samples(
     shared_raw: bool,
 ) -> usize {
     let target_ms = if shared_raw {
-        parse_env_u64(
-            "PMP_AUDIO_WASAPI_SHARED_RAW_PREFILL_MS",
-            stability::wasapi_shared_raw_prefill_ms_default(),
-            20,
-            2000,
-        )
+        parse_env_u64("PMP_AUDIO_WASAPI_SHARED_RAW_PREFILL_MS", 240, 20, 2000)
     } else {
         parse_env_u64("PMP_AUDIO_WASAPI_EXCLUSIVE_PREFILL_MS", 150, 20, 2000)
     };
@@ -494,7 +404,7 @@ pub(crate) fn wasapi_start_prefill_timeout(shared_raw: bool) -> Duration {
     let timeout_ms = if shared_raw {
         parse_env_u64(
             "PMP_AUDIO_WASAPI_SHARED_RAW_PREFILL_TIMEOUT_MS",
-            stability::wasapi_shared_raw_prefill_timeout_ms_default(),
+            320,
             40,
             3000,
         )
@@ -515,19 +425,9 @@ pub(crate) fn streaming_min_start_bounds(
 ) -> (f64, f64) {
     let pack = backend_buffer_policy_pack(output_backend_id);
     if underrun_recovery_active {
-        (
-            (pack.recovery_cap_seconds * stability::source_prepare_recovery_threshold_scale())
-                .clamp(pack.recovery_floor_seconds, 4.0),
-            (pack.recovery_floor_seconds * stability::source_prepare_recovery_threshold_scale())
-                .clamp(0.08, 3.5),
-        )
+        (pack.recovery_cap_seconds, pack.recovery_floor_seconds)
     } else {
-        (
-            (pack.min_start_cap_seconds * stability::source_prepare_min_start_scale())
-                .clamp(pack.min_start_floor_seconds, 3.0),
-            (pack.min_start_floor_seconds * stability::source_prepare_min_start_scale())
-                .clamp(0.05, 2.5),
-        )
+        (pack.min_start_cap_seconds, pack.min_start_floor_seconds)
     }
 }
 
@@ -555,22 +455,7 @@ pub(crate) fn runtime_rebuffer_threshold_samples(
         .min(min_start_samples)
         .max(enter);
 
-    let scaled_enter = scale_samples(
-        enter,
-        stability::source_prepare_rebuffer_threshold_scale(),
-        hard_floor_enter,
-        min_start_samples,
-    )
-    .max(enter);
-    let scaled_resume = scale_samples(
-        resume,
-        stability::source_prepare_rebuffer_threshold_scale(),
-        scaled_enter,
-        min_start_samples,
-    )
-    .max(scaled_enter);
-
-    (scaled_enter, scaled_resume)
+    (enter, resume)
 }
 
 #[cfg(test)]
@@ -619,21 +504,15 @@ mod tests {
     }
 
     #[test]
-    fn pressure_backoffs_do_not_collapse_to_zero() {
-        assert!(decode_push_backoff(RealtimePressureProfile::Guarded) > Duration::ZERO);
-        assert!(decode_push_backoff(RealtimePressureProfile::Critical) > Duration::ZERO);
-        assert!(output_producer_backoff(RealtimePressureProfile::Guarded) > Duration::ZERO);
-        assert!(output_producer_backoff(RealtimePressureProfile::Critical) > Duration::ZERO);
-    }
-
-    #[test]
-    fn hot_path_prewarm_chunk_covers_critical_adaptive_boost() {
+    fn hot_path_prewarm_chunk_covers_critical_transfer_chunk() {
         let capacity = 96_000usize;
         let channels = 2usize;
         let prewarm = hot_path_prewarm_chunk_samples(capacity, channels);
-        let expected =
-            output_producer_chunk_samples(RealtimePressureProfile::Critical) + channels * 2048;
-        assert_eq!(prewarm, expected);
+
+        assert_eq!(
+            prewarm,
+            output_producer_chunk_samples(RealtimePressureProfile::Critical) + channels * 2048
+        );
     }
 
     #[test]
@@ -761,7 +640,6 @@ mod tests {
         assert!(
             strategy.chunk_limit >= output_producer_chunk_samples(RealtimePressureProfile::Guarded)
         );
-        assert!(strategy.producer_backoff > Duration::ZERO);
     }
 
     #[test]

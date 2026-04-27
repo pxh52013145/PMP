@@ -86,6 +86,7 @@ pub(crate) struct AudioStabilityContext {
     pub memory_pool_growth_events: u64,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AudioStabilityTransientHint {
     pub minimum_profile: RealtimePressureProfile,

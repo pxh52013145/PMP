@@ -2,7 +2,7 @@ use std::path::Path;
 
 use super::{
     AudioInput, AudioInputDecodeMode, AudioInputError, AudioInputKind, AudioInputLocator,
-    AudioInputOpenResult, AudioInputSrcPolicy, SymphoniaStreamingMediaSource,
+    AudioInputOpenResult, AudioInputSrcPolicy, SymphoniaInput, SymphoniaStreamingMediaSource,
     REMOTE_STREAM_INPUT_ID,
 };
 
@@ -53,15 +53,24 @@ impl AudioInput for RemoteStreamInput {
             (locator.seekable == Some(true)) as u64,
         );
 
+        if decode_mode == AudioInputDecodeMode::FullTrack {
+            let cache_path =
+                crate::audio::source::materialize_remote_stream_input_locator_complete(locator)
+                    .map_err(|message| {
+                        AudioInputError::new("REMOTE_STREAM_MATERIALIZE_FAILED", message)
+                    })?;
+            let mut opened = SymphoniaInput::default().open(
+                &cache_path,
+                output_sample_rate,
+                decode_mode,
+                src_policy,
+            )?;
+            opened.input_id = REMOTE_STREAM_INPUT_ID;
+            return Ok(opened);
+        }
+
         let (source, extension) = crate::audio::source::open_remote_stream_media_source(locator)
             .map_err(|message| AudioInputError::new("REMOTE_STREAM_OPEN_FAILED", message))?;
-        if decode_mode == AudioInputDecodeMode::FullTrack {
-            crate::audio::diagnostics::record_event(
-                "transport.source.remote.fulltrack_streaming_fallback",
-                1,
-                0,
-            );
-        }
         let mut opened = super::open_streaming_media_source(
             SymphoniaStreamingMediaSource { source, extension },
             output_sample_rate,
