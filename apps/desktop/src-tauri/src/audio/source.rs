@@ -11,6 +11,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use once_cell::sync::Lazy;
 use reqwest::{
     blocking::Client,
@@ -40,9 +41,15 @@ pub(crate) const REMOTE_STREAM_CANCEL_REASON_TRANSPORT_STOPPED: u64 = 3;
 
 static REMOTE_STREAM_IN_FLIGHT: Lazy<Mutex<HashMap<PathBuf, Arc<RemoteStreamDownloadJob>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static REMOTE_STREAM_INPUT_LOCATORS: Lazy<Mutex<HashMap<PathBuf, RemoteStreamInputLocator>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum NativeAudioSourcePayload {
     LocalFile {
         path: String,
@@ -81,6 +88,19 @@ struct RemoteStreamDownloadJob {
     cancel_reason: AtomicU64,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(crate) struct RemoteStreamInputLocator {
+    pub cache_root: PathBuf,
+    pub stream_url: String,
+    pub source_locator: Option<String>,
+    pub connector_id: Option<String>,
+    pub mime_type: Option<String>,
+    pub headers: Option<HashMap<String, String>>,
+    pub expires_at_ms: Option<u64>,
+    pub seekable: Option<bool>,
+    pub range_requests: Option<bool>,
+}
+
 #[derive(Debug, Clone)]
 struct RemoteStreamCacheEntry {
     key: String,
@@ -100,6 +120,13 @@ struct RemoteStreamCompleteMarker {
 
 fn normalize_string(value: &str) -> String {
     value.trim().to_string()
+}
+
+fn normalize_optional_string(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(normalize_string)
+        .filter(|value| !value.is_empty())
 }
 
 fn parse_env_u64(key: &str, default_value: u64, min: u64, max: u64) -> u64 {
@@ -256,6 +283,48 @@ fn build_remote_stream_cache_entry(
     }
 }
 
+fn remote_stream_locator_identity_path(locator: &RemoteStreamInputLocator) -> PathBuf {
+    let identity = locator
+        .source_locator
+        .as_deref()
+        .map(normalize_string)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| normalize_string(&locator.stream_url));
+    PathBuf::from(identity)
+}
+
+#[cfg(test)]
+fn encode_remote_stream_locator_path(locator: &RemoteStreamInputLocator) -> PathBuf {
+    let payload = serde_json::to_vec(locator).unwrap_or_default();
+    let encoded = URL_SAFE_NO_PAD.encode(payload);
+    PathBuf::from(format!("pmp-remote-stream://{encoded}"))
+}
+
+fn decode_remote_stream_locator_path(path: &Path) -> Option<RemoteStreamInputLocator> {
+    let value = path.to_string_lossy();
+    let encoded = value.strip_prefix("pmp-remote-stream://")?;
+    let bytes = URL_SAFE_NO_PAD.decode(encoded.as_bytes()).ok()?;
+    serde_json::from_slice::<RemoteStreamInputLocator>(&bytes).ok()
+}
+
+pub(crate) fn register_remote_stream_input_locator(locator: RemoteStreamInputLocator) -> PathBuf {
+    let identity_path = remote_stream_locator_identity_path(&locator);
+    if let Ok(mut locators) = REMOTE_STREAM_INPUT_LOCATORS.lock() {
+        locators.insert(identity_path.clone(), locator);
+    }
+    identity_path
+}
+
+pub(crate) fn lookup_remote_stream_input_locator(path: &Path) -> Option<RemoteStreamInputLocator> {
+    if let Some(locator) = decode_remote_stream_locator_path(path) {
+        return Some(locator);
+    }
+    REMOTE_STREAM_INPUT_LOCATORS
+        .lock()
+        .ok()
+        .and_then(|locators| locators.get(path).cloned())
+}
+
 fn build_http_client() -> Result<Client, String> {
     Client::builder()
         .connect_timeout(Duration::from_millis(REMOTE_STREAM_CONNECT_TIMEOUT_MS))
@@ -281,6 +350,21 @@ fn build_request_headers(entries: Option<&HashMap<String, String>>) -> Result<He
     }
 
     Ok(headers)
+}
+
+fn header_map_contains(headers: &HeaderMap, name: &'static str) -> bool {
+    headers.contains_key(HeaderName::from_static(name))
+}
+
+fn apply_remote_stream_range_header(headers: &mut HeaderMap, range_requests: Option<bool>) {
+    if range_requests != Some(true) || header_map_contains(headers, "range") {
+        return;
+    }
+    headers.insert(
+        HeaderName::from_static("range"),
+        HeaderValue::from_static("bytes=0-"),
+    );
+    crate::audio::diagnostics::record_event("transport.source.remote.range_request", 0, 0);
 }
 
 fn can_probe_remote_stream_cache(path: &Path) -> bool {
@@ -573,6 +657,7 @@ fn spawn_remote_stream_download(
     stream_url: String,
     headers: HeaderMap,
     expires_at_ms: Option<u64>,
+    range_requests: Option<bool>,
 ) -> Arc<RemoteStreamDownloadJob> {
     let job = Arc::new(RemoteStreamDownloadJob {
         state: Mutex::new(RemoteStreamDownloadState::default()),
@@ -591,6 +676,8 @@ fn spawn_remote_stream_download(
             mark_remote_stream_part_started(&entry)?;
             let client = build_http_client()?;
             let mut request = client.get(&stream_url);
+            let mut headers = headers;
+            apply_remote_stream_range_header(&mut headers, range_requests);
             if !headers.is_empty() {
                 request = request.headers(headers);
             }
@@ -605,6 +692,13 @@ fn spawn_remote_stream_download(
                 return Err(format!(
                     "Remote stream returned non-success status: {status}"
                 ));
+            }
+            if status.as_u16() == 206 {
+                crate::audio::diagnostics::record_event(
+                    "transport.source.remote.range_response",
+                    206,
+                    0,
+                );
             }
 
             let mut file = fs::File::create(&entry.cache_path)
@@ -693,6 +787,7 @@ fn get_or_spawn_remote_stream_download(
     stream_url: &str,
     headers: HeaderMap,
     expires_at_ms: Option<u64>,
+    range_requests: Option<bool>,
 ) -> Result<Arc<RemoteStreamDownloadJob>, String> {
     let mut in_flight = REMOTE_STREAM_IN_FLIGHT
         .lock()
@@ -709,6 +804,7 @@ fn get_or_spawn_remote_stream_download(
         stream_url.to_string(),
         headers,
         expires_at_ms,
+        range_requests,
     );
     in_flight.insert(in_flight_key.clone(), job.clone());
     drop(in_flight);
@@ -732,18 +828,18 @@ fn get_or_spawn_remote_stream_download(
     Ok(job)
 }
 
-fn materialize_remote_stream_to_cache(
-    app_handle: &AppHandle,
+fn materialize_remote_stream_to_cache_root(
+    cache_root: &Path,
     stream_url: &str,
     source_locator: Option<&str>,
     connector_id: Option<&str>,
     mime_type: Option<&str>,
     headers: Option<&HashMap<String, String>>,
     expires_at_ms: Option<u64>,
+    range_requests: Option<bool>,
 ) -> Result<PathBuf, String> {
-    let cache_root = build_remote_stream_cache_root(app_handle)?;
     let entry = build_remote_stream_cache_entry(
-        &cache_root,
+        cache_root,
         stream_url,
         source_locator,
         connector_id,
@@ -763,8 +859,13 @@ fn materialize_remote_stream_to_cache(
         Some(in_flight_key.as_path()),
         REMOTE_STREAM_CANCEL_REASON_TRANSPORT_REPLACED,
     );
-    let job =
-        get_or_spawn_remote_stream_download(&entry, stream_url, request_headers, expires_at_ms)?;
+    let job = get_or_spawn_remote_stream_download(
+        &entry,
+        stream_url,
+        request_headers,
+        expires_at_ms,
+        range_requests,
+    )?;
     let result = wait_for_remote_stream_probe_ready(&job, &entry, expires_at_ms);
     crate::audio::diagnostics::record_event(
         "transport.source.remote.materialize",
@@ -780,7 +881,99 @@ fn materialize_remote_stream_to_cache(
     result.map(|_| entry.cache_path)
 }
 
+fn materialize_remote_stream_to_cache(
+    app_handle: &AppHandle,
+    stream_url: &str,
+    source_locator: Option<&str>,
+    connector_id: Option<&str>,
+    mime_type: Option<&str>,
+    headers: Option<&HashMap<String, String>>,
+    expires_at_ms: Option<u64>,
+    range_requests: Option<bool>,
+) -> Result<PathBuf, String> {
+    let cache_root = build_remote_stream_cache_root(app_handle)?;
+    materialize_remote_stream_to_cache_root(
+        &cache_root,
+        stream_url,
+        source_locator,
+        connector_id,
+        mime_type,
+        headers,
+        expires_at_ms,
+        range_requests,
+    )
+}
+
+pub(crate) fn materialize_remote_stream_input_locator(
+    locator: &RemoteStreamInputLocator,
+) -> Result<PathBuf, String> {
+    let normalized_url = normalize_string(&locator.stream_url);
+    if normalized_url.is_empty() {
+        return Err("Remote stream url is empty".to_string());
+    }
+    materialize_remote_stream_to_cache_root(
+        &locator.cache_root,
+        &normalized_url,
+        locator.source_locator.as_deref(),
+        locator.connector_id.as_deref(),
+        locator.mime_type.as_deref(),
+        locator.headers.as_ref(),
+        locator.expires_at_ms,
+        locator.range_requests,
+    )
+}
+
 impl NativeAudioSourcePayload {
+    pub fn is_remote_stream(&self) -> bool {
+        matches!(self, Self::RemoteStream { .. })
+    }
+
+    pub fn resolve_input_path(&self, app_handle: &AppHandle) -> Result<PathBuf, String> {
+        match self {
+            Self::LocalFile { path, .. } | Self::CacheFile { path, .. } => {
+                let normalized = normalize_string(path);
+                if normalized.is_empty() {
+                    return Err("Native audio source path is empty".to_string());
+                }
+                Ok(PathBuf::from(normalized))
+            }
+            Self::RemoteStream {
+                stream_url,
+                source_locator,
+                connector_id,
+                mime_type,
+                headers,
+                expires_at_ms,
+                seekable,
+                range_requests,
+            } => {
+                let normalized_url = normalize_string(stream_url);
+                if normalized_url.is_empty() {
+                    return Err("Remote stream url is empty".to_string());
+                }
+                let cache_root = build_remote_stream_cache_root(app_handle)?;
+                let locator = RemoteStreamInputLocator {
+                    cache_root,
+                    stream_url: normalized_url,
+                    source_locator: normalize_optional_string(source_locator),
+                    connector_id: normalize_optional_string(connector_id),
+                    mime_type: normalize_optional_string(mime_type),
+                    headers: headers.clone(),
+                    expires_at_ms: *expires_at_ms,
+                    seekable: *seekable,
+                    range_requests: *range_requests,
+                };
+                let identity_path = register_remote_stream_input_locator(locator);
+                crate::audio::diagnostics::record_event(
+                    "transport.source.remote.locator_registered",
+                    1,
+                    0,
+                );
+                Ok(identity_path)
+            }
+        }
+    }
+
     pub fn materialize_transport_path(&self, app_handle: &AppHandle) -> Result<PathBuf, String> {
         match self {
             Self::LocalFile { path, .. } | Self::CacheFile { path, .. } => {
@@ -798,7 +991,7 @@ impl NativeAudioSourcePayload {
                 headers,
                 expires_at_ms,
                 seekable: _,
-                range_requests: _,
+                range_requests,
             } => {
                 let normalized_url = normalize_string(stream_url);
                 if normalized_url.is_empty() {
@@ -812,6 +1005,7 @@ impl NativeAudioSourcePayload {
                     mime_type.as_deref(),
                     headers.as_ref(),
                     *expires_at_ms,
+                    *range_requests,
                 )
             }
         }
@@ -853,6 +1047,54 @@ mod tests {
         let runtime_timeout = remote_stream_read_stall_timeout();
         assert!(runtime_timeout >= Duration::from_millis(5_000));
         assert!(runtime_timeout <= Duration::from_millis(300_000));
+    }
+
+    #[test]
+    fn native_audio_source_payload_accepts_camel_case_remote_fields() {
+        let payload = serde_json::json!({
+            "kind": "remote-stream",
+            "streamUrl": "https://cdn.example.com/audio/test-track.flac",
+            "sourceLocator": "netease://song/1",
+            "connectorId": "netease",
+            "mimeType": "audio/flac",
+            "headers": {
+                "Authorization": "Bearer token"
+            },
+            "expiresAtMs": 123456789u64,
+            "seekable": true,
+            "rangeRequests": true
+        });
+
+        let parsed =
+            serde_json::from_value::<NativeAudioSourcePayload>(payload).expect("parse payload");
+        match parsed {
+            NativeAudioSourcePayload::RemoteStream {
+                stream_url,
+                source_locator,
+                connector_id,
+                mime_type,
+                headers,
+                expires_at_ms,
+                seekable,
+                range_requests,
+            } => {
+                assert_eq!(stream_url, "https://cdn.example.com/audio/test-track.flac");
+                assert_eq!(source_locator.as_deref(), Some("netease://song/1"));
+                assert_eq!(connector_id.as_deref(), Some("netease"));
+                assert_eq!(mime_type.as_deref(), Some("audio/flac"));
+                assert_eq!(
+                    headers
+                        .as_ref()
+                        .and_then(|headers| headers.get("Authorization"))
+                        .map(String::as_str),
+                    Some("Bearer token")
+                );
+                assert_eq!(expires_at_ms, Some(123456789));
+                assert_eq!(seekable, Some(true));
+                assert_eq!(range_requests, Some(true));
+            }
+            _ => panic!("expected remote-stream payload"),
+        }
     }
 
     fn test_cache_root(name: &str) -> PathBuf {
@@ -1009,6 +1251,7 @@ mod tests {
             "https://127.0.0.1/never",
             HeaderMap::new(),
             None,
+            None,
         )
         .expect("join existing");
         assert!(Arc::ptr_eq(&existing, &joined));
@@ -1016,6 +1259,42 @@ mod tests {
         {
             let mut in_flight = REMOTE_STREAM_IN_FLIGHT.lock().expect("registry");
             in_flight.remove(&remote_stream_in_flight_key(&entry));
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn remote_stream_input_locator_registry_preserves_identity_lookup() {
+        let root = test_cache_root("locator");
+        let locator = RemoteStreamInputLocator {
+            cache_root: root.clone(),
+            stream_url: "https://cdn.example.com/audio/test-track.flac".to_string(),
+            source_locator: Some("netease://song/locator".to_string()),
+            connector_id: Some("netease".to_string()),
+            mime_type: Some("audio/flac".to_string()),
+            headers: None,
+            expires_at_ms: Some(now_millis() + 10 * 60_000),
+            seekable: Some(true),
+            range_requests: Some(true),
+        };
+
+        let identity_path = register_remote_stream_input_locator(locator.clone());
+        assert_eq!(identity_path, PathBuf::from("netease://song/locator"));
+
+        let looked_up =
+            lookup_remote_stream_input_locator(&identity_path).expect("registered locator");
+        assert_eq!(looked_up.stream_url, locator.stream_url);
+        assert_eq!(looked_up.range_requests, Some(true));
+
+        let encoded_path = encode_remote_stream_locator_path(&locator);
+        let decoded = lookup_remote_stream_input_locator(&encoded_path).expect("encoded locator");
+        assert_eq!(
+            decoded.source_locator.as_deref(),
+            Some("netease://song/locator")
+        );
+
+        if let Ok(mut locators) = REMOTE_STREAM_INPUT_LOCATORS.lock() {
+            locators.remove(&identity_path);
         }
         let _ = fs::remove_dir_all(root);
     }

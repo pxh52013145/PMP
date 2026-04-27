@@ -1379,7 +1379,10 @@ pub fn load_source(
     source: NativeAudioSourcePayload,
 ) -> Result<String, String> {
     emitter::ensure_started(app_handle);
-    let track_path = source.materialize_transport_path(app_handle)?;
+    if !source.is_remote_stream() {
+        cancel_remote_stream_downloads_for_transport_replacement();
+    }
+    let track_path = source.resolve_input_path(app_handle)?;
     let execution = crate::audio::kernel::execute_load(track_path.clone())?;
     emit_transport_execution(app_handle, execution)?;
     Ok(track_path.to_string_lossy().to_string())
@@ -1411,7 +1414,10 @@ pub fn load_and_play_source(
     replay_gain_db: Option<f32>,
 ) -> Result<String, String> {
     emitter::ensure_started(app_handle);
-    let track_path = source.materialize_transport_path(app_handle)?;
+    if !source.is_remote_stream() {
+        cancel_remote_stream_downloads_for_transport_replacement();
+    }
+    let track_path = source.resolve_input_path(app_handle)?;
     let execution =
         crate::audio::kernel::execute_load_and_play(track_path.clone(), replay_gain_db)?;
     emit_transport_execution(app_handle, execution)?;

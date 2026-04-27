@@ -4,11 +4,13 @@ use std::sync::Arc;
 use crate::audio::output::BoxedSource;
 use crate::audio::policy::{NativeAudioHqSrcPhaseMode, NativeAudioSrcBackend, NativeAudioSrcMode};
 
+mod remote_stream;
 mod rodio;
 mod sacd;
 mod streaming;
 mod symphonia;
 
+pub(crate) use remote_stream::RemoteStreamInput;
 pub(crate) use rodio::{open_source_at as open_rodio_source_at, RodioInput};
 pub(crate) use sacd::SacdInput;
 pub(crate) use streaming::{
@@ -20,6 +22,7 @@ pub(crate) use symphonia::SymphoniaInput;
 pub(crate) const SYMPHONIA_INPUT_ID: &str = "symphonia";
 pub(crate) const RODIO_INPUT_ID: &str = "rodio";
 pub(crate) const SACD_INPUT_ID: &str = "sacd";
+pub(crate) const REMOTE_STREAM_INPUT_ID: &str = "remote-stream";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AudioInputDecodeMode {
@@ -114,6 +117,20 @@ pub(crate) struct AudioInputOpenResult {
     pub source: BoxedSource,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum AudioInputLocator {
+    File(std::path::PathBuf),
+    RemoteStream(crate::audio::source::RemoteStreamInputLocator),
+}
+
+impl AudioInputLocator {
+    pub fn from_path(path: &Path) -> Self {
+        crate::audio::source::lookup_remote_stream_input_locator(path)
+            .map(Self::RemoteStream)
+            .unwrap_or_else(|| Self::File(path.to_path_buf()))
+    }
+}
+
 pub(crate) trait AudioInput: Send + Sync {
     fn id(&self) -> &'static str;
     fn open(
@@ -123,6 +140,27 @@ pub(crate) trait AudioInput: Send + Sync {
         decode_mode: AudioInputDecodeMode,
         src_policy: AudioInputSrcPolicy,
     ) -> Result<AudioInputOpenResult, AudioInputError>;
+
+    fn open_locator(
+        &self,
+        locator: &AudioInputLocator,
+        output_sample_rate: Option<u32>,
+        decode_mode: AudioInputDecodeMode,
+        src_policy: AudioInputSrcPolicy,
+    ) -> Result<AudioInputOpenResult, AudioInputError> {
+        match locator {
+            AudioInputLocator::File(path) => {
+                self.open(path, output_sample_rate, decode_mode, src_policy)
+            }
+            AudioInputLocator::RemoteStream(_) => Err(AudioInputError::new(
+                "AUDIO_INPUT_LOCATOR_UNSUPPORTED",
+                format!(
+                    "Input '{}' does not support remote stream locators",
+                    self.id()
+                ),
+            )),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -137,6 +175,7 @@ impl AudioInputRegistry {
 
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
+        registry.register(Arc::new(RemoteStreamInput));
         registry.register(Arc::new(SacdInput::default()));
         registry.register(Arc::new(SymphoniaInput::default()));
         registry.register(Arc::new(RodioInput::default()));
@@ -163,6 +202,24 @@ impl AudioInputRegistry {
         decode_mode: AudioInputDecodeMode,
         src_policy: AudioInputSrcPolicy,
     ) -> Result<AudioInputOpenResult, AudioInputError> {
+        let locator = AudioInputLocator::from_path(path);
+        self.open_locator_prefer(
+            &locator,
+            output_sample_rate,
+            preferred_id,
+            decode_mode,
+            src_policy,
+        )
+    }
+
+    pub fn open_locator_prefer(
+        &self,
+        locator: &AudioInputLocator,
+        output_sample_rate: Option<u32>,
+        preferred_id: Option<&str>,
+        decode_mode: AudioInputDecodeMode,
+        src_policy: AudioInputSrcPolicy,
+    ) -> Result<AudioInputOpenResult, AudioInputError> {
         if self.inputs.is_empty() {
             return Err(AudioInputError::new(
                 "AUDIO_INPUT_NO_INPUTS",
@@ -173,7 +230,7 @@ impl AudioInputRegistry {
         let mut attempts: Vec<(String, AudioInputError)> = Vec::new();
         if let Some(preferred) = preferred_id {
             if let Some(input) = self.inputs.iter().find(|input| input.id() == preferred) {
-                match input.open(path, output_sample_rate, decode_mode, src_policy) {
+                match input.open_locator(locator, output_sample_rate, decode_mode, src_policy) {
                     Ok(result) => return Ok(result),
                     Err(err) => attempts.push((input.id().to_string(), err)),
                 }
@@ -185,7 +242,7 @@ impl AudioInputRegistry {
                 continue;
             }
 
-            match input.open(path, output_sample_rate, decode_mode, src_policy) {
+            match input.open_locator(locator, output_sample_rate, decode_mode, src_policy) {
                 Ok(result) => return Ok(result),
                 Err(err) => attempts.push((input.id().to_string(), err)),
             }
@@ -371,5 +428,34 @@ mod tests {
             .err()
             .expect("open should fail");
         assert_eq!(err.code, "AUDIO_INPUT_OPEN_FAILED");
+    }
+
+    #[test]
+    fn locator_from_path_uses_registered_remote_stream_identity() {
+        let identity = Path::new("netease://song/input-locator");
+        let locator = crate::audio::source::RemoteStreamInputLocator {
+            cache_root: std::env::temp_dir(),
+            stream_url: "https://cdn.example.com/audio/input-locator.flac".to_string(),
+            source_locator: Some("netease://song/input-locator".to_string()),
+            connector_id: Some("netease".to_string()),
+            mime_type: Some("audio/flac".to_string()),
+            headers: None,
+            expires_at_ms: None,
+            seekable: Some(true),
+            range_requests: Some(true),
+        };
+        let registered = crate::audio::source::register_remote_stream_input_locator(locator);
+        assert_eq!(registered, identity);
+
+        match AudioInputLocator::from_path(identity) {
+            AudioInputLocator::RemoteStream(locator) => {
+                assert_eq!(
+                    locator.stream_url,
+                    "https://cdn.example.com/audio/input-locator.flac"
+                );
+                assert_eq!(locator.range_requests, Some(true));
+            }
+            AudioInputLocator::File(_) => panic!("registered locator should be remote-stream"),
+        }
     }
 }
