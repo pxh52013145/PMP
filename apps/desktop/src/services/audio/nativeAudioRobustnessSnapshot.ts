@@ -188,6 +188,38 @@ export function buildNativeAudioRobustnessSnapshot(
     (event) => event.kind === 'dsp.refill.budget_exceeded'
   );
   const latestDspRefillBudgetEvent = dspRefillBudgetEvents[dspRefillBudgetEvents.length - 1] ?? null;
+  const remoteNetworkRebufferWaitEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'transport.source.remote.rebuffer_wait'
+  );
+  const remoteNetworkRebufferTimeoutEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'transport.source.remote.rebuffer_timeout'
+  );
+  const remoteHttpRetryEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'transport.source.remote.http_retry'
+  );
+  const remoteRangeRequestEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'transport.source.remote.range_request'
+  );
+  const remoteRangeSeekEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'transport.source.remote.range_seek'
+  );
+  const remoteRangeIgnoredEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'transport.source.remote.range_ignored'
+  );
+  const remoteUrlRefreshNeededEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'transport.source.remote.url_refresh_needed'
+  );
+  const remoteUrlRefreshUnavailableEvents = sourceRecord.diagnosticTimeline.filter(
+    (event) => event.kind === 'transport.source.remote.url_refresh_unavailable'
+  );
+  const audioRenderUnderrunEvents = sourceRecord.diagnosticTimeline.filter((event) =>
+    [
+      'exclusive.output.render_underrun',
+      'shared-raw.output.render_underrun',
+      'shared.output.render_underrun',
+      'shared.render_ahead.underrun',
+    ].includes(event.kind)
+  );
   const vstBridgeFailureEvents = sourceRecord.diagnosticTimeline.filter(
     (event) => event.kind === 'vst.bridge.failure'
   );
@@ -345,6 +377,19 @@ export function buildNativeAudioRobustnessSnapshot(
     estimatedAudioBufferBytes: sourceRecord.estimatedAudioBufferBytes,
     diagnosticTimelineDroppedEvents: sourceRecord.diagnosticTimelineDroppedEvents,
     diagnosticTimeline: [...sourceRecord.diagnosticTimeline],
+    remoteNetworkRebufferWaitCount: remoteNetworkRebufferWaitEvents.length,
+    remoteNetworkRebufferTimeoutCount: remoteNetworkRebufferTimeoutEvents.length,
+    remoteHttpRetryCount: remoteHttpRetryEvents.length,
+    remoteRangeRequestCount: remoteRangeRequestEvents.length,
+    remoteRangeSeekCount: remoteRangeSeekEvents.length,
+    remoteRangeIgnoredCount: remoteRangeIgnoredEvents.length,
+    remoteUrlRefreshNeededCount: remoteUrlRefreshNeededEvents.length,
+    remoteUrlRefreshUnavailableCount: remoteUrlRefreshUnavailableEvents.length,
+    audioRenderUnderrunDiagnosticCount: audioRenderUnderrunEvents.length,
+    audioRenderUnderrunDiagnosticFrames: audioRenderUnderrunEvents.reduce(
+      (sum, event) => sum + event.value,
+      0
+    ),
     dspRefillBudgetExceededCount: dspRefillBudgetEvents.length,
     dspRefillBudgetExceededLastUs: latestDspRefillBudgetEvent?.value ?? null,
     dspRefillBudgetExceededLastBudgetUs: latestDspRefillBudgetEvent?.aux ?? null,

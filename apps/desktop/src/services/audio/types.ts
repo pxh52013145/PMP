@@ -331,6 +331,16 @@ export interface AudioRobustnessSnapshot {
     value: number;
     aux: number;
   }>;
+  remoteNetworkRebufferWaitCount?: number;
+  remoteNetworkRebufferTimeoutCount?: number;
+  remoteHttpRetryCount?: number;
+  remoteRangeRequestCount?: number;
+  remoteRangeSeekCount?: number;
+  remoteRangeIgnoredCount?: number;
+  remoteUrlRefreshNeededCount?: number;
+  remoteUrlRefreshUnavailableCount?: number;
+  audioRenderUnderrunDiagnosticCount?: number;
+  audioRenderUnderrunDiagnosticFrames?: number;
   dspRefillBudgetExceededCount?: number;
   dspRefillBudgetExceededLastUs?: number | null;
   dspRefillBudgetExceededLastBudgetUs?: number | null;

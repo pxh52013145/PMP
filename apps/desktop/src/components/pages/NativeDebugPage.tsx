@@ -1997,6 +1997,21 @@ export const NativeDebugPage: React.FC = () => {
       bufferMin: formatSecondsLabel(robustness.bufferedAheadMinSeconds),
       bufferAvg: formatSecondsLabel(robustness.bufferedAheadAvgSeconds),
       rebuffer: formatCount(robustness.rebufferCount),
+      remoteNetworkRebuffer: `${formatCount(
+        robustness.remoteNetworkRebufferWaitCount
+      )} / ${formatCount(robustness.remoteNetworkRebufferTimeoutCount)}`,
+      remoteHttpRetry: formatCount(robustness.remoteHttpRetryCount),
+      remoteRange: `${formatCount(robustness.remoteRangeRequestCount)} / ${formatCount(
+        robustness.remoteRangeSeekCount
+      )} / ${formatCount(robustness.remoteRangeIgnoredCount)}`,
+      remoteUrlRefresh: `${formatCount(robustness.remoteUrlRefreshNeededCount)} / ${formatCount(
+        robustness.remoteUrlRefreshUnavailableCount
+      )}`,
+      audioRenderUnderrunDiagnostics: `${formatCount(
+        robustness.audioRenderUnderrunDiagnosticCount
+      )} / ${formatCount(robustness.audioRenderUnderrunDiagnosticFrames)} ${t(
+        'pages.native-debug.robustness.unit.frames'
+      )}`,
       engineUnderrunEvents: formatCount(robustness.underrunEvents),
       engineUnderrunWindow: formatCount(robustness.underrunEventsWindow),
       outputSampleRate,

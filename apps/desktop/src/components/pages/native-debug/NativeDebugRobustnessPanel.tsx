@@ -30,6 +30,11 @@ export type NativeDebugRobustnessMetricsView = {
   bufferMin: string;
   bufferAvg: string;
   rebuffer: string;
+  remoteNetworkRebuffer: string;
+  remoteHttpRetry: string;
+  remoteRange: string;
+  remoteUrlRefresh: string;
+  audioRenderUnderrunDiagnostics: string;
   engineUnderrunEvents: string;
   engineUnderrunWindow: string;
   outputSampleRate: string;
@@ -309,6 +314,26 @@ export function NativeDebugRobustnessPanel({
           <div className="native-debug-metrics-row">
             <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.rebuffer')}</span>
             <span className="native-debug-metrics-value">{robustnessMetricsView.rebuffer}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.remote.rebuffer')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.remoteNetworkRebuffer}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.remote.httpRetry')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.remoteHttpRetry}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.remote.range')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.remoteRange}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.remote.urlRefresh')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.remoteUrlRefresh}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.underrun.diagnostics')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.audioRenderUnderrunDiagnostics}</span>
           </div>
           <div className="native-debug-metrics-row">
             <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.underrun.events')}</span>
