@@ -5,7 +5,31 @@
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pixel Matrix Player</title>
+    <script>
+      (() => {
+        try {
+          const hash = window.location.hash || '';
+          const transparentStartupOverlay =
+            hash.startsWith('#/ornaments-editor-overlay') ||
+            hash.startsWith('#/ornaments-render-overlay');
+
+          if (transparentStartupOverlay) {
+            document.documentElement.dataset.pmpStartupOverlay = 'transparent';
+          }
+        } catch {
+          // best-effort
+        }
+      })();
+    </script>
     <style>
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+
       #pmp-startup-overlay {
         position: fixed;
         inset: 0;
@@ -43,6 +67,16 @@
         to {
           transform: rotate(360deg);
         }
+      }
+
+      html[data-pmp-startup-overlay='transparent'],
+      html[data-pmp-startup-overlay='transparent'] body,
+      html[data-pmp-startup-overlay='transparent'] #root {
+        background: transparent;
+      }
+
+      html[data-pmp-startup-overlay='transparent'] #pmp-startup-overlay {
+        display: none;
       }
     </style>
   </head>

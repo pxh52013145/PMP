@@ -103,6 +103,8 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
             std::io::Error::new(std::io::ErrorKind::NotFound, "Main window not found")
         })?;
 
+    let _ = window.set_resizable(true);
+
     crate::app_runtime::install_live_host_file_open_bridge(&app.handle());
 
     #[cfg(target_os = "windows")]

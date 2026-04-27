@@ -6,6 +6,7 @@ import { installConsoleBridge } from './services/telemetry/consoleBridge';
 import { getTelemetryLogger } from './services/telemetry/TelemetryService';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import { bootstrapPerformanceRuntimeProfileStorage } from './modules/startup/performanceRuntimeBootstrap';
+import { markStartupReady } from './modules/startup/startupReady';
 import './index.css';
 import './themes/surfaceMotion.css';
 
@@ -58,9 +59,11 @@ function scheduleIdle(
   const delayMs = options.delayMs ?? 0;
 
   const run = () => {
-    const requestIdleCallback = (window as unknown as {
-      requestIdleCallback?: (cb: () => void, options?: { timeout?: number }) => number;
-    }).requestIdleCallback;
+    const requestIdleCallback = (
+      window as unknown as {
+        requestIdleCallback?: (cb: () => void, options?: { timeout?: number }) => number;
+      }
+    ).requestIdleCallback;
 
     const exec = () => {
       void Promise.resolve()
@@ -91,13 +94,17 @@ function StartupReadyGate({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     startupTelemetry.info('startup.root.rendered');
     const overlay = document.getElementById('pmp-startup-overlay');
-    if (!overlay) return;
+    if (!overlay) {
+      markStartupReady();
+      return;
+    }
 
     overlay.style.opacity = '0';
     overlay.style.transition = 'opacity 120ms ease-out';
 
     const timer = window.setTimeout(() => {
       overlay.remove();
+      markStartupReady();
     }, 140);
 
     return () => {
@@ -161,25 +168,54 @@ async function resolveRootAppByHash(hash: string): Promise<RootAppResolveResult>
   return { component: mod.default, kind: 'main' };
 }
 
+function usesSharedStartupOverlay(kind: RootAppResolveResult['kind']): boolean {
+  return kind !== 'ornaments-editor-overlay' && kind !== 'ornaments-render-overlay';
+}
+
+function hashUsesSharedStartupOverlay(hash: string): boolean {
+  return (
+    !hash.startsWith('#/ornaments-editor-overlay') && !hash.startsWith('#/ornaments-render-overlay')
+  );
+}
+
 async function bootstrap(): Promise<void> {
   startupTelemetry.info('startup.bootstrap.begin');
-  const rootApp = await resolveRootAppByHash(window.location.hash);
+  const hash = window.location.hash;
+
+  if (!hashUsesSharedStartupOverlay(hash)) {
+    document.getElementById('pmp-startup-overlay')?.remove();
+    markStartupReady();
+  }
+
+  const rootApp = await resolveRootAppByHash(hash);
   startupTelemetry.info('startup.root.resolved', {
     fields: {
       kind: rootApp.kind,
     },
   });
   const RootApp = rootApp.component;
-  const rootContent = (
+  const overlay = document.getElementById('pmp-startup-overlay');
+  const useSharedStartupOverlay = usesSharedStartupOverlay(rootApp.kind);
+
+  if (!useSharedStartupOverlay) {
+    overlay?.remove();
+    markStartupReady();
+  }
+
+  const rootContent = useSharedStartupOverlay ? (
     <StartupReadyGate>
       <RootApp />
     </StartupReadyGate>
+  ) : (
+    <RootApp />
   );
 
   const appContent =
-    rootApp.kind === 'desktop-lyrics-overlay'
-      ? rootContent
-      : <KernelProvider>{rootContent}</KernelProvider>;
+    rootApp.kind === 'desktop-lyrics-overlay' ? (
+      rootContent
+    ) : (
+      <KernelProvider>{rootContent}</KernelProvider>
+    );
 
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
@@ -195,7 +231,9 @@ async function bootstrap(): Promise<void> {
     scheduleIdle(
       async () => {
         try {
-          const { restoreBackgroundSnapshots } = await import('./modules/background/backgroundSnapshot');
+          const { restoreBackgroundSnapshots } = await import(
+            './modules/background/backgroundSnapshot'
+          );
           await restoreBackgroundSnapshots({ restoreHistory: false });
         } catch (error) {
           startupTelemetry.warn('startup.background.restore-settings.failed', {
@@ -210,7 +248,9 @@ async function bootstrap(): Promise<void> {
     scheduleIdle(
       async () => {
         try {
-          const { restoreBackgroundSnapshots } = await import('./modules/background/backgroundSnapshot');
+          const { restoreBackgroundSnapshots } = await import(
+            './modules/background/backgroundSnapshot'
+          );
           await restoreBackgroundSnapshots({ restoreSettings: false, restoreHistory: true });
         } catch (error) {
           startupTelemetry.warn('startup.background.restore-history.failed', {
@@ -220,9 +260,7 @@ async function bootstrap(): Promise<void> {
       },
       { timeoutMs: 4_000, delayMs: 2_500 }
     );
-
   });
 }
 
 void bootstrap();
-

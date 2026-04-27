@@ -1,6 +1,12 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/tauri';
 import { appWindow, getAll } from '@tauri-apps/api/window';
-import { setupConfigSync, TAURI_EVENTS, STORAGE_KEYS, setupTauriListener } from './utils/windowCommunication';
+import {
+  setupConfigSync,
+  TAURI_EVENTS,
+  STORAGE_KEYS,
+  setupTauriListener,
+} from './utils/windowCommunication';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
 import { useKernel } from './contexts/KernelContext';
@@ -38,6 +44,7 @@ import {
   shouldRunDurableStorageMigrations,
   shouldRunPmpsDurableMigration,
 } from './modules/startup/durableMigrationGuards';
+import { onStartupReady } from './modules/startup/startupReady';
 import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
 import { applyWindowPinPolicy } from './utils/windowPinRuntime';
 import { readWindowPinState, writeWindowPinState } from './utils/windowPinState';
@@ -95,7 +102,11 @@ function AppContent() {
   const { service: performanceControlService, settings: performanceSettings } =
     usePerformanceControlSettings();
   const isWindowActive =
-    isMainWindowVisible && isDocumentVisible && !isMainWindowMinimized && !isPageFrozen && isMainWindowFocused;
+    isMainWindowVisible &&
+    isDocumentVisible &&
+    !isMainWindowMinimized &&
+    !isPageFrozen &&
+    isMainWindowFocused;
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const isTauri = useMemo(() => isTauriRuntime(), []);
 
@@ -105,31 +116,93 @@ function AppContent() {
 
   useEffect(() => {
     if (!isTauri) return;
-    void invokeWithTelemetry('ornaments_render_overlay_open', undefined, {
-      moduleId: 'ornaments',
-      component: 'AppContent',
-      event: 'ornaments.render-overlay.open',
-      successLevel: 'info',
-    });
+    let cancelled = false;
+    let syncFrame: number | null = null;
+    let syncInFlight = false;
+    let syncQueued = false;
+    let unlistenMove: (() => void) | null = null;
+    let unlistenResize: (() => void) | null = null;
 
-    const sync = () => {
-      void invokeWithTelemetry('ornaments_overlay_sync_geometry', undefined, {
-        moduleId: 'ornaments',
-        component: 'AppContent',
-        event: 'ornaments.overlay.sync-geometry',
+    const runGeometrySync = () => {
+      if (cancelled) return;
+      if (syncInFlight) {
+        syncQueued = true;
+        return;
+      }
+
+      syncInFlight = true;
+      void invoke('ornaments_overlay_sync_geometry')
+        .catch(() => {
+          // High-frequency window geometry sync intentionally bypasses invoke telemetry.
+        })
+        .finally(() => {
+          syncInFlight = false;
+          if (cancelled || !syncQueued) return;
+          syncQueued = false;
+          scheduleGeometrySync();
+        });
+    };
+
+    const scheduleGeometrySync = () => {
+      if (cancelled) return;
+      if (syncFrame !== null) return;
+      syncFrame = window.requestAnimationFrame(() => {
+        syncFrame = null;
+        runGeometrySync();
       });
     };
 
-    let unlistenMove: (() => void) | null = null;
-    let unlistenResize: (() => void) | null = null;
-    void appWindow.onMoved(sync).then((unlisten) => {
-      unlistenMove = unlisten;
-    });
-    void appWindow.onResized(sync).then((unlisten) => {
-      unlistenResize = unlisten;
-    });
+    const attachGeometryListeners = async () => {
+      try {
+        const [moveCleanup, resizeCleanup] = await Promise.all([
+          appWindow.onMoved(scheduleGeometrySync),
+          appWindow.onResized(scheduleGeometrySync),
+        ]);
+
+        if (cancelled) {
+          moveCleanup();
+          resizeCleanup();
+          return;
+        }
+
+        unlistenMove = moveCleanup;
+        unlistenResize = resizeCleanup;
+      } catch {
+        // best-effort: ornaments overlays should not block main window interaction
+      }
+    };
+
+    const openRenderOverlays = () => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          if (cancelled) return;
+
+          void invokeWithTelemetry('ornaments_render_overlay_open', undefined, {
+            moduleId: 'ornaments',
+            component: 'AppContent',
+            event: 'ornaments.render-overlay.open',
+            successLevel: 'info',
+          })
+            .then(() => {
+              if (cancelled) return;
+              scheduleGeometrySync();
+              void attachGeometryListeners();
+            })
+            .catch(() => {
+              // best-effort: ornaments overlays should never block main window boot
+            });
+        });
+      });
+    };
+
+    const cleanupStartupReady = onStartupReady(openRenderOverlays);
 
     return () => {
+      cancelled = true;
+      cleanupStartupReady();
+      if (syncFrame !== null) {
+        window.cancelAnimationFrame(syncFrame);
+      }
       if (unlistenMove) unlistenMove();
       if (unlistenResize) unlistenResize();
     };
@@ -164,10 +237,8 @@ function AppContent() {
         if (cancelled) return;
         if (!config.openDebugCenterOnNextStart) return;
 
-        await dispatchCommandOrFallback(
-          commands,
-          'app:navigate-debug-center',
-          () => navigateTo('debug', { tab: 'debug-center' })
+        await dispatchCommandOrFallback(commands, 'app:navigate-debug-center', () =>
+          navigateTo('debug', { tab: 'debug-center' })
         );
         void setDebugConfig({ ...config, openDebugCenterOnNextStart: false }).catch((error) => {
           telemetry.warn('startup.debug-center.flag-clear.failed', {
@@ -514,9 +585,11 @@ function AppContent() {
 
       try {
         const resolvedPinned = await (
-          (appWindow as typeof appWindow & {
-            isAlwaysOnTop?: () => Promise<boolean>;
-          }).isAlwaysOnTop?.() ?? Promise.resolve(false)
+          (
+            appWindow as typeof appWindow & {
+              isAlwaysOnTop?: () => Promise<boolean>;
+            }
+          ).isAlwaysOnTop?.() ?? Promise.resolve(false)
         ).catch(() => false);
         if (disposed) return;
         writeWindowPinState(Boolean(resolvedPinned));
@@ -590,7 +663,9 @@ function AppContent() {
   });
 
   return (
-    <WindowActivityProvider value={{ isVisible: isMainWindowVisible, isActive: isWindowActive, renderMode }}>
+    <WindowActivityProvider
+      value={{ isVisible: isMainWindowVisible, isActive: isWindowActive, renderMode }}
+    >
       <QualityProvider>
         <div className="app-container">
           <MatrixWorkbench showEditorOverlay showEditorPanel showWindowBorder />
