@@ -3,7 +3,10 @@ use std::{
     fs,
     io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Condvar, Mutex},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Condvar, Mutex,
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -31,6 +34,9 @@ const REMOTE_STREAM_COMPLETE_MARKER_VERSION: u8 = 1;
 const REMOTE_STREAM_EXPIRY_SAFETY_MS: u64 = 60_000;
 const REMOTE_STREAM_CONNECT_TIMEOUT_MS: u64 = 10_000;
 const REMOTE_STREAM_READ_STALL_TIMEOUT_MS: u64 = 30_000;
+const REMOTE_STREAM_CANCEL_REASON_MATERIALIZE_ABORTED: u64 = 1;
+pub(crate) const REMOTE_STREAM_CANCEL_REASON_TRANSPORT_REPLACED: u64 = 2;
+pub(crate) const REMOTE_STREAM_CANCEL_REASON_TRANSPORT_STOPPED: u64 = 3;
 
 static REMOTE_STREAM_IN_FLIGHT: Lazy<Mutex<HashMap<PathBuf, Arc<RemoteStreamDownloadJob>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -71,6 +77,8 @@ struct RemoteStreamDownloadState {
 struct RemoteStreamDownloadJob {
     state: Mutex<RemoteStreamDownloadState>,
     signal: Condvar,
+    cancel_requested: AtomicBool,
+    cancel_reason: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -394,6 +402,85 @@ fn remote_stream_in_flight_key(entry: &RemoteStreamCacheEntry) -> PathBuf {
     entry.cache_path.clone()
 }
 
+fn remote_stream_download_cancel_message(reason: u64) -> String {
+    let reason_label = match reason {
+        REMOTE_STREAM_CANCEL_REASON_MATERIALIZE_ABORTED => "materialize-aborted",
+        REMOTE_STREAM_CANCEL_REASON_TRANSPORT_REPLACED => "transport-replaced",
+        REMOTE_STREAM_CANCEL_REASON_TRANSPORT_STOPPED => "transport-stopped",
+        _ => "unknown",
+    };
+    format!("Remote stream download cancelled ({reason_label})")
+}
+
+fn request_remote_stream_download_cancel(job: &Arc<RemoteStreamDownloadJob>, reason: u64) -> bool {
+    if job
+        .cancel_requested
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return false;
+    }
+
+    job.cancel_reason.store(reason, Ordering::Release);
+    let bytes_written = if let Ok(mut state) = job.state.lock() {
+        if !state.completed {
+            state.last_error = Some(remote_stream_download_cancel_message(reason));
+        }
+        state.bytes_written
+    } else {
+        0
+    };
+    crate::audio::diagnostics::record_event(
+        "transport.source.remote.cancel",
+        bytes_written,
+        reason,
+    );
+    job.signal.notify_all();
+    true
+}
+
+fn remote_stream_download_cancel_requested(job: &RemoteStreamDownloadJob) -> Option<u64> {
+    job.cancel_requested
+        .load(Ordering::Acquire)
+        .then(|| job.cancel_reason.load(Ordering::Acquire))
+}
+
+fn remote_stream_download_cancel_error(job: &RemoteStreamDownloadJob) -> Option<String> {
+    remote_stream_download_cancel_requested(job).map(remote_stream_download_cancel_message)
+}
+
+fn cancel_remote_stream_downloads_matching(keep_key: Option<&Path>, reason: u64) -> usize {
+    let jobs = match REMOTE_STREAM_IN_FLIGHT.lock() {
+        Ok(in_flight) => in_flight
+            .iter()
+            .filter_map(|(key, job)| {
+                let should_keep = keep_key
+                    .map(|keep_key| keep_key == key.as_path())
+                    .unwrap_or(false);
+                (!should_keep).then(|| job.clone())
+            })
+            .collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+
+    let cancelled = jobs
+        .iter()
+        .filter(|job| request_remote_stream_download_cancel(job, reason))
+        .count();
+    if cancelled > 0 {
+        crate::audio::diagnostics::record_event(
+            "transport.source.remote.cancel_batch",
+            cancelled as u64,
+            reason,
+        );
+    }
+    cancelled
+}
+
+pub(crate) fn cancel_remote_stream_downloads(reason: u64) -> usize {
+    cancel_remote_stream_downloads_matching(None, reason)
+}
+
 fn mark_remote_stream_part_started(entry: &RemoteStreamCacheEntry) -> Result<(), String> {
     let payload = format!("cache_key={}\nstarted_at_ms={}\n", entry.key, now_millis());
     fs::write(&entry.part_marker_path, payload)
@@ -433,6 +520,10 @@ fn wait_for_remote_stream_probe_ready(
     let deadline = started_at + Duration::from_millis(REMOTE_STREAM_PROBE_HARD_WAIT_MS);
 
     loop {
+        if let Some(cancel_error) = remote_stream_download_cancel_error(job) {
+            return Err(cancel_error);
+        }
+
         let now = Instant::now();
         if now >= deadline {
             let bytes_written = fs::metadata(&entry.cache_path)
@@ -486,17 +577,25 @@ fn spawn_remote_stream_download(
     let job = Arc::new(RemoteStreamDownloadJob {
         state: Mutex::new(RemoteStreamDownloadState::default()),
         signal: Condvar::new(),
+        cancel_requested: AtomicBool::new(false),
+        cancel_reason: AtomicU64::new(0),
     });
     let job_for_thread = job.clone();
     let job_for_registry = job.clone();
 
     thread::spawn(move || {
         let result = (|| -> Result<u64, String> {
+            if let Some(cancel_error) = remote_stream_download_cancel_error(&job_for_thread) {
+                return Err(cancel_error);
+            }
             mark_remote_stream_part_started(&entry)?;
             let client = build_http_client()?;
             let mut request = client.get(&stream_url);
             if !headers.is_empty() {
                 request = request.headers(headers);
+            }
+            if let Some(cancel_error) = remote_stream_download_cancel_error(&job_for_thread) {
+                return Err(cancel_error);
             }
             let mut response = request
                 .send()
@@ -514,6 +613,9 @@ fn spawn_remote_stream_download(
             let mut buf = [0u8; 64 * 1024];
             let read_stall_timeout = remote_stream_read_stall_timeout();
             loop {
+                if let Some(cancel_error) = remote_stream_download_cancel_error(&job_for_thread) {
+                    return Err(cancel_error);
+                }
                 let read = match response.read(&mut buf) {
                     Ok(read) => read,
                     Err(error) if is_remote_stream_read_timeout(&error) => {
@@ -533,6 +635,9 @@ fn spawn_remote_stream_download(
                 };
                 if read == 0 {
                     break;
+                }
+                if let Some(cancel_error) = remote_stream_download_cancel_error(&job_for_thread) {
+                    return Err(cancel_error);
                 }
                 file.write_all(&buf[..read]).map_err(|error| {
                     format!("Failed to write remote stream cache bytes: {error}")
@@ -653,6 +758,11 @@ fn materialize_remote_stream_to_cache(
 
     let request_headers = build_request_headers(headers)?;
     let started_at = Instant::now();
+    let in_flight_key = remote_stream_in_flight_key(&entry);
+    cancel_remote_stream_downloads_matching(
+        Some(in_flight_key.as_path()),
+        REMOTE_STREAM_CANCEL_REASON_TRANSPORT_REPLACED,
+    );
     let job =
         get_or_spawn_remote_stream_download(&entry, stream_url, request_headers, expires_at_ms)?;
     let result = wait_for_remote_stream_probe_ready(&job, &entry, expires_at_ms);
@@ -661,6 +771,12 @@ fn materialize_remote_stream_to_cache(
         started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
         result.is_ok() as u64,
     );
+    if result.is_err() {
+        request_remote_stream_download_cancel(
+            &job,
+            REMOTE_STREAM_CANCEL_REASON_MATERIALIZE_ABORTED,
+        );
+    }
     result.map(|_| entry.cache_path)
 }
 
@@ -879,6 +995,8 @@ mod tests {
         let existing = Arc::new(RemoteStreamDownloadJob {
             state: Mutex::new(RemoteStreamDownloadState::default()),
             signal: Condvar::new(),
+            cancel_requested: AtomicBool::new(false),
+            cancel_reason: AtomicU64::new(0),
         });
 
         {
@@ -898,6 +1016,95 @@ mod tests {
         {
             let mut in_flight = REMOTE_STREAM_IN_FLIGHT.lock().expect("registry");
             in_flight.remove(&remote_stream_in_flight_key(&entry));
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn remote_stream_download_cancel_marks_job_and_error() {
+        let job = Arc::new(RemoteStreamDownloadJob {
+            state: Mutex::new(RemoteStreamDownloadState {
+                bytes_written: 42,
+                ..RemoteStreamDownloadState::default()
+            }),
+            signal: Condvar::new(),
+            cancel_requested: AtomicBool::new(false),
+            cancel_reason: AtomicU64::new(0),
+        });
+
+        assert!(request_remote_stream_download_cancel(
+            &job,
+            REMOTE_STREAM_CANCEL_REASON_TRANSPORT_STOPPED
+        ));
+        assert!(!request_remote_stream_download_cancel(
+            &job,
+            REMOTE_STREAM_CANCEL_REASON_TRANSPORT_REPLACED
+        ));
+        assert!(job.cancel_requested.load(Ordering::Acquire));
+        assert_eq!(
+            job.cancel_reason.load(Ordering::Acquire),
+            REMOTE_STREAM_CANCEL_REASON_TRANSPORT_STOPPED
+        );
+        let state = job.state.lock().expect("state");
+        assert!(state
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("transport-stopped"));
+    }
+
+    #[test]
+    fn remote_stream_cancel_batch_keeps_matching_entry() {
+        let root = test_cache_root("cancel-batch");
+        let kept_entry = build_remote_stream_cache_entry(
+            &root,
+            "https://cdn.example.com/audio/keep.wav",
+            Some("netease://song/keep"),
+            Some("netease"),
+            Some("audio/wav"),
+            None,
+        );
+        let cancelled_entry = build_remote_stream_cache_entry(
+            &root,
+            "https://cdn.example.com/audio/cancel.wav",
+            Some("netease://song/cancel"),
+            Some("netease"),
+            Some("audio/wav"),
+            None,
+        );
+        let kept = Arc::new(RemoteStreamDownloadJob {
+            state: Mutex::new(RemoteStreamDownloadState::default()),
+            signal: Condvar::new(),
+            cancel_requested: AtomicBool::new(false),
+            cancel_reason: AtomicU64::new(0),
+        });
+        let cancelled = Arc::new(RemoteStreamDownloadJob {
+            state: Mutex::new(RemoteStreamDownloadState::default()),
+            signal: Condvar::new(),
+            cancel_requested: AtomicBool::new(false),
+            cancel_reason: AtomicU64::new(0),
+        });
+        let kept_key = remote_stream_in_flight_key(&kept_entry);
+        let cancelled_key = remote_stream_in_flight_key(&cancelled_entry);
+
+        {
+            let mut in_flight = REMOTE_STREAM_IN_FLIGHT.lock().expect("registry");
+            in_flight.insert(kept_key.clone(), kept.clone());
+            in_flight.insert(cancelled_key.clone(), cancelled.clone());
+        }
+
+        let cancelled_count = cancel_remote_stream_downloads_matching(
+            Some(kept_key.as_path()),
+            REMOTE_STREAM_CANCEL_REASON_TRANSPORT_REPLACED,
+        );
+        assert_eq!(cancelled_count, 1);
+        assert!(!kept.cancel_requested.load(Ordering::Acquire));
+        assert!(cancelled.cancel_requested.load(Ordering::Acquire));
+
+        {
+            let mut in_flight = REMOTE_STREAM_IN_FLIGHT.lock().expect("registry");
+            in_flight.remove(&kept_key);
+            in_flight.remove(&cancelled_key);
         }
         let _ = fs::remove_dir_all(root);
     }

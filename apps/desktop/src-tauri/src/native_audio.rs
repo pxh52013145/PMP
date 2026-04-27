@@ -1356,9 +1356,20 @@ fn emit_transport_executions(
     Ok(())
 }
 
+fn cancel_remote_stream_downloads(reason: u64) {
+    let _ = crate::audio::source::cancel_remote_stream_downloads(reason);
+}
+
+fn cancel_remote_stream_downloads_for_transport_replacement() {
+    cancel_remote_stream_downloads(
+        crate::audio::source::REMOTE_STREAM_CANCEL_REASON_TRANSPORT_REPLACED,
+    );
+}
+
 pub fn load(app_handle: &AppHandle, path: Option<String>) -> Result<(), String> {
     emitter::ensure_started(app_handle);
     let track_path = PathBuf::from(path.ok_or_else(|| "No path provided".to_string())?);
+    cancel_remote_stream_downloads_for_transport_replacement();
     let execution = crate::audio::kernel::execute_load(track_path)?;
     emit_transport_execution(app_handle, execution)
 }
@@ -1376,6 +1387,7 @@ pub fn load_source(
 
 pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> Result<(), String> {
     emitter::ensure_started(app_handle);
+    cancel_remote_stream_downloads_for_transport_replacement();
     let track_path = PathBuf::from(path);
     let executions = crate::audio::kernel::execute_crossfade_or_load(track_path, duration_ms)?;
     emit_transport_executions(app_handle, executions)
@@ -1387,6 +1399,7 @@ pub fn load_and_play(
     replay_gain_db: Option<f32>,
 ) -> Result<(), String> {
     emitter::ensure_started(app_handle);
+    cancel_remote_stream_downloads_for_transport_replacement();
     let track_path = PathBuf::from(path);
     let execution = crate::audio::kernel::execute_load_and_play(track_path, replay_gain_db)?;
     emit_transport_execution(app_handle, execution)
@@ -1419,6 +1432,9 @@ pub fn pause(app_handle: &AppHandle) -> Result<(), String> {
 
 pub fn stop(app_handle: &AppHandle) -> Result<(), String> {
     emitter::ensure_started(app_handle);
+    cancel_remote_stream_downloads(
+        crate::audio::source::REMOTE_STREAM_CANCEL_REASON_TRANSPORT_STOPPED,
+    );
     let execution = crate::audio::kernel::execute_stop()?;
     emit_transport_execution(app_handle, execution)
 }
@@ -1495,6 +1511,7 @@ pub fn load_and_play_queue_index(
     replay_gain_db: Option<f32>,
 ) -> Result<(), String> {
     emitter::ensure_started(app_handle);
+    cancel_remote_stream_downloads_for_transport_replacement();
     let track_path = {
         let engine = ENGINE
             .lock()
@@ -1509,6 +1526,7 @@ pub fn load_and_play_queue_index(
 
 pub fn load_queue_index(app_handle: &AppHandle, index: i32) -> Result<(), String> {
     emitter::ensure_started(app_handle);
+    cancel_remote_stream_downloads_for_transport_replacement();
     let track_path = {
         let engine = ENGINE
             .lock()
@@ -1527,6 +1545,7 @@ pub fn crossfade_to_queue_index(
     duration_ms: u64,
 ) -> Result<(), String> {
     emitter::ensure_started(app_handle);
+    cancel_remote_stream_downloads_for_transport_replacement();
     let track_path = {
         let engine = ENGINE
             .lock()
