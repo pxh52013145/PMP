@@ -23,7 +23,10 @@ import {
   createInitialMagnetState,
   MagnetLibraryProvider,
 } from './modules/magnets';
-import { hasFocusedVisibleEditorWindow } from './utils/editorWindowFocus';
+import {
+  hasFocusedVisibleEditorWindow,
+  shouldPollEditorAuxWindowFocus,
+} from './utils/editorWindowFocus';
 import { APP_LIFECYCLE_SERVICE_TOKEN } from './services/lifecycle';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import { WindowCloseProvider } from './contexts/WindowCloseContext';
@@ -109,6 +112,15 @@ function AppContent() {
     isMainWindowFocused;
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const isTauri = useMemo(() => isTauriRuntime(), []);
+  const shouldPollEditorAuxFocus = shouldPollEditorAuxWindowFocus({
+    isTauri,
+    isEditing: editorState.isEditing,
+    isMainWindowFocused,
+    isMainWindowVisible,
+    isDocumentVisible,
+    isMainWindowMinimized,
+    isPageFrozen,
+  });
 
   useEffect(() => {
     void performanceControlService.syncEditorEffectsFromSettings();
@@ -616,7 +628,7 @@ function AppContent() {
   }, [isTauri]);
 
   useEffect(() => {
-    if (!isTauri || !editorState.isEditing || isMainWindowFocused) {
+    if (!shouldPollEditorAuxFocus) {
       setIsEditorAuxWindowFocused(false);
       return;
     }
@@ -648,7 +660,7 @@ function AppContent() {
         window.clearInterval(pollTimer);
       }
     };
-  }, [editorState.isEditing, isMainWindowFocused, isTauri]);
+  }, [shouldPollEditorAuxFocus]);
 
   const isRenderFocusActive = isMainWindowFocused || isEditorAuxWindowFocused;
 

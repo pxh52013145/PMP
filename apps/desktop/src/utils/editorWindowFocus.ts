@@ -4,6 +4,16 @@ export interface EditorWindowFocusProbe {
   isFocused: () => Promise<boolean>;
 }
 
+export interface EditorAuxWindowFocusPollingInput {
+  isTauri: boolean;
+  isEditing: boolean;
+  isMainWindowFocused: boolean;
+  isMainWindowVisible: boolean;
+  isDocumentVisible: boolean;
+  isMainWindowMinimized: boolean;
+  isPageFrozen: boolean;
+}
+
 export function isEditorWindowLabel(label: string): boolean {
   return label.startsWith('editor-');
 }
@@ -27,4 +37,18 @@ export async function hasFocusedVisibleEditorWindow(
   );
 
   return focusStates.some(Boolean);
+}
+
+export function shouldPollEditorAuxWindowFocus(
+  input: EditorAuxWindowFocusPollingInput
+): boolean {
+  return (
+    input.isTauri &&
+    input.isEditing &&
+    !input.isMainWindowFocused &&
+    input.isMainWindowVisible &&
+    input.isDocumentVisible &&
+    !input.isMainWindowMinimized &&
+    !input.isPageFrozen
+  );
 }
