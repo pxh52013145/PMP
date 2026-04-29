@@ -28,8 +28,6 @@ export const BUILTIN_MAGNET_ID_LIST = [
   'btn-playlists',
   'btn-music-library',
   'navigation-page',
-  'platform-magnet',
-  'btn-platform-login',
   'btn-back',
   'btn-debug', // 调试按钮
   'audio-visualizer',

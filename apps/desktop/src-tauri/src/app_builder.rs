@@ -183,7 +183,6 @@ fn init_music_library_services(app: &tauri::AppHandle) {
     if let Err(error) = crate::music_library_db::init(app) {
         eprintln!("[MusicLibrary] Failed to init sqlite store: {error}");
     }
-    crate::music_platform_runtime::init_builtin_platform_runtime_support(app);
     if let Err(error) = crate::music_library_sync::init(app) {
         eprintln!("[MusicLibrary] Failed to init sync orchestrator: {error}");
     }

@@ -269,8 +269,6 @@ pub fn request_app_exit(app: &tauri::AppHandle) {
     crate::native_audio::shutdown();
     crate::windows::desktop_lyrics::shutdown();
     crate::vst_runtime::shutdown_session_status_broadcaster();
-    crate::music_platform_runtime::cleanup_builtin_platform_runtime_state(app);
-
     crate::windows::editor::close_all_editor_windows(app);
     crate::windows::plugin::close_all_plugin_windows(app);
     crate::windows::plugin_shell_surface::close_all_plugin_shell_surfaces(app);

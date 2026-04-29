@@ -70,15 +70,5 @@ name = "pixel-matrix-player"
 path = "src/main.rs"
 test = false
 
-[[bin]]
-name = "pmp-platform-bilibili-sidecar"
-path = "src/bin/pmp-platform-bilibili-sidecar.rs"
-test = false
-
-[[bin]]
-name = "pmp-platform-netease-sidecar"
-path = "src/bin/pmp-platform-netease-sidecar.rs"
-test = false
-
 [patch.crates-io]
 asio-sys = { path = "crates/asio-sys" }

@@ -14,10 +14,6 @@ import { PROCESS_PERF_MONITOR_MAGNET } from '../../data/builtin/processPerfMonit
 import { PLUGIN_DEVELOPMENT_WORKSPACE_MAGNET } from '../../data/builtin/pluginDevelopmentWorkspaceMagnet';
 import { DESKTOP_LYRICS_MAGNET } from '../../data/builtin/desktopLyricsMagnet';
 import {
-  PLATFORM_LOGIN_MAGNET,
-  PLATFORM_MAGNET,
-} from '../../data/builtin/platformMagnets';
-import {
   PLAY_QUEUE_MAGNET,
   PLAYLISTS_MAGNET,
   MUSIC_LIBRARY_MAGNET,
@@ -46,8 +42,6 @@ export function createDefaultMagnetLibrary(): Magnet[] {
     PLAYLISTS_MAGNET,
     MUSIC_LIBRARY_MAGNET,
     NAVIGATION_PAGE_MAGNET,
-    PLATFORM_MAGNET,
-    PLATFORM_LOGIN_MAGNET,
     BACK_BUTTON_MAGNET,
   ];
 }

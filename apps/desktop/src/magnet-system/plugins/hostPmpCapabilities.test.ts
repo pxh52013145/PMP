@@ -1925,12 +1925,12 @@ describe('host.pmp capabilities', () => {
         resolvedSpaceId: 'space2',
         usesFallbackRules: false,
         requiredMagnetIds: expect.arrayContaining(['btn-close', 'drag-handle']),
-        defaultMagnetIds: expect.arrayContaining(['btn-platform-login', 'platform-magnet']),
+        defaultMagnetIds: expect.arrayContaining(['btn-close', 'drag-handle']),
         requiredAnchorsByMagnetId: {
           'btn-close': [{ id: 'anchor', gridX: 26, gridY: 0, role: 'anchor' }],
         },
         defaultAnchorsByMagnetId: {
-          'btn-platform-login': [{ id: 'anchor', gridX: 1, gridY: 0, role: 'anchor' }],
+          'btn-close': [{ id: 'anchor', gridX: 26, gridY: 0, role: 'anchor' }],
         },
       },
     });

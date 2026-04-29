@@ -1,7 +1,4 @@
-use crate::{
-    lyrics, music_library, music_library_db, music_library_sync, music_platform_runtime,
-    music_platform_settings,
-};
+use crate::{lyrics, music_library, music_library_db, music_library_sync};
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_scan(
@@ -192,49 +189,6 @@ pub async fn music_library_db_list_connector_accounts(
     })
     .await
     .map_err(|e| format!("Music library connector account list task failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn music_library_music_platform_auth_invoke(
-    app: tauri::AppHandle,
-    request: music_platform_runtime::MusicPlatformAuthInvokeRequest,
-) -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(move || music_platform_runtime::invoke_auth(&app, request))
-        .await
-        .map_err(|e| format!("Music platform auth invoke task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_music_platform_api_invoke(
-    app: tauri::AppHandle,
-    request: music_platform_runtime::MusicPlatformApiInvokeRequest,
-) -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(move || music_platform_runtime::invoke_api(&app, request))
-        .await
-        .map_err(|e| format!("Music platform API invoke task failed: {e}"))?
-}
-
-#[tauri::command]
-pub async fn music_library_music_platform_global_get_cache_settings(
-    app: tauri::AppHandle,
-) -> Result<music_platform_settings::MusicPlatformGlobalCacheSettings, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_settings::get_global_cache_settings(&app)
-    })
-    .await
-    .map_err(|e| format!("Music platform global get cache settings task failed: {e}"))?
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn music_library_music_platform_global_set_cache_settings(
-    app: tauri::AppHandle,
-    custom_root_path: Option<String>,
-) -> Result<music_platform_settings::MusicPlatformGlobalCacheSettings, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        music_platform_settings::set_global_cache_settings(&app, custom_root_path)
-    })
-    .await
-    .map_err(|e| format!("Music platform global set cache settings task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]

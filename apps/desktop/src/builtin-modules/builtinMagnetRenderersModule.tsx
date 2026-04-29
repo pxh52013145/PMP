@@ -28,20 +28,12 @@ import { PLAY_QUEUE_VARIANT_PRESETS } from '../components/magnet/playQueue/playQ
 import { PLAYBACK_STEP_VARIANT_PRESETS } from '../components/magnet/playbackControls/playbackStepSkin';
 import { PLAYLISTS_VARIANT_PRESETS } from '../components/magnet/playlistsButton/playlistsSkin';
 import { PROGRESS_BAR_VARIANT_PRESETS } from '../components/magnet/progressBar/progressBarSkin';
-import { PLATFORM_LOGIN_VARIANT_PRESETS } from '../components/magnet/platformLogin/platformLoginSkin';
-import { PLATFORM_MAGNET_VARIANT_PRESETS } from '../components/magnet/platformPage/platformMagnetSkin';
 import { AUDIO_VISUALIZER_VARIANT_PRESETS } from '../components/magnet/audioVisualizerSkin';
 import { VOLUME_VARIANT_PRESETS } from '../components/magnet/volumeControl/volumeSkin';
 import { WINDOW_PIN_VARIANT_PRESETS } from '../components/magnet/windowPinButton/windowPinSkin';
 
 const NavigationPageLazy = React.lazy(async () => ({
   default: (await import('../components/magnet/NavigationPage')).NavigationPage,
-}));
-const PlatformMagnetLazy = React.lazy(async () => ({
-  default: (await import('../components/magnet/PlatformMagnet')).PlatformMagnet,
-}));
-const PlatformLoginButtonLazy = React.lazy(async () => ({
-  default: (await import('../components/magnet/PlatformLoginButton')).PlatformLoginButton,
 }));
 const WindowPinButtonLazy = React.lazy(async () => ({
   default: (await import('../components/magnet/WindowPinButton')).WindowPinButton,
@@ -123,24 +115,6 @@ function getBuiltinDefinitions(): MagnetRendererDefinition[] {
       preview: () => createTextPreview(t('magnet.renderers.navigation-page.preview')),
       description: t('magnet.renderers.navigation-page.description'),
       group: 'layout',
-      source: 'builtin',
-    },
-    {
-      id: 'platform-magnet',
-      render: () => renderWithLazyBoundary(<PlatformMagnetLazy />),
-      preview: () => createTextPreview(t('magnet.renderers.platform-magnet.preview')),
-      description: t('magnet.renderers.platform-magnet.description'),
-      group: 'layout',
-      tags: ['platform', 'source', 'adapter', 'sangreal'],
-      source: 'builtin',
-    },
-    {
-      id: 'btn-platform-login',
-      render: () => renderWithLazyBoundary(<PlatformLoginButtonLazy />),
-      preview: () => createTextPreview(t('magnet.renderers.btn-platform-login.preview')),
-      description: t('magnet.renderers.btn-platform-login.description'),
-      group: 'navigation',
-      tags: ['platform', 'auth', 'login'],
       source: 'builtin',
     },
     {
@@ -307,8 +281,6 @@ function getBuiltinDefinitions(): MagnetRendererDefinition[] {
 function getBuiltinVariantCatalog(): ReadonlyArray<readonly [string, readonly MagnetVariantPreset<object>[]]> {
   return [
     ['navigation-page', NAVIGATION_PAGE_VARIANT_PRESETS],
-    ['platform-magnet', PLATFORM_MAGNET_VARIANT_PRESETS],
-    ['btn-platform-login', PLATFORM_LOGIN_VARIANT_PRESETS],
     ['btn-window-pin', WINDOW_PIN_VARIANT_PRESETS],
     ['btn-play-pause', PLAY_PAUSE_VARIANT_PRESETS],
     ['btn-previous', PLAYBACK_STEP_VARIANT_PRESETS],

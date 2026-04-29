@@ -74,13 +74,6 @@ export const SYSTEM_SPACE1_DEFAULT_ANCHORS_BY_MAGNET_ID: Record<string, PixelAnc
 
 export const SYSTEM_SPACE2_DEFAULT_ANCHORS_BY_MAGNET_ID: Record<string, PixelAnchor[]> = {
   ...SYSTEM_REQUIRED_ANCHORS_BY_MAGNET_ID,
-  'btn-platform-login': [{ id: 'anchor', gridX: 1, gridY: 0, role: 'anchor' }],
-  'platform-magnet': [
-    { id: 'top-left', gridX: 0, gridY: 1, role: 'anchor' },
-    { id: 'top-right', gridX: 26, gridY: 1, role: 'boundary' },
-    { id: 'bottom-left', gridX: 0, gridY: 17, role: 'boundary' },
-    { id: 'bottom-right', gridX: 26, gridY: 17, role: 'boundary' },
-  ],
 };
 
 export const SYSTEM_SPACE3_DEFAULT_ANCHORS_BY_MAGNET_ID: Record<string, PixelAnchor[]> = {

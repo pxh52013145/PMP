@@ -87,8 +87,6 @@ export interface MagnetConfigContextValue {
 
 const MagnetConfigContext = createContext<MagnetConfigContextValue | null>(null);
 
-const SPACE2_REQUIRED_PLATFORM_MAGNET_IDS = ['platform-magnet', 'btn-platform-login'] as const;
-
 function resolveRuntimeDefaultActiveMagnetIds(
   fallback: ReadonlySet<string>
 ): ReadonlySet<string> {
@@ -110,14 +108,6 @@ function normalizeSpaceLayoutWithSystemAnchors(
     if (active.has(id)) continue;
     active.add(id);
     changed = true;
-  }
-
-  if (spaceId === 'space2') {
-    for (const id of SPACE2_REQUIRED_PLATFORM_MAGNET_IDS) {
-      if (active.has(id)) continue;
-      active.add(id);
-      changed = true;
-    }
   }
 
   const nextAnchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId'] = {

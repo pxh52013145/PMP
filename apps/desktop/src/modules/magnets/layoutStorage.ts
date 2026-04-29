@@ -10,8 +10,6 @@ import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 
 const SPACE2_DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   ...REQUIRED_MAGNET_IDS,
-  'platform-magnet',
-  'btn-platform-login',
 ]);
 const SPACE3_DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   ...REQUIRED_MAGNET_IDS,
