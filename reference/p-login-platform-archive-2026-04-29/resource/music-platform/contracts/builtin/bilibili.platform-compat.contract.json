@@ -1,0 +1,41 @@
+{
+  "contractVersion": "1.0",
+  "platform": {
+    "platformId": "bilibili",
+    "displayName": "Bilibili",
+    "staticIcon": "bilibili",
+    "vendor": "Bilibili",
+    "supportsMultiInstance": false
+  },
+  "auth": {
+    "loginMode": "qr",
+    "requiresCookie": false,
+    "requiresAccountId": false,
+    "supportsRefresh": true
+  },
+  "capabilities": {
+    "playlists": false,
+    "favorites": true,
+    "dailyRecommendations": true,
+    "search": true,
+    "quality": true,
+    "navigation": false,
+    "settings": false,
+    "pages": true
+  },
+  "apiBindings": {
+    "auth": "host.pmp.connector-auth",
+    "library": "host.pmp.music-platform.bilibili.library",
+    "recommendations": "host.pmp.music-platform.bilibili.recommendations",
+    "search": "host.pmp.music-platform.bilibili.search",
+    "quality": "host.pmp.music-platform.bilibili.quality",
+    "pages": "host.pmp.music-platform.bilibili.workspace"
+  },
+  "extension": {
+    "connectorId": "connector.platform.bilibili",
+    "workspaceKind": "bilibili",
+    "workspaceMode": "dedicated",
+    "runtimeAdapter": "bindingContract",
+    "source": "builtin"
+  }
+}

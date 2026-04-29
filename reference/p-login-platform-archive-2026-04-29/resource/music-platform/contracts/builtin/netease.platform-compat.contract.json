@@ -1,0 +1,41 @@
+{
+  "contractVersion": "1.0",
+  "platform": {
+    "platformId": "netease",
+    "displayName": "Netease",
+    "staticIcon": "netease",
+    "vendor": "NetEase Cloud Music",
+    "supportsMultiInstance": false
+  },
+  "auth": {
+    "loginMode": "qr",
+    "requiresCookie": false,
+    "requiresAccountId": false,
+    "supportsRefresh": true
+  },
+  "capabilities": {
+    "playlists": true,
+    "favorites": false,
+    "dailyRecommendations": true,
+    "search": true,
+    "quality": true,
+    "navigation": false,
+    "settings": false,
+    "pages": true
+  },
+  "apiBindings": {
+    "auth": "host.pmp.connector-auth",
+    "library": "host.pmp.music-platform.netease.library",
+    "recommendations": "host.pmp.music-platform.netease.recommendations",
+    "search": "host.pmp.music-platform.netease.search",
+    "quality": "host.pmp.music-platform.netease.quality",
+    "pages": "host.pmp.music-platform.netease.workspace"
+  },
+  "extension": {
+    "connectorId": "connector.platform.netease",
+    "workspaceKind": "netease",
+    "workspaceMode": "dedicated",
+    "runtimeAdapter": "bindingContract",
+    "source": "builtin"
+  }
+}

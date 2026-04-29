@@ -1,0 +1,30 @@
+{
+  "formatVersion": "1.0",
+  "type": "platform-pack",
+  "metadata": {
+    "id": "builtin-netease",
+    "name": "Netease Platform Pack",
+    "version": "1.1.0",
+    "author": "Pixel Matrix Player",
+    "description": "Builtin netease platform pack with provider-owned workspace runtime"
+  },
+  "connector": {
+    "connectorId": "connector.platform.netease",
+    "displayName": "Netease",
+    "labelKey": "magnet.platform-login.platform.netease",
+    "iconKey": "netease",
+    "platformTemplate": "music",
+    "workspaceKind": "netease",
+    "workspaceMode": "dedicated",
+    "authFlow": "qr",
+    "enabled": true,
+    "sortOrder": 20,
+    "accentColor": "#ff6b87"
+  },
+  "entry": {
+    "contract": "contract.json",
+    "runtime": "runtime.js",
+    "icon": "icon.svg",
+    "sidecar": "bin/pmp-platform-netease-sidecar.exe"
+  }
+}
