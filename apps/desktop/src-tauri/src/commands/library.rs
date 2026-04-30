@@ -1,5 +1,9 @@
 use crate::{lyrics, music_library, music_library_db, music_library_sync};
 
+fn ensure_music_library_services(app: &tauri::AppHandle) -> Result<(), String> {
+    crate::app_builder::ensure_music_library_services_initialized(app)
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_scan(
     app: tauri::AppHandle,
@@ -165,9 +169,12 @@ pub async fn music_library_db_upsert_source(
 pub async fn music_library_db_list_sources(
     app: tauri::AppHandle,
 ) -> Result<Vec<music_library_db::LibrarySourceRecord>, String> {
-    tauri::async_runtime::spawn_blocking(move || music_library_db::list_sources(&app))
-        .await
-        .map_err(|e| format!("Music library source list task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_music_library_services(&app)?;
+        music_library_db::list_sources(&app)
+    })
+    .await
+    .map_err(|e| format!("Music library source list task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -339,9 +346,12 @@ pub async fn music_library_db_list_playlists(
     app: tauri::AppHandle,
     query: Option<music_library_db::LibraryPlaylistQueryInput>,
 ) -> Result<Vec<music_library_db::LibraryPlaylistRecord>, String> {
-    tauri::async_runtime::spawn_blocking(move || music_library_db::list_playlists(&app, query))
-        .await
-        .map_err(|e| format!("Music library list playlists task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_music_library_services(&app)?;
+        music_library_db::list_playlists(&app, query)
+    })
+    .await
+    .map_err(|e| format!("Music library list playlists task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -561,9 +571,12 @@ pub async fn music_library_db_query_tracks_page(
     app: tauri::AppHandle,
     query: Option<music_library_db::LibraryTrackQueryInput>,
 ) -> Result<music_library_db::LibraryTrackQueryPageResult, String> {
-    tauri::async_runtime::spawn_blocking(move || music_library_db::query_tracks_page(&app, query))
-        .await
-        .map_err(|e| format!("Music library paged track query task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_music_library_services(&app)?;
+        music_library_db::query_tracks_page(&app, query)
+    })
+    .await
+    .map_err(|e| format!("Music library paged track query task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -665,7 +678,10 @@ pub async fn music_library_db_get_stats(
     app: tauri::AppHandle,
     query: Option<music_library_db::LibraryFacetQueryInput>,
 ) -> Result<music_library_db::LibraryStatsRecord, String> {
-    tauri::async_runtime::spawn_blocking(move || music_library_db::get_stats(&app, query))
-        .await
-        .map_err(|e| format!("Music library stats task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_music_library_services(&app)?;
+        music_library_db::get_stats(&app, query)
+    })
+    .await
+    .map_err(|e| format!("Music library stats task failed: {e}"))?
 }

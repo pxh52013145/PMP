@@ -1844,6 +1844,10 @@ pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Resul
     let mut desired_vst_node_ids = Vec::new();
     let mut vst_keys: Vec<crate::vst_dsp::VstNodeKey> = Vec::new();
 
+    if vst_enabled && playback_active {
+        crate::app_builder::ensure_vst_services_initialized(app_handle)?;
+    }
+
     for node in &chain {
         let DspNodeConfig::Vst { id, plugin_id } = node else {
             continue;
@@ -2003,6 +2007,8 @@ pub fn vst_warmup(app_handle: &AppHandle) -> Result<Vec<VstWarmupNodeReport>, St
     let capacity_frames = latency_frames.saturating_add(2048).max(8192u32);
 
     let mut reports = Vec::with_capacity(targets.len());
+
+    crate::app_builder::ensure_vst_services_initialized(app_handle)?;
 
     for (node_id, plugin_id) in targets.into_iter() {
         if is_playback_active()? {

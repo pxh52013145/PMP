@@ -8,7 +8,6 @@ import {
   setupTauriListener,
 } from '../../utils/windowCommunication';
 import Background from '../../components/core/Background';
-import PixelMatrixCanvas from '../../components/core/PixelMatrixCanvas';
 import WindowBorder from '../../components/core/WindowBorder';
 import WindowResizeHandles from '../../components/core/WindowResizeHandles';
 import MatrixRainEffect from '../../components/effects/MatrixRainEffect';
@@ -32,9 +31,15 @@ import { readJson, readString, removeKey, writeJson } from '../../modules/storag
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { useWindowClose } from '../../contexts/WindowCloseContext';
+import { onStartupReady } from '../../modules/startup/startupReady';
 
 type BackgroundThemeColor = { id: string; rgb: [number, number, number] };
 const DEFAULT_BACKGROUND_THEME_COLOR: BackgroundThemeColor = { id: 'cyan', rgb: [0, 255, 136] };
+const PIXEL_CANVAS_STARTUP_DELAY_MS = 2500;
+
+const PixelMatrixCanvasLazy = lazy(async () => ({
+  default: (await import('../../components/core/PixelMatrixCanvas')).default,
+}));
 
 const EditorOverlayLazy = lazy(async () => ({
   default: (await import('../../components/core/EditorOverlay')).EditorOverlay,
@@ -77,6 +82,7 @@ export function MatrixWorkbench({
   const [pixelPositions, setPixelPositions] = useState<Map<string, { x: number; y: number }>>(
     new Map()
   );
+  const [pixelCanvasReady, setPixelCanvasReady] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
 
   // 同步 isMaximized 状态到 localStorage，供编辑器窗口使用
@@ -204,8 +210,6 @@ export function MatrixWorkbench({
   }, [activeMagnetIds, magnetLibrary, placementRequest]);
 
   useEffect(() => {
-    if (!disablePixelCanvasForPerf) return;
-
     const updateStaticPixelPositions = () => {
       const layout = computePixelGridLayout(window.innerWidth, window.innerHeight);
       const { COLUMNS, ROWS, EDGE_PADDING } = MATRIX_CONFIG;
@@ -228,6 +232,27 @@ export function MatrixWorkbench({
 
     return () => {
       window.removeEventListener('resize', updateStaticPixelPositions);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (disablePixelCanvasForPerf) return;
+
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const cleanupStartupReady = onStartupReady(() => {
+      timer = window.setTimeout(() => {
+        if (!cancelled) setPixelCanvasReady(true);
+      }, PIXEL_CANVAS_STARTUP_DELAY_MS);
+    });
+
+    return () => {
+      cancelled = true;
+      cleanupStartupReady();
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
     };
   }, [disablePixelCanvasForPerf]);
 
@@ -632,7 +657,11 @@ export function MatrixWorkbench({
       )}
 
       {/* Pixel Grid 层 */}
-      {!disablePixelCanvasForPerf && <PixelMatrixCanvas onPixelPositionsUpdate={setPixelPositions} />}
+      {!disablePixelCanvasForPerf && pixelCanvasReady && (
+        <Suspense fallback={null}>
+          <PixelMatrixCanvasLazy onPixelPositionsUpdate={setPixelPositions} />
+        </Suspense>
+      )}
 
       {/* Magnet 层 */}
       {!disableMagnetLayerForPerf && pixelPositions.size > 0 && (

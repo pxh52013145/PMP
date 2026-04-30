@@ -1,5 +1,6 @@
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use once_cell::sync::Lazy;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu};
@@ -7,6 +8,11 @@ use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu
 const TRAY_MENU_SHOW_ID: &str = "show";
 const TRAY_MENU_HIDE_ID: &str = "hide";
 const TRAY_MENU_QUIT_ID: &str = "quit";
+
+static MUSIC_LIBRARY_SERVICES_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static MUSIC_LIBRARY_SERVICES_INIT_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static VST_SERVICES_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static VST_SERVICES_INIT_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 #[cfg(target_os = "windows")]
 fn should_enable_windows_shell_integration() -> bool {
@@ -122,8 +128,6 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
     }
 
     bind_main_window_events(app, &window);
-    init_vst_services(&app.handle());
-    init_music_library_services(&app.handle());
 
     Ok(())
 }
@@ -160,32 +164,46 @@ fn bind_main_window_events(app: &tauri::App, window: &tauri::Window) {
     });
 }
 
-fn init_vst_services(app: &tauri::AppHandle) {
-    if let Err(error) = crate::vst_audit::init(app) {
-        eprintln!("[VST] Failed to init audit log: {error}");
+pub fn ensure_vst_services_initialized(app: &tauri::AppHandle) -> Result<(), String> {
+    if VST_SERVICES_INITIALIZED.load(Ordering::Acquire) {
+        return Ok(());
     }
-    if let Err(error) = crate::vst_governance::init(app) {
-        eprintln!("[VST] Failed to init governance: {error}");
+
+    let _guard = VST_SERVICES_INIT_LOCK
+        .lock()
+        .map_err(|_| "VST services init lock is poisoned".to_string())?;
+    if VST_SERVICES_INITIALIZED.load(Ordering::Acquire) {
+        return Ok(());
     }
-    if let Err(error) = crate::vst_library::init(app) {
-        eprintln!("[VST] Failed to init library: {error}");
-    }
-    if let Err(error) = crate::vst_compat::init(app) {
-        eprintln!("[VST] Failed to init compatibility: {error}");
-    }
+
+    crate::vst_audit::init(app)?;
+    crate::vst_governance::init(app)?;
+    crate::vst_library::init(app)?;
+    crate::vst_compat::init(app)?;
     crate::vst_runtime::init_session_status_broadcaster(app);
+    VST_SERVICES_INITIALIZED.store(true, Ordering::Release);
+    Ok(())
 }
 
-fn init_music_library_services(app: &tauri::AppHandle) {
+pub fn ensure_music_library_services_initialized(app: &tauri::AppHandle) -> Result<(), String> {
+    if MUSIC_LIBRARY_SERVICES_INITIALIZED.load(Ordering::Acquire) {
+        return Ok(());
+    }
+
+    let _guard = MUSIC_LIBRARY_SERVICES_INIT_LOCK
+        .lock()
+        .map_err(|_| "Music library services init lock is poisoned".to_string())?;
+    if MUSIC_LIBRARY_SERVICES_INITIALIZED.load(Ordering::Acquire) {
+        return Ok(());
+    }
+
     if let Err(error) = crate::music_library::cleanup_legacy_cover_cache_dirs(app) {
         eprintln!("[MusicLibrary] Failed to cleanup legacy cover caches: {error}");
     }
-    if let Err(error) = crate::music_library_db::init(app) {
-        eprintln!("[MusicLibrary] Failed to init sqlite store: {error}");
-    }
-    if let Err(error) = crate::music_library_sync::init(app) {
-        eprintln!("[MusicLibrary] Failed to init sync orchestrator: {error}");
-    }
+    crate::music_library_db::init(app)?;
+    crate::music_library_sync::init(app)?;
+    MUSIC_LIBRARY_SERVICES_INITIALIZED.store(true, Ordering::Release);
+    Ok(())
 }
 
 fn toggle_main_window_visibility(app: &tauri::AppHandle) {

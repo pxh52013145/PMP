@@ -203,7 +203,7 @@ export function resolveQualityProfile(level: QualityLevel): Omit<QualityEffectiv
     case 'potato':
     default:
       return {
-        renderScale: 0.6,
+        renderScale: 0.45,
         fpsForeground: 30,
         fpsBackground: 6,
         fpsEffects: 15,

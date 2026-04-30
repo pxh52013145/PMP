@@ -303,6 +303,8 @@ export class NativeAudioService implements IAudioService {
   private recentSmartPlaylistWriteTimer: number | null = null;
   private builtinSmartPlaylistsReady = false;
   private builtinSmartPlaylistsInitPromise: Promise<void> | null = null;
+  private playlistsRestoredFromLibraryDb = false;
+  private playlistsRestorePromise: Promise<void> | null = null;
   private playlistHydrationPromises = new Map<string, Promise<Playlist | null>>();
   private lastNativeErrorSeq = 0;
   private fallbackTicker: number | null = null;
@@ -1199,6 +1201,7 @@ export class NativeAudioService implements IAudioService {
     const normalizedPlaylistId = String(playlistId || '').trim();
     if (!normalizedPlaylistId) return null;
 
+    await this.ensurePlaylistsRestoredFromLibraryDb();
     const playlist = this.getPlaylist(normalizedPlaylistId);
     if (!playlist) return null;
     if (playlist.tracksHydrated !== false) {
@@ -1912,6 +1915,20 @@ export class NativeAudioService implements IAudioService {
     }
   }
 
+  private ensurePlaylistsRestoredFromLibraryDb(): Promise<void> {
+    if (this.playlistsRestoredFromLibraryDb) return Promise.resolve();
+    if (this.playlistsRestorePromise) return this.playlistsRestorePromise;
+
+    this.playlistsRestorePromise = this.restorePlaylistsFromLibraryDb()
+      .then(() => {
+        this.playlistsRestoredFromLibraryDb = true;
+      })
+      .finally(() => {
+        this.playlistsRestorePromise = null;
+      });
+    return this.playlistsRestorePromise;
+  }
+
   private notifyLatestSeekSequence(seekSeq: number | null): void {
     if (typeof seekSeq !== 'number' || !Number.isFinite(seekSeq)) return;
 
@@ -2164,7 +2181,6 @@ export class NativeAudioService implements IAudioService {
     }
 
     await this.restoreGainDbFromStorage();
-    await this.restorePlaylistsFromLibraryDb();
   }
 
   private applyPlaybackPreferences(
@@ -5951,10 +5967,12 @@ export class NativeAudioService implements IAudioService {
   }
 
   getPlaylists(): Playlist[] {
+    void this.ensurePlaylistsRestoredFromLibraryDb();
     return this.state.playlists;
   }
 
   getPlaylist(playlistId: string): Playlist | null {
+    void this.ensurePlaylistsRestoredFromLibraryDb();
     return this.state.playlists.find((pl) => pl.id === playlistId) ?? null;
   }
 
@@ -6046,6 +6064,7 @@ export class NativeAudioService implements IAudioService {
     const normalizedPlaylistId = String(playlistId || '').trim();
     if (!normalizedPlaylistId) return null;
 
+    await this.ensurePlaylistsRestoredFromLibraryDb();
     const existingPlaylist = this.getPlaylist(normalizedPlaylistId);
     if (!existingPlaylist) return null;
     if (existingPlaylist.tracksHydrated !== false) {

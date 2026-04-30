@@ -48,6 +48,7 @@ import {
   shouldRunPmpsDurableMigration,
 } from './modules/startup/durableMigrationGuards';
 import { onStartupReady } from './modules/startup/startupReady';
+import { readOrnamentsConfig } from './modules/ornaments-v2/store';
 import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
 import { applyWindowPinPolicy } from './utils/windowPinRuntime';
 import { readWindowPinState, writeWindowPinState } from './utils/windowPinState';
@@ -58,6 +59,10 @@ import './App.css';
 
 let coverDecodeReporter: ((src: string, width: number, height: number) => void) | null = null;
 let coverDecodeReporterLoading: Promise<void> | null = null;
+
+function hasEnabledOrnaments(): boolean {
+  return readOrnamentsConfig().items.some((item) => item.enabled);
+}
 
 function reportCoverDecoded(src: string, width: number, height: number): void {
   if (coverDecodeReporter) {
@@ -185,6 +190,11 @@ function AppContent() {
     };
 
     const openRenderOverlays = () => {
+      if (!hasEnabledOrnaments()) {
+        telemetry.info('ornaments.render-overlay.skip-empty');
+        return;
+      }
+
       window.requestAnimationFrame(() => {
         window.requestAnimationFrame(() => {
           if (cancelled) return;
@@ -208,17 +218,34 @@ function AppContent() {
     };
 
     const cleanupStartupReady = onStartupReady(openRenderOverlays);
+    let cleanupOrnamentsUpdated: (() => void) | null = null;
+    const cleanupOrnamentsUpdatedPromise = setupTauriListener(TAURI_EVENTS.ORNAMENTS_UPDATED, () => {
+      if (!cancelled) openRenderOverlays();
+    })
+      .then((cleanup) => {
+        if (cancelled) {
+          cleanup();
+          return null;
+        }
+        cleanupOrnamentsUpdated = cleanup;
+        return cleanup;
+      })
+      .catch(() => null);
 
     return () => {
       cancelled = true;
       cleanupStartupReady();
+      if (cleanupOrnamentsUpdated) cleanupOrnamentsUpdated();
+      void cleanupOrnamentsUpdatedPromise.then((cleanup) => {
+        if (cleanup && cleanup !== cleanupOrnamentsUpdated) cleanup();
+      });
       if (syncFrame !== null) {
         window.cancelAnimationFrame(syncFrame);
       }
       if (unlistenMove) unlistenMove();
       if (unlistenResize) unlistenResize();
     };
-  }, [isTauri]);
+  }, [isTauri, telemetry]);
 
   useEffect(() => {
     const handler = (event: Event) => {
