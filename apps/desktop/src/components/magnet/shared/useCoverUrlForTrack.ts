@@ -6,7 +6,6 @@ import {
   PMP_STORAGE_CHANGE_EVENT,
   type PmpStorageChangeDetail,
 } from '../../../modules/storage/localStorage';
-import { musicLibraryService } from '../../../services/audio/MusicLibraryService';
 import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
 import { trackKey } from './trackKey';
@@ -49,6 +48,11 @@ function buildCoverSignature(coverUrl: string | undefined): string {
                 : 'other';
 
   return `${scheme}:${trimmed.length}`;
+}
+
+async function loadMusicLibraryService() {
+  const { getMusicLibraryService } = await import('../../../services/audio/MusicLibraryService');
+  return getMusicLibraryService();
 }
 
 export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOptions): string | undefined {
@@ -165,13 +169,17 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
     let cancelled = false;
     const currentKey = key;
 
-    void musicLibraryService
-      .getCoverUrlForTrack(lookupTrack, { coverSizeHint, bypassRuntimePolicy })
+    void loadMusicLibraryService()
+      .then((service) => {
+        if (cancelled) return undefined;
+        return service.getCoverUrlForTrack(lookupTrack, { coverSizeHint, bypassRuntimePolicy });
+      })
       .then((url) => {
-      if (cancelled) return;
-      if (!isNonEmptyString(url)) return;
-      setResolved({ key: currentKey, url });
-    });
+        if (cancelled) return;
+        if (!isNonEmptyString(url)) return;
+        setResolved({ key: currentKey, url });
+      })
+      .catch(() => undefined);
 
     return () => {
       cancelled = true;
@@ -217,7 +225,11 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
     pendingReleaseUrlsRef.current.clear();
 
     if (toRelease.size > 0) {
-      const release = () => musicLibraryService.releaseCoverUrls(Array.from(toRelease));
+      const release = () => {
+        void loadMusicLibraryService()
+          .then((service) => service.releaseCoverUrls(Array.from(toRelease)))
+          .catch(() => undefined);
+      };
       if (immediate) {
         release();
         return;
@@ -273,7 +285,9 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
       pendingReleaseUrlsRef.current.clear();
 
       if (toRelease.length > 0) {
-        musicLibraryService.releaseCoverUrls(toRelease);
+        void loadMusicLibraryService()
+          .then((service) => service.releaseCoverUrls(toRelease))
+          .catch(() => undefined);
       }
     }, coverReleaseDelayMs);
 
@@ -293,4 +307,3 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
 
   return preferredCoverUrl;
 }
-

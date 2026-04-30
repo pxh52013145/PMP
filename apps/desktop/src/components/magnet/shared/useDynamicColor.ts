@@ -4,7 +4,6 @@ import {
   getDynamicColorsForImageUrl,
   type DynamicColors,
 } from '../../../utils/dynamicColors';
-import { musicLibraryService } from '../../../services/audio/MusicLibraryService';
 
 export type { DynamicColors } from '../../../utils/dynamicColors';
 export { DEFAULT_DYNAMIC_COLORS, buildCoverGradient } from '../../../utils/dynamicColors';
@@ -56,6 +55,11 @@ function buildSamplingTarget(
   };
 }
 
+async function releaseMusicLibraryCoverUrls(urls: string[]): Promise<void> {
+  const { getMusicLibraryService } = await import('../../../services/audio/MusicLibraryService');
+  getMusicLibraryService().releaseCoverUrls(urls);
+}
+
 export function useDynamicColor(
   coverUrl: string | undefined,
   enabled: boolean = true,
@@ -84,7 +88,7 @@ export function useDynamicColor(
       setColors(value);
 
       if (releaseAfterExtract && target.url.toLowerCase().startsWith('pmp://cover/')) {
-        musicLibraryService.releaseCoverUrls([target.url]);
+        void releaseMusicLibraryCoverUrls([target.url]).catch(() => undefined);
       }
     });
 

@@ -10,7 +10,8 @@ import {
   type MemoryGovernanceRunResult,
   type MemoryGovernanceSnapshot,
 } from '../../contracts/memoryGovernance';
-import { MusicLibraryService, type CoverRuntimeCachePolicy } from '../audio/MusicLibraryService';
+import type { CoverRuntimeCachePolicy } from '../audio/MusicLibraryService';
+import { getRegisteredMusicLibraryService } from '../audio/MusicLibraryServiceRegistry';
 import type { NavigationService } from '../navigation/NavigationService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readJson, writeJson } from '../../modules/storage';
@@ -61,6 +62,17 @@ const ACTION_TO_COVER_RUNTIME_POLICY: Partial<Record<MemoryGovernanceAction, Cov
   'tighten-cover-runtime-caches-high': 'high',
   'tighten-cover-runtime-caches-critical': 'critical',
   'tighten-cover-runtime-caches-hidden': 'hidden',
+};
+
+const EMPTY_COVER_RUNTIME_CACHE_STATS = {
+  coverUrlCacheEntries: 0,
+  coverBlobUrlCacheEntries: 0,
+  coverBlobUrlTotalBytes: 0,
+  coverDecodedEstimateEntries: 0,
+  coverDecodedEstimateTotalBytes: 0,
+  coverUrlInflight: 0,
+  albumCoverUrlCacheEntries: 0,
+  albumCoverUrlInflight: 0,
 };
 
 function appendUniqueActions(
@@ -146,8 +158,11 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
 
       if (action === 'clear-cover-runtime-caches') {
         try {
-          MusicLibraryService.getInstance().clearCoverRuntimeCaches();
-          executed.push(action);
+          const service = getRegisteredMusicLibraryService();
+          if (service) {
+            service.clearCoverRuntimeCaches();
+            executed.push(action);
+          }
         } catch (error) {
           this.telemetry.warn('memory-governance.cover-cache.clear.failed', {
             message: error instanceof Error ? error.message : String(error),
@@ -160,12 +175,14 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       const policy = ACTION_TO_COVER_RUNTIME_POLICY[action];
       if (policy) {
         try {
-          const service = MusicLibraryService.getInstance();
-          service.applyCoverRuntimeCachePolicy(policy);
-          if (policy === 'hidden') {
-            service.clearCoverRuntimeCaches();
+          const service = getRegisteredMusicLibraryService();
+          if (service) {
+            service.applyCoverRuntimeCachePolicy(policy);
+            if (policy === 'hidden') {
+              service.clearCoverRuntimeCaches();
+            }
+            executed.push(action);
           }
-          executed.push(action);
         } catch (error) {
           this.telemetry.warn('memory-governance.cover-cache.policy.failed', {
             message: error instanceof Error ? error.message : String(error),
@@ -266,7 +283,9 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
     const navSnapshot = this.navigation.getSnapshot();
     const navigationHistoryBytes = computeJsonSizeBytes(navSnapshot.history);
 
-    const coverStats = MusicLibraryService.getInstance().getCoverRuntimeCacheStats();
+    const coverStats =
+      getRegisteredMusicLibraryService()?.getCoverRuntimeCacheStats() ??
+      EMPTY_COVER_RUNTIME_CACHE_STATS;
 
     const jsHeapUsedBytes = (() => {
       try {

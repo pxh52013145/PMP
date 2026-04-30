@@ -149,7 +149,7 @@ import {
   compactTrackForQueueState,
   compactTrackForState,
 } from './trackStateProjection';
-import { musicLibraryService, type CoverSizeHint } from './MusicLibraryService';
+import type { CoverSizeHint } from './MusicLibraryService';
 import {
   parseLegacyRuntimeControlFromReplayGain,
   type CrossfadeSettings,
@@ -1022,7 +1022,8 @@ export class NativeAudioService implements IAudioService {
         : candidate;
 
       try {
-        const resolvedUrl = await musicLibraryService.getCoverUrlForTrack(resolutionCandidate, {
+        const { getMusicLibraryService } = await import('./MusicLibraryService');
+        const resolvedUrl = await getMusicLibraryService().getCoverUrlForTrack(resolutionCandidate, {
           coverSizeHint: options?.coverSizeHint ?? 'small',
           bypassRuntimePolicy: true,
         });

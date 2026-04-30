@@ -88,6 +88,10 @@ import {
 import { compactTrackForMusicLibrary } from '../../modules/music-library/trackProjection';
 import { STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import {
+  getRegisteredMusicLibraryService,
+  setRegisteredMusicLibraryService,
+} from './MusicLibraryServiceRegistry';
+import {
   recordCoverBlobUrlsReleased,
   recordCoverResolveCacheHit,
   recordCoverResolveCacheMiss,
@@ -340,7 +344,6 @@ type DesktopCoverLeaseStats = {
 };
 
 export class MusicLibraryService {
-  private static instance: MusicLibraryService;
   private static startupRefreshScheduled: boolean = false;
   private readonly telemetry = getTelemetryLogger('music-library', 'MusicLibraryService');
   private db: IDBDatabase | null = null;
@@ -3087,10 +3090,16 @@ export class MusicLibraryService {
   }
 
   static getInstance(): MusicLibraryService {
-    if (!MusicLibraryService.instance) {
-      MusicLibraryService.instance = new MusicLibraryService();
-    }
-    return MusicLibraryService.instance;
+    const existing = getRegisteredMusicLibraryService();
+    if (existing) return existing;
+
+    const service = new MusicLibraryService();
+    setRegisteredMusicLibraryService(service);
+    return service;
+  }
+
+  static peekInstance(): MusicLibraryService | null {
+    return getRegisteredMusicLibraryService();
   }
 
   // 初始化数据库
@@ -5964,4 +5973,39 @@ export class MusicLibraryService {
   }
 }
 
-export const musicLibraryService = MusicLibraryService.getInstance();
+export function getMusicLibraryService(): MusicLibraryService {
+  return MusicLibraryService.getInstance();
+}
+
+export function peekMusicLibraryService(): MusicLibraryService | null {
+  return MusicLibraryService.peekInstance();
+}
+
+function createLazyMusicLibraryServiceProxy(): MusicLibraryService {
+  return new Proxy({} as MusicLibraryService, {
+    get(_target, property) {
+      if (property === Symbol.toStringTag) return 'LazyMusicLibraryService';
+      if (property === 'toString') return () => '[object LazyMusicLibraryService]';
+      if (property === 'valueOf') return () => getMusicLibraryService();
+
+      const service = getMusicLibraryService();
+      const value = Reflect.get(service, property, service) as unknown;
+      return typeof value === 'function' ? value.bind(service) : value;
+    },
+    set(_target, property, value) {
+      return Reflect.set(getMusicLibraryService(), property, value);
+    },
+    has(_target, property) {
+      return property in getMusicLibraryService();
+    },
+    ownKeys() {
+      return Reflect.ownKeys(getMusicLibraryService());
+    },
+    getOwnPropertyDescriptor(_target, property) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(getMusicLibraryService(), property);
+      return descriptor ? { ...descriptor, configurable: true } : undefined;
+    },
+  });
+}
+
+export const musicLibraryService = createLazyMusicLibraryServiceProxy();
