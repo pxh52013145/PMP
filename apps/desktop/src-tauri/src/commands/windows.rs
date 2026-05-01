@@ -213,6 +213,15 @@ pub async fn ornaments_render_overlay_open(app: tauri::AppHandle) -> Result<(), 
     windows::ornaments_editor_overlay::open_render(&app)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub async fn ornaments_render_overlay_sync_planes(
+    app: tauri::AppHandle,
+    behind: bool,
+    above: bool,
+) -> Result<(), String> {
+    windows::ornaments_editor_overlay::sync_render_planes(&app, behind, above)
+}
+
 #[tauri::command]
 pub async fn ornaments_overlay_sync_geometry(app: tauri::AppHandle) -> Result<(), String> {
     windows::ornaments_editor_overlay::sync_geometry(&app)

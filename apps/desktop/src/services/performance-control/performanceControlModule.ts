@@ -12,11 +12,13 @@ import {
   DefaultPerformanceControlService,
   PERFORMANCE_CONTROL_SERVICE_TOKEN,
 } from './PerformanceControlService';
+import { onStartupIdle } from '../../modules/startup/startupReady';
 
 const PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS = 5_000;
 const PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_THROTTLE = 12_000;
 const PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_PAUSE = 20_000;
 const PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_COLD_IDLE = 45_000;
+const PERFORMANCE_CONTROL_STARTUP_FIRST_REFRESH_DELAY_MS = 5_000;
 
 function resolveRefreshIntervalMs(
   renderMode: 'full' | 'throttle' | 'pause',
@@ -56,11 +58,11 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
       });
 
       service.refreshSettingsFromStorage();
-      void service.refreshNow();
 
       let timer: number | null = null;
       let activeIntervalMs = PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS;
       let teardown: null | (() => void) = null;
+      let cleanupStartupFirstRefresh: null | (() => void) = null;
       let onVisibilityOrFocusChanged: (() => void) | null = null;
       let unsubscribeAudioState: null | (() => void) = null;
       let disposed = false;
@@ -148,10 +150,21 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
         });
 
         applyInterval();
+        cleanupStartupFirstRefresh = onStartupIdle(
+          () => {
+            if (disposed) return;
+            void service.refreshNow();
+          },
+          {
+            delayMs: PERFORMANCE_CONTROL_STARTUP_FIRST_REFRESH_DELAY_MS,
+            timeoutMs: 2_500,
+          }
+        );
       }
 
       return () => {
         disposed = true;
+        cleanupStartupFirstRefresh?.();
         try {
           teardown?.();
         } catch {

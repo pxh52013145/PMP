@@ -14,6 +14,14 @@ static MUSIC_LIBRARY_SERVICES_INIT_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::n
 static VST_SERVICES_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static VST_SERVICES_INIT_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
+pub fn music_library_services_initialized() -> bool {
+    MUSIC_LIBRARY_SERVICES_INITIALIZED.load(Ordering::Acquire)
+}
+
+pub fn vst_services_initialized() -> bool {
+    VST_SERVICES_INITIALIZED.load(Ordering::Acquire)
+}
+
 #[cfg(target_os = "windows")]
 fn should_enable_windows_shell_integration() -> bool {
     let force_enable = std::env::var("PMP_ENABLE_WINDOWS_SHELL_INTEGRATION")

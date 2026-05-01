@@ -251,6 +251,8 @@ export const STORAGE_KEYS = {
   MEMORY_GOVERNANCE_AUTO_ENABLED: 'pixel-matrix-memory-governance-auto-enabled', // boolean
   MEMORY_GOVERNANCE_AUDIT_V1: 'pixel-matrix-memory-governance-audit-v1', // MemoryGovernanceAuditEntry[]
   MEMORY_BASELINE_SAMPLES_V1: 'pixel-matrix-memory-baseline-samples-v1', // MemoryBaselineSample[]
+  STARTUP_MEMORY_TRACE_ENABLED: 'pixel-matrix-startup-memory-trace-enabled', // boolean-like debug flag
+  STARTUP_MEMORY_TRACE_V1: 'pixel-matrix-startup-memory-trace-v1', // StartupMemoryTraceSession
 
   // === Background GIF Optimization ===
   BACKGROUND_GIF_IMPORT_MAX_FPS: 'pixel-matrix-background-gif-import-max-fps',

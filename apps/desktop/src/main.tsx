@@ -7,11 +7,16 @@ import { getTelemetryLogger } from './services/telemetry/TelemetryService';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import { bootstrapPerformanceRuntimeProfileStorage } from './modules/startup/performanceRuntimeBootstrap';
 import { markStartupReady } from './modules/startup/startupReady';
+import {
+  recordStartupMemoryCheckpoint,
+  scheduleStartupMemoryIdleCheckpoints,
+} from './modules/startup/startupMemoryTrace';
 import './index.css';
 import './themes/surfaceMotion.css';
 
 installConsoleBridge();
 const startupTelemetry = getTelemetryLogger('startup', 'main');
+recordStartupMemoryCheckpoint('frontend.main.before-render');
 
 function applyRuntimePlatformDataset(): void {
   if (typeof document === 'undefined' || typeof navigator === 'undefined') return;
@@ -93,6 +98,7 @@ function scheduleIdle(
 function StartupReadyGate({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     startupTelemetry.info('startup.root.rendered');
+    recordStartupMemoryCheckpoint('app.providers.mounted');
     const overlay = document.getElementById('pmp-startup-overlay');
     if (!overlay) {
       markStartupReady();
@@ -193,6 +199,11 @@ async function bootstrap(): Promise<void> {
       kind: rootApp.kind,
     },
   });
+  recordStartupMemoryCheckpoint('frontend.root.resolved', {
+    fields: {
+      kind: rootApp.kind,
+    },
+  });
   const RootApp = rootApp.component;
   const overlay = document.getElementById('pmp-startup-overlay');
   const useSharedStartupOverlay = usesSharedStartupOverlay(rootApp.kind);
@@ -223,6 +234,15 @@ async function bootstrap(): Promise<void> {
       {appContent}
     </React.StrictMode>
   );
+  recordStartupMemoryCheckpoint('frontend.root.render-dispatched', {
+    fields: {
+      kind: rootApp.kind,
+    },
+  });
+
+  if (rootApp.kind === 'main') {
+    scheduleStartupMemoryIdleCheckpoints();
+  }
 
   if (rootApp.kind !== 'main' || !isTauriRuntime()) return;
 

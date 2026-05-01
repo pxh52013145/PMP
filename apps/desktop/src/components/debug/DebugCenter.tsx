@@ -14,7 +14,7 @@ import { getGlobalProcessPerfService } from '../../services/performance-control'
 import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
-import { readJson, usePersistentSetting, writeJson } from '../../modules/storage';
+import { readJson, removeKey, usePersistentSetting, writeJson } from '../../modules/storage';
 import {
   getDebugConfig,
   getDebugEnvSnapshot,
@@ -85,6 +85,11 @@ import {
   TAURI_EVENTS,
   setupTauriListenerWithPayload,
 } from '../../utils/windowCommunication';
+import {
+  readPersistedStartupMemoryTrace,
+  type StartupMemoryCheckpoint,
+  type StartupMemoryTraceSession,
+} from '../../modules/startup/startupMemoryTrace';
 import { MagnetTelemetryWorkbench } from './MagnetTelemetryWorkbench';
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
 import { PmpButton, PmpCard, PmpCheckbox, PmpChoiceButton, PmpSegmented } from '../primitives';
@@ -199,6 +204,21 @@ type TelemetryArtifactFeedback = {
   message: string;
 };
 
+type StartupMemoryTraceFeedback = {
+  tone: 'success' | 'error';
+  message: string;
+};
+
+type StartupMemoryTraceDelta = {
+  id: 'pixel' | 'ornaments';
+  checkpoint: StartupMemoryCheckpoint;
+  previous: StartupMemoryCheckpoint | null;
+  treeWorkingSetDeltaBytes: number | null;
+  treePrivateDeltaBytes: number | null;
+  webview2WorkingSetDeltaBytes: number | null;
+  webview2PrivateDeltaBytes: number | null;
+};
+
 type DebugWorkspaceId =
   | 'overview'
   | 'platforms'
@@ -235,6 +255,14 @@ function formatBytesToMb(value: number | undefined | null): string {
   const mb = value / 1024 / 1024;
   const normalized = Object.is(mb, -0) ? 0 : mb;
   return normalized.toFixed(1);
+}
+
+function formatSignedBytesToMb(value: number | undefined | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
+  const mb = value / 1024 / 1024;
+  const normalized = Object.is(mb, -0) ? 0 : mb;
+  const prefix = normalized > 0 ? '+' : '';
+  return `${prefix}${normalized.toFixed(1)}`;
 }
 
 function formatTelemetryTimestamp(value: number): string {
@@ -288,6 +316,16 @@ function formatDebugTimestamp(value: number | null | undefined): string {
   return new Date(value).toLocaleTimeString();
 }
 
+function formatDebugDateTime(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '-';
+  return new Date(value).toLocaleString();
+}
+
+function formatElapsedMs(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return '-';
+  return `${Math.round(value)}ms`;
+}
+
 function formatOptionalText(value: unknown): string {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return String(value);
@@ -297,6 +335,56 @@ function formatOptionalText(value: unknown): string {
     return normalized || '-';
   }
   return '-';
+}
+
+function diffTraceNumber(current: number | null | undefined, previous: number | null | undefined): number | null {
+  if (typeof current !== 'number' || !Number.isFinite(current)) return null;
+  if (typeof previous !== 'number' || !Number.isFinite(previous)) return null;
+  return current - previous;
+}
+
+function summarizeStartupCheckpointFields(fields: Record<string, unknown>): string {
+  const entries = Object.entries(fields).filter(([, value]) => value !== null && value !== undefined);
+  if (entries.length === 0) return '-';
+  return entries
+    .slice(0, 8)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(' | ');
+}
+
+function buildStartupTraceDelta(
+  checkpoints: readonly StartupMemoryCheckpoint[],
+  id: StartupMemoryTraceDelta['id'],
+  label: string
+): StartupMemoryTraceDelta | null {
+  const index = checkpoints.findIndex((checkpoint) => checkpoint.label === label);
+  if (index < 0) return null;
+
+  const checkpoint = checkpoints[index];
+  if (!checkpoint) return null;
+  const previous = index > 0 ? checkpoints[index - 1] ?? null : null;
+
+  return {
+    id,
+    checkpoint,
+    previous,
+    treeWorkingSetDeltaBytes: diffTraceNumber(
+      checkpoint.process?.totals.workingSetBytes,
+      previous?.process?.totals.workingSetBytes
+    ),
+    treePrivateDeltaBytes: diffTraceNumber(
+      checkpoint.process?.totals.privateBytes,
+      previous?.process?.totals.privateBytes
+    ),
+    webview2WorkingSetDeltaBytes: diffTraceNumber(
+      checkpoint.process?.totals.webview2WorkingSetBytes,
+      previous?.process?.totals.webview2WorkingSetBytes
+    ),
+    webview2PrivateDeltaBytes: diffTraceNumber(
+      checkpoint.process?.totals.webview2PrivateBytes,
+      previous?.process?.totals.webview2PrivateBytes
+    ),
+  };
 }
 
 function formatNullableToggleState(
@@ -830,6 +918,22 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     { format: 'string' }
   );
   const windowCommDebugEnabled = windowCommDebug === '1';
+  const [startupMemoryTraceEnabledSetting, setStartupMemoryTraceEnabledSetting] =
+    usePersistentSetting<string>(STORAGE_KEYS.STARTUP_MEMORY_TRACE_ENABLED, 'false', {
+      format: 'string',
+      listenStorageEvents: true,
+    });
+  const normalizedStartupMemoryTraceSetting = startupMemoryTraceEnabledSetting.trim().toLowerCase();
+  const startupMemoryTraceEnabled =
+    normalizedStartupMemoryTraceSetting === '1' ||
+    normalizedStartupMemoryTraceSetting === 'true' ||
+    normalizedStartupMemoryTraceSetting === 'yes' ||
+    normalizedStartupMemoryTraceSetting === 'on';
+  const [startupMemoryTrace, setStartupMemoryTrace] = useState<StartupMemoryTraceSession | null>(() =>
+    readPersistedStartupMemoryTrace()
+  );
+  const [startupMemoryTraceFeedback, setStartupMemoryTraceFeedback] =
+    useState<StartupMemoryTraceFeedback | null>(null);
   const [telemetrySnapshot, setTelemetrySnapshot] = useState<TelemetrySnapshot>(() =>
     telemetryService.getSnapshot()
   );
@@ -845,6 +949,26 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     () => getTelemetryAiContextPreset(telemetryQueryPresetId),
     [telemetryQueryPresetId]
   );
+  const startupMemoryTraceSummary = useMemo<{
+    latest: StartupMemoryCheckpoint | null;
+    idle15: StartupMemoryCheckpoint | null;
+    visualDeltas: StartupMemoryTraceDelta[];
+  }>(() => {
+    const checkpoints = startupMemoryTrace?.checkpoints ?? [];
+    const visualDeltas = [
+      buildStartupTraceDelta(checkpoints, 'pixel', 'pixel.renderer.created'),
+      buildStartupTraceDelta(checkpoints, 'ornaments', 'ornaments.overlay.opened'),
+    ].filter((item): item is StartupMemoryTraceDelta => Boolean(item));
+
+    return {
+      latest: checkpoints.length > 0 ? checkpoints[checkpoints.length - 1] ?? null : null,
+      idle15: checkpoints.find((checkpoint) => checkpoint.label === 'startup.idle.15s') ?? null,
+      visualDeltas,
+    };
+  }, [startupMemoryTrace]);
+  const startupMemoryTraceLatest = startupMemoryTraceSummary.latest;
+  const startupMemoryTraceIdle15 = startupMemoryTraceSummary.idle15;
+  const startupMemoryTraceVisualDeltas = startupMemoryTraceSummary.visualDeltas;
   const telemetryQueryPresetOptions = useMemo(
     () =>
       [
@@ -969,8 +1093,10 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   }, []);
 
   useEffect(() => {
+    if (activeWorkspace !== 'telemetry') return;
     void refreshPlatformPackDoctor();
   }, [
+    activeWorkspace,
     refreshPlatformPackDoctor,
     platformPackStartupHealth.currentStage,
     platformPackStartupHealth.registeredBuiltinCount,
@@ -1594,6 +1720,43 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     writeJson(STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1, [], { mode: 'idle', debounceMs: 200 });
   }, [clearThreeStageCaptureTimers]);
 
+  const refreshStartupMemoryTrace = useCallback(() => {
+    setStartupMemoryTrace(readPersistedStartupMemoryTrace());
+    setStartupMemoryTraceFeedback(null);
+  }, []);
+
+  const clearStartupMemoryTrace = useCallback(() => {
+    removeKey(STORAGE_KEYS.STARTUP_MEMORY_TRACE_V1);
+    setStartupMemoryTrace(null);
+    setStartupMemoryTraceFeedback({
+      tone: 'success',
+      message: t('debug.center.startupMemoryTrace.status.cleared'),
+    });
+  }, [t]);
+
+  const copyStartupMemoryTraceJson = useCallback(async () => {
+    if (!startupMemoryTrace) {
+      setStartupMemoryTraceFeedback({
+        tone: 'error',
+        message: t('debug.center.startupMemoryTrace.status.copyEmpty'),
+      });
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(startupMemoryTrace, null, 2));
+      setStartupMemoryTraceFeedback({
+        tone: 'success',
+        message: t('debug.center.startupMemoryTrace.status.copied'),
+      });
+    } catch {
+      setStartupMemoryTraceFeedback({
+        tone: 'error',
+        message: t('debug.center.startupMemoryTrace.status.copyFailed'),
+      });
+    }
+  }, [startupMemoryTrace, t]);
+
   const refresh = useCallback(async () => {
     if (!isTauri) return;
     const [nextConfig, snapshot] = await Promise.all([getDebugConfig(), getDebugEnvSnapshot()]);
@@ -1628,10 +1791,12 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   }, [isTauri]);
 
   useEffect(() => {
+    if (activeWorkspace !== 'memory') return;
     void refreshMemory();
-  }, [refreshMemory]);
+  }, [activeWorkspace, refreshMemory]);
 
   useEffect(() => {
+    if (activeWorkspace !== 'platforms') return;
     void refreshSyncOrchestrator();
     if (!isTauri) return;
 
@@ -1642,9 +1807,10 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     return () => {
       window.clearInterval(timer);
     };
-  }, [isTauri, refreshSyncOrchestrator]);
+  }, [activeWorkspace, isTauri, refreshSyncOrchestrator]);
 
   useEffect(() => {
+    if (activeWorkspace !== 'platforms') return;
     void refreshUnifiedSources();
     if (!isTauri) return;
 
@@ -1655,7 +1821,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     return () => {
       window.clearInterval(timer);
     };
-  }, [isTauri, refreshUnifiedSources]);
+  }, [activeWorkspace, isTauri, refreshUnifiedSources]);
 
   useEffect(() => {
     setPlatformAuthStatus(null);
@@ -1664,6 +1830,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   }, [selectedAuthConnectorDefinition?.connectorId]);
 
   useEffect(() => {
+    if (activeWorkspace !== 'platforms') return;
     void refreshSelectedPlatformAuthStatus();
     if (!isTauri) return;
 
@@ -1674,9 +1841,10 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     return () => {
       window.clearInterval(timer);
     };
-  }, [isTauri, refreshSelectedPlatformAuthStatus]);
+  }, [activeWorkspace, isTauri, refreshSelectedPlatformAuthStatus]);
 
   useEffect(() => {
+    if (activeWorkspace !== 'platforms') return;
     if (!isTauri) return;
     const sessionId = platformQrSession?.sessionId;
     if (!sessionId) return;
@@ -1688,9 +1856,10 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     return () => {
       window.clearInterval(timer);
     };
-  }, [platformQrSession?.sessionId, isTauri, pollSelectedPlatformQrSession]);
+  }, [activeWorkspace, platformQrSession?.sessionId, isTauri, pollSelectedPlatformQrSession]);
 
   useEffect(() => {
+    if (activeWorkspace !== 'platforms') return;
     if (!isTauri) return;
 
     let active = true;
@@ -1746,7 +1915,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
         unlisten();
       }
     };
-  }, [isTauri]);
+  }, [activeWorkspace, isTauri]);
 
   useEffect(() => {
     return () => {
@@ -3185,6 +3354,194 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               </pre>
             </div>
           </div>
+          </SettingsCard>
+        ) : null}
+
+        {activeWorkspace === 'runtime' ? (
+          <SettingsCard>
+          <div className="settings-card-header">
+            <div>
+              <p className="settings-card-label">{t('debug.center.startupMemoryTrace.title')}</p>
+              <p className="settings-card-desc">{t('debug.center.startupMemoryTrace.desc')}</p>
+            </div>
+            <span className="settings-card-badge">
+              {startupMemoryTraceEnabled ? t('common.state.on') : t('common.state.off')}
+            </span>
+          </div>
+
+          <SettingsToggleGroup>
+            <SettingsToggleButton
+              type="button"
+              active={!startupMemoryTraceEnabled}
+              onClick={() => {
+                setStartupMemoryTraceEnabledSetting('false');
+                setStartupMemoryTraceFeedback({
+                  tone: 'success',
+                  message: t('debug.center.startupMemoryTrace.status.disabled'),
+                });
+              }}
+            >
+              {t('common.state.off')}
+            </SettingsToggleButton>
+            <SettingsToggleButton
+              type="button"
+              active={startupMemoryTraceEnabled}
+              onClick={() => {
+                setStartupMemoryTraceEnabledSetting('true');
+                setStartupMemoryTraceFeedback({
+                  tone: 'success',
+                  message: t('debug.center.startupMemoryTrace.status.enabled'),
+                });
+              }}
+            >
+              {t('common.state.on')}
+            </SettingsToggleButton>
+          </SettingsToggleGroup>
+
+          <p className="settings-card-note">
+            {t('debug.center.startupMemoryTrace.note', {
+              key: STORAGE_KEYS.STARTUP_MEMORY_TRACE_ENABLED,
+            })}
+          </p>
+
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 10 }}>
+            <SettingsActionButton type="button" onClick={refreshStartupMemoryTrace}>
+              {t('common.action.refresh')}
+            </SettingsActionButton>
+            <SettingsActionButton
+              type="button"
+              onClick={() => void copyStartupMemoryTraceJson()}
+              disabled={!startupMemoryTrace}
+            >
+              {t('debug.center.startupMemoryTrace.action.copyJson')}
+            </SettingsActionButton>
+            <SettingsActionButton type="button" onClick={clearStartupMemoryTrace} disabled={!startupMemoryTrace}>
+              {t('debug.center.startupMemoryTrace.action.clear')}
+            </SettingsActionButton>
+          </div>
+
+          {startupMemoryTrace ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+              <p className="settings-card-desc">
+                {t('debug.center.startupMemoryTrace.summary', {
+                  sessionId: startupMemoryTrace.sessionId,
+                  count: startupMemoryTrace.checkpoints.length,
+                  startedAt: formatDebugDateTime(startupMemoryTrace.startedAtMs),
+                })}
+              </p>
+              {startupMemoryTraceLatest ? (
+                <p className="settings-card-desc">
+                  {t('debug.center.startupMemoryTrace.latest', {
+                    label: startupMemoryTraceLatest.label,
+                    at: formatElapsedMs(startupMemoryTraceLatest.performanceNowMs),
+                    treeWsMb: formatBytesToMb(startupMemoryTraceLatest.process?.totals.workingSetBytes),
+                    webview2PrivateMb: formatBytesToMb(
+                      startupMemoryTraceLatest.process?.totals.webview2PrivateBytes
+                    ),
+                  })}
+                </p>
+              ) : null}
+              {startupMemoryTraceIdle15 ? (
+                <p className="settings-card-desc">
+                  {t('debug.center.startupMemoryTrace.idle15', {
+                    treeWsMb: formatBytesToMb(startupMemoryTraceIdle15.process?.totals.workingSetBytes),
+                    treePrivateMb: formatBytesToMb(startupMemoryTraceIdle15.process?.totals.privateBytes),
+                    webview2WsMb: formatBytesToMb(
+                      startupMemoryTraceIdle15.process?.totals.webview2WorkingSetBytes
+                    ),
+                    webview2PrivateMb: formatBytesToMb(
+                      startupMemoryTraceIdle15.process?.totals.webview2PrivateBytes
+                    ),
+                  })}
+                </p>
+              ) : null}
+              {startupMemoryTraceLatest?.backend ? (
+                <p className="settings-card-desc">
+                  {t('debug.center.startupMemoryTrace.backend', {
+                    musicLibrary: startupMemoryTraceLatest.backend.musicLibraryServicesInitialized
+                      ? t('common.state.on')
+                      : t('common.state.off'),
+                    vst: startupMemoryTraceLatest.backend.vstServicesInitialized
+                      ? t('common.state.on')
+                      : t('common.state.off'),
+                  })}
+                </p>
+              ) : null}
+              {startupMemoryTraceLatest ? (
+                <p className="settings-card-desc">
+                  {t('debug.center.startupMemoryTrace.flags', {
+                    audio: startupMemoryTraceLatest.flags.nativeAudioConstructed
+                      ? t('common.state.on')
+                      : t('common.state.off'),
+                    pixel: startupMemoryTraceLatest.flags.pixelRendererCreated
+                      ? t('common.state.on')
+                      : t('common.state.off'),
+                    ornaments: startupMemoryTraceLatest.flags.ornamentsOverlayOpened
+                      ? t('common.state.on')
+                      : t('common.state.off'),
+                  })}
+                </p>
+              ) : null}
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: 12,
+                  borderRadius: 10,
+                  background: 'rgba(0,0,0,0.14)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                }}
+              >
+                <p className="settings-card-label">
+                  {t('debug.center.startupMemoryTrace.visualDeltas.title')}
+                </p>
+                <p className="settings-card-desc">
+                  {t('debug.center.startupMemoryTrace.visualDeltas.desc')}
+                </p>
+                {startupMemoryTraceVisualDeltas.length === 0 ? (
+                  <p className="settings-card-note" style={{ marginTop: 8 }}>
+                    {t('debug.center.startupMemoryTrace.visualDeltas.empty')}
+                  </p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+                    {startupMemoryTraceVisualDeltas.map((delta) => (
+                      <p className="settings-card-note" key={delta.id}>
+                        {t('debug.center.startupMemoryTrace.visualDeltas.item', {
+                          name: t(`debug.center.startupMemoryTrace.visualDeltas.name.${delta.id}`),
+                          label: delta.checkpoint.label,
+                          previous: delta.previous?.label ?? '-',
+                          at: formatElapsedMs(delta.checkpoint.performanceNowMs),
+                          treeWsDeltaMb: formatSignedBytesToMb(delta.treeWorkingSetDeltaBytes),
+                          treePrivateDeltaMb: formatSignedBytesToMb(delta.treePrivateDeltaBytes),
+                          webview2WsDeltaMb: formatSignedBytesToMb(delta.webview2WorkingSetDeltaBytes),
+                          webview2PrivateDeltaMb: formatSignedBytesToMb(delta.webview2PrivateDeltaBytes),
+                          fields: summarizeStartupCheckpointFields(delta.checkpoint.fields),
+                        })}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <p className="settings-card-note" style={{ marginTop: 12 }}>
+              {t('debug.center.startupMemoryTrace.empty')}
+            </p>
+          )}
+
+          {startupMemoryTraceFeedback ? (
+            <p
+              className="settings-card-note"
+              style={{
+                marginTop: 10,
+                color:
+                  startupMemoryTraceFeedback.tone === 'success'
+                    ? 'rgba(140,255,190,0.9)'
+                    : 'rgba(255,120,120,0.9)',
+              }}
+            >
+              {startupMemoryTraceFeedback.message}
+            </p>
+          ) : null}
           </SettingsCard>
         ) : null}
 

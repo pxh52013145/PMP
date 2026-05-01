@@ -8,6 +8,7 @@ import {
   TELEMETRY_SERVICE_TOKEN,
 } from './TelemetryService';
 import { attachTauriInvokeTelemetry } from './tauriInvokeTelemetry';
+import { flushStartupMemoryTraceTelemetry } from '../../modules/startup/startupMemoryTrace';
 
 export function createTelemetryModule(): KernelModule<AppEvents> {
   return {
@@ -16,6 +17,7 @@ export function createTelemetryModule(): KernelModule<AppEvents> {
       const lifecycle = services.get(APP_LIFECYCLE_SERVICE_TOKEN) as AppLifecycleService;
       const service = new DefaultTelemetryService();
       setGlobalTelemetryService(service);
+      flushStartupMemoryTraceTelemetry();
       const unregister = services.register(TELEMETRY_SERVICE_TOKEN, service);
       const detachConsoleBridge = attachConsoleBridge(service);
       const detachInvokeTelemetry = attachTauriInvokeTelemetry(service);

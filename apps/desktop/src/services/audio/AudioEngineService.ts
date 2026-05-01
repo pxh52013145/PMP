@@ -7,6 +7,10 @@ import { NativeAudioService } from './NativeAudioService';
 import { NoopAudioService } from './NoopAudioService';
 import type { IAudioService } from './types';
 import type { AudioRobustnessSnapshot } from './types';
+import {
+  recordStartupMemoryCheckpoint,
+  setStartupMemoryTraceFlag,
+} from '../../modules/startup/startupMemoryTrace';
 
 export type AudioEngineType = 'native';
 
@@ -89,6 +93,10 @@ export class DefaultAudioEngineService implements AudioEngineService {
       if (!this.isNativeAvailable) return new NoopAudioService();
       return new NativeAudioService();
     })();
+    if (this.audioService instanceof NativeAudioService) {
+      setStartupMemoryTraceFlag('nativeAudioConstructed');
+      recordStartupMemoryCheckpoint('audio.native.constructed');
+    }
 
     this.attachServiceListeners();
     if (options.enableTaskbarMediaControls !== false) {

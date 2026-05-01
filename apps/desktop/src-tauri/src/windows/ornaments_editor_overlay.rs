@@ -261,6 +261,13 @@ fn open_render_window(
     Ok(())
 }
 
+fn close_render_window(app: &AppHandle, label: &str) -> Result<(), String> {
+    if let Some(window) = app.get_window(label) {
+        window.close().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 pub fn open_render(app: &AppHandle) -> Result<(), String> {
     open_render_window(
         app,
@@ -274,6 +281,32 @@ pub fn open_render(app: &AppHandle) -> Result<(), String> {
         "/#/ornaments-render-overlay/above",
         true,
     )
+}
+
+pub fn sync_render_planes(app: &AppHandle, behind: bool, above: bool) -> Result<(), String> {
+    if behind {
+        open_render_window(
+            app,
+            ORNAMENTS_RENDER_OVERLAY_BEHIND_LABEL,
+            "/#/ornaments-render-overlay/behind",
+            false,
+        )?;
+    } else {
+        close_render_window(app, ORNAMENTS_RENDER_OVERLAY_BEHIND_LABEL)?;
+    }
+
+    if above {
+        open_render_window(
+            app,
+            ORNAMENTS_RENDER_OVERLAY_ABOVE_LABEL,
+            "/#/ornaments-render-overlay/above",
+            true,
+        )?;
+    } else {
+        close_render_window(app, ORNAMENTS_RENDER_OVERLAY_ABOVE_LABEL)?;
+    }
+
+    Ok(())
 }
 
 pub fn sync_geometry(app: &AppHandle) -> Result<(), String> {

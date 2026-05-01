@@ -31,7 +31,8 @@ import { readJson, readString, removeKey, writeJson } from '../../modules/storag
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { useWindowClose } from '../../contexts/WindowCloseContext';
-import { onStartupReady } from '../../modules/startup/startupReady';
+import { onStartupIdle } from '../../modules/startup/startupReady';
+import { recordStartupMemoryCheckpoint } from '../../modules/startup/startupMemoryTrace';
 
 type BackgroundThemeColor = { id: string; rgb: [number, number, number] };
 const DEFAULT_BACKGROUND_THEME_COLOR: BackgroundThemeColor = { id: 'cyan', rgb: [0, 255, 136] };
@@ -146,6 +147,7 @@ export function MatrixWorkbench({
 
   type MagnetLibraryFocusRequestV1 = { requestId: string; magnetId: string; createdAt: number };
   const focusCleanupTimerRef = useRef<number | null>(null);
+  const activeSetCheckpointRecordedRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -238,21 +240,18 @@ export function MatrixWorkbench({
   useEffect(() => {
     if (disablePixelCanvasForPerf) return;
 
-    let cancelled = false;
-    let timer: number | null = null;
-
-    const cleanupStartupReady = onStartupReady(() => {
-      timer = window.setTimeout(() => {
-        if (!cancelled) setPixelCanvasReady(true);
-      }, PIXEL_CANVAS_STARTUP_DELAY_MS);
-    });
+    const cleanupStartupIdle = onStartupIdle(
+      () => {
+        setPixelCanvasReady(true);
+      },
+      {
+        delayMs: PIXEL_CANVAS_STARTUP_DELAY_MS,
+        timeoutMs: 1_500,
+      }
+    );
 
     return () => {
-      cancelled = true;
-      cleanupStartupReady();
-      if (timer !== null) {
-        window.clearTimeout(timer);
-      }
+      cleanupStartupIdle();
     };
   }, [disablePixelCanvasForPerf]);
 
@@ -608,6 +607,18 @@ export function MatrixWorkbench({
     requestMainWindowClose,
     toggleEditMode,
   ]);
+
+  useEffect(() => {
+    if (activeSetCheckpointRecordedRef.current) return;
+    activeSetCheckpointRecordedRef.current = true;
+    recordStartupMemoryCheckpoint('magnet.active-set.resolved', {
+      activeMagnetCount: activeMagnets.length,
+      activeMagnetIdsCount: activeMagnetIds.size,
+      fields: {
+        activeSpaceId,
+      },
+    });
+  }, [activeMagnetIds.size, activeMagnets.length, activeSpaceId]);
 
   // 更新占用信息
   useEffect(() => {

@@ -47,7 +47,7 @@ import {
   shouldRunDurableStorageMigrations,
   shouldRunPmpsDurableMigration,
 } from './modules/startup/durableMigrationGuards';
-import { onStartupReady } from './modules/startup/startupReady';
+import { onStartupIdle } from './modules/startup/startupReady';
 import { readOrnamentsConfig } from './modules/ornaments-v2/store';
 import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
 import { applyWindowPinPolicy } from './utils/windowPinRuntime';
@@ -55,13 +55,50 @@ import { readWindowPinState, writeWindowPinState } from './utils/windowPinState'
 import { MatrixWorkbench } from './workbenches/matrix/MatrixWorkbench';
 import { getTelemetryLogger } from './services/telemetry/TelemetryService';
 import { invokeWithTelemetry } from './services/telemetry/tauriInvokeTelemetry';
+import {
+  recordStartupMemoryCheckpoint,
+  setStartupMemoryTraceFlag,
+} from './modules/startup/startupMemoryTrace';
 import './App.css';
 
 let coverDecodeReporter: ((src: string, width: number, height: number) => void) | null = null;
 let coverDecodeReporterLoading: Promise<void> | null = null;
 
-function hasEnabledOrnaments(): boolean {
-  return readOrnamentsConfig().items.some((item) => item.enabled);
+const ORNAMENTS_RENDER_OVERLAY_STARTUP_DELAY_MS = 6_000;
+
+type OrnamentsRenderPlan = {
+  enabledCount: number;
+  behind: boolean;
+  above: boolean;
+  animatedCount: number;
+  totalPlacementAreaPx: number;
+  totalSourcePixels: number;
+};
+
+function readOrnamentsRenderPlan(): OrnamentsRenderPlan {
+  const enabledItems = readOrnamentsConfig().items.filter((item) => item.enabled);
+  return enabledItems.reduce<OrnamentsRenderPlan>(
+    (plan, item) => {
+      if (item.layer.plane === -1) {
+        plan.behind = true;
+      } else {
+        plan.above = true;
+      }
+      plan.enabledCount += 1;
+      if (item.media.animated) plan.animatedCount += 1;
+      plan.totalPlacementAreaPx += Math.max(0, item.placement.width * item.placement.height);
+      plan.totalSourcePixels += Math.max(0, item.media.sourceWidth * item.media.sourceHeight);
+      return plan;
+    },
+    {
+      enabledCount: 0,
+      behind: false,
+      above: false,
+      animatedCount: 0,
+      totalPlacementAreaPx: 0,
+      totalSourcePixels: 0,
+    }
+  );
 }
 
 function reportCoverDecoded(src: string, width: number, height: number): void {
@@ -169,8 +206,20 @@ function AppContent() {
       });
     };
 
+    const detachGeometryListeners = () => {
+      if (unlistenMove) {
+        unlistenMove();
+        unlistenMove = null;
+      }
+      if (unlistenResize) {
+        unlistenResize();
+        unlistenResize = null;
+      }
+    };
+
     const attachGeometryListeners = async () => {
       try {
+        detachGeometryListeners();
         const [moveCleanup, resizeCleanup] = await Promise.all([
           appWindow.onMoved(scheduleGeometrySync),
           appWindow.onResized(scheduleGeometrySync),
@@ -190,8 +239,21 @@ function AppContent() {
     };
 
     const openRenderOverlays = () => {
-      if (!hasEnabledOrnaments()) {
+      const plan = readOrnamentsRenderPlan();
+      if (plan.enabledCount === 0) {
         telemetry.info('ornaments.render-overlay.skip-empty');
+        detachGeometryListeners();
+        void invokeWithTelemetry('ornaments_render_overlay_sync_planes', {
+          behind: false,
+          above: false,
+        }, {
+          moduleId: 'ornaments',
+          component: 'AppContent',
+          event: 'ornaments.render-overlay.sync-empty',
+          successLevel: 'info',
+        }).catch(() => {
+          // best-effort: disabled ornaments should not block main window boot
+        });
         return;
       }
 
@@ -199,14 +261,39 @@ function AppContent() {
         window.requestAnimationFrame(() => {
           if (cancelled) return;
 
-          void invokeWithTelemetry('ornaments_render_overlay_open', undefined, {
+          setStartupMemoryTraceFlag('ornamentsOverlayRequested');
+          recordStartupMemoryCheckpoint('ornaments.overlay.open.requested', {
+            fields: {
+              enabledCount: plan.enabledCount,
+              behind: plan.behind,
+              above: plan.above,
+              animatedCount: plan.animatedCount,
+              totalPlacementAreaPx: plan.totalPlacementAreaPx,
+              totalSourcePixels: plan.totalSourcePixels,
+            },
+          });
+          void invokeWithTelemetry('ornaments_render_overlay_sync_planes', {
+            behind: plan.behind,
+            above: plan.above,
+          }, {
             moduleId: 'ornaments',
             component: 'AppContent',
-            event: 'ornaments.render-overlay.open',
+            event: 'ornaments.render-overlay.sync-planes',
             successLevel: 'info',
           })
             .then(() => {
               if (cancelled) return;
+              setStartupMemoryTraceFlag('ornamentsOverlayOpened');
+              recordStartupMemoryCheckpoint('ornaments.overlay.opened', {
+                fields: {
+                  enabledCount: plan.enabledCount,
+                  behind: plan.behind,
+                  above: plan.above,
+                  animatedCount: plan.animatedCount,
+                  totalPlacementAreaPx: plan.totalPlacementAreaPx,
+                  totalSourcePixels: plan.totalSourcePixels,
+                },
+              });
               scheduleGeometrySync();
               void attachGeometryListeners();
             })
@@ -217,7 +304,10 @@ function AppContent() {
       });
     };
 
-    const cleanupStartupReady = onStartupReady(openRenderOverlays);
+    const cleanupStartupIdle = onStartupIdle(openRenderOverlays, {
+      delayMs: ORNAMENTS_RENDER_OVERLAY_STARTUP_DELAY_MS,
+      timeoutMs: 2_000,
+    });
     let cleanupOrnamentsUpdated: (() => void) | null = null;
     const cleanupOrnamentsUpdatedPromise = setupTauriListener(TAURI_EVENTS.ORNAMENTS_UPDATED, () => {
       if (!cancelled) openRenderOverlays();
@@ -234,7 +324,7 @@ function AppContent() {
 
     return () => {
       cancelled = true;
-      cleanupStartupReady();
+      cleanupStartupIdle();
       if (cleanupOrnamentsUpdated) cleanupOrnamentsUpdated();
       void cleanupOrnamentsUpdatedPromise.then((cleanup) => {
         if (cleanup && cleanup !== cleanupOrnamentsUpdated) cleanup();
@@ -242,8 +332,7 @@ function AppContent() {
       if (syncFrame !== null) {
         window.cancelAnimationFrame(syncFrame);
       }
-      if (unlistenMove) unlistenMove();
-      if (unlistenResize) unlistenResize();
+      detachGeometryListeners();
     };
   }, [isTauri, telemetry]);
 

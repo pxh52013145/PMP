@@ -17,6 +17,7 @@ import { createTelemetryModule } from '../services/telemetry';
 import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { STORAGE_KEYS } from '../utils/windowCommunication';
 import { PMP_STORAGE_CHANGE_EVENT } from '../modules/storage/localStorage';
+import { recordStartupMemoryCheckpoint } from '../modules/startup/startupMemoryTrace';
 
 type DesktopKernel = Kernel<AppEvents>;
 
@@ -191,6 +192,7 @@ function createRuntime(): KernelRuntime {
       loader.activate([module]);
       builtinContributionsActivated = true;
       telemetry.info('kernel.builtin-contributions.activated');
+      recordStartupMemoryCheckpoint('builtin-contributions.activated');
     })().finally(() => {
       builtinContributionsActivationPromise = null;
     });
@@ -231,6 +233,13 @@ function createRuntime(): KernelRuntime {
   loader.activate(modules);
   telemetry.info('kernel.runtime.created');
   telemetry.info('kernel.modules.activated', {
+    fields: {
+      moduleCount: modules.length,
+      auxWindow: isAuxWindow,
+      canUsePluginModules,
+    },
+  });
+  recordStartupMemoryCheckpoint('kernel.modules.activated', {
     fields: {
       moduleCount: modules.length,
       auxWindow: isAuxWindow,

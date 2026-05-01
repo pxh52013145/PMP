@@ -36,6 +36,9 @@ import {
   SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN,
   type SpaceRuntimeGovernanceService,
 } from './SpaceRuntimeGovernanceService';
+import { onStartupIdle } from '../../modules/startup/startupReady';
+
+const MEMORY_GOVERNANCE_STARTUP_FIRST_RUN_DELAY_MS = 15_000;
 
 function readEnabledSetting(): boolean {
   try {
@@ -98,6 +101,12 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
       let enabled = readEnabledSetting();
       let timer: number | null = null;
       let playbackTimer: number | null = null;
+      let cleanupStartupFirstRun: (() => void) | null = null;
+
+      const cancelStartupFirstRun = () => {
+        cleanupStartupFirstRun?.();
+        cleanupStartupFirstRun = null;
+      };
 
       const stopPlaybackWatch = () => {
         if (playbackTimer === null) return;
@@ -137,6 +146,21 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
         }, MEMORY_GOVERNANCE_INTERVAL_MS);
       };
 
+      const scheduleStartupFirstRun = () => {
+        cancelStartupFirstRun();
+        cleanupStartupFirstRun = onStartupIdle(
+          () => {
+            cleanupStartupFirstRun = null;
+            if (!enabled) return;
+            void service.runOnce('interval');
+          },
+          {
+            delayMs: MEMORY_GOVERNANCE_STARTUP_FIRST_RUN_DELAY_MS,
+            timeoutMs: 3_000,
+          }
+        );
+      };
+
       const stop = () => {
         if (timer === null) return;
         window.clearInterval(timer);
@@ -154,8 +178,10 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
         if (enabled) {
           start();
           startPlaybackWatch();
+          cancelStartupFirstRun();
           void service.runOnce(reason);
         } else {
+          cancelStartupFirstRun();
           stop();
           stopPlaybackWatch();
         }
@@ -164,7 +190,7 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
       if (enabled) {
         start();
         startPlaybackWatch();
-        void service.runOnce('interval');
+        scheduleStartupFirstRun();
       }
 
       const unregisterFlush = lifecycle.registerFlushHandler((reason) => {
@@ -195,6 +221,7 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
       window.addEventListener(PMP_STORAGE_CHANGE_EVENT, onStorageChange as EventListener);
 
       return () => {
+        cancelStartupFirstRun();
         stop();
         stopPlaybackWatch();
         try {

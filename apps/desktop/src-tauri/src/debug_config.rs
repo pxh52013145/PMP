@@ -195,6 +195,7 @@ pub fn env_snapshot() -> BTreeMap<String, Option<String>> {
         "PMP_VST_BRIDGE_MINIDUMP_DIR",
         "PMP_VST_BRIDGE_DEBUG",
         "PMP_RACK_VST3_DEBUG",
+        "PMP_STARTUP_MEMORY_TRACE",
     ];
 
     for key in keys {

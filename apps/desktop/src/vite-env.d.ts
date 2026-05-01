@@ -8,6 +8,7 @@ interface ImportMetaEnv {
   readonly VITE_PERF_NEXT_LOW_RENDER?: string;
   readonly VITE_PERF_PIXEL_ANTIALIAS?: string;
   readonly VITE_PERF_ROUND_PIXELS?: string;
+  readonly VITE_PMP_STARTUP_MEMORY_TRACE?: string;
 }
 
 interface ImportMeta {

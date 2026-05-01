@@ -6,6 +6,10 @@ import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { useQuality } from '../../contexts/QualityContext';
 import { readString } from '../../modules/storage';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import {
+  recordStartupMemoryCheckpoint,
+  setStartupMemoryTraceFlag,
+} from '../../modules/startup/startupMemoryTrace';
 
 interface PixelMatrixCanvasProps {
   onPixelPositionsUpdate?: (positions: Map<string, { x: number; y: number }>) => void;
@@ -45,6 +49,7 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
       fpsCapFull: quality.fpsForeground,
       fpsCapThrottle: quality.fpsBackground,
     });
+    setStartupMemoryTraceFlag('pixelRendererCreated');
     containerRef.current.appendChild(renderer.getView());
     rendererRef.current = renderer;
 
@@ -66,6 +71,13 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
     }
 
     onPixelPositionsUpdateRef.current?.(renderer.getAllPixelPositions());
+    recordStartupMemoryCheckpoint('pixel.renderer.created', {
+      fields: {
+        renderScale: quality.renderScale,
+        fpsForeground: quality.fpsForeground,
+        fpsBackground: quality.fpsBackground,
+      },
+    });
 
     let resizeRaf: number | null = null;
     const handleResize = () => {

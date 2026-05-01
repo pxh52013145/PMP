@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::Arc;
 
-use crate::{debug_config, modules, perf_monitor, telemetry, telemetry_contract, windows};
+use crate::{
+    app_builder, debug_config, modules, perf_monitor, telemetry, telemetry_contract, windows,
+};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -12,6 +14,13 @@ pub struct RecentGitCommit {
     pub short_hash: String,
     pub subject: String,
     pub committed_at_iso: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartupRuntimeState {
+    pub music_library_services_initialized: bool,
+    pub vst_services_initialized: bool,
 }
 
 fn parse_recent_git_commits_output(stdout: &str) -> Vec<RecentGitCommit> {
@@ -92,6 +101,14 @@ pub fn debug_set_config(
 #[tauri::command]
 pub fn debug_get_env_snapshot() -> BTreeMap<String, Option<String>> {
     debug_config::env_snapshot()
+}
+
+#[tauri::command]
+pub fn debug_get_startup_runtime_state() -> StartupRuntimeState {
+    StartupRuntimeState {
+        music_library_services_initialized: app_builder::music_library_services_initialized(),
+        vst_services_initialized: app_builder::vst_services_initialized(),
+    }
 }
 
 #[tauri::command]
