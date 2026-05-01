@@ -1907,19 +1907,25 @@ std::optional<PluginDescriptor> buildDescriptorForPluginId(const std::string& pl
   return desc;
 }
 
-class EditorHostContent : public juce::Component {
+class EditorHostContent : public juce::Component, private juce::ComponentListener {
  public:
+  explicit EditorHostContent(std::function<void(int, int)> onChildSizeChanged)
+      : onChildSizeChanged_(std::move(onChildSizeChanged)) {}
+
   void setChild(std::unique_ptr<juce::Component> child) {
     if (child_.get() == child.get()) return;
     if (child_) {
+      child_->removeComponentListener(this);
       removeChildComponent(child_.get());
     }
     child_ = std::move(child);
     if (child_) {
+      child_->addComponentListener(this);
       addAndMakeVisible(*child_);
       // Match our own size to the hosted child so DocumentWindow sizing works.
       if (child_->getWidth() > 0 && child_->getHeight() > 0) {
         setSize(child_->getWidth(), child_->getHeight());
+        notifyChildSizeChanged(child_->getWidth(), child_->getHeight());
       }
       resized();
     }
@@ -1929,16 +1935,73 @@ class EditorHostContent : public juce::Component {
 
   void resized() override {
     if (child_) {
-      child_->setBounds(getLocalBounds());
+      const auto targetBounds = getLocalBounds();
+      syncingChildBounds_ = true;
+      if (auto* editor = dynamic_cast<juce::AudioProcessorEditor*>(child_.get());
+          editor != nullptr && editorCanUseConstrainer(*editor)) {
+        editor->setBoundsConstrained(targetBounds);
+      } else {
+        child_->setBounds(targetBounds);
+      }
+      syncingChildBounds_ = false;
+
+      if (child_->getWidth() != targetBounds.getWidth() ||
+          child_->getHeight() != targetBounds.getHeight()) {
+        syncToChildSize(*child_);
+      }
+    }
+  }
+
+  void childBoundsChanged(juce::Component* child) override {
+    if (syncingChildBounds_ || child != child_.get() || child == nullptr) return;
+    syncToChildSize(*child);
+  }
+
+  void componentMovedOrResized(juce::Component& component, bool, bool wasResized) override {
+    if (!wasResized || syncingChildBounds_ || &component != child_.get()) return;
+    syncToChildSize(component);
+  }
+
+  ~EditorHostContent() override {
+    if (child_) {
+      child_->removeComponentListener(this);
     }
   }
 
  private:
+  static bool editorCanUseConstrainer(juce::AudioProcessorEditor& editor) {
+    auto* topLevel = editor.getTopLevelComponent();
+    return topLevel != nullptr && topLevel->getPeer() != nullptr && editor.getConstrainer() != nullptr;
+  }
+
+  void syncToChildSize(const juce::Component& child) {
+    const int width = child.getWidth();
+    const int height = child.getHeight();
+    if (width <= 0 || height <= 0) return;
+
+    if (getWidth() != width || getHeight() != height) {
+      setSize(width, height);
+    }
+    notifyChildSizeChanged(width, height);
+  }
+
+  void notifyChildSizeChanged(int width, int height) {
+    if (onChildSizeChanged_) {
+      onChildSizeChanged_(width, height);
+    }
+  }
+
+  std::function<void(int, int)> onChildSizeChanged_;
   std::unique_ptr<juce::Component> child_;
+  bool syncingChildBounds_ = false;
 };
 
 class PluginEditorWindow : public juce::DocumentWindow {
  public:
+  static constexpr int kMinimumContentWidth = 320;
+  static constexpr int kMinimumContentHeight = 180;
+  static constexpr int kMaximumWindowDimension = 32768;
+
   PluginEditorWindow(const juce::String& title,
                      std::unique_ptr<juce::Component> content,
                      uint64_t ownerHwnd,
@@ -1946,7 +2009,8 @@ class PluginEditorWindow : public juce::DocumentWindow {
                      std::function<void()> onRequestDestroy)
       : DocumentWindow(title,
                        juce::Colours::darkgrey,
-                       juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton),
+                       juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton,
+                       false),
         ownerHwnd_(ownerHwnd),
         pinned_(pinned),
         onRequestDestroy_(std::move(onRequestDestroy)) {
@@ -1959,7 +2023,10 @@ class PluginEditorWindow : public juce::DocumentWindow {
                    safeMode ? 1 : 0);
     }
 
-    setUsingNativeTitleBar(safeMode);
+    // Keep the native editor in JUCE's self-drawn chrome even in compatibility mode. Safe mode
+    // controls editor creation/attachment order; using the OS titlebar here regresses the custom
+    // VST window controls and resize behavior.
+    setUsingNativeTitleBar(false);
     setResizable(false, false);
 
     if (isEditorLogEnabled()) {
@@ -1967,18 +2034,21 @@ class PluginEditorWindow : public juce::DocumentWindow {
     }
     // Keep DocumentWindow content stable and only swap the hosted child.
     // Some plugin UIs appear sensitive to DocumentWindow content replacement.
-    auto* hostContent = new EditorHostContent();
+    auto* hostContent = new EditorHostContent([this](int width, int height) {
+      resizeWindowToContent(width, height, false);
+    });
     setContentOwned(hostContent, true);
     hostContent_ = hostContent;
 
     if (content) {
       hostContent_->setChild(std::move(content));
     }
+    applyContentResizeCapability();
     if (isEditorLogEnabled()) {
       std::fprintf(stderr, "[pmp-vst-bridge] editor window ctor after setContentOwned\n");
     }
 
-    // In safe mode, avoid extra host chrome to better match JUCE AudioPluginHost behavior.
+    // In safe mode, keep the host chrome minimal and avoid the extra pin control.
     if (!safeMode) {
       pinButton_.setButtonText("Pin");
       pinButton_.setClickingTogglesState(true);
@@ -1987,7 +2057,7 @@ class PluginEditorWindow : public juce::DocumentWindow {
       addAndMakeVisible(pinButton_);
     }
 
-    int width = 320;
+    int width = kMinimumContentWidth;
     int height = 240;
     if (hostContent_ != nullptr) {
       if (auto* child = hostContent_->getChild()) {
@@ -1995,19 +2065,23 @@ class PluginEditorWindow : public juce::DocumentWindow {
         height = std::max(height, child->getHeight());
       }
     }
-    centreWithSize(width, height);
+    resizeWindowToContent(width, height, false);
+    centreWithSize(getWidth(), getHeight());
+
+    // Create the native peer only after self-drawn chrome, content, and resizability are configured.
+    // DocumentWindow's default constructor path adds the peer too early on Windows, which can leave
+    // the VST editor stuck with an OS titlebar even after setUsingNativeTitleBar(false).
+    setVisible(false);
+    if (!isOnDesktop()) {
+      addToDesktop(getDesktopWindowStyleFlags());
+    }
 
     if (safeMode) {
-      // Compatibility mode: avoid Win32 style hacks and hidden-peer tricks.
-      // Some plugins (notably Waves/WaveShell family) are sensitive to unusual window styles.
+      // Compatibility mode: avoid Win32 style hacks. Some plugins (notably Waves/WaveShell family)
+      // are sensitive to unusual window styles, but the peer still uses JUCE self-drawn chrome.
       setVisible(true);
     } else {
-      // Create the native peer while hidden so we can apply Win32 styles/owner before the first
-      // show(), avoiding a transient taskbar icon flash on open.
-      setVisible(false);
-      if (!isOnDesktop()) {
-        addToDesktop(getDesktopWindowStyleFlags());
-      }
+      // Apply Win32 styles/owner before the first show(), avoiding a transient taskbar icon flash.
       applyWin32Style();
       setVisible(true);
     }
@@ -2035,6 +2109,9 @@ class PluginEditorWindow : public juce::DocumentWindow {
 
   int getDesktopWindowStyleFlags() const override {
     int styleFlags = juce::DocumentWindow::getDesktopWindowStyleFlags();
+    if (!isUsingNativeTitleBar()) {
+      styleFlags &= ~static_cast<int>(juce::ComponentPeer::windowHasTitleBar);
+    }
     if (isEditorSafeModeEnabled()) {
       // Keep JUCE defaults (appears on taskbar, normal window flags).
       return styleFlags;
@@ -2055,7 +2132,18 @@ class PluginEditorWindow : public juce::DocumentWindow {
     juce::MessageManager::callAsync([callback]() mutable { callback(); });
   }
 
-  void minimiseButtonPressed() override { setVisible(false); }
+  void minimiseButtonPressed() override {
+#if defined(_WIN32)
+    if (auto* peer = getPeer()) {
+      HWND hwnd = (HWND)peer->getNativeHandle();
+      if (hwnd != nullptr) {
+        ShowWindow(hwnd, SW_MINIMIZE);
+        return;
+      }
+    }
+#endif
+    setMinimised(true);
+  }
 
   void resized() override {
     juce::DocumentWindow::resized();
@@ -2080,10 +2168,14 @@ class PluginEditorWindow : public juce::DocumentWindow {
 
   void bringToFront(bool activate) {
 #if defined(_WIN32)
-    if (!isEditorSafeModeEnabled()) {
-      if (auto* peer = getPeer()) {
-        HWND hwnd = (HWND)peer->getNativeHandle();
-        if (hwnd != nullptr) {
+    if (auto* peer = getPeer()) {
+      HWND hwnd = (HWND)peer->getNativeHandle();
+      if (hwnd != nullptr) {
+        if (IsIconic(hwnd)) {
+          ShowWindow(hwnd, SW_RESTORE);
+        }
+
+        if (!isEditorSafeModeEnabled()) {
           const UINT baseFlags = SWP_NOMOVE | SWP_NOSIZE;
           if (activate) {
             SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, baseFlags);
@@ -2112,6 +2204,7 @@ class PluginEditorWindow : public juce::DocumentWindow {
         std::fprintf(stderr, "[pmp-vst-bridge] editor window replaceContent: setChild begin\n");
       }
       hostContent_->setChild(std::move(content));
+      applyContentResizeCapability();
       if (isEditorLogEnabled()) {
         std::fprintf(stderr, "[pmp-vst-bridge] editor window replaceContent: setChild end\n");
       }
@@ -2120,7 +2213,7 @@ class PluginEditorWindow : public juce::DocumentWindow {
       setContentOwned(content.release(), true);
     }
 
-    int width = 320;
+    int width = kMinimumContentWidth;
     int height = 240;
     if (hostContent_ != nullptr) {
       if (auto* child = hostContent_->getChild()) {
@@ -2131,11 +2224,71 @@ class PluginEditorWindow : public juce::DocumentWindow {
       width = std::max(width, root->getWidth());
       height = std::max(height, root->getHeight());
     }
-    centreWithSize(width, height);
+    resizeWindowToContent(width, height, false);
+    centreWithSize(getWidth(), getHeight());
     resized();
   }
 
  private:
+  static bool contentWantsResizableWindow(const juce::Component* content) {
+    if (auto* editor = dynamic_cast<const juce::AudioProcessorEditor*>(content)) {
+      return editor->isResizable();
+    }
+    return false;
+  }
+
+  juce::AudioProcessorEditor* getHostedEditor() const {
+    if (hostContent_ == nullptr) return nullptr;
+    return dynamic_cast<juce::AudioProcessorEditor*>(hostContent_->getChild());
+  }
+
+  void applyContentResizeCapability() {
+    const bool resizable =
+        contentWantsResizableWindow(hostContent_ != nullptr ? hostContent_->getChild() : nullptr);
+    // Use window-border resizing so the plugin's own bottom-right editor handle remains usable.
+    setResizable(resizable, false);
+    applyContentResizeLimits();
+  }
+
+  void applyContentResizeLimits() {
+    int minContentWidth = kMinimumContentWidth;
+    int minContentHeight = kMinimumContentHeight;
+    int maxContentWidth = kMaximumWindowDimension;
+    int maxContentHeight = kMaximumWindowDimension;
+
+    if (auto* editor = getHostedEditor()) {
+      if (auto* editorConstrainer = editor->getConstrainer()) {
+        minContentWidth = std::max(minContentWidth, editorConstrainer->getMinimumWidth());
+        minContentHeight = std::max(minContentHeight, editorConstrainer->getMinimumHeight());
+        maxContentWidth = std::min(maxContentWidth, editorConstrainer->getMaximumWidth());
+        maxContentHeight = std::min(maxContentHeight, editorConstrainer->getMaximumHeight());
+      }
+    }
+
+    minContentWidth = std::min(minContentWidth, maxContentWidth);
+    minContentHeight = std::min(minContentHeight, maxContentHeight);
+
+    const auto border = getContentComponentBorder();
+    setResizeLimits(minContentWidth + border.getLeftAndRight(),
+                    minContentHeight + border.getTopAndBottom(),
+                    maxContentWidth + border.getLeftAndRight(),
+                    maxContentHeight + border.getTopAndBottom());
+  }
+
+  void resizeWindowToContent(int width, int height, bool preserveTopLeft) {
+    applyContentResizeLimits();
+
+    const int contentWidth = std::max(kMinimumContentWidth, width);
+    const int contentHeight = std::max(kMinimumContentHeight, height);
+    if (preserveTopLeft) {
+      const auto topLeft = getPosition();
+      setContentComponentSize(contentWidth, contentHeight);
+      setTopLeftPosition(topLeft);
+      return;
+    }
+    setContentComponentSize(contentWidth, contentHeight);
+  }
+
   void applyWin32Style() {
 #if defined(_WIN32)
     if (isEditorSafeModeEnabled()) {
