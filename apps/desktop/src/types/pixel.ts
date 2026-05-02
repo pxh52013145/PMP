@@ -2,6 +2,13 @@
  * Pixel Dot 相关类型定义
  */
 
+import type {
+  RuntimeCapabilityId,
+  RuntimeLeaseActivation,
+  RuntimeLeaseBackgroundPolicy,
+  RuntimeRestorePriority,
+} from '../contracts/runtimeCapsule';
+
 export type PixelShape = 'square' | 'circle' | 'triangle' | 'hexagon';
 
 export interface PixelDot {
@@ -154,10 +161,16 @@ export type MagnetRuntimeMemoryTier = 'light' | 'medium' | 'heavy';
 
 export interface MagnetRuntimeConfig {
   memoryTier?: MagnetRuntimeMemoryTier;
+  capabilities?: RuntimeCapabilityId[];
+  activation?: RuntimeLeaseActivation;
   spaceId?: string;
   releaseOnSpaceExit?: boolean;
+  backgroundPolicy?: RuntimeLeaseBackgroundPolicy;
   backgroundCapable?: boolean;
   backgroundAfterFirstActivationOnly?: boolean;
+  warmRetentionMs?: number;
+  hibernateAfterMs?: number;
+  restorePriority?: RuntimeRestorePriority;
 }
 
 /**

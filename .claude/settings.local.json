@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm:*)",
+      "Bash(git:*)",
+      "Bash(npm --prefix \"/d/pixel-matrix-player/apps/desktop\" test -- --runInBand src/magnet-system/plugins/pluginRuntimeResolver.test.ts src/magnet-system/plugins/sidecarDemoFixture.test.ts src/magnet-system/plugins/runtime/sidecarRuntimeBridgeHostSession.test.ts src/magnet-system/plugins/runtime/sidecarCommandRuntime.test.ts)",
+      "Bash(npm:*)"
+    ]
+  }
+}

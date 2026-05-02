@@ -13,4 +13,3 @@ pub async fn background_import_media(
     .await
     .map_err(|e| format!("Import task failed: {e}"))?
 }
-

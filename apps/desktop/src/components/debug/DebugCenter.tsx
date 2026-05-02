@@ -10,6 +10,7 @@ import {
 import './DebugCenter.css';
 import type { TelemetryQueryInput, TelemetryQueryResult, TelemetryRecord } from '../../contracts/telemetry';
 import { useKernel } from '../../contexts/KernelContext';
+import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { getGlobalProcessPerfService } from '../../services/performance-control';
 import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import { useNavigation } from '../../contexts/NavigationContext';
@@ -72,6 +73,11 @@ import {
   TELEMETRY_SERVICE_TOKEN,
 } from '../../services/telemetry/TelemetryService';
 import type { TelemetryService, TelemetrySnapshot } from '../../services/telemetry/telemetryTypes';
+import {
+  RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN,
+  type RuntimeCapsuleManagerService,
+  type RuntimeCapsuleManagerSnapshot,
+} from '../../services/runtime-capsules';
 import {
   buildTelemetryAiContextReport,
   getTelemetryAiContextPreset,
@@ -853,8 +859,17 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const t = useT();
   const { history } = useNavigation();
   const isTauri = useMemo(() => isTauriRuntime(), []);
+  const { isVisible, renderMode } = useWindowActivity();
+  const debugPollingAllowed = isVisible && renderMode !== 'pause';
   const telemetryService = useMemo(
     () => kernel.services.get(TELEMETRY_SERVICE_TOKEN) as TelemetryService,
+    [kernel]
+  );
+  const runtimeCapsuleManager = useMemo(
+    () =>
+      kernel.services.getOptional(
+        RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN
+      ) as RuntimeCapsuleManagerService | null,
     [kernel]
   );
   const [config, setConfigState] = useState<DebugConfig>(() => getDefaultDebugConfig());
@@ -864,6 +879,10 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [desktopCoverLeaseStats, setDesktopCoverLeaseStats] = useState<DesktopCoverLeaseStats | null>(null);
   const [musicLibrarySnapshot, setMusicLibrarySnapshot] =
     useState<MusicLibraryRuntimeMemorySnapshot | null>(null);
+  const [runtimeCapsuleSnapshot, setRuntimeCapsuleSnapshot] =
+    useState<RuntimeCapsuleManagerSnapshot | null>(() =>
+      runtimeCapsuleManager?.collectSnapshot() ?? null
+    );
   const [busy, setBusy] = useState(false);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -945,6 +964,39 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     useState<TelemetryArtifactAction | null>(null);
   const [telemetryArtifactFeedback, setTelemetryArtifactFeedback] =
     useState<TelemetryArtifactFeedback | null>(null);
+  useEffect(() => {
+    if (!runtimeCapsuleManager) {
+      setRuntimeCapsuleSnapshot(null);
+      return;
+    }
+    return runtimeCapsuleManager.subscribe(setRuntimeCapsuleSnapshot);
+  }, [runtimeCapsuleManager]);
+
+  useEffect(() => {
+    if (activeWorkspace !== 'memory') return;
+    if (!debugPollingAllowed) return;
+    if (!runtimeCapsuleManager) return;
+
+    const lease = runtimeCapsuleManager.acquireLease({
+      capabilityId: 'debug.process-perf',
+      ownerKind: 'debug',
+      ownerId: 'debug-center:memory',
+      priority: 'foreground',
+      reason: {
+        routeId: 'debug-center',
+        detail: 'debug center memory workspace active',
+      },
+    });
+
+    return () => {
+      if (!lease) return;
+      runtimeCapsuleManager.releaseLease(lease.id, {
+        kind: 'lease-expired',
+        detail: 'debug center memory workspace released',
+      });
+    };
+  }, [activeWorkspace, debugPollingAllowed, runtimeCapsuleManager]);
+
   const telemetryQueryPreset = useMemo(
     () => getTelemetryAiContextPreset(telemetryQueryPresetId),
     [telemetryQueryPresetId]
@@ -1094,9 +1146,11 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
 
   useEffect(() => {
     if (activeWorkspace !== 'telemetry') return;
+    if (!debugPollingAllowed) return;
     void refreshPlatformPackDoctor();
   }, [
     activeWorkspace,
+    debugPollingAllowed,
     refreshPlatformPackDoctor,
     platformPackStartupHealth.currentStage,
     platformPackStartupHealth.registeredBuiltinCount,
@@ -1792,11 +1846,13 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
 
   useEffect(() => {
     if (activeWorkspace !== 'memory') return;
+    if (!debugPollingAllowed) return;
     void refreshMemory();
-  }, [activeWorkspace, refreshMemory]);
+  }, [activeWorkspace, debugPollingAllowed, refreshMemory]);
 
   useEffect(() => {
     if (activeWorkspace !== 'platforms') return;
+    if (!debugPollingAllowed) return;
     void refreshSyncOrchestrator();
     if (!isTauri) return;
 
@@ -1807,10 +1863,11 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeWorkspace, isTauri, refreshSyncOrchestrator]);
+  }, [activeWorkspace, debugPollingAllowed, isTauri, refreshSyncOrchestrator]);
 
   useEffect(() => {
     if (activeWorkspace !== 'platforms') return;
+    if (!debugPollingAllowed) return;
     void refreshUnifiedSources();
     if (!isTauri) return;
 
@@ -1821,7 +1878,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeWorkspace, isTauri, refreshUnifiedSources]);
+  }, [activeWorkspace, debugPollingAllowed, isTauri, refreshUnifiedSources]);
 
   useEffect(() => {
     setPlatformAuthStatus(null);
@@ -1831,6 +1888,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
 
   useEffect(() => {
     if (activeWorkspace !== 'platforms') return;
+    if (!debugPollingAllowed) return;
     void refreshSelectedPlatformAuthStatus();
     if (!isTauri) return;
 
@@ -1841,10 +1899,11 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeWorkspace, isTauri, refreshSelectedPlatformAuthStatus]);
+  }, [activeWorkspace, debugPollingAllowed, isTauri, refreshSelectedPlatformAuthStatus]);
 
   useEffect(() => {
     if (activeWorkspace !== 'platforms') return;
+    if (!debugPollingAllowed) return;
     if (!isTauri) return;
     const sessionId = platformQrSession?.sessionId;
     if (!sessionId) return;
@@ -1856,7 +1915,13 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeWorkspace, platformQrSession?.sessionId, isTauri, pollSelectedPlatformQrSession]);
+  }, [
+    activeWorkspace,
+    debugPollingAllowed,
+    platformQrSession?.sessionId,
+    isTauri,
+    pollSelectedPlatformQrSession,
+  ]);
 
   useEffect(() => {
     if (activeWorkspace !== 'platforms') return;
@@ -4945,6 +5010,35 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
           )}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div>
+              <p className="settings-card-label">{t('debug.center.memory.runtimeCapsules.label')}</p>
+              {runtimeCapsuleSnapshot ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <p className="settings-card-desc">
+                    {t('debug.center.memory.runtimeCapsules.summary', {
+                      capsules: runtimeCapsuleSnapshot.capsules.length,
+                      leases: runtimeCapsuleSnapshot.activeLeaseCount,
+                      capabilities: runtimeCapsuleSnapshot.registeredCapabilityCount,
+                    })}
+                  </p>
+                  {runtimeCapsuleSnapshot.capsules.map((capsule) => (
+                    <p className="settings-card-note" key={capsule.manifest.id}>
+                      {t('debug.center.memory.runtimeCapsules.item', {
+                        id: capsule.manifest.id,
+                        state: capsule.state,
+                        tier: capsule.manifest.memoryTier,
+                        leases: capsule.activeLeases.length,
+                        startup: capsule.manifest.startup,
+                        background: capsule.manifest.backgroundPolicy,
+                      })}
+                    </p>
+                  ))}
+                </div>
+              ) : (
+                <p className="settings-card-note">{t('debug.center.memory.runtimeCapsules.empty')}</p>
+              )}
+            </div>
+
             <div>
               <p className="settings-card-label">{t('debug.center.memory.editorWindows.label')}</p>
               <p className="settings-card-desc">

@@ -4,7 +4,7 @@
  */
 
 import { emit, listen, UnlistenFn } from '@tauri-apps/api/event';
-import { readString, writeJson } from '../modules/storage';
+import { readString, writeString } from '../modules/storage';
 import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { isTauriRuntime } from './tauriRuntime';
 
@@ -14,8 +14,63 @@ const BROADCAST_CHANNEL_NAME = 'pixel-matrix-window-comm';
 let debugEnabledCache: boolean | null = null;
 const telemetry = getTelemetryLogger('windowing', 'windowCommunication');
 
+export const BROADCAST_DATA_UPDATE_PAYLOAD_SOFT_LIMIT_BYTES = 64 * 1024;
+export const BROADCAST_DATA_UPDATE_PAYLOAD_HARD_LIMIT_BYTES = 512 * 1024;
+
+const BROADCAST_DATA_UPDATE_RESERVED_HEAVY_KEY_HINTS = [
+  'queue',
+  'playlist',
+  'tracks',
+  'music-library',
+  'music-library-result',
+  'cover-blob',
+  'blob-url',
+] as const;
+
+export interface BroadcastDataUpdatePayloadBudgetSnapshot {
+  bytes: number;
+  softLimitBytes: number;
+  hardLimitBytes: number;
+  softLimitExceeded: boolean;
+  hardLimitExceeded: boolean;
+  reservedHeavyDomain: boolean;
+  matchedReservedHint: string | null;
+  shouldWarn: boolean;
+}
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function countUtf8Bytes(value: string): number {
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(value).byteLength;
+  }
+  return value.length;
+}
+
+export function inspectBroadcastDataUpdatePayloadBudget(
+  storageKey: string,
+  serializedPayload: string
+): BroadcastDataUpdatePayloadBudgetSnapshot {
+  const bytes = countUtf8Bytes(serializedPayload);
+  const normalizedKey = storageKey.toLowerCase();
+  const matchedReservedHint =
+    BROADCAST_DATA_UPDATE_RESERVED_HEAVY_KEY_HINTS.find((hint) => normalizedKey.includes(hint)) ?? null;
+  const softLimitExceeded = bytes > BROADCAST_DATA_UPDATE_PAYLOAD_SOFT_LIMIT_BYTES;
+  const hardLimitExceeded = bytes > BROADCAST_DATA_UPDATE_PAYLOAD_HARD_LIMIT_BYTES;
+  const reservedHeavyDomain = matchedReservedHint !== null;
+
+  return {
+    bytes,
+    softLimitBytes: BROADCAST_DATA_UPDATE_PAYLOAD_SOFT_LIMIT_BYTES,
+    hardLimitBytes: BROADCAST_DATA_UPDATE_PAYLOAD_HARD_LIMIT_BYTES,
+    softLimitExceeded,
+    hardLimitExceeded,
+    reservedHeavyDomain,
+    matchedReservedHint,
+    shouldWarn: softLimitExceeded || (reservedHeavyDomain && bytes > 8 * 1024),
+  };
 }
 
 function isDebugEnabled(): boolean {
@@ -391,7 +446,35 @@ export async function broadcastDataUpdate<T>(
 ): Promise<void> {
   try {
     // 1. 更新 localStorage
-    writeJson(storageKey, data, { mode: 'sync' });
+    const serializedPayload = JSON.stringify(data);
+    if (serializedPayload === undefined) {
+      telemetry.warn('window-communication.broadcast-data.json-empty', {
+        fields: {
+          storageKey,
+          tauriEvent,
+        },
+      });
+      return;
+    }
+
+    const budget = inspectBroadcastDataUpdatePayloadBudget(storageKey, serializedPayload);
+    if (budget.shouldWarn) {
+      telemetry.warn('window-communication.broadcast-data.payload-budget.warning', {
+        fields: {
+          storageKey,
+          tauriEvent,
+          bytes: budget.bytes,
+          softLimitBytes: budget.softLimitBytes,
+          hardLimitBytes: budget.hardLimitBytes,
+          softLimitExceeded: budget.softLimitExceeded,
+          hardLimitExceeded: budget.hardLimitExceeded,
+          reservedHeavyDomain: budget.reservedHeavyDomain,
+          matchedReservedHint: budget.matchedReservedHint,
+        },
+      });
+    }
+
+    writeString(storageKey, serializedPayload, { mode: 'sync' });
     const timestamp = Date.now();
 
     // Current-window notification (fast, no backend dependency)

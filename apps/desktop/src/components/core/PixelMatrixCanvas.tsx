@@ -1,11 +1,16 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { PixelMatrixRenderer } from '../../pixelEngine/PixelMatrixRenderer';
 import './PixelMatrixCanvas.css';
 import { STORAGE_KEYS, TAURI_EVENTS, setupTauriListener } from '../../utils/windowCommunication';
+import { useKernel } from '../../contexts/KernelContext';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { useQuality } from '../../contexts/QualityContext';
 import { readString } from '../../modules/storage';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import {
+  RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN,
+  type RuntimeCapsuleManagerService,
+} from '../../services/runtime-capsules';
 import {
   recordStartupMemoryCheckpoint,
   setStartupMemoryTraceFlag,
@@ -18,6 +23,14 @@ interface PixelMatrixCanvasProps {
 const telemetry = getTelemetryLogger('visualizer', 'PixelMatrixCanvas');
 
 export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatrixCanvasProps) {
+  const kernel = useKernel();
+  const runtimeCapsuleManager = useMemo(
+    () =>
+      kernel.services.getOptional(
+        RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN
+      ) as RuntimeCapsuleManagerService | null,
+    [kernel]
+  );
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<PixelMatrixRenderer | null>(null);
   const onPixelPositionsUpdateRef = useRef(onPixelPositionsUpdate);
@@ -32,6 +45,28 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
   useEffect(() => {
     qualityRef.current = effective;
   }, [effective]);
+
+  useEffect(() => {
+    if (!runtimeCapsuleManager) return;
+
+    const lease = runtimeCapsuleManager.acquireLease({
+      capabilityId: 'visual.canvas.pixi',
+      ownerKind: 'window',
+      ownerId: 'pixel-matrix-canvas',
+      reason: {
+        routeId: 'main',
+        detail: 'pixi matrix canvas mounted',
+      },
+    });
+
+    return () => {
+      if (!lease) return;
+      runtimeCapsuleManager.releaseLease(lease.id, {
+        kind: 'shutdown',
+        detail: 'pixi matrix canvas unmounted',
+      });
+    };
+  }, [runtimeCapsuleManager]);
 
   useEffect(() => {
     if (!containerRef.current) return;

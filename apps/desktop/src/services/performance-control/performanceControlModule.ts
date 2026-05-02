@@ -4,6 +4,10 @@ import { setupDualListener, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windo
 import { AUDIO_ENGINE_SERVICE_TOKEN } from '../audio';
 import { TELEMETRY_SERVICE_TOKEN, type TelemetryService } from '../telemetry';
 import {
+  RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN,
+  type RuntimeCapsuleManagerService,
+} from '../runtime-capsules';
+import {
   DefaultProcessPerfService,
   PROCESS_PERF_SERVICE_TOKEN,
   setGlobalProcessPerfService,
@@ -19,12 +23,20 @@ const PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_THROTTLE = 12_000;
 const PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_PAUSE = 20_000;
 const PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_COLD_IDLE = 45_000;
 const PERFORMANCE_CONTROL_STARTUP_FIRST_REFRESH_DELAY_MS = 5_000;
+const DEBUG_PROCESS_PERF_CAPABILITY_ID = 'debug.process-perf';
 
 function resolveRefreshIntervalMs(
   renderMode: 'full' | 'throttle' | 'pause',
   visible: boolean,
-  coldIdle: boolean
+  coldIdle: boolean,
+  debugProcessPerfActive: boolean
 ): number {
+  if (debugProcessPerfActive) {
+    if (!visible || renderMode === 'pause') return PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_PAUSE;
+    if (renderMode === 'throttle') return PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_THROTTLE;
+    return PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS;
+  }
+
   if (coldIdle) {
     return visible ? PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_COLD_IDLE : PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_PAUSE;
   }
@@ -44,6 +56,9 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
         PROCESS_PERF_SERVICE_TOKEN,
         processPerfService
       );
+      const runtimeCapsuleManager = services.getOptional(
+        RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN
+      ) as RuntimeCapsuleManagerService | null;
 
       const service = new DefaultPerformanceControlService(events, processPerfService);
       const audioEngine = services.getOptional(AUDIO_ENGINE_SERVICE_TOKEN);
@@ -65,6 +80,8 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
       let cleanupStartupFirstRefresh: null | (() => void) = null;
       let onVisibilityOrFocusChanged: (() => void) | null = null;
       let unsubscribeAudioState: null | (() => void) = null;
+      let unsubscribeRuntimeCapsules: null | (() => void) = null;
+      let runtimeCapsuleSnapshot = runtimeCapsuleManager?.collectSnapshot() ?? null;
       let disposed = false;
       if (typeof window !== 'undefined') {
         const isColdIdleAudioState = (): boolean => {
@@ -76,11 +93,19 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
               state.currentTrack == null &&
               (state.playbackState === 'idle' ||
                 state.playbackState === 'stopped' ||
-                state.playbackState === 'error')
+              state.playbackState === 'error')
             );
           } catch {
             return false;
           }
+        };
+
+        const isDebugProcessPerfActive = (): boolean => {
+          if (!runtimeCapsuleSnapshot) return false;
+          return runtimeCapsuleSnapshot.capsules.some((capsule) => {
+            if (!capsule.activeLeases.length) return false;
+            return capsule.manifest.provides?.includes(DEBUG_PROCESS_PERF_CAPABILITY_ID) ?? false;
+          });
         };
 
         const getRuntimeActivity = () => {
@@ -90,13 +115,19 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
           const renderMode: 'full' | 'throttle' | 'pause' =
             isVisible && isFocused ? 'full' : policy === 'pause' ? 'pause' : policy;
           const coldIdle = isColdIdleAudioState();
-          return { isVisible, renderMode, coldIdle };
+          const debugProcessPerfActive = isDebugProcessPerfActive();
+          return { isVisible, renderMode, coldIdle, debugProcessPerfActive };
         };
 
         const applyInterval = () => {
           if (disposed) return;
-          const { isVisible, renderMode, coldIdle } = getRuntimeActivity();
-          const nextIntervalMs = resolveRefreshIntervalMs(renderMode, isVisible, coldIdle);
+          const { isVisible, renderMode, coldIdle, debugProcessPerfActive } = getRuntimeActivity();
+          const nextIntervalMs = resolveRefreshIntervalMs(
+            renderMode,
+            isVisible,
+            coldIdle,
+            debugProcessPerfActive
+          );
           if (timer !== null && nextIntervalMs === activeIntervalMs) {
             return;
           }
@@ -114,6 +145,13 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
           applyInterval();
           void service.refreshNow();
         };
+
+        if (runtimeCapsuleManager) {
+          unsubscribeRuntimeCapsules = runtimeCapsuleManager.subscribe((snapshot) => {
+            runtimeCapsuleSnapshot = snapshot;
+            applyInterval();
+          });
+        }
 
         void setupDualListener(
           [
@@ -181,6 +219,7 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
           }
         }
         unsubscribeAudioState?.();
+        unsubscribeRuntimeCapsules?.();
         unsubscribeGovernance();
         unsubscribeQuality();
         setGlobalProcessPerfService(null);

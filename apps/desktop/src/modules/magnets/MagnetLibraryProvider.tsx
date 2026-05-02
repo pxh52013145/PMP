@@ -53,6 +53,7 @@ import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { createDefaultMagnetSpacesState, sanitizeMagnetSpacesState } from './spaces';
 import { parsePerformanceRuntimeProfile } from '../../contracts/performanceControl';
 import type { SpaceRuntimeGovernanceService } from '../../services/governance';
+import type { RuntimeCapsuleManagerService } from '../../services/runtime-capsules';
 
 const telemetry = getTelemetryLogger('magnets', 'MagnetLibraryProvider');
 
@@ -67,6 +68,7 @@ export interface MagnetLibraryProviderProps {
   autoSaveDebounceMs?: number;
   registerFlushHandler?: (handler: () => void) => () => void;
   spaceRuntimeGovernance?: SpaceRuntimeGovernanceService | null;
+  runtimeCapsuleManager?: RuntimeCapsuleManagerService | null;
 }
 
 export interface MagnetConfigContextValue {
@@ -143,6 +145,12 @@ type MagnetRuntimeAssociation = {
   requireActivatedBackground: boolean;
 };
 
+type MagnetRuntimeCapabilityLease = {
+  magnetId: string;
+  capabilityId: string;
+  spaceId: string;
+};
+
 function resolveMagnetRuntimeAssociation(
   magnet: Magnet,
   activeSpaceId: string
@@ -180,6 +188,7 @@ export function MagnetLibraryProvider({
   autoSaveDebounceMs = 500,
   registerFlushHandler,
   spaceRuntimeGovernance = null,
+  runtimeCapsuleManager = null,
 }: MagnetLibraryProviderProps) {
   const runtimeDefaultActiveMagnetIds = useMemo(
     () => resolveRuntimeDefaultActiveMagnetIds(defaultActiveMagnetIds),
@@ -349,6 +358,55 @@ export function MagnetLibraryProvider({
       }
     };
   }, [activeRuntimeAssociations, spaceRuntimeGovernance]);
+
+  const activeRuntimeCapabilityLeases = useMemo<MagnetRuntimeCapabilityLease[]>(() => {
+    const leases: MagnetRuntimeCapabilityLease[] = [];
+    for (const magnet of activeMagnets) {
+      const capabilities = magnet.runtime?.capabilities;
+      if (!Array.isArray(capabilities) || capabilities.length === 0) continue;
+      const spaceId = (magnet.runtime?.spaceId ?? activeSpaceId).trim();
+      if (!spaceId) continue;
+      for (const capabilityId of capabilities) {
+        const normalizedCapabilityId = capabilityId.trim();
+        if (!normalizedCapabilityId) continue;
+        leases.push({
+          magnetId: magnet.id,
+          capabilityId: normalizedCapabilityId,
+          spaceId,
+        });
+      }
+    }
+    return leases;
+  }, [activeMagnets, activeSpaceId]);
+
+  useEffect(() => {
+    if (!runtimeCapsuleManager || activeRuntimeCapabilityLeases.length === 0) return;
+
+    const acquiredLeaseIds: string[] = [];
+    for (const lease of activeRuntimeCapabilityLeases) {
+      const acquired = runtimeCapsuleManager.acquireLease({
+        capabilityId: lease.capabilityId,
+        ownerKind: 'magnet',
+        ownerId: lease.magnetId,
+        reason: {
+          spaceId: lease.spaceId,
+          capabilityId: lease.capabilityId,
+        },
+      });
+      if (acquired) {
+        acquiredLeaseIds.push(acquired.id);
+      }
+    }
+
+    return () => {
+      for (const leaseId of acquiredLeaseIds) {
+        runtimeCapsuleManager.releaseLease(leaseId, {
+          kind: 'lease-expired',
+          detail: 'magnet runtime capability lease released',
+        });
+      }
+    };
+  }, [activeRuntimeCapabilityLeases, runtimeCapsuleManager]);
 
   const buildLayoutSnapshot = useCallback(
     (library: Magnet[], activeIds: Set<string>): MagnetSpaceLayout => {

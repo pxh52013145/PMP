@@ -96,7 +96,7 @@ const ProcessPerfMonitorDefaultRenderer = memo(function ProcessPerfMonitorDefaul
   }, [perfSnapshot, t]);
 
   useEffect(() => {
-    if (!isVisible) return;
+    if (!isVisible || renderMode === 'pause') return;
 
     let cancelled = false;
     void service.refreshNow().catch((err) => {

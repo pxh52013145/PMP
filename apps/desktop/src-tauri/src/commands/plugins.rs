@@ -757,10 +757,7 @@ mod tests {
             .contract_raw
             .unwrap()
             .contains("\"contractVersion\""));
-        assert!(payload
-            .runtime_raw
-            .unwrap()
-            .contains("mountPage"));
+        assert!(payload.runtime_raw.unwrap().contains("mountPage"));
         assert_eq!(payload.runtime_exists, Some(true));
         assert!(payload.icon_raw_base64.is_some());
         assert_eq!(payload.icon_exists, Some(true));

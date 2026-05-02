@@ -89,4 +89,58 @@ describe('DefaultSpaceRuntimeGovernanceService', () => {
     vi.advanceTimersByTime(1);
     expect(service.reclaim({ reason: 'test', minTier: 1 })).toEqual(['space2']);
   });
+
+  it('invokes participant lifecycle hooks for warm, freeze, and teardown', () => {
+    const service = new DefaultSpaceRuntimeGovernanceService();
+    const onWarm = vi.fn();
+    const onFreeze = vi.fn();
+    const onTeardown = vi.fn();
+
+    service.registerParticipant('space2', {
+      id: 'plugin-workspace',
+      capsuleId: 'plugin.runtime',
+      onWarm,
+      onFreeze,
+      onTeardown,
+    });
+
+    service.warmSpace('space2');
+    service.activateSpace('space2');
+    service.activateSpace('space1');
+    service.reclaim({ reason: 'test', minTier: 2 });
+
+    expect(onWarm).toHaveBeenCalledTimes(1);
+    expect(onFreeze).toHaveBeenCalledTimes(1);
+    expect(onTeardown).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes registered participant snapshots in the collected space snapshot', () => {
+    const service = new DefaultSpaceRuntimeGovernanceService();
+
+    service.registerParticipant('space2', {
+      id: 'plugin-workspace',
+      capsuleId: 'plugin.runtime',
+      collectSnapshot: () => ({
+        id: 'plugin-workspace',
+        capsuleId: 'plugin.runtime',
+        state: 'warming',
+        listeners: 3,
+        detail: { route: 'dev-session' },
+      }),
+    });
+
+    service.warmSpace('space2');
+
+    const snapshot = service.collectSnapshot();
+    expect(snapshot.descriptors.find((descriptor) => descriptor.spaceId === 'space2')).toMatchObject({
+      participants: [
+        expect.objectContaining({
+          id: 'plugin-workspace',
+          capsuleId: 'plugin.runtime',
+          state: 'warming',
+          listeners: 3,
+        }),
+      ],
+    });
+  });
 });

@@ -36,6 +36,10 @@ import {
   SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN,
   type SpaceRuntimeGovernanceService,
 } from './services/governance';
+import {
+  RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN,
+  type RuntimeCapsuleManagerService,
+} from './services/runtime-capsules';
 import { getDebugConfig, setDebugConfig } from './modules/debug';
 import { INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN } from './magnet-system/plugins/installedExtensionRuntimeManager';
 import {
@@ -135,6 +139,9 @@ function AppContent() {
   const installedExtensionRuntimeManager = kernel.services.getOptional(
     INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN
   );
+  const runtimeCapsuleManager = kernel.services.getOptional(
+    RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN
+  ) as RuntimeCapsuleManagerService | null;
   const { navigateTo } = useNavigation();
   const { editorState } = useEditor();
 
@@ -169,13 +176,39 @@ function AppContent() {
   }, [performanceControlService, performanceSettings.editorLowPerformanceMode]);
 
   useEffect(() => {
-    if (!isTauri) return;
+    if (!isTauri || !isWindowActive) return;
     let cancelled = false;
     let syncFrame: number | null = null;
     let syncInFlight = false;
     let syncQueued = false;
     let unlistenMove: (() => void) | null = null;
     let unlistenResize: (() => void) | null = null;
+    let ornamentsOverlayLeaseId: string | null = null;
+
+    const releaseOrnamentsOverlayLease = (detail: string) => {
+      if (!ornamentsOverlayLeaseId || !runtimeCapsuleManager) return;
+      runtimeCapsuleManager.releaseLease(ornamentsOverlayLeaseId, {
+        kind: 'lease-expired',
+        detail,
+      });
+      ornamentsOverlayLeaseId = null;
+    };
+
+    const acquireOrnamentsOverlayLease = (plan: OrnamentsRenderPlan) => {
+      if (!runtimeCapsuleManager) return;
+      releaseOrnamentsOverlayLease('ornaments overlay plan refreshed');
+      const lease = runtimeCapsuleManager.acquireLease({
+        capabilityId: 'ornaments.render-overlay',
+        ownerKind: 'window',
+        ownerId: 'ornaments-render-overlay',
+        priority: plan.animatedCount > 0 ? 'normal' : 'background',
+        reason: {
+          routeId: 'ornaments-render-overlay',
+          detail: `ornaments overlay requested for ${plan.enabledCount} enabled item(s)`,
+        },
+      });
+      ornamentsOverlayLeaseId = lease?.id ?? null;
+    };
 
     const runGeometrySync = () => {
       if (cancelled) return;
@@ -242,6 +275,7 @@ function AppContent() {
       const plan = readOrnamentsRenderPlan();
       if (plan.enabledCount === 0) {
         telemetry.info('ornaments.render-overlay.skip-empty');
+        releaseOrnamentsOverlayLease('ornaments overlay plan is empty');
         detachGeometryListeners();
         void invokeWithTelemetry('ornaments_render_overlay_sync_planes', {
           behind: false,
@@ -294,6 +328,7 @@ function AppContent() {
                   totalSourcePixels: plan.totalSourcePixels,
                 },
               });
+              acquireOrnamentsOverlayLease(plan);
               scheduleGeometrySync();
               void attachGeometryListeners();
             })
@@ -333,8 +368,9 @@ function AppContent() {
         window.cancelAnimationFrame(syncFrame);
       }
       detachGeometryListeners();
+      releaseOrnamentsOverlayLease('ornaments overlay app content cleanup');
     };
-  }, [isTauri, telemetry]);
+  }, [isTauri, isWindowActive, runtimeCapsuleManager, telemetry]);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -811,6 +847,9 @@ function App() {
   const spaceRuntimeGovernance = kernel.services.getOptional(
     SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN
   ) as SpaceRuntimeGovernanceService | null;
+  const runtimeCapsuleManager = kernel.services.getOptional(
+    RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN
+  ) as RuntimeCapsuleManagerService | null;
   const registerFlushHandler = useCallback(
     (handler: () => void) => lifecycle.registerFlushHandler(() => handler()),
     [lifecycle]
@@ -834,6 +873,7 @@ function App() {
               gridSize={{ columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS }}
               registerFlushHandler={registerFlushHandler}
               spaceRuntimeGovernance={spaceRuntimeGovernance}
+              runtimeCapsuleManager={runtimeCapsuleManager}
             >
               <WindowCloseProvider>
                 <AppContent />

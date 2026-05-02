@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useKernel } from '../../contexts/KernelContext';
+import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { useT } from '../../i18n';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { getGlobalProcessPerfService } from '../../services/performance-control';
+import {
+  RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN,
+  type RuntimeCapsuleManagerService,
+} from '../../services/runtime-capsules';
 import {
   getProcessPerfSnapshot,
   type ProcessPerfSnapshot,
@@ -24,8 +30,17 @@ function computeRowKey(row: ProcessPerfRow): string {
 }
 
 export function PerfMonitorPage() {
+  const kernel = useKernel();
   const t = useT();
   const isTauri = useMemo(() => isTauriRuntime(), []);
+  const { isVisible, renderMode } = useWindowActivity();
+  const runtimeCapsuleManager = useMemo(
+    () =>
+      kernel.services.getOptional(
+        RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN
+      ) as RuntimeCapsuleManagerService | null,
+    [kernel]
+  );
   const [snapshot, setSnapshot] = useState<ProcessPerfSnapshot | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -78,11 +93,38 @@ export function PerfMonitorPage() {
   }, [refresh]);
 
   useEffect(() => {
+    if (!isTauri || !runtimeCapsuleManager || !isVisible || renderMode === 'pause') return;
+
+    const lease = runtimeCapsuleManager.acquireLease({
+      capabilityId: 'debug.process-perf',
+      ownerKind: 'route',
+      ownerId: 'perf-monitor-page',
+      priority: 'foreground',
+      reason: {
+        routeId: 'perf-monitor',
+        detail: 'perf monitor page active',
+      },
+    });
+
+    return () => {
+      if (!lease) return;
+      runtimeCapsuleManager.releaseLease(lease.id, {
+        kind: 'lease-expired',
+        detail: 'perf monitor page released',
+      });
+    };
+  }, [isTauri, isVisible, renderMode, runtimeCapsuleManager]);
+
+  useEffect(() => {
     if (!isTauri) return;
     if (!autoRefresh) return;
-    const handle = window.setInterval(() => void refresh(), 1000);
+    if (!isVisible || renderMode === 'pause') return;
+
+    const intervalMs = renderMode === 'throttle' ? 5_000 : 1_000;
+    void refresh();
+    const handle = window.setInterval(() => void refresh(), intervalMs);
     return () => window.clearInterval(handle);
-  }, [autoRefresh, isTauri, refresh]);
+  }, [autoRefresh, isTauri, isVisible, refresh, renderMode]);
 
   const sortedProcesses = useMemo(() => {
     if (!snapshot) return [];
