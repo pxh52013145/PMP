@@ -36,27 +36,21 @@ import {
   getTrackPathForIdentity,
   normalizeTrackIdentityForCompare as normalizeTrackIdentityForCompareUtil,
   normalizeTrackPathForCompare as normalizeTrackPathForCompareUtil,
-  prependTrackWithDedup,
 } from './trackIdentity';
 import {
   resolvePlatformPlaybackIdentity,
 } from './platformPlaybackResolver';
 import {
-  AudioPlaybackSourceResolver,
   type PreparedAudioSource,
-  toNativeAudioSourcePayload,
 } from './audioPlaybackSourceResolver';
 import {
   computeDynamicSrcStressScore,
   resolveDynamicSrcDegradationTransition,
 } from './audioStabilityController';
 import {
-  evaluateAutoOutputSwitch,
-  isSharedOutputBackendId,
   pruneUnderrunSpikeTimestamps,
-  resolveAutoOutputBackendChain,
-  resolveNextAutoOutputBackend,
 } from './audioOutputFailoverController';
+import { NativeAudioOutputBackendController } from './nativeAudioOutputBackendController';
 import {
   SeekCommandCoalescer,
   VolumeCommandCoalescer,
@@ -74,10 +68,18 @@ import {
   type StreamingBufferSettings,
 } from './streamingBufferPolicy';
 import {
-  createAudioTuningControllerState,
   resolveAudioTuningProfilePayload,
-  resolveAudioTuningTransition,
 } from './audioTuningProfiles';
+import {
+  NativeAudioTuningAutoController,
+  resolveNativeAudioTuningAutoSettingsPatch,
+} from './nativeAudioTuningAutoController';
+import {
+  normalizeDynamicSrcLearningProfile,
+  parseDynamicSrcLearningProfile as parseDynamicSrcLearningProfileState,
+  resolveDynamicSrcLearningScale,
+  resolveDynamicSrcLearningUpdate,
+} from './nativeAudioDynamicSrcLearningController';
 import {
   resolveStoredDynamicSrcAutoSettings,
   resolveStoredTuningAutoSettings,
@@ -91,33 +93,15 @@ import {
   type AudioPlaybackPreferences,
 } from './audioPlaybackPreferences';
 import {
-  clearNativeLibraryPlaylistItems,
-  deleteNativeLibraryPlaylist,
   markNativeLibraryUserEntryPlayed,
-  listNativeLibraryPlaylistItems,
-  listNativeLibraryPlaylists,
-  prependNativeLibraryPlaylistItem,
-  queryNativeLibraryPlaylistTracksPage,
-  queryNativeLibraryTracks,
-  replaceNativeLibraryPlaylistItems,
-  removeNativeLibraryPlaylistItemAt,
-  touchNativeLibraryPlaylistOpened,
   upsertNativeLibraryUserEntry,
-  upsertNativeLibraryPlaylist,
-  type NativeLibraryPlaylistItemRecord,
-  type NativeLibraryPlaylistRecord,
 } from '../../modules/music-library';
-import { resolvePlaylistTrackIndexes } from '../../modules/playlists/runtimeProjection';
 import { readString, removeKey } from '../../modules/storage';
 import {
   cancelScheduledProcessWorkingSetTrim,
   getLastProcessWorkingSetTrimEvent,
   scheduleProcessWorkingSetTrim,
 } from '../../utils/processWorkingSetTrim';
-import {
-  recordRecentPlaylistWriteFlushed,
-  recordRecentPlaylistWriteScheduled,
-} from './audioPerformanceTelemetry';
 import { buildNativeAudioRobustnessSnapshot } from './nativeAudioRobustnessSnapshot';
 import { NativeAudioRobustnessController } from './nativeAudioRobustnessController';
 import { createNativeAudioRobustnessSnapshotSource } from './nativeAudioRobustnessSnapshotAdapter';
@@ -137,15 +121,14 @@ import {
   type NativeAudioTransportFacadeContext,
 } from './nativeAudioTransportFacade';
 import {
-  applyRecentSmartPlaylistSnapshotToState,
-  compactTrackForRecentPlaylist,
-  mergeRecentSmartPlaylistTracks,
-  serializeTrackForPlaylist,
-  toPlaylistItemUpserts,
-  type RecentSmartPlaylistWriteEntry,
-} from './recentSmartPlaylist';
+  AudioPlaylistShell,
+  parseTracksFromPlaylistItems,
+} from './audioPlaylistShell';
+import { RecentSmartPlaylistWriter } from './recentSmartPlaylistWriter';
+import { NativeAudioSpectrumController } from './nativeAudioSpectrumController';
+import { NativeAudioQueueMirror } from './nativeAudioQueueMirror';
+import { NativeAudioSourcePreparation } from './nativeAudioSourcePreparation';
 import {
-  compactTrackForPlaylistState,
   compactTrackForQueueState,
   compactTrackForState,
 } from './trackStateProjection';
@@ -154,7 +137,6 @@ import {
   parseLegacyRuntimeControlFromReplayGain,
   type CrossfadeSettings,
   type DynamicSrcLearningMap,
-  type DynamicSrcLearningRecord,
   type NativeAudioComponentsStatePayload,
   type NativeAudioEnginePolicyPatch,
   type NativeAudioEnginePolicyPayload,
@@ -186,41 +168,6 @@ function readTelemetryErrorMessage(error: unknown): string {
   }
 }
 
-const PLAYLIST_QUEUE_PAGE_SIZE = 120;
-
-function buildContiguousPlaylistIndexRanges(
-  indexes: readonly number[]
-): Array<{ offset: number; limit: number }> {
-  if (indexes.length === 0) {
-    return [];
-  }
-
-  const ranges: Array<{ offset: number; limit: number }> = [];
-  let start = indexes[0] ?? 0;
-  let previous = start;
-
-  for (let index = 1; index < indexes.length; index += 1) {
-    const current = indexes[index] ?? previous;
-    if (current === previous + 1) {
-      previous = current;
-      continue;
-    }
-
-    ranges.push({
-      offset: start,
-      limit: previous - start + 1,
-    });
-    start = current;
-    previous = current;
-  }
-
-  ranges.push({
-    offset: start,
-    limit: previous - start + 1,
-  });
-  return ranges;
-}
-
 function buildTrackTelemetryFields(track: Track | null | undefined): Record<string, unknown> {
   if (!track) {
     return {
@@ -250,7 +197,38 @@ export class NativeAudioService implements IAudioService {
     'pixel-matrix-native-audio-output-device';
 
   private readonly telemetry = getTelemetryLogger('audio', 'NativeAudioService');
-  private readonly playbackSourceResolver = new AudioPlaybackSourceResolver();
+  private readonly sourcePreparation = new NativeAudioSourcePreparation({
+    isRuntime: isTauriRuntime,
+    invokeCommand: (command, payload) => this.invokeCommand(command, payload),
+    emitError: (error) => this.emitError(error),
+    recordStabilityHint: (reason, options) =>
+      this.recordNativeStabilityHintBestEffort(reason, options),
+    onUnsupportedSource: (source, track) => {
+      this.telemetry.warn('audio.source.prepare.unsupported', {
+        fields: {
+          sourceKind: source.kind,
+          deferredReason: source.kind === 'deferred' ? source.reason : null,
+          ...buildTrackTelemetryFields(track),
+        },
+      });
+    },
+  });
+  private readonly playlistShell = new AudioPlaylistShell({
+    getState: () => this.state,
+    getPlaylists: () => this.state.playlists,
+    getPlaylist: (playlistId) =>
+      this.state.playlists.find((playlist) => playlist.id === playlistId) ?? null,
+    replacePlaylists: (playlists, currentPlaylist) => {
+      const partial: Partial<AudioState> = { playlists };
+      if (currentPlaylist !== undefined) {
+        partial.currentPlaylist = currentPlaylist;
+      } else if (this.state.currentPlaylist) {
+        partial.currentPlaylist =
+          playlists.find((playlist) => playlist.id === this.state.currentPlaylist?.id) ?? null;
+      }
+      this.updateState(partial);
+    },
+  });
   private state: AudioState;
   private timeUpdateCallbacks: Set<(time: number) => void> = new Set();
   private endedCallbacks: Set<() => void> = new Set();
@@ -280,13 +258,27 @@ export class NativeAudioService implements IAudioService {
   private playbackPreferencesListenerInitPromise: Promise<void> | null = null;
   private spectrumData: Uint8Array | null = null;
   private spectrumFrames: Partial<Record<AudioSpectrumTap, AudioSpectrumFrame>> = {};
-  private spectrumEnabled = false;
-  private spectrumEnablePending = false;
-  private spectrumDisableTimer: number | null = null;
-  private lastSpectrumTouchAtMs = 0;
-  private lastPlaybackActiveAtMs = 0;
-  private readonly spectrumIdleTimeoutMs = 2500;
-  private readonly spectrumPlaybackGraceMs = 4000;
+  private readonly spectrumController = new NativeAudioSpectrumController({
+    setBackendEnabled: (enabled) => this.setNativeSpectrumEnabled(enabled),
+    onBackendSetFailed: (enabled, error) => {
+      this.telemetry.warn('audio.spectrum.set-enabled.failed', {
+        message: readTelemetryErrorMessage(error),
+        fields: {
+          enabled,
+        },
+      });
+    },
+    onClearData: () => this.clearSpectrumData(),
+  });
+  private readonly queueMirror = new NativeAudioQueueMirror({
+    isDisposed: () => this.disposed,
+    isRuntime: isTauriRuntime,
+    getQueue: () => this.state.queue,
+    getCurrentIndex: () => this.state.currentIndex,
+    getTrackPath: (track) => this.getTrackPath(track),
+    buildTelemetryFields: (queue, currentIndex, extra) =>
+      this.buildQueueTelemetryFields(queue, currentIndex, extra),
+  });
   private restoredOutputBackend = false;
   private restoredInputId = false;
   private restoredStreamingBufferSettings = false;
@@ -298,14 +290,27 @@ export class NativeAudioService implements IAudioService {
   private restoredGainDb = false;
   private visibilityListenerAttached = false;
   private visibilityListenerCleanup: (() => void) | null = null;
-  private recentSmartPlaylistWriteQueue: Promise<void> = Promise.resolve();
-  private recentSmartPlaylistWriteBuffer: RecentSmartPlaylistWriteEntry[] = [];
-  private recentSmartPlaylistWriteTimer: number | null = null;
-  private builtinSmartPlaylistsReady = false;
-  private builtinSmartPlaylistsInitPromise: Promise<void> | null = null;
-  private playlistsRestoredFromLibraryDb = false;
-  private playlistsRestorePromise: Promise<void> | null = null;
-  private playlistHydrationPromises = new Map<string, Promise<Playlist | null>>();
+  private readonly recentSmartPlaylistWriter = new RecentSmartPlaylistWriter({
+    playlistId: NativeAudioService.SMART_PLAYLIST_RECENT_ID,
+    playlistName: NativeAudioService.SMART_PLAYLIST_RECENT_NAME,
+    playlistLimit: NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT,
+    debounceMs: NativeAudioService.RECENT_SMART_PLAYLIST_WRITE_DEBOUNCE_MS,
+    maxBufferedEvents: NativeAudioService.RECENT_SMART_PLAYLIST_MAX_BUFFERED_EVENTS,
+    isRuntime: isTauriRuntime,
+    getPlaylists: () => this.state.playlists,
+    getCurrentPlaylist: () => this.state.currentPlaylist,
+    updateState: (partial) => this.updateState(partial),
+    ensureBuiltinSmartPlaylistsInLibraryDb: () => this.ensureBuiltinSmartPlaylistsInLibraryDb(),
+    parseTracksFromPlaylistItems,
+    onFlushFailed: (error, bufferedEntryCount) => {
+      this.telemetry.warn('audio.recent-playlist.flush.failed', {
+        message: readTelemetryErrorMessage(error),
+        fields: {
+          bufferedEntryCount,
+        },
+      });
+    },
+  });
   private lastNativeErrorSeq = 0;
   private fallbackTicker: number | null = null;
   private fallbackClockStartedAtMs: number | null = null;
@@ -351,14 +356,55 @@ export class NativeAudioService implements IAudioService {
   private protectionWindowTimer: ReturnType<typeof setTimeout> | null = null;
   private trackSwitchWorkingSetTrimRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private renderQueuePageLockProtectionUntilMs = 0;
-  private availableOutputBackends: string[] = [];
-  private currentOutputBackendId: string | null = null;
-  private currentOutputDeviceId: string | null = null;
-  private currentOutputDeviceName: string | null = null;
-  private backendSwitchInFlight = false;
-  private autoBackendSwitchCount = 0;
-  private lastAutoBackendSwitchAtMs: number | null = null;
-  private lastAutoBackendSwitchReason: string | null = null;
+  private readonly outputBackendController = new NativeAudioOutputBackendController({
+    config: {
+      underrunWindowMs: NativeAudioService.AUTO_BACKEND_UNDERRUN_WINDOW_MS,
+      underrunTriggerCount: NativeAudioService.AUTO_BACKEND_UNDERRUN_TRIGGER_COUNT,
+      underrunFrameSpikeTrigger: NativeAudioService.AUTO_BACKEND_UNDERRUN_FRAME_SPIKE_TRIGGER,
+      switchCooldownMs: NativeAudioService.AUTO_BACKEND_SWITCH_COOLDOWN_MS,
+    },
+    isWindowsOutputPlatform: () => this.isWindowsOutputPlatform(),
+  });
+
+  private get availableOutputBackends(): string[] {
+    return this.outputBackendController.availableOutputBackends;
+  }
+
+  private set availableOutputBackends(backends: string[]) {
+    this.outputBackendController.replaceOutputBackends(backends);
+  }
+
+  private get currentOutputBackendId(): string | null {
+    return this.outputBackendController.currentOutputBackendId;
+  }
+
+  private set currentOutputBackendId(backendId: string | null) {
+    this.outputBackendController.setCurrentOutputBackendId(backendId);
+  }
+
+  private get currentOutputDeviceId(): string | null {
+    return this.outputBackendController.currentOutputDeviceId;
+  }
+
+  private get currentOutputDeviceName(): string | null {
+    return this.outputBackendController.currentOutputDeviceName;
+  }
+
+  private get backendSwitchInFlight(): boolean {
+    return this.outputBackendController.backendSwitchInFlight;
+  }
+
+  private get autoBackendSwitchCount(): number {
+    return this.outputBackendController.autoBackendSwitchCount;
+  }
+
+  private get lastAutoBackendSwitchAtMs(): number | null {
+    return this.outputBackendController.lastAutoBackendSwitchAtMs;
+  }
+
+  private get lastAutoBackendSwitchReason(): string | null {
+    return this.outputBackendController.lastAutoBackendSwitchReason;
+  }
   private lastSchedulerProfile: 'normal' | 'guarded' | 'critical' = 'normal';
   private stabilityProfile: AudioStabilityProfile = 'balanced';
   private stabilityActionProfile: 'normal' | 'guarded' | 'critical' = 'normal';
@@ -507,10 +553,6 @@ export class NativeAudioService implements IAudioService {
   private static readonly ROBUSTNESS_FORCE_BURST_WINDOW_MS = 300;
   private static readonly ROBUSTNESS_FORCE_BURST_LIMIT = 3;
   private static readonly PLAYLIST_OWNER_UID = 'local:default';
-  private static readonly PLAYLIST_KIND_MANUAL = 'manual' as const;
-  private static readonly PLAYLIST_KIND_SMART = 'smart' as const;
-  private static readonly PLAYLIST_KIND_PLATFORM = 'platform' as const;
-  private static readonly PLAYLIST_QUERY_LIMIT = 200;
   private static readonly SMART_PLAYLIST_RECENT_ID = 'smart-recently-played';
   private static readonly SMART_PLAYLIST_RECENT_NAME = 'Recently Played';
   private static readonly SMART_PLAYLIST_RECENT_LIMIT = 1000;
@@ -531,23 +573,73 @@ export class NativeAudioService implements IAudioService {
   private dynamicSrcLearningLastPersistAtMs = 0;
   private dynamicSrcLearningLastPersistedSignature: string | null = null;
   private dynamicSrcLearningLastUpdateAtMs = 0;
-  private tuningAutoEnabled = NativeAudioService.TUNING_AUTO_ENABLED_DEFAULT;
-  private tuningAutoTickIntervalMs = NativeAudioService.TUNING_AUTO_TICK_INTERVAL_MS;
-  private tuningAutoStableWindowMs = NativeAudioService.TUNING_AUTO_STABLE_WINDOW_MS;
-  private tuningAutoMinSwitchIntervalMs = NativeAudioService.TUNING_AUTO_MIN_SWITCH_INTERVAL_MS;
-  private tuningAutoPostSwitchObserveWindowMs =
-    NativeAudioService.TUNING_AUTO_POST_SWITCH_OBSERVE_WINDOW_MS;
-  private tuningAutoElevatedStressScore = NativeAudioService.TUNING_AUTO_ELEVATED_STRESS_SCORE;
-  private tuningAutoCriticalStressScore = NativeAudioService.TUNING_AUTO_CRITICAL_STRESS_SCORE;
-  private tuningAutoCriticalUnderrunEventsWindow =
-    NativeAudioService.TUNING_AUTO_CRITICAL_UNDERRUN_EVENTS_WINDOW;
-  private tuningAutoCriticalOverflowGrowthTicks =
-    NativeAudioService.TUNING_AUTO_CRITICAL_OVERFLOW_GROWTH_TICKS;
-  private tuningAutoControllerState = createAudioTuningControllerState('ll-guarded');
-  private tuningAutoTimer: ReturnType<typeof setInterval> | null = null;
-  private tuningAutoApplyInFlight = false;
-  private tuningAutoLastReason: string | null = null;
-  private tuningAutoLastAppliedAtMs: number | null = null;
+  private readonly tuningAutoController = new NativeAudioTuningAutoController({
+    initialSettings: {
+      enabled: NativeAudioService.TUNING_AUTO_ENABLED_DEFAULT,
+      tickIntervalMs: NativeAudioService.TUNING_AUTO_TICK_INTERVAL_MS,
+      stableWindowMs: NativeAudioService.TUNING_AUTO_STABLE_WINDOW_MS,
+      minSwitchIntervalMs: NativeAudioService.TUNING_AUTO_MIN_SWITCH_INTERVAL_MS,
+      postSwitchObserveWindowMs: NativeAudioService.TUNING_AUTO_POST_SWITCH_OBSERVE_WINDOW_MS,
+      elevatedStressScore: NativeAudioService.TUNING_AUTO_ELEVATED_STRESS_SCORE,
+      criticalStressScore: NativeAudioService.TUNING_AUTO_CRITICAL_STRESS_SCORE,
+      criticalUnderrunEventsWindow: NativeAudioService.TUNING_AUTO_CRITICAL_UNDERRUN_EVENTS_WINDOW,
+      criticalOverflowGrowthTicks: NativeAudioService.TUNING_AUTO_CRITICAL_OVERFLOW_GROWTH_TICKS,
+    },
+    isDisposed: () => this.disposed,
+    onTick: () => this.tickTuningAutoController(),
+  });
+
+  private get tuningAutoSettings(): AudioTuningAutoSettings {
+    return this.tuningAutoController.getSettings();
+  }
+
+  private get tuningAutoEnabled(): boolean {
+    return this.tuningAutoController.enabled;
+  }
+
+  private get tuningAutoTickIntervalMs(): number {
+    return this.tuningAutoController.tickIntervalMs;
+  }
+
+  private get tuningAutoStableWindowMs(): number {
+    return this.tuningAutoController.stableWindowMs;
+  }
+
+  private get tuningAutoMinSwitchIntervalMs(): number {
+    return this.tuningAutoController.minSwitchIntervalMs;
+  }
+
+  private get tuningAutoPostSwitchObserveWindowMs(): number {
+    return this.tuningAutoController.postSwitchObserveWindowMs;
+  }
+
+  private get tuningAutoElevatedStressScore(): number {
+    return this.tuningAutoController.elevatedStressScore;
+  }
+
+  private get tuningAutoCriticalStressScore(): number {
+    return this.tuningAutoController.criticalStressScore;
+  }
+
+  private get tuningAutoCriticalUnderrunEventsWindow(): number {
+    return this.tuningAutoController.criticalUnderrunEventsWindow;
+  }
+
+  private get tuningAutoCriticalOverflowGrowthTicks(): number {
+    return this.tuningAutoController.criticalOverflowGrowthTicks;
+  }
+
+  private get tuningAutoControllerState() {
+    return this.tuningAutoController.getControllerState();
+  }
+
+  private get tuningAutoLastReason(): string | null {
+    return this.tuningAutoController.getLastReason();
+  }
+
+  private get tuningAutoLastAppliedAtMs(): number | null {
+    return this.tuningAutoController.getLastAppliedAtMs();
+  }
 
   private buildQueueTelemetryFields(
     queue: Track[],
@@ -615,84 +707,19 @@ export class NativeAudioService implements IAudioService {
   }
 
   private async prepareSourceForNativePlayback(track: Track): Promise<PreparedAudioSource> {
-    if (!isTauriRuntime()) {
-      return {
-        kind: 'local-file',
-        track,
-        path: getTrackPathForIdentity(track),
-      };
-    }
-
-    return this.playbackSourceResolver.prepare(track, {
-      recordStabilityHint: (reason, options) => {
-        this.recordNativeStabilityHintBestEffort(reason, options);
-      },
-    });
+    return this.sourcePreparation.prepare(track);
   }
 
   private resolveTrackForPreparedSource(source: PreparedAudioSource): Track {
-    switch (source.kind) {
-      case 'cache-file':
-      case 'local-file':
-        return source.track;
-      case 'remote-stream':
-        return source.track;
-      case 'deferred':
-        if (!source.sourceLocator) {
-          return source.track;
-        }
-        return {
-          ...source.track,
-          originalPath:
-            typeof source.track.originalPath === 'string' && source.track.originalPath.trim().length > 0
-              ? source.track.originalPath
-              : source.sourceLocator,
-          comment:
-            typeof source.track.comment === 'string' && source.track.comment.trim().length > 0
-              ? source.track.comment
-              : source.sourceLocator,
-        };
-    }
+    return this.sourcePreparation.resolveTrack(source);
   }
 
   private resolvePreparedSourceIdentityPath(source: PreparedAudioSource, track: Track): string | null {
-    switch (source.kind) {
-      case 'local-file':
-      case 'cache-file':
-        return source.path;
-      case 'remote-stream':
-        return source.sourceLocator || source.streamUrl;
-      case 'deferred':
-        return source.sourceLocator ?? this.getTrackPath(track);
-      default:
-        return this.getTrackPath(track);
-    }
+    return this.sourcePreparation.resolveIdentityPath(source, track);
   }
 
   private resolvePreparedSourcePathForNativeTransport(source: PreparedAudioSource): string | null {
-    switch (source.kind) {
-      case 'local-file':
-      case 'cache-file':
-        return source.path;
-      default:
-        return null;
-    }
-  }
-
-  private emitUnsupportedNativePreparedSourceError(source: PreparedAudioSource, track: Track): void {
-    const error = new Error(
-      'Native audio could not resolve a playable source for this track.'
-    ) as Error & { code?: string };
-    error.code =
-      source.kind === 'deferred' ? 'NATIVE_TRACK_SOURCE_DEFERRED' : 'NATIVE_TRACK_SOURCE_UNSUPPORTED';
-    this.emitError(error);
-    this.telemetry.warn('audio.source.prepare.unsupported', {
-      fields: {
-        sourceKind: source.kind,
-        deferredReason: source.kind === 'deferred' ? source.reason : null,
-        ...buildTrackTelemetryFields(track),
-      },
-    });
+    return this.sourcePreparation.resolveNativeTransportPath(source);
   }
 
   private applyPreparedSourceMaterializedPath(
@@ -700,32 +727,7 @@ export class NativeAudioService implements IAudioService {
     track: Track,
     materializedPath: string | null | undefined
   ): Track {
-    if (!materializedPath || !this.isProbablyAbsolutePath(materializedPath)) {
-      return track;
-    }
-
-    switch (source.kind) {
-      case 'remote-stream':
-        return {
-          ...track,
-          filePath: materializedPath,
-          path: materializedPath,
-          originalPath: source.sourceLocator,
-          comment:
-            typeof track.comment === 'string' && track.comment.trim().length > 0
-              ? track.comment
-              : source.sourceLocator,
-        };
-      case 'cache-file':
-      case 'local-file':
-        return {
-          ...track,
-          filePath: materializedPath,
-          path: materializedPath,
-        };
-      default:
-        return track;
-    }
+    return this.sourcePreparation.applyMaterializedPath(source, track, materializedPath);
   }
 
   private async invokePreparedSourceLoadCommand(
@@ -735,36 +737,7 @@ export class NativeAudioService implements IAudioService {
       replayGainDb?: number;
     }
   ): Promise<string | null> {
-    const transportPath = this.resolvePreparedSourcePathForNativeTransport(source);
-    if (transportPath && !this.isProbablyAbsolutePath(transportPath)) {
-      const error = new Error(
-        'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
-      ) as Error & { code?: string };
-      error.code = 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
-      this.emitError(error);
-      return null;
-    }
-
-    const payload = toNativeAudioSourcePayload(source);
-    if (!payload) {
-      this.emitUnsupportedNativePreparedSourceError(source, this.resolveTrackForPreparedSource(source));
-      return null;
-    }
-
-    try {
-      if (options?.play) {
-        return await this.invokeCommand<string>('native_audio_load_and_play_source', {
-          source: payload,
-          replayGainDb: options.replayGainDb,
-        });
-      }
-
-      return await this.invokeCommand<string>('native_audio_load_source', {
-        source: payload,
-      });
-    } catch {
-      return null;
-    }
+    return this.sourcePreparation.loadSource(source, options);
   }
 
   private async syncMaterializedQueueItemPathIfNeeded(
@@ -806,1127 +779,19 @@ export class NativeAudioService implements IAudioService {
       });
   }
 
-  private parseTrackFromPlaylistPayload(
-    payloadJson?: string,
-    fallback?: {
-      id?: string;
-      title?: string;
-      artist?: string;
-      album?: string;
-      duration?: number;
-    }
-  ): Track | null {
-    let record: Record<string, unknown> | null = null;
-    if (typeof payloadJson === 'string' && payloadJson.trim().length > 0) {
-      try {
-        const parsed = JSON.parse(payloadJson) as unknown;
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          record = parsed as Record<string, unknown>;
-        }
-      } catch {
-        record = null;
-      }
-    }
-
-    const asString = (value: unknown): string | undefined => {
-      return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
-    };
-    const asNumber = (value: unknown): number | undefined => {
-      return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-    };
-
-    const id = asString(record?.id) ?? fallback?.id?.trim();
-    const title = asString(record?.title) ?? fallback?.title?.trim();
-    if (!id || !title) return null;
-
-    const track: Track = {
-      id,
-      title,
-      artist: asString(record?.artist) ?? fallback?.artist,
-      album: asString(record?.album) ?? fallback?.album,
-      albumArtist: asString(record?.albumArtist),
-      duration: asNumber(record?.duration) ?? fallback?.duration,
-      path: asString(record?.path),
-      filePath: asString(record?.filePath),
-      originalPath: asString(record?.originalPath),
-      libraryPathId: asString(record?.libraryPathId),
-      mtimeMs: asNumber(record?.mtimeMs),
-      quickFingerprint: asString(record?.quickFingerprint),
-      coverKey: asString(record?.coverKey),
-      coverUrl: asString(record?.coverUrl),
-      year: asNumber(record?.year),
-      genre: asString(record?.genre),
-      trackNumber: asNumber(record?.trackNumber),
-      discNumber: asNumber(record?.discNumber),
-      composer: asString(record?.composer),
-      bitrate: asNumber(record?.bitrate),
-      sampleRate: asNumber(record?.sampleRate),
-      replayGainTrackGainDb: asNumber(record?.replayGainTrackGainDb),
-      replayGainAlbumGainDb: asNumber(record?.replayGainAlbumGainDb),
-      format: asString(record?.format),
-      codecName: asString(record?.codecName),
-      fileSize: asNumber(record?.fileSize),
-      dateAdded: asNumber(record?.dateAdded),
-      lastPlayed: asNumber(record?.lastPlayed),
-      playCount: asNumber(record?.playCount),
-      rating: asNumber(record?.rating),
-      favorite:
-        typeof record?.favorite === 'boolean' ? (record.favorite as boolean) : undefined,
-      tags: Array.isArray(record?.tags)
-        ? (record.tags as unknown[])
-            .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-            .map((value) => value.trim())
-        : undefined,
-      lyrics: asString(record?.lyrics),
-      comment: asString(record?.comment),
-      mimeType: asString(record?.mimeType),
-    };
-
-    return compactTrackForPlaylistState(track);
-  }
-
-  private parseTracksFromPlaylistItems(
-    playlistId: string,
-    items: NativeLibraryPlaylistItemRecord[]
-  ): Track[] {
-    const tracks: Track[] = [];
-    for (const item of items) {
-      const fallbackId = item.localTrackId || item.entryId || `${playlistId}::${item.position}`;
-      const track = this.parseTrackFromPlaylistPayload(item.trackPayloadJson, {
-        id: fallbackId,
-        title: item.snapshotTitle,
-        artist: item.snapshotArtist,
-        album: item.snapshotAlbum,
-        duration: item.snapshotDurationSeconds,
-      });
-      if (!track) continue;
-      tracks.push(track);
-    }
-    return tracks;
-  }
-
-  private sanitizePlaylistCoverUrl(value: unknown): string | undefined {
-    if (typeof value !== 'string') return undefined;
-    const normalized = value.trim();
-    if (!normalized) return undefined;
-
-    const lower = normalized.toLowerCase();
-    if (
-      lower.startsWith('http://') ||
-      lower.startsWith('https://') ||
-      lower.startsWith('pmp://cover/') ||
-      lower.startsWith('pmp://localhost/cover/')
-    ) {
-      return normalized;
-    }
-
-    return undefined;
-  }
-
-  private isAssetLocalhostHttpUrl(value: string | null | undefined): boolean {
-    const normalized = typeof value === 'string' ? value.trim() : '';
-    if (!normalized) return false;
-
-    try {
-      const parsed = new URL(normalized);
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        return false;
-      }
-      return parsed.hostname.toLowerCase() === 'asset.localhost';
-    } catch {
-      return false;
-    }
-  }
-
-  private isPlaylistCoverResolutionAbsolutePath(value: string | null | undefined): boolean {
-    const normalized = typeof value === 'string' ? value.trim() : '';
-    if (!normalized) return false;
-    if (normalized.startsWith('/') || normalized.startsWith('\\\\')) return true;
-    return /^[A-Za-z]:[\\/]/.test(normalized);
-  }
-
-  private canRenderPmpPlaylistCoverDirectly(): boolean {
-    if (typeof window === 'undefined') return true;
-    const protocol = String(window.location?.protocol || '').toLowerCase();
-    return protocol !== 'http:' && protocol !== 'https:';
-  }
-
-  private async loadPlaylistCoverPreviewTracks(
-    playlist: Playlist,
-    limit: number
-  ): Promise<Track[]> {
-    const playlistId = String(playlist.id || '').trim();
-    if (!playlistId) return [];
-
-    const normalizedLimit = Math.max(1, Math.min(8, Math.floor(limit)));
-    let tracks = this.parseTracksFromPlaylistItems(
-      playlistId,
-      await listNativeLibraryPlaylistItems(playlistId, { limit: normalizedLimit })
-    ).slice(0, normalizedLimit);
-
-    if (
-      tracks.length === 0 &&
-      playlist.kind === NativeAudioService.PLAYLIST_KIND_SMART &&
-      playlistId === NativeAudioService.SMART_PLAYLIST_RECENT_ID
-    ) {
-      tracks = (await this.buildRecentSmartPlaylistTracks(normalizedLimit)).slice(
-        0,
-        normalizedLimit
-      );
-    }
-
-    return tracks;
-  }
-
   async resolvePlaylistCoverPreview(
     playlistId: string,
     options?: { coverSizeHint?: CoverSizeHint; preferCompactPreview?: boolean }
   ): Promise<string | undefined> {
-    const normalizedPlaylistId = String(playlistId || '').trim();
-    if (!normalizedPlaylistId) return undefined;
-
-    const playlist = this.getPlaylist(normalizedPlaylistId);
-    if (!playlist) return undefined;
-
-    const explicitPlaylistCover = this.sanitizePlaylistCoverUrl(playlist.coverUrl);
-    const preferCompactPreview = options?.preferCompactPreview === true;
-    const explicitPlaylistCoverLower =
-      typeof explicitPlaylistCover === 'string' ? explicitPlaylistCover.toLowerCase() : '';
-    const isManagedPmpPlaylistCover =
-      explicitPlaylistCoverLower.startsWith('pmp://cover/') ||
-      explicitPlaylistCoverLower.startsWith('pmp://localhost/cover/');
-    const isAssetLocalhostPlaylistCover =
-      this.isAssetLocalhostHttpUrl(explicitPlaylistCover);
-    if (
-      explicitPlaylistCover &&
-      !preferCompactPreview &&
-      !isManagedPmpPlaylistCover &&
-      !isAssetLocalhostPlaylistCover
-    ) {
-      return explicitPlaylistCover;
-    }
-
-    const scanLimit = 5;
-    const trackCandidates =
-      playlist.tracksHydrated !== false && playlist.tracks.length > 0
-        ? playlist.tracks.slice(0, scanLimit)
-        : await this.loadPlaylistCoverPreviewTracks(playlist, scanLimit);
-
-    for (const candidate of trackCandidates) {
-      const embeddedCoverUrl =
-        typeof candidate.coverUrl === 'string' ? candidate.coverUrl.trim() : '';
-      const shouldIgnoreEmbeddedTrackCover =
-        this.isPlaylistCoverResolutionAbsolutePath(candidate.filePath || candidate.path) ||
-        embeddedCoverUrl.toLowerCase().startsWith('pmp://cover/') ||
-        embeddedCoverUrl.toLowerCase().startsWith('pmp://localhost/cover/');
-      const resolutionCandidate = shouldIgnoreEmbeddedTrackCover
-        ? { ...candidate, coverUrl: undefined }
-        : candidate;
-
-      try {
-        const { getMusicLibraryService } = await import('./MusicLibraryService');
-        const resolvedUrl = await getMusicLibraryService().getCoverUrlForTrack(resolutionCandidate, {
-          coverSizeHint: options?.coverSizeHint ?? 'small',
-          bypassRuntimePolicy: true,
-        });
-        const normalizedResolvedUrl =
-          typeof resolvedUrl === 'string' ? resolvedUrl.trim() : '';
-        if (normalizedResolvedUrl) {
-          return normalizedResolvedUrl;
-        }
-      } catch {
-        // best-effort preview resolution
-      }
-
-      if (embeddedCoverUrl && !shouldIgnoreEmbeddedTrackCover) {
-        return embeddedCoverUrl;
-      }
-    }
-
-    if (
-      explicitPlaylistCover &&
-      (this.canRenderPmpPlaylistCoverDirectly() ||
-        !isManagedPmpPlaylistCover)
-    ) {
-      return explicitPlaylistCover;
-    }
-
-    return undefined;
-  }
-
-  private createPlaylistSummaryFromRecord(record: {
-    id: string;
-    name: string;
-    description?: string;
-    coverUrl?: string;
-    kind?: Playlist['kind'];
-    isReadonly?: boolean;
-    sourceConnectorId?: string;
-    sourcePlaylistId?: string;
-    smartRuleJson?: string;
-    createdAtMs?: number;
-    updatedAtMs?: number;
-    trackCount?: number;
-    totalDuration?: number;
-  }): Playlist {
-    return {
-      id: record.id,
-      name: record.name,
-      description: record.description,
-      coverUrl: this.sanitizePlaylistCoverUrl(record.coverUrl),
-      tracks: [],
-      kind: record.kind,
-      readonly: record.isReadonly,
-      sourceConnectorId: record.sourceConnectorId,
-      sourcePlaylistId: record.sourcePlaylistId,
-      smartRuleJson: record.smartRuleJson,
-      createdAt: record.createdAtMs ?? Date.now(),
-      updatedAt: record.updatedAtMs ?? Date.now(),
-      trackCount:
-        typeof record.trackCount === 'number' && Number.isFinite(record.trackCount)
-          ? Math.max(0, Math.floor(record.trackCount))
-          : 0,
-      totalDuration:
-        typeof record.totalDuration === 'number' && Number.isFinite(record.totalDuration)
-          ? Math.max(0, record.totalDuration)
-          : 0,
-      tracksHydrated: false,
-    };
-  }
-
-  private createHydratedPlaylist(
-    playlist: Playlist,
-    tracks: Track[],
-    options?: { trackCount?: number; totalDuration?: number }
-  ): Playlist {
-    const computedTotalDuration = tracks.reduce((sum, track) => sum + (track.duration ?? 0), 0);
-    return {
-      ...playlist,
-      tracks,
-      trackCount:
-        typeof options?.trackCount === 'number' && Number.isFinite(options.trackCount)
-          ? Math.max(0, Math.floor(options.trackCount))
-          : tracks.length,
-      totalDuration:
-        typeof options?.totalDuration === 'number' && Number.isFinite(options.totalDuration)
-          ? Math.max(0, options.totalDuration)
-          : computedTotalDuration,
-      tracksHydrated: true,
-    };
-  }
-
-  private createPlaylistSummaryReference(playlist: Playlist | null | undefined): Playlist | null {
-    if (!playlist) return null;
-
-    return {
-      ...playlist,
-      tracks: [],
-      trackCount:
-        typeof playlist.trackCount === 'number' && Number.isFinite(playlist.trackCount)
-          ? Math.max(0, Math.floor(playlist.trackCount))
-          : playlist.tracks.length,
-      totalDuration:
-        typeof playlist.totalDuration === 'number' && Number.isFinite(playlist.totalDuration)
-          ? Math.max(0, playlist.totalDuration)
-          : playlist.tracks.reduce((sum, track) => sum + (track.duration ?? 0), 0),
-      tracksHydrated: false,
-    };
-  }
-
-  private syncCurrentPlaylistReference(playlists: Playlist[]): Playlist | null {
-    const currentPlaylistId = this.state.currentPlaylist?.id;
-    if (!currentPlaylistId) return null;
-    return this.createPlaylistSummaryReference(
-      playlists.find((playlist) => playlist.id === currentPlaylistId) ?? null
-    );
-  }
-
-  private async loadPlaylistTracksFromLibraryDb(playlist: Playlist): Promise<Track[]> {
-    const playlistId = String(playlist.id || '').trim();
-    if (!playlistId) return [];
-
-    if (playlist.kind === NativeAudioService.PLAYLIST_KIND_SMART) {
-      const limit = this.resolveRecentSmartPlaylistLimit(playlist.smartRuleJson);
-      let tracks = this.parseTracksFromPlaylistItems(
-        playlistId,
-        await listNativeLibraryPlaylistItems(playlistId, { limit })
-      ).slice(0, limit);
-
-      if (
-        tracks.length === 0 &&
-        playlistId === NativeAudioService.SMART_PLAYLIST_RECENT_ID
-      ) {
-        tracks = await this.buildRecentSmartPlaylistTracks(limit);
-        if (tracks.length > 0) {
-          const now = Date.now();
-          const snapshotPlaylist: Playlist = {
-            id: playlistId,
-            name: playlist.name,
-            description: playlist.description,
-            tracks,
-            kind: NativeAudioService.PLAYLIST_KIND_SMART,
-            readonly: true,
-            smartRuleJson: playlist.smartRuleJson,
-            createdAt: playlist.createdAt,
-            updatedAt: Math.max(playlist.updatedAt, now),
-            trackCount: tracks.length,
-            totalDuration: tracks.reduce((sum, track) => sum + (track.duration ?? 0), 0),
-            tracksHydrated: true,
-          };
-          void replaceNativeLibraryPlaylistItems(
-            playlistId,
-            toPlaylistItemUpserts(snapshotPlaylist)
-          ).catch((error) => {
-            this.telemetry.warn('audio.recent-playlist.backfill.failed', {
-              message: readTelemetryErrorMessage(error),
-              fields: {
-                playlistId,
-                trackCount: tracks.length,
-              },
-            });
-          });
-        }
-      }
-
-      return tracks;
-    }
-
-    return this.parseTracksFromPlaylistItems(
-      playlistId,
-      await listNativeLibraryPlaylistItems(playlistId)
-    );
-  }
-
-  private async resolvePlaylistForQueuePlayback(playlistId: string): Promise<Playlist | null> {
-    const normalizedPlaylistId = String(playlistId || '').trim();
-    if (!normalizedPlaylistId) return null;
-
-    await this.ensurePlaylistsRestoredFromLibraryDb();
-    const playlist = this.getPlaylist(normalizedPlaylistId);
-    if (!playlist) return null;
-    if (playlist.tracksHydrated !== false) {
-      return playlist;
-    }
-
-    try {
-      const tracks = await this.loadPlaylistTracksFromLibraryDb(playlist);
-      const latestPlaylist = this.getPlaylist(normalizedPlaylistId) ?? playlist;
-      return this.createHydratedPlaylist(latestPlaylist, tracks, {
-        trackCount:
-          typeof latestPlaylist.trackCount === 'number' && latestPlaylist.trackCount > 0
-            ? latestPlaylist.trackCount
-            : tracks.length,
-        totalDuration:
-          typeof latestPlaylist.totalDuration === 'number' && latestPlaylist.totalDuration > 0
-            ? latestPlaylist.totalDuration
-            : undefined,
-      });
-    } catch (error) {
-      this.telemetry.warn('audio.playlist.queue-resolve.failed', {
-        message: readTelemetryErrorMessage(error),
-        fields: {
-          playlistId: normalizedPlaylistId,
-        },
-      });
-      return playlist;
-    }
-  }
-
-  private async loadPlaylistTracksForQueuePlayback(
-    playlistId: string
-  ): Promise<{ playlist: Playlist; tracks: Track[] } | null> {
-    const normalizedPlaylistId = String(playlistId || '').trim();
-    if (!normalizedPlaylistId) return null;
-
-    const playlist = this.getPlaylist(normalizedPlaylistId);
-    if (!playlist) return null;
-    if (playlist.tracksHydrated !== false) {
-      return {
-        playlist,
-        tracks: playlist.tracks,
-      };
-    }
-
-    if (!isTauriRuntime()) {
-      const resolvedPlaylist = await this.resolvePlaylistForQueuePlayback(normalizedPlaylistId);
-      if (!resolvedPlaylist) return null;
-      return {
-        playlist: resolvedPlaylist,
-        tracks: resolvedPlaylist.tracks,
-      };
-    }
-
-    const tracks: Track[] = [];
-    let offset = 0;
-    let total =
-      typeof playlist.trackCount === 'number' && Number.isFinite(playlist.trackCount)
-        ? Math.max(0, Math.floor(playlist.trackCount))
-        : 0;
-
-    while (offset === 0 || offset < total) {
-      const page = await this.queryPlaylistTracksPage(normalizedPlaylistId, {
-        sortField: 'default',
-        sortDirection: 'asc',
-        limit: PLAYLIST_QUEUE_PAGE_SIZE,
-        offset,
-      });
-      const items = page?.items ?? [];
-      if (typeof page?.total === 'number' && Number.isFinite(page.total)) {
-        total = Math.max(0, Math.floor(page.total));
-      }
-      if (items.length === 0) {
-        break;
-      }
-      tracks.push(...items.map((item) => item.track));
-      offset += items.length;
-      if (items.length < PLAYLIST_QUEUE_PAGE_SIZE) {
-        break;
-      }
-    }
-
-    return {
-      playlist,
-      tracks,
-    };
-  }
-
-  private async loadPlaylistTrackSelectionForQueue(
-    playlistId: string,
-    trackIndexes: readonly number[]
-  ): Promise<{ playlist: Playlist; normalizedIndexes: number[]; tracks: Track[] } | null> {
-    const normalizedPlaylistId = String(playlistId || '').trim();
-    if (!normalizedPlaylistId) return null;
-
-    const playlist = this.getPlaylist(normalizedPlaylistId);
-    if (!playlist) return null;
-
-    const normalizedIndexes = this.normalizePlaylistTrackIndexes(playlist, trackIndexes);
-    if (normalizedIndexes.length === 0) {
-      return {
-        playlist,
-        normalizedIndexes,
-        tracks: [],
-      };
-    }
-
-    if (playlist.tracksHydrated !== false) {
-      return {
-        playlist,
-        normalizedIndexes,
-        tracks: normalizedIndexes
-          .map((index) => playlist.tracks[index])
-          .filter((track): track is Track => Boolean(track)),
-      };
-    }
-
-    if (!isTauriRuntime()) {
-      const resolvedPlaylist = await this.resolvePlaylistForQueuePlayback(normalizedPlaylistId);
-      if (!resolvedPlaylist) return null;
-      return {
-        playlist: resolvedPlaylist,
-        normalizedIndexes,
-        tracks: normalizedIndexes
-          .map((index) => resolvedPlaylist.tracks[index])
-          .filter((track): track is Track => Boolean(track)),
-      };
-    }
-
-    const selectedTrackMap = new Map<number, Track>();
-    for (const range of buildContiguousPlaylistIndexRanges(normalizedIndexes)) {
-      let rangeOffset = range.offset;
-      let remaining = range.limit;
-      while (remaining > 0) {
-        const pageLimit = Math.min(PLAYLIST_QUEUE_PAGE_SIZE, remaining);
-        const page = await this.queryPlaylistTracksPage(normalizedPlaylistId, {
-          sortField: 'default',
-          sortDirection: 'asc',
-          limit: pageLimit,
-          offset: rangeOffset,
-        });
-        const items = page?.items ?? [];
-        if (items.length === 0) {
-          break;
-        }
-        for (const item of items) {
-          selectedTrackMap.set(item.playlistIndex, item.track);
-        }
-        rangeOffset += items.length;
-        remaining -= items.length;
-        if (items.length < pageLimit) {
-          break;
-        }
-      }
-    }
-
-    return {
-      playlist,
-      normalizedIndexes,
-      tracks: normalizedIndexes
-        .map((index) => selectedTrackMap.get(index))
-        .filter((track): track is Track => Boolean(track)),
-    };
-  }
-
-  private buildPersistablePlaylistFromTracks(
-    playlist: Playlist,
-    tracks: Track[],
-    updatedAtMs: number = Date.now()
-  ): Playlist {
-    return {
-      ...playlist,
-      tracks,
-      trackCount: tracks.length,
-      totalDuration: tracks.reduce((sum, track) => sum + (track.duration ?? 0), 0),
-      updatedAt: updatedAtMs,
-      tracksHydrated: true,
-    };
-  }
-
-  private replacePlaylistState(playlist: Playlist): void {
-    const playlists = this.state.playlists.map((item) =>
-      item.id === playlist.id ? playlist : item
-    );
-    const currentPlaylist =
-      this.state.currentPlaylist?.id === playlist.id
-        ? this.createPlaylistSummaryReference(playlist)
-        : this.syncCurrentPlaylistReference(playlists);
-    this.updateState({ playlists, currentPlaylist });
-  }
-
-  private replacePlaylistStateWithSummary(playlist: Playlist): void {
-    const summaryPlaylist = this.createPlaylistSummaryReference(playlist) ?? playlist;
-    this.replacePlaylistState(summaryPlaylist);
-  }
-
-  private createPlaylistFromNativeRecord(
-    record: NativeLibraryPlaylistRecord,
-    options?: {
-      tracks?: Track[];
-      tracksHydrated?: boolean;
-    }
-  ): Playlist {
-    const summaryPlaylist = this.createPlaylistSummaryFromRecord({
-      id: record.id,
-      name: record.name,
-      description: record.description,
-      coverUrl: record.coverUrl,
-      kind: record.kind,
-      isReadonly: record.isReadonly,
-      sourceConnectorId: record.sourceConnectorId,
-      sourcePlaylistId: record.sourcePlaylistId,
-      smartRuleJson: record.smartRuleJson,
-      createdAtMs: record.createdAtMs,
-      updatedAtMs: record.updatedAtMs,
-      trackCount: record.trackCount,
-      totalDuration: record.totalDuration,
-    });
-    const tracksHydrated = options?.tracksHydrated === true;
-    return {
-      ...summaryPlaylist,
-      tracks: tracksHydrated ? [...(options?.tracks ?? [])] : [],
-      tracksHydrated,
-    };
-  }
-
-  private replacePlaylistStateWithNativeSummaryRecord(record: NativeLibraryPlaylistRecord): void {
-    this.replacePlaylistState(this.createPlaylistFromNativeRecord(record));
-  }
-
-  private replaceHydratedPlaylistStateWithNativeRecord(
-    record: NativeLibraryPlaylistRecord,
-    tracks: Track[]
-  ): void {
-    this.replacePlaylistState(
-      this.createPlaylistFromNativeRecord(record, {
-        tracks,
-        tracksHydrated: true,
-      })
-    );
-  }
-
-  private queryPlaylistTrackPageFromTracks(
-    tracks: Track[],
-    options?: {
-      searchQuery?: string;
-      sortField?: PlaylistTrackSortField;
-      sortDirection?: PlaylistTrackSortDirection;
-      limit?: number;
-      offset?: number;
-    }
-  ): PlaylistTrackPageResult {
-    const indexes = resolvePlaylistTrackIndexes({
-      tracks,
-      searchQuery: options?.searchQuery ?? '',
-      sortField: options?.sortField ?? 'default',
-      sortDirection: options?.sortDirection ?? 'asc',
-    });
-    const limit =
-      typeof options?.limit === 'number' && Number.isFinite(options.limit)
-        ? Math.max(1, Math.min(2000, Math.floor(options.limit)))
-        : indexes.length;
-    const offset =
-      typeof options?.offset === 'number' && Number.isFinite(options.offset)
-        ? Math.max(0, Math.floor(options.offset))
-        : 0;
-    const pagedIndexes = indexes.slice(offset, offset + limit);
-
-    return {
-      total: indexes.length,
-      items: pagedIndexes
-        .map((playlistIndex) => {
-          const track = tracks[playlistIndex];
-          if (!track) return null;
-          return {
-            playlistIndex,
-            track,
-          };
-        })
-        .filter(
-          (
-            item
-          ): item is {
-            playlistIndex: number;
-            track: Track;
-          } => item != null
-        ),
-    };
-  }
-
-  private normalizePlaylistTrackIndexes(
-    playlist: Playlist,
-    trackIndexes: readonly number[]
-  ): number[] {
-    const total =
-      typeof playlist.trackCount === 'number' && Number.isFinite(playlist.trackCount)
-        ? Math.max(playlist.tracks.length, Math.floor(playlist.trackCount))
-        : playlist.tracks.length;
-    if (total === 0 || trackIndexes.length === 0) {
-      return [];
-    }
-
-    const normalized: number[] = [];
-    const seen = new Set<number>();
-    for (const index of trackIndexes) {
-      if (!Number.isInteger(index)) continue;
-      if (index < 0 || index >= total) continue;
-      if (seen.has(index)) continue;
-      seen.add(index);
-      normalized.push(index);
-    }
-    return normalized;
-  }
-
-  private clearRecentSmartPlaylistWriteTimer(): void {
-    if (this.recentSmartPlaylistWriteTimer === null) return;
-    if (typeof window === 'undefined') {
-      this.recentSmartPlaylistWriteTimer = null;
-      return;
-    }
-    window.clearTimeout(this.recentSmartPlaylistWriteTimer);
-    this.recentSmartPlaylistWriteTimer = null;
-  }
-
-  private scheduleRecentSmartPlaylistWriteFlush(): void {
-    if (typeof window === 'undefined') {
-      this.flushRecentSmartPlaylistWriteBufferBestEffort();
-      return;
-    }
-    this.clearRecentSmartPlaylistWriteTimer();
-    this.recentSmartPlaylistWriteTimer = window.setTimeout(() => {
-      this.recentSmartPlaylistWriteTimer = null;
-      this.flushRecentSmartPlaylistWriteBufferBestEffort();
-    }, NativeAudioService.RECENT_SMART_PLAYLIST_WRITE_DEBOUNCE_MS);
-  }
-
-  private flushRecentSmartPlaylistWriteBufferBestEffort(): void {
-    if (!isTauriRuntime()) {
-      this.recentSmartPlaylistWriteBuffer = [];
-      return;
-    }
-
-    if (this.recentSmartPlaylistWriteBuffer.length === 0) return;
-    const bufferedEntries = this.recentSmartPlaylistWriteBuffer.splice(0);
-
-    this.recentSmartPlaylistWriteQueue = this.recentSmartPlaylistWriteQueue
-      .then(async () => {
-        await this.flushRecentSmartPlaylistWriteBatch(bufferedEntries);
-      })
-      .catch((error) => {
-        this.telemetry.warn('audio.recent-playlist.flush.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            bufferedEntryCount: bufferedEntries.length,
-          },
-        });
-      })
-      .finally(() => {
-        if (
-          this.recentSmartPlaylistWriteBuffer.length > 0 &&
-          this.recentSmartPlaylistWriteTimer === null
-        ) {
-          this.scheduleRecentSmartPlaylistWriteFlush();
-        }
-      });
-  }
-
-  private async flushRecentSmartPlaylistWriteBatch(
-    bufferedEntries: RecentSmartPlaylistWriteEntry[]
-  ): Promise<void> {
-    if (bufferedEntries.length === 0) return;
-
-    await this.ensureBuiltinSmartPlaylistsInLibraryDb();
-
-    const existingTracksFromState =
-      this.state.playlists.find((item) => item.id === NativeAudioService.SMART_PLAYLIST_RECENT_ID)
-        ?.tracks ?? [];
-    const existingTracks =
-      existingTracksFromState.length > 0
-        ? existingTracksFromState
-        : this.parseTracksFromPlaylistItems(
-            NativeAudioService.SMART_PLAYLIST_RECENT_ID,
-            await listNativeLibraryPlaylistItems(NativeAudioService.SMART_PLAYLIST_RECENT_ID)
-          );
-
-    const { tracks: mergedTracks, latestPlayedAtMs } = mergeRecentSmartPlaylistTracks({
-      existingTracks,
-      bufferedEntries,
-      limit: NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT,
-    });
-
-    const updatedAtMs = latestPlayedAtMs > 0 ? latestPlayedAtMs : Date.now();
-    const nextRecentSnapshot = applyRecentSmartPlaylistSnapshotToState({
-      playlists: this.state.playlists,
-      currentPlaylist: this.state.currentPlaylist,
-      tracks: mergedTracks,
-      updatedAtMs,
-      recentPlaylistId: NativeAudioService.SMART_PLAYLIST_RECENT_ID,
-      recentPlaylistName: NativeAudioService.SMART_PLAYLIST_RECENT_NAME,
-      recentPlaylistLimit: NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT,
-    });
-    this.updateState(nextRecentSnapshot);
-
-    const payloadPlaylist: Playlist = {
-      id: NativeAudioService.SMART_PLAYLIST_RECENT_ID,
-      name: NativeAudioService.SMART_PLAYLIST_RECENT_NAME,
-      tracks: mergedTracks,
-      kind: NativeAudioService.PLAYLIST_KIND_SMART,
-      readonly: true,
-      createdAt: updatedAtMs,
-      updatedAt: updatedAtMs,
-      trackCount: mergedTracks.length,
-      totalDuration: mergedTracks.reduce((sum, item) => sum + (item.duration ?? 0), 0),
-    };
-
-    const playlistItems = toPlaylistItemUpserts(payloadPlaylist);
-    await replaceNativeLibraryPlaylistItems(
-      NativeAudioService.SMART_PLAYLIST_RECENT_ID,
-      playlistItems
-    );
-
-    const payloadBytes = playlistItems.reduce((total, item) => {
-      const jsonLength = typeof item.trackPayloadJson === 'string' ? item.trackPayloadJson.length : 0;
-      return total + jsonLength;
-    }, 0);
-    recordRecentPlaylistWriteFlushed({
-      eventCount: bufferedEntries.length,
-      trackCount: mergedTracks.length,
-      payloadBytes,
-    });
+    return this.playlistShell.resolvePlaylistCoverPreview(playlistId, options);
   }
 
   private enqueueRecentSmartPlaylistTrackBestEffort(track: Track, playedAtMs: number): void {
-    if (!isTauriRuntime()) return;
-    if (!track || typeof track !== 'object') return;
-
-    const recentTrack = compactTrackForRecentPlaylist({
-      ...track,
-      lastPlayed: playedAtMs,
-      playCount:
-        typeof track.playCount === 'number' && Number.isFinite(track.playCount)
-          ? Math.max(1, Math.floor(track.playCount) + 1)
-          : 1,
-    });
-
-    this.recentSmartPlaylistWriteBuffer.push({
-      track: recentTrack,
-      playedAtMs,
-    });
-    recordRecentPlaylistWriteScheduled();
-
-    if (
-      this.recentSmartPlaylistWriteBuffer.length >=
-      NativeAudioService.RECENT_SMART_PLAYLIST_MAX_BUFFERED_EVENTS
-    ) {
-      this.clearRecentSmartPlaylistWriteTimer();
-      this.flushRecentSmartPlaylistWriteBufferBestEffort();
-      return;
-    }
-
-    this.scheduleRecentSmartPlaylistWriteFlush();
-  }
-
-  private isReadonlyPlaylist(playlist: Playlist | null | undefined): boolean {
-    if (!playlist) return false;
-    if (playlist.readonly === true) return true;
-    return playlist.kind === NativeAudioService.PLAYLIST_KIND_SMART;
-  }
-
-  private upsertPlaylistMetadataToLibraryDbBestEffort(playlist: Playlist): void {
-    if (!isTauriRuntime()) return;
-
-    const playlistId = String(playlist.id || '').trim();
-    const playlistName = String(playlist.name || '').trim();
-    if (!playlistId || !playlistName) return;
-
-    const kind =
-      playlist.kind === NativeAudioService.PLAYLIST_KIND_SMART
-        ? NativeAudioService.PLAYLIST_KIND_SMART
-        : playlist.kind === NativeAudioService.PLAYLIST_KIND_PLATFORM
-          ? NativeAudioService.PLAYLIST_KIND_PLATFORM
-          : NativeAudioService.PLAYLIST_KIND_MANUAL;
-
-    if (kind === NativeAudioService.PLAYLIST_KIND_SMART) {
-      return;
-    }
-
-    const now = Date.now();
-    void upsertNativeLibraryPlaylist({
-      id: playlistId,
-      ownerUid: NativeAudioService.PLAYLIST_OWNER_UID,
-      name: playlistName,
-      description: typeof playlist.description === 'string' ? playlist.description.trim() : undefined,
-      coverUrl: this.sanitizePlaylistCoverUrl(playlist.coverUrl),
-      kind,
-      sourceConnectorId: playlist.sourceConnectorId,
-      sourcePlaylistId: playlist.sourcePlaylistId,
-      smartRuleJson: playlist.smartRuleJson,
-      isReadonly: playlist.readonly === true,
-      createdAtMs:
-        typeof playlist.createdAt === 'number' && Number.isFinite(playlist.createdAt)
-          ? Math.max(0, Math.floor(playlist.createdAt))
-          : now,
-      updatedAtMs:
-        typeof playlist.updatedAt === 'number' && Number.isFinite(playlist.updatedAt)
-          ? Math.max(0, Math.floor(playlist.updatedAt))
-          : now,
-    })
-      .catch((error) => {
-        this.telemetry.warn('audio.playlist.metadata-upsert.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            playlistId,
-          },
-        });
-      });
-  }
-
-  private deletePlaylistFromLibraryDbBestEffort(playlistId: string): void {
-    if (!isTauriRuntime()) return;
-    const normalizedPlaylistId = String(playlistId || '').trim();
-    if (!normalizedPlaylistId) return;
-
-    void deleteNativeLibraryPlaylist(normalizedPlaylistId).catch((error) => {
-      this.telemetry.warn('audio.playlist.delete.failed', {
-        message: readTelemetryErrorMessage(error),
-        fields: {
-          playlistId: normalizedPlaylistId,
-        },
-      });
-    });
-  }
-
-  private touchPlaylistOpenedBestEffort(playlistId: string): void {
-    if (!isTauriRuntime()) return;
-    const normalizedPlaylistId = String(playlistId || '').trim();
-    if (!normalizedPlaylistId) return;
-
-    void touchNativeLibraryPlaylistOpened(normalizedPlaylistId, {
-      openedAtMs: Date.now(),
-    }).catch((error) => {
-      this.telemetry.warn('audio.playlist.touch-opened.failed', {
-        message: readTelemetryErrorMessage(error),
-        fields: {
-          playlistId: normalizedPlaylistId,
-        },
-      });
-    });
-  }
-
-  private resolveRecentSmartPlaylistLimit(ruleJson?: string): number {
-    const defaultLimit = NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT;
-    if (typeof ruleJson !== 'string' || ruleJson.trim().length === 0) return defaultLimit;
-    try {
-      const parsed = JSON.parse(ruleJson) as unknown;
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return defaultLimit;
-      const record = parsed as Record<string, unknown>;
-      if (record.type !== 'recently_played') return defaultLimit;
-      const limit = record.limit;
-      if (typeof limit !== 'number' || !Number.isFinite(limit)) return defaultLimit;
-      return Math.max(1, Math.min(5000, Math.floor(limit)));
-    } catch {
-      return defaultLimit;
-    }
-  }
-
-  private mapNativeTrackRecordToTrack(record: {
-    id: string;
-    filePath: string;
-    quickFingerprint?: string;
-    title?: string;
-    artist?: string;
-    album?: string;
-    genre?: string;
-    durationSeconds?: number;
-    sampleRate?: number;
-    fileSize?: number;
-    mtimeMs?: number;
-    playCount: number;
-    lastPlayedAtMs?: number;
-  }): Track {
-    const fileName = record.filePath.split(/[/\\]/).pop();
-    const fallbackTitle = (fileName && fileName.trim()) || record.id;
-
-    return {
-      id: record.id,
-      title: (record.title && record.title.trim()) || fallbackTitle,
-      artist: record.artist,
-      album: record.album,
-      duration: record.durationSeconds,
-      filePath: record.filePath,
-      path: record.filePath,
-      quickFingerprint: record.quickFingerprint,
-      genre: record.genre,
-      sampleRate: record.sampleRate,
-      fileSize: record.fileSize,
-      mtimeMs: record.mtimeMs,
-      playCount: record.playCount,
-      lastPlayed: record.lastPlayedAtMs,
-    };
-  }
-
-  private async buildRecentSmartPlaylistTracks(limit: number): Promise<Track[]> {
-    const rows = await queryNativeLibraryTracks({
-      limit: Math.max(1, Math.min(2000, limit * 3)),
-      includeMissing: false,
-      visibleOnly: true,
-      filters: [{ field: 'playCount', operator: 'gte', value: '1' }],
-      sort: [
-        { field: 'lastPlayedAtMs', order: 'desc' },
-        { field: 'updatedAtMs', order: 'desc' },
-      ],
-    });
-
-    const tracks: Track[] = [];
-    const seenTrackIds = new Set<string>();
-    for (const row of rows) {
-      if (!row.id || seenTrackIds.has(row.id)) continue;
-      if (typeof row.lastPlayedAtMs !== 'number' || !Number.isFinite(row.lastPlayedAtMs)) continue;
-      tracks.push(this.mapNativeTrackRecordToTrack(row));
-      seenTrackIds.add(row.id);
-      if (tracks.length >= limit) break;
-    }
-
-    return tracks;
+    this.recentSmartPlaylistWriter.enqueueTrackBestEffort(track, playedAtMs);
   }
 
   private async ensureBuiltinSmartPlaylistsInLibraryDb(): Promise<void> {
-    if (this.builtinSmartPlaylistsReady) return;
-    if (this.builtinSmartPlaylistsInitPromise) {
-      await this.builtinSmartPlaylistsInitPromise;
-      return;
-    }
-
-    this.builtinSmartPlaylistsInitPromise = (async () => {
-      const records = await listNativeLibraryPlaylists({
-        ownerUid: NativeAudioService.PLAYLIST_OWNER_UID,
-        kind: NativeAudioService.PLAYLIST_KIND_SMART,
-        limit: NativeAudioService.PLAYLIST_QUERY_LIMIT,
-      });
-
-      const recentRecord =
-        records.find((item) => item.id === NativeAudioService.SMART_PLAYLIST_RECENT_ID) ?? null;
-      const now = Date.now();
-
-      await upsertNativeLibraryPlaylist({
-        id: NativeAudioService.SMART_PLAYLIST_RECENT_ID,
-        ownerUid: NativeAudioService.PLAYLIST_OWNER_UID,
-        name: NativeAudioService.SMART_PLAYLIST_RECENT_NAME,
-        kind: NativeAudioService.PLAYLIST_KIND_SMART,
-        smartRuleJson: JSON.stringify({
-          type: 'recently_played',
-          limit: NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT,
-        }),
-        isReadonly: true,
-        createdAtMs: recentRecord?.createdAtMs ?? now,
-        updatedAtMs: now,
-        lastOpenedAtMs: recentRecord?.lastOpenedAtMs,
-      });
-
-      this.builtinSmartPlaylistsReady = true;
-    })();
-
-    try {
-      await this.builtinSmartPlaylistsInitPromise;
-    } finally {
-      this.builtinSmartPlaylistsInitPromise = null;
-    }
-  }
-
-  private async restorePlaylistsFromLibraryDb(): Promise<void> {
-    if (!isTauriRuntime()) return;
-
-    try {
-      await this.ensureBuiltinSmartPlaylistsInLibraryDb();
-      const records = await listNativeLibraryPlaylists({
-        ownerUid: NativeAudioService.PLAYLIST_OWNER_UID,
-        limit: NativeAudioService.PLAYLIST_QUERY_LIMIT,
-      });
-      if (records.length === 0) return;
-
-      const playlists = records.map((record) =>
-        this.createPlaylistSummaryFromRecord({
-          id: record.id,
-          name: record.name,
-          description: record.description,
-          coverUrl: record.coverUrl,
-          kind: record.kind,
-          isReadonly: record.isReadonly,
-          sourceConnectorId: record.sourceConnectorId,
-          sourcePlaylistId: record.sourcePlaylistId,
-          smartRuleJson: record.smartRuleJson,
-          createdAtMs: record.createdAtMs,
-          updatedAtMs: record.updatedAtMs,
-          trackCount: record.trackCount,
-          totalDuration: record.totalDuration,
-        })
-      );
-
-      const nextCurrentPlaylistId = this.state.currentPlaylist?.id;
-      const currentPlaylist = nextCurrentPlaylistId
-        ? this.createPlaylistSummaryReference(
-            playlists.find((item) => item.id === nextCurrentPlaylistId) ?? null
-          )
-        : null;
-      this.updateState({ playlists, currentPlaylist });
-    } catch (error) {
-      this.telemetry.warn('audio.playlists.restore.failed', {
-        message: readTelemetryErrorMessage(error),
-      });
-    }
-  }
-
-  private ensurePlaylistsRestoredFromLibraryDb(): Promise<void> {
-    if (this.playlistsRestoredFromLibraryDb) return Promise.resolve();
-    if (this.playlistsRestorePromise) return this.playlistsRestorePromise;
-
-    this.playlistsRestorePromise = this.restorePlaylistsFromLibraryDb()
-      .then(() => {
-        this.playlistsRestoredFromLibraryDb = true;
-      })
-      .finally(() => {
-        this.playlistsRestorePromise = null;
-      });
-    return this.playlistsRestorePromise;
+    await this.playlistShell.restorePlaylistSummaries();
   }
 
   private notifyLatestSeekSequence(seekSeq: number | null): void {
@@ -1945,7 +810,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   private isSharedOutputBackend(backendId: string | null | undefined): backendId is string {
-    return isSharedOutputBackendId(backendId);
+    return this.outputBackendController.isSharedOutputBackend(backendId);
   }
 
   private hasPinnedOutputBackendChoice(): boolean {
@@ -2079,6 +944,9 @@ export class NativeAudioService implements IAudioService {
     void this.lastNativeErrorSeq;
     void this.lastUnderrunEvents;
     void this.protectionWindowReason;
+    void this.backendSwitchInFlight;
+    void this.autoBackendSwitchCount;
+    void this.lastAutoBackendSwitchAtMs;
     void this.lastAutoBackendSwitchReason;
     void this.lastSchedulerProfile;
     void this.dynamicSrcAutoDegradationLastChangedAtMs;
@@ -2107,6 +975,16 @@ export class NativeAudioService implements IAudioService {
     void this.controlQueueCriticalOverflowEvents;
     void this.diagnosticTimelineDroppedEvents;
     void this.diagnosticTimeline;
+    void this.tuningAutoEnabled;
+    void this.tuningAutoTickIntervalMs;
+    void this.tuningAutoStableWindowMs;
+    void this.tuningAutoMinSwitchIntervalMs;
+    void this.tuningAutoPostSwitchObserveWindowMs;
+    void this.tuningAutoElevatedStressScore;
+    void this.tuningAutoCriticalStressScore;
+    void this.tuningAutoCriticalUnderrunEventsWindow;
+    void this.tuningAutoCriticalOverflowGrowthTicks;
+    void this.tuningAutoControllerState;
     void this.tuningAutoLastReason;
     void this.tuningAutoLastAppliedAtMs;
     void this.markPendingSeekGuard;
@@ -2592,9 +1470,12 @@ export class NativeAudioService implements IAudioService {
   }
 
   private applyRuntimeAudioComponentsState(components: NativeAudioComponentsStatePayload): void {
-    this.currentOutputBackendId = this.sanitizeBackendId(components.outputBackendId);
-    this.currentOutputDeviceId = this.sanitizeNonEmptyString(components.outputDeviceId);
-    this.currentOutputDeviceName = this.sanitizeNonEmptyString(components.outputDevice);
+    this.outputBackendController.applyRuntimeAudioComponentsState({
+      ...components,
+      outputBackendId: this.sanitizeBackendId(components.outputBackendId),
+      outputDeviceId: this.sanitizeNonEmptyString(components.outputDeviceId),
+      outputDevice: this.sanitizeNonEmptyString(components.outputDevice),
+    });
   }
 
   private parseComponentsStatePayload(payload: unknown): NativeAudioComponentsStatePayload {
@@ -2781,42 +1662,10 @@ export class NativeAudioService implements IAudioService {
   }
 
   private parseDynamicSrcLearningProfile(raw: string | null): DynamicSrcLearningMap {
-    if (!raw) return {};
-
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (!parsed || typeof parsed !== 'object') return {};
-
-      const input = parsed as Record<string, unknown>;
-      const entries: Array<[string, DynamicSrcLearningRecord]> = [];
-      for (const [key, value] of Object.entries(input)) {
-        if (typeof key !== 'string' || key.trim().length === 0) continue;
-        if (!value || typeof value !== 'object') continue;
-
-        const record = value as Record<string, unknown>;
-        const stressIndexRaw = record.stressIndex;
-        const updatedAtRaw = record.updatedAtMs;
-        if (typeof stressIndexRaw !== 'number' || !Number.isFinite(stressIndexRaw)) continue;
-        const normalizedStress = Math.max(0, Math.min(12, stressIndexRaw));
-        const updatedAtMs =
-          typeof updatedAtRaw === 'number' && Number.isFinite(updatedAtRaw)
-            ? Math.max(0, Math.floor(updatedAtRaw))
-            : 0;
-
-        entries.push([
-          key,
-          {
-            stressIndex: normalizedStress,
-            updatedAtMs,
-          },
-        ]);
-      }
-
-      entries.sort((a, b) => (b[1].updatedAtMs || 0) - (a[1].updatedAtMs || 0));
-      return Object.fromEntries(entries.slice(0, NativeAudioService.DYNAMIC_SRC_LEARNING_MAX_ITEMS));
-    } catch {
-      return {};
-    }
+    return parseDynamicSrcLearningProfileState({
+      raw,
+      maxItems: NativeAudioService.DYNAMIC_SRC_LEARNING_MAX_ITEMS,
+    });
   }
 
   private clearDynamicSrcLearningPersistTimer(): void {
@@ -2826,10 +1675,10 @@ export class NativeAudioService implements IAudioService {
   }
 
   private normalizeDynamicSrcLearningProfileForPersistence(): DynamicSrcLearningMap {
-    const trimmedEntries = Object.entries(this.dynamicSrcLearningProfile)
-      .sort((a, b) => (b[1].updatedAtMs || 0) - (a[1].updatedAtMs || 0))
-      .slice(0, NativeAudioService.DYNAMIC_SRC_LEARNING_MAX_ITEMS);
-    this.dynamicSrcLearningProfile = Object.fromEntries(trimmedEntries);
+    this.dynamicSrcLearningProfile = normalizeDynamicSrcLearningProfile({
+      profile: this.dynamicSrcLearningProfile,
+      maxItems: NativeAudioService.DYNAMIC_SRC_LEARNING_MAX_ITEMS,
+    });
     return this.dynamicSrcLearningProfile;
   }
 
@@ -2884,31 +1733,25 @@ export class NativeAudioService implements IAudioService {
     }
     this.dynamicSrcLearningLastUpdateAtMs = nowMs;
 
-    const deviceKey = this.buildDynamicSrcLearningDeviceKey();
-    const previous = this.dynamicSrcLearningProfile[deviceKey]?.stressIndex ?? 0;
-    const normalizedStress = Math.max(0, Math.min(12, stressScore));
-    const blended = previous * 0.9 + normalizedStress * 0.1;
-    const nextStressIndex = Math.max(0, Math.min(12, blended));
-    if (Math.abs(nextStressIndex - previous) < NativeAudioService.DYNAMIC_SRC_LEARNING_MIN_DELTA) {
-      return;
-    }
+    const update = resolveDynamicSrcLearningUpdate({
+      profile: this.dynamicSrcLearningProfile,
+      deviceKey: this.buildDynamicSrcLearningDeviceKey(),
+      stressScore,
+      nowMs,
+      minDelta: NativeAudioService.DYNAMIC_SRC_LEARNING_MIN_DELTA,
+    });
+    if (!update.changed) return;
 
-    this.dynamicSrcLearningProfile[deviceKey] = {
-      stressIndex: nextStressIndex,
-      updatedAtMs: nowMs,
-    };
-
+    this.dynamicSrcLearningProfile = update.profile;
     this.scheduleDynamicSrcLearningPersist(nowMs);
   }
 
   private getDynamicSrcLearningScale(): number {
-    if (!this.dynamicSrcLearningEnabled) return 1;
-
-    const deviceKey = this.buildDynamicSrcLearningDeviceKey();
-    const stressIndex = this.dynamicSrcLearningProfile[deviceKey]?.stressIndex ?? 0;
-    if (stressIndex <= 0) return 1;
-
-    return 1 + Math.min(0.5, stressIndex / 30);
+    return resolveDynamicSrcLearningScale({
+      enabled: this.dynamicSrcLearningEnabled,
+      profile: this.dynamicSrcLearningProfile,
+      deviceKey: this.buildDynamicSrcLearningDeviceKey(),
+    });
   }
 
   private evaluateDynamicSrcAutoDegradation(options?: {
@@ -3158,85 +2001,30 @@ export class NativeAudioService implements IAudioService {
   }
 
   private readTuningAutoSettings(): AudioTuningAutoSettings {
-    const defaults: AudioTuningAutoSettings = {
-      enabled: this.tuningAutoEnabled,
-      tickIntervalMs: this.tuningAutoTickIntervalMs,
-      stableWindowMs: this.tuningAutoStableWindowMs,
-      minSwitchIntervalMs: this.tuningAutoMinSwitchIntervalMs,
-      postSwitchObserveWindowMs: this.tuningAutoPostSwitchObserveWindowMs,
-      elevatedStressScore: this.tuningAutoElevatedStressScore,
-      criticalStressScore: this.tuningAutoCriticalStressScore,
-      criticalUnderrunEventsWindow: this.tuningAutoCriticalUnderrunEventsWindow,
-      criticalOverflowGrowthTicks: this.tuningAutoCriticalOverflowGrowthTicks,
-    };
-
     return resolveStoredTuningAutoSettings({
       raw: readString(STORAGE_KEYS.NATIVE_AUDIO_TUNING_AUTO_SETTINGS),
-      defaults,
+      defaults: this.tuningAutoSettings,
     });
   }
 
   private applyTuningAutoSettingsState(settings: AudioTuningAutoSettings): void {
-    this.tuningAutoEnabled = settings.enabled;
-    this.tuningAutoTickIntervalMs = settings.tickIntervalMs;
-    this.tuningAutoStableWindowMs = settings.stableWindowMs;
-    this.tuningAutoMinSwitchIntervalMs = settings.minSwitchIntervalMs;
-    this.tuningAutoPostSwitchObserveWindowMs = settings.postSwitchObserveWindowMs;
-    this.tuningAutoElevatedStressScore = settings.elevatedStressScore;
-    this.tuningAutoCriticalStressScore = Math.max(
-      this.tuningAutoElevatedStressScore,
-      settings.criticalStressScore
-    );
-    this.tuningAutoCriticalUnderrunEventsWindow = settings.criticalUnderrunEventsWindow;
-    this.tuningAutoCriticalOverflowGrowthTicks = settings.criticalOverflowGrowthTicks;
-    this.restartTuningAutoLoop();
-  }
-
-  private clearTuningAutoLoop(): void {
-    if (this.tuningAutoTimer === null) return;
-    clearInterval(this.tuningAutoTimer);
-    this.tuningAutoTimer = null;
-  }
-
-  private restartTuningAutoLoop(): void {
-    this.clearTuningAutoLoop();
-    if (!this.tuningAutoEnabled || this.disposed) return;
-
-    this.tuningAutoTimer = setInterval(() => {
-      void this.tickTuningAutoController();
-    }, this.tuningAutoTickIntervalMs);
+    this.tuningAutoController.applySettings(settings);
   }
 
   private async tickTuningAutoController(): Promise<void> {
-    if (!this.tuningAutoEnabled || this.disposed) return;
-    if (this.tuningAutoApplyInFlight) return;
-
     const nowMs = Date.now();
     const snapshot = this.buildRobustnessSnapshot(nowMs);
-    const decision = resolveAudioTuningTransition({
+    const decision = this.tuningAutoController.evaluateTick({
       nowMs,
       snapshot,
-      state: this.tuningAutoControllerState,
-      thresholds: {
-        elevatedStressScore: this.tuningAutoElevatedStressScore,
-        criticalStressScore: this.tuningAutoCriticalStressScore,
-        criticalUnderrunEventsWindow: this.tuningAutoCriticalUnderrunEventsWindow,
-        criticalOverflowGrowthTicks: this.tuningAutoCriticalOverflowGrowthTicks,
-        stableWindowMs: this.tuningAutoStableWindowMs,
-        minSwitchIntervalMs: this.tuningAutoMinSwitchIntervalMs,
-        postSwitchObserveWindowMs: this.tuningAutoPostSwitchObserveWindowMs,
-      },
     });
-
-    this.tuningAutoControllerState = decision.state;
-    this.tuningAutoLastReason = decision.reason;
+    if (!decision) return;
     if (!decision.changed) return;
 
-    this.tuningAutoApplyInFlight = true;
+    if (!this.tuningAutoController.beginApply()) return;
     try {
       await this.applyTuningProfile(decision.nextProfile);
-      this.tuningAutoLastReason = `auto:${decision.reason}`;
-      this.tuningAutoLastAppliedAtMs = Date.now();
+      this.tuningAutoController.markAutoApplied(decision.reason, Date.now());
     } catch (error) {
       this.telemetry.warn('audio.tuning-profile.auto-apply.failed', {
         message: readTelemetryErrorMessage(error),
@@ -3246,80 +2034,21 @@ export class NativeAudioService implements IAudioService {
         },
       });
     } finally {
-      this.tuningAutoApplyInFlight = false;
+      this.tuningAutoController.finishApply();
       this.emitRobustnessSnapshot(true);
     }
   }
 
   getAudioTuningAutoSettings(): AudioTuningAutoSettings {
-    return {
-      enabled: this.tuningAutoEnabled,
-      tickIntervalMs: this.tuningAutoTickIntervalMs,
-      stableWindowMs: this.tuningAutoStableWindowMs,
-      minSwitchIntervalMs: this.tuningAutoMinSwitchIntervalMs,
-      postSwitchObserveWindowMs: this.tuningAutoPostSwitchObserveWindowMs,
-      elevatedStressScore: this.tuningAutoElevatedStressScore,
-      criticalStressScore: this.tuningAutoCriticalStressScore,
-      criticalUnderrunEventsWindow: this.tuningAutoCriticalUnderrunEventsWindow,
-      criticalOverflowGrowthTicks: this.tuningAutoCriticalOverflowGrowthTicks,
-    };
+    return this.tuningAutoSettings;
   }
 
   async setAudioTuningAutoSettings(settingsPatch: AudioTuningAutoSettingsPatch): Promise<void> {
     const current = this.getAudioTuningAutoSettings();
-
-    const clampMs = (value: unknown, fallback: number, min: number, max: number): number => {
-      if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-      return Math.max(min, Math.min(max, Math.floor(value)));
-    };
-    const clampCount = (value: unknown, fallback: number, min: number, max: number): number => {
-      if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-      return Math.max(min, Math.min(max, Math.floor(value)));
-    };
-
-    const nextElevatedStressScore = clampCount(
-      settingsPatch.elevatedStressScore,
-      current.elevatedStressScore,
-      1,
-      20
-    );
-
-    const nextSettings: AudioTuningAutoSettings = {
-      enabled: typeof settingsPatch.enabled === 'boolean' ? settingsPatch.enabled : current.enabled,
-      tickIntervalMs: clampMs(settingsPatch.tickIntervalMs, current.tickIntervalMs, 500, 10_000),
-      stableWindowMs: clampMs(settingsPatch.stableWindowMs, current.stableWindowMs, 5_000, 120_000),
-      minSwitchIntervalMs: clampMs(
-        settingsPatch.minSwitchIntervalMs,
-        current.minSwitchIntervalMs,
-        1_000,
-        120_000
-      ),
-      postSwitchObserveWindowMs: clampMs(
-        settingsPatch.postSwitchObserveWindowMs,
-        current.postSwitchObserveWindowMs,
-        1_000,
-        120_000
-      ),
-      elevatedStressScore: nextElevatedStressScore,
-      criticalStressScore: clampCount(
-        settingsPatch.criticalStressScore,
-        current.criticalStressScore,
-        nextElevatedStressScore,
-        30
-      ),
-      criticalUnderrunEventsWindow: clampCount(
-        settingsPatch.criticalUnderrunEventsWindow,
-        current.criticalUnderrunEventsWindow,
-        1,
-        12
-      ),
-      criticalOverflowGrowthTicks: clampCount(
-        settingsPatch.criticalOverflowGrowthTicks,
-        current.criticalOverflowGrowthTicks,
-        1,
-        8
-      ),
-    };
+    const nextSettings = resolveNativeAudioTuningAutoSettingsPatch({
+      patch: settingsPatch,
+      current,
+    });
 
     await broadcastDataUpdate(
       STORAGE_KEYS.NATIVE_AUDIO_TUNING_AUTO_SETTINGS,
@@ -3649,23 +2378,13 @@ export class NativeAudioService implements IAudioService {
       TAURI_EVENTS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS_UPDATED
     );
 
-    this.tuningAutoControllerState = {
-      ...this.tuningAutoControllerState,
-      activeProfile: profileId,
-      lastSwitchAtMs: nowMs,
-    };
-    this.tuningAutoLastReason = `manual:${profileId}`;
-    this.tuningAutoLastAppliedAtMs = nowMs;
+    this.tuningAutoController.markManualApplied(profileId, nowMs);
 
     this.emitRobustnessSnapshot();
   }
 
   private getAutoBackendChain(): string[] {
-    return resolveAutoOutputBackendChain({
-      availableBackends: this.availableOutputBackends,
-      currentBackendId: this.currentOutputBackendId,
-      isWindows: this.isWindowsOutputPlatform(),
-    });
+    return this.outputBackendController.resolveAutoBackendChain();
   }
 
   private isWindowsOutputPlatform(): boolean {
@@ -3683,19 +2402,11 @@ export class NativeAudioService implements IAudioService {
   }
 
   private shouldAutoSwitchNow(reason: string, nowMs: number): boolean {
-    const decision = evaluateAutoOutputSwitch({
+    const decision = this.outputBackendController.evaluateAutoSwitch({
       reason,
       nowMs,
-      backendSwitchInFlight: this.backendSwitchInFlight,
-      lastAutoSwitchAtMs: this.lastAutoBackendSwitchAtMs,
       lastUnderrunFrames: this.lastUnderrunFrames,
       underrunSpikeTimestampsMs: this.underrunSpikeTimestampsMs,
-      config: {
-        underrunWindowMs: NativeAudioService.AUTO_BACKEND_UNDERRUN_WINDOW_MS,
-        underrunTriggerCount: NativeAudioService.AUTO_BACKEND_UNDERRUN_TRIGGER_COUNT,
-        underrunFrameSpikeTrigger: NativeAudioService.AUTO_BACKEND_UNDERRUN_FRAME_SPIKE_TRIGGER,
-        switchCooldownMs: NativeAudioService.AUTO_BACKEND_SWITCH_COOLDOWN_MS,
-      },
     });
     this.underrunSpikeTimestampsMs = decision.prunedUnderrunSpikeTimestampsMs;
     return decision.shouldSwitch;
@@ -3719,25 +2430,17 @@ export class NativeAudioService implements IAudioService {
   }
 
   private async tryAutoSwitchOutputBackend(reason: string): Promise<void> {
-    if (this.backendSwitchInFlight) return;
-
-    if (!this.isSharedOutputBackend(this.currentOutputBackendId)) {
-      return;
-    }
-
-    if (this.hasPinnedOutputBackendChoice()) {
-      return;
-    }
-
     const nowMs = Date.now();
     if (
-      this.lastAutoBackendSwitchAtMs !== null &&
-      nowMs - this.lastAutoBackendSwitchAtMs < NativeAudioService.AUTO_BACKEND_SWITCH_COOLDOWN_MS
+      !this.outputBackendController.canTryAutoSwitch({
+        nowMs,
+        pinned: this.hasPinnedOutputBackendChoice(),
+      })
     ) {
       return;
     }
 
-    this.backendSwitchInFlight = true;
+    if (!this.outputBackendController.beginSwitch()) return;
 
     try {
       await this.refreshOutputBackendInventory();
@@ -3747,7 +2450,7 @@ export class NativeAudioService implements IAudioService {
 
       const current = this.currentOutputBackendId;
       if (!this.isSharedOutputBackend(current)) return;
-      const targetBackend = resolveNextAutoOutputBackend(chain, current);
+      const targetBackend = this.outputBackendController.resolveNextAutoBackend();
       if (!targetBackend) return;
       if (targetBackend === current) return;
 
@@ -3759,12 +2462,10 @@ export class NativeAudioService implements IAudioService {
         return;
       }
 
-      this.autoBackendSwitchCount += 1;
-      this.lastAutoBackendSwitchAtMs = Date.now();
-      this.lastAutoBackendSwitchReason = reason;
+      this.outputBackendController.markAutoSwitch(reason, Date.now());
       this.emitRobustnessSnapshot(true);
     } finally {
-      this.backendSwitchInFlight = false;
+      this.outputBackendController.finishSwitch();
     }
   }
 
@@ -4415,300 +3116,15 @@ export class NativeAudioService implements IAudioService {
     return queue.map((track) => this.getTrackPath(track)).filter(Boolean) as string[];
   }
 
-  private buildNativeQueueEntryPaths(queue: Track[]): string[] | null {
-    const queuePaths: string[] = [];
-    for (const track of queue) {
-      const trackPath =
-        this.getTrackPath(track) ??
-        (typeof track.id === 'string' && track.id.trim().length > 0
-          ? `queue://track-id/${encodeURIComponent(track.id.trim())}`
-          : null);
-      if (!trackPath) {
-        return null;
-      }
-      queuePaths.push(trackPath);
-    }
-    return queuePaths;
-  }
-
-  private syncAppendedQueueToNative(nextQueue: Track[], appendedTracks: Track[]): void {
-    if (this.disposed) return;
-    if (!isTauriRuntime()) return;
-    if (this.nativeQueueMirrorDirty) return;
-
-    const currentIndex = this.state.currentIndex;
-    const appendedPaths = this.buildNativeQueueEntryPaths(appendedTracks);
-    if (!appendedPaths) {
-      this.markNativeQueueMirrorDirty('append-missing-identity', {
-        addedCount: appendedTracks.length,
-      });
-      return;
-    }
-
-    void invokeWithTelemetry('native_audio_append_queue', { queue: appendedPaths }, {
-      moduleId: 'audio',
-      component: 'NativeAudioService',
-      event: 'audio.queue.append',
-    })
-      .then(() => {
-        this.markNativeQueueMutationSynced(nextQueue, currentIndex);
-        this.telemetry.info('audio.queue.sync.flush', {
-          fields: this.buildQueueTelemetryFields(nextQueue, currentIndex, {
-            mode: 'append',
-            addedCount: appendedTracks.length,
-            queuePathCount: appendedPaths.length,
-            queuePathApproxBytes: approxJsonBytes(appendedPaths),
-          }),
-        });
-      })
-      .catch((error) => {
-        this.telemetry.warn('audio.queue.sync.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            phase: 'append',
-            addedCount: appendedTracks.length,
-          },
-        });
-        this.markNativeQueueMirrorDirty('append-command-failed', {
-          addedCount: appendedTracks.length,
-        });
-      });
-  }
-
-  private canUseAtomicNativeQueueMutation(queue: Track[]): boolean {
-    return (
-      isTauriRuntime() &&
-      !this.nativeQueueMirrorDirty &&
-      this.buildNativeQueueEntryPaths(queue) !== null
-    );
-  }
-
-  private markNativeQueueMutationSynced(queue: Track[], currentIndex: number): void {
-    this.nativeQueueMirrorQueueRef = queue;
-    this.nativeQueueMirrorIndex = currentIndex;
-    if (this.state.queue === queue && this.state.currentIndex !== currentIndex) {
-      this.scheduleNativeQueueIndexSync(this.state.currentIndex);
-    }
-  }
-
-  private syncRemovedQueueItemToNative(
-    previousQueue: Track[],
-    nextQueue: Track[],
-    removedIndex: number,
-    currentIndex: number
-  ): void {
-    if (this.disposed) return;
-    if (!this.canUseAtomicNativeQueueMutation(previousQueue)) {
-      this.markNativeQueueMirrorDirty('remove-preconditions-missing', {
-        removedIndex,
-      });
-      return;
-    }
-
-    void invokeWithTelemetry('native_audio_remove_queue_item', { index: removedIndex }, {
-      moduleId: 'audio',
-      component: 'NativeAudioService',
-      event: 'audio.queue.remove-native',
-    })
-      .then(() => {
-        this.markNativeQueueMutationSynced(nextQueue, currentIndex);
-        this.telemetry.info('audio.queue.sync.flush', {
-          fields: this.buildQueueTelemetryFields(nextQueue, currentIndex, {
-            mode: 'remove',
-            removedIndex,
-          }),
-        });
-      })
-      .catch((error) => {
-        this.telemetry.warn('audio.queue.sync.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            phase: 'remove',
-            removedIndex,
-          },
-        });
-        this.markNativeQueueMirrorDirty('remove-command-failed', {
-          removedIndex,
-        });
-      });
-  }
-
-  private syncMovedQueueItemToNative(
-    previousQueue: Track[],
-    nextQueue: Track[],
-    fromIndex: number,
-    toIndex: number,
-    currentIndex: number
-  ): void {
-    if (this.disposed) return;
-    if (!this.canUseAtomicNativeQueueMutation(previousQueue)) {
-      this.markNativeQueueMirrorDirty('move-preconditions-missing', {
-        fromIndex,
-        toIndex,
-      });
-      return;
-    }
-
-    void invokeWithTelemetry('native_audio_move_queue_item', { fromIndex, toIndex }, {
-      moduleId: 'audio',
-      component: 'NativeAudioService',
-      event: 'audio.queue.move-native',
-    })
-      .then(() => {
-        this.markNativeQueueMutationSynced(nextQueue, currentIndex);
-        this.telemetry.info('audio.queue.sync.flush', {
-          fields: this.buildQueueTelemetryFields(nextQueue, currentIndex, {
-            mode: 'move',
-            fromIndex,
-            toIndex,
-          }),
-        });
-      })
-      .catch((error) => {
-        this.telemetry.warn('audio.queue.sync.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            phase: 'move',
-            fromIndex,
-            toIndex,
-          },
-        });
-        this.markNativeQueueMirrorDirty('move-command-failed', {
-          fromIndex,
-          toIndex,
-        });
-      });
-  }
-
   private async replaceQueueItemPathInNative(index: number, path: string): Promise<boolean> {
-    if (!isTauriRuntime()) return false;
-    if (this.nativeQueueMirrorDirty || !this.buildNativeQueueEntryPaths(this.state.queue)) {
-      return false;
-    }
-
-    try {
-      await invokeWithTelemetry('native_audio_replace_queue_item_path', { index, path }, {
-        moduleId: 'audio',
-        component: 'NativeAudioService',
-        event: 'audio.queue.patch-item-path',
-      });
-      this.markNativeQueueMutationSynced(this.state.queue, this.state.currentIndex);
-      return true;
-    } catch (error) {
-      this.telemetry.warn('audio.queue.sync.failed', {
-        message: readTelemetryErrorMessage(error),
-        fields: {
-          phase: 'replace-item-path',
-          index,
-        },
-      });
-      this.markNativeQueueMirrorDirty('replace-item-path-command-failed', {
-        index,
-      });
-      return false;
-    }
+    return this.queueMirror.replaceItemPath(index, path);
   }
 
   private canUseQueueIndexTransport(queue: Track[], index: number): boolean {
-    if (!isTauriRuntime()) return false;
-    if (index < 0 || index >= queue.length) return false;
-    if (this.nativeQueueMirrorDirty) return false;
-    return this.buildNativeQueueEntryPaths(queue) !== null;
+    return this.queueMirror.canUseQueueIndexTransport(queue, index);
   }
 
   private disposed = false;
-  private nativeQueueMirrorQueueRef: Track[] | null = null;
-  private nativeQueueMirrorIndex = -1;
-  private pendingNativeQueueIndex: number | null = null;
-  private nativeQueueIndexSyncScheduled = false;
-  private nativeQueueMirrorDirty = false;
-
-  private resetNativeQueueMirrorState(): void {
-    this.nativeQueueMirrorQueueRef = null;
-    this.nativeQueueMirrorIndex = -1;
-    this.pendingNativeQueueIndex = null;
-    this.nativeQueueIndexSyncScheduled = false;
-    this.nativeQueueMirrorDirty = false;
-  }
-
-  private markNativeQueueMirrorDirty(
-    reason: string,
-    fields?: Record<string, unknown>
-  ): void {
-    if (this.nativeQueueMirrorDirty) return;
-    this.nativeQueueMirrorDirty = true;
-    this.nativeQueueMirrorQueueRef = null;
-    this.nativeQueueMirrorIndex = -1;
-    this.pendingNativeQueueIndex = null;
-    this.nativeQueueIndexSyncScheduled = false;
-    this.telemetry.warn('audio.queue.native-mirror.dirty', {
-      fields: {
-        reason,
-        ...fields,
-      },
-    });
-  }
-
-  private scheduleNativeQueueIndexSync(currentIndex: number): void {
-    if (this.disposed || !isTauriRuntime() || this.nativeQueueMirrorDirty) return;
-    if (
-      this.nativeQueueMirrorQueueRef === this.state.queue &&
-      this.nativeQueueMirrorIndex === currentIndex
-    ) {
-      return;
-    }
-
-    this.pendingNativeQueueIndex = currentIndex;
-    if (this.nativeQueueIndexSyncScheduled) return;
-    this.nativeQueueIndexSyncScheduled = true;
-
-    const flush = () => {
-      this.nativeQueueIndexSyncScheduled = false;
-      const nextIndex = this.pendingNativeQueueIndex;
-      this.pendingNativeQueueIndex = null;
-      if (nextIndex == null) return;
-      void this.syncQueueIndexToNative(nextIndex);
-    };
-
-    if (typeof queueMicrotask === 'function') {
-      queueMicrotask(flush);
-      return;
-    }
-
-    void Promise.resolve().then(flush);
-  }
-
-  private async syncQueueIndexToNative(currentIndex: number): Promise<void> {
-    if (this.disposed || !isTauriRuntime() || this.nativeQueueMirrorDirty) return;
-    if (
-      this.nativeQueueMirrorQueueRef === this.state.queue &&
-      this.nativeQueueMirrorIndex === currentIndex
-    ) {
-      return;
-    }
-
-    const fields = this.buildQueueTelemetryFields(this.state.queue, currentIndex, {
-      mode: 'index-only',
-    });
-    try {
-      await invokeWithTelemetry('native_audio_sync_queue_index', { currentIndex }, {
-        moduleId: 'audio',
-        component: 'NativeAudioService',
-        event: 'audio.queue.sync.index',
-      });
-      this.nativeQueueMirrorQueueRef = this.state.queue;
-      this.nativeQueueMirrorIndex = currentIndex;
-      this.telemetry.info('audio.queue.sync.flush', { fields });
-    } catch (error) {
-      this.telemetry.warn('audio.queue.sync.failed', {
-        message: readTelemetryErrorMessage(error),
-        fields,
-      });
-      this.markNativeQueueMirrorDirty('index-command-failed', {
-        currentIndex,
-      });
-    }
-  }
 
   private resolveQueueFromPaths(queuePaths: string[]): Track[] {
     const pathToTrack = new Map<string, Track>();
@@ -5014,17 +3430,10 @@ export class NativeAudioService implements IAudioService {
   }
 
   private applyPlaybackStateSideEffects(playbackState: PlaybackState) {
-    if (playbackState === 'playing' || playbackState === 'buffering') {
-      this.lastPlaybackActiveAtMs = Date.now();
-    }
+    this.spectrumController.handlePlaybackState(playbackState);
 
     if (playbackState === 'playing' || playbackState === 'paused' || playbackState === 'idle') {
       this.scheduleDynamicSrcRestoreEvaluation();
-    }
-
-    if (playbackState === 'stopped' || playbackState === 'idle' || playbackState === 'error') {
-      this.lastSpectrumTouchAtMs = 0;
-      this.maybeDisableSpectrum();
     }
   }
 
@@ -5082,7 +3491,7 @@ export class NativeAudioService implements IAudioService {
           (await this.replaceQueueItemPathInNative(index, transportPath));
         if (pathPatched) {
           await this.invokeCommand('native_audio_load_queue_index', { index });
-          this.markNativeQueueMutationSynced(queue, index);
+          this.queueMirror.markMutationSynced(queue, index);
           usedQueueIndexLoad = true;
           loaded = true;
         } else {
@@ -5129,8 +3538,8 @@ export class NativeAudioService implements IAudioService {
       }
     }
 
-    if (!usedQueueIndexLoad && queue.length > previousQueue.length && !this.nativeQueueMirrorDirty) {
-      this.markNativeQueueMutationSynced(queue, index);
+    if (!usedQueueIndexLoad && queue.length > previousQueue.length && !this.queueMirror.isDirty()) {
+      this.queueMirror.markMutationSynced(queue, index);
     }
 
     this.updateState({
@@ -5204,8 +3613,8 @@ export class NativeAudioService implements IAudioService {
       }
     }
 
-    if (queue.length > previousQueue.length && !this.nativeQueueMirrorDirty) {
-      this.markNativeQueueMutationSynced(queue, index);
+    if (queue.length > previousQueue.length && !this.queueMirror.isDirty()) {
+      this.queueMirror.markMutationSynced(queue, index);
     }
 
     this.markTrackPlayedBestEffort(playedTrack);
@@ -5266,14 +3675,12 @@ export class NativeAudioService implements IAudioService {
   private resetQueueRuntimeState(): void {
     this.desiredPlayIndex = null;
     this.playIndexQueue = Promise.resolve();
-    this.pendingNativeQueueIndex = null;
-    this.nativeQueueIndexSyncScheduled = false;
+    this.queueMirror.clearPendingIndexSync();
 
     this.stopFallbackTicker();
     this.fallbackClockBaseTimeSec = 0;
     this.fallbackClockStartedAtMs = null;
     this.lastBackendTimeUpdateAtMs = 0;
-    this.lastPlaybackActiveAtMs = 0;
 
     this.bufferedAheadRollingWindow = [];
     this.bufferedAheadRollingSum = 0;
@@ -5300,17 +3707,7 @@ export class NativeAudioService implements IAudioService {
     this.sharedStressReason = null;
     this.sharedStressEscalationCount = 0;
     this.dynamicSrcPolicyExecutor.reset();
-
-    if (this.spectrumDisableTimer !== null) {
-      window.clearTimeout(this.spectrumDisableTimer);
-      this.spectrumDisableTimer = null;
-    }
-    this.lastSpectrumTouchAtMs = 0;
-    if (this.spectrumEnabled) {
-      void this.setSpectrumEnabled(false);
-    }
-    this.spectrumData = null;
-    this.spectrumFrames = {};
+    this.spectrumController.reset();
   }
 
   seek(time: number): void {
@@ -5390,7 +3787,7 @@ export class NativeAudioService implements IAudioService {
       fields,
     });
     this.updateState({ queue });
-    this.syncAppendedQueueToNative(queue, [queuedTrack]);
+    this.queueMirror.syncAppended(queue, [queuedTrack]);
     captureTelemetryScenarioSnapshot({
       moduleId: 'audio',
       component: 'NativeAudioService',
@@ -5415,7 +3812,7 @@ export class NativeAudioService implements IAudioService {
       fields,
     });
     this.updateState({ queue });
-    this.syncAppendedQueueToNative(queue, appendedQueueTracks);
+    this.queueMirror.syncAppended(queue, appendedQueueTracks);
     captureTelemetryScenarioSnapshot({
       moduleId: 'audio',
       component: 'NativeAudioService',
@@ -5482,7 +3879,7 @@ export class NativeAudioService implements IAudioService {
       fields,
       minIntervalMs: 250,
     });
-    this.syncRemovedQueueItemToNative(previousQueue, queue, index, currentIndex);
+    this.queueMirror.syncRemoved(previousQueue, queue, index, currentIndex);
   }
 
   clearQueue(options?: { releasePlaylists?: boolean }): void {
@@ -5508,7 +3905,7 @@ export class NativeAudioService implements IAudioService {
       this.releasePlaylistTracks();
     }
     if (isTauriRuntime()) {
-      this.resetNativeQueueMirrorState();
+      this.queueMirror.reset();
       this.fireAndForgetCommand('native_audio_clear_queue');
     }
     this.fireAndForgetCommand('native_audio_stop');
@@ -5846,7 +4243,7 @@ export class NativeAudioService implements IAudioService {
       fields,
       minIntervalMs: 250,
     });
-    this.syncMovedQueueItemToNative(previousQueue, queue, fromIndex, toIndex, currentIndex);
+    this.queueMirror.syncMoved(previousQueue, queue, fromIndex, toIndex, currentIndex);
   }
 
   async playPrevious(): Promise<void> {
@@ -5909,71 +4306,23 @@ export class NativeAudioService implements IAudioService {
 
   // Playlist creation and mutation helpers.
   createPlaylist(name: string, description?: string, options?: PlaylistCreateOptions): Playlist {
-    const kind =
-      options?.kind === NativeAudioService.PLAYLIST_KIND_SMART
-        ? NativeAudioService.PLAYLIST_KIND_SMART
-        : options?.kind === NativeAudioService.PLAYLIST_KIND_PLATFORM
-          ? NativeAudioService.PLAYLIST_KIND_PLATFORM
-          : NativeAudioService.PLAYLIST_KIND_MANUAL;
-
-    const now = Date.now();
-    const playlist: Playlist = {
-      id: `playlist-${now}-${Math.random().toString(36).slice(2, 8)}`,
-      name,
-      description,
-      tracks: [],
-      kind,
-      readonly: options?.readonly === true || kind === NativeAudioService.PLAYLIST_KIND_SMART,
-      sourceConnectorId: options?.sourceConnectorId,
-      sourcePlaylistId: options?.sourcePlaylistId,
-      smartRuleJson: options?.smartRuleJson,
-      createdAt: now,
-      updatedAt: now,
-      trackCount: 0,
-      totalDuration: 0,
-      tracksHydrated: true,
-    };
-
-    const playlists = [...this.state.playlists, playlist];
-    this.updateState({ playlists });
-    this.upsertPlaylistMetadataToLibraryDbBestEffort(playlist);
-    return playlist;
+    return this.playlistShell.createPlaylist(name, description, options);
   }
 
   deletePlaylist(playlistId: string): void {
-    const targetPlaylist = this.getPlaylist(playlistId);
-    if (this.isReadonlyPlaylist(targetPlaylist)) return;
-
-    this.playlistHydrationPromises.delete(playlistId);
-    const playlists = this.state.playlists.filter((pl) => pl.id !== playlistId);
-    const currentPlaylist =
-      this.state.currentPlaylist?.id === playlistId ? null : this.state.currentPlaylist;
-    this.updateState({ playlists, currentPlaylist });
-    this.deletePlaylistFromLibraryDbBestEffort(playlistId);
+    this.playlistShell.deletePlaylist(playlistId);
   }
 
   renamePlaylist(playlistId: string, newName: string): void {
-    const targetPlaylist = this.getPlaylist(playlistId);
-    if (this.isReadonlyPlaylist(targetPlaylist)) return;
-
-    const playlists = this.state.playlists.map((pl) =>
-      pl.id === playlistId ? { ...pl, name: newName, updatedAt: Date.now() } : pl
-    );
-    this.updateState({ playlists });
-    const updatedPlaylist = playlists.find((pl) => pl.id === playlistId);
-    if (updatedPlaylist) {
-      this.upsertPlaylistMetadataToLibraryDbBestEffort(updatedPlaylist);
-    }
+    this.playlistShell.renamePlaylist(playlistId, newName);
   }
 
   getPlaylists(): Playlist[] {
-    void this.ensurePlaylistsRestoredFromLibraryDb();
-    return this.state.playlists;
+    return this.playlistShell.getPlaylists();
   }
 
   getPlaylist(playlistId: string): Playlist | null {
-    void this.ensurePlaylistsRestoredFromLibraryDb();
-    return this.state.playlists.find((pl) => pl.id === playlistId) ?? null;
+    return this.playlistShell.getPlaylist(playlistId);
   }
 
   async queryPlaylistTracksPage(
@@ -5986,442 +4335,31 @@ export class NativeAudioService implements IAudioService {
       offset?: number;
     }
   ): Promise<PlaylistTrackPageResult | null> {
-    const normalizedPlaylistId = String(playlistId || '').trim();
-    if (!normalizedPlaylistId) return null;
-
-    const playlist = this.getPlaylist(normalizedPlaylistId);
-    if (!playlist) return null;
-
-    if (!isTauriRuntime()) {
-      return this.queryPlaylistTrackPageFromTracks(playlist.tracks, options);
-    }
-
-    try {
-      const page = await queryNativeLibraryPlaylistTracksPage({
-        playlistId: normalizedPlaylistId,
-        searchQuery: options?.searchQuery,
-        sortField: options?.sortField,
-        sortDirection: options?.sortDirection,
-        limit: options?.limit,
-        offset: options?.offset,
-      });
-      return {
-        total: page.total,
-        items: page.items
-          .map((item) => {
-            const fallbackId =
-              item.localTrackId || item.entryId || `${normalizedPlaylistId}::${item.position}`;
-            const track = this.parseTrackFromPlaylistPayload(item.trackPayloadJson, {
-              id: fallbackId,
-              title: item.snapshotTitle,
-              artist: item.snapshotArtist,
-              album: item.snapshotAlbum,
-              duration: item.snapshotDurationSeconds,
-            });
-            if (!track) return null;
-            return {
-              playlistIndex: item.position,
-              track,
-            };
-          })
-          .filter(
-            (
-              item
-            ): item is {
-              playlistIndex: number;
-              track: Track;
-            } => item != null
-          ),
-      };
-    } catch (error) {
-      this.telemetry.warn('audio.playlist.query-page.failed', {
-        message: readTelemetryErrorMessage(error),
-        fields: {
-          playlistId: normalizedPlaylistId,
-          searchQueryLength: options?.searchQuery?.trim().length ?? 0,
-          sortField: options?.sortField ?? 'default',
-          sortDirection: options?.sortDirection ?? 'asc',
-        },
-      });
-    }
-
-    if (
-      playlist.kind === NativeAudioService.PLAYLIST_KIND_SMART &&
-      normalizedPlaylistId === NativeAudioService.SMART_PLAYLIST_RECENT_ID
-    ) {
-      const limitHint =
-        typeof options?.limit === 'number' && Number.isFinite(options.limit)
-          ? Math.max(1, Math.min(2000, Math.floor(options.limit)))
-          : this.resolveRecentSmartPlaylistLimit(playlist.smartRuleJson);
-      const recentTracks = await this.buildRecentSmartPlaylistTracks(limitHint);
-      return this.queryPlaylistTrackPageFromTracks(recentTracks, options);
-    }
-
-    return { items: [], total: 0 };
+    return this.playlistShell.queryPlaylistTracksPage(playlistId, options);
   }
 
   async hydratePlaylistTracks(playlistId: string): Promise<Playlist | null> {
-    const normalizedPlaylistId = String(playlistId || '').trim();
-    if (!normalizedPlaylistId) return null;
-
-    await this.ensurePlaylistsRestoredFromLibraryDb();
-    const existingPlaylist = this.getPlaylist(normalizedPlaylistId);
-    if (!existingPlaylist) return null;
-    if (existingPlaylist.tracksHydrated !== false) {
-      return existingPlaylist;
-    }
-
-    const pending = this.playlistHydrationPromises.get(normalizedPlaylistId);
-    if (pending) {
-      return pending;
-    }
-
-    this.telemetry.info('audio.playlist.hydrate.start', {
-      fields: {
-        playlistId: normalizedPlaylistId,
-        trackCountHint: existingPlaylist.trackCount ?? existingPlaylist.tracks.length,
-        kind: existingPlaylist.kind ?? null,
-      },
-    });
-    const hydrationPromise = this.loadPlaylistTracksFromLibraryDb(existingPlaylist)
-      .then((tracks) => {
-        const latestPlaylist = this.getPlaylist(normalizedPlaylistId);
-        if (!latestPlaylist) return null;
-
-        const hydratedPlaylist = this.createHydratedPlaylist(latestPlaylist, tracks, {
-          trackCount:
-            typeof latestPlaylist.trackCount === 'number' && latestPlaylist.trackCount > 0
-              ? latestPlaylist.trackCount
-              : tracks.length,
-          totalDuration:
-            typeof latestPlaylist.totalDuration === 'number' && latestPlaylist.totalDuration > 0
-              ? latestPlaylist.totalDuration
-              : undefined,
-        });
-        const playlists = this.state.playlists.map((playlist) =>
-          playlist.id === normalizedPlaylistId ? hydratedPlaylist : playlist
-        );
-        const currentPlaylist =
-          this.state.currentPlaylist?.id === normalizedPlaylistId
-            ? this.createPlaylistSummaryReference(hydratedPlaylist)
-            : this.syncCurrentPlaylistReference(playlists);
-        this.updateState({ playlists, currentPlaylist });
-        this.telemetry.info('audio.playlist.hydrate.completed', {
-          fields: {
-            playlistId: normalizedPlaylistId,
-            trackCount: tracks.length,
-            kind: hydratedPlaylist.kind ?? null,
-          },
-        });
-        return hydratedPlaylist;
-      })
-      .catch((error) => {
-        this.telemetry.warn('audio.playlist.hydrate.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            playlistId: normalizedPlaylistId,
-            trackCountHint: existingPlaylist.trackCount ?? existingPlaylist.tracks.length,
-            kind: existingPlaylist.kind ?? null,
-          },
-        });
-        return null;
-      })
-      .finally(() => {
-        this.playlistHydrationPromises.delete(normalizedPlaylistId);
-      });
-
-    this.playlistHydrationPromises.set(normalizedPlaylistId, hydrationPromise);
-    return hydrationPromise;
+    return this.playlistShell.hydratePlaylistTracks(playlistId);
   }
 
   releasePlaylistTracks(playlistId?: string): void {
-    const normalizedPlaylistId = String(playlistId || '').trim();
-    const shouldReleaseAll = normalizedPlaylistId.length === 0;
-    let changed = false;
-
-    const playlists = this.state.playlists.map((playlist) => {
-      const targetMatch = shouldReleaseAll || playlist.id === normalizedPlaylistId;
-      if (!targetMatch || playlist.tracksHydrated === false || playlist.tracks.length === 0) {
-        return playlist;
-      }
-
-      changed = true;
-      this.playlistHydrationPromises.delete(playlist.id);
-      return {
-        ...playlist,
-        tracks: [],
-        trackCount:
-          typeof playlist.trackCount === 'number' && Number.isFinite(playlist.trackCount)
-            ? playlist.trackCount
-            : 0,
-        totalDuration:
-          typeof playlist.totalDuration === 'number' && Number.isFinite(playlist.totalDuration)
-            ? playlist.totalDuration
-            : 0,
-        tracksHydrated: false,
-      };
-    });
-
-    if (!changed) return;
-
-    const currentPlaylist =
-      this.state.currentPlaylist && (shouldReleaseAll || this.state.currentPlaylist.id === normalizedPlaylistId)
-        ? this.createPlaylistSummaryReference(
-            playlists.find((playlist) => playlist.id === this.state.currentPlaylist?.id) ?? null
-          )
-        : this.syncCurrentPlaylistReference(playlists);
-    this.updateState({ playlists, currentPlaylist });
+    this.playlistShell.releasePlaylistTracks(playlistId);
   }
 
   addTrackToPlaylist(playlistId: string, track: Track): void {
-    const targetPlaylist = this.getPlaylist(playlistId);
-    if (this.isReadonlyPlaylist(targetPlaylist)) return;
-    if (!targetPlaylist) return;
-    const stateTrack = compactTrackForPlaylistState(track);
-
-    if (targetPlaylist?.tracksHydrated === false) {
-      const normalizedPlaylistId = String(playlistId || '').trim();
-      if (!normalizedPlaylistId) return;
-
-      void (async () => {
-        const serializedTrackPayload = serializeTrackForPlaylist(stateTrack);
-        if (serializedTrackPayload && isTauriRuntime()) {
-          const savedPlaylist = await prependNativeLibraryPlaylistItem(normalizedPlaylistId, {
-            trackPayloadJson: serializedTrackPayload,
-            snapshotTitle: stateTrack.title,
-            snapshotArtist: stateTrack.artist,
-            snapshotAlbum: stateTrack.album,
-            snapshotDurationSeconds:
-              typeof stateTrack.duration === 'number' && Number.isFinite(stateTrack.duration)
-                ? Math.max(0, stateTrack.duration)
-                : undefined,
-            createdAtMs: Date.now(),
-          });
-          if (savedPlaylist) {
-            this.replacePlaylistStateWithNativeSummaryRecord(savedPlaylist);
-            return;
-          }
-        }
-        if (!isTauriRuntime()) {
-          const nextTracks = prependTrackWithDedup(targetPlaylist.tracks, stateTrack);
-          const nextPlaylist = this.buildPersistablePlaylistFromTracks(targetPlaylist, nextTracks);
-          this.replacePlaylistStateWithSummary(nextPlaylist);
-        }
-      })().catch((error) => {
-        this.telemetry.warn('audio.playlist.add-track.summary-update.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            playlistId: normalizedPlaylistId,
-            trackId: stateTrack.id,
-          },
-        });
-      });
-      return;
-    }
-
-    const normalizedPlaylistId = String(playlistId || '').trim();
-    const nextTracks = prependTrackWithDedup(targetPlaylist.tracks, stateTrack);
-    const previousPlaylist = targetPlaylist;
-    const optimisticPlaylist = this.buildPersistablePlaylistFromTracks(targetPlaylist, nextTracks);
-    this.replacePlaylistState(optimisticPlaylist);
-
-    if (!isTauriRuntime()) {
-      return;
-    }
-
-    const serializedTrackPayload = serializeTrackForPlaylist(stateTrack);
-    if (!normalizedPlaylistId || !serializedTrackPayload) {
-      this.replacePlaylistState(previousPlaylist);
-      this.telemetry.warn('audio.playlist.add-track.hydrated-update.skipped', {
-        fields: {
-          playlistId: normalizedPlaylistId || previousPlaylist.id,
-          trackId: stateTrack.id,
-          serializable: Boolean(serializedTrackPayload),
-        },
-      });
-      return;
-    }
-
-    void prependNativeLibraryPlaylistItem(normalizedPlaylistId, {
-      trackPayloadJson: serializedTrackPayload,
-      snapshotTitle: stateTrack.title,
-      snapshotArtist: stateTrack.artist,
-      snapshotAlbum: stateTrack.album,
-      snapshotDurationSeconds:
-        typeof stateTrack.duration === 'number' && Number.isFinite(stateTrack.duration)
-          ? Math.max(0, stateTrack.duration)
-          : undefined,
-      createdAtMs: Date.now(),
-    })
-      .then((savedPlaylist) => {
-        if (!savedPlaylist) {
-          this.replacePlaylistState(previousPlaylist);
-          return;
-        }
-        this.replaceHydratedPlaylistStateWithNativeRecord(savedPlaylist, nextTracks);
-      })
-      .catch((error) => {
-        this.replacePlaylistState(previousPlaylist);
-        this.telemetry.warn('audio.playlist.add-track.hydrated-update.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            playlistId: normalizedPlaylistId,
-            trackId: stateTrack.id,
-          },
-        });
-      });
+    this.playlistShell.addTrackToPlaylist(playlistId, track);
   }
 
   removeTrackFromPlaylist(playlistId: string, trackIndex: number): void {
-    const targetPlaylist = this.getPlaylist(playlistId);
-    if (this.isReadonlyPlaylist(targetPlaylist)) return;
-    if (!targetPlaylist) return;
-
-    if (targetPlaylist?.tracksHydrated === false) {
-      const normalizedPlaylistId = String(playlistId || '').trim();
-      const normalizedTrackIndex =
-        Number.isInteger(trackIndex) && trackIndex >= 0 ? trackIndex : -1;
-      if (!normalizedPlaylistId || normalizedTrackIndex < 0) return;
-
-      void (async () => {
-        if (isTauriRuntime()) {
-          const savedPlaylist = await removeNativeLibraryPlaylistItemAt(
-            normalizedPlaylistId,
-            normalizedTrackIndex
-          );
-          if (savedPlaylist) {
-            this.replacePlaylistStateWithNativeSummaryRecord(savedPlaylist);
-            return;
-          }
-        }
-        if (!isTauriRuntime()) {
-          const nextTracks = [...targetPlaylist.tracks];
-          if (normalizedTrackIndex >= nextTracks.length) return;
-          nextTracks.splice(normalizedTrackIndex, 1);
-          const nextPlaylist = this.buildPersistablePlaylistFromTracks(targetPlaylist, nextTracks);
-          this.replacePlaylistStateWithSummary(nextPlaylist);
-        }
-      })().catch((error) => {
-        this.telemetry.warn('audio.playlist.remove-track.summary-update.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            playlistId: normalizedPlaylistId,
-            trackIndex: normalizedTrackIndex,
-          },
-        });
-      });
-      return;
-    }
-
-    const normalizedTrackIndex =
-      Number.isInteger(trackIndex) && trackIndex >= 0 && trackIndex < targetPlaylist.tracks.length
-        ? trackIndex
-        : -1;
-    if (normalizedTrackIndex < 0) return;
-
-    const normalizedPlaylistId = String(playlistId || '').trim();
-    const previousPlaylist = targetPlaylist;
-    const nextTracks = [...targetPlaylist.tracks];
-    nextTracks.splice(normalizedTrackIndex, 1);
-    const optimisticPlaylist = this.buildPersistablePlaylistFromTracks(targetPlaylist, nextTracks);
-    this.replacePlaylistState(optimisticPlaylist);
-
-    if (!isTauriRuntime()) {
-      return;
-    }
-
-    if (!normalizedPlaylistId) {
-      this.replacePlaylistState(previousPlaylist);
-      return;
-    }
-
-    void removeNativeLibraryPlaylistItemAt(normalizedPlaylistId, normalizedTrackIndex)
-      .then((savedPlaylist) => {
-        if (!savedPlaylist) {
-          this.replacePlaylistState(previousPlaylist);
-          return;
-        }
-        this.replaceHydratedPlaylistStateWithNativeRecord(savedPlaylist, nextTracks);
-      })
-      .catch((error) => {
-        this.replacePlaylistState(previousPlaylist);
-        this.telemetry.warn('audio.playlist.remove-track.hydrated-update.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            playlistId: normalizedPlaylistId,
-            trackIndex: normalizedTrackIndex,
-          },
-        });
-      });
+    this.playlistShell.removeTrackFromPlaylist(playlistId, trackIndex);
   }
 
   clearPlaylist(playlistId: string): void {
-    const targetPlaylist = this.getPlaylist(playlistId);
-    if (this.isReadonlyPlaylist(targetPlaylist)) return;
-    if (!targetPlaylist) return;
-
-    if (targetPlaylist?.tracksHydrated === false) {
-      const normalizedPlaylistId = String(playlistId || '').trim();
-      if (!normalizedPlaylistId) return;
-
-      void (async () => {
-        if (isTauriRuntime()) {
-          const savedPlaylist = await clearNativeLibraryPlaylistItems(normalizedPlaylistId);
-          if (savedPlaylist) {
-            this.replacePlaylistStateWithNativeSummaryRecord(savedPlaylist);
-            return;
-          }
-        }
-        if (!isTauriRuntime()) {
-          const nextPlaylist = this.buildPersistablePlaylistFromTracks(targetPlaylist, []);
-          this.replacePlaylistStateWithSummary(nextPlaylist);
-        }
-      })().catch((error) => {
-        this.telemetry.warn('audio.playlist.clear.summary-update.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            playlistId: normalizedPlaylistId,
-          },
-        });
-      });
-      return;
-    }
-
-    const normalizedPlaylistId = String(playlistId || '').trim();
-    const previousPlaylist = targetPlaylist;
-    const optimisticPlaylist = this.buildPersistablePlaylistFromTracks(targetPlaylist, []);
-    this.replacePlaylistState(optimisticPlaylist);
-
-    if (!isTauriRuntime()) {
-      return;
-    }
-
-    if (!normalizedPlaylistId) {
-      this.replacePlaylistState(previousPlaylist);
-      return;
-    }
-
-    void clearNativeLibraryPlaylistItems(normalizedPlaylistId)
-      .then((savedPlaylist) => {
-        if (!savedPlaylist) {
-          this.replacePlaylistState(previousPlaylist);
-          return;
-        }
-        this.replaceHydratedPlaylistStateWithNativeRecord(savedPlaylist, []);
-      })
-      .catch((error) => {
-        this.replacePlaylistState(previousPlaylist);
-        this.telemetry.warn('audio.playlist.clear.hydrated-update.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: {
-            playlistId: normalizedPlaylistId,
-          },
-        });
-      });
+    this.playlistShell.clearPlaylist(playlistId);
   }
 
   async playPlaylist(playlistId: string): Promise<void> {
-    const resolved = await this.loadPlaylistTracksForQueuePlayback(playlistId);
+    const resolved = await this.playlistShell.resolvePlaylistTracksForQueue(playlistId);
     if (!resolved || resolved.tracks.length === 0) return;
     const { playlist, tracks } = resolved;
     this.telemetry.info('audio.playlist.play', {
@@ -6434,14 +4372,12 @@ export class NativeAudioService implements IAudioService {
     this.clearQueue({ releasePlaylists: false });
     this.addMultipleToQueue(tracks);
     await this.playTrackAtIndex(0);
-    this.updateState({
-      currentPlaylist: this.createPlaylistSummaryReference(this.getPlaylist(playlistId) ?? playlist),
-    });
-    this.touchPlaylistOpenedBestEffort(playlistId);
+    this.playlistShell.setCurrentPlaylist(this.getPlaylist(playlistId) ?? playlist);
+    this.playlistShell.touchPlaylistOpened(playlistId);
   }
 
   async playPlaylistTrackAtIndex(playlistId: string, trackIndex: number): Promise<void> {
-    const resolved = await this.loadPlaylistTracksForQueuePlayback(playlistId);
+    const resolved = await this.playlistShell.resolvePlaylistTracksForQueue(playlistId);
     if (!resolved || resolved.tracks.length === 0) return;
     const { playlist, tracks } = resolved;
 
@@ -6466,14 +4402,12 @@ export class NativeAudioService implements IAudioService {
     this.clearQueue({ releasePlaylists: false });
     this.addMultipleToQueue(tracks);
     await this.playTrackAtIndex(normalizedTrackIndex);
-    this.updateState({
-      currentPlaylist: this.createPlaylistSummaryReference(this.getPlaylist(playlistId) ?? playlist),
-    });
-    this.touchPlaylistOpenedBestEffort(playlistId);
+    this.playlistShell.setCurrentPlaylist(this.getPlaylist(playlistId) ?? playlist);
+    this.playlistShell.touchPlaylistOpened(playlistId);
   }
 
   async addPlaylistToQueue(playlistId: string): Promise<void> {
-    const resolved = await this.loadPlaylistTracksForQueuePlayback(playlistId);
+    const resolved = await this.playlistShell.resolvePlaylistTracksForQueue(playlistId);
     if (!resolved) return;
     const { playlist, tracks } = resolved;
     const fields = {
@@ -6501,7 +4435,10 @@ export class NativeAudioService implements IAudioService {
     playlistId: string,
     trackIndexes: number[]
   ): Promise<void> {
-    const resolved = await this.loadPlaylistTrackSelectionForQueue(playlistId, trackIndexes);
+    const resolved = await this.playlistShell.resolvePlaylistTrackSelectionForQueue(
+      playlistId,
+      trackIndexes
+    );
     if (!resolved) return;
     const { playlist, normalizedIndexes, tracks } = resolved;
     if (normalizedIndexes.length === 0) return;
@@ -6535,74 +4472,20 @@ export class NativeAudioService implements IAudioService {
   }
 
   private touchSpectrumUsage(): void {
-    if (this.disposed) return;
-
-    const nowMs = Date.now();
-    const playbackState = this.state.playbackState;
-    const playbackActive = playbackState === 'playing' || playbackState === 'buffering';
-    const withinPlaybackGrace = nowMs - this.lastPlaybackActiveAtMs <= this.spectrumPlaybackGraceMs;
-
-    if (!playbackActive && !withinPlaybackGrace) {
-      this.lastSpectrumTouchAtMs = 0;
-      this.maybeDisableSpectrum();
-      return;
-    }
-
-    this.lastSpectrumTouchAtMs = nowMs;
-    this.ensureSpectrumEnabled();
-    this.scheduleSpectrumDisable();
+    this.spectrumController.touch(this.state.playbackState);
   }
 
-  private ensureSpectrumEnabled(): void {
-    if (this.spectrumEnabled || this.spectrumEnablePending) return;
-    this.spectrumEnablePending = true;
-    void this.setSpectrumEnabled(true).finally(() => {
-      this.spectrumEnablePending = false;
+  private async setNativeSpectrumEnabled(enabled: boolean): Promise<void> {
+    await invokeWithTelemetry('native_audio_set_spectrum_enabled', { enabled }, {
+      moduleId: 'audio',
+      component: 'NativeAudioService',
+      event: 'audio.spectrum.set-enabled',
     });
   }
 
-  private scheduleSpectrumDisable(): void {
-    if (typeof window === 'undefined') return;
-    if (this.spectrumDisableTimer !== null) return;
-    const timeout = Math.max(500, this.spectrumIdleTimeoutMs + 100);
-    this.spectrumDisableTimer = window.setTimeout(() => {
-      this.spectrumDisableTimer = null;
-      this.maybeDisableSpectrum();
-    }, timeout);
-  }
-
-  private maybeDisableSpectrum(): void {
-    if (this.disposed) return;
-    const idleMs = Date.now() - this.lastSpectrumTouchAtMs;
-    if (idleMs < this.spectrumIdleTimeoutMs) {
-      this.scheduleSpectrumDisable();
-      return;
-    }
-    if (!this.spectrumEnabled) return;
-    void this.setSpectrumEnabled(false);
-  }
-
-  private async setSpectrumEnabled(enabled: boolean): Promise<void> {
-    if (this.spectrumEnabled === enabled) return;
-    this.spectrumEnabled = enabled;
-    try {
-      await invokeWithTelemetry('native_audio_set_spectrum_enabled', { enabled }, {
-        moduleId: 'audio',
-        component: 'NativeAudioService',
-        event: 'audio.spectrum.set-enabled',
-      });
-    } catch (error) {
-      this.telemetry.warn('audio.spectrum.set-enabled.failed', {
-        message: readTelemetryErrorMessage(error),
-        fields: {
-          enabled,
-        },
-      });
-    }
-    if (!enabled) {
-      this.spectrumData = null;
-      this.spectrumFrames = {};
-    }
+  private clearSpectrumData(): void {
+    this.spectrumData = null;
+    this.spectrumFrames = {};
   }
 
   // Spectrum data accessors.
@@ -6620,13 +4503,11 @@ export class NativeAudioService implements IAudioService {
   destroy(): void {
     this.disposed = true;
     this.cancelPlaybackWorkingSetTrim();
-    this.resetNativeQueueMirrorState();
-    this.playlistHydrationPromises.clear();
+    this.queueMirror.reset();
     this.diagnosticTimelineIgnoreBeforeMs = 0;
 
     this.stop();
-    this.clearRecentSmartPlaylistWriteTimer();
-    this.flushRecentSmartPlaylistWriteBufferBestEffort();
+    this.recentSmartPlaylistWriter.dispose({ flush: true });
     this.clearPendingVolume();
     if (typeof window !== 'undefined') {
       this.seekCommandCoalescer.clearAll({ clearTimer: (timerId) => window.clearTimeout(timerId) });
@@ -6655,7 +4536,7 @@ export class NativeAudioService implements IAudioService {
     this.playbackPreferencesListenerCleanup?.();
     this.playbackPreferencesListenerCleanup = null;
     this.playbackPreferencesListenerInitPromise = null;
-    this.clearTuningAutoLoop();
+    this.tuningAutoController.dispose();
     this.timeUpdateCallbacks.clear();
     this.endedCallbacks.clear();
     this.stateChangeCallbacks.clear();
@@ -6680,14 +4561,6 @@ export class NativeAudioService implements IAudioService {
     }
     this.runtimeComponentsListeners.forEach((unlisten) => unlisten());
     this.runtimeComponentsListeners = [];
-    if (this.spectrumDisableTimer !== null) {
-      window.clearTimeout(this.spectrumDisableTimer);
-      this.spectrumDisableTimer = null;
-    }
-    if (this.spectrumEnabled) {
-      void this.setSpectrumEnabled(false);
-    }
-    this.spectrumData = null;
-    this.spectrumFrames = {};
+    this.spectrumController.destroy();
   }
 }

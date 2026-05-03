@@ -10,6 +10,12 @@ vi.mock('../telemetry/TelemetryService', () => ({
   }),
 }));
 
+async function flushTransitionMicrotasks(): Promise<void> {
+  for (let index = 0; index < 8; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe('DefaultSpaceRuntimeGovernanceService', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -173,9 +179,7 @@ describe('DefaultSpaceRuntimeGovernanceService', () => {
     });
 
     warmHook.resolve?.();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushTransitionMicrotasks();
 
     expect(service.collectSnapshot().descriptors.find((item) => item.spaceId === 'space2')).toMatchObject({
       state: 'active',

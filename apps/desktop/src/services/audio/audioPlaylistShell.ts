@@ -17,7 +17,6 @@ import {
 import { resolvePlaylistTrackIndexes } from '../../modules/playlists/runtimeProjection';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { getTelemetryLogger } from '../telemetry/TelemetryService';
-import { NoopAudioService } from './NoopAudioService';
 import {
   serializeTrackForPlaylist,
   toPlaylistItemUpserts,
@@ -149,7 +148,14 @@ function createPlaylistFromNativeRecord(
   };
 }
 
-function parseTrackFromPlaylistPayload(
+export interface AudioPlaylistShellHost {
+  getState(): { playlists: Playlist[]; currentPlaylist: Playlist | null };
+  getPlaylists(): Playlist[];
+  getPlaylist(playlistId: string): Playlist | null;
+  replacePlaylists(playlists: Playlist[], currentPlaylist?: Playlist | null): void;
+}
+
+export function parseTrackFromPlaylistPayload(
   payloadJson?: string,
   fallback?: {
     id?: string;
@@ -223,7 +229,7 @@ function parseTrackFromPlaylistPayload(
   });
 }
 
-function parseTracksFromPlaylistItems(
+export function parseTracksFromPlaylistItems(
   playlistId: string,
   items: NativeLibraryPlaylistItemRecord[]
 ): Track[] {
@@ -395,7 +401,7 @@ export class AudioPlaylistShell {
   private builtinSmartPlaylistsInitPromise: Promise<void> | null = null;
   private playlistHydrationPromises = new Map<string, Promise<Playlist | null>>();
 
-  constructor(private readonly shell: NoopAudioService) {}
+  constructor(private readonly shell: AudioPlaylistShellHost) {}
 
   getPlaylists(): Playlist[] {
     void this.ensurePlaylistsRestored();
@@ -963,13 +969,7 @@ export class AudioPlaylistShell {
 
   setCurrentPlaylist(playlist: Playlist | null): void {
     const state = this.shell.getState();
-    this.shell.replaceState(
-      {
-        ...state,
-        currentPlaylist: createPlaylistSummaryReference(playlist),
-      },
-      { emit: true }
-    );
+    this.shell.replacePlaylists(state.playlists, createPlaylistSummaryReference(playlist));
   }
 
   private async ensurePlaylistsRestored(): Promise<void> {

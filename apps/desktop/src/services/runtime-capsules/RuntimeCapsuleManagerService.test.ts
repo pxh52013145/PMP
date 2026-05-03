@@ -23,6 +23,12 @@ const TEST_CAPSULE: RuntimeCapsuleManifest = {
   provides: ['visual.canvas.pixi'],
 };
 
+async function flushTransitionMicrotasks(): Promise<void> {
+  for (let index = 0; index < 8; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe('DefaultRuntimeCapsuleManagerService', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -197,9 +203,7 @@ describe('DefaultRuntimeCapsuleManagerService', () => {
 
     now = 2_100;
     warmHook.resolve?.();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushTransitionMicrotasks();
 
     expect(service.collectSnapshot().capsules[0].state).toBe('active');
   });

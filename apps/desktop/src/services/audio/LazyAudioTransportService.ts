@@ -224,8 +224,7 @@ export class LazyAudioTransportService implements IAudioService {
   }
 
   getState(): AudioState {
-    void this.playlistShell.restorePlaylistSummaries();
-    return this.delegate.getState();
+    return this.shell.getState();
   }
 
   onTimeUpdate(callback: TimeListener): () => void {
@@ -376,89 +375,54 @@ export class LazyAudioTransportService implements IAudioService {
   }
 
   createPlaylist(name: string, description?: string, options?: PlaylistCreateOptions): Playlist {
-    if (this.transport) return this.transport.createPlaylist(name, description, options);
     return this.playlistShell.createPlaylist(name, description, options);
   }
 
   deletePlaylist(playlistId: string): void {
-    if (this.transport) {
-      this.transport.deletePlaylist(playlistId);
-      return;
-    }
     this.playlistShell.deletePlaylist(playlistId);
   }
 
   renamePlaylist(playlistId: string, newName: string): void {
-    if (this.transport) {
-      this.transport.renamePlaylist(playlistId, newName);
-      return;
-    }
     this.playlistShell.renamePlaylist(playlistId, newName);
   }
 
   getPlaylists(): Playlist[] {
-    if (this.transport) return this.transport.getPlaylists();
     return this.playlistShell.getPlaylists();
   }
 
   getPlaylist(playlistId: string): Playlist | null {
-    if (this.transport) return this.transport.getPlaylist(playlistId);
     return this.playlistShell.getPlaylist(playlistId);
   }
 
   addTrackToPlaylist(playlistId: string, track: Track): void {
-    if (this.transport) {
-      this.transport.addTrackToPlaylist(playlistId, track);
-      return;
-    }
     this.playlistShell.addTrackToPlaylist(playlistId, track);
   }
 
   removeTrackFromPlaylist(playlistId: string, trackIndex: number): void {
-    if (this.transport) {
-      this.transport.removeTrackFromPlaylist(playlistId, trackIndex);
-      return;
-    }
     this.playlistShell.removeTrackFromPlaylist(playlistId, trackIndex);
   }
 
   clearPlaylist(playlistId: string): void {
-    if (this.transport) {
-      this.transport.clearPlaylist(playlistId);
-      return;
-    }
     this.playlistShell.clearPlaylist(playlistId);
   }
 
   async playPlaylist(playlistId: string): Promise<void> {
-    if (this.transport) {
-      await this.transport.playPlaylist(playlistId);
-      return;
-    }
     const resolved = await this.playlistShell.resolvePlaylistTracksForQueue(playlistId);
     if (!resolved || resolved.tracks.length === 0) return;
-    this.shell.clearQueue();
-    this.shell.addMultipleToQueue(resolved.tracks);
+    this.delegate.clearQueue();
+    this.delegate.addMultipleToQueue(resolved.tracks);
     this.playlistShell.setCurrentPlaylist(resolved.playlist);
     await this.playTrackAtIndex(0);
     this.playlistShell.touchPlaylistOpened(playlistId);
   }
 
   async addPlaylistToQueue(playlistId: string): Promise<void> {
-    if (this.transport) {
-      await this.transport.addPlaylistToQueue(playlistId);
-      return;
-    }
     const resolved = await this.playlistShell.resolvePlaylistTracksForQueue(playlistId);
     if (!resolved || resolved.tracks.length === 0) return;
-    this.shell.addMultipleToQueue(resolved.tracks);
+    this.delegate.addMultipleToQueue(resolved.tracks);
   }
 
   async playPlaylistTrackAtIndex(playlistId: string, trackIndex: number): Promise<void> {
-    if (this.transport?.playPlaylistTrackAtIndex) {
-      await this.transport.playPlaylistTrackAtIndex(playlistId, trackIndex);
-      return;
-    }
     const resolved = await this.playlistShell.resolvePlaylistTracksForQueue(playlistId);
     if (!resolved || resolved.tracks.length === 0) return;
     const normalizedIndex =
@@ -466,8 +430,8 @@ export class LazyAudioTransportService implements IAudioService {
         ? trackIndex
         : -1;
     if (normalizedIndex < 0) return;
-    this.shell.clearQueue();
-    this.shell.addMultipleToQueue(resolved.tracks);
+    this.delegate.clearQueue();
+    this.delegate.addMultipleToQueue(resolved.tracks);
     this.playlistShell.setCurrentPlaylist(resolved.playlist);
     await this.playTrackAtIndex(normalizedIndex);
     this.playlistShell.touchPlaylistOpened(playlistId);
@@ -477,22 +441,15 @@ export class LazyAudioTransportService implements IAudioService {
     playlistId: string,
     trackIndexes: number[]
   ): Promise<void> {
-    if (this.transport?.addPlaylistTrackIndexesToQueue) {
-      await this.transport.addPlaylistTrackIndexesToQueue(playlistId, trackIndexes);
-      return;
-    }
     const resolved = await this.playlistShell.resolvePlaylistTrackSelectionForQueue(
       playlistId,
       trackIndexes
     );
     if (!resolved || resolved.tracks.length === 0) return;
-    this.shell.addMultipleToQueue(resolved.tracks);
+    this.delegate.addMultipleToQueue(resolved.tracks);
   }
 
   async hydratePlaylistTracks(playlistId: string): Promise<Playlist | null> {
-    if (this.transport?.hydratePlaylistTracks) {
-      return this.transport.hydratePlaylistTracks(playlistId);
-    }
     return this.playlistShell.hydratePlaylistTracks(playlistId);
   }
 
@@ -506,9 +463,6 @@ export class LazyAudioTransportService implements IAudioService {
       offset?: number;
     }
   ): Promise<PlaylistTrackPageResult | null> {
-    if (this.transport?.queryPlaylistTracksPage) {
-      return this.transport.queryPlaylistTracksPage(playlistId, options);
-    }
     return this.playlistShell.queryPlaylistTracksPage(playlistId, options);
   }
 
@@ -519,17 +473,10 @@ export class LazyAudioTransportService implements IAudioService {
       preferCompactPreview?: boolean;
     }
   ): Promise<string | undefined> {
-    if (this.transport?.resolvePlaylistCoverPreview) {
-      return this.transport.resolvePlaylistCoverPreview(playlistId, options);
-    }
     return this.playlistShell.resolvePlaylistCoverPreview(playlistId, options);
   }
 
   releasePlaylistTracks(playlistId?: string): void {
-    if (this.transport?.releasePlaylistTracks) {
-      this.transport.releasePlaylistTracks(playlistId);
-      return;
-    }
     this.playlistShell.releasePlaylistTracks(playlistId);
   }
 
@@ -615,7 +562,9 @@ export class LazyAudioTransportService implements IAudioService {
     if (!transport) return;
 
     try {
-      this.shell.replaceState(transport.getState(), { emit: false });
+      this.shell.replaceState(this.mergeTransportStateIntoShell(transport.getState()), {
+        emit: false,
+      });
     } catch {
       // Best effort: keep whatever shell state we already have.
     }
@@ -660,11 +609,13 @@ export class LazyAudioTransportService implements IAudioService {
     this.detachDelegate();
     this.delegateUnsubscribers = [
       delegate.onStateChange((state) => {
+        let stateToEmit = state;
         if (delegate === this.transport) {
-          this.shell.replaceState(state, { emit: false });
+          stateToEmit = this.mergeTransportStateIntoShell(state);
+          this.shell.replaceState(stateToEmit, { emit: false });
         }
-        this.emitState(state);
-        this.applyTransportLeasePolicy(state);
+        this.emitState(stateToEmit);
+        this.applyTransportLeasePolicy(stateToEmit);
       }),
       delegate.onTimeUpdate((time) => {
         this.timeListeners.forEach((listener) => listener(time));
@@ -688,6 +639,15 @@ export class LazyAudioTransportService implements IAudioService {
         })
       );
     }
+  }
+
+  private mergeTransportStateIntoShell(transportState: AudioState): AudioState {
+    const shellState = this.shell.getState();
+    return {
+      ...transportState,
+      playlists: shellState.playlists,
+      currentPlaylist: shellState.currentPlaylist,
+    };
   }
 
   private detachDelegate(): void {

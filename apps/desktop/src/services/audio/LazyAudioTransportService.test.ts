@@ -4,7 +4,7 @@ import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { DefaultRuntimeCapsuleManagerService } from '../runtime-capsules/RuntimeCapsuleManagerService';
 import { LazyAudioTransportService } from './LazyAudioTransportService';
 import { NoopAudioService } from './NoopAudioService';
-import type { Track } from './types';
+import type { PlaylistTrackPageResult, Track } from './types';
 
 const TEST_TRACK: Track = {
   id: 'track-1',
@@ -12,6 +12,14 @@ const TEST_TRACK: Track = {
   artist: 'Artist',
   duration: 12,
   path: 'memory://track-1',
+};
+
+const SECOND_TRACK: Track = {
+  id: 'track-2',
+  title: 'Track 2',
+  artist: 'Artist',
+  duration: 14,
+  path: 'memory://track-2',
 };
 
 const AUDIO_SHELL_CAPSULE: RuntimeCapsuleManifest = {
@@ -93,6 +101,101 @@ describe('LazyAudioTransportService', () => {
       items: [{ playlistIndex: 0, track: expect.objectContaining({ id: TEST_TRACK.id }) }],
     });
     expect(service.getQueue()).toHaveLength(1);
+
+    service.destroy();
+  });
+
+  it('keeps playlist mutations in the shell after transport activation', async () => {
+    const transport = new NoopAudioService() as NoopAudioService & {
+      queryPlaylistTracksPage: (playlistId: string) => Promise<PlaylistTrackPageResult | null>;
+    };
+    const createTransport = vi.fn(() => transport);
+    const createPlaylistSpy = vi.spyOn(transport, 'createPlaylist');
+    const addTrackSpy = vi.spyOn(transport, 'addTrackToPlaylist');
+    const queryPlaylistTracksPage = vi.fn(() => Promise.resolve(null));
+    transport.queryPlaylistTracksPage = queryPlaylistTracksPage;
+    const service = new LazyAudioTransportService({ createTransport });
+
+    service.addToQueue(TEST_TRACK);
+    await service.playTrackAtIndex(0);
+    expect(service.isTransportActive()).toBe(true);
+
+    const playlist = service.createPlaylist('Shell Only');
+    service.addTrackToPlaylist(playlist.id, SECOND_TRACK);
+    const page = await service.queryPlaylistTracksPage(playlist.id, { limit: 10 });
+
+    expect(createPlaylistSpy).not.toHaveBeenCalled();
+    expect(addTrackSpy).not.toHaveBeenCalled();
+    expect(queryPlaylistTracksPage).not.toHaveBeenCalled();
+    expect(page).toMatchObject({
+      total: 1,
+      items: [{ playlistIndex: 0, track: expect.objectContaining({ id: SECOND_TRACK.id }) }],
+    });
+    expect(service.getPlaylist(playlist.id)).toMatchObject({
+      id: playlist.id,
+      trackCount: 1,
+    });
+
+    service.destroy();
+  });
+
+  it('preserves shell playlists and current playlist when transport state changes', async () => {
+    const transport = new NoopAudioService();
+    const createTransport = vi.fn(() => transport);
+    const service = new LazyAudioTransportService({ createTransport });
+
+    const playlist = service.createPlaylist('Shell Playlist');
+    service.addTrackToPlaylist(playlist.id, TEST_TRACK);
+    await service.playPlaylist(playlist.id);
+
+    expect(service.isTransportActive()).toBe(true);
+    expect(service.getState().currentPlaylist).toMatchObject({
+      id: playlist.id,
+      tracks: [],
+      tracksHydrated: false,
+    });
+
+    transport.createPlaylist('Transport Internal');
+    transport.clearQueue();
+    transport.addToQueue(SECOND_TRACK);
+
+    expect(service.getPlaylists().map((item) => item.name)).toEqual(['Shell Playlist']);
+    expect(service.getState().currentPlaylist).toMatchObject({
+      id: playlist.id,
+      tracks: [],
+      tracksHydrated: false,
+    });
+    expect(service.getQueue()).toEqual([expect.objectContaining({ id: SECOND_TRACK.id })]);
+
+    service.destroy();
+  });
+
+  it('plays playlists from the shell while transport is active', async () => {
+    const transport = new NoopAudioService();
+    const createTransport = vi.fn(() => transport);
+    const playPlaylistSpy = vi.spyOn(transport, 'playPlaylist');
+    const service = new LazyAudioTransportService({ createTransport });
+
+    const playlist = service.createPlaylist('Shell Playback');
+    service.addTrackToPlaylist(playlist.id, SECOND_TRACK);
+    service.addToQueue(TEST_TRACK);
+    await service.playTrackAtIndex(0);
+    expect(service.isTransportActive()).toBe(true);
+
+    await service.playPlaylist(playlist.id);
+
+    expect(playPlaylistSpy).not.toHaveBeenCalled();
+    expect(transport.getQueue()).toEqual([expect.objectContaining({ id: SECOND_TRACK.id })]);
+    expect(service.getState()).toMatchObject({
+      currentPlaylist: expect.objectContaining({
+        id: playlist.id,
+        tracks: [],
+        tracksHydrated: false,
+      }),
+      currentTrack: expect.objectContaining({ id: SECOND_TRACK.id }),
+      currentIndex: 0,
+      playbackState: 'playing',
+    });
 
     service.destroy();
   });
