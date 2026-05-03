@@ -47,9 +47,6 @@ import {
   type PreparedAudioSource,
 } from './audioPlaybackSourceResolver';
 import {
-  computeDynamicSrcStressScore,
-} from './audioStabilityController';
-import {
   pruneUnderrunSpikeTimestamps,
 } from './audioOutputFailoverController';
 import { NativeAudioOutputBackendController } from './nativeAudioOutputBackendController';
@@ -77,6 +74,10 @@ import {
   NativeAudioDynamicSrcPolicyController,
   resolveNativeAudioDynamicSrcSettingsPatch,
 } from './nativeAudioDynamicSrcPolicyController';
+import {
+  NativeAudioDynamicSrcRuntimeCoordinator,
+  type NativeAudioDynamicSrcRuntimeState,
+} from './nativeAudioDynamicSrcRuntimeCoordinator';
 import { resolveStoredTuningAutoSettings } from './nativeAudioAutoSettingsStorage';
 import {
   persistAudioPlaybackMuted,
@@ -628,10 +629,6 @@ export class NativeAudioService implements IAudioService {
     return this.dynamicSrcPolicyController.currentAdaptiveProfile;
   }
 
-  private get dynamicSrcLearningEnabled(): boolean {
-    return this.dynamicSrcPolicyController.learningEnabled;
-  }
-
   private readonly dynamicSrcLearningController = new NativeAudioDynamicSrcLearningController({
     maxItems: NativeAudioService.DYNAMIC_SRC_LEARNING_MAX_ITEMS,
     persistMinIntervalMs: NativeAudioService.DYNAMIC_SRC_LEARNING_PERSIST_MIN_INTERVAL_MS,
@@ -639,6 +636,20 @@ export class NativeAudioService implements IAudioService {
     minDelta: NativeAudioService.DYNAMIC_SRC_LEARNING_MIN_DELTA,
     persistProfile: (profile) =>
       broadcastDataUpdate(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE, profile),
+  });
+
+  private readonly dynamicSrcRuntimeCoordinator = new NativeAudioDynamicSrcRuntimeCoordinator({
+    policyController: this.dynamicSrcPolicyController,
+    learningController: this.dynamicSrcLearningController,
+    host: {
+      getRuntimeState: () => this.getDynamicSrcRuntimeState(),
+      hasActiveProtectionWindow: (nowMs) => this.hasActiveProtectionWindow(nowMs),
+      hasActiveSharedStressWindow: (nowMs) => this.hasActiveSharedStressWindow(nowMs),
+      hasPendingSeekWork: () => this.hasPendingSeekWork(),
+      ensureLatencySrcPolicy: (reason) => this.ensureLatencySrcPolicy(reason),
+      restoreQualitySrcPolicy: (reason) =>
+        this.applySrcPolicyIfNeeded(this.dynamicSrcQualityPolicy, reason, 'quality'),
+    },
   });
 
   private get dynamicSrcLearningProfile(): DynamicSrcLearningMap {
@@ -1712,13 +1723,10 @@ export class NativeAudioService implements IAudioService {
     };
   }
 
-  private buildDynamicSrcStabilityMetrics(nowMs: number = Date.now()) {
+  private getDynamicSrcRuntimeState(): NativeAudioDynamicSrcRuntimeState {
     return {
       playbackState: this.state.playbackState,
       underrunRecoveryUntilMs: this.underrunRecoveryUntilMs,
-      nowMs,
-      protectionWindowActive: this.hasActiveProtectionWindow(nowMs),
-      sharedStressWindowActive: this.hasActiveSharedStressWindow(nowMs),
       outputCallbackMetricsValid: this.outputCallbackMetricsValid,
       outputWaitTimeoutCount: this.outputWaitTimeoutCount,
       outputRenderUnderrunEvents: this.outputRenderUnderrunEvents,
@@ -1731,33 +1739,27 @@ export class NativeAudioService implements IAudioService {
       sharedRenderAheadEnabled: this.sharedRenderAheadEnabled,
       sharedRenderUnderrunEvents: this.sharedRenderUnderrunEvents,
       sharedRenderLowHitCount: this.sharedRenderLowHitCount,
+      lastUnderrunFrames: this.lastUnderrunFrames,
+      outputBackendId: this.currentOutputBackendId,
+      outputDeviceId: this.currentOutputDeviceId,
+      outputDeviceName: this.currentOutputDeviceName,
     };
   }
 
   private getDynamicSrcStressScore(nowMs: number = Date.now()): number {
-    return computeDynamicSrcStressScore(this.buildDynamicSrcStabilityMetrics(nowMs));
+    return this.dynamicSrcRuntimeCoordinator.getDynamicSrcStressScore(nowMs);
   }
 
   private buildDynamicSrcLearningDeviceKey(): string {
-    const backend = this.currentOutputBackendId ?? 'unknown-backend';
-    const device = this.currentOutputDeviceId ?? this.currentOutputDeviceName ?? 'default-device';
-    return `${backend}::${device}`;
+    return this.dynamicSrcRuntimeCoordinator.buildDynamicSrcLearningDeviceKey();
   }
 
   private updateDynamicSrcLearningFromStress(stressScore: number, nowMs: number = Date.now()): void {
-    this.dynamicSrcLearningController.updateFromStress({
-      enabled: this.dynamicSrcLearningEnabled,
-      deviceKey: this.buildDynamicSrcLearningDeviceKey(),
-      stressScore,
-      nowMs,
-    });
+    this.dynamicSrcRuntimeCoordinator.updateDynamicSrcLearningFromStress(stressScore, nowMs);
   }
 
   private getDynamicSrcLearningScale(): number {
-    return this.dynamicSrcLearningController.getScale({
-      enabled: this.dynamicSrcLearningEnabled,
-      deviceKey: this.buildDynamicSrcLearningDeviceKey(),
-    });
+    return this.dynamicSrcRuntimeCoordinator.getDynamicSrcLearningScale();
   }
 
   private evaluateDynamicSrcAutoDegradation(options?: {
@@ -1765,35 +1767,7 @@ export class NativeAudioService implements IAudioService {
     triggerActions?: boolean;
     stressScore?: number;
   }): void {
-    const nowMs = options?.nowMs ?? Date.now();
-    const action = this.dynamicSrcPolicyController.evaluateAutoDegradation({
-      nowMs,
-      triggerActions: options?.triggerActions,
-      stressScore: options?.stressScore,
-      lastUnderrunFrames: this.lastUnderrunFrames,
-      metrics: this.buildDynamicSrcStabilityMetrics(nowMs),
-      effectiveTiming: options?.triggerActions
-        ? this.getEffectiveDynamicSrcTiming(nowMs)
-        : undefined,
-    });
-
-    if (action.kind === 'none') {
-      return;
-    }
-
-    if (action.kind === 'ensure-latency') {
-      void this.ensureLatencySrcPolicy(action.reason);
-      return;
-    }
-
-    if (action.kind === 'hold') {
-      this.withDynamicSrcHold(action.reason, action.holdMs);
-      return;
-    }
-
-    if (action.kind === 'schedule-restore') {
-      this.scheduleDynamicSrcRestoreEvaluation();
-    }
+    this.dynamicSrcRuntimeCoordinator.evaluateDynamicSrcAutoDegradation(options);
   }
 
   private getEffectiveDynamicSrcTiming(nowMs: number = Date.now()): {
@@ -1806,51 +1780,23 @@ export class NativeAudioService implements IAudioService {
     sharedStressHoldMs: number;
     outputErrorHoldMs: number;
   } {
-    const stressScore = this.getDynamicSrcStressScore(nowMs);
-    return this.dynamicSrcPolicyController.getEffectiveTiming({
-      stressScore,
-      learningScale: this.getDynamicSrcLearningScale(),
-    });
+    return this.dynamicSrcRuntimeCoordinator.getEffectiveDynamicSrcTiming(nowMs);
   }
 
   private clearDynamicSrcRestoreTimer(): void {
-    this.dynamicSrcPolicyController.clearRestoreTimer();
+    this.dynamicSrcRuntimeCoordinator.clearDynamicSrcRestoreTimer();
   }
 
   private scheduleDynamicSrcRestoreEvaluation(minDelayMs: number = 0): void {
-    const nowMs = Date.now();
-    this.dynamicSrcPolicyController.scheduleRestoreEvaluation({
-      minDelayMs,
-      nowMs,
-      effectiveTiming: this.getEffectiveDynamicSrcTiming(nowMs),
-      onRestore: () => {
-        void this.maybeRestoreQualitySrc('stable-window');
-      },
-    });
+    this.dynamicSrcRuntimeCoordinator.scheduleDynamicSrcRestoreEvaluation(minDelayMs);
   }
 
   private withDynamicSrcHold(reason: string, holdMs: number): void {
-    const nowMs = Date.now();
-    const hold = this.dynamicSrcPolicyController.withHold({
-      reason,
-      holdMs,
-      nowMs,
-      effectiveTiming: this.getEffectiveDynamicSrcTiming(nowMs),
-      hasPendingSeekWork: this.hasPendingSeekWork(),
-    });
-    if (hold.ensureLatencyReason) {
-      void this.ensureLatencySrcPolicy(hold.ensureLatencyReason);
-    }
-    this.scheduleDynamicSrcRestoreEvaluation();
+    this.dynamicSrcRuntimeCoordinator.withDynamicSrcHold(reason, holdMs);
   }
 
   private flushDeferredLatencySrcPolicy(trigger: string): void {
-    const reason = this.dynamicSrcPolicyController.flushDeferredLatencyPolicy({
-      trigger,
-      hasPendingSeekWork: this.hasPendingSeekWork(),
-    });
-    if (!reason) return;
-    void this.ensureLatencySrcPolicy(reason);
+    this.dynamicSrcRuntimeCoordinator.flushDeferredLatencySrcPolicy(trigger);
   }
 
   private async applySrcPolicyIfNeeded(
@@ -1905,31 +1851,6 @@ export class NativeAudioService implements IAudioService {
   private async ensureLatencySrcPolicy(reason: string): Promise<void> {
     if (!this.dynamicSrcPolicyController.canEnsureLatency()) return;
     await this.applySrcPolicyIfNeeded(this.getLatencySrcPolicy(), reason, 'latency');
-  }
-
-  private async maybeRestoreQualitySrc(reason: string): Promise<void> {
-    const nowMs = Date.now();
-    const readiness = this.dynamicSrcPolicyController.getRestoreReadiness({
-      nowMs,
-      underrunRecoveryUntilMs: this.underrunRecoveryUntilMs,
-      protectionWindowActive: this.hasActiveProtectionWindow(nowMs),
-      sharedStressWindowActive: this.hasActiveSharedStressWindow(nowMs),
-      playbackState: this.state.playbackState,
-    });
-    if (readiness.action === 'skip') return;
-    if (readiness.action === 'schedule') {
-      this.scheduleDynamicSrcRestoreEvaluation();
-      return;
-    }
-
-    const restored = await this.applySrcPolicyIfNeeded(
-      this.dynamicSrcQualityPolicy,
-      reason,
-      'quality'
-    );
-    if (!restored && this.dynamicSrcPolicyController.profile !== 'quality') {
-      this.scheduleDynamicSrcRestoreEvaluation();
-    }
   }
 
   private createDynamicSrcAutoSettingsHost(): DynamicSrcAutoSettingsHost {
