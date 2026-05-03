@@ -5,6 +5,9 @@ export {
   type RuntimeCapsuleLeaseRequest,
   type RuntimeCapsuleManagerService,
   type RuntimeCapsuleManagerSnapshot,
+  type RuntimeCapsuleReclaimMode,
+  type RuntimeCapsuleReclaimOptions,
+  type RuntimeCapsuleReclaimResult,
   type RuntimeCapsuleSnapshotListener,
 } from './RuntimeCapsuleManagerService';
 export { createRuntimeCapsuleManagerModule } from './runtimeCapsuleManagerModule';

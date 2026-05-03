@@ -5,6 +5,10 @@ import { STORAGE_KEYS, TAURI_EVENTS, setupTauriListener } from '../../utils/wind
 import { useKernel } from '../../contexts/KernelContext';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { useQuality } from '../../contexts/QualityContext';
+import type {
+  RuntimeCapsuleState,
+  RuntimeLifecycleParticipant,
+} from '../../contracts/runtimeCapsule';
 import { readString } from '../../modules/storage';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import {
@@ -37,6 +41,10 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
   const { isActive, renderMode } = useWindowActivity();
   const { effective } = useQuality();
   const qualityRef = useRef(effective);
+  const renderModeRef = useRef(renderMode);
+  const isActiveRef = useRef(isActive);
+  const participantStateRef = useRef<RuntimeCapsuleState>('cold');
+  const shouldRetainRenderLease = renderMode !== 'pause';
 
   useEffect(() => {
     onPixelPositionsUpdateRef.current = onPixelPositionsUpdate;
@@ -47,7 +55,61 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
   }, [effective]);
 
   useEffect(() => {
+    renderModeRef.current = renderMode;
+  }, [renderMode]);
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
+
+  useEffect(() => {
     if (!runtimeCapsuleManager) return;
+
+    const participant: RuntimeLifecycleParticipant = {
+      id: 'pixel-matrix-canvas',
+      capsuleId: 'visual.canvas.pixi',
+      onWarm: () => {
+        participantStateRef.current = 'active';
+        rendererRef.current?.setInteractionEnabled(isActiveRef.current);
+        rendererRef.current?.setRenderMode(renderModeRef.current);
+      },
+      onSuspend: () => {
+        participantStateRef.current = 'suspended';
+        rendererRef.current?.setInteractionEnabled(false);
+        rendererRef.current?.setRenderMode('pause');
+      },
+      onFreeze: () => {
+        participantStateRef.current = 'frozen';
+        rendererRef.current?.setInteractionEnabled(false);
+        rendererRef.current?.setRenderMode('pause');
+      },
+      onHibernate: () => {
+        participantStateRef.current = 'hibernated';
+        rendererRef.current?.setInteractionEnabled(false);
+        rendererRef.current?.setRenderMode('pause');
+      },
+      onTeardown: () => {
+        participantStateRef.current = 'cold';
+        rendererRef.current?.setInteractionEnabled(false);
+        rendererRef.current?.setRenderMode('pause');
+      },
+      collectSnapshot: () => ({
+        id: 'pixel-matrix-canvas',
+        capsuleId: 'visual.canvas.pixi',
+        state: participantStateRef.current,
+        detail: {
+          rendererMounted: rendererRef.current !== null,
+          renderMode: renderModeRef.current,
+          interactionActive: isActiveRef.current,
+        },
+      }),
+    };
+
+    return runtimeCapsuleManager.registerParticipant('visual.canvas.pixi', participant);
+  }, [runtimeCapsuleManager]);
+
+  useEffect(() => {
+    if (!runtimeCapsuleManager || !shouldRetainRenderLease) return;
 
     const lease = runtimeCapsuleManager.acquireLease({
       capabilityId: 'visual.canvas.pixi',
@@ -66,7 +128,7 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
         detail: 'pixi matrix canvas unmounted',
       });
     };
-  }, [runtimeCapsuleManager]);
+  }, [runtimeCapsuleManager, shouldRetainRenderLease]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -171,17 +233,31 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
   }, []);
 
   useEffect(() => {
+    if (
+      runtimeCapsuleManager &&
+      (participantStateRef.current === 'hibernated' || participantStateRef.current === 'cold')
+    ) {
+      rendererRef.current?.setInteractionEnabled(false);
+      return;
+    }
     rendererRef.current?.setInteractionEnabled(isActive);
-  }, [isActive]);
+  }, [isActive, runtimeCapsuleManager]);
 
   useEffect(() => {
+    if (
+      runtimeCapsuleManager &&
+      renderMode !== 'pause' &&
+      (participantStateRef.current === 'hibernated' || participantStateRef.current === 'cold')
+    ) {
+      return;
+    }
     rendererRef.current?.setRenderMode(renderMode);
     telemetry.info('visualizer.pixel-matrix.render-mode.changed', {
       fields: {
         renderMode,
       },
     });
-  }, [renderMode]);
+  }, [renderMode, runtimeCapsuleManager]);
 
   useEffect(() => {
     rendererRef.current?.setQuality({

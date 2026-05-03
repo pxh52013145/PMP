@@ -295,6 +295,27 @@ function createStartupRecord(
   };
 }
 
+function createStartupRecordWithId(pluginId: string): InstalledHostExtensionRecord {
+  const base = createStartupRecord();
+  return {
+    ...base,
+    manifest: {
+      ...base.manifest,
+      identity: {
+        ...base.manifest.identity,
+        id: pluginId,
+        name: pluginId,
+      },
+    },
+    resolvedArtifacts: [
+      {
+        runtimeId: 'worker.main',
+        path: `C:/plugins/${pluginId}/dist/index.js`,
+      },
+    ],
+  };
+}
+
 function createOptionalCapabilityStartupRecord(
   overrides: Partial<InstalledHostExtensionRecord> = {}
 ): InstalledHostExtensionRecord {
@@ -689,6 +710,58 @@ describe('DefaultInstalledExtensionRuntimeManager', () => {
     manager.dispose();
     await flushAsyncWork();
     expect(secondDispose).toHaveBeenCalledWith('module-dispose');
+  });
+
+  it('cleans up managed runtimes for capsule reclaim and bumps remount tokens', async () => {
+    const records = [
+      createStartupRecordWithId('demo-startup-extension'),
+      createStartupRecordWithId('demo-z-startup-extension'),
+    ];
+    const firstDispose = vi.fn().mockResolvedValue(undefined);
+    const secondDispose = vi.fn().mockResolvedValue(undefined);
+
+    loadInstalledExtensionsMock.mockReturnValue(records);
+    startInstalledExtensionStartupRuntimeMock
+      .mockResolvedValueOnce({
+        runtimeInstanceId: 'startup-runtime-1',
+        dispose: firstDispose,
+      })
+      .mockResolvedValueOnce({
+        runtimeInstanceId: 'startup-runtime-2',
+        dispose: secondDispose,
+      });
+
+    const manager = createManager();
+    const restartListener = vi.fn();
+    manager.subscribeRestart(restartListener);
+    manager.start();
+    await flushAsyncWork();
+
+    expect(manager.listManagedRuntimes()).toEqual([
+      {
+        pluginId: 'demo-startup-extension',
+        mode: 'startup',
+        runtimeInstanceId: 'startup-runtime-1',
+      },
+      {
+        pluginId: 'demo-z-startup-extension',
+        mode: 'startup',
+        runtimeInstanceId: 'startup-runtime-2',
+      },
+    ]);
+
+    const cleaned = await manager.cleanupManagedRuntimes('capsule-hibernate');
+
+    expect(cleaned).toBe(2);
+    expect(firstDispose).toHaveBeenCalledWith('capsule-hibernate');
+    expect(secondDispose).toHaveBeenCalledWith('capsule-hibernate');
+    expect(manager.listManagedRuntimes()).toEqual([]);
+    expect(manager.getRestartToken('demo-startup-extension')).toBeGreaterThan(0);
+    expect(manager.getRestartToken('demo-z-startup-extension')).toBeGreaterThan(0);
+    expect(restartListener).toHaveBeenCalledTimes(1);
+
+    manager.dispose();
+    await flushAsyncWork();
   });
 
   it('starts background runtimes for matching capability activations', async () => {

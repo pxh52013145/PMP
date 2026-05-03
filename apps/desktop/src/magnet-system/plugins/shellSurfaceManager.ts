@@ -24,6 +24,9 @@ import {
 } from './shellSurfaceDescriptors';
 
 export type ManagedPluginShellSurfaceSpec = PluginShellSurfaceDescriptorRecord;
+export type ShellSurfaceSnapshotListener = (
+  surfaces: ManagedPluginShellSurfaceSpec[]
+) => void;
 
 export interface ShellSurfaceManager {
   summonSurface: (spec: ManagedPluginShellSurfaceSpec) => Promise<void>;
@@ -45,7 +48,9 @@ export interface ShellSurfaceManager {
     pluginId: string;
     reason?: string;
   }) => Promise<void>;
+  cleanupAllSurfaces: (reason?: string) => Promise<number>;
   listTrackedSurfaces: () => ManagedPluginShellSurfaceSpec[];
+  subscribeTrackedSurfaces: (listener: ShellSurfaceSnapshotListener) => () => void;
   start: () => void;
   dispose: () => void;
 }
@@ -145,6 +150,7 @@ function subscribeShellSurfaceEnvironmentSignals(
 
 export class DefaultShellSurfaceManager implements ShellSurfaceManager {
   private readonly tracked = new Map<string, ManagedPluginShellSurfaceSpec>();
+  private readonly trackedSurfaceListeners = new Set<ShellSurfaceSnapshotListener>();
   private lastHandledExtensionRestartAt = 0;
   private readonly deps: ShellSurfaceManagerDeps;
   private started = false;
@@ -183,6 +189,7 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
       }),
       spec
     );
+    this.emitTrackedSurfacesChanged();
   };
 
   dismissSurface = async (target: {
@@ -230,6 +237,7 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
         target.reason
       );
       this.tracked.delete(key);
+      this.emitTrackedSurfacesChanged();
       completePluginGovernanceCleanup(handle, {
         extraFields: {
           reason: target.reason ?? 'manual-cleanup',
@@ -282,8 +290,44 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
     }
   };
 
+  cleanupAllSurfaces = async (reason: string = 'runtime-capsule-reclaim'): Promise<number> => {
+    const tracked = Array.from(this.tracked.values());
+    for (const spec of tracked) {
+      try {
+        await this.cleanupSurface({
+          sourceKind: spec.sourceKind,
+          pluginId: spec.pluginId,
+          surfaceId: spec.descriptor.id,
+          surfaceType: spec.descriptor.surfaceType,
+          reason,
+        });
+      } catch (error) {
+        telemetry.warn('shell-surface.cleanup-all-surface.failed', {
+          message: readErrorMessage(error),
+          fields: {
+            sourceKind: spec.sourceKind,
+            pluginId: spec.pluginId,
+            surfaceId: spec.descriptor.id,
+            surfaceType: spec.descriptor.surfaceType,
+            reason,
+          },
+        });
+      }
+    }
+
+    return tracked.length - this.tracked.size;
+  };
+
   listTrackedSurfaces = (): ManagedPluginShellSurfaceSpec[] => {
     return Array.from(this.tracked.values());
+  };
+
+  subscribeTrackedSurfaces = (listener: ShellSurfaceSnapshotListener): (() => void) => {
+    this.trackedSurfaceListeners.add(listener);
+    listener(this.listTrackedSurfaces());
+    return () => {
+      this.trackedSurfaceListeners.delete(listener);
+    };
   };
 
   start = (): void => {
@@ -338,7 +382,22 @@ export class DefaultShellSurfaceManager implements ShellSurfaceManager {
     this.unsubscribeExtensions = null;
     this.unsubscribeRuntimeRestart = null;
     this.unsubscribeEnvironmentSignals = null;
+    this.trackedSurfaceListeners.clear();
   };
+
+  private emitTrackedSurfacesChanged(): void {
+    if (this.trackedSurfaceListeners.size === 0) return;
+    const snapshot = this.listTrackedSurfaces();
+    for (const listener of Array.from(this.trackedSurfaceListeners)) {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        telemetry.warn('shell-surface.tracked-listener.failed', {
+          message: readErrorMessage(error),
+        });
+      }
+    }
+  }
 
   private syncTrackedSurfaces(): void {
     for (const spec of Array.from(this.tracked.values())) {

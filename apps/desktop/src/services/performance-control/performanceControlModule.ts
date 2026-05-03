@@ -1,5 +1,9 @@
 import type { KernelModule } from '../../kernel';
 import type { AppEvents } from '../../contracts/events';
+import type {
+  RuntimeCapsuleState,
+  RuntimeLifecycleParticipant,
+} from '../../contracts/runtimeCapsule';
 import { setupDualListener, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { AUDIO_ENGINE_SERVICE_TOKEN } from '../audio';
 import { TELEMETRY_SERVICE_TOKEN, type TelemetryService } from '../telemetry';
@@ -24,6 +28,7 @@ const PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_PAUSE = 20_000;
 const PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_COLD_IDLE = 45_000;
 const PERFORMANCE_CONTROL_STARTUP_FIRST_REFRESH_DELAY_MS = 5_000;
 const DEBUG_PROCESS_PERF_CAPABILITY_ID = 'debug.process-perf';
+const DEBUG_PROCESS_PERF_PARTICIPANT_ID = 'performance-control.process-perf';
 
 function resolveRefreshIntervalMs(
   renderMode: 'full' | 'throttle' | 'pause',
@@ -81,7 +86,9 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
       let onVisibilityOrFocusChanged: (() => void) | null = null;
       let unsubscribeAudioState: null | (() => void) = null;
       let unsubscribeRuntimeCapsules: null | (() => void) = null;
+      let unregisterProcessPerfParticipant: null | (() => void) = null;
       let runtimeCapsuleSnapshot = runtimeCapsuleManager?.collectSnapshot() ?? null;
+      let processPerfParticipantState: RuntimeCapsuleState = 'cold';
       let disposed = false;
       if (typeof window !== 'undefined') {
         const isColdIdleAudioState = (): boolean => {
@@ -151,6 +158,50 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
             runtimeCapsuleSnapshot = snapshot;
             applyInterval();
           });
+
+          const participant: RuntimeLifecycleParticipant = {
+            id: DEBUG_PROCESS_PERF_PARTICIPANT_ID,
+            capsuleId: DEBUG_PROCESS_PERF_CAPABILITY_ID,
+            onWarm: () => {
+              processPerfParticipantState = 'active';
+              applyInterval();
+              void service.refreshNow();
+            },
+            onSuspend: (reason) => {
+              processPerfParticipantState = 'suspended';
+              processPerfService.releaseRuntimeCaches(reason.kind);
+              applyInterval();
+            },
+            onHibernate: (reason) => {
+              processPerfParticipantState = 'hibernated';
+              processPerfService.releaseRuntimeCaches(reason.kind);
+              applyInterval();
+            },
+            onTeardown: (reason) => {
+              processPerfParticipantState = 'cold';
+              processPerfService.releaseRuntimeCaches(reason.kind);
+              applyInterval();
+            },
+            collectSnapshot: () => {
+              const snapshot = processPerfService.getSnapshot();
+              return {
+                id: DEBUG_PROCESS_PERF_PARTICIPANT_ID,
+                capsuleId: DEBUG_PROCESS_PERF_CAPABILITY_ID,
+                state: processPerfParticipantState,
+                detail: {
+                  availability: snapshot.availability,
+                  detailLevel: snapshot.detailLevel,
+                  hasFullSnapshot: snapshot.fullSnapshot !== null,
+                  hasTotalsSnapshot: snapshot.totalsSnapshot !== null,
+                  lastSuccessAtMs: snapshot.lastSuccessAtMs,
+                },
+              };
+            },
+          };
+          unregisterProcessPerfParticipant = runtimeCapsuleManager.registerParticipant(
+            DEBUG_PROCESS_PERF_CAPABILITY_ID,
+            participant
+          );
         }
 
         void setupDualListener(
@@ -220,6 +271,7 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
         }
         unsubscribeAudioState?.();
         unsubscribeRuntimeCapsules?.();
+        unregisterProcessPerfParticipant?.();
         unsubscribeGovernance();
         unsubscribeQuality();
         setGlobalProcessPerfService(null);

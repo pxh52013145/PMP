@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
@@ -68,6 +69,13 @@ import {
 } from '../../modules/music-platform/platformRuntimeDescriptor';
 import { focusMusicPlatformWorkspaceInstance } from '../../modules/music-platform/platformWorkspaceFocus';
 import { useT } from '../../i18n';
+import { useKernel } from '../../contexts/KernelContext';
+import {
+  SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN,
+  type SpaceRuntimeGovernanceService,
+} from '../../services/governance';
+import type { RuntimeCapsuleState, RuntimeLifecycleParticipant } from '../../contracts/runtimeCapsule';
+import { useMagnetConfig } from '../../modules/magnets/useMagnetConfig';
 import { PmpButton } from '../primitives';
 import { resolveInstalledExtensionRuntime } from '../../magnet-system/plugins/runtime';
 import {
@@ -335,7 +343,14 @@ function readPlatformPackPreviewStatus(
 export const PluginDevelopmentWorkspaceMagnet = memo(
   function PluginDevelopmentWorkspaceMagnet() {
     const t = useT();
+    const kernel = useKernel();
+    const { activeSpaceId } = useMagnetConfig();
+    const spaceRuntimeGovernance = kernel.services.getOptional(
+      SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN
+    ) as SpaceRuntimeGovernanceService | null;
     const isTauri = isTauriRuntime();
+    const lifecycleStateRef = useRef<RuntimeCapsuleState>('active');
+    const participantDetailRef = useRef<Record<string, unknown>>({});
     const installedRevision = useSyncExternalStore(
       subscribeInstalledExtensions,
       getInstalledExtensionsRevision,
@@ -481,6 +496,73 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
           (selectedPluginId ? installedByPluginId.get(selectedPluginId) ?? null : null)
       );
     }, [currentDraft?.installedRecord, installedByPluginId, selectedPluginId, t]);
+
+    const participantDetail = useMemo<Record<string, unknown>>(
+      () => ({
+        workspaceProfile,
+        selectedPluginId,
+        selectedPlatformPackInstanceId,
+        installedExtensionCount: installedExtensions.length,
+        devSessionCount: devSessions.length,
+        platformPackBindingCount: platformPackBindings.length,
+        runtimePreviewCount: runtimePreviewEntries.length,
+        hasDraft: draft !== null,
+        hasPlatformPackSource: platformPackSource !== null,
+        platformPackStatus: platformPackSource?.status ?? null,
+        platformPackBlocked: platformPackBlockingError !== null,
+        busy,
+      }),
+      [
+        busy,
+        devSessions.length,
+        draft,
+        installedExtensions.length,
+        platformPackBindings.length,
+        platformPackBlockingError,
+        platformPackSource,
+        runtimePreviewEntries.length,
+        selectedPlatformPackInstanceId,
+        selectedPluginId,
+        workspaceProfile,
+      ]
+    );
+
+    useEffect(() => {
+      participantDetailRef.current = participantDetail;
+    }, [participantDetail]);
+
+    useEffect(() => {
+      if (!spaceRuntimeGovernance) return;
+      lifecycleStateRef.current = 'active';
+
+      const participant: RuntimeLifecycleParticipant = {
+        id: 'plugin-development-workspace',
+        capsuleId: 'plugin.runtime',
+        onWarm: () => {
+          lifecycleStateRef.current = 'warming';
+        },
+        onFreeze: () => {
+          lifecycleStateRef.current = 'frozen';
+          setBusy(false);
+        },
+        onTeardown: () => {
+          lifecycleStateRef.current = 'tearing_down';
+          setBusy(false);
+          setDraft(null);
+          setError(null);
+          setPlatformPackSource(null);
+        },
+        collectSnapshot: () => ({
+          id: 'plugin-development-workspace',
+          capsuleId: 'plugin.runtime',
+          state: lifecycleStateRef.current,
+          listeners: 5,
+          detail: participantDetailRef.current,
+        }),
+      };
+
+      return spaceRuntimeGovernance.registerParticipant(activeSpaceId, participant);
+    }, [activeSpaceId, spaceRuntimeGovernance]);
 
     const handleChoosePluginProject = useCallback(async () => {
       if (busy) return;

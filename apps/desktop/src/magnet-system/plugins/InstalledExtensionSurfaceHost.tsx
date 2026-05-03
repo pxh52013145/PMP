@@ -9,6 +9,11 @@ import { useKernel } from '../../contexts/KernelContext';
 import { COMMANDS_SERVICE_TOKEN } from '../../services/commands';
 import { KEYBINDINGS_SERVICE_TOKEN } from '../../services/keybindings';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
+import {
+  SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN,
+  type SpaceRuntimeGovernanceService,
+} from '../../services/governance';
+import type { RuntimeCapsuleState, RuntimeLifecycleParticipant } from '../../contracts/runtimeCapsule';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import {
   buildRuntimeActivateSnapshot,
@@ -57,6 +62,7 @@ import {
 } from './activationEvents';
 import { readExtensionConfig, subscribeExtensionConfig } from './pluginConfig';
 import { useInstalledExtensionRuntimeRestartToken } from './useInstalledExtensionRuntimeRestartToken';
+import { useMagnetConfig } from '../../modules/magnets/useMagnetConfig';
 import { useMagnetSkin } from '../../themes/useMagnetSkin';
 import {
   readInstalledExtensionPmpHostContributions,
@@ -150,10 +156,14 @@ function InstalledExtensionSurfaceHost({
   surface: InstalledExtensionSurface;
 }) {
   const kernel = useKernel();
+  const { activeSpaceId } = useMagnetConfig();
   const audioService = useAudioService();
   const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const keybindings = kernel.services.getOptional(KEYBINDINGS_SERVICE_TOKEN);
   const navigationService = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
+  const spaceRuntimeGovernance = kernel.services.getOptional(
+    SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN
+  ) as SpaceRuntimeGovernanceService | null;
   const runtimeManager = kernel.services.get(INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN);
   const restartToken = useInstalledExtensionRuntimeRestartToken(pluginId);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -166,6 +176,11 @@ function InstalledExtensionSurfaceHost({
   const [settingsSurfaceHeight, setSettingsSurfaceHeight] = useState<number>(
     DEFAULT_SETTINGS_SURFACE_HEIGHT_PX
   );
+  const [runtimeLifecyclePaused, setRuntimeLifecyclePaused] = useState(false);
+  const [runtimeLifecycleEpoch, setRuntimeLifecycleEpoch] = useState(0);
+  const runtimeLifecycleStateRef = useRef<RuntimeCapsuleState>('cold');
+  const runtimeCleanupRef = useRef<((reason: string) => Promise<void>) | null>(null);
+  const participantDetailRef = useRef<Record<string, unknown>>({});
   const frameId = useMemo(() => {
     return `extv2-${pluginId}-${restartToken}-${Math.random().toString(16).slice(2)}`;
   }, [pluginId, restartToken]);
@@ -423,6 +438,109 @@ function InstalledExtensionSurfaceHost({
   }, [frameId]);
 
   useEffect(() => {
+    runtimeLifecycleStateRef.current = mounted
+      ? 'active'
+      : frameReady
+        ? 'warming'
+        : runtimeLifecyclePaused
+          ? runtimeLifecycleStateRef.current
+          : 'cold';
+  }, [frameReady, mounted, runtimeLifecyclePaused]);
+
+  useEffect(() => {
+    participantDetailRef.current = {
+      pluginId,
+      hostLabel,
+      surfaceKind: surface.kind,
+      surfaceId,
+      frameId,
+      enabled,
+      frameReady,
+      mounted,
+      paused: runtimeLifecyclePaused,
+      hasRuntimeCleanup: runtimeCleanupRef.current !== null,
+      runtimeResolutionStatus: runtimeResolution?.status ?? 'missing',
+      runtimeId:
+        runtimeResolution?.status === 'resolved'
+          ? runtimeResolution.runtime.runtimeId
+          : runtimeResolution?.runtime?.runtimeId ?? null,
+    };
+  }, [
+    enabled,
+    frameId,
+    frameReady,
+    hostLabel,
+    mounted,
+    pluginId,
+    runtimeLifecyclePaused,
+    runtimeResolution,
+    surface.kind,
+    surfaceId,
+  ]);
+
+  useEffect(() => {
+    if (!spaceRuntimeGovernance) return;
+    const participantId = [
+      'plugin-surface',
+      pluginId,
+      surface.kind,
+      surfaceId ?? 'magnet',
+    ].join(':');
+
+    const pauseRuntime = (state: RuntimeCapsuleState, reason: string) => {
+      runtimeLifecycleStateRef.current = state;
+      setRuntimeLifecyclePaused(true);
+      postToFrame({ type: 'sandbox:dispose' });
+      void runtimeCleanupRef.current?.(reason);
+    };
+
+    const participant: RuntimeLifecycleParticipant = {
+      id: participantId,
+      capsuleId: 'plugin.runtime',
+      onWarm: () => {
+        runtimeLifecycleStateRef.current = 'warming';
+        setRuntimeLifecyclePaused(false);
+        setRuntimeLifecycleEpoch((value) => value + 1);
+      },
+      onSuspend: (reason) => {
+        runtimeLifecycleStateRef.current = 'suspended';
+        participantDetailRef.current = {
+          ...participantDetailRef.current,
+          lastSuspendReason: reason.detail ?? reason.kind,
+        };
+      },
+      onFreeze: (reason) => {
+        pauseRuntime('frozen', `space-freeze:${reason.detail ?? reason.kind}`);
+      },
+      onHibernate: (reason) => {
+        pauseRuntime('hibernated', `space-hibernate:${reason.detail ?? reason.kind}`);
+      },
+      onTeardown: (reason) => {
+        pauseRuntime('tearing_down', `space-teardown:${reason.detail ?? reason.kind}`);
+        setFrameReady(false);
+        setMounted(false);
+      },
+      collectSnapshot: () => ({
+        id: participantId,
+        capsuleId: 'plugin.runtime',
+        state: runtimeLifecycleStateRef.current,
+        timers: runtimeCleanupRef.current ? 1 : 0,
+        listeners: runtimeCleanupRef.current ? 2 : 0,
+        detail: participantDetailRef.current,
+      }),
+    };
+
+    return spaceRuntimeGovernance.registerParticipant(activeSpaceId, participant);
+  }, [
+    activeSpaceId,
+    pluginId,
+    postToFrame,
+    spaceRuntimeGovernance,
+    surface.kind,
+    surfaceId,
+  ]);
+
+  useEffect(() => {
     if (!enabled) return;
     if (activationError) return;
     if (!runtimeResolution || runtimeResolution.status !== 'resolved') return;
@@ -582,6 +700,7 @@ function InstalledExtensionSurfaceHost({
     if (!frameReady) return;
     if (!record) return;
     if (!runtimeResolution || runtimeResolution.status !== 'resolved') return;
+    if (runtimeLifecyclePaused) return;
 
     let disposed = false;
     let pingInterval: number | null = null;
@@ -619,6 +738,7 @@ function InstalledExtensionSurfaceHost({
 
       await runtimeResources.cleanup(reason);
     };
+    runtimeCleanupRef.current = cleanupRuntime;
 
     const boot = async () => {
       try {
@@ -802,6 +922,9 @@ function InstalledExtensionSurfaceHost({
       disposed = true;
       void cleanupRuntime('runtime-dispose');
       postToFrame({ type: 'sandbox:dispose' });
+      if (runtimeCleanupRef.current === cleanupRuntime) {
+        runtimeCleanupRef.current = null;
+      }
     };
   }, [
     activationError,
@@ -821,6 +944,8 @@ function InstalledExtensionSurfaceHost({
     record,
     runtimeResolution,
     runtimeResources,
+    runtimeLifecycleEpoch,
+    runtimeLifecyclePaused,
     surface.kind,
     surface.mountContext,
     surfaceId,

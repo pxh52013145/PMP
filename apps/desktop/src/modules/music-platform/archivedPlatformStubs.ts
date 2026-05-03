@@ -814,7 +814,7 @@ export function getActiveMusicPlatformInstanceId(_input?: unknown): string | nul
   return null;
 }
 
-export function setActiveMusicPlatformInstance(): void {
+export function setActiveMusicPlatformInstance(_input?: unknown): void {
   return undefined;
 }
 
@@ -840,15 +840,18 @@ export function subscribePlatformRenderSelections(
   return () => undefined;
 }
 
-export function upsertPlatformRenderSelection(): void {
+export function upsertPlatformRenderSelection(_record?: PlatformRenderSelectionRecord): void {
   return undefined;
 }
 
-export function removePlatformRenderSelection(): void {
-  return undefined;
+export function removePlatformRenderSelection(_instanceId?: string): boolean {
+  return false;
 }
 
-export function setPlatformRenderSelectionMounted(): void {
+export function setPlatformRenderSelectionMounted(
+  _instanceId?: string,
+  _mounted?: boolean
+): void {
   return undefined;
 }
 

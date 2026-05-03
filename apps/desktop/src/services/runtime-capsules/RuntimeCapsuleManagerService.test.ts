@@ -84,6 +84,61 @@ describe('DefaultRuntimeCapsuleManagerService', () => {
     });
   });
 
+  it('invokes participant hooks when capsule lifecycle state changes', () => {
+    let now = 300;
+    const service = new DefaultRuntimeCapsuleManagerService(() => now);
+    const onWarm = vi.fn();
+    const onSuspend = vi.fn();
+    const onHibernate = vi.fn();
+    const onTeardown = vi.fn();
+    service.registerCapsule(TEST_CAPSULE);
+    service.registerParticipant('visual.canvas.pixi', {
+      id: 'pixel-matrix-canvas',
+      capsuleId: 'visual.canvas.pixi',
+      onWarm,
+      onSuspend,
+      onHibernate,
+      onTeardown,
+      collectSnapshot: () => ({
+        id: 'pixel-matrix-canvas',
+        capsuleId: 'visual.canvas.pixi',
+        state: 'active',
+        detail: { rendererMounted: true },
+      }),
+    });
+
+    const lease = service.acquireLease({
+      capabilityId: 'visual.canvas.pixi',
+      ownerKind: 'magnet',
+      ownerId: 'visual-tool',
+    });
+    now = 400;
+    service.releaseLease(lease?.id ?? '');
+    now = 9_000;
+    service.reclaimInactiveCapsules({
+      mode: 'hibernate',
+      minMemoryTier: 'medium',
+      reason: { kind: 'memory-pressure', pressureLevel: 'watch' },
+    });
+    service.reclaimInactiveCapsules({
+      mode: 'teardown',
+      minMemoryTier: 'medium',
+      bypassWarmRetention: true,
+      reason: { kind: 'memory-pressure', pressureLevel: 'high' },
+    });
+
+    expect(onWarm).toHaveBeenCalledTimes(1);
+    expect(onSuspend).toHaveBeenCalledTimes(1);
+    expect(onHibernate).toHaveBeenCalledTimes(1);
+    expect(onTeardown).toHaveBeenCalledTimes(1);
+    expect(service.collectSnapshot().capsules[0].participants).toEqual([
+      expect.objectContaining({
+        id: 'pixel-matrix-canvas',
+        capsuleId: 'visual.canvas.pixi',
+      }),
+    ]);
+  });
+
   it('releases all leases owned by the same owner', () => {
     const service = new DefaultRuntimeCapsuleManagerService(() => 500);
     service.registerCapsule(TEST_CAPSULE);
@@ -103,5 +158,87 @@ describe('DefaultRuntimeCapsuleManagerService', () => {
     const capsule = service.collectSnapshot().capsules[0];
     expect(capsule.state).toBe('idle-warm');
     expect(capsule.activeLeases).toHaveLength(0);
+  });
+
+  it('hibernates idle capsules after their warm retention window', () => {
+    let now = 1_000;
+    const service = new DefaultRuntimeCapsuleManagerService(() => now);
+    service.registerCapsule(TEST_CAPSULE);
+    const lease = service.acquireLease({
+      capabilityId: 'visual.canvas.pixi',
+      ownerKind: 'magnet',
+      ownerId: 'visual-tool',
+    });
+
+    now = 2_000;
+    service.releaseLease(lease?.id ?? '');
+    now = 9_999;
+    expect(
+      service.reclaimInactiveCapsules({
+        mode: 'hibernate',
+        minMemoryTier: 'medium',
+        reason: { kind: 'memory-pressure' },
+      })
+    ).toEqual([]);
+
+    now = 10_000;
+    const reclaimed = service.reclaimInactiveCapsules({
+      mode: 'hibernate',
+      minMemoryTier: 'medium',
+      reason: { kind: 'memory-pressure', pressureLevel: 'watch' },
+    });
+
+    expect(reclaimed).toEqual([
+      expect.objectContaining({
+        capsuleId: 'visual.canvas.pixi',
+        from: 'idle-warm',
+        to: 'hibernated',
+        memoryTier: 'heavy',
+      }),
+    ]);
+    expect(service.collectSnapshot().capsules[0]).toMatchObject({
+      state: 'hibernated',
+      activeLeases: [],
+    });
+  });
+
+  it('tears down inactive capsules under high pressure without touching active leases', () => {
+    let now = 1_000;
+    const service = new DefaultRuntimeCapsuleManagerService(() => now);
+    service.registerCapsule(TEST_CAPSULE);
+    service.registerCapsule({
+      ...TEST_CAPSULE,
+      id: 'debug.process-perf',
+      kind: 'debug',
+      memoryTier: 'medium',
+      startup: 'manual',
+      provides: ['debug.process-perf'],
+    });
+    const activeLease = service.acquireLease({
+      capabilityId: 'debug.process-perf',
+      ownerKind: 'debug',
+      ownerId: 'debug-center',
+    });
+    const idleLease = service.acquireLease({
+      capabilityId: 'visual.canvas.pixi',
+      ownerKind: 'magnet',
+      ownerId: 'visual-tool',
+    });
+
+    now = 2_000;
+    service.releaseLease(idleLease?.id ?? '');
+    const reclaimed = service.reclaimInactiveCapsules({
+      mode: 'teardown',
+      minMemoryTier: 'medium',
+      bypassWarmRetention: true,
+      reason: { kind: 'memory-pressure', pressureLevel: 'high' },
+    });
+
+    expect(reclaimed.map((item) => item.capsuleId)).toEqual(['visual.canvas.pixi']);
+    expect(service.collectSnapshot().capsules).toEqual([
+      expect.objectContaining({ manifest: expect.objectContaining({ id: 'debug.process-perf' }), state: 'active' }),
+      expect.objectContaining({ manifest: expect.objectContaining({ id: 'visual.canvas.pixi' }), state: 'cold' }),
+    ]);
+    expect(activeLease).toMatchObject({ capsuleId: 'debug.process-perf' });
   });
 });

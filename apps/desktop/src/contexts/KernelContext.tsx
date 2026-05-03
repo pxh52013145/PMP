@@ -19,6 +19,7 @@ import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { STORAGE_KEYS } from '../utils/windowCommunication';
 import { PMP_STORAGE_CHANGE_EVENT } from '../modules/storage/localStorage';
 import { recordStartupMemoryCheckpoint } from '../modules/startup/startupMemoryTrace';
+import { createPlatformWorkspaceGovernanceModule } from '../modules/music-platform/platformWorkspaceGovernanceModule';
 
 type DesktopKernel = Kernel<AppEvents>;
 
@@ -228,6 +229,7 @@ function createRuntime(): KernelRuntime {
   ];
 
   if (!isAuxWindow) {
+    modules.push(createPlatformWorkspaceGovernanceModule());
     modules.push(createSpaceRuntimeGovernanceModule());
     modules.push(createMemoryGovernanceModule());
   }

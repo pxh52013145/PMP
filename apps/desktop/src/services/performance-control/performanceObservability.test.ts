@@ -130,6 +130,7 @@ function createProcessPerfService(initial: ProcessPerfServiceSnapshot) {
     },
     refreshSnapshot: async () => snapshot.fullSnapshot,
     refreshTotalsSnapshot: async () => snapshot.totalsSnapshot,
+    releaseRuntimeCaches: () => undefined,
     destroy: () => undefined,
   };
 

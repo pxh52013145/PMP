@@ -88,6 +88,28 @@ describe('DefaultSpaceRuntimeGovernanceService', () => {
 
     vi.advanceTimersByTime(1);
     expect(service.reclaim({ reason: 'test', minTier: 1 })).toEqual(['space2']);
+    expect(service.collectSnapshot().descriptors.find((item) => item.spaceId === 'space2')).toMatchObject({
+      state: 'hibernated',
+    });
+    expect(service.collectSnapshot().hibernatedSpaceIds).toContain('space2');
+  });
+
+  it('tears down hibernated heavy spaces under high pressure', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const service = new DefaultSpaceRuntimeGovernanceService();
+
+    service.activateSpace('space2');
+    service.activateSpace('space1');
+
+    vi.advanceTimersByTime(10_000);
+    expect(service.reclaim({ reason: 'watch', minTier: 1 })).toEqual(['space2']);
+    expect(service.collectSnapshot().hibernatedSpaceIds).toContain('space2');
+
+    expect(service.reclaim({ reason: 'high', minTier: 2 })).toEqual(['space2']);
+    expect(service.collectSnapshot().descriptors.find((item) => item.spaceId === 'space2')).toMatchObject({
+      state: 'cold',
+    });
   });
 
   it('invokes participant lifecycle hooks for warm, freeze, and teardown', () => {
@@ -112,6 +134,30 @@ describe('DefaultSpaceRuntimeGovernanceService', () => {
     expect(onWarm).toHaveBeenCalledTimes(1);
     expect(onFreeze).toHaveBeenCalledTimes(1);
     expect(onTeardown).toHaveBeenCalledTimes(1);
+  });
+
+  it('invokes participant lifecycle hooks for suspend and hibernate', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const service = new DefaultSpaceRuntimeGovernanceService();
+    const onSuspend = vi.fn();
+    const onHibernate = vi.fn();
+
+    service.registerParticipant('space2', {
+      id: 'plugin-workspace',
+      capsuleId: 'plugin.runtime',
+      onSuspend,
+      onHibernate,
+    });
+
+    service.activateSpace('space2');
+    service.suspendSpace('space2', 'test suspend');
+    service.activateSpace('space1');
+    vi.advanceTimersByTime(10_000);
+    service.reclaim({ reason: 'test hibernate', minTier: 1 });
+
+    expect(onSuspend).toHaveBeenCalledTimes(1);
+    expect(onHibernate).toHaveBeenCalledTimes(1);
   });
 
   it('includes registered participant snapshots in the collected space snapshot', () => {

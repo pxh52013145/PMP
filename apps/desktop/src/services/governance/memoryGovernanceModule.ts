@@ -36,6 +36,10 @@ import {
   SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN,
   type SpaceRuntimeGovernanceService,
 } from './SpaceRuntimeGovernanceService';
+import {
+  RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN,
+  type RuntimeCapsuleManagerService,
+} from '../runtime-capsules';
 import { onStartupIdle } from '../../modules/startup/startupReady';
 
 const MEMORY_GOVERNANCE_STARTUP_FIRST_RUN_DELAY_MS = 15_000;
@@ -78,12 +82,16 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
       const spaceRuntimeGovernance = services.getOptional(
         SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN
       ) as SpaceRuntimeGovernanceService | null;
+      const runtimeCapsuleManager = services.getOptional(
+        RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN
+      ) as RuntimeCapsuleManagerService | null;
 
       const service: MemoryGovernanceService = new DefaultMemoryGovernanceService(
         navigation,
         events,
         processPerfService,
-        spaceRuntimeGovernance
+        spaceRuntimeGovernance,
+        runtimeCapsuleManager
       );
       const unregister = services.register(MEMORY_GOVERNANCE_SERVICE_TOKEN, service);
       const detachPerformanceObservability = attachPerformanceObservabilityBridge({

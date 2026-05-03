@@ -190,4 +190,45 @@ describe('DefaultProcessPerfService', () => {
     expect(service.getSnapshot().lastError).toContain('only supported on Windows');
     expect(seenAvailability).toContain('unsupported');
   });
+
+  it('releases cached runtime snapshots without destroying the service', async () => {
+    const telemetry = createTelemetryService();
+    const service = new DefaultProcessPerfService(telemetry.service);
+
+    requestProcessPerfTotalsSnapshotMock.mockResolvedValue({
+      timestampMs: 10,
+      sampleIntervalMs: 1000,
+      cpuCount: 8,
+      rootPid: 1,
+      systemMemory: null,
+      totals: {
+        workingSetBytes: 10,
+        privateBytes: 20,
+        cpuPercent: 5,
+        appWorkingSetBytes: 1,
+        appPrivateBytes: 2,
+        appCpuPercent: 1,
+        webview2WorkingSetBytes: 3,
+        webview2PrivateBytes: 4,
+        webview2CpuPercent: 2,
+        otherWorkingSetBytes: 5,
+        otherPrivateBytes: 6,
+        otherCpuPercent: 3,
+      },
+    });
+
+    await service.refreshTotalsSnapshot({ force: true });
+    expect(service.getSnapshot().availability).toBe('ready');
+    expect(service.getSnapshot().totalsSnapshot).not.toBeNull();
+
+    service.releaseRuntimeCaches('test');
+
+    expect(service.getSnapshot()).toMatchObject({
+      availability: 'idle',
+      detailLevel: 'none',
+      fullSnapshot: null,
+      totalsSnapshot: null,
+      lastError: null,
+    });
+  });
 });

@@ -141,6 +141,51 @@ describe('DefaultShellSurfaceManager', () => {
     expect(manager.listTrackedSurfaces()).toEqual([]);
   });
 
+  it('cleans up all tracked shell surfaces for runtime capsule reclaim', async () => {
+    const openSurface = vi.fn(async () => undefined);
+    const destroySurface = vi.fn(async () => undefined);
+    const manager = new DefaultShellSurfaceManager({
+      enableBackgroundSync: false,
+      deps: {
+        openSurface,
+        destroySurface,
+      },
+    });
+    const overlay = createSpec({
+      pluginId: 'demo-plugin',
+      surfaceId: 'demo-overlay',
+      surfaceType: 'overlay',
+    });
+    const widget = createSpec({
+      pluginId: 'demo-plugin',
+      surfaceId: 'demo-widget',
+      surfaceType: 'desktop-widget',
+    });
+
+    await manager.summonSurface(overlay);
+    await manager.summonSurface(widget);
+    const cleaned = await manager.cleanupAllSurfaces('capsule-hibernate');
+
+    expect(cleaned).toBe(2);
+    expect(destroySurface).toHaveBeenNthCalledWith(
+      1,
+      'demo-plugin',
+      'demo-overlay',
+      'overlay',
+      'extv2',
+      'capsule-hibernate'
+    );
+    expect(destroySurface).toHaveBeenNthCalledWith(
+      2,
+      'demo-plugin',
+      'demo-widget',
+      'desktop-widget',
+      'extv2',
+      'capsule-hibernate'
+    );
+    expect(manager.listTrackedSurfaces()).toEqual([]);
+  });
+
   it('background sync cleans up tracked surfaces when the descriptor disappears', async () => {
     const openSurface = vi.fn(async () => undefined);
     const destroySurface = vi.fn(async () => undefined);

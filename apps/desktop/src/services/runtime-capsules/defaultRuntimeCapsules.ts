@@ -99,7 +99,7 @@ export const DEFAULT_RUNTIME_CAPSULE_MANIFESTS: RuntimeCapsuleManifest[] = [
     kind: 'plugin',
     memoryTier: 'heavy',
     startup: 'first-use',
-    backgroundPolicy: 'pinned',
+    backgroundPolicy: 'while-active',
     warmRetentionMs: 10_000,
     hibernateAfterMs: 60_000,
     provides: ['plugin.runtime'],

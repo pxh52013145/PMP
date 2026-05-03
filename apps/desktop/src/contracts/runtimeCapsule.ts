@@ -130,6 +130,7 @@ export interface RuntimeCapsuleSnapshot {
   manifest: RuntimeCapsuleManifest;
   state: RuntimeCapsuleState;
   activeLeases: RuntimeLease[];
+  participants?: RuntimeParticipantSnapshot[];
   lastTransition: RuntimeCapsuleTransition | null;
   lastActiveAtMs: number | null;
   lastSuspendedAtMs: number | null;

@@ -1,3 +1,12 @@
+import type {
+  RuntimeCapsuleBackgroundPolicy,
+  RuntimeCapsuleKind,
+  RuntimeCapsuleMemoryTier,
+  RuntimeCapsuleStartupPolicy,
+  RuntimeCapsuleState,
+  RuntimeParticipantSnapshot,
+} from './runtimeCapsule';
+
 export type MemoryGovernanceTier = 0 | 1 | 2 | 3;
 
 export type MemoryGovernanceReason =
@@ -11,6 +20,8 @@ export type MemoryGovernanceReason =
 
 export type MemoryGovernanceAction =
   | 'teardown-reclaimable-spaces'
+  | 'hibernate-idle-runtime-capsules'
+  | 'teardown-idle-runtime-capsules'
   | 'clear-cover-runtime-caches'
   | 'tighten-cover-runtime-caches-watch'
   | 'tighten-cover-runtime-caches-high'
@@ -34,6 +45,30 @@ export type MemoryGovernanceWebview2Snapshot = {
   treeCpuPercent: number | null;
 };
 
+export type MemoryGovernanceRuntimeCapsuleDescriptor = {
+  id: string;
+  state: RuntimeCapsuleState;
+  kind: RuntimeCapsuleKind;
+  memoryTier: RuntimeCapsuleMemoryTier;
+  startup: RuntimeCapsuleStartupPolicy;
+  backgroundPolicy: RuntimeCapsuleBackgroundPolicy;
+  activeLeaseCount: number;
+  lastActiveAtMs: number | null;
+  lastSuspendedAtMs: number | null;
+  warmRetentionMs: number;
+  hibernateAfterMs: number;
+};
+
+export type MemoryGovernanceRuntimeCapsulesSnapshot = {
+  activeLeaseCount: number;
+  activeCapsuleIds: string[];
+  idleWarmCapsuleIds: string[];
+  hibernatedCapsuleIds: string[];
+  reclaimableCapsuleIds: string[];
+  heavyReclaimableCapsuleIds: string[];
+  descriptors?: MemoryGovernanceRuntimeCapsuleDescriptor[];
+};
+
 export type MemoryGovernanceSnapshot = {
   atMs: number;
   isTauri: boolean;
@@ -49,11 +84,21 @@ export type MemoryGovernanceSnapshot = {
   spaceRuntime?: {
     activeSpaceId: string | null;
     frozenSpaceIds: string[];
+    hibernatedSpaceIds?: string[];
     heavySpaceIds: string[];
     zeroAssociationSpaceIds?: string[];
     reclaimableSpaceIds: string[];
     lastSwitchAt: number | null;
+    descriptors?: Array<{
+      spaceId: string;
+      state: string;
+      kind: string;
+      memoryTier: string;
+      activeAssociationCount: number;
+      participants: RuntimeParticipantSnapshot[];
+    }>;
   };
+  runtimeCapsules?: MemoryGovernanceRuntimeCapsulesSnapshot;
   webview2?: MemoryGovernanceWebview2Snapshot;
 };
 
@@ -103,6 +148,9 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
   const webview2Cpu = snapshot.webview2?.webview2CpuPercent ?? 0;
   const treePrivate = snapshot.webview2?.treePrivateBytes ?? 0;
   const reclaimableSpaceCount = snapshot.spaceRuntime?.reclaimableSpaceIds.length ?? 0;
+  const hibernatedSpaceCount = snapshot.spaceRuntime?.hibernatedSpaceIds?.length ?? 0;
+  const reclaimableRuntimeCapsuleCount = snapshot.runtimeCapsules?.reclaimableCapsuleIds.length ?? 0;
+  const hibernatedRuntimeCapsuleCount = snapshot.runtimeCapsules?.hibernatedCapsuleIds.length ?? 0;
 
   // Heuristic tiers (best-effort): we avoid aggressive actions by default and only reclaim when
   // multiple signals indicate pressure.
@@ -144,8 +192,14 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
 
   const actions: MemoryGovernanceAction[] = [];
 
-  if (reclaimableSpaceCount > 0) {
+  if (reclaimableSpaceCount > 0 || (tier >= 2 && hibernatedSpaceCount > 0)) {
     actions.push('teardown-reclaimable-spaces');
+  }
+
+  if (tier >= 2 && (reclaimableRuntimeCapsuleCount > 0 || hibernatedRuntimeCapsuleCount > 0)) {
+    actions.push('teardown-idle-runtime-capsules');
+  } else if (reclaimableRuntimeCapsuleCount > 0) {
+    actions.push('hibernate-idle-runtime-capsules');
   }
 
   if (

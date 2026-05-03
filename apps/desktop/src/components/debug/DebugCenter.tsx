@@ -79,6 +79,11 @@ import {
   type RuntimeCapsuleManagerSnapshot,
 } from '../../services/runtime-capsules';
 import {
+  SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN,
+  type SpaceRuntimeGovernanceService,
+  type SpaceRuntimeGovernanceSnapshot,
+} from '../../services/governance';
+import {
   buildTelemetryAiContextReport,
   getTelemetryAiContextPreset,
   type TelemetryAiContextPreset,
@@ -872,6 +877,13 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       ) as RuntimeCapsuleManagerService | null,
     [kernel]
   );
+  const spaceRuntimeGovernance = useMemo(
+    () =>
+      kernel.services.getOptional(
+        SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN
+      ) as SpaceRuntimeGovernanceService | null,
+    [kernel]
+  );
   const [config, setConfigState] = useState<DebugConfig>(() => getDefaultDebugConfig());
   const [envSnapshot, setEnvSnapshot] = useState<DebugEnvSnapshot>({});
   const [editorWindowsState, setEditorWindowsState] = useState<EditorWindowsDebugState | null>(null);
@@ -882,6 +894,10 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [runtimeCapsuleSnapshot, setRuntimeCapsuleSnapshot] =
     useState<RuntimeCapsuleManagerSnapshot | null>(() =>
       runtimeCapsuleManager?.collectSnapshot() ?? null
+    );
+  const [spaceRuntimeSnapshot, setSpaceRuntimeSnapshot] =
+    useState<SpaceRuntimeGovernanceSnapshot | null>(() =>
+      spaceRuntimeGovernance?.collectSnapshot() ?? null
     );
   const [busy, setBusy] = useState(false);
   const [pendingRestart, setPendingRestart] = useState(false);
@@ -971,6 +987,20 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     }
     return runtimeCapsuleManager.subscribe(setRuntimeCapsuleSnapshot);
   }, [runtimeCapsuleManager]);
+
+  useEffect(() => {
+    if (!spaceRuntimeGovernance) {
+      setSpaceRuntimeSnapshot(null);
+      return;
+    }
+
+    const refresh = () => setSpaceRuntimeSnapshot(spaceRuntimeGovernance.collectSnapshot());
+    refresh();
+    if (activeWorkspace !== 'memory' || !debugPollingAllowed) return;
+
+    const interval = window.setInterval(refresh, 2_000);
+    return () => window.clearInterval(interval);
+  }, [activeWorkspace, debugPollingAllowed, spaceRuntimeGovernance]);
 
   useEffect(() => {
     if (activeWorkspace !== 'memory') return;
@@ -5036,6 +5066,49 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                 </div>
               ) : (
                 <p className="settings-card-note">{t('debug.center.memory.runtimeCapsules.empty')}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="settings-card-label">{t('debug.center.memory.spaceRuntime.label')}</p>
+              {spaceRuntimeSnapshot ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <p className="settings-card-desc">
+                    {t('debug.center.memory.spaceRuntime.summary', {
+                      active: spaceRuntimeSnapshot.activeSpaceId ?? '-',
+                      frozen: spaceRuntimeSnapshot.frozenSpaceIds.length,
+                      hibernated: spaceRuntimeSnapshot.hibernatedSpaceIds.length,
+                      reclaimable: spaceRuntimeSnapshot.reclaimableSpaceIds.length,
+                    })}
+                  </p>
+                  {spaceRuntimeSnapshot.descriptors.map((descriptor) => (
+                    <div className="settings-card-note" key={descriptor.spaceId}>
+                      <p>
+                        {t('debug.center.memory.spaceRuntime.item', {
+                          id: descriptor.spaceId,
+                          state: descriptor.state,
+                          kind: descriptor.kind,
+                          tier: descriptor.memoryTier,
+                          associations: descriptor.activeAssociationCount,
+                          participants: descriptor.participants.length,
+                        })}
+                      </p>
+                      {descriptor.participants.map((participant) => (
+                        <p key={participant.id}>
+                          {t('debug.center.memory.spaceRuntime.participant', {
+                            id: participant.id,
+                            capsule: participant.capsuleId,
+                            state: participant.state,
+                            timers: participant.timers ?? 0,
+                            listeners: participant.listeners ?? 0,
+                          })}
+                        </p>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="settings-card-note">{t('debug.center.memory.spaceRuntime.empty')}</p>
               )}
             </div>
 

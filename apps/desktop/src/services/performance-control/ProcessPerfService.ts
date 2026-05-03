@@ -40,6 +40,7 @@ export interface ProcessPerfService {
   subscribe(listener: ProcessPerfSnapshotListener): () => void;
   refreshSnapshot(options?: ProcessPerfRefreshOptions): Promise<ProcessPerfSnapshot | null>;
   refreshTotalsSnapshot(options?: ProcessPerfRefreshOptions): Promise<ProcessPerfTotalsSnapshot | null>;
+  releaseRuntimeCaches(reason?: string): void;
   destroy(): void;
 }
 
@@ -188,6 +189,19 @@ export class DefaultProcessPerfService implements ProcessPerfService {
   ): Promise<ProcessPerfTotalsSnapshot | null> {
     const snapshot = await this.refresh('totals', options.force === true);
     return snapshot.availability === 'ready' ? snapshot.totalsSnapshot : null;
+  }
+
+  releaseRuntimeCaches(_reason: string = 'runtime-capsule-reclaim'): void {
+    this.snapshot = {
+      ...this.snapshot,
+      updatedAtMs: Date.now(),
+      availability: 'idle',
+      detailLevel: 'none',
+      lastError: null,
+      fullSnapshot: null,
+      totalsSnapshot: null,
+    };
+    this.emitChanged();
   }
 
   destroy(): void {

@@ -52,7 +52,13 @@ import type {
 const telemetry = getTelemetryLogger('extensions', 'installedExtensionRuntimeManager');
 
 type ManagedRuntimeHandle = Awaited<ReturnType<typeof startInstalledExtensionStartupRuntime>>;
-type ManagedRuntimeMode = 'startup' | 'event';
+export type ManagedRuntimeMode = 'startup' | 'event';
+export type ManagedRuntimeSnapshot = {
+  pluginId: string;
+  mode: ManagedRuntimeMode;
+  runtimeInstanceId: string | null;
+};
+export type ManagedRuntimeSnapshotListener = (runtimes: ManagedRuntimeSnapshot[]) => void;
 type ManagedRuntimeEntry = {
   handle: ManagedRuntimeHandle;
   mode: ManagedRuntimeMode;
@@ -122,6 +128,9 @@ export interface InstalledExtensionRuntimeManager {
   getRestartRevision: () => number;
   subscribeRestart: (listener: RestartListener) => () => void;
   getRestartToken: (pluginId: string) => number;
+  listManagedRuntimes: () => ManagedRuntimeSnapshot[];
+  subscribeManagedRuntimes: (listener: ManagedRuntimeSnapshotListener) => () => void;
+  cleanupManagedRuntimes: (reason?: string) => Promise<number>;
   readActivationError: (
     record: InstalledHostExtensionRecord,
     trigger: InstalledExtensionActivationTrigger
@@ -268,6 +277,7 @@ export class DefaultInstalledExtensionRuntimeManager
   implements InstalledExtensionRuntimeManager
 {
   private readonly restartListeners = new Set<RestartListener>();
+  private readonly managedRuntimeListeners = new Set<ManagedRuntimeSnapshotListener>();
   private readonly runtimeHandles = new Map<string, ManagedRuntimeEntry>();
   private readonly inflightStarts = new Map<string, Promise<void>>();
   private readonly lifecycleTokens = new Map<string, number>();
@@ -310,6 +320,45 @@ export class DefaultInstalledExtensionRuntimeManager
       request && request.pluginId === pluginId ? request.at : 0;
     const lifecycleToken = this.lifecycleTokens.get(pluginId) ?? 0;
     return Math.max(supervisorToken, lifecycleToken);
+  };
+
+  listManagedRuntimes = (): ManagedRuntimeSnapshot[] => {
+    return Array.from(this.runtimeHandles.entries())
+      .map(([pluginId, entry]) => ({
+        pluginId,
+        mode: entry.mode,
+        runtimeInstanceId:
+          typeof entry.handle.runtimeInstanceId === 'string'
+            ? entry.handle.runtimeInstanceId
+            : null,
+      }))
+      .sort((left, right) => left.pluginId.localeCompare(right.pluginId));
+  };
+
+  subscribeManagedRuntimes = (
+    listener: ManagedRuntimeSnapshotListener
+  ): (() => void) => {
+    this.managedRuntimeListeners.add(listener);
+    listener(this.listManagedRuntimes());
+    return () => {
+      this.managedRuntimeListeners.delete(listener);
+    };
+  };
+
+  cleanupManagedRuntimes = async (
+    reason: string = 'runtime-capsule-reclaim'
+  ): Promise<number> => {
+    const pluginIds = Array.from(this.runtimeHandles.keys());
+    if (pluginIds.length === 0) return 0;
+
+    await Promise.allSettled(
+      pluginIds.map((pluginId) => this.stopRuntime(pluginId, reason))
+    );
+    for (const pluginId of pluginIds) {
+      this.bumpLifecycleToken(pluginId);
+    }
+    this.notifyRestartListeners();
+    return pluginIds.length - this.runtimeHandles.size;
   };
 
   readActivationError = (
@@ -580,6 +629,20 @@ export class DefaultInstalledExtensionRuntimeManager
     }
   };
 
+  private emitManagedRuntimesChanged(): void {
+    if (this.managedRuntimeListeners.size === 0) return;
+    const snapshot = this.listManagedRuntimes();
+    for (const listener of Array.from(this.managedRuntimeListeners)) {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        telemetry.warn('extension.runtime_manager.managed_runtime_listener_failed', {
+          message: readErrorMessage(error),
+        });
+      }
+    }
+  }
+
   private bumpLifecycleToken = (pluginId: string): void => {
     const now = Date.now();
     const nextToken =
@@ -630,6 +693,7 @@ export class DefaultInstalledExtensionRuntimeManager
     const entry = this.runtimeHandles.get(pluginId);
     this.runtimeHandles.delete(pluginId);
     if (!entry) return;
+    this.emitManagedRuntimesChanged();
 
     try {
       await entry.handle.dispose(reason);
@@ -665,6 +729,7 @@ export class DefaultInstalledExtensionRuntimeManager
     if (existingEntry) {
       if (options.mode === 'startup' && existingEntry.mode === 'event') {
         existingEntry.mode = 'startup';
+        this.emitManagedRuntimesChanged();
       }
       return;
     }
@@ -675,6 +740,7 @@ export class DefaultInstalledExtensionRuntimeManager
       const currentEntry = this.runtimeHandles.get(pluginId);
       if (currentEntry && options.mode === 'startup' && currentEntry.mode === 'event') {
         currentEntry.mode = 'startup';
+        this.emitManagedRuntimesChanged();
       }
       return;
     }
@@ -757,6 +823,7 @@ export class DefaultInstalledExtensionRuntimeManager
       if (currentEntry) {
         if (options.mode === 'startup' && currentEntry.mode === 'event') {
           currentEntry.mode = 'startup';
+          this.emitManagedRuntimesChanged();
         }
         await handle.dispose('duplicate-runtime');
         return;
@@ -766,6 +833,7 @@ export class DefaultInstalledExtensionRuntimeManager
         handle,
         mode: options.mode,
       });
+      this.emitManagedRuntimesChanged();
     })()
       .catch((error) => {
         telemetry.error('extension.runtime_manager.background_start_failed', {

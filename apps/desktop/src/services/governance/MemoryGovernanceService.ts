@@ -4,6 +4,8 @@ import type { AppEvents } from '../../contracts/events';
 import {
   computeJsonSizeBytes,
   decideMemoryGovernancePlan,
+  type MemoryGovernanceRuntimeCapsuleDescriptor,
+  type MemoryGovernanceRuntimeCapsulesSnapshot,
   type MemoryGovernanceWebview2Snapshot,
   type MemoryGovernanceAction,
   type MemoryGovernanceReason,
@@ -22,6 +24,7 @@ import { invokeWithTelemetry } from '../telemetry/tauriInvokeTelemetry';
 import { scheduleProcessWorkingSetTrim } from '../../utils/processWorkingSetTrim';
 import type { ProcessPerfService } from '../performance-control';
 import type { SpaceRuntimeGovernanceService } from './SpaceRuntimeGovernanceService';
+import type { RuntimeCapsuleManagerService } from '../runtime-capsules';
 
 export type MemoryGovernanceAuditEntry = {
   atMs: number;
@@ -47,7 +50,10 @@ const HIDDEN_PHASE_REASONS: ReadonlySet<MemoryGovernanceReason> = new Set([
   'tauri-window-hidden',
 ]);
 
-const HIDDEN_PHASE_BASE_ACTION: MemoryGovernanceAction = 'tighten-cover-runtime-caches-hidden';
+const HIDDEN_PHASE_BASE_ACTIONS: readonly MemoryGovernanceAction[] = [
+  'tighten-cover-runtime-caches-hidden',
+  'hibernate-idle-runtime-capsules',
+];
 
 const HIDDEN_PHASE_TAURI_ACTIONS: readonly MemoryGovernanceAction[] = [
   'trim-webview2-working-set',
@@ -75,6 +81,85 @@ const EMPTY_COVER_RUNTIME_CACHE_STATS = {
   albumCoverUrlInflight: 0,
 };
 
+function runtimeCapsuleMemoryTierScore(
+  tier: MemoryGovernanceRuntimeCapsuleDescriptor['memoryTier']
+): number {
+  if (tier === 'heavy') return 2;
+  if (tier === 'medium') return 1;
+  return 0;
+}
+
+function isRuntimeCapsuleReclaimable(
+  descriptor: MemoryGovernanceRuntimeCapsuleDescriptor,
+  atMs: number
+): boolean {
+  if (descriptor.activeLeaseCount > 0) return false;
+  if (descriptor.startup === 'core') return false;
+  if (runtimeCapsuleMemoryTierScore(descriptor.memoryTier) < 1) return false;
+  if (
+    descriptor.backgroundPolicy === 'pinned' ||
+    descriptor.backgroundPolicy === 'realtime-critical'
+  ) {
+    return false;
+  }
+  if (
+    descriptor.state !== 'idle-warm' &&
+    descriptor.state !== 'suspended' &&
+    descriptor.state !== 'frozen'
+  ) {
+    return false;
+  }
+
+  const inactiveSince = descriptor.lastSuspendedAtMs ?? descriptor.lastActiveAtMs;
+  if (inactiveSince === null) return false;
+  return Math.max(0, atMs - inactiveSince) >= descriptor.warmRetentionMs;
+}
+
+function buildRuntimeCapsulesSnapshot(
+  runtimeCapsuleManager: RuntimeCapsuleManagerService | null,
+  atMs: number
+): MemoryGovernanceRuntimeCapsulesSnapshot | undefined {
+  const managerSnapshot = runtimeCapsuleManager?.collectSnapshot();
+  if (!managerSnapshot) return undefined;
+
+  const descriptors: MemoryGovernanceRuntimeCapsuleDescriptor[] = managerSnapshot.capsules.map(
+    (capsule) => ({
+      id: capsule.manifest.id,
+      state: capsule.state,
+      kind: capsule.manifest.kind,
+      memoryTier: capsule.manifest.memoryTier,
+      startup: capsule.manifest.startup,
+      backgroundPolicy: capsule.manifest.backgroundPolicy,
+      activeLeaseCount: capsule.activeLeases.length,
+      lastActiveAtMs: capsule.lastActiveAtMs,
+      lastSuspendedAtMs: capsule.lastSuspendedAtMs,
+      warmRetentionMs: capsule.manifest.warmRetentionMs,
+      hibernateAfterMs: capsule.manifest.hibernateAfterMs,
+    })
+  );
+  const reclaimable = descriptors.filter((descriptor) =>
+    isRuntimeCapsuleReclaimable(descriptor, atMs)
+  );
+
+  return {
+    activeLeaseCount: managerSnapshot.activeLeaseCount,
+    activeCapsuleIds: descriptors
+      .filter((descriptor) => descriptor.activeLeaseCount > 0 || descriptor.state === 'active')
+      .map((descriptor) => descriptor.id),
+    idleWarmCapsuleIds: descriptors
+      .filter((descriptor) => descriptor.state === 'idle-warm')
+      .map((descriptor) => descriptor.id),
+    hibernatedCapsuleIds: descriptors
+      .filter((descriptor) => descriptor.state === 'hibernated')
+      .map((descriptor) => descriptor.id),
+    reclaimableCapsuleIds: reclaimable.map((descriptor) => descriptor.id),
+    heavyReclaimableCapsuleIds: reclaimable
+      .filter((descriptor) => descriptor.memoryTier === 'heavy')
+      .map((descriptor) => descriptor.id),
+    descriptors,
+  };
+}
+
 function appendUniqueActions(
   target: MemoryGovernanceAction[],
   actions: readonly MemoryGovernanceAction[]
@@ -96,9 +181,7 @@ function buildPlannedActions(
     return plannedActions;
   }
 
-  if (!plannedActions.includes(HIDDEN_PHASE_BASE_ACTION)) {
-    plannedActions.unshift(HIDDEN_PHASE_BASE_ACTION);
-  }
+  appendUniqueActions(plannedActions, HIDDEN_PHASE_BASE_ACTIONS);
 
   if (isTauri) {
     appendUniqueActions(plannedActions, HIDDEN_PHASE_TAURI_ACTIONS);
@@ -115,7 +198,8 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
     private readonly navigation: NavigationService,
     private readonly events: ScopedEventBus<AppEvents>,
     private readonly processPerfService: ProcessPerfService,
-    private readonly spaceRuntimeGovernance: SpaceRuntimeGovernanceService | null = null
+    private readonly spaceRuntimeGovernance: SpaceRuntimeGovernanceService | null = null,
+    private readonly runtimeCapsuleManager: RuntimeCapsuleManagerService | null = null
   ) {}
 
   getLastResult(): MemoryGovernanceRunResult | null {
@@ -150,6 +234,55 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
               reason,
               tier: plan.tier,
               reclaimedSpaceIds: reclaimed,
+            },
+          });
+        }
+        continue;
+      }
+
+      if (action === 'hibernate-idle-runtime-capsules') {
+        const reclaimed = this.runtimeCapsuleManager?.reclaimInactiveCapsules({
+          mode: 'hibernate',
+          minMemoryTier: 'medium',
+          reason: {
+            kind: 'memory-pressure',
+            sourceId: 'memory-governance',
+            detail: `memory-governance:${reason}`,
+            pressureLevel: plan.tier >= 2 ? 'high' : plan.tier >= 1 ? 'watch' : 'normal',
+          },
+        }) ?? [];
+        if (reclaimed.length > 0) {
+          executed.push(action);
+          this.telemetry.info('memory-governance.runtime-capsule.hibernate', {
+            fields: {
+              reason,
+              tier: plan.tier,
+              capsuleIds: reclaimed.map((item) => item.capsuleId),
+            },
+          });
+        }
+        continue;
+      }
+
+      if (action === 'teardown-idle-runtime-capsules') {
+        const reclaimed = this.runtimeCapsuleManager?.reclaimInactiveCapsules({
+          mode: 'teardown',
+          minMemoryTier: 'medium',
+          bypassWarmRetention: plan.tier >= 2,
+          reason: {
+            kind: 'memory-pressure',
+            sourceId: 'memory-governance',
+            detail: `memory-governance:${reason}`,
+            pressureLevel: 'high',
+          },
+        }) ?? [];
+        if (reclaimed.length > 0) {
+          executed.push(action);
+          this.telemetry.info('memory-governance.runtime-capsule.teardown', {
+            fields: {
+              reason,
+              tier: plan.tier,
+              capsuleIds: reclaimed.map((item) => item.capsuleId),
             },
           });
         }
@@ -299,6 +432,7 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
 
     const webview2 = await this.collectWebview2Snapshot(isTauri);
     const spaceRuntimeSnapshot = this.spaceRuntimeGovernance?.collectSnapshot();
+    const runtimeCapsules = buildRuntimeCapsulesSnapshot(this.runtimeCapsuleManager, atMs);
 
     return {
       atMs,
@@ -316,12 +450,22 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
         ? {
             activeSpaceId: spaceRuntimeSnapshot.activeSpaceId,
             frozenSpaceIds: spaceRuntimeSnapshot.frozenSpaceIds,
+            hibernatedSpaceIds: spaceRuntimeSnapshot.hibernatedSpaceIds,
             heavySpaceIds: spaceRuntimeSnapshot.heavySpaceIds,
             zeroAssociationSpaceIds: spaceRuntimeSnapshot.zeroAssociationSpaceIds,
             reclaimableSpaceIds: spaceRuntimeSnapshot.reclaimableSpaceIds,
             lastSwitchAt: spaceRuntimeSnapshot.lastSwitchAt,
+            descriptors: spaceRuntimeSnapshot.descriptors.map((descriptor) => ({
+              spaceId: descriptor.spaceId,
+              state: descriptor.state,
+              kind: descriptor.kind,
+              memoryTier: descriptor.memoryTier,
+              activeAssociationCount: descriptor.activeAssociationCount,
+              participants: descriptor.participants,
+            })),
           }
         : undefined,
+      runtimeCapsules,
       webview2,
     };
   }

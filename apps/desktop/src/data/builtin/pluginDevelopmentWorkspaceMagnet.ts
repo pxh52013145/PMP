@@ -35,6 +35,7 @@ export const PLUGIN_DEVELOPMENT_WORKSPACE_MAGNET: Magnet = {
     capabilities: ['plugin.runtime'],
     activation: 'visible',
     backgroundPolicy: 'pinned',
+    releaseOnSpaceExit: true,
     warmRetentionMs: 10_000,
     hibernateAfterMs: 60_000,
   },
