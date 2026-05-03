@@ -1,0 +1,259 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import {
+  NativeAudioDynamicSrcPolicyController,
+} from './nativeAudioDynamicSrcPolicyController';
+import {
+  restoreDynamicSrcAutoSettingsFromStorageImpl,
+  type DynamicSrcAutoSettingsHost,
+} from './nativeAudioDynamicSrcAutoSettings';
+import type { AudioDynamicSrcAutoSettings } from './types';
+import type { DynamicSrcLearningMap } from './nativeAudioServiceTypes';
+
+type ListenerEntry = {
+  storageKeys: string[];
+  tauriEvents: string[];
+  callback: () => void;
+  cleanup: () => void;
+};
+
+const mocks = vi.hoisted(() => {
+  const storage = new Map<string, string>();
+  const listeners: ListenerEntry[] = [];
+  const setupDualListener = vi.fn(
+    async (storageKeys: string[], tauriEvents: string[], callback: () => void) => {
+      const cleanup = vi.fn();
+      listeners.push({ storageKeys, tauriEvents, callback, cleanup });
+      return cleanup;
+    }
+  );
+
+  return { listeners, setupDualListener, storage };
+});
+
+vi.mock('../../modules/storage', () => ({
+  readString: vi.fn((key: string) => mocks.storage.get(key) ?? null),
+}));
+
+vi.mock('../../utils/windowCommunication', () => ({
+  STORAGE_KEYS: {
+    NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS: 'pixel-matrix-native-audio-dynamic-src-settings',
+    NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE:
+      'pixel-matrix-native-audio-dynamic-src-learning-profile',
+  },
+  setupDualListener: mocks.setupDualListener,
+}));
+
+const DEFAULT_SETTINGS: AudioDynamicSrcAutoSettings = {
+  enabled: true,
+  adaptiveEnabled: true,
+  learningEnabled: true,
+  restoreDebounceMs: 4_000,
+  minSwitchIntervalMs: 600,
+  seekHoldMs: 2_000,
+  underrunHoldMs: 12_000,
+  sharedStressHoldMs: 8_000,
+  outputErrorHoldMs: 10_000,
+};
+
+function createController(): NativeAudioDynamicSrcPolicyController {
+  return new NativeAudioDynamicSrcPolicyController({
+    defaults: DEFAULT_SETTINGS,
+    thresholds: {
+      elevatedScoreThreshold: 4,
+      criticalScoreThreshold: 8,
+      severeUnderrunFramesThreshold: 1024,
+      degradationL2HoldFloorMs: 4_000,
+    },
+  });
+}
+
+function parseLearningProfile(raw: string | null): DynamicSrcLearningMap {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === 'object' ? (parsed as DynamicSrcLearningMap) : {};
+  } catch {
+    return {};
+  }
+}
+
+function createHost(controller = createController(), initialStressScore = 0) {
+  let learningProfile: DynamicSrcLearningMap = {};
+  let learningLastPersistedSignature: string | null = null;
+  let learningLastPersistAtMs = -1;
+  let settingsListenerCleanup: (() => void) | null = null;
+  let settingsListenerInitPromise: Promise<void> | null = null;
+  let stressScore = initialStressScore;
+
+  const evaluateDynamicSrcAutoDegradation = vi.fn();
+  const emitRobustnessSnapshot = vi.fn();
+  const clearDynamicSrcLearningPersistTimer = vi.fn();
+  const scheduleDynamicSrcRestoreEvaluation = vi.fn();
+
+  const host: DynamicSrcAutoSettingsHost = {
+    policyController: controller,
+    getDynamicSrcSettingsListenerCleanup: () => settingsListenerCleanup,
+    setDynamicSrcSettingsListenerCleanup: (cleanup) => {
+      settingsListenerCleanup = cleanup;
+    },
+    getDynamicSrcSettingsListenerInitPromise: () => settingsListenerInitPromise,
+    setDynamicSrcSettingsListenerInitPromise: (promise) => {
+      settingsListenerInitPromise = promise;
+    },
+    setDynamicSrcLearningProfile: (profile) => {
+      learningProfile = profile;
+    },
+    getDynamicSrcLearningLastPersistedSignature: () => learningLastPersistedSignature,
+    setDynamicSrcLearningLastPersistedSignature: (signature) => {
+      learningLastPersistedSignature = signature;
+    },
+    setDynamicSrcLearningLastPersistAtMs: (timestampMs) => {
+      learningLastPersistAtMs = timestampMs;
+    },
+    parseDynamicSrcLearningProfile: parseLearningProfile,
+    normalizeDynamicSrcLearningProfileForPersistence: () => learningProfile,
+    getDynamicSrcStressScore: () => stressScore,
+    evaluateDynamicSrcAutoDegradation,
+    emitRobustnessSnapshot,
+    clearDynamicSrcLearningPersistTimer,
+    scheduleDynamicSrcRestoreEvaluation,
+  };
+
+  return {
+    controller,
+    host,
+    clearDynamicSrcLearningPersistTimer,
+    emitRobustnessSnapshot,
+    evaluateDynamicSrcAutoDegradation,
+    getLearningLastPersistAtMs: () => learningLastPersistAtMs,
+    getLearningLastPersistedSignature: () => learningLastPersistedSignature,
+    getLearningProfile: () => learningProfile,
+    scheduleDynamicSrcRestoreEvaluation,
+    setStressScore: (nextStressScore: number) => {
+      stressScore = nextStressScore;
+    },
+  };
+}
+
+function writeJson(storageKey: string, value: unknown): void {
+  mocks.storage.set(storageKey, JSON.stringify(value));
+}
+
+function triggerListener(storageKey: string): void {
+  const listener = mocks.listeners.find((entry) => entry.storageKeys.includes(storageKey));
+  expect(listener).toBeTruthy();
+  listener?.callback();
+}
+
+describe('nativeAudioDynamicSrcAutoSettings', () => {
+  beforeEach(() => {
+    mocks.storage.clear();
+    mocks.listeners.length = 0;
+    mocks.setupDualListener.mockClear();
+  });
+
+  it('restores learning and auto settings through the policy controller host', async () => {
+    const settings: AudioDynamicSrcAutoSettings = {
+      enabled: true,
+      adaptiveEnabled: true,
+      learningEnabled: false,
+      restoreDebounceMs: 5_000,
+      minSwitchIntervalMs: 700,
+      seekHoldMs: 1_500,
+      underrunHoldMs: 9_000,
+      sharedStressHoldMs: 6_000,
+      outputErrorHoldMs: 7_000,
+    };
+    const learningProfile = {
+      'wasapi::default': { stressIndex: 2, updatedAtMs: 50 },
+    };
+    writeJson(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS, settings);
+    writeJson(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE, learningProfile);
+
+    const context = createHost(createController(), 5);
+    await restoreDynamicSrcAutoSettingsFromStorageImpl(context.host);
+
+    expect(context.controller.getSettings()).toEqual(settings);
+    expect(context.controller.currentAdaptiveProfile).toBe('elevated');
+    expect(context.getLearningProfile()).toEqual(learningProfile);
+    expect(context.getLearningLastPersistedSignature()).toBe(JSON.stringify(learningProfile));
+    expect(context.getLearningLastPersistAtMs()).toBe(0);
+    expect(context.evaluateDynamicSrcAutoDegradation).toHaveBeenCalledWith({
+      triggerActions: false,
+    });
+    expect(context.emitRobustnessSnapshot).toHaveBeenCalledWith(true);
+    expect(mocks.setupDualListener).toHaveBeenCalledTimes(2);
+  });
+
+  it('applies settings listener changes without service dynamicSrc setter compatibility', async () => {
+    const context = createHost(createController(), 0);
+    await restoreDynamicSrcAutoSettingsFromStorageImpl(context.host);
+
+    const effectiveTiming = context.controller.getEffectiveTiming({
+      stressScore: 0,
+      learningScale: 1,
+    });
+    context.controller.withHold({
+      reason: 'underrun-spike',
+      holdMs: 5_000,
+      nowMs: 1_000,
+      effectiveTiming,
+      hasPendingSeekWork: false,
+    });
+    expect(context.controller.holdUntil).toBeGreaterThan(0);
+
+    writeJson(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS, {
+      ...DEFAULT_SETTINGS,
+      enabled: false,
+      adaptiveEnabled: false,
+      learningEnabled: false,
+    });
+    triggerListener(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS);
+
+    expect(context.controller.getSettings()).toMatchObject({
+      enabled: false,
+      adaptiveEnabled: false,
+      learningEnabled: false,
+    });
+    expect(context.controller.profile).toBe('quality');
+    expect(context.controller.currentAdaptiveProfile).toBe('baseline');
+    expect(context.controller.holdUntil).toBe(0);
+    expect(context.clearDynamicSrcLearningPersistTimer).toHaveBeenCalledTimes(1);
+    expect(context.scheduleDynamicSrcRestoreEvaluation).not.toHaveBeenCalled();
+
+    context.setStressScore(9);
+    writeJson(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS, DEFAULT_SETTINGS);
+    triggerListener(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS);
+
+    expect(context.controller.getSettings()).toEqual(DEFAULT_SETTINGS);
+    expect(context.controller.currentAdaptiveProfile).toBe('critical');
+    expect(context.scheduleDynamicSrcRestoreEvaluation).toHaveBeenCalledTimes(1);
+    expect(context.emitRobustnessSnapshot).toHaveBeenCalledTimes(3);
+  });
+
+  it('applies learning profile listener updates only when the persisted signature changes', async () => {
+    const initialProfile = {
+      'wasapi::default': { stressIndex: 1, updatedAtMs: 10 },
+    };
+    const nextProfile = {
+      'wasapi::default': { stressIndex: 3, updatedAtMs: 20 },
+    };
+    writeJson(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE, initialProfile);
+
+    const context = createHost();
+    await restoreDynamicSrcAutoSettingsFromStorageImpl(context.host);
+    expect(context.getLearningProfile()).toEqual(initialProfile);
+
+    writeJson(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE, nextProfile);
+    triggerListener(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE);
+
+    expect(context.getLearningProfile()).toEqual(nextProfile);
+    expect(context.getLearningLastPersistedSignature()).toBe(JSON.stringify(nextProfile));
+    expect(context.getLearningLastPersistAtMs()).toBeGreaterThan(0);
+    expect(context.emitRobustnessSnapshot).toHaveBeenCalledTimes(2);
+
+    triggerListener(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE);
+    expect(context.emitRobustnessSnapshot).toHaveBeenCalledTimes(2);
+  });
+});

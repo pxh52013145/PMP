@@ -1,153 +1,140 @@
 ﻿import { readString } from '../../modules/storage';
 import { STORAGE_KEYS, setupDualListener } from '../../utils/windowCommunication';
-import { resolveDynamicSrcAdaptiveProfile } from './dynamicSrcAdaptiveTiming';
-import type { AudioDynamicSrcAdaptiveProfile, AudioDynamicSrcAutoSettings } from './types';
+import { resolveStoredDynamicSrcAutoSettings } from './nativeAudioAutoSettingsStorage';
+import type { AudioDynamicSrcAutoSettings } from './types';
+import type { NativeAudioDynamicSrcPolicyController } from './nativeAudioDynamicSrcPolicyController';
 import type { DynamicSrcLearningMap } from './nativeAudioServiceTypes';
 
 type DynamicSrcSettingsListenerCleanup = (() => void) | null;
 
-export type DynamicSrcHost = {
-  dynamicSrcLearningProfile: DynamicSrcLearningMap;
-  dynamicSrcLearningLastPersistedSignature: string;
-  dynamicSrcLearningLastPersistAtMs: number;
-  dynamicSrcAutoEnabled: boolean;
-  dynamicSrcAdaptiveEnabled: boolean;
-  dynamicSrcLearningEnabled: boolean;
-  dynamicSrcRestoreDebounceMs: number;
-  dynamicSrcMinSwitchIntervalMs: number;
-  dynamicSrcSeekHoldMs: number;
-  dynamicSrcUnderrunHoldMs: number;
-  dynamicSrcSharedStressHoldMs: number;
-  dynamicSrcOutputErrorHoldMs: number;
-  dynamicSrcAdaptiveProfile: AudioDynamicSrcAdaptiveProfile;
-  dynamicSrcProfile: 'quality' | 'latency';
-  dynamicSrcHoldUntilMs: number;
-  dynamicSrcSettingsListenerCleanup: DynamicSrcSettingsListenerCleanup;
-  dynamicSrcSettingsListenerInitPromise: Promise<void> | null;
+export type DynamicSrcAutoSettingsHost = {
+  policyController: NativeAudioDynamicSrcPolicyController;
+  getDynamicSrcSettingsListenerCleanup(): DynamicSrcSettingsListenerCleanup;
+  setDynamicSrcSettingsListenerCleanup(cleanup: DynamicSrcSettingsListenerCleanup): void;
+  getDynamicSrcSettingsListenerInitPromise(): Promise<void> | null;
+  setDynamicSrcSettingsListenerInitPromise(promise: Promise<void> | null): void;
+  setDynamicSrcLearningProfile(profile: DynamicSrcLearningMap): void;
+  getDynamicSrcLearningLastPersistedSignature(): string | null;
+  setDynamicSrcLearningLastPersistedSignature(signature: string | null): void;
+  setDynamicSrcLearningLastPersistAtMs(timestampMs: number): void;
   parseDynamicSrcLearningProfile(raw: string | null): DynamicSrcLearningMap;
   normalizeDynamicSrcLearningProfileForPersistence(): DynamicSrcLearningMap;
-  readDynamicSrcAutoSettings(): AudioDynamicSrcAutoSettings;
   getDynamicSrcStressScore(): number;
   evaluateDynamicSrcAutoDegradation(options: { triggerActions: boolean }): void;
   emitRobustnessSnapshot(force?: boolean): void;
   clearDynamicSrcLearningPersistTimer(): void;
-  clearDynamicSrcRestoreTimer(): void;
   scheduleDynamicSrcRestoreEvaluation(): void;
 };
 
+export type DynamicSrcHost = DynamicSrcAutoSettingsHost;
+
+export function readDynamicSrcAutoSettingsFromStorage(
+  policyController: NativeAudioDynamicSrcPolicyController
+): AudioDynamicSrcAutoSettings {
+  return resolveStoredDynamicSrcAutoSettings({
+    raw: readString(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS),
+    defaults: policyController.getSettings(),
+  });
+}
+
+function restoreInitialDynamicSrcState(host: DynamicSrcAutoSettingsHost): void {
+  const persisted = readDynamicSrcAutoSettingsFromStorage(host.policyController);
+  host.policyController.applySettings(persisted);
+  host.policyController.currentAdaptiveProfile = host.policyController.resolveAdaptiveProfile(
+    host.getDynamicSrcStressScore()
+  );
+  host.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
+  host.emitRobustnessSnapshot(true);
+}
+
+function applyPersistedDynamicSrcSettings(host: DynamicSrcAutoSettingsHost): void {
+  const previous = host.policyController.getSettings();
+  const next = readDynamicSrcAutoSettingsFromStorage(host.policyController);
+  const changed =
+    next.enabled !== previous.enabled ||
+    next.adaptiveEnabled !== previous.adaptiveEnabled ||
+    next.learningEnabled !== previous.learningEnabled;
+
+  host.policyController.applySettings(next);
+  if (!next.learningEnabled) {
+    host.clearDynamicSrcLearningPersistTimer();
+  }
+
+  if (!next.enabled) {
+    host.policyController.disableAuto();
+  } else {
+    host.policyController.currentAdaptiveProfile = host.policyController.resolveAdaptiveProfile(
+      host.getDynamicSrcStressScore()
+    );
+    host.scheduleDynamicSrcRestoreEvaluation();
+  }
+
+  host.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
+  if (changed) {
+    host.emitRobustnessSnapshot(true);
+  }
+}
+
+function applyPersistedDynamicSrcLearningProfile(host: DynamicSrcAutoSettingsHost): void {
+  const nextProfile = host.parseDynamicSrcLearningProfile(
+    readString(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE)
+  );
+  const nextSignature = JSON.stringify(nextProfile);
+  if (nextSignature === host.getDynamicSrcLearningLastPersistedSignature()) {
+    return;
+  }
+
+  host.setDynamicSrcLearningProfile(nextProfile);
+  host.setDynamicSrcLearningLastPersistedSignature(nextSignature);
+  host.setDynamicSrcLearningLastPersistAtMs(Date.now());
+  host.emitRobustnessSnapshot(true);
+}
+
 export async function restoreDynamicSrcAutoSettingsFromStorageImpl(
-  this: DynamicSrcHost,
-  options: {
-    elevatedScoreThreshold: number;
-    criticalScoreThreshold: number;
-  },
+  host: DynamicSrcAutoSettingsHost
 ): Promise<void> {
-    this.dynamicSrcLearningProfile = this.parseDynamicSrcLearningProfile(
+  host.setDynamicSrcLearningProfile(
+    host.parseDynamicSrcLearningProfile(
       readString(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE)
+    )
+  );
+  host.setDynamicSrcLearningLastPersistedSignature(
+    JSON.stringify(host.normalizeDynamicSrcLearningProfileForPersistence())
+  );
+  host.setDynamicSrcLearningLastPersistAtMs(0);
+
+  restoreInitialDynamicSrcState(host);
+
+  if (host.getDynamicSrcSettingsListenerCleanup()) return;
+  const existingInitPromise = host.getDynamicSrcSettingsListenerInitPromise();
+  if (existingInitPromise) {
+    await existingInitPromise;
+    return;
+  }
+
+  const initPromise = (async () => {
+    if (host.getDynamicSrcSettingsListenerCleanup()) return;
+
+    const settingsCleanup = await setupDualListener(
+      [STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS],
+      [],
+      () => applyPersistedDynamicSrcSettings(host)
     );
-    this.dynamicSrcLearningLastPersistedSignature = JSON.stringify(
-      this.normalizeDynamicSrcLearningProfileForPersistence()
+
+    const learningCleanup = await setupDualListener(
+      [STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE],
+      [],
+      () => applyPersistedDynamicSrcLearningProfile(host)
     );
-    this.dynamicSrcLearningLastPersistAtMs = 0;
 
-    const persisted = this.readDynamicSrcAutoSettings();
-    this.dynamicSrcAutoEnabled = persisted.enabled;
-    this.dynamicSrcAdaptiveEnabled = persisted.adaptiveEnabled;
-    this.dynamicSrcLearningEnabled = persisted.learningEnabled;
-    this.dynamicSrcRestoreDebounceMs = persisted.restoreDebounceMs;
-    this.dynamicSrcMinSwitchIntervalMs = persisted.minSwitchIntervalMs;
-    this.dynamicSrcSeekHoldMs = persisted.seekHoldMs;
-    this.dynamicSrcUnderrunHoldMs = persisted.underrunHoldMs;
-    this.dynamicSrcSharedStressHoldMs = persisted.sharedStressHoldMs;
-    this.dynamicSrcOutputErrorHoldMs = persisted.outputErrorHoldMs;
-    this.dynamicSrcAdaptiveProfile = resolveDynamicSrcAdaptiveProfile({
-      adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
-      stressScore: this.getDynamicSrcStressScore(),
-      elevatedScoreThreshold: options.elevatedScoreThreshold,
-      criticalScoreThreshold: options.criticalScoreThreshold,
+    host.setDynamicSrcSettingsListenerCleanup(() => {
+      settingsCleanup();
+      learningCleanup();
     });
-    this.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
-    this.emitRobustnessSnapshot(true);
+  })().finally(() => {
+    host.setDynamicSrcSettingsListenerInitPromise(null);
+  });
 
-    if (this.dynamicSrcSettingsListenerCleanup) return;
-    if (this.dynamicSrcSettingsListenerInitPromise) {
-      await this.dynamicSrcSettingsListenerInitPromise;
-      return;
-    }
-
-    const applyPersistedDynamicSrcSettings = () => {
-      const next = this.readDynamicSrcAutoSettings();
-      const changed =
-        next.enabled !== this.dynamicSrcAutoEnabled ||
-        next.adaptiveEnabled !== this.dynamicSrcAdaptiveEnabled ||
-        next.learningEnabled !== this.dynamicSrcLearningEnabled;
-      this.dynamicSrcAutoEnabled = next.enabled;
-      this.dynamicSrcAdaptiveEnabled = next.adaptiveEnabled;
-      this.dynamicSrcLearningEnabled = next.learningEnabled;
-      if (!this.dynamicSrcLearningEnabled) {
-        this.clearDynamicSrcLearningPersistTimer();
-      }
-      this.dynamicSrcRestoreDebounceMs = next.restoreDebounceMs;
-      this.dynamicSrcMinSwitchIntervalMs = next.minSwitchIntervalMs;
-      this.dynamicSrcSeekHoldMs = next.seekHoldMs;
-      this.dynamicSrcUnderrunHoldMs = next.underrunHoldMs;
-      this.dynamicSrcSharedStressHoldMs = next.sharedStressHoldMs;
-      this.dynamicSrcOutputErrorHoldMs = next.outputErrorHoldMs;
-      if (!this.dynamicSrcAutoEnabled) {
-        this.dynamicSrcProfile = 'quality';
-        this.dynamicSrcAdaptiveProfile = 'baseline';
-        this.dynamicSrcHoldUntilMs = 0;
-        this.clearDynamicSrcRestoreTimer();
-      } else {
-        this.dynamicSrcAdaptiveProfile = resolveDynamicSrcAdaptiveProfile({
-          adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
-          stressScore: this.getDynamicSrcStressScore(),
-          elevatedScoreThreshold: options.elevatedScoreThreshold,
-          criticalScoreThreshold: options.criticalScoreThreshold,
-        });
-        this.scheduleDynamicSrcRestoreEvaluation();
-      }
-      this.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
-      if (changed) {
-        this.emitRobustnessSnapshot(true);
-      }
-    };
-
-    this.dynamicSrcSettingsListenerInitPromise = (async () => {
-      if (this.dynamicSrcSettingsListenerCleanup) return;
-
-      const settingsCleanup = await setupDualListener(
-        [STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS],
-        [],
-        applyPersistedDynamicSrcSettings
-      );
-
-      const learningCleanup = await setupDualListener(
-        [STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE],
-        [],
-        () => {
-          const nextProfile = this.parseDynamicSrcLearningProfile(
-            readString(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE)
-          );
-          const nextSignature = JSON.stringify(nextProfile);
-          if (nextSignature === this.dynamicSrcLearningLastPersistedSignature) {
-            return;
-          }
-          this.dynamicSrcLearningProfile = nextProfile;
-          this.dynamicSrcLearningLastPersistedSignature = nextSignature;
-          this.dynamicSrcLearningLastPersistAtMs = Date.now();
-          this.emitRobustnessSnapshot(true);
-        }
-      );
-
-      this.dynamicSrcSettingsListenerCleanup = () => {
-        settingsCleanup();
-        learningCleanup();
-      };
-    })().finally(() => {
-      this.dynamicSrcSettingsListenerInitPromise = null;
-    });
-
-    await this.dynamicSrcSettingsListenerInitPromise;
-  
+  host.setDynamicSrcSettingsListenerInitPromise(initPromise);
+  await initPromise;
 }
