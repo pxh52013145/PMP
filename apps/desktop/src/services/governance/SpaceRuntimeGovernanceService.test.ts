@@ -136,6 +136,78 @@ describe('DefaultSpaceRuntimeGovernanceService', () => {
     expect(onTeardown).toHaveBeenCalledTimes(1);
   });
 
+  it('invokes warm hooks when a cold space activates', () => {
+    const service = new DefaultSpaceRuntimeGovernanceService();
+    const onWarm = vi.fn();
+
+    service.registerParticipant('space2', {
+      id: 'plugin-workspace',
+      capsuleId: 'plugin.runtime',
+      onWarm,
+    });
+
+    service.activateSpace('space2');
+
+    expect(onWarm).toHaveBeenCalledTimes(1);
+    expect(service.collectSnapshot().descriptors.find((item) => item.spaceId === 'space2')).toMatchObject({
+      state: 'active',
+    });
+  });
+
+  it('keeps activation warming until async warm hooks settle', async () => {
+    const warmHook = { resolve: null as (() => void) | null };
+    const service = new DefaultSpaceRuntimeGovernanceService();
+    service.registerParticipant('space2', {
+      id: 'plugin-workspace',
+      capsuleId: 'plugin.runtime',
+      onWarm: () =>
+        new Promise<void>((resolve) => {
+          warmHook.resolve = resolve;
+        }),
+    });
+
+    service.activateSpace('space2');
+
+    expect(service.collectSnapshot().descriptors.find((item) => item.spaceId === 'space2')).toMatchObject({
+      state: 'warming',
+    });
+
+    warmHook.resolve?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(service.collectSnapshot().descriptors.find((item) => item.spaceId === 'space2')).toMatchObject({
+      state: 'active',
+    });
+  });
+
+  it('keeps teardown pending until async teardown hooks time out', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const service = new DefaultSpaceRuntimeGovernanceService(50);
+    service.registerParticipant('space2', {
+      id: 'plugin-workspace',
+      capsuleId: 'plugin.runtime',
+      onTeardown: () => new Promise<void>(() => undefined),
+    });
+
+    service.activateSpace('space2');
+    service.activateSpace('space1');
+    const reclaimed = service.reclaim({ reason: 'test', minTier: 2 });
+
+    expect(reclaimed).toEqual(['space2']);
+    expect(service.collectSnapshot().descriptors.find((item) => item.spaceId === 'space2')).toMatchObject({
+      state: 'tearing_down',
+    });
+
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(service.collectSnapshot().descriptors.find((item) => item.spaceId === 'space2')).toMatchObject({
+      state: 'cold',
+    });
+  });
+
   it('invokes participant lifecycle hooks for suspend and hibernate', () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

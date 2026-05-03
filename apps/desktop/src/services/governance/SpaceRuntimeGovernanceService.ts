@@ -21,6 +21,13 @@ export type SpaceRuntimeKind = 'default' | 'platform' | 'plugin-workspace' | 'ed
 
 export type SpaceRuntimeMemoryTier = 'light' | 'medium' | 'heavy';
 
+type SpaceLifecycleHookName =
+  | 'onWarm'
+  | 'onFreeze'
+  | 'onTeardown'
+  | 'onSuspend'
+  | 'onHibernate';
+
 export interface SpaceRuntimeDescriptor {
   spaceId: string;
   state: SpaceRuntimeState;
@@ -70,6 +77,7 @@ export const SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN = createServiceToken<SpaceRu
 );
 
 const DEFAULT_WARM_RETENTION_MS = 30_000;
+const DEFAULT_SPACE_TRANSITION_TIMEOUT_MS = 2_500;
 const PLATFORM_SPACE_ID = 'space2';
 
 function classifySpace(spaceId: string): Pick<SpaceRuntimeDescriptor, 'kind' | 'memoryTier' | 'warmRetentionMs' | 'keepWarmOnBlur'> {
@@ -95,9 +103,13 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
   private readonly associationsBySpaceId = new Map<string, Map<string, number>>();
   private readonly participantsBySpaceId = new Map<string, Map<string, RuntimeLifecycleParticipant>>();
   private readonly cachedParticipantSnapshotsBySpaceId = new Map<string, Map<string, RuntimeParticipantSnapshot>>();
+  private readonly transitionTokensBySpaceId = new Map<string, number>();
+  private readonly pendingTransitionTimers = new Set<ReturnType<typeof setTimeout>>();
   private activeSpaceId: string | null = null;
   private lastSwitchAt: number | null = null;
   private readonly telemetry = getTelemetryLogger('space-governance', 'SpaceRuntimeGovernanceService');
+
+  constructor(private readonly transitionTimeoutMs: number = DEFAULT_SPACE_TRANSITION_TIMEOUT_MS) {}
 
   activateSpace(spaceId: string): void {
     const normalized = spaceId.trim();
@@ -110,32 +122,36 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
     }
 
     const descriptor = this.ensureDescriptor(normalized);
-    descriptor.state = 'active';
     descriptor.hasActivated = true;
-    descriptor.lastActivatedAt = now;
-    descriptor.lastSuspendedAt = null;
-    descriptor.lastFrozenAt = null;
-    descriptor.lastHibernatedAt = null;
     this.activeSpaceId = normalized;
     this.lastSwitchAt = previousActiveSpaceId === normalized ? this.lastSwitchAt : now;
-    this.cachedParticipantSnapshotsBySpaceId.delete(normalized);
+    if (descriptor.state === 'warming') {
+      this.applyActiveState(descriptor, now, previousActiveSpaceId);
+      return;
+    }
 
-    this.telemetry.info('space-governance.runtime.state', {
-      fields: {
-        spaceId: normalized,
-        state: descriptor.state,
-        previousActiveSpaceId,
-        kind: descriptor.kind,
-        memoryTier: descriptor.memoryTier,
+    this.transitionWithSettledHooks(
+      descriptor,
+      'warming',
+      'active',
+      'onWarm',
+      {
+        kind: 'system',
+        ownerId: 'space-runtime-governance',
+        spaceId: descriptor.spaceId,
+        detail: 'space activation requested',
       },
-    });
+      () => this.applyActiveState(descriptor, this.now(), previousActiveSpaceId),
+      now
+    );
   }
 
   warmSpace(spaceId: string): void {
     const descriptor = this.ensureDescriptor(spaceId);
-    if (descriptor.state === 'active') return;
+    if (descriptor.state === 'active' || descriptor.state === 'warming') return;
     descriptor.state = 'warming';
-    this.invokeParticipantHook(spaceId, 'onWarm', {
+    this.bumpTransitionToken(descriptor.spaceId);
+    this.invokeParticipantHook(descriptor.spaceId, 'onWarm', 'warming', {
       kind: 'system',
       ownerId: 'space-runtime-governance',
       spaceId: descriptor.spaceId,
@@ -159,8 +175,9 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
     }
 
     descriptor.state = 'suspended';
+    this.bumpTransitionToken(descriptor.spaceId);
     descriptor.lastSuspendedAt = Date.now();
-    this.invokeParticipantHook(spaceId, 'onSuspend', {
+    this.invokeParticipantHook(descriptor.spaceId, 'onSuspend', 'suspended', {
       kind: 'window-backgrounded',
       spaceId: descriptor.spaceId,
       detail: reason,
@@ -188,8 +205,9 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
       return;
     }
     descriptor.state = 'frozen';
+    this.bumpTransitionToken(descriptor.spaceId);
     descriptor.lastFrozenAt = Date.now();
-    this.invokeParticipantHook(spaceId, 'onFreeze', {
+    this.invokeParticipantHook(descriptor.spaceId, 'onFreeze', 'frozen', {
       kind: 'space-exit',
       spaceId: descriptor.spaceId,
       detail: 'space frozen',
@@ -224,11 +242,12 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
     }
 
     descriptor.state = 'hibernated';
+    this.bumpTransitionToken(descriptor.spaceId);
     descriptor.lastHibernatedAt = Date.now();
     if (descriptor.activeAssociationCount === 0 && descriptor.lastZeroAssociationAt === null) {
       descriptor.lastZeroAssociationAt = descriptor.lastHibernatedAt;
     }
-    this.invokeParticipantHook(spaceId, 'onHibernate', {
+    this.invokeParticipantHook(descriptor.spaceId, 'onHibernate', 'hibernated', {
       kind: 'memory-pressure',
       spaceId: descriptor.spaceId,
       detail: reason,
@@ -251,36 +270,36 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
     const descriptor = this.descriptors.get(spaceId.trim());
     if (!descriptor || descriptor.spaceId === this.activeSpaceId) return;
 
-    descriptor.state = 'tearing_down';
-    this.invokeParticipantHook(spaceId, 'onTeardown', {
+    const pressureReason: RuntimePressureReason = {
       kind: 'memory-pressure',
       spaceId: descriptor.spaceId,
       detail: reason,
-    });
-    this.markCachedParticipantSnapshots(descriptor.spaceId, 'tearing_down', {
-      lastTransition: 'teardown',
-      transitionReason: reason,
-    });
-    this.telemetry.info('space-governance.runtime.teardown', {
-      fields: {
-        spaceId: descriptor.spaceId,
-        reason,
-        kind: descriptor.kind,
-        memoryTier: descriptor.memoryTier,
-      },
-    });
+    };
+    const now = Date.now();
 
-    descriptor.state = 'cold';
-    descriptor.lastSuspendedAt = null;
-    descriptor.lastFrozenAt = null;
-    descriptor.lastHibernatedAt = null;
-    descriptor.lastZeroAssociationAt = null;
-    descriptor.activeAssociationCount = 0;
-    this.associationsBySpaceId.delete(descriptor.spaceId);
-    this.markCachedParticipantSnapshots(descriptor.spaceId, 'cold', {
-      lastTransition: 'teardown',
-      transitionReason: reason,
-    });
+    this.transitionWithSettledHooks(
+      descriptor,
+      'tearing_down',
+      'cold',
+      'onTeardown',
+      pressureReason,
+      () => this.applyColdState(descriptor, reason),
+      now,
+      () => {
+        this.markCachedParticipantSnapshots(descriptor.spaceId, 'tearing_down', {
+          lastTransition: 'teardown',
+          transitionReason: reason,
+        });
+        this.telemetry.info('space-governance.runtime.teardown', {
+          fields: {
+            spaceId: descriptor.spaceId,
+            reason,
+            kind: descriptor.kind,
+            memoryTier: descriptor.memoryTier,
+          },
+        });
+      }
+    );
   }
 
   registerParticipant(spaceId: string, participant: RuntimeLifecycleParticipant): () => void {
@@ -479,6 +498,164 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
     return descriptor;
   }
 
+  private now(): number {
+    return Date.now();
+  }
+
+  private bumpTransitionToken(spaceId: string): number {
+    const next = (this.transitionTokensBySpaceId.get(spaceId) ?? 0) + 1;
+    this.transitionTokensBySpaceId.set(spaceId, next);
+    return next;
+  }
+
+  private applyActiveState(
+    descriptor: SpaceRuntimeDescriptor,
+    atMs: number,
+    previousActiveSpaceId: string | null
+  ): void {
+    if (descriptor.state !== 'active') {
+      this.bumpTransitionToken(descriptor.spaceId);
+    }
+    descriptor.state = 'active';
+    descriptor.hasActivated = true;
+    descriptor.lastActivatedAt = atMs;
+    descriptor.lastSuspendedAt = null;
+    descriptor.lastFrozenAt = null;
+    descriptor.lastHibernatedAt = null;
+    this.cachedParticipantSnapshotsBySpaceId.delete(descriptor.spaceId);
+
+    this.telemetry.info('space-governance.runtime.state', {
+      fields: {
+        spaceId: descriptor.spaceId,
+        state: descriptor.state,
+        previousActiveSpaceId,
+        kind: descriptor.kind,
+        memoryTier: descriptor.memoryTier,
+      },
+    });
+  }
+
+  private applyColdState(descriptor: SpaceRuntimeDescriptor, reason: string): void {
+    if (descriptor.state !== 'cold') {
+      this.bumpTransitionToken(descriptor.spaceId);
+    }
+    descriptor.state = 'cold';
+    descriptor.lastSuspendedAt = null;
+    descriptor.lastFrozenAt = null;
+    descriptor.lastHibernatedAt = null;
+    descriptor.lastZeroAssociationAt = null;
+    descriptor.activeAssociationCount = 0;
+    this.associationsBySpaceId.delete(descriptor.spaceId);
+    this.markCachedParticipantSnapshots(descriptor.spaceId, 'cold', {
+      lastTransition: 'teardown',
+      transitionReason: reason,
+    });
+  }
+
+  private transitionWithSettledHooks(
+    descriptor: SpaceRuntimeDescriptor,
+    pendingState: SpaceRuntimeState,
+    finalState: SpaceRuntimeState,
+    hookName: SpaceLifecycleHookName,
+    reason: RuntimeLeaseReason | RuntimePressureReason,
+    finalize: () => void,
+    atMs: number,
+    onPending?: () => void
+  ): void {
+    if (descriptor.state === finalState || descriptor.state === pendingState) return;
+
+    const participants = this.participantsBySpaceId.get(descriptor.spaceId);
+    if (!participants || participants.size === 0) {
+      finalize();
+      return;
+    }
+
+    const token = this.bumpTransitionToken(descriptor.spaceId);
+    descriptor.state = pendingState;
+    onPending?.();
+    this.telemetry.debug('space-governance.runtime.state', {
+      fields: {
+        spaceId: descriptor.spaceId,
+        state: pendingState,
+        targetState: finalState,
+        hookName,
+        atMs,
+      },
+    });
+
+    const hookPromises = this.invokeParticipantHook(
+      descriptor.spaceId,
+      hookName,
+      pendingState,
+      reason
+    );
+    if (hookPromises.length === 0) {
+      finalize();
+      return;
+    }
+
+    this.waitForSettledHooks(
+      descriptor,
+      token,
+      pendingState,
+      finalState,
+      hookName,
+      reason,
+      hookPromises,
+      finalize
+    );
+  }
+
+  private waitForSettledHooks(
+    descriptor: SpaceRuntimeDescriptor,
+    token: number,
+    pendingState: SpaceRuntimeState,
+    finalState: SpaceRuntimeState,
+    hookName: SpaceLifecycleHookName,
+    reason: RuntimeLeaseReason | RuntimePressureReason,
+    hookPromises: Array<Promise<void>>,
+    finalize: () => void
+  ): void {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const timeoutMs = Math.max(0, this.transitionTimeoutMs);
+    const hooksSettled = Promise.allSettled(hookPromises).then(() => 'settled' as const);
+    const timeoutSettled = new Promise<'timeout'>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingTransitionTimers.delete(timer);
+        if (timeoutId === timer) {
+          timeoutId = null;
+        }
+        resolve('timeout');
+      }, timeoutMs);
+      timeoutId = timer;
+      this.pendingTransitionTimers.add(timer);
+    });
+
+    void Promise.race([hooksSettled, timeoutSettled]).then((result) => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        this.pendingTransitionTimers.delete(timeoutId);
+        timeoutId = null;
+      }
+      if (this.transitionTokensBySpaceId.get(descriptor.spaceId) !== token) return;
+      if (descriptor.state !== pendingState) return;
+
+      if (result === 'timeout') {
+        this.telemetry.warn('space-governance.runtime.participant.hook.timeout', {
+          fields: {
+            spaceId: descriptor.spaceId,
+            hookName,
+            pendingState,
+            finalState,
+            timeoutMs,
+            reasonKind: reason.kind,
+          },
+        });
+      }
+      finalize();
+    });
+  }
+
   private collectParticipantSnapshots(spaceId: string, state: SpaceRuntimeState): RuntimeParticipantSnapshot[] {
     const participants = this.participantsBySpaceId.get(spaceId);
     const snapshots: RuntimeParticipantSnapshot[] = [];
@@ -606,17 +783,36 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
 
   private invokeParticipantHook(
     spaceId: string,
-    hookName: 'onWarm' | 'onFreeze' | 'onTeardown' | 'onSuspend' | 'onHibernate',
+    hookName: SpaceLifecycleHookName,
+    state: RuntimeCapsuleState,
     reason: RuntimeLeaseReason | RuntimePressureReason
-  ): void {
+  ): Array<Promise<void>> {
     const participants = this.participantsBySpaceId.get(spaceId.trim());
-    if (!participants || participants.size === 0) return;
+    if (!participants || participants.size === 0) return [];
 
+    const promises: Array<Promise<void>> = [];
     for (const participant of participants.values()) {
       const hook = participant[hookName];
       if (typeof hook !== 'function') continue;
       try {
-        void hook(reason as never);
+        const result = hook(reason as never);
+        if (result && typeof (result as Promise<void>).catch === 'function') {
+          promises.push(
+            (result as Promise<void>).catch((error) => {
+              this.telemetry.warn('space-governance.runtime.participant.hook.failed', {
+                message: error instanceof Error ? error.message : String(error),
+                fields: {
+                  spaceId,
+                  participantId: participant.id,
+                  capsuleId: participant.capsuleId,
+                  hookName,
+                  state,
+                  reasonKind: reason.kind,
+                },
+              });
+            })
+          );
+        }
       } catch (error) {
         this.telemetry.warn('space-governance.runtime.participant.hook.failed', {
           message: error instanceof Error ? error.message : String(error),
@@ -625,11 +821,13 @@ export class DefaultSpaceRuntimeGovernanceService implements SpaceRuntimeGoverna
             participantId: participant.id,
             capsuleId: participant.capsuleId,
             hookName,
+            state,
             reasonKind: reason.kind,
           },
         });
       }
     }
+    return promises;
   }
 
   private getReclaimableDescriptors(

@@ -13,7 +13,10 @@ import { createKeybindingsModule } from '../services/keybindings';
 import { createMemoryGovernanceModule, createSpaceRuntimeGovernanceModule } from '../services/governance';
 import { createQualityModule } from '../services/quality';
 import { createPerformanceControlModule } from '../services/performance-control';
-import { createRuntimeCapsuleManagerModule } from '../services/runtime-capsules';
+import {
+  createEditorToolsRuntimeCapsuleModule,
+  createRuntimeCapsuleManagerModule,
+} from '../services/runtime-capsules';
 import { createTelemetryModule } from '../services/telemetry';
 import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { STORAGE_KEYS } from '../utils/windowCommunication';
@@ -213,6 +216,7 @@ function createRuntime(): KernelRuntime {
     createTelemetryModule(),
     createQualityModule(),
     createRuntimeCapsuleManagerModule(),
+    createEditorToolsRuntimeCapsuleModule(),
     createPerformanceControlModule(),
     createNavigationModule(),
     createAudioModule({

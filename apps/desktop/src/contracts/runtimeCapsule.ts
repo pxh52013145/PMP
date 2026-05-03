@@ -108,6 +108,7 @@ export interface RuntimePressureReason {
 
 export interface RuntimeLease {
   id: string;
+  key?: string;
   capsuleId: string;
   capabilityId?: RuntimeCapabilityId;
   ownerKind: RuntimeLeaseOwnerKind;

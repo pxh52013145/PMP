@@ -17,6 +17,7 @@ export type {
   PlaylistCreateOptions,
 } from './types';
 export type { IAudioService } from './types';
+export { LazyAudioTransportService, type LazyAudioTransportServiceOptions } from './LazyAudioTransportService';
 export { NativeAudioService } from './NativeAudioService';
 export type { AudioEngineService, AudioEngineSnapshot, AudioEngineType } from './AudioEngineService';
 export { AUDIO_ENGINE_SERVICE_TOKEN, DefaultAudioEngineService } from './AudioEngineService';

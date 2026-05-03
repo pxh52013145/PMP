@@ -171,6 +171,35 @@ export class NoopAudioService implements IAudioService {
     };
   }
 
+  replaceState(state: AudioState, options: { emit?: boolean } = {}): void {
+    this.currentTrack = state.currentTrack;
+    this.playbackState = state.playbackState;
+    this.currentTime = state.currentTime;
+    this.duration = state.duration;
+    this.volume = state.volume;
+    this.muted = state.muted;
+    this.playMode = state.playMode;
+    this.queue = [...state.queue];
+    this.currentIndex = state.currentIndex;
+    this.playlists = [...state.playlists];
+    this.currentPlaylist = state.currentPlaylist;
+
+    if (options.emit === false) return;
+    this.timeUpdateCallbacks.forEach((cb) => cb(this.currentTime));
+    this.emitState();
+  }
+
+  replacePlaylists(playlists: Playlist[], currentPlaylist?: Playlist | null): void {
+    this.playlists = [...playlists];
+    if (currentPlaylist !== undefined) {
+      this.currentPlaylist = currentPlaylist;
+    } else if (this.currentPlaylist) {
+      this.currentPlaylist =
+        this.playlists.find((playlist) => playlist.id === this.currentPlaylist?.id) ?? null;
+    }
+    this.emitState();
+  }
+
   onTimeUpdate(callback: (time: number) => void): () => void {
     this.timeUpdateCallbacks.add(callback);
     callback(this.currentTime);

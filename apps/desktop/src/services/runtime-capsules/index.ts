@@ -9,5 +9,12 @@ export {
   type RuntimeCapsuleReclaimOptions,
   type RuntimeCapsuleReclaimResult,
   type RuntimeCapsuleSnapshotListener,
+  type RuntimeLeaseRenewOptions,
 } from './RuntimeCapsuleManagerService';
+export {
+  EDITOR_TOOLS_RUNTIME_CAPSULE_SERVICE_TOKEN,
+  createEditorToolsRuntimeCapsuleModule,
+  type EditorToolsRuntimeActivity,
+  type EditorToolsRuntimeCapsuleService,
+} from './editorToolsRuntimeCapsuleModule';
 export { createRuntimeCapsuleManagerModule } from './runtimeCapsuleManagerModule';

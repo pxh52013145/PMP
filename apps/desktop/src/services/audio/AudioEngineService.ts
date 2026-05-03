@@ -3,6 +3,8 @@ import { createServiceToken } from '../../kernel';
 import type { AppEvents } from '../../contracts/events';
 import { getTelemetryLogger } from '../telemetry/TelemetryService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import type { RuntimeCapsuleManagerService } from '../runtime-capsules';
+import { LazyAudioTransportService } from './LazyAudioTransportService';
 import { NativeAudioService } from './NativeAudioService';
 import { NoopAudioService } from './NoopAudioService';
 import type { IAudioService } from './types';
@@ -83,6 +85,7 @@ export class DefaultAudioEngineService implements AudioEngineService {
     options: {
       mode?: AudioEngineMode;
       enableTaskbarMediaControls?: boolean;
+      runtimeCapsuleManager?: RuntimeCapsuleManagerService | null;
     } = {}
   ) {
     this.mode = options.mode ?? 'real';
@@ -91,12 +94,19 @@ export class DefaultAudioEngineService implements AudioEngineService {
     this.audioService = (() => {
       if (this.mode !== 'real') return new NoopAudioService();
       if (!this.isNativeAvailable) return new NoopAudioService();
-      return new NativeAudioService();
+      return new LazyAudioTransportService({
+        runtimeCapsuleManager: options.runtimeCapsuleManager,
+        createTransport: () => new NativeAudioService(),
+        onTransportCreated: () => {
+          setStartupMemoryTraceFlag('nativeAudioConstructed');
+          recordStartupMemoryCheckpoint('audio.native.constructed');
+          this.events.emit('audio/engineChanged', {
+            engineType: this.engineType,
+            isNativeAvailable: this.isNativeAvailable,
+          });
+        },
+      });
     })();
-    if (this.audioService instanceof NativeAudioService) {
-      setStartupMemoryTraceFlag('nativeAudioConstructed');
-      recordStartupMemoryCheckpoint('audio.native.constructed');
-    }
 
     this.attachServiceListeners();
     if (options.enableTaskbarMediaControls !== false) {

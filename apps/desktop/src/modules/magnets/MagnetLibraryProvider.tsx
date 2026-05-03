@@ -146,6 +146,7 @@ type MagnetRuntimeAssociation = {
 };
 
 type MagnetRuntimeCapabilityLease = {
+  leaseKey: string;
   magnetId: string;
   capabilityId: string;
   spaceId: string;
@@ -207,6 +208,7 @@ export function MagnetLibraryProvider({
   const builtInMagnetIds = useMemo(() => new Set(BUILTIN_MAGNET_IDS), []);
   const isTauri = useMemo(() => isTauriRuntime(), []);
   const suppressNextAutoSaveRef = useRef(false);
+  const runtimeCapabilityLeaseIdsRef = useRef(new Map<string, string>());
 
   const [layoutStoreState, setLayoutStoreState] = useState<MagnetLayoutStoreState | null>(null);
   const layoutStoreRevisionRef = useRef(0);
@@ -389,6 +391,7 @@ export function MagnetLibraryProvider({
         const normalizedCapabilityId = capabilityId.trim();
         if (!normalizedCapabilityId) continue;
         leases.push({
+          leaseKey: ['magnet', spaceId, magnet.id, normalizedCapabilityId].join(':'),
           magnetId: magnet.id,
           capabilityId: normalizedCapabilityId,
           spaceId,
@@ -399,12 +402,27 @@ export function MagnetLibraryProvider({
   }, [activeMagnets, activeSpaceId]);
 
   useEffect(() => {
-    if (!runtimeCapsuleManager || activeRuntimeCapabilityLeases.length === 0) return;
+    if (!runtimeCapsuleManager) return;
 
-    const acquiredLeaseIds: string[] = [];
+    const desiredLeaseKeys = new Set<string>();
     for (const lease of activeRuntimeCapabilityLeases) {
+      desiredLeaseKeys.add(lease.leaseKey);
+      const existingLeaseId = runtimeCapabilityLeaseIdsRef.current.get(lease.leaseKey);
+      if (existingLeaseId) {
+        const renewed = runtimeCapsuleManager.renewLease(existingLeaseId, {
+          reason: {
+            spaceId: lease.spaceId,
+            capabilityId: lease.capabilityId,
+            detail: 'magnet runtime capability lease renewed',
+          },
+        });
+        if (renewed) continue;
+        runtimeCapabilityLeaseIdsRef.current.delete(lease.leaseKey);
+      }
+
       const acquired = runtimeCapsuleManager.acquireLease({
         capabilityId: lease.capabilityId,
+        leaseKey: lease.leaseKey,
         ownerKind: 'magnet',
         ownerId: lease.magnetId,
         reason: {
@@ -413,19 +431,33 @@ export function MagnetLibraryProvider({
         },
       });
       if (acquired) {
-        acquiredLeaseIds.push(acquired.id);
+        runtimeCapabilityLeaseIdsRef.current.set(lease.leaseKey, acquired.id);
       }
     }
 
+    for (const [leaseKey, leaseId] of runtimeCapabilityLeaseIdsRef.current) {
+      if (desiredLeaseKeys.has(leaseKey)) continue;
+      runtimeCapsuleManager.releaseLease(leaseId, {
+        kind: 'lease-expired',
+        detail: 'magnet runtime capability lease released',
+      });
+      runtimeCapabilityLeaseIdsRef.current.delete(leaseKey);
+    }
+  }, [activeRuntimeCapabilityLeases, runtimeCapsuleManager]);
+
+  useEffect(() => {
+    if (!runtimeCapsuleManager) return;
+    const runtimeCapabilityLeaseIds = runtimeCapabilityLeaseIdsRef.current;
     return () => {
-      for (const leaseId of acquiredLeaseIds) {
+      for (const leaseId of runtimeCapabilityLeaseIds.values()) {
         runtimeCapsuleManager.releaseLease(leaseId, {
           kind: 'lease-expired',
           detail: 'magnet runtime capability lease released',
         });
       }
+      runtimeCapabilityLeaseIds.clear();
     };
-  }, [activeRuntimeCapabilityLeases, runtimeCapsuleManager]);
+  }, [runtimeCapsuleManager]);
 
   const buildLayoutSnapshot = useCallback(
     (library: Magnet[], activeIds: Set<string>): MagnetSpaceLayout => {

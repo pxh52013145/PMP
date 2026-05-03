@@ -539,7 +539,7 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
         id: 'plugin-development-workspace',
         capsuleId: 'plugin.runtime',
         onWarm: () => {
-          lifecycleStateRef.current = 'warming';
+          lifecycleStateRef.current = 'active';
         },
         onFreeze: () => {
           lifecycleStateRef.current = 'frozen';

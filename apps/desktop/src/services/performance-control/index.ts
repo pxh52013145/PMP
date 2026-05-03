@@ -17,3 +17,8 @@ export {
 } from './ProcessPerfService';
 export { attachPerformanceObservabilityBridge } from './performanceObservability';
 export { createPerformanceControlModule } from './performanceControlModule';
+export {
+  DEBUG_PROCESS_PERF_CAPABILITY_ID,
+  registerProcessPerfRuntimeCapsuleParticipant,
+  type ProcessPerfRuntimeCapsuleRegistrationOptions,
+} from './processPerfRuntimeCapsule';

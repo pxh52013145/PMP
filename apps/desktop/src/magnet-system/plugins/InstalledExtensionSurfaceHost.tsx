@@ -498,7 +498,7 @@ function InstalledExtensionSurfaceHost({
       id: participantId,
       capsuleId: 'plugin.runtime',
       onWarm: () => {
-        runtimeLifecycleStateRef.current = 'warming';
+        runtimeLifecycleStateRef.current = 'active';
         setRuntimeLifecyclePaused(false);
         setRuntimeLifecycleEpoch((value) => value + 1);
       },

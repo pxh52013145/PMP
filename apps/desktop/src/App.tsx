@@ -37,6 +37,8 @@ import {
   type SpaceRuntimeGovernanceService,
 } from './services/governance';
 import {
+  EDITOR_TOOLS_RUNTIME_CAPSULE_SERVICE_TOKEN,
+  type EditorToolsRuntimeCapsuleService,
   RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN,
   type RuntimeCapsuleManagerService,
 } from './services/runtime-capsules';
@@ -142,6 +144,9 @@ function AppContent() {
   const runtimeCapsuleManager = kernel.services.getOptional(
     RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN
   ) as RuntimeCapsuleManagerService | null;
+  const editorToolsRuntimeCapsule = kernel.services.getOptional(
+    EDITOR_TOOLS_RUNTIME_CAPSULE_SERVICE_TOKEN
+  ) as EditorToolsRuntimeCapsuleService | null;
   const { navigateTo } = useNavigation();
   const { editorState } = useEditor();
 
@@ -170,6 +175,45 @@ function AppContent() {
     isMainWindowMinimized,
     isPageFrozen,
   });
+
+  useEffect(() => {
+    if (!editorToolsRuntimeCapsule) return;
+    editorToolsRuntimeCapsule.updateActivity({
+      isEditing: editorState.isEditing,
+      editorMode: editorState.mode,
+      selectedMagnetId: editorState.selectedMagnetId,
+      selectedPixelCount: editorState.selectedPixels.size,
+      isEditorAuxWindowFocused,
+      isMainWindowFocused,
+      isMainWindowVisible,
+      isDocumentVisible,
+      isMainWindowMinimized,
+      isPageFrozen,
+      isWindowActive,
+      shouldPollEditorAuxFocus,
+    });
+  }, [
+    editorState.isEditing,
+    editorState.mode,
+    editorState.selectedMagnetId,
+    editorState.selectedPixels.size,
+    editorToolsRuntimeCapsule,
+    isDocumentVisible,
+    isEditorAuxWindowFocused,
+    isMainWindowFocused,
+    isMainWindowMinimized,
+    isMainWindowVisible,
+    isPageFrozen,
+    isWindowActive,
+    shouldPollEditorAuxFocus,
+  ]);
+
+  useEffect(() => {
+    if (!editorToolsRuntimeCapsule) return;
+    return () => {
+      editorToolsRuntimeCapsule.clearActivity('AppContent activity cleanup');
+    };
+  }, [editorToolsRuntimeCapsule]);
 
   useEffect(() => {
     void performanceControlService.syncEditorEffectsFromSettings();
