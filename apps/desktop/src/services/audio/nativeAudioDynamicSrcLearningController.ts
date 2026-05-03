@@ -124,3 +124,165 @@ export function resolveDynamicSrcLearningScale(input: {
 
   return 1 + Math.min(0.5, stressIndex / 30);
 }
+
+export type NativeAudioDynamicSrcLearningControllerOptions = {
+  maxItems: number;
+  persistMinIntervalMs: number;
+  updateMinIntervalMs: number;
+  minDelta: number;
+  persistProfile: (profile: DynamicSrcLearningMap) => Promise<void> | void;
+  setTimeoutFn?: (handler: () => void, timeoutMs: number) => ReturnType<typeof setTimeout>;
+  clearTimeoutFn?: (timer: ReturnType<typeof setTimeout>) => void;
+};
+
+export class NativeAudioDynamicSrcLearningController {
+  private profile: DynamicSrcLearningMap = {};
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastPersistAtMs = 0;
+  private lastPersistedSignature: string | null = null;
+  private lastUpdateAtMs = 0;
+
+  constructor(private readonly options: NativeAudioDynamicSrcLearningControllerOptions) {}
+
+  getProfile(): DynamicSrcLearningMap {
+    return this.profile;
+  }
+
+  getLastPersistedSignature(): string | null {
+    return this.lastPersistedSignature;
+  }
+
+  getLastPersistAtMs(): number {
+    return this.lastPersistAtMs;
+  }
+
+  getLastUpdateAtMs(): number {
+    return this.lastUpdateAtMs;
+  }
+
+  restorePersistedProfile(raw: string | null): DynamicSrcLearningMap {
+    this.profile = parseDynamicSrcLearningProfile({
+      raw,
+      maxItems: this.options.maxItems,
+    });
+    this.lastPersistedSignature = JSON.stringify(this.normalizeProfileForPersistence());
+    this.lastPersistAtMs = 0;
+    return this.profile;
+  }
+
+  applyPersistedProfile(raw: string | null, nowMs: number = Date.now()): boolean {
+    const nextProfile = parseDynamicSrcLearningProfile({
+      raw,
+      maxItems: this.options.maxItems,
+    });
+    const nextSignature = JSON.stringify(nextProfile);
+    if (nextSignature === this.lastPersistedSignature) {
+      return false;
+    }
+
+    this.profile = nextProfile;
+    this.lastPersistedSignature = nextSignature;
+    this.lastPersistAtMs = nowMs;
+    return true;
+  }
+
+  clearPersistTimer(): void {
+    if (this.persistTimer === null) return;
+    const clearTimeoutFn = this.options.clearTimeoutFn ?? clearTimeout;
+    clearTimeoutFn(this.persistTimer);
+    this.persistTimer = null;
+  }
+
+  normalizeProfileForPersistence(): DynamicSrcLearningMap {
+    this.profile = normalizeDynamicSrcLearningProfile({
+      profile: this.profile,
+      maxItems: this.options.maxItems,
+    });
+    return this.profile;
+  }
+
+  persistProfile(enabled: boolean, nowMs: number = Date.now()): void {
+    if (!enabled) return;
+
+    const normalizedProfile = this.normalizeProfileForPersistence();
+    const signature = JSON.stringify(normalizedProfile);
+    if (signature === this.lastPersistedSignature) {
+      this.lastPersistAtMs = nowMs;
+      return;
+    }
+
+    this.lastPersistAtMs = nowMs;
+    this.lastPersistedSignature = signature;
+
+    try {
+      void Promise.resolve(this.options.persistProfile(normalizedProfile)).catch(() => {});
+    } catch {
+      // Best-effort persistence must not affect playback policy timing.
+    }
+  }
+
+  schedulePersist(enabled: boolean, nowMs: number = Date.now()): void {
+    if (!enabled) return;
+
+    const minIntervalMs = Math.max(0, Math.floor(this.options.persistMinIntervalMs));
+    const elapsedMs = nowMs - this.lastPersistAtMs;
+    if (elapsedMs >= minIntervalMs) {
+      this.clearPersistTimer();
+      this.persistProfile(enabled, nowMs);
+      return;
+    }
+
+    if (this.persistTimer !== null) return;
+
+    const delayMs = Math.max(0, minIntervalMs - elapsedMs);
+    const setTimeoutFn = this.options.setTimeoutFn ?? setTimeout;
+    this.persistTimer = setTimeoutFn(() => {
+      this.persistTimer = null;
+      this.persistProfile(enabled, Date.now());
+    }, delayMs);
+  }
+
+  updateFromStress(input: {
+    enabled: boolean;
+    stressScore: number;
+    nowMs: number;
+    deviceKey: string;
+  }): boolean {
+    if (!input.enabled) return false;
+    if (!Number.isFinite(input.stressScore)) return false;
+
+    const updateMinIntervalMs = Math.max(0, Math.floor(this.options.updateMinIntervalMs));
+    if (
+      this.lastUpdateAtMs > 0 &&
+      input.nowMs - this.lastUpdateAtMs < updateMinIntervalMs
+    ) {
+      return false;
+    }
+    this.lastUpdateAtMs = input.nowMs;
+
+    const update = resolveDynamicSrcLearningUpdate({
+      profile: this.profile,
+      deviceKey: input.deviceKey,
+      stressScore: input.stressScore,
+      nowMs: input.nowMs,
+      minDelta: this.options.minDelta,
+    });
+    if (!update.changed) return false;
+
+    this.profile = update.profile;
+    this.schedulePersist(input.enabled, input.nowMs);
+    return true;
+  }
+
+  getScale(input: { enabled: boolean; deviceKey: string }): number {
+    return resolveDynamicSrcLearningScale({
+      enabled: input.enabled,
+      profile: this.profile,
+      deviceKey: input.deviceKey,
+    });
+  }
+
+  dispose(): void {
+    this.clearPersistTimer();
+  }
+}

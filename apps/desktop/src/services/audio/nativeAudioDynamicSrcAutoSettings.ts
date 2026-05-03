@@ -2,27 +2,21 @@
 import { STORAGE_KEYS, setupDualListener } from '../../utils/windowCommunication';
 import { resolveStoredDynamicSrcAutoSettings } from './nativeAudioAutoSettingsStorage';
 import type { AudioDynamicSrcAutoSettings } from './types';
+import type { NativeAudioDynamicSrcLearningController } from './nativeAudioDynamicSrcLearningController';
 import type { NativeAudioDynamicSrcPolicyController } from './nativeAudioDynamicSrcPolicyController';
-import type { DynamicSrcLearningMap } from './nativeAudioServiceTypes';
 
 type DynamicSrcSettingsListenerCleanup = (() => void) | null;
 
 export type DynamicSrcAutoSettingsHost = {
   policyController: NativeAudioDynamicSrcPolicyController;
+  learningController: NativeAudioDynamicSrcLearningController;
   getDynamicSrcSettingsListenerCleanup(): DynamicSrcSettingsListenerCleanup;
   setDynamicSrcSettingsListenerCleanup(cleanup: DynamicSrcSettingsListenerCleanup): void;
   getDynamicSrcSettingsListenerInitPromise(): Promise<void> | null;
   setDynamicSrcSettingsListenerInitPromise(promise: Promise<void> | null): void;
-  setDynamicSrcLearningProfile(profile: DynamicSrcLearningMap): void;
-  getDynamicSrcLearningLastPersistedSignature(): string | null;
-  setDynamicSrcLearningLastPersistedSignature(signature: string | null): void;
-  setDynamicSrcLearningLastPersistAtMs(timestampMs: number): void;
-  parseDynamicSrcLearningProfile(raw: string | null): DynamicSrcLearningMap;
-  normalizeDynamicSrcLearningProfileForPersistence(): DynamicSrcLearningMap;
   getDynamicSrcStressScore(): number;
   evaluateDynamicSrcAutoDegradation(options: { triggerActions: boolean }): void;
   emitRobustnessSnapshot(force?: boolean): void;
-  clearDynamicSrcLearningPersistTimer(): void;
   scheduleDynamicSrcRestoreEvaluation(): void;
 };
 
@@ -57,7 +51,7 @@ function applyPersistedDynamicSrcSettings(host: DynamicSrcAutoSettingsHost): voi
 
   host.policyController.applySettings(next);
   if (!next.learningEnabled) {
-    host.clearDynamicSrcLearningPersistTimer();
+    host.learningController.clearPersistTimer();
   }
 
   if (!next.enabled) {
@@ -76,32 +70,22 @@ function applyPersistedDynamicSrcSettings(host: DynamicSrcAutoSettingsHost): voi
 }
 
 function applyPersistedDynamicSrcLearningProfile(host: DynamicSrcAutoSettingsHost): void {
-  const nextProfile = host.parseDynamicSrcLearningProfile(
+  const changed = host.learningController.applyPersistedProfile(
     readString(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE)
   );
-  const nextSignature = JSON.stringify(nextProfile);
-  if (nextSignature === host.getDynamicSrcLearningLastPersistedSignature()) {
+  if (!changed) {
     return;
   }
 
-  host.setDynamicSrcLearningProfile(nextProfile);
-  host.setDynamicSrcLearningLastPersistedSignature(nextSignature);
-  host.setDynamicSrcLearningLastPersistAtMs(Date.now());
   host.emitRobustnessSnapshot(true);
 }
 
 export async function restoreDynamicSrcAutoSettingsFromStorageImpl(
   host: DynamicSrcAutoSettingsHost
 ): Promise<void> {
-  host.setDynamicSrcLearningProfile(
-    host.parseDynamicSrcLearningProfile(
-      readString(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE)
-    )
+  host.learningController.restorePersistedProfile(
+    readString(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE)
   );
-  host.setDynamicSrcLearningLastPersistedSignature(
-    JSON.stringify(host.normalizeDynamicSrcLearningProfileForPersistence())
-  );
-  host.setDynamicSrcLearningLastPersistAtMs(0);
 
   restoreInitialDynamicSrcState(host);
 

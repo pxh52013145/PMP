@@ -3,12 +3,12 @@ import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import {
   NativeAudioDynamicSrcPolicyController,
 } from './nativeAudioDynamicSrcPolicyController';
+import { NativeAudioDynamicSrcLearningController } from './nativeAudioDynamicSrcLearningController';
 import {
   restoreDynamicSrcAutoSettingsFromStorageImpl,
   type DynamicSrcAutoSettingsHost,
 } from './nativeAudioDynamicSrcAutoSettings';
 import type { AudioDynamicSrcAutoSettings } from './types';
-import type { DynamicSrcLearningMap } from './nativeAudioServiceTypes';
 
 type ListenerEntry = {
   storageKeys: string[];
@@ -68,31 +68,26 @@ function createController(): NativeAudioDynamicSrcPolicyController {
   });
 }
 
-function parseLearningProfile(raw: string | null): DynamicSrcLearningMap {
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === 'object' ? (parsed as DynamicSrcLearningMap) : {};
-  } catch {
-    return {};
-  }
-}
-
 function createHost(controller = createController(), initialStressScore = 0) {
-  let learningProfile: DynamicSrcLearningMap = {};
-  let learningLastPersistedSignature: string | null = null;
-  let learningLastPersistAtMs = -1;
   let settingsListenerCleanup: (() => void) | null = null;
   let settingsListenerInitPromise: Promise<void> | null = null;
   let stressScore = initialStressScore;
 
+  const learningController = new NativeAudioDynamicSrcLearningController({
+    maxItems: 64,
+    persistMinIntervalMs: 2_000,
+    updateMinIntervalMs: 250,
+    minDelta: 0.0005,
+    persistProfile: vi.fn(),
+  });
   const evaluateDynamicSrcAutoDegradation = vi.fn();
   const emitRobustnessSnapshot = vi.fn();
-  const clearDynamicSrcLearningPersistTimer = vi.fn();
+  const clearPersistTimer = vi.spyOn(learningController, 'clearPersistTimer');
   const scheduleDynamicSrcRestoreEvaluation = vi.fn();
 
   const host: DynamicSrcAutoSettingsHost = {
     policyController: controller,
+    learningController,
     getDynamicSrcSettingsListenerCleanup: () => settingsListenerCleanup,
     setDynamicSrcSettingsListenerCleanup: (cleanup) => {
       settingsListenerCleanup = cleanup;
@@ -101,34 +96,22 @@ function createHost(controller = createController(), initialStressScore = 0) {
     setDynamicSrcSettingsListenerInitPromise: (promise) => {
       settingsListenerInitPromise = promise;
     },
-    setDynamicSrcLearningProfile: (profile) => {
-      learningProfile = profile;
-    },
-    getDynamicSrcLearningLastPersistedSignature: () => learningLastPersistedSignature,
-    setDynamicSrcLearningLastPersistedSignature: (signature) => {
-      learningLastPersistedSignature = signature;
-    },
-    setDynamicSrcLearningLastPersistAtMs: (timestampMs) => {
-      learningLastPersistAtMs = timestampMs;
-    },
-    parseDynamicSrcLearningProfile: parseLearningProfile,
-    normalizeDynamicSrcLearningProfileForPersistence: () => learningProfile,
     getDynamicSrcStressScore: () => stressScore,
     evaluateDynamicSrcAutoDegradation,
     emitRobustnessSnapshot,
-    clearDynamicSrcLearningPersistTimer,
     scheduleDynamicSrcRestoreEvaluation,
   };
 
   return {
     controller,
     host,
-    clearDynamicSrcLearningPersistTimer,
+    clearDynamicSrcLearningPersistTimer: clearPersistTimer,
     emitRobustnessSnapshot,
     evaluateDynamicSrcAutoDegradation,
-    getLearningLastPersistAtMs: () => learningLastPersistAtMs,
-    getLearningLastPersistedSignature: () => learningLastPersistedSignature,
-    getLearningProfile: () => learningProfile,
+    getLearningLastPersistAtMs: () => learningController.getLastPersistAtMs(),
+    getLearningLastPersistedSignature: () => learningController.getLastPersistedSignature(),
+    getLearningProfile: () => learningController.getProfile(),
+    learningController,
     scheduleDynamicSrcRestoreEvaluation,
     setStressScore: (nextStressScore: number) => {
       stressScore = nextStressScore;

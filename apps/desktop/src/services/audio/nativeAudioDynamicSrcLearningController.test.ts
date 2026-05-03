@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  NativeAudioDynamicSrcLearningController,
   normalizeDynamicSrcLearningProfile,
   parseDynamicSrcLearningProfile,
   resolveDynamicSrcLearningScale,
@@ -74,5 +75,107 @@ describe('nativeAudioDynamicSrcLearningController', () => {
         deviceKey: 'device',
       })
     ).toBe(1);
+  });
+
+  it('owns learning update throttling and immediate persistence', () => {
+    const persisted: unknown[] = [];
+    const controller = new NativeAudioDynamicSrcLearningController({
+      maxItems: 8,
+      persistMinIntervalMs: 2_000,
+      updateMinIntervalMs: 250,
+      minDelta: 0.0005,
+      persistProfile: (profile) => {
+        persisted.push(profile);
+      },
+    });
+
+    expect(
+      controller.updateFromStress({
+        enabled: true,
+        stressScore: 8,
+        nowMs: 2_500,
+        deviceKey: 'wasapi::default',
+      })
+    ).toBe(true);
+    expect(controller.getProfile()['wasapi::default']).toEqual({
+      stressIndex: 0.8,
+      updatedAtMs: 2_500,
+    });
+    expect(persisted).toEqual([
+      {
+        'wasapi::default': { stressIndex: 0.8, updatedAtMs: 2_500 },
+      },
+    ]);
+
+    expect(
+      controller.updateFromStress({
+        enabled: true,
+        stressScore: 9,
+        nowMs: 2_600,
+        deviceKey: 'wasapi::default',
+      })
+    ).toBe(false);
+  });
+
+  it('debounces learning persistence and clears pending timers on dispose', () => {
+    const persisted: unknown[] = [];
+    const timers: Array<{ handler: () => void; timeoutMs: number }> = [];
+    const cleared: unknown[] = [];
+    const controller = new NativeAudioDynamicSrcLearningController({
+      maxItems: 8,
+      persistMinIntervalMs: 2_000,
+      updateMinIntervalMs: 0,
+      minDelta: 0.0005,
+      persistProfile: (profile) => {
+        persisted.push(profile);
+      },
+      setTimeoutFn: (handler, timeoutMs) => {
+        timers.push({ handler, timeoutMs });
+        return { timer: timers.length } as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeoutFn: (timer) => {
+        cleared.push(timer);
+      },
+    });
+
+    controller.restorePersistedProfile(
+      JSON.stringify({ device: { stressIndex: 1, updatedAtMs: 1_000 } })
+    );
+    expect(
+      controller.updateFromStress({
+        enabled: true,
+        stressScore: 5,
+        nowMs: 500,
+        deviceKey: 'device',
+      })
+    ).toBe(true);
+
+    expect(persisted).toEqual([]);
+    expect(timers).toEqual([{ handler: expect.any(Function), timeoutMs: 1_500 }]);
+
+    controller.dispose();
+    expect(cleared).toHaveLength(1);
+
+    const persistSpy = vi.fn();
+    const disabledController = new NativeAudioDynamicSrcLearningController({
+      maxItems: 8,
+      persistMinIntervalMs: 2_000,
+      updateMinIntervalMs: 0,
+      minDelta: 0.0005,
+      persistProfile: persistSpy,
+      setTimeoutFn: (handler, timeoutMs) => {
+        timers.push({ handler, timeoutMs });
+        return { timer: timers.length } as unknown as ReturnType<typeof setTimeout>;
+      },
+    });
+    expect(
+      disabledController.updateFromStress({
+        enabled: false,
+        stressScore: 10,
+        nowMs: 3_000,
+        deviceKey: 'device',
+      })
+    ).toBe(false);
+    expect(persistSpy).not.toHaveBeenCalled();
   });
 });

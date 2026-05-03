@@ -71,10 +71,7 @@ import {
   resolveNativeAudioTuningAutoSettingsPatch,
 } from './nativeAudioTuningAutoController';
 import {
-  normalizeDynamicSrcLearningProfile,
-  parseDynamicSrcLearningProfile as parseDynamicSrcLearningProfileState,
-  resolveDynamicSrcLearningScale,
-  resolveDynamicSrcLearningUpdate,
+  NativeAudioDynamicSrcLearningController,
 } from './nativeAudioDynamicSrcLearningController';
 import {
   NativeAudioDynamicSrcPolicyController,
@@ -635,11 +632,19 @@ export class NativeAudioService implements IAudioService {
     return this.dynamicSrcPolicyController.learningEnabled;
   }
 
-  private dynamicSrcLearningProfile: DynamicSrcLearningMap = {};
-  private dynamicSrcLearningPersistTimer: ReturnType<typeof setTimeout> | null = null;
-  private dynamicSrcLearningLastPersistAtMs = 0;
-  private dynamicSrcLearningLastPersistedSignature: string | null = null;
-  private dynamicSrcLearningLastUpdateAtMs = 0;
+  private readonly dynamicSrcLearningController = new NativeAudioDynamicSrcLearningController({
+    maxItems: NativeAudioService.DYNAMIC_SRC_LEARNING_MAX_ITEMS,
+    persistMinIntervalMs: NativeAudioService.DYNAMIC_SRC_LEARNING_PERSIST_MIN_INTERVAL_MS,
+    updateMinIntervalMs: NativeAudioService.DYNAMIC_SRC_LEARNING_UPDATE_MIN_INTERVAL_MS,
+    minDelta: NativeAudioService.DYNAMIC_SRC_LEARNING_MIN_DELTA,
+    persistProfile: (profile) =>
+      broadcastDataUpdate(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE, profile),
+  });
+
+  private get dynamicSrcLearningProfile(): DynamicSrcLearningMap {
+    return this.dynamicSrcLearningController.getProfile();
+  }
+
   private readonly tuningAutoController = new NativeAudioTuningAutoController({
     initialSettings: {
       enabled: NativeAudioService.TUNING_AUTO_ENABLED_DEFAULT,
@@ -1074,7 +1079,6 @@ export class NativeAudioService implements IAudioService {
     void this.scheduleSeekFlush;
     void this.flushPendingVolumeCommand;
     void this.scheduleVolumeFlush;
-    void this.parseDynamicSrcLearningProfile;
     void this.updateDynamicSrcLearningFromStress;
     void this.applySharedTimelineStressIfNeeded;
     void this.recordBufferedAheadSample;
@@ -1740,95 +1744,18 @@ export class NativeAudioService implements IAudioService {
     return `${backend}::${device}`;
   }
 
-  private parseDynamicSrcLearningProfile(raw: string | null): DynamicSrcLearningMap {
-    return parseDynamicSrcLearningProfileState({
-      raw,
-      maxItems: NativeAudioService.DYNAMIC_SRC_LEARNING_MAX_ITEMS,
-    });
-  }
-
-  private clearDynamicSrcLearningPersistTimer(): void {
-    if (this.dynamicSrcLearningPersistTimer === null) return;
-    clearTimeout(this.dynamicSrcLearningPersistTimer);
-    this.dynamicSrcLearningPersistTimer = null;
-  }
-
-  private normalizeDynamicSrcLearningProfileForPersistence(): DynamicSrcLearningMap {
-    this.dynamicSrcLearningProfile = normalizeDynamicSrcLearningProfile({
-      profile: this.dynamicSrcLearningProfile,
-      maxItems: NativeAudioService.DYNAMIC_SRC_LEARNING_MAX_ITEMS,
-    });
-    return this.dynamicSrcLearningProfile;
-  }
-
-  private persistDynamicSrcLearningProfile(nowMs: number = Date.now()): void {
-    if (!this.dynamicSrcLearningEnabled) return;
-
-    const normalizedProfile = this.normalizeDynamicSrcLearningProfileForPersistence();
-    const signature = JSON.stringify(normalizedProfile);
-    if (signature === this.dynamicSrcLearningLastPersistedSignature) {
-      this.dynamicSrcLearningLastPersistAtMs = nowMs;
-      return;
-    }
-
-    this.dynamicSrcLearningLastPersistAtMs = nowMs;
-    this.dynamicSrcLearningLastPersistedSignature = signature;
-
-    void broadcastDataUpdate(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE, normalizedProfile).catch(
-      () => {}
-    );
-  }
-
-  private scheduleDynamicSrcLearningPersist(nowMs: number = Date.now()): void {
-    if (!this.dynamicSrcLearningEnabled) return;
-
-    const minIntervalMs = NativeAudioService.DYNAMIC_SRC_LEARNING_PERSIST_MIN_INTERVAL_MS;
-    const elapsedMs = nowMs - this.dynamicSrcLearningLastPersistAtMs;
-    if (elapsedMs >= minIntervalMs) {
-      this.clearDynamicSrcLearningPersistTimer();
-      this.persistDynamicSrcLearningProfile(nowMs);
-      return;
-    }
-
-    if (this.dynamicSrcLearningPersistTimer !== null) return;
-
-    const delayMs = Math.max(0, minIntervalMs - elapsedMs);
-    this.dynamicSrcLearningPersistTimer = setTimeout(() => {
-      this.dynamicSrcLearningPersistTimer = null;
-      this.persistDynamicSrcLearningProfile(Date.now());
-    }, delayMs);
-  }
-
   private updateDynamicSrcLearningFromStress(stressScore: number, nowMs: number = Date.now()): void {
-    if (!this.dynamicSrcLearningEnabled) return;
-    if (!Number.isFinite(stressScore)) return;
-
-    if (
-      this.dynamicSrcLearningLastUpdateAtMs > 0 &&
-      nowMs - this.dynamicSrcLearningLastUpdateAtMs <
-        NativeAudioService.DYNAMIC_SRC_LEARNING_UPDATE_MIN_INTERVAL_MS
-    ) {
-      return;
-    }
-    this.dynamicSrcLearningLastUpdateAtMs = nowMs;
-
-    const update = resolveDynamicSrcLearningUpdate({
-      profile: this.dynamicSrcLearningProfile,
+    this.dynamicSrcLearningController.updateFromStress({
+      enabled: this.dynamicSrcLearningEnabled,
       deviceKey: this.buildDynamicSrcLearningDeviceKey(),
       stressScore,
       nowMs,
-      minDelta: NativeAudioService.DYNAMIC_SRC_LEARNING_MIN_DELTA,
     });
-    if (!update.changed) return;
-
-    this.dynamicSrcLearningProfile = update.profile;
-    this.scheduleDynamicSrcLearningPersist(nowMs);
   }
 
   private getDynamicSrcLearningScale(): number {
-    return resolveDynamicSrcLearningScale({
+    return this.dynamicSrcLearningController.getScale({
       enabled: this.dynamicSrcLearningEnabled,
-      profile: this.dynamicSrcLearningProfile,
       deviceKey: this.buildDynamicSrcLearningDeviceKey(),
     });
   }
@@ -2008,6 +1935,7 @@ export class NativeAudioService implements IAudioService {
   private createDynamicSrcAutoSettingsHost(): DynamicSrcAutoSettingsHost {
     return {
       policyController: this.dynamicSrcPolicyController,
+      learningController: this.dynamicSrcLearningController,
       getDynamicSrcSettingsListenerCleanup: () => this.dynamicSrcSettingsListenerCleanup,
       setDynamicSrcSettingsListenerCleanup: (cleanup) => {
         this.dynamicSrcSettingsListenerCleanup = cleanup;
@@ -2016,25 +1944,10 @@ export class NativeAudioService implements IAudioService {
       setDynamicSrcSettingsListenerInitPromise: (promise) => {
         this.dynamicSrcSettingsListenerInitPromise = promise;
       },
-      setDynamicSrcLearningProfile: (profile) => {
-        this.dynamicSrcLearningProfile = profile;
-      },
-      getDynamicSrcLearningLastPersistedSignature: () =>
-        this.dynamicSrcLearningLastPersistedSignature,
-      setDynamicSrcLearningLastPersistedSignature: (signature) => {
-        this.dynamicSrcLearningLastPersistedSignature = signature;
-      },
-      setDynamicSrcLearningLastPersistAtMs: (timestampMs) => {
-        this.dynamicSrcLearningLastPersistAtMs = timestampMs;
-      },
-      parseDynamicSrcLearningProfile: (raw) => this.parseDynamicSrcLearningProfile(raw),
-      normalizeDynamicSrcLearningProfileForPersistence: () =>
-        this.normalizeDynamicSrcLearningProfileForPersistence(),
       getDynamicSrcStressScore: () => this.getDynamicSrcStressScore(),
       evaluateDynamicSrcAutoDegradation: (options) =>
         this.evaluateDynamicSrcAutoDegradation(options),
       emitRobustnessSnapshot: (force) => this.emitRobustnessSnapshot(force),
-      clearDynamicSrcLearningPersistTimer: () => this.clearDynamicSrcLearningPersistTimer(),
       scheduleDynamicSrcRestoreEvaluation: () => this.scheduleDynamicSrcRestoreEvaluation(),
     };
   }
@@ -2312,7 +2225,7 @@ export class NativeAudioService implements IAudioService {
 
     this.dynamicSrcPolicyController.applySettings(nextSettings);
     if (!nextSettings.learningEnabled) {
-      this.clearDynamicSrcLearningPersistTimer();
+      this.dynamicSrcLearningController.clearPersistTimer();
     }
 
     if (!nextSettings.enabled) {
@@ -4488,7 +4401,7 @@ export class NativeAudioService implements IAudioService {
     this.stopFallbackTicker();
     this.clearProtectionWindowTimer();
     this.dynamicSrcPolicyController.dispose();
-    this.clearDynamicSrcLearningPersistTimer();
+    this.dynamicSrcLearningController.dispose();
     this.protectionWindowUntilMs = 0;
     this.protectionWindowRefCount = 0;
     this.protectionWindowReason = null;
