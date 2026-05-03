@@ -1907,13 +1907,14 @@ std::optional<PluginDescriptor> buildDescriptorForPluginId(const std::string& pl
   return desc;
 }
 
-class EditorHostContent : public juce::Component, private juce::ComponentListener {
+class EditorHostContent : public juce::Component, private juce::ComponentListener, private juce::AsyncUpdater {
  public:
   explicit EditorHostContent(std::function<void(int, int)> onChildSizeChanged)
       : onChildSizeChanged_(std::move(onChildSizeChanged)) {}
 
   void setChild(std::unique_ptr<juce::Component> child) {
     if (child_.get() == child.get()) return;
+    cancelPendingUpdate();
     if (child_) {
       child_->removeComponentListener(this);
       removeChildComponent(child_.get());
@@ -1922,10 +1923,8 @@ class EditorHostContent : public juce::Component, private juce::ComponentListene
     if (child_) {
       child_->addComponentListener(this);
       addAndMakeVisible(*child_);
-      // Match our own size to the hosted child so DocumentWindow sizing works.
       if (child_->getWidth() > 0 && child_->getHeight() > 0) {
         setSize(child_->getWidth(), child_->getHeight());
-        notifyChildSizeChanged(child_->getWidth(), child_->getHeight());
       }
       resized();
     }
@@ -1934,66 +1933,68 @@ class EditorHostContent : public juce::Component, private juce::ComponentListene
   juce::Component* getChild() const { return child_.get(); }
 
   void resized() override {
-    if (child_) {
-      const auto targetBounds = getLocalBounds();
-      syncingChildBounds_ = true;
-      if (auto* editor = dynamic_cast<juce::AudioProcessorEditor*>(child_.get());
-          editor != nullptr && editorCanUseConstrainer(*editor)) {
-        editor->setBoundsConstrained(targetBounds);
-      } else {
-        child_->setBounds(targetBounds);
-      }
-      syncingChildBounds_ = false;
-
-      if (child_->getWidth() != targetBounds.getWidth() ||
-          child_->getHeight() != targetBounds.getHeight()) {
-        syncToChildSize(*child_);
-      }
-    }
-  }
-
-  void childBoundsChanged(juce::Component* child) override {
-    if (syncingChildBounds_ || child != child_.get() || child == nullptr) return;
-    syncToChildSize(*child);
+    layoutChildWithoutOwningEditorSize();
   }
 
   void componentMovedOrResized(juce::Component& component, bool, bool wasResized) override {
-    if (!wasResized || syncingChildBounds_ || &component != child_.get()) return;
-    syncToChildSize(component);
+    if (!wasResized || layoutingChild_ || &component != child_.get()) return;
+    requestWindowSizeFromChild(component.getWidth(), component.getHeight());
   }
 
   ~EditorHostContent() override {
+    cancelPendingUpdate();
     if (child_) {
       child_->removeComponentListener(this);
     }
   }
 
  private:
-  static bool editorCanUseConstrainer(juce::AudioProcessorEditor& editor) {
-    auto* topLevel = editor.getTopLevelComponent();
-    return topLevel != nullptr && topLevel->getPeer() != nullptr && editor.getConstrainer() != nullptr;
-  }
+  void layoutChildWithoutOwningEditorSize() {
+    if (!child_) return;
 
-  void syncToChildSize(const juce::Component& child) {
-    const int width = child.getWidth();
-    const int height = child.getHeight();
-    if (width <= 0 || height <= 0) return;
+    const auto targetBounds = getLocalBounds();
+    const juce::ScopedValueSetter<bool> guard(layoutingChild_, true);
 
-    if (getWidth() != width || getHeight() != height) {
-      setSize(width, height);
+    if (isHostedPluginEditor()) {
+      if (child_->getPosition() != targetBounds.getPosition()) {
+        child_->setTopLeftPosition(targetBounds.getPosition());
+      }
+      return;
     }
-    notifyChildSizeChanged(width, height);
+
+    if (child_->getBounds() != targetBounds) {
+      child_->setBounds(targetBounds);
+    }
   }
 
-  void notifyChildSizeChanged(int width, int height) {
+  bool isHostedPluginEditor() const {
+    return dynamic_cast<juce::AudioProcessorEditor*>(child_.get()) != nullptr;
+  }
+
+  void requestWindowSizeFromChild(int width, int height) {
+    if (width <= 0 || height <= 0) return;
+    pendingChildWidth_ = width;
+    pendingChildHeight_ = height;
+    triggerAsyncUpdate();
+  }
+
+  void handleAsyncUpdate() override {
+    if (!child_ || pendingChildWidth_ <= 0 || pendingChildHeight_ <= 0) return;
+
+    if (getWidth() != pendingChildWidth_ || getHeight() != pendingChildHeight_) {
+      setSize(pendingChildWidth_, pendingChildHeight_);
+    }
+
     if (onChildSizeChanged_) {
-      onChildSizeChanged_(width, height);
+      onChildSizeChanged_(pendingChildWidth_, pendingChildHeight_);
     }
   }
 
   std::function<void(int, int)> onChildSizeChanged_;
   std::unique_ptr<juce::Component> child_;
-  bool syncingChildBounds_ = false;
+  int pendingChildWidth_ = 0;
+  int pendingChildHeight_ = 0;
+  bool layoutingChild_ = false;
 };
 
 class PluginEditorWindow : public juce::DocumentWindow {
@@ -2043,7 +2044,7 @@ class PluginEditorWindow : public juce::DocumentWindow {
     if (content) {
       hostContent_->setChild(std::move(content));
     }
-    applyContentResizeCapability();
+    applyEditorWindowResizePolicy();
     if (isEditorLogEnabled()) {
       std::fprintf(stderr, "[pmp-vst-bridge] editor window ctor after setContentOwned\n");
     }
@@ -2204,7 +2205,7 @@ class PluginEditorWindow : public juce::DocumentWindow {
         std::fprintf(stderr, "[pmp-vst-bridge] editor window replaceContent: setChild begin\n");
       }
       hostContent_->setChild(std::move(content));
-      applyContentResizeCapability();
+      applyEditorWindowResizePolicy();
       if (isEditorLogEnabled()) {
         std::fprintf(stderr, "[pmp-vst-bridge] editor window replaceContent: setChild end\n");
       }
@@ -2230,23 +2231,15 @@ class PluginEditorWindow : public juce::DocumentWindow {
   }
 
  private:
-  static bool contentWantsResizableWindow(const juce::Component* content) {
-    if (auto* editor = dynamic_cast<const juce::AudioProcessorEditor*>(content)) {
-      return editor->isResizable();
-    }
-    return false;
-  }
-
   juce::AudioProcessorEditor* getHostedEditor() const {
     if (hostContent_ == nullptr) return nullptr;
     return dynamic_cast<juce::AudioProcessorEditor*>(hostContent_->getChild());
   }
 
-  void applyContentResizeCapability() {
-    const bool resizable =
-        contentWantsResizableWindow(hostContent_ != nullptr ? hostContent_->getChild() : nullptr);
-    // Use window-border resizing so the plugin's own bottom-right editor handle remains usable.
-    setResizable(resizable, false);
+  void applyEditorWindowResizePolicy() {
+    // The VST editor component is the size authority. The host frame follows plugin resize
+    // requests, but it does not expose its own border resizer that can fight the native view.
+    setResizable(false, false);
     applyContentResizeLimits();
   }
 
