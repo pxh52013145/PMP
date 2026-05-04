@@ -39,6 +39,7 @@ const AUDIO_TRANSPORT_CAPSULE: RuntimeCapsuleManifest = {
   memoryTier: 'medium',
   startup: 'first-use',
   backgroundPolicy: 'realtime-critical',
+  idleReclaimPolicy: 'after-retention',
   warmRetentionMs: 60_000,
   hibernateAfterMs: 300_000,
   dependencies: ['audio.shell'],

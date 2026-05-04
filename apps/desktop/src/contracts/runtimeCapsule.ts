@@ -28,12 +28,30 @@ export type RuntimeCapsuleMemoryTier = 'light' | 'medium' | 'heavy';
 
 export type RuntimeCapsuleStartupPolicy = 'core' | 'active-space' | 'first-use' | 'manual';
 
+/**
+ * Controls whether an actively leased capsule may keep running in hidden/background states.
+ * Idle reclaim after all leases are released is governed separately by idleReclaimPolicy.
+ */
 export type RuntimeCapsuleBackgroundPolicy =
   | 'never'
   | 'while-visible'
   | 'while-active'
   | 'pinned'
   | 'realtime-critical';
+
+/**
+ * Controls how governance may reclaim a capsule after its active leases reach zero.
+ *
+ * - default: follow warmRetentionMs / hibernateAfterMs.
+ * - protected: do not reclaim through normal idle governance.
+ * - after-retention: explicitly opt into retention-based reclaim, even for critical backgrounds.
+ * - budget-pressure-only: skip idle hibernation and only reclaim on high pressure or explicit bypass.
+ */
+export type RuntimeCapsuleIdleReclaimPolicy =
+  | 'default'
+  | 'protected'
+  | 'after-retention'
+  | 'budget-pressure-only';
 
 export type RuntimeLeaseActivation = 'visible' | 'interaction' | 'first-use' | 'manual';
 
@@ -81,13 +99,27 @@ export interface RuntimeCapsuleManifest {
   memoryTier: RuntimeCapsuleMemoryTier;
   startup: RuntimeCapsuleStartupPolicy;
   backgroundPolicy: RuntimeCapsuleBackgroundPolicy;
-  reclaimableWhenIdle?: boolean;
+  /**
+   * Optional because older manifests should remain conservative:
+   * pinned and realtime-critical default to protected, while other policies use default.
+   */
+  idleReclaimPolicy?: RuntimeCapsuleIdleReclaimPolicy;
   warmRetentionMs: number;
   hibernateAfterMs: number;
   dependencies?: string[];
   provides?: RuntimeCapabilityId[];
   requires?: RuntimeCapabilityId[];
   budget?: RuntimeCapsuleBudget;
+}
+
+export function resolveRuntimeCapsuleIdleReclaimPolicy(
+  manifest: Pick<RuntimeCapsuleManifest, 'backgroundPolicy' | 'idleReclaimPolicy'>
+): RuntimeCapsuleIdleReclaimPolicy {
+  if (manifest.idleReclaimPolicy) return manifest.idleReclaimPolicy;
+  if (manifest.backgroundPolicy === 'pinned' || manifest.backgroundPolicy === 'realtime-critical') {
+    return 'protected';
+  }
+  return 'default';
 }
 
 export interface RuntimeLeaseReason {

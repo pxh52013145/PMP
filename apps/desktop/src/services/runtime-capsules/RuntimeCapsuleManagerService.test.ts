@@ -391,7 +391,7 @@ describe('DefaultRuntimeCapsuleManagerService', () => {
       memoryTier: 'medium',
       startup: 'first-use',
       backgroundPolicy: 'realtime-critical',
-      reclaimableWhenIdle: true,
+      idleReclaimPolicy: 'after-retention',
       warmRetentionMs: 60_000,
       hibernateAfterMs: 300_000,
       provides: ['audio.transport'],
@@ -468,6 +468,53 @@ describe('DefaultRuntimeCapsuleManagerService', () => {
       state: 'idle-warm',
       activeLeases: [],
     });
+  });
+
+  it('keeps budget-pressure-only capsules warm until explicit pressure bypass', () => {
+    let now = 1_000;
+    const service = new DefaultRuntimeCapsuleManagerService(() => now);
+    service.registerCapsule({
+      ...TEST_CAPSULE,
+      id: 'plugin.runtime',
+      kind: 'plugin',
+      memoryTier: 'medium',
+      startup: 'first-use',
+      backgroundPolicy: 'while-active',
+      idleReclaimPolicy: 'budget-pressure-only',
+      warmRetentionMs: 1,
+      hibernateAfterMs: 1,
+      provides: ['plugin.runtime'],
+    });
+    const lease = service.acquireLease({
+      capabilityId: 'plugin.runtime',
+      ownerKind: 'plugin',
+      ownerId: 'plugin-host',
+    });
+
+    now = 2_000;
+    service.releaseLease(lease?.id ?? '');
+
+    expect(
+      service.reclaimInactiveCapsules({
+        mode: 'hibernate',
+        minMemoryTier: 'medium',
+        reason: { kind: 'memory-pressure', pressureLevel: 'watch' },
+      })
+    ).toEqual([]);
+
+    const reclaimed = service.reclaimInactiveCapsules({
+      mode: 'hibernate',
+      minMemoryTier: 'medium',
+      reason: { kind: 'memory-pressure', pressureLevel: 'high' },
+    });
+
+    expect(reclaimed).toEqual([
+      expect.objectContaining({
+        capsuleId: 'plugin.runtime',
+        from: 'idle-warm',
+        to: 'hibernated',
+      }),
+    ]);
   });
 
   it('tears down inactive capsules under high pressure without touching active leases', () => {

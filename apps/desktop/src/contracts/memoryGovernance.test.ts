@@ -54,4 +54,39 @@ describe('decideMemoryGovernancePlan', () => {
     expect(plan.actions).toContain('teardown-idle-runtime-capsules');
     expect(plan.actions).not.toContain('hibernate-idle-runtime-capsules');
   });
+
+  it('only includes pressure-only runtime capsules when pressure is high', () => {
+    const idlePlan = decideMemoryGovernancePlan({
+      ...BASE_SNAPSHOT,
+      runtimeCapsules: {
+        activeLeaseCount: 0,
+        activeCapsuleIds: [],
+        idleWarmCapsuleIds: ['plugin.runtime'],
+        hibernatedCapsuleIds: [],
+        reclaimableCapsuleIds: [],
+        pressureReclaimableCapsuleIds: ['plugin.runtime'],
+        heavyReclaimableCapsuleIds: [],
+      },
+    });
+
+    expect(idlePlan.actions).not.toContain('hibernate-idle-runtime-capsules');
+    expect(idlePlan.actions).not.toContain('teardown-idle-runtime-capsules');
+
+    const pressurePlan = decideMemoryGovernancePlan({
+      ...BASE_SNAPSHOT,
+      jsHeapUsedBytes: 700_000_000,
+      runtimeCapsules: {
+        activeLeaseCount: 0,
+        activeCapsuleIds: [],
+        idleWarmCapsuleIds: ['plugin.runtime'],
+        hibernatedCapsuleIds: [],
+        reclaimableCapsuleIds: [],
+        pressureReclaimableCapsuleIds: ['plugin.runtime'],
+        heavyReclaimableCapsuleIds: [],
+      },
+    });
+
+    expect(pressurePlan.tier).toBe(2);
+    expect(pressurePlan.actions).toContain('teardown-idle-runtime-capsules');
+  });
 });

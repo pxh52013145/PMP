@@ -13,6 +13,9 @@ import {
   type MemoryGovernanceRunResult,
   type MemoryGovernanceSnapshot,
 } from '../../contracts/memoryGovernance';
+import {
+  resolveRuntimeCapsuleIdleReclaimPolicy,
+} from '../../contracts/runtimeCapsule';
 import type { CoverRuntimeCachePolicy } from '../audio/MusicLibraryService';
 import { getRegisteredMusicLibraryService } from '../audio/MusicLibraryServiceRegistry';
 import type { NavigationService } from '../navigation/NavigationService';
@@ -127,11 +130,7 @@ function isRuntimeCapsuleReclaimable(
   if (descriptor.activeLeaseCount > 0) return false;
   if (descriptor.startup === 'core') return false;
   if (runtimeCapsuleMemoryTierScore(descriptor.memoryTier) < 1) return false;
-  if (
-    descriptor.backgroundPolicy === 'pinned' ||
-    (descriptor.backgroundPolicy === 'realtime-critical' &&
-      descriptor.reclaimableWhenIdle !== true)
-  ) {
+  if (descriptor.idleReclaimPolicy === 'protected') {
     return false;
   }
   if (
@@ -145,6 +144,7 @@ function isRuntimeCapsuleReclaimable(
   const inactiveSince = descriptor.lastSuspendedAtMs ?? descriptor.lastActiveAtMs;
   if (inactiveSince === null) return false;
   if ((descriptor.budgetViolationCount ?? 0) > 0) return true;
+  if (descriptor.idleReclaimPolicy === 'budget-pressure-only') return false;
   return Math.max(0, atMs - inactiveSince) >= descriptor.warmRetentionMs;
 }
 
@@ -251,7 +251,7 @@ function buildRuntimeCapsulesSnapshot(
       memoryTier: capsule.manifest.memoryTier,
       startup: capsule.manifest.startup,
       backgroundPolicy: capsule.manifest.backgroundPolicy,
-      reclaimableWhenIdle: capsule.manifest.reclaimableWhenIdle,
+      idleReclaimPolicy: resolveRuntimeCapsuleIdleReclaimPolicy(capsule.manifest),
       activeLeaseCount: capsule.activeLeases.length,
       lastActiveAtMs: capsule.lastActiveAtMs,
       lastSuspendedAtMs: capsule.lastSuspendedAtMs,
@@ -276,6 +276,21 @@ function buildRuntimeCapsulesSnapshot(
       .filter((descriptor) => descriptor.state === 'hibernated')
       .map((descriptor) => descriptor.id),
     reclaimableCapsuleIds: reclaimable.map((descriptor) => descriptor.id),
+    pressureReclaimableCapsuleIds: descriptors
+      .filter(
+        (descriptor) =>
+          descriptor.idleReclaimPolicy === 'budget-pressure-only' &&
+          descriptor.activeLeaseCount === 0 &&
+          descriptor.startup !== 'core' &&
+          runtimeCapsuleMemoryTierScore(descriptor.memoryTier) >= 1 &&
+          descriptor.state !== 'cold' &&
+          descriptor.state !== 'active' &&
+          descriptor.state !== 'resolving' &&
+          descriptor.state !== 'warming' &&
+          descriptor.state !== 'tearing_down' &&
+          descriptor.state !== 'faulted'
+      )
+      .map((descriptor) => descriptor.id),
     heavyReclaimableCapsuleIds: reclaimable
       .filter((descriptor) => descriptor.memoryTier === 'heavy')
       .map((descriptor) => descriptor.id),
@@ -458,6 +473,7 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       if (action === 'teardown-idle-runtime-capsules') {
         const targetCapsuleIds = [
           ...(snapshot.runtimeCapsules?.reclaimableCapsuleIds ?? []),
+          ...(snapshot.runtimeCapsules?.pressureReclaimableCapsuleIds ?? []),
           ...(snapshot.runtimeCapsules?.hibernatedCapsuleIds ?? []),
         ];
         const reclaimed = this.runtimeCapsuleManager?.reclaimInactiveCapsules({

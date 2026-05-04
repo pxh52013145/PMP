@@ -13,6 +13,7 @@ import type {
   RuntimeParticipantSnapshot,
   RuntimePressureReason,
 } from '../../contracts/runtimeCapsule';
+import { resolveRuntimeCapsuleIdleReclaimPolicy } from '../../contracts/runtimeCapsule';
 import { createServiceToken } from '../../kernel';
 import { getTelemetryLogger } from '../telemetry/TelemetryService';
 
@@ -743,11 +744,17 @@ export class DefaultRuntimeCapsuleManagerService implements RuntimeCapsuleManage
     if (record.activeLeases.size > 0) return false;
     if (record.manifest.startup === 'core') return false;
     if (memoryTierScore(record.manifest.memoryTier) < memoryTierScore(minMemoryTier)) return false;
+    const idleReclaimPolicy = resolveRuntimeCapsuleIdleReclaimPolicy(record.manifest);
+    if (options.includePinned !== true && idleReclaimPolicy === 'protected') {
+      return false;
+    }
+
+    const pressureBypassesRetention =
+      idleReclaimPolicy === 'budget-pressure-only' && options.reason.pressureLevel === 'high';
     if (
-      options.includePinned !== true &&
-      (record.manifest.backgroundPolicy === 'pinned' ||
-        (record.manifest.backgroundPolicy === 'realtime-critical' &&
-          record.manifest.reclaimableWhenIdle !== true))
+      idleReclaimPolicy === 'budget-pressure-only' &&
+      !pressureBypassesRetention &&
+      options.bypassWarmRetention !== true
     ) {
       return false;
     }
@@ -764,7 +771,7 @@ export class DefaultRuntimeCapsuleManagerService implements RuntimeCapsuleManage
     }
 
     if (options.mode === 'hibernate' && record.state === 'hibernated') return false;
-    if (options.bypassWarmRetention === true) return true;
+    if (options.bypassWarmRetention === true || pressureBypassesRetention) return true;
 
     const inactiveSince = record.lastSuspendedAtMs ?? record.lastActiveAtMs;
     if (inactiveSince === null) return false;

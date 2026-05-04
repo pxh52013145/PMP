@@ -1,6 +1,7 @@
 import type {
   RuntimeCapsuleBudget,
   RuntimeCapsuleBackgroundPolicy,
+  RuntimeCapsuleIdleReclaimPolicy,
   RuntimeCapsuleKind,
   RuntimeCapsuleMemoryTier,
   RuntimeCapsuleStartupPolicy,
@@ -53,7 +54,7 @@ export type MemoryGovernanceRuntimeCapsuleDescriptor = {
   memoryTier: RuntimeCapsuleMemoryTier;
   startup: RuntimeCapsuleStartupPolicy;
   backgroundPolicy: RuntimeCapsuleBackgroundPolicy;
-  reclaimableWhenIdle?: boolean;
+  idleReclaimPolicy: RuntimeCapsuleIdleReclaimPolicy;
   activeLeaseCount: number;
   lastActiveAtMs: number | null;
   lastSuspendedAtMs: number | null;
@@ -75,6 +76,7 @@ export type MemoryGovernanceRuntimeCapsulesSnapshot = {
   idleWarmCapsuleIds: string[];
   hibernatedCapsuleIds: string[];
   reclaimableCapsuleIds: string[];
+  pressureReclaimableCapsuleIds?: string[];
   heavyReclaimableCapsuleIds: string[];
   budgetViolationCapsuleIds?: string[];
   budgetViolations?: MemoryGovernanceRuntimeCapsuleBudgetViolation[];
@@ -162,6 +164,8 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
   const reclaimableSpaceCount = snapshot.spaceRuntime?.reclaimableSpaceIds.length ?? 0;
   const hibernatedSpaceCount = snapshot.spaceRuntime?.hibernatedSpaceIds?.length ?? 0;
   const reclaimableRuntimeCapsuleCount = snapshot.runtimeCapsules?.reclaimableCapsuleIds.length ?? 0;
+  const pressureReclaimableRuntimeCapsuleCount =
+    snapshot.runtimeCapsules?.pressureReclaimableCapsuleIds?.length ?? 0;
   const hibernatedRuntimeCapsuleCount = snapshot.runtimeCapsules?.hibernatedCapsuleIds.length ?? 0;
 
   // Heuristic tiers (best-effort): we avoid aggressive actions by default and only reclaim when
@@ -208,7 +212,12 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
     actions.push('teardown-reclaimable-spaces');
   }
 
-  if (tier >= 2 && (reclaimableRuntimeCapsuleCount > 0 || hibernatedRuntimeCapsuleCount > 0)) {
+  if (
+    tier >= 2 &&
+    (reclaimableRuntimeCapsuleCount > 0 ||
+      pressureReclaimableRuntimeCapsuleCount > 0 ||
+      hibernatedRuntimeCapsuleCount > 0)
+  ) {
     actions.push('teardown-idle-runtime-capsules');
   } else if (reclaimableRuntimeCapsuleCount > 0) {
     actions.push('hibernate-idle-runtime-capsules');
