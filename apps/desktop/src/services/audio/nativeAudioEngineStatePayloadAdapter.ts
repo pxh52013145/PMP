@@ -3,7 +3,10 @@ import type {
   AudioStabilityActionProfile,
   AudioStabilityProfile,
 } from './types';
-import type { NativeAudioStatePayload } from './nativeAudioServiceTypes';
+import type {
+  NativeAudioEnginePolicyPayload,
+  NativeAudioStatePayload,
+} from './nativeAudioServiceTypes';
 
 export type NativeAudioEngineState = {
   lastSchedulerProfile?: 'normal' | 'guarded' | 'critical';
@@ -164,5 +167,79 @@ export function applyNativeAudioEngineStatePayload(
 
   if (typeof payload.transportExactInt32Container === 'boolean') {
     state.transportExactInt32Container = payload.transportExactInt32Container;
+  }
+}
+
+export function applyNativeAudioEnginePolicyPayload(
+  state: NativeAudioEngineState,
+  payload: unknown,
+  options?: {
+    captureCurrentQualityPolicy?: boolean;
+    onCaptureCurrentQualityPolicy?: () => void;
+  }
+): void {
+  if (!payload || typeof payload !== 'object') return;
+  const policy = payload as NativeAudioEnginePolicyPayload;
+
+  if (isStabilityProfile(policy.stabilityProfile)) {
+    state.stabilityProfile = policy.stabilityProfile;
+  }
+
+  if (policy.transportMode === 'robust' || policy.transportMode === 'transport-exact') {
+    state.transportMode = policy.transportMode;
+  }
+
+  if (
+    policy.hqSrcPhaseMode === 'linear' ||
+    policy.hqSrcPhaseMode === 'minimum' ||
+    policy.hqSrcPhaseMode === 'intermediate'
+  ) {
+    state.hqSrcPhaseMode = policy.hqSrcPhaseMode;
+  }
+
+  if (
+    policy.srcMode === 'source-native' ||
+    policy.srcMode === 'match-output' ||
+    policy.srcMode === 'target-rate'
+  ) {
+    state.srcMode = policy.srcMode;
+  }
+
+  if (policy.srcBackend === 'rubato' || policy.srcBackend === 'linear-simd') {
+    state.srcBackend = policy.srcBackend;
+  }
+
+  if (
+    typeof policy.srcTargetSampleRate === 'number' &&
+    Number.isFinite(policy.srcTargetSampleRate) &&
+    policy.srcTargetSampleRate > 0
+  ) {
+    state.srcTargetSampleRate = Math.max(
+      8000,
+      Math.min(768000, Math.floor(policy.srcTargetSampleRate))
+    );
+  } else if (policy.srcTargetSampleRate == null) {
+    state.srcTargetSampleRate = null;
+  }
+
+  if (policy.outputQuantizationMode === 'round' || policy.outputQuantizationMode === 'tpdf') {
+    state.outputQuantizationMode = policy.outputQuantizationMode;
+  }
+
+  if (options?.captureCurrentQualityPolicy) {
+    options.onCaptureCurrentQualityPolicy?.();
+  }
+
+  if (typeof policy.hqSrcStopbandDb === 'number' && Number.isFinite(policy.hqSrcStopbandDb)) {
+    state.hqSrcStopbandDb = Math.max(0, Math.min(200, Math.floor(policy.hqSrcStopbandDb)));
+  }
+
+  if (typeof policy.transportExactInt32Container === 'boolean') {
+    state.transportExactInt32Container = policy.transportExactInt32Container;
+  }
+
+  if (!policy.hqSrcEnabled) {
+    state.hqSrcActive = false;
+    state.hqSrcRatio = 1;
   }
 }

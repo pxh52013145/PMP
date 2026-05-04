@@ -1,9 +1,7 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { setupNativeListenersImpl } from './nativeAudioNativeListeners';
 import {
-  restoreDynamicSrcAutoSettingsFromStorageImpl,
-  setDynamicSrcAutoSettingsImpl,
-  type DynamicSrcAutoSettingsHost,
+  NativeAudioDynamicSrcAutoSettingsCoordinator,
 } from './nativeAudioDynamicSrcAutoSettings';
 import {
   AudioDynamicSrcAdaptiveProfile,
@@ -127,6 +125,10 @@ import { NativeAudioSpectrumController } from './nativeAudioSpectrumController';
 import { NativeAudioQueueMirror } from './nativeAudioQueueMirror';
 import { NativeAudioSourcePreparation } from './nativeAudioSourcePreparation';
 import {
+  applyNativeAudioEnginePolicyPayload,
+  type NativeAudioEngineState,
+} from './nativeAudioEngineStatePayloadAdapter';
+import {
   compactTrackForQueueState,
   compactTrackForState,
 } from './trackStateProjection';
@@ -137,7 +139,6 @@ import {
   type DynamicSrcLearningMap,
   type NativeAudioComponentsStatePayload,
   type NativeAudioEnginePolicyPatch,
-  type NativeAudioEnginePolicyPayload,
   type NativeAudioSrcPolicy,
   type ReplayGainMode,
   type ReplayGainSettings,
@@ -248,8 +249,6 @@ export class NativeAudioService implements IAudioService {
   private spectrumListener?: UnlistenFn;
   private errorListener?: UnlistenFn;
   private runtimeComponentsListeners: UnlistenFn[] = [];
-  private dynamicSrcSettingsListenerCleanup: (() => void) | null = null;
-  private dynamicSrcSettingsListenerInitPromise: Promise<void> | null = null;
   private tuningAutoSettingsListenerCleanup: (() => void) | null = null;
   private tuningAutoSettingsListenerInitPromise: Promise<void> | null = null;
   private playbackPreferencesListenerCleanup: (() => void) | null = null;
@@ -655,6 +654,23 @@ export class NativeAudioService implements IAudioService {
     },
   });
 
+  private readonly dynamicSrcSettingsCoordinator = new NativeAudioDynamicSrcAutoSettingsCoordinator({
+    policyController: this.dynamicSrcPolicyController,
+    learningController: this.dynamicSrcLearningController,
+    host: {
+      getDynamicSrcStressScore: () => this.getDynamicSrcStressScore(),
+      getCurrentQualitySrcPolicy: () => this.dynamicSrcQualityPolicy,
+      captureCurrentQualitySrcPolicy: () => this.captureCurrentQualitySrcPolicy(),
+      restoreQualitySrcPolicyForDisabled: async (reason) => {
+        await this.applySrcPolicyIfNeeded(this.dynamicSrcQualityPolicy, reason, 'quality');
+      },
+      evaluateDynamicSrcAutoDegradation: (options) =>
+        this.evaluateDynamicSrcAutoDegradation(options),
+      emitRobustnessSnapshot: (force) => this.emitRobustnessSnapshot(force),
+      scheduleDynamicSrcRestoreEvaluation: () => this.scheduleDynamicSrcRestoreEvaluation(),
+    },
+  });
+
   private get dynamicSrcLearningProfile(): DynamicSrcLearningMap {
     return this.dynamicSrcLearningController.getProfile();
   }
@@ -1026,7 +1042,6 @@ export class NativeAudioService implements IAudioService {
   }
 
   private retainTypeScriptBaselineState(): void {
-    void this.dynamicSrcSettingsListenerInitPromise;
     void this.lastNativeErrorSeq;
     void this.lastUnderrunEvents;
     void this.protectionWindowReason;
@@ -1886,33 +1901,8 @@ export class NativeAudioService implements IAudioService {
     await this.applySrcPolicyIfNeeded(this.getLatencySrcPolicy(), reason, 'latency');
   }
 
-  private createDynamicSrcAutoSettingsHost(): DynamicSrcAutoSettingsHost {
-    return {
-      policyController: this.dynamicSrcPolicyController,
-      learningController: this.dynamicSrcLearningController,
-      getDynamicSrcSettingsListenerCleanup: () => this.dynamicSrcSettingsListenerCleanup,
-      setDynamicSrcSettingsListenerCleanup: (cleanup) => {
-        this.dynamicSrcSettingsListenerCleanup = cleanup;
-      },
-      getDynamicSrcSettingsListenerInitPromise: () => this.dynamicSrcSettingsListenerInitPromise,
-      setDynamicSrcSettingsListenerInitPromise: (promise) => {
-        this.dynamicSrcSettingsListenerInitPromise = promise;
-      },
-      getDynamicSrcStressScore: () => this.getDynamicSrcStressScore(),
-      getCurrentQualitySrcPolicy: () => this.dynamicSrcQualityPolicy,
-      captureCurrentQualitySrcPolicy: () => this.captureCurrentQualitySrcPolicy(),
-      restoreQualitySrcPolicyForDisabled: async (reason) => {
-        await this.applySrcPolicyIfNeeded(this.dynamicSrcQualityPolicy, reason, 'quality');
-      },
-      evaluateDynamicSrcAutoDegradation: (options) =>
-        this.evaluateDynamicSrcAutoDegradation(options),
-      emitRobustnessSnapshot: (force) => this.emitRobustnessSnapshot(force),
-      scheduleDynamicSrcRestoreEvaluation: () => this.scheduleDynamicSrcRestoreEvaluation(),
-    };
-  }
-
   private async restoreDynamicSrcAutoSettingsFromStorage(): Promise<void> {
-    return restoreDynamicSrcAutoSettingsFromStorageImpl(this.createDynamicSrcAutoSettingsHost());
+    return this.dynamicSrcSettingsCoordinator.restoreFromStorage();
   }
 
   private readTuningAutoSettings(): AudioTuningAutoSettings {
@@ -2014,76 +2004,16 @@ export class NativeAudioService implements IAudioService {
   }
 
   private applyEnginePolicyPayload(payload: unknown): void {
-    if (!payload || typeof payload !== 'object') return;
-    const policy = payload as NativeAudioEnginePolicyPayload;
-
-    if (
-      policy.stabilityProfile === 'low-latency' ||
-      policy.stabilityProfile === 'balanced' ||
-      policy.stabilityProfile === 'stable' ||
-      policy.stabilityProfile === 'game-safe' ||
-      policy.stabilityProfile === 'safe-mode'
-    ) {
-      this.stabilityProfile = policy.stabilityProfile;
-    }
-
-    if (policy.transportMode === 'robust' || policy.transportMode === 'transport-exact') {
-      this.transportMode = policy.transportMode;
-    }
-
-    if (
-      policy.hqSrcPhaseMode === 'linear' ||
-      policy.hqSrcPhaseMode === 'minimum' ||
-      policy.hqSrcPhaseMode === 'intermediate'
-    ) {
-      this.hqSrcPhaseMode = policy.hqSrcPhaseMode;
-    }
-
-    if (
-      policy.srcMode === 'source-native' ||
-      policy.srcMode === 'match-output' ||
-      policy.srcMode === 'target-rate'
-    ) {
-      this.srcMode = policy.srcMode;
-    }
-
-    if (policy.srcBackend === 'rubato' || policy.srcBackend === 'linear-simd') {
-      this.srcBackend = policy.srcBackend;
-    }
-
-    if (
-      typeof policy.srcTargetSampleRate === 'number' &&
-      Number.isFinite(policy.srcTargetSampleRate) &&
-      policy.srcTargetSampleRate > 0
-    ) {
-      this.srcTargetSampleRate = Math.max(8000, Math.min(768000, Math.floor(policy.srcTargetSampleRate)));
-    } else if (policy.srcTargetSampleRate == null) {
-      this.srcTargetSampleRate = null;
-    }
-
-    if (policy.outputQuantizationMode === 'round' || policy.outputQuantizationMode === 'tpdf') {
-      this.outputQuantizationMode = policy.outputQuantizationMode;
-    }
-
-    if (
-      !this.dynamicSrcPolicyController.enabled ||
-      this.dynamicSrcPolicyController.manualLockActive
-    ) {
-      this.captureCurrentQualitySrcPolicy();
-    }
-
-    if (typeof policy.hqSrcStopbandDb === 'number' && Number.isFinite(policy.hqSrcStopbandDb)) {
-      this.hqSrcStopbandDb = Math.max(0, Math.min(200, Math.floor(policy.hqSrcStopbandDb)));
-    }
-
-    if (typeof policy.transportExactInt32Container === 'boolean') {
-      this.transportExactInt32Container = policy.transportExactInt32Container;
-    }
-
-    if (!policy.hqSrcEnabled) {
-      this.hqSrcActive = false;
-      this.hqSrcRatio = 1;
-    }
+    applyNativeAudioEnginePolicyPayload(
+      this as unknown as NativeAudioEngineState,
+      payload,
+      {
+        captureCurrentQualityPolicy:
+          !this.dynamicSrcPolicyController.enabled ||
+          this.dynamicSrcPolicyController.manualLockActive,
+        onCaptureCurrentQualityPolicy: () => this.captureCurrentQualitySrcPolicy(),
+      }
+    );
   }
 
   private async setEnginePolicyInternal(
@@ -2163,11 +2093,11 @@ export class NativeAudioService implements IAudioService {
   }
 
   getDynamicSrcAutoSettings(): AudioDynamicSrcAutoSettings {
-    return this.dynamicSrcPolicyController.getSettings();
+    return this.dynamicSrcSettingsCoordinator.getSettings();
   }
 
   async setDynamicSrcAutoSettings(settings: AudioDynamicSrcAutoSettingsPatch): Promise<void> {
-    return setDynamicSrcAutoSettingsImpl(this.createDynamicSrcAutoSettingsHost(), settings);
+    return this.dynamicSrcSettingsCoordinator.setSettings(settings);
   }
 
   async applyTuningProfile(profileId: AudioTuningProfileId): Promise<void> {
@@ -4295,9 +4225,7 @@ export class NativeAudioService implements IAudioService {
     this.protectionWindowUntilMs = 0;
     this.protectionWindowRefCount = 0;
     this.protectionWindowReason = null;
-    this.dynamicSrcSettingsListenerCleanup?.();
-    this.dynamicSrcSettingsListenerCleanup = null;
-    this.dynamicSrcSettingsListenerInitPromise = null;
+    this.dynamicSrcSettingsCoordinator.dispose();
     this.tuningAutoSettingsListenerCleanup?.();
     this.tuningAutoSettingsListenerCleanup = null;
     this.tuningAutoSettingsListenerInitPromise = null;

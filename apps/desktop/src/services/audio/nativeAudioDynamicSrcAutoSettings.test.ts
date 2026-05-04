@@ -5,6 +5,7 @@ import {
 } from './nativeAudioDynamicSrcPolicyController';
 import { NativeAudioDynamicSrcLearningController } from './nativeAudioDynamicSrcLearningController';
 import {
+  NativeAudioDynamicSrcAutoSettingsCoordinator,
   restoreDynamicSrcAutoSettingsFromStorageImpl,
   setDynamicSrcAutoSettingsImpl,
   type DynamicSrcAutoSettingsHost,
@@ -324,5 +325,34 @@ describe('nativeAudioDynamicSrcAutoSettings', () => {
 
     triggerListener(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE);
     expect(context.emitRobustnessSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('owns storage listener lifecycle through the settings coordinator', async () => {
+    const context = createHost(createController(), 5);
+    const coordinator = new NativeAudioDynamicSrcAutoSettingsCoordinator({
+      policyController: context.controller,
+      learningController: context.learningController,
+      host: {
+        getDynamicSrcStressScore: () => 5,
+        getCurrentQualitySrcPolicy: () => context.controller.currentQualityPolicy,
+        captureCurrentQualitySrcPolicy: context.captureCurrentQualitySrcPolicy,
+        restoreQualitySrcPolicyForDisabled: context.restoreQualitySrcPolicyForDisabled,
+        evaluateDynamicSrcAutoDegradation: context.evaluateDynamicSrcAutoDegradation,
+        emitRobustnessSnapshot: context.emitRobustnessSnapshot,
+        scheduleDynamicSrcRestoreEvaluation: context.scheduleDynamicSrcRestoreEvaluation,
+      },
+    });
+
+    await coordinator.restoreFromStorage();
+    await coordinator.restoreFromStorage();
+
+    expect(mocks.setupDualListener).toHaveBeenCalledTimes(2);
+    expect(coordinator.getSettings()).toEqual(DEFAULT_SETTINGS);
+
+    coordinator.dispose();
+
+    expect(mocks.listeners).toHaveLength(2);
+    expect(mocks.listeners[0]?.cleanup).toHaveBeenCalledTimes(1);
+    expect(mocks.listeners[1]?.cleanup).toHaveBeenCalledTimes(1);
   });
 });

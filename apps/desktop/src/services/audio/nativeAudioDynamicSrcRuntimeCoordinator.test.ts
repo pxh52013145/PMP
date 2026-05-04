@@ -179,6 +179,30 @@ describe('NativeAudioDynamicSrcRuntimeCoordinator', () => {
     }
   });
 
+  it('holds output-error recovery without seek deferral and schedules restore after the hold', () => {
+    const nowMs = 1_000;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    try {
+      const context = createCoordinator();
+      const effectiveTiming = context.coordinator.getEffectiveDynamicSrcTiming(nowMs);
+
+      context.coordinator.withDynamicSrcHold(
+        'output-error:NATIVE_AUDIO_OUTPUT_ERROR',
+        effectiveTiming.outputErrorHoldMs
+      );
+
+      expect(context.ensureLatencySrcPolicy).toHaveBeenCalledWith(
+        'output-error:NATIVE_AUDIO_OUTPUT_ERROR'
+      );
+      expect(context.policyController.deferredLatency).toBeNull();
+      expect(context.policyController.holdUntil).toBe(11_000);
+      expect(context.timers).toHaveLength(1);
+      expect(context.timers[0]?.timeoutMs).toBe(10_000);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it('flushes deferred seek latency only after pending seek work settles', () => {
     let nowMs = 1_000;
     const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);

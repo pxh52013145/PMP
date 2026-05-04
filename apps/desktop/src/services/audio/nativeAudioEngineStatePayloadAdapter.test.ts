@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyNativeAudioEnginePolicyPayload,
   applyNativeAudioEngineStatePayload,
   type NativeAudioEngineState,
 } from './nativeAudioEngineStatePayloadAdapter';
@@ -143,5 +144,55 @@ describe('nativeAudioEngineStatePayloadAdapter', () => {
 
     applyNativeAudioEngineStatePayload(state, { srcTargetSampleRate: -1 });
     expect(state.srcTargetSampleRate).toBe(768000);
+  });
+
+  it('applies engine policy payloads and captures the updated quality SRC policy', () => {
+    const state = createState();
+    state.hqSrcActive = true;
+    state.hqSrcRatio = 1.75;
+    let capturedPolicy: Pick<
+      NativeAudioEngineState,
+      'srcMode' | 'srcBackend' | 'srcTargetSampleRate'
+    > | null = null;
+
+    applyNativeAudioEnginePolicyPayload(
+      state,
+      {
+        stabilityProfile: 'stable',
+        transportMode: 'transport-exact',
+        hqSrcPhaseMode: 'intermediate',
+        srcMode: 'target-rate',
+        srcBackend: 'linear-simd',
+        srcTargetSampleRate: 192_000.8,
+        outputQuantizationMode: 'tpdf',
+        hqSrcStopbandDb: 145.9,
+        transportExactInt32Container: false,
+        hqSrcEnabled: false,
+      },
+      {
+        captureCurrentQualityPolicy: true,
+        onCaptureCurrentQualityPolicy: () => {
+          capturedPolicy = {
+            srcMode: state.srcMode,
+            srcBackend: state.srcBackend,
+            srcTargetSampleRate: state.srcTargetSampleRate,
+          };
+        },
+      }
+    );
+
+    expect(capturedPolicy).toEqual({
+      srcMode: 'target-rate',
+      srcBackend: 'linear-simd',
+      srcTargetSampleRate: 192000,
+    });
+    expect(state.stabilityProfile).toBe('stable');
+    expect(state.transportMode).toBe('transport-exact');
+    expect(state.hqSrcPhaseMode).toBe('intermediate');
+    expect(state.outputQuantizationMode).toBe('tpdf');
+    expect(state.hqSrcStopbandDb).toBe(145);
+    expect(state.transportExactInt32Container).toBe(false);
+    expect(state.hqSrcActive).toBe(false);
+    expect(state.hqSrcRatio).toBe(1);
   });
 });

@@ -19,13 +19,7 @@ import type { NativeAudioSrcPolicy } from './nativeAudioServiceTypes';
 
 type DynamicSrcSettingsListenerCleanup = (() => void) | null;
 
-export type DynamicSrcAutoSettingsHost = {
-  policyController: NativeAudioDynamicSrcPolicyController;
-  learningController: NativeAudioDynamicSrcLearningController;
-  getDynamicSrcSettingsListenerCleanup(): DynamicSrcSettingsListenerCleanup;
-  setDynamicSrcSettingsListenerCleanup(cleanup: DynamicSrcSettingsListenerCleanup): void;
-  getDynamicSrcSettingsListenerInitPromise(): Promise<void> | null;
-  setDynamicSrcSettingsListenerInitPromise(promise: Promise<void> | null): void;
+export type DynamicSrcAutoSettingsCoordinatorHost = {
   getDynamicSrcStressScore(): number;
   getCurrentQualitySrcPolicy(): NativeAudioSrcPolicy;
   captureCurrentQualitySrcPolicy(): void;
@@ -35,7 +29,62 @@ export type DynamicSrcAutoSettingsHost = {
   scheduleDynamicSrcRestoreEvaluation(): void;
 };
 
+export type DynamicSrcAutoSettingsHost = {
+  policyController: NativeAudioDynamicSrcPolicyController;
+  learningController: NativeAudioDynamicSrcLearningController;
+  getDynamicSrcSettingsListenerCleanup(): DynamicSrcSettingsListenerCleanup;
+  setDynamicSrcSettingsListenerCleanup(cleanup: DynamicSrcSettingsListenerCleanup): void;
+  getDynamicSrcSettingsListenerInitPromise(): Promise<void> | null;
+  setDynamicSrcSettingsListenerInitPromise(promise: Promise<void> | null): void;
+} & DynamicSrcAutoSettingsCoordinatorHost;
+
 export type DynamicSrcHost = DynamicSrcAutoSettingsHost;
+
+export type NativeAudioDynamicSrcAutoSettingsCoordinatorOptions = {
+  policyController: NativeAudioDynamicSrcPolicyController;
+  learningController: NativeAudioDynamicSrcLearningController;
+  host: DynamicSrcAutoSettingsCoordinatorHost;
+};
+
+export class NativeAudioDynamicSrcAutoSettingsCoordinator {
+  private listenerCleanup: DynamicSrcSettingsListenerCleanup = null;
+  private listenerInitPromise: Promise<void> | null = null;
+  private readonly host: DynamicSrcAutoSettingsHost;
+
+  constructor(options: NativeAudioDynamicSrcAutoSettingsCoordinatorOptions) {
+    this.host = {
+      ...options.host,
+      policyController: options.policyController,
+      learningController: options.learningController,
+      getDynamicSrcSettingsListenerCleanup: () => this.listenerCleanup,
+      setDynamicSrcSettingsListenerCleanup: (cleanup) => {
+        this.listenerCleanup = cleanup;
+      },
+      getDynamicSrcSettingsListenerInitPromise: () => this.listenerInitPromise,
+      setDynamicSrcSettingsListenerInitPromise: (promise) => {
+        this.listenerInitPromise = promise;
+      },
+    };
+  }
+
+  getSettings(): AudioDynamicSrcAutoSettings {
+    return this.host.policyController.getSettings();
+  }
+
+  async setSettings(settings: AudioDynamicSrcAutoSettingsPatch): Promise<void> {
+    return setDynamicSrcAutoSettingsImpl(this.host, settings);
+  }
+
+  async restoreFromStorage(): Promise<void> {
+    return restoreDynamicSrcAutoSettingsFromStorageImpl(this.host);
+  }
+
+  dispose(): void {
+    this.listenerCleanup?.();
+    this.listenerCleanup = null;
+    this.listenerInitPromise = null;
+  }
+}
 
 export function readDynamicSrcAutoSettingsFromStorage(
   policyController: NativeAudioDynamicSrcPolicyController
