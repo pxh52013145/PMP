@@ -22,8 +22,21 @@ function readErrorMessage(error: unknown): string {
 
 type NativeAudioListenerCleanup = (() => void) | null;
 
+type NativeAudioDiagnosticTimelineEntry = {
+  seq: number;
+  timestampMs: number;
+  kind: string;
+  value: number;
+  aux: number;
+};
+
+type DynamicSrcAutoDegradationOptions = {
+  nowMs?: number;
+  stressScore?: number;
+  triggerActions: boolean;
+};
+
 export type NativeAudioListenerHost = {
-  [key: string]: unknown;
   state: AudioState;
   stateListener: NativeAudioListenerCleanup;
   errorListener: NativeAudioListenerCleanup;
@@ -84,42 +97,52 @@ export type NativeAudioListenerHost = {
   controlQueueCoalescedOverflowEvents: number;
   controlQueueCriticalOverflowEvents: number;
   estimatedAudioBufferBytes: number;
+  memoryPoolF32GrowthEvents: number;
+  memoryPoolF32GrowthBytes: number;
+  memoryPoolF32PrewarmHits: number;
+  realtimeMemoryLockAttemptedBytes: number;
+  realtimeMemoryLockSucceededBytes: number;
+  realtimeMemoryLockFailedBytes: number;
+  realtimeMemoryLockSkippedBytes: number;
+  realtimeMemoryLockFailureCount: number;
+  realtimeMemoryLockSkippedCount: number;
+  realtimeMemoryLockedRoleMask: number;
+  realtimeMemoryFailedRoleMask: number;
+  realtimeMemorySkippedRoleMask: number;
+  realtimeMemoryPressureEvents: number;
   diagnosticTimelineDroppedEvents: number;
-  diagnosticTimeline: Array<{
-    seq: number;
-    timestampMs: number;
-    kind: string;
-    value: number;
-    aux: number;
-  }>;
+  diagnosticTimeline: NativeAudioDiagnosticTimelineEntry[];
   fallbackClockBaseTimeSec: number;
   fallbackClockStartedAtMs: number | null;
   lastBackendTimeUpdateAtMs: number;
   timeUpdateCallbacks: Set<(time: number) => void>;
   endedCallbacks: Set<() => void>;
-  spectrumData: Uint8Array;
+  spectrumData: Uint8Array | null;
   spectrumFrames: Partial<Record<AudioSpectrumTap, AudioSpectrumFrame>>;
   shouldIgnoreBackendCurrentTime(nextTime: number): boolean;
-  handleUnderrunSpike(...args: unknown[]): void;
-  handleRenderQueuePageLockStatus(...args: unknown[]): void;
-  maybeReleaseUnderrunRecovery(...args: unknown[]): void;
+  handleUnderrunSpike(nextUnderrunEvents: number, nextUnderrunFrames?: number): void;
+  handleRenderQueuePageLockStatus(
+    locked: boolean,
+    playbackState?: NativeAudioStatePayload['playbackState']
+  ): void;
+  maybeReleaseUnderrunRecovery(playbackState: AudioState['playbackState']): void;
   ensureFallbackTicker(): void;
-  applyPlaybackStateSideEffects(...args: unknown[]): void;
-  applySharedTimelineStressIfNeeded(...args: unknown[]): void;
+  applyPlaybackStateSideEffects(playbackState: AudioState['playbackState']): void;
+  applySharedTimelineStressIfNeeded(timeline: NativeAudioDiagnosticTimelineEntry[]): void;
   deriveTitleFromPath(path: string): string;
-  emitError(...args: unknown[]): void;
-  emitRobustnessSnapshot(...args: unknown[]): void;
-  evaluateDynamicSrcAutoDegradation(...args: unknown[]): void;
-  getEffectiveDynamicSrcTiming(...args: unknown[]): { stressScore: number };
+  emitError(error: Error): void;
+  emitRobustnessSnapshot(force?: boolean): void;
+  evaluateDynamicSrcAutoDegradation(options: DynamicSrcAutoDegradationOptions): void;
+  getEffectiveDynamicSrcTiming(nowMs?: number): { stressScore: number };
   getTrackPath(track: AudioState['currentTrack'] | null | undefined): string | null;
   handleTrackEnded(): void;
-  isSameQueuePaths(...args: unknown[]): boolean;
+  isSameQueuePaths(queuePaths: string[]): boolean;
   normalizeTrackPathForCompare(path: string | null): string;
-  recordBufferedAheadSample(...args: unknown[]): void;
+  recordBufferedAheadSample(value: number): void;
   resolveQueueFromPaths(paths: string[]): AudioState['queue'];
   resolveTrackFromPath(path: string): { track: NonNullable<AudioState['currentTrack']>; index: number } | null;
-  trackPlaybackStateForMetrics(...args: unknown[]): void;
-  updateDynamicSrcLearningFromStress(...args: unknown[]): void;
+  trackPlaybackStateForMetrics(nextPlaybackState: AudioState['playbackState']): void;
+  updateDynamicSrcLearningFromStress(stressScore: number, nowMs?: number): void;
   updateState(partial: Partial<AudioState>, options?: { emitStateChange?: boolean }): AudioState;
 };
 

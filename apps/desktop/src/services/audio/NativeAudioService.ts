@@ -2,6 +2,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { setupNativeListenersImpl } from './nativeAudioNativeListeners';
 import {
   restoreDynamicSrcAutoSettingsFromStorageImpl,
+  setDynamicSrcAutoSettingsImpl,
   type DynamicSrcAutoSettingsHost,
 } from './nativeAudioDynamicSrcAutoSettings';
 import {
@@ -72,7 +73,6 @@ import {
 } from './nativeAudioDynamicSrcLearningController';
 import {
   NativeAudioDynamicSrcPolicyController,
-  resolveNativeAudioDynamicSrcSettingsPatch,
 } from './nativeAudioDynamicSrcPolicyController';
 import {
   NativeAudioDynamicSrcRuntimeCoordinator,
@@ -97,9 +97,8 @@ import {
   getLastProcessWorkingSetTrimEvent,
   scheduleProcessWorkingSetTrim,
 } from '../../utils/processWorkingSetTrim';
-import { buildNativeAudioRobustnessSnapshot } from './nativeAudioRobustnessSnapshot';
 import { NativeAudioRobustnessController } from './nativeAudioRobustnessController';
-import { createNativeAudioRobustnessSnapshotSource } from './nativeAudioRobustnessSnapshotAdapter';
+import { buildNativeAudioRobustnessSnapshotFromAdapterInput } from './nativeAudioRobustnessSnapshotAdapter';
 import {
   clearPendingSeekGuardImpl,
   clearPendingSeekImpl,
@@ -1866,6 +1865,11 @@ export class NativeAudioService implements IAudioService {
         this.dynamicSrcSettingsListenerInitPromise = promise;
       },
       getDynamicSrcStressScore: () => this.getDynamicSrcStressScore(),
+      getCurrentQualitySrcPolicy: () => this.dynamicSrcQualityPolicy,
+      captureCurrentQualitySrcPolicy: () => this.captureCurrentQualitySrcPolicy(),
+      restoreQualitySrcPolicyForDisabled: async (reason) => {
+        await this.applySrcPolicyIfNeeded(this.dynamicSrcQualityPolicy, reason, 'quality');
+      },
       evaluateDynamicSrcAutoDegradation: (options) =>
         this.evaluateDynamicSrcAutoDegradation(options),
       emitRobustnessSnapshot: (force) => this.emitRobustnessSnapshot(force),
@@ -2129,41 +2133,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   async setDynamicSrcAutoSettings(settings: AudioDynamicSrcAutoSettingsPatch): Promise<void> {
-    const nextSettings = resolveNativeAudioDynamicSrcSettingsPatch({
-      patch: settings,
-      current: this.getDynamicSrcAutoSettings(),
-    });
-
-    if (!nextSettings.enabled && this.dynamicSrcPolicyController.profile === 'latency') {
-      await this.applySrcPolicyIfNeeded(this.dynamicSrcQualityPolicy, 'dynamic-src-disabled', 'quality');
-    }
-
-    await broadcastDataUpdate(
-      STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS,
-      nextSettings,
-      TAURI_EVENTS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS_UPDATED
-    );
-
-    this.dynamicSrcPolicyController.applySettings(nextSettings);
-    if (!nextSettings.learningEnabled) {
-      this.dynamicSrcLearningController.clearPersistTimer();
-    }
-
-    if (!nextSettings.enabled) {
-      this.dynamicSrcPolicyController.disableAuto();
-      this.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
-      this.emitRobustnessSnapshot();
-      return;
-    }
-
-    this.captureCurrentQualitySrcPolicy();
-    this.dynamicSrcPolicyController.enableAuto({
-      currentQualityPolicy: this.dynamicSrcQualityPolicy,
-      stressScore: this.getDynamicSrcStressScore(),
-    });
-    this.scheduleDynamicSrcRestoreEvaluation();
-    this.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
-    this.emitRobustnessSnapshot();
+    return setDynamicSrcAutoSettingsImpl(this.createDynamicSrcAutoSettingsHost(), settings);
   }
 
   async applyTuningProfile(profileId: AudioTuningProfileId): Promise<void> {
@@ -2630,49 +2600,54 @@ export class NativeAudioService implements IAudioService {
   }
 
   private buildRobustnessSnapshot(nowMs: number = Date.now()): AudioRobustnessSnapshot {
-    const source = createNativeAudioRobustnessSnapshotSource({
-      record: this as unknown as Record<string, unknown>,
-      state: this.state,
-      stabilityActionProfile: this.stabilityActionProfile,
-      sourcePrepareProfile: this.sourcePrepareProfile,
-      stabilityPrimaryReason: this.stabilityPrimaryReason,
-      stabilityReasonCodes: this.stabilityReasonCodes,
-      stabilityHintProfile: this.stabilityHintProfile,
-      stabilityHintPrimaryReason: this.stabilityHintPrimaryReason,
-      stabilityHintReasonCodes: this.stabilityHintReasonCodes,
-      estimatedAudioBufferBytes: this.estimatedAudioBufferBytes,
-      renderQueuePageLockFailureCount: this.renderQueuePageLockFailureCount,
-      renderQueuePageLockAttemptedBytes: this.renderQueuePageLockAttemptedBytes,
-      renderQueuePageLockSucceededBytes: this.renderQueuePageLockSucceededBytes,
-      renderQueuePageLockFailedBytes: this.renderQueuePageLockFailedBytes,
-      memoryPoolF32GrowthEvents: this.memoryPoolF32GrowthEvents,
-      memoryPoolF32GrowthBytes: this.memoryPoolF32GrowthBytes,
-      memoryPoolF32PrewarmHits: this.memoryPoolF32PrewarmHits,
-      realtimeMemoryLockAttemptedBytes: this.realtimeMemoryLockAttemptedBytes,
-      realtimeMemoryLockSucceededBytes: this.realtimeMemoryLockSucceededBytes,
-      realtimeMemoryLockFailedBytes: this.realtimeMemoryLockFailedBytes,
-      realtimeMemoryLockSkippedBytes: this.realtimeMemoryLockSkippedBytes,
-      realtimeMemoryLockFailureCount: this.realtimeMemoryLockFailureCount,
-      realtimeMemoryLockSkippedCount: this.realtimeMemoryLockSkippedCount,
-      realtimeMemoryLockedRoleMask: this.realtimeMemoryLockedRoleMask,
-      realtimeMemoryFailedRoleMask: this.realtimeMemoryFailedRoleMask,
-      realtimeMemorySkippedRoleMask: this.realtimeMemorySkippedRoleMask,
-      realtimeMemoryPressureEvents: this.realtimeMemoryPressureEvents,
-      bufferedAheadRollingWindow: this.bufferedAheadRollingWindow,
-      bufferedAheadRollingSum: this.bufferedAheadRollingSum,
-      underrunRecoveryUntilMs: this.underrunRecoveryUntilMs,
-      dynamicSrcAdaptiveProfile: this.dynamicSrcAdaptiveProfile,
-      dynamicSrcLearningProfile: this.dynamicSrcLearningProfile,
-      pruneUnderrunSpikeWindow: (timestampMs) => this.pruneUnderrunSpikeWindow(timestampMs),
-      getEffectiveDynamicSrcTiming: (timestampMs) => this.getEffectiveDynamicSrcTiming(timestampMs),
-      evaluateDynamicSrcAutoDegradation: (options) => this.evaluateDynamicSrcAutoDegradation(options),
-      buildDynamicSrcLearningDeviceKey: () => this.buildDynamicSrcLearningDeviceKey(),
-      getDynamicSrcLearningScale: () => this.getDynamicSrcLearningScale(),
-      hasActiveProtectionWindow: (timestampMs) => this.hasActiveProtectionWindow(timestampMs),
-      hasActiveSharedStressWindow: (timestampMs) => this.hasActiveSharedStressWindow(timestampMs),
-      lastWorkingSetTrimEvent: getLastProcessWorkingSetTrimEvent(),
-    });
-    return buildNativeAudioRobustnessSnapshot(source, nowMs);
+    return buildNativeAudioRobustnessSnapshotFromAdapterInput(
+      {
+        record: this as unknown as Record<string, unknown>,
+        state: this.state,
+        stabilityActionProfile: this.stabilityActionProfile,
+        sourcePrepareProfile: this.sourcePrepareProfile,
+        stabilityPrimaryReason: this.stabilityPrimaryReason,
+        stabilityReasonCodes: this.stabilityReasonCodes,
+        stabilityHintProfile: this.stabilityHintProfile,
+        stabilityHintPrimaryReason: this.stabilityHintPrimaryReason,
+        stabilityHintReasonCodes: this.stabilityHintReasonCodes,
+        estimatedAudioBufferBytes: this.estimatedAudioBufferBytes,
+        renderQueuePageLockFailureCount: this.renderQueuePageLockFailureCount,
+        renderQueuePageLockAttemptedBytes: this.renderQueuePageLockAttemptedBytes,
+        renderQueuePageLockSucceededBytes: this.renderQueuePageLockSucceededBytes,
+        renderQueuePageLockFailedBytes: this.renderQueuePageLockFailedBytes,
+        memoryPoolF32GrowthEvents: this.memoryPoolF32GrowthEvents,
+        memoryPoolF32GrowthBytes: this.memoryPoolF32GrowthBytes,
+        memoryPoolF32PrewarmHits: this.memoryPoolF32PrewarmHits,
+        realtimeMemoryLockAttemptedBytes: this.realtimeMemoryLockAttemptedBytes,
+        realtimeMemoryLockSucceededBytes: this.realtimeMemoryLockSucceededBytes,
+        realtimeMemoryLockFailedBytes: this.realtimeMemoryLockFailedBytes,
+        realtimeMemoryLockSkippedBytes: this.realtimeMemoryLockSkippedBytes,
+        realtimeMemoryLockFailureCount: this.realtimeMemoryLockFailureCount,
+        realtimeMemoryLockSkippedCount: this.realtimeMemoryLockSkippedCount,
+        realtimeMemoryLockedRoleMask: this.realtimeMemoryLockedRoleMask,
+        realtimeMemoryFailedRoleMask: this.realtimeMemoryFailedRoleMask,
+        realtimeMemorySkippedRoleMask: this.realtimeMemorySkippedRoleMask,
+        realtimeMemoryPressureEvents: this.realtimeMemoryPressureEvents,
+        bufferedAheadRollingWindow: this.bufferedAheadRollingWindow,
+        bufferedAheadRollingSum: this.bufferedAheadRollingSum,
+        underrunRecoveryUntilMs: this.underrunRecoveryUntilMs,
+        dynamicSrcAdaptiveProfile: this.dynamicSrcAdaptiveProfile,
+        dynamicSrcLearningProfile: this.dynamicSrcLearningProfile,
+        pruneUnderrunSpikeWindow: (timestampMs) => this.pruneUnderrunSpikeWindow(timestampMs),
+        getEffectiveDynamicSrcTiming: (timestampMs) =>
+          this.getEffectiveDynamicSrcTiming(timestampMs),
+        evaluateDynamicSrcAutoDegradation: (options) =>
+          this.evaluateDynamicSrcAutoDegradation(options),
+        buildDynamicSrcLearningDeviceKey: () => this.buildDynamicSrcLearningDeviceKey(),
+        getDynamicSrcLearningScale: () => this.getDynamicSrcLearningScale(),
+        hasActiveProtectionWindow: (timestampMs) => this.hasActiveProtectionWindow(timestampMs),
+        hasActiveSharedStressWindow: (timestampMs) =>
+          this.hasActiveSharedStressWindow(timestampMs),
+        lastWorkingSetTrimEvent: getLastProcessWorkingSetTrimEvent(),
+      },
+      nowMs
+    );
   }
 
   private emitRobustnessSnapshot(force: boolean = false): void {

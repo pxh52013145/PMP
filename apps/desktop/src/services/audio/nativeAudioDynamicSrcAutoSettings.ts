@@ -1,9 +1,21 @@
 ﻿import { readString } from '../../modules/storage';
-import { STORAGE_KEYS, setupDualListener } from '../../utils/windowCommunication';
+import {
+  broadcastDataUpdate,
+  STORAGE_KEYS,
+  TAURI_EVENTS,
+  setupDualListener,
+} from '../../utils/windowCommunication';
 import { resolveStoredDynamicSrcAutoSettings } from './nativeAudioAutoSettingsStorage';
-import type { AudioDynamicSrcAutoSettings } from './types';
+import type {
+  AudioDynamicSrcAutoSettings,
+  AudioDynamicSrcAutoSettingsPatch,
+} from './types';
 import type { NativeAudioDynamicSrcLearningController } from './nativeAudioDynamicSrcLearningController';
-import type { NativeAudioDynamicSrcPolicyController } from './nativeAudioDynamicSrcPolicyController';
+import {
+  resolveNativeAudioDynamicSrcSettingsPatch,
+  type NativeAudioDynamicSrcPolicyController,
+} from './nativeAudioDynamicSrcPolicyController';
+import type { NativeAudioSrcPolicy } from './nativeAudioServiceTypes';
 
 type DynamicSrcSettingsListenerCleanup = (() => void) | null;
 
@@ -15,6 +27,9 @@ export type DynamicSrcAutoSettingsHost = {
   getDynamicSrcSettingsListenerInitPromise(): Promise<void> | null;
   setDynamicSrcSettingsListenerInitPromise(promise: Promise<void> | null): void;
   getDynamicSrcStressScore(): number;
+  getCurrentQualitySrcPolicy(): NativeAudioSrcPolicy;
+  captureCurrentQualitySrcPolicy(): void;
+  restoreQualitySrcPolicyForDisabled(reason: string): Promise<void> | void;
   evaluateDynamicSrcAutoDegradation(options: { triggerActions: boolean }): void;
   emitRobustnessSnapshot(force?: boolean): void;
   scheduleDynamicSrcRestoreEvaluation(): void;
@@ -41,6 +56,67 @@ function restoreInitialDynamicSrcState(host: DynamicSrcAutoSettingsHost): void {
   host.emitRobustnessSnapshot(true);
 }
 
+function emitDynamicSrcSettingsSnapshot(
+  host: DynamicSrcAutoSettingsHost,
+  force: boolean = false
+): void {
+  if (force) {
+    host.emitRobustnessSnapshot(true);
+    return;
+  }
+  host.emitRobustnessSnapshot();
+}
+
+function applyDynamicSrcAutoSettingsState(
+  host: DynamicSrcAutoSettingsHost,
+  nextSettings: AudioDynamicSrcAutoSettings,
+  options: {
+    captureCurrentQualityPolicy?: boolean;
+    enableAuto?: boolean;
+    emitSnapshot?: boolean;
+    forceSnapshot?: boolean;
+    scheduleRestore?: boolean;
+  } = {}
+): void {
+  host.policyController.applySettings(nextSettings);
+  if (!nextSettings.learningEnabled) {
+    host.learningController.clearPersistTimer();
+  }
+
+  if (!nextSettings.enabled) {
+    host.policyController.disableAuto();
+    host.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
+    if (options.emitSnapshot) {
+      emitDynamicSrcSettingsSnapshot(host, options.forceSnapshot);
+    }
+    return;
+  }
+
+  if (options.captureCurrentQualityPolicy) {
+    host.captureCurrentQualitySrcPolicy();
+  }
+
+  const stressScore = host.getDynamicSrcStressScore();
+  if (options.enableAuto) {
+    host.policyController.enableAuto({
+      currentQualityPolicy: host.getCurrentQualitySrcPolicy(),
+      stressScore,
+    });
+  } else {
+    host.policyController.currentAdaptiveProfile =
+      host.policyController.resolveAdaptiveProfile(stressScore);
+  }
+
+  if (options.scheduleRestore) {
+    host.scheduleDynamicSrcRestoreEvaluation();
+  }
+
+  host.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
+  if (options.emitSnapshot) {
+    emitDynamicSrcSettingsSnapshot(host, options.forceSnapshot);
+  }
+}
+
 function applyPersistedDynamicSrcSettings(host: DynamicSrcAutoSettingsHost): void {
   const previous = host.policyController.getSettings();
   const next = readDynamicSrcAutoSettingsFromStorage(host.policyController);
@@ -49,24 +125,11 @@ function applyPersistedDynamicSrcSettings(host: DynamicSrcAutoSettingsHost): voi
     next.adaptiveEnabled !== previous.adaptiveEnabled ||
     next.learningEnabled !== previous.learningEnabled;
 
-  host.policyController.applySettings(next);
-  if (!next.learningEnabled) {
-    host.learningController.clearPersistTimer();
-  }
-
-  if (!next.enabled) {
-    host.policyController.disableAuto();
-  } else {
-    host.policyController.currentAdaptiveProfile = host.policyController.resolveAdaptiveProfile(
-      host.getDynamicSrcStressScore()
-    );
-    host.scheduleDynamicSrcRestoreEvaluation();
-  }
-
-  host.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
-  if (changed) {
-    host.emitRobustnessSnapshot(true);
-  }
+  applyDynamicSrcAutoSettingsState(host, next, {
+    emitSnapshot: changed,
+    forceSnapshot: true,
+    scheduleRestore: next.enabled,
+  });
 }
 
 function applyPersistedDynamicSrcLearningProfile(host: DynamicSrcAutoSettingsHost): void {
@@ -78,6 +141,33 @@ function applyPersistedDynamicSrcLearningProfile(host: DynamicSrcAutoSettingsHos
   }
 
   host.emitRobustnessSnapshot(true);
+}
+
+export async function setDynamicSrcAutoSettingsImpl(
+  host: DynamicSrcAutoSettingsHost,
+  settings: AudioDynamicSrcAutoSettingsPatch
+): Promise<void> {
+  const nextSettings = resolveNativeAudioDynamicSrcSettingsPatch({
+    patch: settings,
+    current: host.policyController.getSettings(),
+  });
+
+  if (!nextSettings.enabled && host.policyController.profile === 'latency') {
+    await host.restoreQualitySrcPolicyForDisabled('dynamic-src-disabled');
+  }
+
+  await broadcastDataUpdate(
+    STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS,
+    nextSettings,
+    TAURI_EVENTS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS_UPDATED
+  );
+
+  applyDynamicSrcAutoSettingsState(host, nextSettings, {
+    captureCurrentQualityPolicy: nextSettings.enabled,
+    enableAuto: nextSettings.enabled,
+    emitSnapshot: true,
+    scheduleRestore: nextSettings.enabled,
+  });
 }
 
 export async function restoreDynamicSrcAutoSettingsFromStorageImpl(

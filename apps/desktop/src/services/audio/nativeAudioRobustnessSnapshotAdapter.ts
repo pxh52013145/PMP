@@ -1,6 +1,7 @@
 import type { DynamicSrcEffectiveTiming } from './dynamicSrcAdaptiveTiming';
-import type {
-  NativeAudioRobustnessSnapshotSource,
+import {
+  buildNativeAudioRobustnessSnapshot,
+  type NativeAudioRobustnessSnapshotSource,
 } from './nativeAudioRobustnessSnapshot';
 import type { AudioRobustnessSnapshot, AudioState } from './types';
 import type { ProcessWorkingSetTrimEvent } from '../../utils/processWorkingSetTrim';
@@ -60,45 +61,66 @@ export function createNativeAudioRobustnessSnapshotSource(
   const source = Object.create(input.record) as NativeAudioRobustnessSnapshotSource &
     Record<string, unknown>;
 
-  source.state = input.state;
-  source.stabilityActionProfile = input.stabilityActionProfile;
-  source.sourcePrepareProfile = input.sourcePrepareProfile;
-  source.stabilityPrimaryReason = input.stabilityPrimaryReason;
-  source.stabilityReasonCodes = input.stabilityReasonCodes;
-  source.stabilityHintProfile = input.stabilityHintProfile;
-  source.stabilityHintPrimaryReason = input.stabilityHintPrimaryReason;
-  source.stabilityHintReasonCodes = input.stabilityHintReasonCodes;
-  source.estimatedAudioBufferBytes = input.estimatedAudioBufferBytes;
-  source.renderQueuePageLockFailureCount = input.renderQueuePageLockFailureCount;
-  source.renderQueuePageLockAttemptedBytes = input.renderQueuePageLockAttemptedBytes;
-  source.renderQueuePageLockSucceededBytes = input.renderQueuePageLockSucceededBytes;
-  source.renderQueuePageLockFailedBytes = input.renderQueuePageLockFailedBytes;
-  source.memoryPoolF32GrowthEvents = input.memoryPoolF32GrowthEvents;
-  source.memoryPoolF32GrowthBytes = input.memoryPoolF32GrowthBytes;
-  source.memoryPoolF32PrewarmHits = input.memoryPoolF32PrewarmHits;
-  source.realtimeMemoryLockAttemptedBytes = input.realtimeMemoryLockAttemptedBytes;
-  source.realtimeMemoryLockSucceededBytes = input.realtimeMemoryLockSucceededBytes;
-  source.realtimeMemoryLockFailedBytes = input.realtimeMemoryLockFailedBytes;
-  source.realtimeMemoryLockSkippedBytes = input.realtimeMemoryLockSkippedBytes;
-  source.realtimeMemoryLockFailureCount = input.realtimeMemoryLockFailureCount;
-  source.realtimeMemoryLockSkippedCount = input.realtimeMemoryLockSkippedCount;
-  source.realtimeMemoryLockedRoleMask = input.realtimeMemoryLockedRoleMask;
-  source.realtimeMemoryFailedRoleMask = input.realtimeMemoryFailedRoleMask;
-  source.realtimeMemorySkippedRoleMask = input.realtimeMemorySkippedRoleMask;
-  source.realtimeMemoryPressureEvents = input.realtimeMemoryPressureEvents;
-  source.bufferedAheadRollingWindow = input.bufferedAheadRollingWindow;
-  source.bufferedAheadRollingSum = input.bufferedAheadRollingSum;
-  source.underrunRecoveryUntilMs = input.underrunRecoveryUntilMs;
-  source.dynamicSrcAdaptiveProfile = input.dynamicSrcAdaptiveProfile;
-  source.dynamicSrcLearningProfile = input.dynamicSrcLearningProfile;
-  source.pruneUnderrunSpikeWindow = input.pruneUnderrunSpikeWindow;
-  source.getEffectiveDynamicSrcTiming = input.getEffectiveDynamicSrcTiming;
-  source.evaluateDynamicSrcAutoDegradation = input.evaluateDynamicSrcAutoDegradation;
-  source.buildDynamicSrcLearningDeviceKey = input.buildDynamicSrcLearningDeviceKey;
-  source.getDynamicSrcLearningScale = input.getDynamicSrcLearningScale;
-  source.hasActiveProtectionWindow = input.hasActiveProtectionWindow;
-  source.hasActiveSharedStressWindow = input.hasActiveSharedStressWindow;
-  source.lastWorkingSetTrimEvent = input.lastWorkingSetTrimEvent;
+  const overlay: Record<string, unknown> = {
+    state: input.state,
+    stabilityActionProfile: input.stabilityActionProfile,
+    sourcePrepareProfile: input.sourcePrepareProfile,
+    stabilityPrimaryReason: input.stabilityPrimaryReason,
+    stabilityReasonCodes: input.stabilityReasonCodes,
+    stabilityHintProfile: input.stabilityHintProfile,
+    stabilityHintPrimaryReason: input.stabilityHintPrimaryReason,
+    stabilityHintReasonCodes: input.stabilityHintReasonCodes,
+    estimatedAudioBufferBytes: input.estimatedAudioBufferBytes,
+    renderQueuePageLockFailureCount: input.renderQueuePageLockFailureCount,
+    renderQueuePageLockAttemptedBytes: input.renderQueuePageLockAttemptedBytes,
+    renderQueuePageLockSucceededBytes: input.renderQueuePageLockSucceededBytes,
+    renderQueuePageLockFailedBytes: input.renderQueuePageLockFailedBytes,
+    memoryPoolF32GrowthEvents: input.memoryPoolF32GrowthEvents,
+    memoryPoolF32GrowthBytes: input.memoryPoolF32GrowthBytes,
+    memoryPoolF32PrewarmHits: input.memoryPoolF32PrewarmHits,
+    realtimeMemoryLockAttemptedBytes: input.realtimeMemoryLockAttemptedBytes,
+    realtimeMemoryLockSucceededBytes: input.realtimeMemoryLockSucceededBytes,
+    realtimeMemoryLockFailedBytes: input.realtimeMemoryLockFailedBytes,
+    realtimeMemoryLockSkippedBytes: input.realtimeMemoryLockSkippedBytes,
+    realtimeMemoryLockFailureCount: input.realtimeMemoryLockFailureCount,
+    realtimeMemoryLockSkippedCount: input.realtimeMemoryLockSkippedCount,
+    realtimeMemoryLockedRoleMask: input.realtimeMemoryLockedRoleMask,
+    realtimeMemoryFailedRoleMask: input.realtimeMemoryFailedRoleMask,
+    realtimeMemorySkippedRoleMask: input.realtimeMemorySkippedRoleMask,
+    realtimeMemoryPressureEvents: input.realtimeMemoryPressureEvents,
+    bufferedAheadRollingWindow: input.bufferedAheadRollingWindow,
+    bufferedAheadRollingSum: input.bufferedAheadRollingSum,
+    underrunRecoveryUntilMs: input.underrunRecoveryUntilMs,
+    dynamicSrcAdaptiveProfile: input.dynamicSrcAdaptiveProfile,
+    dynamicSrcLearningProfile: input.dynamicSrcLearningProfile,
+    pruneUnderrunSpikeWindow: input.pruneUnderrunSpikeWindow,
+    getEffectiveDynamicSrcTiming: input.getEffectiveDynamicSrcTiming,
+    evaluateDynamicSrcAutoDegradation: input.evaluateDynamicSrcAutoDegradation,
+    buildDynamicSrcLearningDeviceKey: input.buildDynamicSrcLearningDeviceKey,
+    getDynamicSrcLearningScale: input.getDynamicSrcLearningScale,
+    hasActiveProtectionWindow: input.hasActiveProtectionWindow,
+    hasActiveSharedStressWindow: input.hasActiveSharedStressWindow,
+    lastWorkingSetTrimEvent: input.lastWorkingSetTrimEvent,
+  };
+
+  for (const [key, value] of Object.entries(overlay)) {
+    Object.defineProperty(source, key, {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
 
   return source;
+}
+
+export function buildNativeAudioRobustnessSnapshotFromAdapterInput(
+  input: NativeAudioRobustnessSnapshotAdapterInput,
+  nowMs: number
+): AudioRobustnessSnapshot {
+  return buildNativeAudioRobustnessSnapshot(
+    createNativeAudioRobustnessSnapshotSource(input),
+    nowMs
+  );
 }

@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import { STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import {
   NativeAudioDynamicSrcPolicyController,
 } from './nativeAudioDynamicSrcPolicyController';
 import { NativeAudioDynamicSrcLearningController } from './nativeAudioDynamicSrcLearningController';
 import {
   restoreDynamicSrcAutoSettingsFromStorageImpl,
+  setDynamicSrcAutoSettingsImpl,
   type DynamicSrcAutoSettingsHost,
 } from './nativeAudioDynamicSrcAutoSettings';
 import type { AudioDynamicSrcAutoSettings } from './types';
@@ -20,6 +21,9 @@ type ListenerEntry = {
 const mocks = vi.hoisted(() => {
   const storage = new Map<string, string>();
   const listeners: ListenerEntry[] = [];
+  const broadcastDataUpdate = vi.fn(async (key: string, value: unknown) => {
+    storage.set(key, JSON.stringify(value));
+  });
   const setupDualListener = vi.fn(
     async (storageKeys: string[], tauriEvents: string[], callback: () => void) => {
       const cleanup = vi.fn();
@@ -28,7 +32,7 @@ const mocks = vi.hoisted(() => {
     }
   );
 
-  return { listeners, setupDualListener, storage };
+  return { broadcastDataUpdate, listeners, setupDualListener, storage };
 });
 
 vi.mock('../../modules/storage', () => ({
@@ -41,6 +45,10 @@ vi.mock('../../utils/windowCommunication', () => ({
     NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE:
       'pixel-matrix-native-audio-dynamic-src-learning-profile',
   },
+  TAURI_EVENTS: {
+    NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS_UPDATED: 'native-audio-dynamic-src-settings-updated',
+  },
+  broadcastDataUpdate: mocks.broadcastDataUpdate,
   setupDualListener: mocks.setupDualListener,
 }));
 
@@ -84,6 +92,14 @@ function createHost(controller = createController(), initialStressScore = 0) {
   const emitRobustnessSnapshot = vi.fn();
   const clearPersistTimer = vi.spyOn(learningController, 'clearPersistTimer');
   const scheduleDynamicSrcRestoreEvaluation = vi.fn();
+  const captureCurrentQualitySrcPolicy = vi.fn(() => {
+    controller.currentQualityPolicy = {
+      srcMode: 'source-native',
+      srcBackend: 'linear-simd',
+      srcTargetSampleRate: null,
+    };
+  });
+  const restoreQualitySrcPolicyForDisabled = vi.fn(async () => undefined);
 
   const host: DynamicSrcAutoSettingsHost = {
     policyController: controller,
@@ -97,6 +113,9 @@ function createHost(controller = createController(), initialStressScore = 0) {
       settingsListenerInitPromise = promise;
     },
     getDynamicSrcStressScore: () => stressScore,
+    getCurrentQualitySrcPolicy: () => controller.currentQualityPolicy,
+    captureCurrentQualitySrcPolicy,
+    restoreQualitySrcPolicyForDisabled,
     evaluateDynamicSrcAutoDegradation,
     emitRobustnessSnapshot,
     scheduleDynamicSrcRestoreEvaluation,
@@ -106,12 +125,14 @@ function createHost(controller = createController(), initialStressScore = 0) {
     controller,
     host,
     clearDynamicSrcLearningPersistTimer: clearPersistTimer,
+    captureCurrentQualitySrcPolicy,
     emitRobustnessSnapshot,
     evaluateDynamicSrcAutoDegradation,
     getLearningLastPersistAtMs: () => learningController.getLastPersistAtMs(),
     getLearningLastPersistedSignature: () => learningController.getLastPersistedSignature(),
     getLearningProfile: () => learningController.getProfile(),
     learningController,
+    restoreQualitySrcPolicyForDisabled,
     scheduleDynamicSrcRestoreEvaluation,
     setStressScore: (nextStressScore: number) => {
       stressScore = nextStressScore;
@@ -133,6 +154,7 @@ describe('nativeAudioDynamicSrcAutoSettings', () => {
   beforeEach(() => {
     mocks.storage.clear();
     mocks.listeners.length = 0;
+    mocks.broadcastDataUpdate.mockClear();
     mocks.setupDualListener.mockClear();
   });
 
@@ -213,6 +235,70 @@ describe('nativeAudioDynamicSrcAutoSettings', () => {
     expect(context.controller.currentAdaptiveProfile).toBe('critical');
     expect(context.scheduleDynamicSrcRestoreEvaluation).toHaveBeenCalledTimes(1);
     expect(context.emitRobustnessSnapshot).toHaveBeenCalledTimes(3);
+  });
+
+  it('persists manual settings and restores quality before disabling latency auto SRC', async () => {
+    const context = createHost(createController(), 0);
+    context.controller.profile = 'latency';
+
+    await setDynamicSrcAutoSettingsImpl(context.host, {
+      enabled: false,
+      learningEnabled: false,
+      seekHoldMs: 1_234,
+    });
+
+    expect(context.restoreQualitySrcPolicyForDisabled).toHaveBeenCalledWith(
+      'dynamic-src-disabled'
+    );
+    expect(mocks.broadcastDataUpdate).toHaveBeenCalledWith(
+      STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS,
+      expect.objectContaining({
+        enabled: false,
+        learningEnabled: false,
+        seekHoldMs: 1_234,
+      }),
+      TAURI_EVENTS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS_UPDATED
+    );
+    expect(
+      context.restoreQualitySrcPolicyForDisabled.mock.invocationCallOrder[0]
+    ).toBeLessThan(mocks.broadcastDataUpdate.mock.invocationCallOrder[0]);
+    expect(context.controller.getSettings()).toMatchObject({
+      enabled: false,
+      learningEnabled: false,
+      seekHoldMs: 1_234,
+    });
+    expect(context.controller.profile).toBe('quality');
+    expect(context.clearDynamicSrcLearningPersistTimer).toHaveBeenCalledTimes(1);
+    expect(context.evaluateDynamicSrcAutoDegradation).toHaveBeenCalledWith({
+      triggerActions: false,
+    });
+    expect(context.emitRobustnessSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('captures quality policy and enables runtime auto state for manual enable changes', async () => {
+    const context = createHost(createController(), 9);
+    context.controller.manualLockActive = true;
+
+    await setDynamicSrcAutoSettingsImpl(context.host, {
+      enabled: true,
+      adaptiveEnabled: true,
+      learningEnabled: true,
+    });
+
+    expect(context.restoreQualitySrcPolicyForDisabled).not.toHaveBeenCalled();
+    expect(context.captureCurrentQualitySrcPolicy).toHaveBeenCalledTimes(1);
+    expect(context.controller.manualLockActive).toBe(false);
+    expect(context.controller.currentAdaptiveProfile).toBe('critical');
+    expect(context.controller.currentQualityPolicy).toEqual({
+      srcMode: 'source-native',
+      srcBackend: 'linear-simd',
+      srcTargetSampleRate: null,
+    });
+    expect(context.scheduleDynamicSrcRestoreEvaluation).toHaveBeenCalledTimes(1);
+    expect(context.evaluateDynamicSrcAutoDegradation).toHaveBeenCalledWith({
+      triggerActions: false,
+    });
+    expect(context.emitRobustnessSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it('applies learning profile listener updates only when the persisted signature changes', async () => {
