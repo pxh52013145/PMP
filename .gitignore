@@ -71,12 +71,15 @@ scripts/*
 !scripts/audio-score-gate.mjs
 !scripts/package-platform-pack.mjs
 !scripts/platform-pack-dev-fixture.mjs
+!scripts/telemetry-inspect.mjs
 !scripts/perf-memory-phase0-suite.ps1
 !scripts/prepare-music-platform-packs.mjs
 snapshots/
 
 # Local scratch
 logs/
+.codex-tmp/
+.tmp-debug-ui-shots/
 
 # OS generated files
 Thumbs.db
