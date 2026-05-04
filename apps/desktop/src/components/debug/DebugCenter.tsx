@@ -49,10 +49,10 @@ import {
   type SpaceRuntimeGovernanceSnapshot,
 } from '../../services/governance';
 import {
-  buildTelemetryAiContextReport,
-  getTelemetryAiContextPreset,
-  type TelemetryAiContextPreset,
-  type TelemetryAiContextPresetId,
+  buildTelemetryDiagnosticContextReport,
+  getTelemetryDiagnosticContextPreset,
+  type TelemetryDiagnosticContextPreset,
+  type TelemetryDiagnosticContextPresetId,
 } from '../../services/telemetry/aiContextReport';
 import { buildTelemetryScenarioReport } from '../../services/telemetry/scenarioReport';
 import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
@@ -162,8 +162,8 @@ type TelemetryArtifactAction =
   | 'session-json'
   | 'bundle-json'
   | 'scenario-report'
-  | 'copy-ai-context'
-  | 'export-ai-context';
+  | 'copy-diagnostic-context'
+  | 'export-diagnostic-context';
 
 type TelemetryArtifactFeedback = {
   tone: 'progress' | 'success' | 'error';
@@ -203,6 +203,8 @@ type DebugCenterProps = {
 };
 
 const MEMORY_BASELINE_MAX_ENTRIES = 20;
+const TELEMETRY_TAIL_VISIBLE_LIMIT = 80;
+const TELEMETRY_QUERY_RECORD_VISIBLE_LIMIT = 80;
 const THREE_STAGE_CAPTURE_PLAN: ReadonlyArray<{
   stage: MemoryBaselineSample['stage'];
   delayMs: number;
@@ -806,7 +808,8 @@ export function DebugCenter({
   const [telemetrySnapshot, setTelemetrySnapshot] = useState<TelemetrySnapshot>(() =>
     telemetryService.getSnapshot()
   );
-  const [telemetryQueryPresetId, setTelemetryQueryPresetId] = useState<TelemetryAiContextPresetId>('general');
+  const [telemetryQueryPresetId, setTelemetryQueryPresetId] =
+    useState<TelemetryDiagnosticContextPresetId>('general');
   const [telemetryQueryResult, setTelemetryQueryResult] = useState<TelemetryQueryResult | null>(null);
   const [telemetryQueryBusy, setTelemetryQueryBusy] = useState(false);
   const [telemetryQueryError, setTelemetryQueryError] = useState<string | null>(null);
@@ -862,7 +865,7 @@ export function DebugCenter({
   }, [activeWorkspace, debugPollingAllowed, runtimeCapsuleManager]);
 
   const telemetryQueryPreset = useMemo(
-    () => getTelemetryAiContextPreset(telemetryQueryPresetId),
+    () => getTelemetryDiagnosticContextPreset(telemetryQueryPresetId),
     [telemetryQueryPresetId]
   );
   const startupMemoryTraceSummary = useMemo<{
@@ -892,7 +895,7 @@ export function DebugCenter({
         { id: 'plugins' as const, label: t('debug.center.telemetry.query.preset.plugins') },
         { id: 'performance' as const, label: t('debug.center.telemetry.query.preset.performance') },
         { id: 'general' as const, label: t('debug.center.telemetry.query.preset.general') },
-      ] satisfies Array<{ id: TelemetryAiContextPresetId; label: string }>,
+      ] satisfies Array<{ id: TelemetryDiagnosticContextPresetId; label: string }>,
     [t]
   );
   const workspaceOptions = useMemo(
@@ -1020,7 +1023,7 @@ export function DebugCenter({
   }, [telemetryService]);
 
   const runTelemetryPresetQuery = useCallback(
-    async (presetId: TelemetryAiContextPresetId) => {
+    async (presetId: TelemetryDiagnosticContextPresetId) => {
       setTelemetryQueryPresetId(presetId);
       if (!isTauri) {
         setTelemetryQueryResult(null);
@@ -1031,7 +1034,7 @@ export function DebugCenter({
       setTelemetryQueryBusy(true);
       setTelemetryQueryError(null);
       try {
-        const preset = getTelemetryAiContextPreset(presetId);
+        const preset = getTelemetryDiagnosticContextPreset(presetId);
         const result = await queryTelemetryCurrentSession(preset.query);
         if (!result) {
           throw new Error(t('debug.center.telemetry.query.failed'));
@@ -1336,7 +1339,7 @@ export function DebugCenter({
           ? 'debug.center.telemetry.artifacts.label.bundleJson'
         : action === 'scenario-report'
           ? 'debug.center.telemetry.artifacts.label.scenarioReport'
-          : 'debug.center.telemetry.artifacts.label.aiContext';
+          : 'debug.center.telemetry.artifacts.label.diagnosticContext';
     setTelemetryArtifactBusyAction(action);
     setTelemetryArtifactFeedback({
       tone: 'progress',
@@ -1499,19 +1502,19 @@ export function DebugCenter({
     }
   }, [beginTelemetryArtifactAction, completeTelemetryArtifactAction, failTelemetryArtifactAction, isTauri, saveDebugArtifact, t]);
 
-  const loadTelemetryAiContextArtifact = useCallback(async (
-    presetId: TelemetryAiContextPresetId = 'general'
+  const loadTelemetryDiagnosticContextArtifact = useCallback(async (
+    presetId: TelemetryDiagnosticContextPresetId = 'general'
   ): Promise<{
-    preset: TelemetryAiContextPreset;
+    preset: TelemetryDiagnosticContextPreset;
     query: TelemetryQueryInput;
     report: string;
     sessionId: string;
   }> => {
-    const preset = getTelemetryAiContextPreset(presetId);
+    const preset = getTelemetryDiagnosticContextPreset(presetId);
     const query = preset.query;
     const result = await queryTelemetryCurrentSession(query);
     if (!result || result.matchedRecordCount === 0) {
-      throw new Error('Telemetry AI context is empty.');
+      throw new Error('Telemetry diagnostic context is empty.');
     }
 
     const perfTotals = isTauri
@@ -1520,7 +1523,7 @@ export function DebugCenter({
           getProcessPerfTotalsSnapshot()
         )
       : null;
-    const report = buildTelemetryAiContextReport({
+    const report = buildTelemetryDiagnosticContextReport({
       query,
       result,
       perfTotals,
@@ -1534,35 +1537,35 @@ export function DebugCenter({
     };
   }, [isTauri]);
 
-  const handleCopyTelemetryAiContext = useCallback(async (
-    presetId: TelemetryAiContextPresetId = 'general'
+  const handleCopyTelemetryDiagnosticContext = useCallback(async (
+    presetId: TelemetryDiagnosticContextPresetId = 'general'
   ) => {
-    const action: TelemetryArtifactAction = 'copy-ai-context';
+    const action: TelemetryArtifactAction = 'copy-diagnostic-context';
     setError(null);
     beginTelemetryArtifactAction(action, 'copy');
     try {
-      const artifact = await loadTelemetryAiContextArtifact(presetId);
+      const artifact = await loadTelemetryDiagnosticContextArtifact(presetId);
       await navigator.clipboard.writeText(artifact.report);
       completeTelemetryArtifactAction(
         action,
         t('debug.center.telemetry.artifacts.feedback.copiedFromSession', {
-          label: t('debug.center.telemetry.artifacts.label.aiContext'),
+          label: t('debug.center.telemetry.artifacts.label.diagnosticContext'),
           sessionId: artifact.sessionId,
         })
       );
     } catch (err) {
       failTelemetryArtifactAction(action, 'copy', err);
     }
-  }, [beginTelemetryArtifactAction, completeTelemetryArtifactAction, failTelemetryArtifactAction, loadTelemetryAiContextArtifact, t]);
+  }, [beginTelemetryArtifactAction, completeTelemetryArtifactAction, failTelemetryArtifactAction, loadTelemetryDiagnosticContextArtifact, t]);
 
-  const handleExportTelemetryAiContext = useCallback(async (
-    presetId: TelemetryAiContextPresetId = 'general'
+  const handleExportTelemetryDiagnosticContext = useCallback(async (
+    presetId: TelemetryDiagnosticContextPresetId = 'general'
   ) => {
-    const action: TelemetryArtifactAction = 'export-ai-context';
+    const action: TelemetryArtifactAction = 'export-diagnostic-context';
     setError(null);
     beginTelemetryArtifactAction(action, 'export');
     try {
-      const artifact = await loadTelemetryAiContextArtifact(presetId);
+      const artifact = await loadTelemetryDiagnosticContextArtifact(presetId);
       const safeTs = new Date().toISOString().replace(/[:.]/g, '-');
       const safeSessionId = sanitizeFileSegment(artifact.sessionId, 'session');
       const fileName = `telemetry-${artifact.preset.fileStem}-${safeTs}-${safeSessionId}.md`;
@@ -1571,17 +1574,17 @@ export function DebugCenter({
         action,
         result.kind === 'saved'
           ? t('debug.center.telemetry.artifacts.feedback.exportedTo', {
-              label: t('debug.center.telemetry.artifacts.label.aiContext'),
+              label: t('debug.center.telemetry.artifacts.label.diagnosticContext'),
               path: result.path,
             })
           : t('debug.center.telemetry.artifacts.feedback.downloadStarted', {
-              label: t('debug.center.telemetry.artifacts.label.aiContext'),
+              label: t('debug.center.telemetry.artifacts.label.diagnosticContext'),
             })
       );
     } catch (err) {
       failTelemetryArtifactAction(action, 'export', err);
     }
-  }, [beginTelemetryArtifactAction, completeTelemetryArtifactAction, failTelemetryArtifactAction, loadTelemetryAiContextArtifact, saveDebugArtifact, t]);
+  }, [beginTelemetryArtifactAction, completeTelemetryArtifactAction, failTelemetryArtifactAction, loadTelemetryDiagnosticContextArtifact, saveDebugArtifact, t]);
 
   const handleExportBaselinesJson = useCallback(() => {
     if (memoryBaselines.length === 0) {
@@ -2455,7 +2458,7 @@ export function DebugCenter({
         ) : null}
 
         {activeWorkspace === 'telemetry' ? (
-          <SettingsCard>
+          <SettingsCard className="debug-center-telemetry-card">
           <div className="settings-card-header">
             <div>
               <p className="settings-card-label">{t('debug.center.telemetry.runtime.title')}</p>
@@ -2515,9 +2518,9 @@ export function DebugCenter({
             {telemetrySnapshot.tail.length === 0 ? (
               <p className="settings-card-note">{t('debug.center.telemetry.runtime.empty')}</p>
             ) : (
-              <pre className="debug-center-code-block debug-center-code-block--tall">
+              <pre className="debug-center-code-block debug-center-telemetry-log debug-center-code-block--telemetry-tail">
                 {telemetrySnapshot.tail
-                  .slice(-12)
+                  .slice(-TELEMETRY_TAIL_VISIBLE_LIMIT)
                   .reverse()
                   .map((record) => formatTelemetryRecordLine(record))
                   .join('\n')}
@@ -2615,9 +2618,9 @@ export function DebugCenter({
                       {t('debug.center.telemetry.query.empty')}
                     </p>
                   ) : (
-                    <pre className="debug-center-code-block debug-center-code-block--tall">
+                    <pre className="debug-center-code-block debug-center-telemetry-log debug-center-code-block--telemetry-records">
                       {telemetryQueryResult.records
-                        .slice(-10)
+                        .slice(-TELEMETRY_QUERY_RECORD_VISIBLE_LIMIT)
                         .reverse()
                         .map((record) => formatTelemetryRecordLine(record))
                         .join('\n')}
@@ -2659,19 +2662,19 @@ export function DebugCenter({
               type="button"
               disabled={telemetryArtifactBusyAction !== null}
               onClick={() => {
-                void handleCopyTelemetryAiContext(telemetryQueryPresetId);
+                void handleCopyTelemetryDiagnosticContext(telemetryQueryPresetId);
               }}
             >
-              {t('debug.center.telemetry.artifacts.action.copyAiContext')}
+              {t('debug.center.telemetry.artifacts.action.copyDiagnosticContext')}
             </SettingsActionButton>
             <SettingsActionButton
               type="button"
               disabled={telemetryArtifactBusyAction !== null}
               onClick={() => {
-                void handleExportTelemetryAiContext(telemetryQueryPresetId);
+                void handleExportTelemetryDiagnosticContext(telemetryQueryPresetId);
               }}
             >
-              {t('debug.center.telemetry.artifacts.action.exportAiContext')}
+              {t('debug.center.telemetry.artifacts.action.exportDiagnosticContext')}
             </SettingsActionButton>
           </div>
           {telemetryArtifactFeedback ? (

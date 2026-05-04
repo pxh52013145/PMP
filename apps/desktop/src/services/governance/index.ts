@@ -3,6 +3,10 @@ export { GOVERNANCE_SERVICE_TOKEN } from './GovernanceService';
 
 export type {
   MemoryGovernanceAuditEntry,
+  MemoryGovernanceCoverRuntimeCacheHost,
+  MemoryGovernanceCoverRuntimeCacheHostProvider,
+  MemoryGovernanceCoverRuntimeCachePolicy,
+  MemoryGovernanceCoverRuntimeCacheStats,
   MemoryGovernanceService,
 } from './MemoryGovernanceService';
 export { MEMORY_GOVERNANCE_SERVICE_TOKEN } from './MemoryGovernanceService';

@@ -102,6 +102,7 @@ pub struct EditorWindowDebugInfo {
 pub struct EditorWindowsDebugState {
     pub windows: Vec<EditorWindowDebugInfo>,
     pub cached_hidden: Option<String>,
+    pub memory_first: bool,
 }
 
 pub const CONTROL_CLOSE_HIDE_WINDOWS: &[EditorWindowType] = &[
@@ -156,6 +157,7 @@ pub fn title(window_type: EditorWindowType) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct EditorWindowGeometry {
     pub x: f64,
     pub y: f64,
@@ -196,8 +198,11 @@ static HIDDEN_WINDOW_DESTROY_REVISION: Lazy<Mutex<HashMap<EditorWindowType, u64>
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 static EDITOR_WINDOWS_REVISION: AtomicU64 = AtomicU64::new(0);
+static EDITOR_MEMORY_FIRST: AtomicBool = AtomicBool::new(false);
 const CONTROL_DONE_DESTROY_DELAY_MS: u64 = 5_000;
+const CONTROL_DONE_MEMORY_FIRST_DESTROY_DELAY_MS: u64 = 500;
 const HIDDEN_WINDOW_DESTROY_DELAY_MS: u64 = 10_000;
+const HIDDEN_WINDOW_MEMORY_FIRST_DESTROY_DELAY_MS: u64 = 250;
 
 static FORCE_CLOSE_WINDOWS: Lazy<Mutex<HashSet<EditorWindowType>>> =
     Lazy::new(|| Mutex::new(HashSet::new()));
@@ -450,12 +455,29 @@ fn hidden_destroy_revision(window_type: EditorWindowType) -> u64 {
     revisions.get(&window_type).copied().unwrap_or(0)
 }
 
-fn schedule_destroy_if_still_hidden(app: &AppHandle, window_type: EditorWindowType) {
+fn set_memory_first_option(memory_first: Option<bool>) -> bool {
+    if let Some(enabled) = memory_first {
+        EDITOR_MEMORY_FIRST.store(enabled, Ordering::SeqCst);
+        enabled
+    } else {
+        EDITOR_MEMORY_FIRST.load(Ordering::SeqCst)
+    }
+}
+
+fn editor_memory_first_enabled() -> bool {
+    EDITOR_MEMORY_FIRST.load(Ordering::SeqCst)
+}
+
+fn schedule_destroy_if_still_hidden_after(
+    app: &AppHandle,
+    window_type: EditorWindowType,
+    delay_ms: u64,
+) {
     let scheduled_revision = bump_hidden_destroy_revision(window_type);
     let app_handle = app.clone();
 
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(HIDDEN_WINDOW_DESTROY_DELAY_MS));
+        std::thread::sleep(Duration::from_millis(delay_ms));
 
         if hidden_destroy_revision(window_type) != scheduled_revision {
             return;
@@ -475,6 +497,15 @@ fn schedule_destroy_if_still_hidden(app: &AppHandle, window_type: EditorWindowTy
     });
 }
 
+fn schedule_destroy_if_still_hidden(app: &AppHandle, window_type: EditorWindowType) {
+    let delay_ms = if editor_memory_first_enabled() {
+        HIDDEN_WINDOW_MEMORY_FIRST_DESTROY_DELAY_MS
+    } else {
+        HIDDEN_WINDOW_DESTROY_DELAY_MS
+    };
+    schedule_destroy_if_still_hidden_after(app, window_type, delay_ms);
+}
+
 fn cache_window_handle(
     app: &AppHandle,
     window: &tauri::Window,
@@ -482,6 +513,13 @@ fn cache_window_handle(
 ) -> Result<(), String> {
     window.hide().map_err(|e| e.to_string())?;
     let _ = app.emit_all(EVENT_EDITOR_WINDOW_HIDDEN, window_type.as_str());
+
+    if editor_memory_first_enabled() {
+        clear_cached_window(window_type);
+        schedule_destroy_if_still_hidden(app, window_type);
+        return Ok(());
+    }
+
     evict_previous_cached_window(app, window_type);
     schedule_destroy_if_still_hidden(app, window_type);
     Ok(())
@@ -497,14 +535,52 @@ fn destroy_window(app: &AppHandle, window_type: EditorWindowType) {
     request_force_close(app, window_type);
 }
 
+fn destroy_hidden_editor_windows(app: &AppHandle) -> usize {
+    // Clear cached hidden window label to avoid stale handles after destruction.
+    if let Ok(mut cache) = HIDDEN_WINDOW_LRU.lock() {
+        cache.cached_hidden = None;
+    }
+
+    let mut destroyed = 0usize;
+    for window_type in ALL_EDITOR_WINDOWS {
+        let Some(window) = app.get_window(label(*window_type)) else {
+            continue;
+        };
+
+        let is_visible = window.is_visible().ok().unwrap_or(false);
+        if is_visible {
+            continue;
+        }
+
+        destroy_window(app, *window_type);
+        destroyed += 1;
+    }
+
+    destroyed
+}
+
+pub fn set_editor_windows_memory_first_enabled(
+    app: &AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    EDITOR_MEMORY_FIRST.store(enabled, Ordering::SeqCst);
+    if enabled {
+        destroy_hidden_editor_windows(app);
+    }
+    Ok(())
+}
+
 pub fn open_editor_window(
     app: &AppHandle,
     window_type: EditorWindowType,
     geometry: EditorWindowGeometry,
     always_on_top: Option<bool>,
+    memory_first: Option<bool>,
     exit_flag: Arc<AtomicBool>,
     blur_enabled: Arc<AtomicBool>,
 ) -> Result<(), String> {
+    set_memory_first_option(memory_first);
+
     let geometry = if window_type == EditorWindowType::Style {
         compute_style_bar_geometry(app).unwrap_or(geometry)
     } else {
@@ -641,7 +717,13 @@ pub fn sync_style_bar_window(app: &AppHandle) {
     apply_geometry(&window, &geometry);
 }
 
-pub fn close_editor_window(app: &AppHandle, window_type: EditorWindowType) -> Result<(), String> {
+pub fn close_editor_window(
+    app: &AppHandle,
+    window_type: EditorWindowType,
+    memory_first: Option<bool>,
+) -> Result<(), String> {
+    let memory_first_enabled = set_memory_first_option(memory_first);
+
     if window_type == EditorWindowType::Control {
         // Bump revision so any previously scheduled delayed destroys become no-ops.
         let destroy_revision = EDITOR_WINDOWS_REVISION.fetch_add(1, Ordering::SeqCst) + 1;
@@ -682,8 +764,13 @@ pub fn close_editor_window(app: &AppHandle, window_type: EditorWindowType) -> Re
         // After "Done" we still want to reclaim WebView2 memory. Closing hidden windows is much less
         // likely to disturb z-order/focus than closing visible/owned windows immediately.
         let app_handle = app.clone();
+        let destroy_delay_ms = if memory_first_enabled {
+            CONTROL_DONE_MEMORY_FIRST_DESTROY_DELAY_MS
+        } else {
+            CONTROL_DONE_DESTROY_DELAY_MS
+        };
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(CONTROL_DONE_DESTROY_DELAY_MS));
+            std::thread::sleep(Duration::from_millis(destroy_delay_ms));
 
             // If the editor was reopened meanwhile, skip destroying windows to preserve UX/state.
             if EDITOR_WINDOWS_REVISION.load(Ordering::SeqCst) != destroy_revision {
@@ -754,6 +841,7 @@ pub fn debug_get_editor_windows_state(app: &AppHandle) -> EditorWindowsDebugStat
     EditorWindowsDebugState {
         windows,
         cached_hidden,
+        memory_first: editor_memory_first_enabled(),
     }
 }
 
@@ -761,25 +849,5 @@ pub fn debug_get_editor_windows_state(app: &AppHandle) -> EditorWindowsDebugStat
 ///
 /// Safety: only destroys windows that are currently not visible.
 pub fn governance_destroy_hidden_editor_windows(app: &AppHandle) -> usize {
-    // Clear cached hidden window label to avoid stale handles after destruction.
-    if let Ok(mut cache) = HIDDEN_WINDOW_LRU.lock() {
-        cache.cached_hidden = None;
-    }
-
-    let mut destroyed = 0usize;
-    for window_type in ALL_EDITOR_WINDOWS {
-        let Some(window) = app.get_window(label(*window_type)) else {
-            continue;
-        };
-
-        let is_visible = window.is_visible().ok().unwrap_or(false);
-        if is_visible {
-            continue;
-        }
-
-        destroy_window(app, *window_type);
-        destroyed += 1;
-    }
-
-    destroyed
+    destroy_hidden_editor_windows(app)
 }

@@ -6,7 +6,7 @@ import type {
 import { buildMagnetTelemetryAiQuery } from '../../modules/debug/magnetTelemetry';
 import type { ProcessPerfTotalsSnapshot } from '../../modules/debug/processPerf';
 
-const DEFAULT_AI_MODULE_IDS = [
+const DEFAULT_DIAGNOSTIC_MODULE_IDS = [
   'startup',
   'navigation',
   'audio',
@@ -24,22 +24,25 @@ const DEFAULT_AI_MODULE_IDS = [
   'visualizer',
 ] as const;
 
-const DEFAULT_AI_LEVELS = ['info', 'warn', 'error', 'fatal'] as const;
-const PERFORMANCE_AI_LEVELS = ['debug', 'info', 'warn', 'error', 'fatal'] as const;
-const DEFAULT_AI_LIMIT = 180;
+const DEFAULT_DIAGNOSTIC_LEVELS = ['info', 'warn', 'error', 'fatal'] as const;
+const PERFORMANCE_DIAGNOSTIC_LEVELS = ['debug', 'info', 'warn', 'error', 'fatal'] as const;
+const DEFAULT_DIAGNOSTIC_LIMIT = 180;
 const MAX_RECENT_RECORDS = 80;
 
-export type TelemetryAiContextPresetId =
+export type TelemetryDiagnosticContextPresetId =
   | 'general'
   | 'magnets'
   | 'plugins'
   | 'performance';
 
-export type TelemetryAiContextPreset = {
-  id: TelemetryAiContextPresetId;
+export type TelemetryDiagnosticContextPreset = {
+  id: TelemetryDiagnosticContextPresetId;
   fileStem: string;
   query: TelemetryQueryInput;
 };
+
+export type TelemetryAiContextPresetId = TelemetryDiagnosticContextPresetId;
+export type TelemetryAiContextPreset = TelemetryDiagnosticContextPreset;
 
 function cloneQuery(query: TelemetryQueryInput): TelemetryQueryInput {
   return {
@@ -113,67 +116,74 @@ function renderPerfTotals(perfTotals: ProcessPerfTotalsSnapshot | null | undefin
   ];
 }
 
-export function getDefaultTelemetryAiQuery(): TelemetryQueryInput {
+export function getDefaultTelemetryDiagnosticQuery(): TelemetryQueryInput {
   return {
-    moduleIds: [...DEFAULT_AI_MODULE_IDS],
-    levels: [...DEFAULT_AI_LEVELS],
-    limit: DEFAULT_AI_LIMIT,
+    moduleIds: [...DEFAULT_DIAGNOSTIC_MODULE_IDS],
+    levels: [...DEFAULT_DIAGNOSTIC_LEVELS],
+    limit: DEFAULT_DIAGNOSTIC_LIMIT,
   };
 }
 
-export function getPluginTelemetryAiQuery(): TelemetryQueryInput {
+export function getPluginTelemetryDiagnosticQuery(): TelemetryQueryInput {
   return {
     eventPrefixes: ['plugin.'],
-    levels: [...DEFAULT_AI_LEVELS],
-    limit: DEFAULT_AI_LIMIT,
+    levels: [...DEFAULT_DIAGNOSTIC_LEVELS],
+    limit: DEFAULT_DIAGNOSTIC_LIMIT,
   };
 }
 
-export function getMagnetTelemetryAiQuery(): TelemetryQueryInput {
+export function getMagnetTelemetryDiagnosticQuery(): TelemetryQueryInput {
   return buildMagnetTelemetryAiQuery();
 }
 
-export function getPerformanceTelemetryAiQuery(): TelemetryQueryInput {
+export function getPerformanceTelemetryDiagnosticQuery(): TelemetryQueryInput {
   return {
     eventPrefixes: ['performance.'],
-    levels: [...PERFORMANCE_AI_LEVELS],
-    limit: DEFAULT_AI_LIMIT,
+    levels: [...PERFORMANCE_DIAGNOSTIC_LEVELS],
+    limit: DEFAULT_DIAGNOSTIC_LIMIT,
   };
 }
 
-export function getTelemetryAiContextPreset(
-  presetId: TelemetryAiContextPresetId = 'general'
-): TelemetryAiContextPreset {
+export const getDefaultTelemetryAiQuery = getDefaultTelemetryDiagnosticQuery;
+export const getPluginTelemetryAiQuery = getPluginTelemetryDiagnosticQuery;
+export const getMagnetTelemetryAiQuery = getMagnetTelemetryDiagnosticQuery;
+export const getPerformanceTelemetryAiQuery = getPerformanceTelemetryDiagnosticQuery;
+
+export function getTelemetryDiagnosticContextPreset(
+  presetId: TelemetryDiagnosticContextPresetId = 'general'
+): TelemetryDiagnosticContextPreset {
   switch (presetId) {
     case 'magnets':
       return {
         id: 'magnets',
         fileStem: 'magnet-context',
-        query: cloneQuery(getMagnetTelemetryAiQuery()),
+        query: cloneQuery(getMagnetTelemetryDiagnosticQuery()),
       };
     case 'plugins':
       return {
         id: 'plugins',
         fileStem: 'plugin-context',
-        query: cloneQuery(getPluginTelemetryAiQuery()),
+        query: cloneQuery(getPluginTelemetryDiagnosticQuery()),
       };
     case 'performance':
       return {
         id: 'performance',
         fileStem: 'performance-context',
-        query: cloneQuery(getPerformanceTelemetryAiQuery()),
+        query: cloneQuery(getPerformanceTelemetryDiagnosticQuery()),
       };
     case 'general':
     default:
       return {
         id: 'general',
-        fileStem: 'ai-context',
-        query: cloneQuery(getDefaultTelemetryAiQuery()),
+        fileStem: 'diagnostic-context',
+        query: cloneQuery(getDefaultTelemetryDiagnosticQuery()),
       };
   }
 }
 
-export function buildTelemetryAiContextReport(input: {
+export const getTelemetryAiContextPreset = getTelemetryDiagnosticContextPreset;
+
+export function buildTelemetryDiagnosticContextReport(input: {
   query: TelemetryQueryInput;
   result: TelemetryQueryResult;
   perfTotals?: ProcessPerfTotalsSnapshot | null;
@@ -184,7 +194,7 @@ export function buildTelemetryAiContextReport(input: {
       : input.result.records.slice(input.result.records.length - MAX_RECENT_RECORDS);
 
   const lines: string[] = [
-    '# PMP Telemetry AI Context',
+    '# PMP Telemetry Diagnostic Context',
     '',
     '## Session',
     '',
@@ -205,7 +215,7 @@ export function buildTelemetryAiContextReport(input: {
     `- search_text: ${input.query.searchText?.trim() || 'none'}`,
     `- from_ts: ${formatTimestamp(input.query.fromTs ?? null)}`,
     `- to_ts: ${formatTimestamp(input.query.toTs ?? null)}`,
-    `- limit: ${typeof input.query.limit === 'number' ? input.query.limit : DEFAULT_AI_LIMIT}`,
+    `- limit: ${typeof input.query.limit === 'number' ? input.query.limit : DEFAULT_DIAGNOSTIC_LIMIT}`,
     '',
     '## Process Snapshot',
     '',
@@ -238,3 +248,5 @@ export function buildTelemetryAiContextReport(input: {
 
   return `${lines.join('\n')}\n`;
 }
+
+export const buildTelemetryAiContextReport = buildTelemetryDiagnosticContextReport;

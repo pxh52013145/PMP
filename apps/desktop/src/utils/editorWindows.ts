@@ -2,6 +2,7 @@
 import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { invokeWithTelemetry } from '../services/telemetry/tauriInvokeTelemetry';
 import { getEffectiveWindowPinPolicy } from './windowPinRuntime';
+import { readEditorLowPerformanceMode } from './editorWindowEffects';
 
 export type EditorWindowType =
   | 'control'
@@ -43,12 +44,14 @@ export async function openEditorWindow(config: EditorWindowConfig): Promise<void
   }
   try {
     const alwaysOnTop = getEffectiveWindowPinPolicy().editorWindowsPinned;
+    const memoryFirst = readEditorLowPerformanceMode();
     telemetry.info('window.editor.open.requested', {
       fields: {
         windowType: config.type,
         width: config.width,
         height: config.height,
         alwaysOnTop,
+        memoryFirst,
       },
     });
     await invokeWithTelemetry('open_editor_window', {
@@ -58,6 +61,7 @@ export async function openEditorWindow(config: EditorWindowConfig): Promise<void
       width: config.width,
       height: config.height,
       alwaysOnTop,
+      memoryFirst,
     }, {
       moduleId: 'windowing',
       component: 'editorWindows',
@@ -67,6 +71,7 @@ export async function openEditorWindow(config: EditorWindowConfig): Promise<void
     telemetry.info('window.editor.open.completed', {
       fields: {
         windowType: config.type,
+        memoryFirst,
       },
     });
   } catch (error) {
@@ -108,24 +113,30 @@ const WINDOW_HIERARCHY: Record<EditorWindowType, EditorWindowType[]> = {
 /**
  * 关闭编辑器窗口（包括其子窗口）
  */
-export async function closeEditorWindow(type: EditorWindowType): Promise<void> {
+export async function closeEditorWindow(
+  type: EditorWindowType,
+  options?: { memoryFirst?: boolean }
+): Promise<void> {
   try {
     // 先关闭所有子窗口
     if (!isTauriRuntime()) return;
+    const memoryFirst = options?.memoryFirst ?? readEditorLowPerformanceMode();
     telemetry.info('window.editor.close.requested', {
       fields: {
         windowType: type,
+        memoryFirst,
       },
     });
 
     const childWindows = WINDOW_HIERARCHY[type] || [];
     for (const childType of childWindows) {
-      await closeEditorWindow(childType); // 递归关闭子窗口及其子窗口
+      await closeEditorWindow(childType, { memoryFirst }); // 递归关闭子窗口及其子窗口
     }
 
     // 再关闭自己
     await invokeWithTelemetry('close_editor_window', {
       windowType: type,
+      memoryFirst,
     }, {
       moduleId: 'windowing',
       component: 'editorWindows',
@@ -137,6 +148,7 @@ export async function closeEditorWindow(type: EditorWindowType): Promise<void> {
     telemetry.info('window.editor.close.completed', {
       fields: {
         windowType: type,
+        memoryFirst,
       },
     });
   } catch (error) {

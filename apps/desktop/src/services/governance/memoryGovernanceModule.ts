@@ -23,6 +23,7 @@ import {
 } from './MemoryGovernanceService';
 import { getTelemetryLogger } from '../telemetry/TelemetryService';
 import { AUDIO_ENGINE_SERVICE_TOKEN } from '../audio';
+import { getRegisteredMusicLibraryService } from '../audio/MusicLibraryServiceRegistry';
 import {
   attachPerformanceObservabilityBridge,
   PERFORMANCE_CONTROL_SERVICE_TOKEN,
@@ -91,7 +92,8 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
         events,
         processPerfService,
         spaceRuntimeGovernance,
-        runtimeCapsuleManager
+        runtimeCapsuleManager,
+        getRegisteredMusicLibraryService
       );
       const unregister = services.register(MEMORY_GOVERNANCE_SERVICE_TOKEN, service);
       const detachPerformanceObservability = attachPerformanceObservabilityBridge({

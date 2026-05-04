@@ -24,9 +24,19 @@ export { buildTelemetryScenarioReport } from './scenarioReport';
 export { captureTelemetryScenarioSnapshot } from './scenarioSnapshots';
 export {
   buildTelemetryAiContextReport,
+  buildTelemetryDiagnosticContextReport,
   getDefaultTelemetryAiQuery,
+  getDefaultTelemetryDiagnosticQuery,
   getPerformanceTelemetryAiQuery,
+  getPerformanceTelemetryDiagnosticQuery,
   getPluginTelemetryAiQuery,
+  getPluginTelemetryDiagnosticQuery,
   getTelemetryAiContextPreset,
+  getTelemetryDiagnosticContextPreset,
 } from './aiContextReport';
-export type { TelemetryAiContextPreset, TelemetryAiContextPresetId } from './aiContextReport';
+export type {
+  TelemetryAiContextPreset,
+  TelemetryAiContextPresetId,
+  TelemetryDiagnosticContextPreset,
+  TelemetryDiagnosticContextPresetId,
+} from './aiContextReport';

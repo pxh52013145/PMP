@@ -30,8 +30,27 @@ export async function setEditorBlurEnabled(enabled: boolean): Promise<void> {
   }
 }
 
+export async function setEditorMemoryFirstEnabled(enabled: boolean): Promise<void> {
+  if (!isTauriRuntime()) return;
+  try {
+    await invokeWithTelemetry('set_editor_memory_first_enabled', { enabled }, {
+      moduleId: 'windowing',
+      component: 'editorWindowEffects',
+      event: 'window.editor.memory-first.set',
+    });
+  } catch (error) {
+    telemetry.error('window.editor.memory-first.set.failed', {
+      message: getErrorMessage(error),
+      fields: { enabled },
+    });
+  }
+}
+
 export async function applyEditorLowPerformanceMode(lowPerformanceMode: boolean): Promise<void> {
-  await setEditorBlurEnabled(!lowPerformanceMode);
+  await Promise.all([
+    setEditorBlurEnabled(!lowPerformanceMode),
+    setEditorMemoryFirstEnabled(lowPerformanceMode),
+  ]);
   await broadcastSignal(TAURI_EVENTS.EDITOR_LOW_PERFORMANCE_MODE_UPDATED);
 }
 

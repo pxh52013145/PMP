@@ -5,7 +5,10 @@ import type { NavigationService } from '../navigation/NavigationService';
 import { EventBus } from '../../kernel/EventBus';
 import type { ProcessPerfService } from '../performance-control';
 import { DefaultRuntimeCapsuleManagerService } from '../runtime-capsules';
-import { DefaultMemoryGovernanceService } from './MemoryGovernanceService';
+import {
+  DefaultMemoryGovernanceService,
+  type MemoryGovernanceCoverRuntimeCacheHostProvider,
+} from './MemoryGovernanceService';
 
 const mocks = vi.hoisted(() => ({
   isTauri: false,
@@ -13,7 +16,6 @@ const mocks = vi.hoisted(() => ({
   invokeWithTelemetry: vi.fn(() => Promise.resolve(0)),
   readJson: vi.fn(() => []),
   writeJson: vi.fn(),
-  getRegisteredMusicLibraryService: vi.fn(() => null),
   telemetry: {
     debug: vi.fn(),
     info: vi.fn(),
@@ -41,10 +43,6 @@ vi.mock('../telemetry/TelemetryService', () => ({
 vi.mock('../../modules/storage', () => ({
   readJson: mocks.readJson,
   writeJson: mocks.writeJson,
-}));
-
-vi.mock('../audio/MusicLibraryServiceRegistry', () => ({
-  getRegisteredMusicLibraryService: mocks.getRegisteredMusicLibraryService,
 }));
 
 function createNavigation(): NavigationService {
@@ -103,6 +101,7 @@ function createProcessPerfService(
 function createService(options: {
   processPerfService?: ProcessPerfService;
   runtimeCapsuleManager?: DefaultRuntimeCapsuleManagerService | null;
+  coverRuntimeCacheHostProvider?: MemoryGovernanceCoverRuntimeCacheHostProvider;
 } = {}): DefaultMemoryGovernanceService {
   const events = new EventBus<AppEvents>();
   return new DefaultMemoryGovernanceService(
@@ -110,7 +109,8 @@ function createService(options: {
     events,
     options.processPerfService ?? createProcessPerfService(),
     null,
-    options.runtimeCapsuleManager ?? null
+    options.runtimeCapsuleManager ?? null,
+    options.coverRuntimeCacheHostProvider
   );
 }
 
@@ -243,5 +243,31 @@ describe('DefaultMemoryGovernanceService', () => {
       state: 'hibernated',
       activeLeases: [],
     });
+  });
+
+  it('uses an injected cover cache host instead of reaching for a global music-library instance', async () => {
+    mocks.isTauri = false;
+    const coverHost = {
+      getCoverRuntimeCacheStats: vi.fn(() => ({
+        coverUrlCacheEntries: 0,
+        coverBlobUrlCacheEntries: 1,
+        coverBlobUrlTotalBytes: 11 * 1024 * 1024,
+        coverDecodedEstimateEntries: 0,
+        coverDecodedEstimateTotalBytes: 0,
+        coverUrlInflight: 0,
+        albumCoverUrlCacheEntries: 0,
+        albumCoverUrlInflight: 0,
+      })),
+      clearCoverRuntimeCaches: vi.fn(),
+      applyCoverRuntimeCachePolicy: vi.fn(),
+    };
+
+    const result = await createService({
+      coverRuntimeCacheHostProvider: () => coverHost,
+    }).runOnce('interval');
+
+    expect(result.executed).toContain('tighten-cover-runtime-caches-watch');
+    expect(coverHost.getCoverRuntimeCacheStats).toHaveBeenCalledTimes(1);
+    expect(coverHost.applyCoverRuntimeCachePolicy).toHaveBeenCalledWith('watch');
   });
 });

@@ -11,6 +11,7 @@ pub async fn open_editor_window(
     width: f64,
     height: f64,
     always_on_top: Option<bool>,
+    memory_first: Option<bool>,
     exit: tauri::State<'_, app_runtime::ExitFlag>,
     effects: tauri::State<'_, app_runtime::EditorEffectsState>,
 ) -> Result<(), String> {
@@ -27,17 +28,22 @@ pub async fn open_editor_window(
             height,
         },
         always_on_top,
+        memory_first,
         exit.0.clone(),
         effects.blur_enabled.clone(),
     )
 }
 
 #[tauri::command]
-pub async fn close_editor_window(app: tauri::AppHandle, window_type: String) -> Result<(), String> {
+pub async fn close_editor_window(
+    app: tauri::AppHandle,
+    window_type: String,
+    memory_first: Option<bool>,
+) -> Result<(), String> {
     let editor_window_type = windows::editor::EditorWindowType::from_str(window_type.as_str())
         .ok_or_else(|| format!("Unknown editor window type: {}", window_type))?;
 
-    windows::editor::close_editor_window(&app, editor_window_type)
+    windows::editor::close_editor_window(&app, editor_window_type, memory_first)
 }
 
 #[tauri::command]
@@ -196,6 +202,14 @@ pub async fn set_editor_blur_enabled(
 ) -> Result<(), String> {
     effects.blur_enabled.store(enabled, Ordering::SeqCst);
     windows::editor::set_editor_windows_blur_enabled(&app, enabled)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn set_editor_memory_first_enabled(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    windows::editor::set_editor_windows_memory_first_enabled(&app, enabled)
 }
 
 #[tauri::command]

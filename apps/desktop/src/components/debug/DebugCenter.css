@@ -220,6 +220,28 @@
   max-height: 220px;
 }
 
+.debug-center-telemetry-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.debug-center-telemetry-log {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  white-space: pre;
+  overflow-wrap: normal;
+  resize: vertical;
+}
+
+.debug-center-code-block--telemetry-tail {
+  min-height: clamp(260px, 36vh, 420px);
+  max-height: min(640px, 58vh);
+}
+
+.debug-center-code-block--telemetry-records {
+  min-height: clamp(320px, 42vh, 520px);
+  max-height: min(720px, 62vh);
+}
+
 .debug-center-inset-panel {
   min-width: 0;
   margin-top: 8px;

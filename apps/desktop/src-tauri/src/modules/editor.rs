@@ -9,5 +9,6 @@ pub const DESCRIPTOR: BackendModuleDescriptor = BackendModuleDescriptor {
         "open_editor_window",
         "close_editor_window",
         "editor_effects",
+        "set_editor_memory_first_enabled",
     ],
 };

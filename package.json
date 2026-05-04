@@ -36,6 +36,7 @@
     "plugin:platform:smoke": "node scripts/plugin-platform-smoke.mjs",
     "test": "pnpm --filter @pixel-matrix/desktop test",
     "test:tauri:asio": "pnpm --filter @pixel-matrix/desktop test:tauri:asio",
+    "telemetry:inspect": "node scripts/telemetry-inspect.mjs",
     "hooks:install": "git config core.hooksPath .githooks",
     "magnet:doctor": "node scripts/magnet-doctor.mjs",
     "lint": "pnpm --parallel lint",
