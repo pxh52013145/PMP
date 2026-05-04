@@ -4,6 +4,34 @@
   --debug-cyan-rgb: 74, 205, 196;
 }
 
+.debug-page.page-settings--debug {
+  --settings-bg: #0d1013;
+  --settings-accent-rgb: 114, 211, 196;
+  --settings-main-active-line: #72d3c4;
+  --settings-main-active-line-glow: rgba(114, 211, 196, 0.2);
+  --settings-sub-active-line: #72d3c4;
+  --settings-main-ring-idle: rgba(134, 152, 160, 0.58);
+  --settings-main-ring-idle-gap: rgba(134, 152, 160, 0.42);
+  --settings-main-ring-active: rgba(114, 211, 196, 0.92);
+  --settings-main-ring-active-gap: rgba(114, 211, 196, 0.22);
+  --settings-panel-bg: #15191d;
+  --settings-panel-bg-deep: #0f1317;
+  --settings-divider-solid: rgba(105, 124, 132, 0.34);
+  --settings-text-sub: #8e9ba2;
+  --settings-text-label: #b6c5cb;
+  --settings-text-desc: #8d9aa1;
+  --settings-text-value: #eef6f4;
+  --settings-control-bg: rgba(12, 16, 19, 0.68);
+  --settings-control-border: rgba(124, 143, 150, 0.46);
+  --settings-text: #eef6f4;
+  --settings-text-muted: rgba(174, 190, 196, 0.84);
+  --settings-text-dim: rgba(136, 151, 158, 0.86);
+
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0) 32%),
+    #0d1013;
+}
+
 .debug-page .settings-shell {
   min-width: 0;
 }
@@ -53,6 +81,47 @@
   filter: drop-shadow(0 0 0.2vw rgba(var(--settings-accent-rgb), 0.48));
 }
 
+.debug-page.page-settings--debug .settings-main-tab {
+  background: #161a1e;
+  color: rgba(177, 190, 196, 0.86);
+}
+
+.debug-page.page-settings--debug .settings-main-tab:hover {
+  background: #1b2024;
+  color: #dce8e8;
+}
+
+.debug-page.page-settings--debug .settings-main-tab[data-active='true'] {
+  background: #18201f;
+  color: #f0faf7;
+}
+
+.debug-page.page-settings--debug .settings-sub-tabs::before,
+.debug-page.page-settings--debug .settings-sub-tab::after {
+  background: rgba(112, 131, 138, 0.42);
+}
+
+.debug-page.page-settings--debug .settings-sub-tab {
+  color: rgba(177, 190, 196, 0.88);
+}
+
+.debug-page.page-settings--debug .settings-sub-tab:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: #e6f2f2;
+}
+
+.debug-page.page-settings--debug .settings-sub-tab[data-active='true'] {
+  background: rgba(114, 211, 196, 0.08);
+  color: #f0faf7;
+}
+
+.debug-page.page-settings--debug .settings-sub-tab[data-active='true']::before {
+  background: var(--settings-sub-active-line);
+  box-shadow:
+    0 0 0.34vw rgba(var(--settings-accent-rgb), 0.32),
+    0 0 0.12vw rgba(var(--settings-accent-rgb), 0.52);
+}
+
 .debug-page .settings-subbar {
   min-width: 0;
 }
@@ -63,7 +132,20 @@
 }
 
 .debug-page .settings-content {
-  border-color: rgba(var(--settings-accent-rgb), 0.24);
+  border-color: rgba(var(--settings-accent-rgb), 0.18);
+  background-image:
+    linear-gradient(180deg, rgba(21, 25, 29, 0.98), rgba(15, 19, 23, 0.98)),
+    linear-gradient(
+      120deg,
+      rgba(var(--settings-accent-rgb), 0.36) 0%,
+      rgba(255, 255, 255, 0.035) 30%,
+      rgba(184, 151, 86, 0.2) 66%,
+      rgba(var(--settings-accent-rgb), 0.32) 100%
+    );
+  box-shadow:
+    0 12px 24px rgba(0, 0, 0, 0.42),
+    0 0 0 1px rgba(255, 255, 255, 0.035);
+  animation: none;
 }
 
 .debug-page .settings-content-body {

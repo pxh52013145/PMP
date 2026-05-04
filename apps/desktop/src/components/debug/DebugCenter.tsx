@@ -907,24 +907,24 @@ export function DebugCenter({
           desc: t('debug.center.workspace.desc.overview'),
         },
         {
-          id: 'runtime' as const,
-          label: t('debug.center.workspace.tab.runtime'),
-          desc: t('debug.center.workspace.desc.runtime'),
-        },
-        {
           id: 'telemetry' as const,
           label: t('debug.center.workspace.tab.telemetry'),
           desc: t('debug.center.workspace.desc.telemetry'),
         },
         {
-          id: 'magnets' as const,
-          label: t('debug.center.workspace.tab.magnets'),
-          desc: t('debug.center.workspace.desc.magnets'),
-        },
-        {
           id: 'memory' as const,
           label: t('debug.center.workspace.tab.memory'),
           desc: t('debug.center.workspace.desc.memory'),
+        },
+        {
+          id: 'runtime' as const,
+          label: t('debug.center.workspace.tab.runtime'),
+          desc: t('debug.center.workspace.desc.runtime'),
+        },
+        {
+          id: 'magnets' as const,
+          label: t('debug.center.workspace.tab.magnets'),
+          desc: t('debug.center.workspace.desc.magnets'),
         },
       ] satisfies Array<{ id: DebugWorkspaceId; label: string; desc: string }>,
     [t]
@@ -1965,6 +1965,16 @@ export function DebugCenter({
           count: formatCount(coverCacheStats.coverBlobUrlCacheEntries),
           mb: formatBytesToMb(coverCacheStats.coverBlobUrlTotalBytes),
         });
+  const telemetryDroppedTotal =
+    telemetrySnapshot.status.droppedRecords +
+    telemetrySnapshot.queueDroppedRecords +
+    telemetrySnapshot.tailDroppedRecords;
+  const debugEnvInjectedCount = Object.values(envSnapshot).filter((value) => value).length;
+  const startupEnvDetail = pendingRestart
+    ? t('debug.center.overview.status.startupEnvDetail.pending')
+    : t('debug.center.overview.status.startupEnvDetail.clean', {
+        count: debugEnvInjectedCount,
+      });
 
   const header =
     variant === 'page' ? (
@@ -2019,12 +2029,173 @@ export function DebugCenter({
           </SettingsCard>
         ) : null}
 
+        {statusMessage || error ? (
+          <div className="debug-center-feedback-strip">
+            {statusMessage ? (
+              <p className="settings-card-note debug-center-feedback debug-center-feedback--success">
+                {statusMessage}
+              </p>
+            ) : null}
+            {error ? (
+              <p className="settings-card-note debug-center-feedback debug-center-feedback--error">
+                {error}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         {activeWorkspace === 'overview' ? (
+          <>
+            <SettingsCard className="debug-center-overview-card">
+              <div className="settings-card-header">
+                <div>
+                  <p className="settings-card-label">{t('debug.center.overview.status.title')}</p>
+                  <p className="settings-card-desc">{t('debug.center.overview.status.desc')}</p>
+                </div>
+              </div>
+
+              <div className="debug-center-status-grid">
+                <div className="debug-center-status-item">
+                  <span className="debug-center-status-label">
+                    {t('debug.center.overview.status.runtime')}
+                  </span>
+                  <strong className="debug-center-status-value">
+                    {isTauri
+                      ? t('debug.center.overview.status.runtime.tauri')
+                      : t('debug.center.overview.status.runtime.web')}
+                  </strong>
+                  <span className="debug-center-status-detail">
+                    {debugPollingAllowed
+                      ? t('debug.center.overview.status.polling.active')
+                      : t('debug.center.overview.status.polling.paused')}
+                  </span>
+                </div>
+
+                <div className="debug-center-status-item">
+                  <span className="debug-center-status-label">
+                    {t('debug.center.overview.status.telemetry')}
+                  </span>
+                  <strong className="debug-center-status-value">
+                    {telemetrySnapshot.policy.enabled ? t('common.state.on') : t('common.state.off')}
+                  </strong>
+                  <span className="debug-center-status-detail">
+                    {t('debug.center.overview.status.telemetryDetail', {
+                      tail: telemetrySnapshot.tail.length,
+                      dropped: telemetryDroppedTotal,
+                    })}
+                  </span>
+                </div>
+
+                <div className="debug-center-status-item">
+                  <span className="debug-center-status-label">
+                    {t('debug.center.overview.status.session')}
+                  </span>
+                  <strong className="debug-center-status-value">
+                    {telemetrySnapshot.status.currentSessionId || '-'}
+                  </strong>
+                  <span className="debug-center-status-detail">
+                    {t('debug.center.overview.status.sessionDetail', {
+                      size: formatBytesToMbLabel(telemetrySnapshot.status.currentFileBytes),
+                      level: telemetrySnapshot.status.persistMinLevel,
+                    })}
+                  </span>
+                </div>
+
+                <div className="debug-center-status-item">
+                  <span className="debug-center-status-label">
+                    {t('debug.center.overview.status.startupEnv')}
+                  </span>
+                  <strong className="debug-center-status-value">
+                    {config.enabled ? t('common.state.on') : t('common.state.off')}
+                  </strong>
+                  <span className="debug-center-status-detail">{startupEnvDetail}</span>
+                </div>
+
+                <div className="debug-center-status-item">
+                  <span className="debug-center-status-label">
+                    {t('debug.center.overview.status.memory')}
+                  </span>
+                  <strong className="debug-center-status-value">{memoryBaselines.length}</strong>
+                  <span className="debug-center-status-detail">
+                    {t('debug.center.overview.status.memoryDetail', {
+                      trace: startupMemoryTraceEnabled ? t('common.state.on') : t('common.state.off'),
+                    })}
+                  </span>
+                </div>
+
+                <div className="debug-center-status-item">
+                  <span className="debug-center-status-label">
+                    {t('debug.center.overview.status.windowComm')}
+                  </span>
+                  <strong className="debug-center-status-value">
+                    {windowCommDebugEnabled ? t('common.state.on') : t('common.state.off')}
+                  </strong>
+                  <span className="debug-center-status-detail">
+                    {t('debug.center.overview.status.windowCommDetail')}
+                  </span>
+                </div>
+              </div>
+            </SettingsCard>
+
+            <SettingsCard>
+              <div className="settings-card-header">
+                <div>
+                  <p className="settings-card-label">{t('debug.center.shortcuts.title')}</p>
+                  <p className="settings-card-desc">{t('debug.center.shortcuts.desc')}</p>
+                </div>
+              </div>
+
+              <div className="debug-center-actions debug-center-actions--start debug-center-actions--cluster">
+                <SettingsActionButton type="button" onClick={() => setActiveWorkspace('telemetry')}>
+                  {t('debug.center.shortcuts.telemetry')}
+                </SettingsActionButton>
+                <SettingsActionButton
+                  type="button"
+                  onClick={() => void handleOpenPerfMonitor()}
+                >
+                  {t('debug.center.shortcuts.perfMonitor')}
+                </SettingsActionButton>
+                <SettingsActionButton type="button" onClick={() => setActiveWorkspace('memory')}>
+                  {t('debug.center.shortcuts.memory')}
+                </SettingsActionButton>
+                <SettingsActionButton type="button" onClick={() => setActiveWorkspace('runtime')}>
+                  {t('debug.center.shortcuts.runtime')}
+                </SettingsActionButton>
+                <SettingsActionButton
+                  type="button"
+                  onClick={() => void handleOpenNativeDebug()}
+                >
+                  {t('debug.center.shortcuts.nativeDebug')}
+                </SettingsActionButton>
+                <SettingsActionButton type="button" onClick={() => void handleOpenDspRack()}>
+                  {t('debug.center.shortcuts.dspRack')}
+                </SettingsActionButton>
+                <SettingsActionButton
+                  type="button"
+                  onClick={() => void handleOpenVstManager()}
+                  disabled={!isTauri}
+                >
+                  {t('debug.center.shortcuts.vstManager')}
+                </SettingsActionButton>
+                <SettingsActionButton
+                  type="button"
+                  onClick={() => void handleOpenThemeDebugWindow()}
+                  disabled={!isTauri}
+                >
+                  {t('debug.center.shortcuts.themeDebug')}
+                </SettingsActionButton>
+              </div>
+            </SettingsCard>
+          </>
+        ) : null}
+
+
+        {activeWorkspace === 'runtime' ? (
           <SettingsCard>
           <div className="settings-card-header">
             <div>
-              <p className="settings-card-label">{t('debug.center.mode.label')}</p>
-              <p className="settings-card-desc">{t('debug.center.mode.desc')}</p>
+              <p className="settings-card-label">{t('debug.center.startupEnv.label')}</p>
+              <p className="settings-card-desc">{t('debug.center.startupEnv.desc')}</p>
             </div>
             <span className="settings-card-badge">
               {config.enabled ? t('common.state.on') : t('common.state.off')}
@@ -2048,14 +2219,10 @@ export function DebugCenter({
             </SettingsToggleButton>
           </SettingsToggleGroup>
 
-          {pendingRestart ? <p className="settings-card-note">{t('debug.center.mode.note.restartRequired')}</p> : null}
-          {busy ? <p className="settings-card-note">{t('debug.center.mode.note.saving')}</p> : null}
-          {statusMessage ? (
-            <p className="settings-card-note debug-center-feedback debug-center-feedback--success">
-              {statusMessage}
-            </p>
+          {pendingRestart ? (
+            <p className="settings-card-note">{t('debug.center.startupEnv.note.restartRequired')}</p>
           ) : null}
-          {error ? <p className="settings-card-note debug-center-feedback debug-center-feedback--error">{error}</p> : null}
+          {busy ? <p className="settings-card-note">{t('debug.center.startupEnv.note.saving')}</p> : null}
           </SettingsCard>
         ) : null}
 
@@ -3191,48 +3358,6 @@ export function DebugCenter({
           </>
         ) : null}
 
-        {activeWorkspace === 'overview' ? (
-          <SettingsCard>
-          <div className="settings-card-header">
-            <div>
-              <p className="settings-card-label">{t('debug.center.shortcuts.title')}</p>
-              <p className="settings-card-desc">{t('debug.center.shortcuts.desc')}</p>
-            </div>
-          </div>
-
-          <div className="debug-center-actions debug-center-actions--start">
-            <SettingsActionButton
-              type="button"
-              onClick={() => void handleOpenPerfMonitor()}
-            >
-              {t('debug.center.shortcuts.perfMonitor')}
-            </SettingsActionButton>
-            <SettingsActionButton
-              type="button"
-              onClick={() => void handleOpenNativeDebug()}
-            >
-              {t('debug.center.shortcuts.nativeDebug')}
-            </SettingsActionButton>
-            <SettingsActionButton type="button" onClick={() => void handleOpenDspRack()}>
-              {t('debug.center.shortcuts.dspRack')}
-            </SettingsActionButton>
-            <SettingsActionButton
-              type="button"
-              onClick={() => void handleOpenVstManager()}
-              disabled={!isTauri}
-            >
-              {t('debug.center.shortcuts.vstManager')}
-            </SettingsActionButton>
-            <SettingsActionButton
-              type="button"
-              onClick={() => void handleOpenThemeDebugWindow()}
-              disabled={!isTauri}
-            >
-              {t('debug.center.shortcuts.themeDebug')}
-            </SettingsActionButton>
-          </div>
-          </SettingsCard>
-        ) : null}
       </div>
 
       <ConfirmDialog

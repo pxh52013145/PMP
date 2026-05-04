@@ -68,6 +68,18 @@
   margin-top: 14px;
 }
 
+.debug-center-actions--cluster {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  width: 100%;
+  justify-content: stretch;
+}
+
+.debug-center-actions--cluster .settings-action-btn {
+  width: 100%;
+  justify-content: center;
+}
+
 .debug-center-runtime-note {
   margin-top: 16px;
 }
@@ -128,6 +140,21 @@
 
 .debug-center-root [data-tone='progress'] {
   color: rgba(255, 225, 150, 0.95);
+}
+
+.debug-center-feedback-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.debug-center-feedback-strip .settings-card-note {
+  margin: 0;
 }
 
 .debug-center-root pre {
@@ -275,6 +302,57 @@
 
 .debug-center-workspace-toggle {
   flex-wrap: wrap;
+}
+
+.debug-center-overview-card {
+  min-width: 0;
+}
+
+.debug-center-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.debug-center-status-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 104px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
+    rgba(0, 0, 0, 0.16);
+}
+
+.debug-center-status-label {
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.debug-center-status-value {
+  min-width: 0;
+  color: rgba(255, 255, 255, 0.94);
+  font-size: 16px;
+  font-weight: 750;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-center-status-detail {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 12px;
+  line-height: 1.28;
+  overflow-wrap: anywhere;
 }
 
 .debug-center-memory-card,

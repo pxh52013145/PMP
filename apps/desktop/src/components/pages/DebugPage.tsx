@@ -93,9 +93,6 @@ function resolveDebugSectionId(page: PageContribution): DebugSectionId {
 }
 
 function getDebugSectionLabel(section: DebugSection): string {
-  if (section.pages.length === 1) {
-    return section.pages[0]?.title ?? section.title;
-  }
   return section.title;
 }
 
@@ -158,7 +155,7 @@ export const DebugPage: React.FC = () => {
       },
       {
         id: 'observability',
-        title: t('pages.perf-monitor.title'),
+        title: t('pages.debug.sections.observability'),
         order: 20,
         pages: [],
       },
@@ -247,10 +244,10 @@ export const DebugPage: React.FC = () => {
     () =>
       [
         { id: 'overview' as const, title: t('debug.center.workspace.tab.overview') },
-        { id: 'runtime' as const, title: t('debug.center.workspace.tab.runtime') },
         { id: 'telemetry' as const, title: t('debug.center.workspace.tab.telemetry') },
-        { id: 'magnets' as const, title: t('debug.center.workspace.tab.magnets') },
         { id: 'memory' as const, title: t('debug.center.workspace.tab.memory') },
+        { id: 'runtime' as const, title: t('debug.center.workspace.tab.runtime') },
+        { id: 'magnets' as const, title: t('debug.center.workspace.tab.magnets') },
       ] satisfies Array<{ id: DebugWorkspaceId; title: string }>,
     [t]
   );
