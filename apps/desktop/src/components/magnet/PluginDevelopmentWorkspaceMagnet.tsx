@@ -8,10 +8,12 @@ import {
   useSyncExternalStore,
 } from 'react';
 import {
+  Activity,
   ExternalLink,
   Eye,
   Link2,
   Play,
+  Power,
   RefreshCw,
   Unplug,
 } from 'lucide-react';
@@ -54,6 +56,17 @@ import {
   type PlatformPackDevInstanceBindingRecord,
 } from '../../modules/music-platform/platformPackDevBinding';
 import {
+  clearPlatformPackDevWatcherPending,
+  getPlatformPackDevWatcher,
+  getPlatformPackDevWatchersRevision,
+  primePlatformPackDevWatcherSnapshot,
+  runPlatformPackDevWatcherPass,
+  setPlatformPackDevWatcherEnabled,
+  subscribePlatformPackDevWatchers,
+  type PlatformPackDevWatcherChangeKind,
+  type PlatformPackDevWatcherRecord,
+} from '../../modules/music-platform/platformPackDevWatcher';
+import {
   getActiveMusicPlatformInstanceId,
   getMusicPlatformActiveInstanceState,
   subscribeMusicPlatformActiveInstanceState,
@@ -83,6 +96,7 @@ import {
   INSTALLED_EXTENSION_VIEW_LAUNCHERS,
 } from '../../magnet-system/plugins/runtime/installedExtensionHostLaunchers';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { PluginMagnetCreatorWorkspace } from './PluginMagnetCreatorWorkspace';
 import './PluginDevelopmentWorkspaceMagnet.css';
 
 type RuntimePreviewEntry = {
@@ -93,7 +107,7 @@ type RuntimePreviewEntry = {
   issues: string[];
 };
 
-type WorkspaceProfile = 'manifest-v2' | 'platform-pack';
+type WorkspaceProfile = 'plugin-magnet' | 'manifest-v2' | 'platform-pack';
 
 type SessionDraft = {
   pluginId: string;
@@ -262,6 +276,30 @@ function formatPlatformPackStatusLabel(
   }
 }
 
+function formatPlatformPackWatcherStatusLabel(
+  t: (key: string, params?: Record<string, unknown>) => string,
+  watcher: PlatformPackDevWatcherRecord | null
+): string {
+  if (!watcher?.enabled) {
+    return t('magnet.pluginDevelopmentWorkspace.platformPack.watcher.status.disabled');
+  }
+  return t(`magnet.pluginDevelopmentWorkspace.platformPack.watcher.status.${watcher.status}`);
+}
+
+function formatPlatformPackWatcherChangeKindLabel(
+  t: (key: string, params?: Record<string, unknown>) => string,
+  changeKind: PlatformPackDevWatcherChangeKind
+): string {
+  return t(
+    `magnet.pluginDevelopmentWorkspace.platformPack.watcher.changeKind.${changeKind}`
+  );
+}
+
+function formatPlatformPackWatcherFiles(files: string[] | undefined): string {
+  if (!files?.length) return '-';
+  return files.join(', ');
+}
+
 function readPlatformPackDisplayName(source: PlatformPackDevSource): string {
   return source.manifest?.metadata.name ?? source.manifest?.metadata.id ?? source.rootDir;
 }
@@ -366,6 +404,11 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
       getPlatformPackDevInstanceBindingsRevision,
       getPlatformPackDevInstanceBindingsRevision
     );
+    const platformPackWatcherRevision = useSyncExternalStore(
+      subscribePlatformPackDevWatchers,
+      getPlatformPackDevWatchersRevision,
+      getPlatformPackDevWatchersRevision
+    );
     const platformRenderSelectionSnapshot = useSyncExternalStore(
       (listener) => subscribePlatformRenderSelections(() => listener()),
       getPlatformRenderSelectionSnapshot,
@@ -405,7 +448,7 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [workspaceProfile, setWorkspaceProfile] =
-      useState<WorkspaceProfile>('manifest-v2');
+      useState<WorkspaceProfile>('plugin-magnet');
     const [platformPackSource, setPlatformPackSource] =
       useState<PlatformPackDevSource | null>(null);
     const [selectedPlatformPackInstanceId, setSelectedPlatformPackInstanceId] =
@@ -436,6 +479,10 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
     );
     const activePlatformPackBinding =
       platformPackBindingForSource ?? selectedPlatformPackBinding ?? platformPackBindings[0] ?? null;
+    const activePlatformPackWatcher = useMemo(() => {
+      void platformPackWatcherRevision;
+      return getPlatformPackDevWatcher(activePlatformPackBinding?.instanceId ?? null);
+    }, [activePlatformPackBinding?.instanceId, platformPackWatcherRevision]);
     const activePlatformPackPreviewStatus = useMemo(() => {
       void platformRenderSelectionSnapshot;
       void musicPlatformActiveInstanceSnapshot;
@@ -489,6 +536,48 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
       setSelectedPlatformPackInstanceId(platformPackBindings[0]?.instanceId ?? null);
     }, [platformPackBindings, selectedPlatformPackInstanceId]);
 
+    useEffect(() => {
+      if (
+        workspaceProfile !== 'platform-pack' ||
+        !activePlatformPackBinding ||
+        !activePlatformPackWatcher?.enabled
+      ) {
+        return;
+      }
+
+      let disposed = false;
+      let running = false;
+      const runPass = async () => {
+        if (running || disposed) return;
+        running = true;
+        try {
+          const result = await runPlatformPackDevWatcherPass(activePlatformPackBinding);
+          if (disposed) return;
+          if (result.source) {
+            setPlatformPackSource(result.source);
+          }
+        } catch (watcherError) {
+          if (!disposed) {
+            setError(watcherError instanceof Error ? watcherError.message : String(watcherError));
+          }
+        } finally {
+          running = false;
+        }
+      };
+
+      void runPass();
+      const intervalId = window.setInterval(runPass, activePlatformPackWatcher.intervalMs);
+      return () => {
+        disposed = true;
+        window.clearInterval(intervalId);
+      };
+    }, [
+      activePlatformPackBinding,
+      activePlatformPackWatcher?.enabled,
+      activePlatformPackWatcher?.intervalMs,
+      workspaceProfile,
+    ]);
+
     const runtimePreviewEntries = useMemo(() => {
       return readRuntimePreviewEntries(
         t,
@@ -510,9 +599,13 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
         hasPlatformPackSource: platformPackSource !== null,
         platformPackStatus: platformPackSource?.status ?? null,
         platformPackBlocked: platformPackBlockingError !== null,
+        platformPackWatcherEnabled: activePlatformPackWatcher?.enabled ?? false,
+        platformPackWatcherStatus: activePlatformPackWatcher?.status ?? null,
         busy,
       }),
       [
+        activePlatformPackWatcher?.enabled,
+        activePlatformPackWatcher?.status,
         busy,
         devSessions.length,
         draft,
@@ -668,6 +761,7 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
         const result = await bindPlatformPackDevInstance(platformPackSource);
         setSelectedPlatformPackInstanceId(result.record.instanceId);
         setPlatformPackSource(result.source);
+        primePlatformPackDevWatcherSnapshot(result.record.instanceId, result.source);
       } catch (bindError) {
         setError(bindError instanceof Error ? bindError.message : String(bindError));
       } finally {
@@ -685,6 +779,8 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
           const result = await reloadPlatformPackDevInstanceBinding(record);
           setSelectedPlatformPackInstanceId(result.record.instanceId);
           setPlatformPackSource(result.source);
+          primePlatformPackDevWatcherSnapshot(result.record.instanceId, result.source);
+          clearPlatformPackDevWatcherPending(result.record.instanceId, result.source);
         } catch (reloadError) {
           setError(reloadError instanceof Error ? reloadError.message : String(reloadError));
         } finally {
@@ -701,6 +797,7 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
         setError(null);
 
         try {
+          setPlatformPackDevWatcherEnabled(record, false);
           await detachPlatformPackDevInstanceBinding(record.instanceId);
           if (selectedPlatformPackInstanceId === record.instanceId) {
             setSelectedPlatformPackInstanceId(null);
@@ -727,6 +824,43 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
           });
         } catch (focusError) {
           setError(focusError instanceof Error ? focusError.message : String(focusError));
+        } finally {
+          setBusy(false);
+        }
+      },
+      [busy]
+    );
+
+    const handleTogglePlatformPackWatcher = useCallback(
+      async (record: PlatformPackDevInstanceBindingRecord, enabled: boolean) => {
+        setPlatformPackDevWatcherEnabled(record, enabled);
+        setError(null);
+        if (!enabled) return;
+        try {
+          const result = await runPlatformPackDevWatcherPass(record);
+          if (result.source) {
+            setPlatformPackSource(result.source);
+          }
+        } catch (watcherError) {
+          setError(watcherError instanceof Error ? watcherError.message : String(watcherError));
+        }
+      },
+      []
+    );
+
+    const handleConfirmPlatformPackWatcherReload = useCallback(
+      async (record: PlatformPackDevInstanceBindingRecord) => {
+        if (busy) return;
+        setBusy(true);
+        setError(null);
+
+        try {
+          const result = await reloadPlatformPackDevInstanceBinding(record);
+          setSelectedPlatformPackInstanceId(result.record.instanceId);
+          setPlatformPackSource(result.source);
+          clearPlatformPackDevWatcherPending(result.record.instanceId, result.source);
+        } catch (reloadError) {
+          setError(reloadError instanceof Error ? reloadError.message : String(reloadError));
         } finally {
           setBusy(false);
         }
@@ -804,9 +938,66 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
         };
       });
     }, [devSessions, installedByPluginId]);
+    const profileNavItems: Array<{ id: WorkspaceProfile; labelKey: string }> = [
+      {
+        id: 'plugin-magnet',
+        labelKey: 'magnet.pluginDevelopmentWorkspace.profile.pluginMagnet',
+      },
+      {
+        id: 'manifest-v2',
+        labelKey: 'magnet.pluginDevelopmentWorkspace.profile.manifestV2',
+      },
+      {
+        id: 'platform-pack',
+        labelKey: 'magnet.pluginDevelopmentWorkspace.profile.platformPack',
+      },
+    ];
 
     return (
       <div className="plugin-dev-workspace">
+        <div
+          className="plugin-dev-workspace__menubar"
+          role="tablist"
+          aria-label={t('magnet.pluginDevelopmentWorkspace.profile.ariaLabel')}
+        >
+          <div className="plugin-dev-workspace__menubar-items">
+            {profileNavItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={workspaceProfile === item.id}
+                className={[
+                  'plugin-dev-workspace__menubar-item',
+                  workspaceProfile === item.id
+                    ? 'plugin-dev-workspace__menubar-item--active'
+                    : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                onClick={() => setWorkspaceProfile(item.id)}
+              >
+                {t(item.labelKey)}
+              </button>
+            ))}
+          </div>
+          {workspaceProfile === 'plugin-magnet' ? null : (
+            <PmpButton
+              type="button"
+              variant="primary"
+              onClick={() =>
+                void (workspaceProfile === 'manifest-v2'
+                  ? handleChoosePluginProject()
+                  : handleChoosePlatformPackProject())
+              }
+              disabled={busy}
+            >
+              {workspaceProfile === 'manifest-v2'
+                ? t('magnet.pluginDevelopmentWorkspace.action.selectProject')
+                : t('magnet.pluginDevelopmentWorkspace.action.selectPlatformPack')}
+            </PmpButton>
+          )}
+        </div>
         <div className="plugin-dev-workspace__header">
           <div>
             <div className="plugin-dev-workspace__eyebrow">
@@ -818,63 +1009,21 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
             <p className="plugin-dev-workspace__subtitle">
               {t('magnet.pluginDevelopmentWorkspace.subtitle')}
             </p>
-            <div
-              className="plugin-dev-workspace__profile-switch"
-              role="tablist"
-              aria-label={t('magnet.pluginDevelopmentWorkspace.profile.ariaLabel')}
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={workspaceProfile === 'manifest-v2'}
-                className={[
-                  'plugin-dev-workspace__profile-tab',
-                  workspaceProfile === 'manifest-v2'
-                    ? 'plugin-dev-workspace__profile-tab--active'
-                    : '',
-                ]
-                  .filter(Boolean)
-                  .join(' ')}
-                onClick={() => setWorkspaceProfile('manifest-v2')}
-              >
-                {t('magnet.pluginDevelopmentWorkspace.profile.manifestV2')}
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={workspaceProfile === 'platform-pack'}
-                className={[
-                  'plugin-dev-workspace__profile-tab',
-                  workspaceProfile === 'platform-pack'
-                    ? 'plugin-dev-workspace__profile-tab--active'
-                    : '',
-                ]
-                  .filter(Boolean)
-                  .join(' ')}
-                onClick={() => setWorkspaceProfile('platform-pack')}
-              >
-                {t('magnet.pluginDevelopmentWorkspace.profile.platformPack')}
-              </button>
-            </div>
           </div>
-          <PmpButton
-            type="button"
-            variant="primary"
-            onClick={() =>
-              void (workspaceProfile === 'manifest-v2'
-                ? handleChoosePluginProject()
-                : handleChoosePlatformPackProject())
-            }
-            disabled={busy}
-          >
-            {workspaceProfile === 'manifest-v2'
-              ? t('magnet.pluginDevelopmentWorkspace.action.selectProject')
-              : t('magnet.pluginDevelopmentWorkspace.action.selectPlatformPack')}
-          </PmpButton>
         </div>
 
         {error ? <div className="plugin-dev-workspace__error">{error}</div> : null}
 
+        {workspaceProfile === 'plugin-magnet' ? (
+          <PluginMagnetCreatorWorkspace
+            busy={busy}
+            installedExtensions={installedExtensions}
+            devSessions={devSessions}
+            selectedPluginId={selectedPluginId}
+            onSelectPluginId={setSelectedPluginId}
+            onError={setError}
+          />
+        ) : (
         <div className="plugin-dev-workspace__body">
           <section className="plugin-dev-workspace__section plugin-dev-workspace__section--sessions">
             <div className="plugin-dev-workspace__section-title">
@@ -1473,6 +1622,12 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
                     <span>{t('magnet.pluginDevelopmentWorkspace.label.revision')}</span>
                     <strong>{activePlatformPackBinding?.revision ?? '-'}</strong>
                   </div>
+                  <div>
+                    <span>{t('magnet.pluginDevelopmentWorkspace.platformPack.watcher.title')}</span>
+                    <strong>
+                      {formatPlatformPackWatcherStatusLabel(t, activePlatformPackWatcher)}
+                    </strong>
+                  </div>
                 </div>
 
                 <div className="plugin-dev-workspace__preview">
@@ -1480,6 +1635,128 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
                     <Eye size={16} />
                     <span>{t('magnet.pluginDevelopmentWorkspace.platformPack.preview.title')}</span>
                   </div>
+                  {activePlatformPackBinding ? (
+                    <div className="plugin-dev-workspace__watcher">
+                      <div className="plugin-dev-workspace__watcher-header">
+                        <label className="plugin-dev-workspace__watcher-toggle">
+                          <input
+                            type="checkbox"
+                            checked={activePlatformPackWatcher?.enabled === true}
+                            onChange={(event) =>
+                              void handleTogglePlatformPackWatcher(
+                                activePlatformPackBinding,
+                                event.target.checked
+                              )
+                            }
+                          />
+                          <Power size={14} />
+                          <span>
+                            {t('magnet.pluginDevelopmentWorkspace.platformPack.watcher.enable')}
+                          </span>
+                        </label>
+                        <span
+                          className={[
+                            'plugin-dev-workspace__tag',
+                            activePlatformPackWatcher?.status === 'error'
+                              ? 'plugin-dev-workspace__tag--error'
+                              : activePlatformPackWatcher?.status === 'pending'
+                                ? 'plugin-dev-workspace__tag--warn'
+                                : 'plugin-dev-workspace__tag--info',
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}
+                        >
+                          {formatPlatformPackWatcherStatusLabel(t, activePlatformPackWatcher)}
+                        </span>
+                      </div>
+                      <div className="plugin-dev-workspace__watcher-grid">
+                        <div>
+                          <span>
+                            {t('magnet.pluginDevelopmentWorkspace.platformPack.watcher.lastChange')}
+                          </span>
+                          <strong>
+                            {activePlatformPackWatcher?.lastChange
+                              ? formatPlatformPackWatcherChangeKindLabel(
+                                  t,
+                                  activePlatformPackWatcher.lastChange.changeKind
+                                )
+                              : '-'}
+                          </strong>
+                          <small>
+                            {formatPlatformPackWatcherFiles(
+                              activePlatformPackWatcher?.lastChange?.changedFiles
+                            )}
+                          </small>
+                        </div>
+                        <div>
+                          <span>
+                            {t('magnet.pluginDevelopmentWorkspace.platformPack.watcher.pending')}
+                          </span>
+                          <strong>
+                            {activePlatformPackWatcher?.pendingReload
+                              ? formatPlatformPackWatcherChangeKindLabel(
+                                  t,
+                                  activePlatformPackWatcher.pendingReload.changeKind
+                                )
+                              : t('magnet.pluginDevelopmentWorkspace.platformPack.watcher.none')}
+                          </strong>
+                          <small>
+                            {formatPlatformPackWatcherFiles(
+                              activePlatformPackWatcher?.pendingReload?.changedFiles
+                            )}
+                          </small>
+                        </div>
+                        <div>
+                          <span>
+                            {t('magnet.pluginDevelopmentWorkspace.platformPack.watcher.lastReload')}
+                          </span>
+                          <strong>
+                            {activePlatformPackWatcher?.lastAutoReload
+                              ? t(
+                                  activePlatformPackWatcher.lastAutoReload.status === 'success'
+                                    ? 'magnet.pluginDevelopmentWorkspace.platformPack.reloadHistory.success'
+                                    : 'magnet.pluginDevelopmentWorkspace.platformPack.reloadHistory.error'
+                                )
+                              : '-'}
+                          </strong>
+                          <small>
+                            {activePlatformPackWatcher?.lastAutoReload
+                              ? formatTimestamp(activePlatformPackWatcher.lastAutoReload.at)
+                              : '-'}
+                          </small>
+                        </div>
+                      </div>
+                      {activePlatformPackWatcher?.pendingReload ? (
+                        <div className="plugin-dev-workspace__session-actions">
+                          <PmpButton
+                            type="button"
+                            variant="primary"
+                            disabled={busy}
+                            onClick={() =>
+                              void handleConfirmPlatformPackWatcherReload(
+                                activePlatformPackBinding
+                              )
+                            }
+                          >
+                            <Activity size={14} />
+                            {t(
+                              'magnet.pluginDevelopmentWorkspace.platformPack.watcher.confirmReload'
+                            )}
+                          </PmpButton>
+                          <span className="plugin-dev-workspace__note">
+                            {t(
+                              'magnet.pluginDevelopmentWorkspace.platformPack.watcher.pendingNote'
+                            )}
+                          </span>
+                        </div>
+                      ) : null}
+                      {activePlatformPackWatcher?.lastError ? (
+                        <div className="plugin-dev-workspace__runtime-issues">
+                          {activePlatformPackWatcher.lastError}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <div className="plugin-dev-workspace__preview-steps">
                     <div className="plugin-dev-workspace__preview-step">
                       <span className="plugin-dev-workspace__preview-dot plugin-dev-workspace__preview-dot--ready" />
@@ -1736,6 +2013,7 @@ export const PluginDevelopmentWorkspaceMagnet = memo(
             )}
           </section>
         </div>
+        )}
       </div>
     );
   }

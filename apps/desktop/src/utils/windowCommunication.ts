@@ -246,6 +246,8 @@ export const STORAGE_KEYS = {
   EXTENSIONS_V2_AUDIT_LOG_V1: 'pixel-matrix-installed-extensions-v2-audit-log-v1', // manifest-v2 governance audit log
   EXTENSIONS_V2_RUNTIME_RESTART_V1: 'pixel-matrix-installed-extensions-v2-runtime-restart-v1', // manifest-v2 runtime restart request
   EXTENSIONS_V2_DEV_SESSIONS_V1: 'pixel-matrix-installed-extensions-v2-dev-sessions-v1', // manifest-v2 development sessions
+  PLUGIN_MAGNET_CREATOR_DRAFT_V1:
+    'pixel-matrix-plugin-magnet-creator-draft-v1', // Host-side plugin magnet creator draft
 
   // === Shader Packs (.pmps) ===
   PMPS_SHADERS: 'pixel-matrix-pmps-shaders', // 已安装 shader pack（manifest + fragmentCode）
@@ -301,6 +303,7 @@ export const STORAGE_KEYS = {
   PLATFORM_IMPORTED_INSTANCES_V1: 'pixel-matrix-platform-imported-instances-v1', // Imported platform instance registrations
   PLATFORM_PACKS_V1: 'pixel-matrix-platform-packs-v1', // Installed platform packs (manifest + contract + unpacked artifacts)
   PLATFORM_PACK_DEV_BINDINGS_V1: 'pixel-matrix-platform-pack-dev-bindings-v1', // Host-managed platform pack development bindings
+  PLATFORM_PACK_DEV_WATCHERS_V1: 'pixel-matrix-platform-pack-dev-watchers-v1', // Host-managed platform pack dev watcher state
 
   // === Memory Governance ===
   MEMORY_GOVERNANCE_AUTO_ENABLED: 'pixel-matrix-memory-governance-auto-enabled', // boolean
@@ -423,11 +426,13 @@ export const TAURI_EVENTS = {
   PLATFORM_IMPORTED_INSTANCES_UPDATED: 'platform-imported-instances-updated',
   PLATFORM_PACKS_UPDATED: 'platform-packs-updated',
   PLATFORM_PACK_DEV_BINDINGS_UPDATED: 'platform-pack-dev-bindings-updated',
+  PLATFORM_PACK_DEV_WATCHERS_UPDATED: 'platform-pack-dev-watchers-updated',
 
   // Extensions
   EXTENSIONS_V2_UPDATED: 'extensions-v2-updated',
   EXTENSIONS_CONFIG_UPDATED: 'extensions-config-updated',
   EXTENSIONS_V2_DEV_SESSIONS_UPDATED: 'extensions-v2-dev-sessions-updated',
+  PLUGIN_MAGNET_CREATOR_DRAFT_UPDATED: 'plugin-magnet-creator-draft-updated',
 
   // Shader Packs (.pmps)
   PMPS_SHADERS_UPDATED: 'pmps-shaders-updated',

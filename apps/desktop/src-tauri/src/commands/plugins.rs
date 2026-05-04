@@ -5,6 +5,7 @@ use base64::{engine::general_purpose, Engine as _};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 use tauri::Manager;
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,11 +50,14 @@ pub struct PlatformPackDevSourcePayload {
     pub runtime_path: Option<String>,
     pub runtime_raw: Option<String>,
     pub runtime_exists: Option<bool>,
+    pub runtime_modified_at_ms: Option<u64>,
     pub icon_path: Option<String>,
     pub icon_raw_base64: Option<String>,
     pub icon_exists: Option<bool>,
+    pub icon_modified_at_ms: Option<u64>,
     pub sidecar_path: Option<String>,
     pub sidecar_exists: Option<bool>,
+    pub sidecar_modified_at_ms: Option<u64>,
     pub diagnostics: Vec<PlatformPackDevSourceDiagnostic>,
 }
 
@@ -325,6 +329,13 @@ fn read_platform_pack_dev_binary_file_base64(
     }
 }
 
+fn read_platform_pack_dev_modified_at_ms(path: &Path) -> Option<u64> {
+    let metadata = fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    let duration = modified.duration_since(UNIX_EPOCH).ok()?;
+    Some(duration.as_millis().min(u128::from(u64::MAX)) as u64)
+}
+
 fn collect_install_source_files(
     root_dir: &Path,
     current_dir: &Path,
@@ -465,11 +476,14 @@ pub fn plugin_read_platform_pack_dev_source(
     let mut runtime_path = None;
     let mut runtime_raw = None;
     let mut runtime_exists = None;
+    let mut runtime_modified_at_ms = None;
     let mut icon_path = None;
     let mut icon_raw_base64 = None;
     let mut icon_exists = None;
+    let mut icon_modified_at_ms = None;
     let mut sidecar_path = None;
     let mut sidecar_exists = None;
+    let mut sidecar_modified_at_ms = None;
 
     if let Some(raw) = manifest_raw.as_deref() {
         match serde_json::from_str::<serde_json::Value>(raw) {
@@ -496,6 +510,7 @@ pub fn plugin_read_platform_pack_dev_source(
                     runtime_path = Some(normalize_display_path(&path));
                     runtime_exists = Some(exists);
                     if exists {
+                        runtime_modified_at_ms = read_platform_pack_dev_modified_at_ms(&path);
                         runtime_raw = read_platform_pack_dev_text_file(
                             &path,
                             &mut diagnostics,
@@ -521,6 +536,7 @@ pub fn plugin_read_platform_pack_dev_source(
                     icon_path = Some(normalize_display_path(&path));
                     icon_exists = Some(exists);
                     if exists {
+                        icon_modified_at_ms = read_platform_pack_dev_modified_at_ms(&path);
                         icon_raw_base64 = read_platform_pack_dev_binary_file_base64(
                             &path,
                             &mut diagnostics,
@@ -550,6 +566,8 @@ pub fn plugin_read_platform_pack_dev_source(
                             "sidecar.entry.missing",
                             format!("Sidecar entry is missing: {relative_path}"),
                         );
+                    } else {
+                        sidecar_modified_at_ms = read_platform_pack_dev_modified_at_ms(&path);
                     }
                 }
             }
@@ -573,11 +591,14 @@ pub fn plugin_read_platform_pack_dev_source(
         runtime_path,
         runtime_raw,
         runtime_exists,
+        runtime_modified_at_ms,
         icon_path,
         icon_raw_base64,
         icon_exists,
+        icon_modified_at_ms,
         sidecar_path,
         sidecar_exists,
+        sidecar_modified_at_ms,
         diagnostics,
     })
 }
