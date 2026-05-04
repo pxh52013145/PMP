@@ -1,17 +1,19 @@
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/tauri';
 import { appWindow, currentMonitor } from '@tauri-apps/api/window';
 import {
-  Eye,
-  EyeOff,
+  AArrowDown,
+  AArrowUp,
+  Droplet,
+  DropletOff,
   FastForward,
-  Minus,
   MousePointer2,
-  Move,
-  Plus,
+  Pause,
+  Play,
   Rewind,
   RotateCcw,
-  Type,
+  SkipBack,
+  SkipForward,
   X,
 } from 'lucide-react';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -24,6 +26,8 @@ import './DesktopLyricsOverlayApp.css';
 
 const OVERLAY_SYNC_EVENT = 'desktop-lyrics-overlay-sync';
 const OVERLAY_PROGRESS_EVENT = 'desktop-lyrics-overlay-progress';
+const NATIVE_AUDIO_STATE_EVENT = 'native_audio_state';
+const DESKTOP_LYRICS_AUDIO_CONTROL_REQUEST_EVENT = 'desktop-lyrics-audio-control-requested';
 const MIN_FONT_SIZE = 16;
 const MAX_FONT_SIZE = 56;
 const MIN_OPACITY_PERCENT = 0;
@@ -39,6 +43,7 @@ const MAX_REGION_WIDTH = 8192;
 const MAX_REGION_HEIGHT = 2160;
 
 type OverlayHandleEdge = 'left' | 'right' | 'top' | 'bottom';
+type AudioControlAction = 'previous' | 'toggle-play-pause' | 'next';
 
 type PositionLike = {
   x: number;
@@ -91,6 +96,13 @@ interface DesktopLyricsOverlayProgressPayload {
   activeIndex?: number | null;
   activeProgressPercent?: number | null;
   activeProgressRemainingMs?: number | null;
+}
+
+interface NativeAudioStatePayload {
+  playbackState?: string | null;
+  state?: {
+    playbackState?: string | null;
+  } | null;
 }
 
 interface ActiveProgressAnimation {
@@ -167,6 +179,14 @@ function normalizeLyricOffsetMs(value: unknown): number {
   }
 
   return Math.round(Math.min(MAX_LYRIC_OFFSET_MS, Math.max(MIN_LYRIC_OFFSET_MS, value)));
+}
+
+function normalizePlaybackState(value: unknown): string {
+  return typeof value === 'string' && value.trim().length > 0 ? value : 'idle';
+}
+
+function resolveNativePlaybackState(payload: NativeAudioStatePayload | null | undefined): string {
+  return normalizePlaybackState(payload?.state?.playbackState ?? payload?.playbackState);
 }
 
 function toLogicalPosition(position: PositionLike, scaleFactor: number): PositionLike {
@@ -359,6 +379,7 @@ function DesktopLyricsOverlayPanel() {
   const [isHovered, setIsHovered] = useState(false);
   const [isMoving, setIsMoving] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
+  const [playbackState, setPlaybackState] = useState('idle');
   const panelRef = useRef<HTMLDivElement | null>(null);
   const lineStackRef = useRef<HTMLDivElement | null>(null);
   const stateRef = useRef<DesktopLyricsOverlaySyncPayload>(DEFAULT_OVERLAY_STATE);
@@ -613,6 +634,43 @@ function DesktopLyricsOverlayPanel() {
       }
     };
   }, [applyActiveProgress]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: UnlistenFn | null = null;
+
+    const bind = async () => {
+      unlisten = await listen<NativeAudioStatePayload>(NATIVE_AUDIO_STATE_EVENT, (event) => {
+        setPlaybackState(resolveNativePlaybackState(event.payload));
+      });
+
+      if (disposed && unlisten) {
+        unlisten();
+      }
+    };
+
+    void bind().catch((error) => {
+      telemetry.warn('desktop-lyrics.overlay.audio-state.listen.failed', {
+        message: getErrorMessage(error),
+      });
+    });
+
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  const sendAudioControlRequest = useCallback(async (action: AudioControlAction) => {
+    try {
+      await emit(DESKTOP_LYRICS_AUDIO_CONTROL_REQUEST_EVENT, { action });
+    } catch (error) {
+      telemetry.error('desktop-lyrics.overlay.audio-control.request.failed', {
+        message: getErrorMessage(error),
+        fields: { action },
+      });
+    }
+  }, []);
 
   const toggleClickThrough = useCallback(async () => {
     const next = !state.clickThrough;
@@ -999,6 +1057,10 @@ function DesktopLyricsOverlayPanel() {
     [activeIndex, state.fontSize]
   );
   const showChrome = (isHovered || isMoving || isResizing) && !state.clickThrough;
+  const isPlaying = playbackState === 'playing' || playbackState === 'buffering';
+  const previousTrackTitle = t('commands.audio.previous-track.title');
+  const playPauseTitle = t('commands.audio.toggle-play-pause.title');
+  const nextTrackTitle = t('commands.audio.next-track.title');
   const clickThroughTitle = state.clickThrough
     ? t('magnet.desktopLyricsButton.contextMenu.clickThrough.disable')
     : t('magnet.desktopLyricsButton.contextMenu.clickThrough.enable');
@@ -1026,13 +1088,42 @@ function DesktopLyricsOverlayPanel() {
         <div className="desktop-lyrics-overlay__background" aria-hidden="true" />
 
         <div
+          className="desktop-lyrics-overlay__audio-controls"
+          onMouseDown={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            title={previousTrackTitle}
+            aria-label={previousTrackTitle}
+            onClick={() => void sendAudioControlRequest('previous')}
+          >
+            <SkipBack size={14} />
+          </button>
+          <button
+            type="button"
+            className={isPlaying ? 'is-active' : ''}
+            title={playPauseTitle}
+            aria-label={playPauseTitle}
+            onClick={() => void sendAudioControlRequest('toggle-play-pause')}
+          >
+            {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+          </button>
+          <button
+            type="button"
+            title={nextTrackTitle}
+            aria-label={nextTrackTitle}
+            onClick={() => void sendAudioControlRequest('next')}
+          >
+            <SkipForward size={14} />
+          </button>
+        </div>
+
+        <div
           className="desktop-lyrics-overlay__toolbar"
           onMouseDown={(event) => event.stopPropagation()}
           onPointerDown={(event) => event.stopPropagation()}
         >
-          <span className="desktop-lyrics-overlay__drag-hint" aria-hidden="true">
-            <Move size={14} />
-          </span>
           <button
             type="button"
             className={state.clickThrough ? 'is-active' : ''}
@@ -1048,8 +1139,7 @@ function DesktopLyricsOverlayPanel() {
             aria-label={smallerFontTitle}
             onClick={() => void adjustFontSize(-FONT_STEP)}
           >
-            <Type size={14} />
-            <Minus size={10} />
+            <AArrowDown size={15} />
           </button>
           <button
             type="button"
@@ -1057,8 +1147,7 @@ function DesktopLyricsOverlayPanel() {
             aria-label={largerFontTitle}
             onClick={() => void adjustFontSize(FONT_STEP)}
           >
-            <Type size={14} />
-            <Plus size={10} />
+            <AArrowUp size={15} />
           </button>
           <button
             type="button"
@@ -1066,7 +1155,7 @@ function DesktopLyricsOverlayPanel() {
             aria-label={lowerOpacityTitle}
             onClick={() => void adjustOpacity(-OPACITY_STEP)}
           >
-            <EyeOff size={14} />
+            <DropletOff size={14} />
           </button>
           <button
             type="button"
@@ -1074,7 +1163,7 @@ function DesktopLyricsOverlayPanel() {
             aria-label={higherOpacityTitle}
             onClick={() => void adjustOpacity(OPACITY_STEP)}
           >
-            <Eye size={14} />
+            <Droplet size={14} />
           </button>
           <button
             type="button"

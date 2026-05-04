@@ -6,6 +6,7 @@ import {
   TAURI_EVENTS,
   STORAGE_KEYS,
   setupTauriListener,
+  setupTauriListenerWithPayload,
 } from './utils/windowCommunication';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
@@ -71,6 +72,24 @@ let coverDecodeReporter: ((src: string, width: number, height: number) => void) 
 let coverDecodeReporterLoading: Promise<void> | null = null;
 
 const ORNAMENTS_RENDER_OVERLAY_STARTUP_DELAY_MS = 6_000;
+const DESKTOP_LYRICS_AUDIO_CONTROL_REQUEST_EVENT = 'desktop-lyrics-audio-control-requested';
+
+type DesktopLyricsAudioControlAction = 'previous' | 'toggle-play-pause' | 'next';
+
+type DesktopLyricsAudioControlRequestPayload = {
+  action?: DesktopLyricsAudioControlAction;
+};
+
+const DESKTOP_LYRICS_AUDIO_CONTROL_COMMANDS: Record<DesktopLyricsAudioControlAction, string> = {
+  previous: 'audio:previous-track',
+  'toggle-play-pause': 'audio:toggle-play-pause',
+  next: 'audio:next-track',
+};
+
+function resolveDesktopLyricsAudioControlCommand(action: unknown): string | null {
+  if (typeof action !== 'string') return null;
+  return DESKTOP_LYRICS_AUDIO_CONTROL_COMMANDS[action as DesktopLyricsAudioControlAction] ?? null;
+}
 
 type OrnamentsRenderPlan = {
   enabledCount: number;
@@ -435,6 +454,52 @@ function AppContent() {
     document.addEventListener('load', handler, true);
     return () => document.removeEventListener('load', handler, true);
   }, []);
+
+  useEffect(() => {
+    if (!isTauri) return;
+
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    const attach = async () => {
+      const cleanup = await setupTauriListenerWithPayload<DesktopLyricsAudioControlRequestPayload>(
+        DESKTOP_LYRICS_AUDIO_CONTROL_REQUEST_EVENT,
+        (payload) => {
+          const commandId = resolveDesktopLyricsAudioControlCommand(payload?.action);
+          if (!commandId) {
+            telemetry.warn('desktop-lyrics.audio-control.invalid-request', {
+              fields: { action: payload?.action },
+            });
+            return;
+          }
+
+          void dispatchCommandOrFallback(commands, commandId, () => {
+            telemetry.warn('desktop-lyrics.audio-control.command-unavailable', {
+              fields: { action: payload?.action, commandId },
+            });
+          }).catch((error) => {
+            telemetry.error('desktop-lyrics.audio-control.command.failed', {
+              message: error instanceof Error ? error.message : String(error),
+              fields: { action: payload?.action, commandId },
+            });
+          });
+        }
+      );
+
+      if (disposed) {
+        cleanup();
+        return;
+      }
+      unlisten = cleanup;
+    };
+
+    void attach();
+
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, [commands, isTauri, telemetry]);
 
   useEffect(() => {
     if (!isTauri) return;

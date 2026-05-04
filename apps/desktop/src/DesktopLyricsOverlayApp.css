@@ -68,8 +68,14 @@ body.desktop-lyrics-unlock-page #root {
   border: 0;
   outline: 0;
   color: #f7fbff;
-  font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC',
-    'Microsoft YaHei', sans-serif;
+  font-family:
+    'Segoe UI',
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'PingFang SC',
+    'Microsoft YaHei',
+    sans-serif;
   user-select: none;
   overflow: hidden;
   --desktop-lyrics-chrome-opacity: 0;
@@ -123,10 +129,10 @@ body.desktop-lyrics-unlock-page #root {
   background: rgba(8, 11, 16, var(--desktop-lyrics-bg-alpha, 0.92));
 }
 
+.desktop-lyrics-overlay__audio-controls,
 .desktop-lyrics-overlay__toolbar {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 18px;
   z-index: 5;
   display: inline-flex;
   align-items: center;
@@ -145,12 +151,24 @@ body.desktop-lyrics-unlock-page #root {
     border-color 160ms ease;
 }
 
+.desktop-lyrics-overlay__audio-controls {
+  right: 24px;
+}
+
+.desktop-lyrics-overlay__toolbar {
+  left: 24px;
+  max-width: calc(100vw - 152px);
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.desktop-lyrics-overlay.is-interactive .desktop-lyrics-overlay__audio-controls,
 .desktop-lyrics-overlay.is-interactive .desktop-lyrics-overlay__toolbar {
   pointer-events: auto;
   transform: translateY(0);
 }
 
-.desktop-lyrics-overlay__drag-hint,
+.desktop-lyrics-overlay__audio-controls button,
 .desktop-lyrics-overlay__toolbar button {
   width: 26px;
   height: 26px;
@@ -161,10 +179,7 @@ body.desktop-lyrics-unlock-page #root {
   color: rgba(246, 250, 255, 0.9);
 }
 
-.desktop-lyrics-overlay__drag-hint {
-  color: rgba(246, 250, 255, 0.42);
-}
-
+.desktop-lyrics-overlay__audio-controls button,
 .desktop-lyrics-overlay__toolbar button {
   border: 0;
   padding: 0;
@@ -177,15 +192,18 @@ body.desktop-lyrics-unlock-page #root {
     transform 140ms ease;
 }
 
+.desktop-lyrics-overlay__audio-controls button:hover,
 .desktop-lyrics-overlay__toolbar button:hover {
   background: rgba(255, 255, 255, 0.14);
   color: #ffffff;
 }
 
+.desktop-lyrics-overlay__audio-controls button:active,
 .desktop-lyrics-overlay__toolbar button:active {
   transform: scale(0.94);
 }
 
+.desktop-lyrics-overlay__audio-controls button.is-active,
 .desktop-lyrics-overlay__toolbar button.is-active {
   background: rgba(115, 228, 255, 0.18);
   color: var(--desktop-lyrics-accent);
