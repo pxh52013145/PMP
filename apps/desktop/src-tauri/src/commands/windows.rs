@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use crate::{app_runtime, windows};
+use crate::{app_runtime, desktop_lyrics_fonts, windows};
 
 #[tauri::command]
 pub async fn open_editor_window(
@@ -318,6 +318,18 @@ pub async fn desktop_lyrics_preview_layout(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn desktop_lyrics_set_lyric_offset_ms(offset_ms: i32) -> Result<(), String> {
     windows::desktop_lyrics::set_lyric_offset_ms(offset_ms)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_import_font(
+    app: tauri::AppHandle,
+    source_path: String,
+) -> Result<desktop_lyrics_fonts::DesktopLyricsFontImportResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        desktop_lyrics_fonts::import_desktop_lyrics_font(&app, source_path)
+    })
+    .await
+    .map_err(|error| format!("Import task failed: {error}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]

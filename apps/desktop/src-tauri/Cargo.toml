@@ -14,7 +14,7 @@ tauri-build = { version = "1.5", features = [] }
 zerovec = { version = "0.11.4", features = ["alloc"] }
 
 [dependencies]
-tauri = { version = "1.5", features = [ "path-all", "protocol-asset", "system-tray", "fs-all", "window-all", "shell-open"] }
+tauri = { version = "1.5", features = [ "dialog-open", "path-all", "protocol-asset", "system-tray", "fs-all", "window-all", "shell-open"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 window-shadows = "0.2"
@@ -38,6 +38,7 @@ lofty = "0.22"
 dsf = "0.2.2"
 rustfft = { version = "6.4.1", default-features = false }
 rubato = { version = "0.16", default-features = false }
+ttf-parser = "0.25"
 
 # HTTP客户端（使用 rustls 避免依赖系统 OpenSSL）
 reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "rustls-tls"] }

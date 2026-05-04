@@ -38,7 +38,7 @@
       },
       "dialog": {
         "all": false,
-        "open": false,
+        "open": true,
         "save": false,
         "message": false,
         "ask": false,

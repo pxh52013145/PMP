@@ -68,14 +68,16 @@ body.desktop-lyrics-unlock-page #root {
   border: 0;
   outline: 0;
   color: #f7fbff;
-  font-family:
+  font-family: var(
+    --desktop-lyrics-font-family,
     'Segoe UI',
     system-ui,
     -apple-system,
     BlinkMacSystemFont,
     'PingFang SC',
     'Microsoft YaHei',
-    sans-serif;
+    sans-serif
+  );
   user-select: none;
   overflow: hidden;
   --desktop-lyrics-chrome-opacity: 0;
@@ -361,17 +363,20 @@ body.desktop-lyrics-unlock-page #root {
 .desktop-lyrics-overlay__lyric-base,
 .desktop-lyrics-overlay__lyric-fill {
   display: block;
+  white-space: normal;
+  overflow-wrap: inherit;
+  text-wrap: inherit;
 }
 
 .desktop-lyrics-overlay__lyric-fill {
   position: absolute;
   inset: 0;
-  width: var(--desktop-lyrics-active-progress, 0%);
+  width: 100%;
   overflow: hidden;
-  white-space: nowrap;
+  clip-path: inset(0 calc(100% - var(--desktop-lyrics-active-progress, 0%)) 0 0);
   color: #fbfdff;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.58);
-  will-change: width;
+  will-change: clip-path;
 }
 
 .desktop-lyrics-overlay__secondary {

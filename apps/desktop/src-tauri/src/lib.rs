@@ -7,6 +7,7 @@ pub mod backend_telemetry;
 pub mod background_media;
 pub mod commands;
 pub mod debug_config;
+pub mod desktop_lyrics_fonts;
 pub mod dsp_graph;
 pub mod lyrics;
 pub mod magnet_layout_store;

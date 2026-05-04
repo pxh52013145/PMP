@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useT } from './i18n';
+import { useDesktopLyricsFontConfig } from './modules/desktopLyricsFonts';
 import { writeJson } from './modules/storage';
 import { getTelemetryLogger } from './services/telemetry/TelemetryService';
 import { invokeWithTelemetry } from './services/telemetry/tauriInvokeTelemetry';
@@ -375,6 +376,7 @@ export function DesktopLyricsOverlayApp() {
 
 function DesktopLyricsOverlayPanel() {
   const t = useT();
+  const { fontFamily: desktopLyricsFontFamily } = useDesktopLyricsFontConfig();
   const [state, setState] = useState<DesktopLyricsOverlaySyncPayload>(DEFAULT_OVERLAY_STATE);
   const [isHovered, setIsHovered] = useState(false);
   const [isMoving, setIsMoving] = useState(false);
@@ -1034,8 +1036,9 @@ function DesktopLyricsOverlayPanel() {
   const rootStyle = useMemo<React.CSSProperties>(
     () => ({
       ['--desktop-lyrics-bg-alpha' as string]: `${state.opacityPercent / 100}`,
+      ['--desktop-lyrics-font-family' as string]: desktopLyricsFontFamily,
     }),
-    [state.opacityPercent]
+    [desktopLyricsFontFamily, state.opacityPercent]
   );
 
   const primaryText = state.text?.primary?.trim() || t('pages.track.lyrics.placeholder');

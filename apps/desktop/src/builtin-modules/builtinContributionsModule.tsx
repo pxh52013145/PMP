@@ -96,6 +96,9 @@ const PerformanceSettingsPanelLazy = React.lazy(async () => ({
 const ThemeToolsSettingsPanelLazy = React.lazy(async () => ({
   default: (await import('../components/settings-panels/ThemeToolsSettingsPanel')).ThemeToolsSettingsPanel,
 }));
+const DesktopLyricsFontSettingsPanelLazy = React.lazy(async () => ({
+  default: (await import('../components/settings-panels/DesktopLyricsFontSettingsPanel')).DesktopLyricsFontSettingsPanel,
+}));
 const PluginsSettingsPanelLazy = React.lazy(async () => ({
   default: (await import('../components/settings-panels/PluginsSettingsPanel')).PluginsSettingsPanel,
 }));
@@ -236,6 +239,18 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           render: () => renderWithLazyBoundary(<ThemeToolsSettingsPanelLazy />),
           source: 'builtin',
           order: 11,
+          group: 'core',
+          metadata: { settingsSection: 'system' },
+        });
+
+        register<SettingsPanelContribution>({
+          kind: 'settings-panel',
+          id: 'desktop-lyrics-font',
+          title: t('settings.panels.desktopLyricsFont.title'),
+          description: t('settings.panels.desktopLyricsFont.desc'),
+          render: () => renderWithLazyBoundary(<DesktopLyricsFontSettingsPanelLazy />),
+          source: 'builtin',
+          order: 11.2,
           group: 'core',
           metadata: { settingsSection: 'system' },
         });
