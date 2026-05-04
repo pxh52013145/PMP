@@ -403,12 +403,12 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
         register<PageContribution>({
           kind: 'page',
           id: 'observability',
-          title: t('pages.observability.title'),
+          title: t('pages.perf-monitor.title'),
           render: () => renderWithLazyBoundary(<ObservabilityPageLazy />),
           source: 'builtin',
           order: 87,
           group: 'debug',
-          tags: ['debug', 'telemetry', 'observability'],
+          tags: ['debug', 'perf', 'webview2', 'observability'],
         });
 
         register<PageContribution>({

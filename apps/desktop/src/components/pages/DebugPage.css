@@ -1,0 +1,110 @@
+.debug-page {
+  --debug-surface-soft: rgba(255, 255, 255, 0.045);
+  --debug-border-soft: rgba(255, 255, 255, 0.085);
+  --debug-cyan-rgb: 74, 205, 196;
+}
+
+.debug-page .settings-shell {
+  min-width: 0;
+}
+
+.debug-page .settings-topbar {
+  gap: 14px;
+}
+
+.debug-page .settings-main-tabs {
+  max-width: 100%;
+}
+
+.debug-page .settings-main-tab {
+  min-width: 0;
+}
+
+.debug-page .settings-main-tab-top {
+  min-width: 0;
+  gap: 8px;
+}
+
+.debug-page .settings-main-tab-label,
+.debug-page .settings-sub-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-page.page-settings--debug .settings-main-tab .settings-main-tab-spin::after {
+  background: conic-gradient(
+    from 0deg,
+    rgba(var(--settings-accent-rgb), 0) 0deg,
+    rgba(var(--settings-accent-rgb), 0) 228deg,
+    rgba(var(--settings-accent-rgb), 0.92) 304deg,
+    rgba(var(--settings-accent-rgb), 0.18) 346deg,
+    rgba(var(--settings-accent-rgb), 0) 360deg
+  );
+  filter: drop-shadow(0 0 0.14vw rgba(var(--settings-accent-rgb), 0.28));
+}
+
+.debug-page.page-settings--debug .settings-main-tab[data-active='true'] .settings-main-tab-spin::before {
+  box-shadow: 0 0 0.08vw rgba(var(--settings-accent-rgb), 0.24);
+}
+
+.debug-page.page-settings--debug .settings-main-tab[data-active='true'] .settings-main-tab-spin::after {
+  filter: drop-shadow(0 0 0.2vw rgba(var(--settings-accent-rgb), 0.48));
+}
+
+.debug-page .settings-subbar {
+  min-width: 0;
+}
+
+.debug-page .settings-sub-tabs {
+  min-width: 0;
+  scrollbar-width: thin;
+}
+
+.debug-page .settings-content {
+  border-color: rgba(var(--settings-accent-rgb), 0.24);
+}
+
+.debug-page .settings-content-body {
+  gap: 14px;
+}
+
+.debug-page .settings-content-body > .page-debug-center,
+.debug-page .settings-content-body > .page-observability,
+.debug-page .settings-content-body > .native-debug-page {
+  min-height: 100%;
+}
+
+.debug-page .settings-card {
+  border-color: var(--debug-border-soft);
+}
+
+.debug-page .settings-card-header {
+  min-width: 0;
+}
+
+.debug-page .settings-card-header > div {
+  min-width: 0;
+}
+
+.debug-page .settings-card-label,
+.debug-page .settings-card-desc,
+.debug-page .settings-card-note {
+  overflow-wrap: anywhere;
+}
+
+.debug-page pre {
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .debug-page .settings-topbar {
+    align-items: stretch;
+  }
+
+  .debug-page .settings-topbar-actions {
+    justify-content: flex-start;
+  }
+
+}

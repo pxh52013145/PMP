@@ -174,8 +174,8 @@ export function NativeDebugPlaybackDspPanel({
         <p className="device-label">{t('pages.native-debug.crossfade.title')}</p>
         <p className="device-hint">{t('pages.native-debug.crossfade.desc')}</p>
       </div>
-      <div className="device-controls" style={{ gap: 10 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div className="device-controls native-debug-inline-controls">
+        <label className="native-debug-check-field">
           <input
             type="checkbox"
             checked={crossfadeSettings.enabled}
@@ -185,7 +185,7 @@ export function NativeDebugPlaybackDspPanel({
           />
           {t('common.action.enable')}
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <label className="native-debug-number-field">
           <span>{t('pages.native-debug.crossfade.duration')}</span>
           <input
             type="number"
@@ -195,7 +195,7 @@ export function NativeDebugPlaybackDspPanel({
             onChange={(e) =>
               setCrossfadeSettings((prev) => ({ ...prev, durationMs: Number(e.target.value) }))
             }
-            style={{ width: 88 }}
+            className="native-debug-number-input"
           />
           <span>ms</span>
         </label>
@@ -230,8 +230,8 @@ export function NativeDebugPlaybackDspPanel({
           })}
         </p>
       </div>
-      <div className="device-controls" style={{ gap: 10 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div className="device-controls native-debug-inline-controls">
+        <label className="native-debug-check-field">
           <input
             type="checkbox"
             checked={replayGainSettings.enabled}
@@ -254,7 +254,7 @@ export function NativeDebugPlaybackDspPanel({
           <option value="track">{t('pages.native-debug.replayGain.mode.track')}</option>
           <option value="album">{t('pages.native-debug.replayGain.mode.album')}</option>
         </select>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <label className="native-debug-number-field">
           <span>{t('pages.native-debug.replayGain.preamp')}</span>
           <input
             type="number"
@@ -263,7 +263,7 @@ export function NativeDebugPlaybackDspPanel({
             onChange={(e) =>
               setReplayGainSettings((prev) => ({ ...prev, preampDb: Number(e.target.value) }))
             }
-            style={{ width: 72 }}
+            className="native-debug-number-input native-debug-number-input--short"
           />
           <span>dB</span>
         </label>
@@ -278,8 +278,8 @@ export function NativeDebugPlaybackDspPanel({
         <p className="device-label">{t('settings.audioAdvanced.runtimeControl.title')}</p>
         <p className="device-hint">{t('settings.audioAdvanced.runtimeControl.subtitle')}</p>
       </div>
-      <div className="device-controls" style={{ gap: 10 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div className="device-controls native-debug-inline-controls">
+        <label className="native-debug-check-field">
             <input
               type="checkbox"
               checked={runtimeControlSettings.dynamicGainEnabled}
@@ -292,7 +292,7 @@ export function NativeDebugPlaybackDspPanel({
             />
           {t('settings.audioAdvanced.runtimeControl.dynamicGain.label')}
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <label className="native-debug-check-field">
           <input
             type="checkbox"
             checked={runtimeControlSettings.volumeDebounceEnabled}
@@ -316,7 +316,7 @@ export function NativeDebugPlaybackDspPanel({
         <p className="device-label">{t('pages.native-debug.eq.title')}</p>
         <p className="device-hint">{t('pages.native-debug.eq.desc')}</p>
       </div>
-      <div className="device-controls" style={{ gap: 10 }}>
+      <div className="device-controls native-debug-inline-controls">
         <button type="button" onClick={() => void handleEqReset()}>
           {t('pages.native-debug.eq.action.zeroAll')}
         </button>
@@ -352,8 +352,8 @@ export function NativeDebugPlaybackDspPanel({
         <p className="device-label">{t('pages.native-debug.limiter.title')}</p>
         <p className="device-hint">{t('pages.native-debug.limiter.desc')}</p>
       </div>
-      <div className="device-controls" style={{ gap: 10 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div className="device-controls native-debug-inline-controls">
+        <label className="native-debug-check-field">
           <input
             type="checkbox"
             checked={limiterEnabled}

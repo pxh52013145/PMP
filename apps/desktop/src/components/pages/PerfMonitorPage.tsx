@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import './PerfMonitorPage.css';
 import { useKernel } from '../../contexts/KernelContext';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { useT } from '../../i18n';
@@ -27,6 +28,23 @@ function formatCpuPercent(value: number | null | undefined): string {
 
 function computeRowKey(row: ProcessPerfRow): string {
   return `${row.pid}:${row.privateBytes ?? '-'}:${row.workingSetBytes ?? '-'}:${row.cpuPercent ?? '-'}`;
+}
+
+type PerfMetricCardProps = {
+  label: string;
+  value: string;
+  detail?: string;
+  tone?: 'default' | 'accent' | 'muted';
+};
+
+function PerfMetricCard({ label, value, detail, tone = 'default' }: PerfMetricCardProps) {
+  return (
+    <div className={`perf-monitor-metric perf-monitor-metric--${tone}`}>
+      <span className="perf-monitor-metric-label">{label}</span>
+      <strong className="perf-monitor-metric-value">{value}</strong>
+      {detail ? <span className="perf-monitor-metric-detail">{detail}</span> : null}
+    </div>
+  );
 }
 
 export function PerfMonitorPage() {
@@ -133,12 +151,14 @@ export function PerfMonitorPage() {
 
   if (!isTauri) {
     return (
-      <div className="settings-page" style={{ padding: 18 }}>
-        <div className="settings-header">
-          <h1 style={{ margin: 0 }}>{t('pages.perf-monitor.title')}</h1>
-          <p style={{ margin: '8px 0 0 0', opacity: 0.75 }}>{t('pages.perf-monitor.subtitle')}</p>
+      <div className="settings-page perf-monitor-page">
+        <div className="perf-monitor-header">
+          <div className="perf-monitor-heading">
+            <p className="settings-card-label">{t('pages.perf-monitor.title')}</p>
+            <p className="settings-card-desc">{t('pages.perf-monitor.subtitle')}</p>
+          </div>
         </div>
-        <PmpCard className="settings-card" surfaceId="primitive.card.settings">
+        <PmpCard className="settings-card perf-monitor-card" surfaceId="primitive.card.settings">
           <p className="settings-card-desc">{t('debug.center.note.requireTauri')}</p>
         </PmpCard>
       </div>
@@ -146,34 +166,14 @@ export function PerfMonitorPage() {
   }
 
   return (
-    <div className="settings-page" style={{ padding: 18 }}>
-      <div className="settings-header">
-        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-          <div>
-            <h1 style={{ margin: 0 }}>{t('pages.perf-monitor.title')}</h1>
-            <p style={{ margin: '8px 0 0 0', opacity: 0.75 }}>{t('pages.perf-monitor.subtitle')}</p>
-          </div>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            <PmpButton
-              type="button"
-              className="settings-action-btn"
-              variant="default"
-              onClick={() => void refresh()}
-              disabled={busy}
-            >
-              {t('common.action.refresh')}
-            </PmpButton>
-          </div>
+    <div className="settings-page perf-monitor-page">
+      <div className="perf-monitor-header">
+        <div className="perf-monitor-heading">
+          <p className="settings-card-label">{t('pages.perf-monitor.title')}</p>
+          <p className="settings-card-desc">{t('pages.perf-monitor.subtitle')}</p>
         </div>
-      </div>
-
-      <PmpCard className="settings-card" surfaceId="primitive.card.settings">
-        <div className="settings-card-header">
-          <div>
-            <p className="settings-card-label">{t('pages.perf-monitor.section.totals.title')}</p>
-            <p className="settings-card-desc">{t('pages.perf-monitor.section.totals.desc')}</p>
-          </div>
-          <PmpSegmented className="settings-toggle" surfaceId="primitive.segmented.toggle">
+        <div className="perf-monitor-toolbar">
+          <PmpSegmented className="settings-toggle perf-monitor-refresh-toggle" surfaceId="primitive.segmented.toggle">
             <PmpChoiceButton type="button" active={!autoRefresh} onClick={() => setAutoRefresh(false)}>
               {t('common.state.off')}
             </PmpChoiceButton>
@@ -181,18 +181,86 @@ export function PerfMonitorPage() {
               {t('common.state.on')}
             </PmpChoiceButton>
           </PmpSegmented>
+          <PmpButton
+            type="button"
+            className="settings-action-btn"
+            variant="default"
+            onClick={() => void refresh()}
+            disabled={busy}
+          >
+            {t('common.action.refresh')}
+          </PmpButton>
+        </div>
+      </div>
+
+      {snapshot ? (
+        <div className="perf-monitor-metric-grid">
+          <PerfMetricCard
+            tone="accent"
+            label={t('pages.perf-monitor.metric.webview2Private')}
+            value={formatBytesMb(snapshot.totals.webview2PrivateBytes)}
+            detail={t('pages.perf-monitor.metric.cpuValue', {
+              value: formatCpuPercent(snapshot.totals.webview2CpuPercent),
+            })}
+          />
+          <PerfMetricCard
+            label={t('pages.perf-monitor.metric.webview2Ws')}
+            value={formatBytesMb(snapshot.totals.webview2WorkingSetBytes)}
+          />
+          <PerfMetricCard
+            tone="accent"
+            label={t('pages.perf-monitor.metric.treePrivate')}
+            value={formatBytesMb(snapshot.totals.privateBytes)}
+            detail={t('pages.perf-monitor.metric.cpuValue', {
+              value: formatCpuPercent(snapshot.totals.cpuPercent),
+            })}
+          />
+          <PerfMetricCard
+            label={t('pages.perf-monitor.metric.treeWs')}
+            value={formatBytesMb(snapshot.totals.workingSetBytes)}
+          />
+          <PerfMetricCard
+            tone="muted"
+            label={t('pages.perf-monitor.metric.sampleInterval')}
+            value={snapshot.sampleIntervalMs ? `${(snapshot.sampleIntervalMs / 1000).toFixed(2)}s` : '-'}
+            detail={t('pages.perf-monitor.metric.cpuCores', { count: snapshot.cpuCount })}
+          />
+          <PerfMetricCard
+            tone="muted"
+            label={t('pages.perf-monitor.metric.systemLoad')}
+            value={snapshot.systemMemory ? `${snapshot.systemMemory.memoryLoadPercent}%` : '-'}
+            detail={
+              snapshot.systemMemory
+                ? t('pages.perf-monitor.metric.availableMemory', {
+                    value: formatBytesMb(snapshot.systemMemory.availablePhysicalBytes),
+                  })
+                : undefined
+            }
+          />
+        </div>
+      ) : null}
+
+      <PmpCard className="settings-card perf-monitor-card" surfaceId="primitive.card.settings">
+        <div className="settings-card-header">
+          <div>
+            <p className="settings-card-label">{t('pages.perf-monitor.section.totals.title')}</p>
+            <p className="settings-card-desc">{t('pages.perf-monitor.section.totals.desc')}</p>
+          </div>
+          <span className="settings-card-badge">
+            {autoRefresh ? t('common.state.on') : t('common.state.off')}
+          </span>
         </div>
 
-        <p className="settings-card-note">{t('pages.perf-monitor.note.metrics')}</p>
+        <p className="settings-card-note perf-monitor-note">{t('pages.perf-monitor.note.metrics')}</p>
 
         {error ? (
-          <p className="settings-card-note" style={{ color: 'rgba(255, 140, 140, 0.92)' }}>
+          <p className="settings-card-note perf-monitor-error">
             {error}
           </p>
         ) : null}
 
         {snapshot ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div className="perf-monitor-summary">
             <p className="settings-card-note">
               {t('pages.perf-monitor.sample', {
                 intervalSec: snapshot.sampleIntervalMs ? (snapshot.sampleIntervalMs / 1000).toFixed(2) : '-',
@@ -228,7 +296,7 @@ export function PerfMonitorPage() {
         )}
       </PmpCard>
 
-      <PmpCard className="settings-card" surfaceId="primitive.card.settings">
+      <PmpCard className="settings-card perf-monitor-card" surfaceId="primitive.card.settings">
         <div className="settings-card-header">
           <div>
             <p className="settings-card-label">{t('pages.perf-monitor.section.processes.title')}</p>
@@ -237,7 +305,14 @@ export function PerfMonitorPage() {
         </div>
 
         {snapshot ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="perf-monitor-process-list" role="table" aria-label={t('pages.perf-monitor.section.processes.title')}>
+            <div className="perf-monitor-process-head" role="row">
+              <span role="columnheader">{t('pages.perf-monitor.process.name')}</span>
+              <span role="columnheader">{t('pages.perf-monitor.process.kind')}</span>
+              <span role="columnheader">{t('pages.perf-monitor.process.cpu')}</span>
+              <span role="columnheader">{t('pages.perf-monitor.process.private')}</span>
+              <span role="columnheader">{t('pages.perf-monitor.process.ws')}</span>
+            </div>
             {sortedProcesses.map((process) => {
               const kindLabel =
                 process.kind === 'app'
@@ -249,27 +324,19 @@ export function PerfMonitorPage() {
               return (
                 <div
                   key={process.pid}
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 12,
-                    border: '1px solid rgba(255,255,255,0.08)',
-                    background: 'rgba(0,0,0,0.22)',
-                  }}
+                  className="perf-monitor-process-row"
+                  role="row"
                 >
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline' }}>
-                    <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.92)' }}>{process.name}</span>
-                    <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>
+                  <div className="perf-monitor-process-title" role="cell">
+                    <span>{process.name}</span>
+                    <small>
                       {t('debug.center.memory.processPerf.processPid', { pid: process.pid })}
-                    </span>
+                    </small>
                   </div>
-                  <p className="settings-card-note" style={{ marginTop: 6 }}>
-                    {t('debug.center.memory.processPerf.processLine', {
-                      kind: kindLabel,
-                      cpu: formatCpuPercent(process.cpuPercent),
-                      private: formatBytesMb(process.privateBytes),
-                      ws: formatBytesMb(process.workingSetBytes),
-                    })}
-                  </p>
+                  <span className="perf-monitor-process-kind" role="cell">{kindLabel}</span>
+                  <span className="perf-monitor-process-value" role="cell">{formatCpuPercent(process.cpuPercent)}</span>
+                  <span className="perf-monitor-process-value" role="cell">{formatBytesMb(process.privateBytes)}</span>
+                  <span className="perf-monitor-process-value" role="cell">{formatBytesMb(process.workingSetBytes)}</span>
                 </div>
               );
             })}

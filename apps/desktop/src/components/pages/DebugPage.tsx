@@ -1,4 +1,5 @@
 import './SettingsPage.css';
+import './DebugPage.css';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { PageContribution } from '../../contracts/contributions';
 import { useKernel } from '../../contexts/KernelContext';
@@ -6,6 +7,11 @@ import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import { COMMANDS_SERVICE_TOKEN, dispatchCommandOrFallback } from '../../services/commands';
 import { PmpButton, PmpChoiceButton } from '../primitives';
+import type { DebugWorkspaceId } from '../debug/DebugCenter';
+
+const DebugCenterPageWithWorkspace = React.lazy(async () => ({
+  default: (await import('./DebugCenterPage')).DebugCenterPage,
+}));
 
 function sortPages(a: PageContribution, b: PageContribution): number {
   const orderA = typeof a.order === 'number' ? a.order : Number.POSITIVE_INFINITY;
@@ -23,6 +29,13 @@ type DebugSection = {
   pages: PageContribution[];
 };
 
+type DebugSubTabItem = {
+  id: string;
+  title: string;
+  active: boolean;
+  onClick: () => void;
+};
+
 const DEBUG_TAB_IDS = new Set(['debug-center', 'observability', 'perf-monitor', 'native-debug']);
 const DEBUG_PAGES_WITH_OWN_HEADER = new Set([
   'debug-center',
@@ -30,6 +43,10 @@ const DEBUG_PAGES_WITH_OWN_HEADER = new Set([
   'perf-monitor',
   'native-debug',
 ]);
+
+function normalizeDebugTabId(value: string): string {
+  return value === 'observability' ? 'perf-monitor' : value;
+}
 
 function isDebugSectionId(value: string): value is DebugSectionId {
   return value === 'overview' || value === 'observability' || value === 'native';
@@ -50,7 +67,9 @@ function readDebugTabFromHash(): string | undefined {
       ? tabFromPath ?? search.get('tab') ?? undefined
       : pageId;
 
-  return typeof tab === 'string' && DEBUG_TAB_IDS.has(tab) ? tab : undefined;
+  return typeof tab === 'string' && DEBUG_TAB_IDS.has(tab)
+    ? normalizeDebugTabId(tab)
+    : undefined;
 }
 
 function resolveDebugSectionId(page: PageContribution): DebugSectionId {
@@ -62,7 +81,6 @@ function resolveDebugSectionId(page: PageContribution): DebugSectionId {
 
   if (page.id === 'native-debug' || page.tags?.includes('native')) return 'native';
   if (
-    page.id === 'observability' ||
     page.id === 'perf-monitor' ||
     page.tags?.includes('telemetry') ||
     page.tags?.includes('perf') ||
@@ -89,6 +107,8 @@ export const DebugPage: React.FC = () => {
   const [revision, setRevision] = useState(0);
   const [activePageId, setActivePageId] = useState<string | null>(null);
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
+  const [debugCenterWorkspace, setDebugCenterWorkspace] =
+    useState<DebugWorkspaceId>('overview');
   const subTabsRef = React.useRef<HTMLDivElement | null>(null);
 
   const openDebugTab = useCallback(
@@ -124,6 +144,7 @@ export const DebugPage: React.FC = () => {
       .list<PageContribution>('page')
       .filter((page) => page.group === 'debug')
       .filter((page) => page.id !== 'debug')
+      .filter((page) => page.id !== 'observability')
       .sort(sortPages);
   }, [kernel.contributions, revision]);
 
@@ -137,7 +158,7 @@ export const DebugPage: React.FC = () => {
       },
       {
         id: 'observability',
-        title: t('pages.debug.sections.observability'),
+        title: t('pages.perf-monitor.title'),
         order: 20,
         pages: [],
       },
@@ -184,7 +205,9 @@ export const DebugPage: React.FC = () => {
           ? undefined
           : readDebugTabFromHash();
     const requestedTab =
-      typeof requestedTabFromNavigation === 'string' ? requestedTabFromNavigation : undefined;
+      typeof requestedTabFromNavigation === 'string'
+        ? normalizeDebugTabId(requestedTabFromNavigation)
+        : undefined;
     const requestedPage =
       typeof requestedTab === 'string'
         ? pages.find((page) => page.id === requestedTab) ?? null
@@ -196,29 +219,11 @@ export const DebugPage: React.FC = () => {
       return;
     }
 
-    let nextSection: DebugSection | null = null;
-    if (activeSectionId) {
-      nextSection = sections.find((section) => section.id === activeSectionId) ?? null;
-    }
-    if (!nextSection) {
-      nextSection = sections.find((section) => section.pages.length > 0) ?? sections[0] ?? null;
-    }
+    const defaultPage = pages.find((page) => page.id === 'debug-center') ?? pages[0] ?? null;
+    if (!defaultPage) return;
 
-    const nextSectionId = nextSection?.id ?? null;
-    const sectionPages = nextSection?.pages ?? [];
-    const activeValid = activePageId && pages.some((page) => page.id === activePageId);
-    const shouldHoldSectionLanding = nextSectionId === 'native' && activePageId === null;
-    if (!activeValid) {
-      const nextId = shouldHoldSectionLanding ? null : sectionPages[0]?.id ?? pages[0].id;
-      if (nextId !== activePageId) setActivePageId(nextId);
-    } else if (
-      activePageId &&
-      sectionPages.length > 0 &&
-      !sectionPages.some((page) => page.id === activePageId)
-    ) {
-      const nextId = sectionPages[0]?.id ?? pages[0].id;
-      if (nextId !== activePageId) setActivePageId(nextId);
-    }
+    if (defaultPage.id !== activePageId) setActivePageId(defaultPage.id);
+    const nextSectionId = resolveDebugSectionId(defaultPage);
     if (nextSectionId !== activeSectionId) setActiveSectionId(nextSectionId);
   }, [activePageId, activeSectionId, currentPage, pages, sections]);
 
@@ -238,12 +243,53 @@ export const DebugPage: React.FC = () => {
   const visiblePages = useMemo(() => {
     return activeSection?.pages ?? [];
   }, [activeSection]);
-  const shouldShowSectionSubbar = visiblePages.length > 1;
+  const debugCenterWorkspaceTabs = useMemo(
+    () =>
+      [
+        { id: 'overview' as const, title: t('debug.center.workspace.tab.overview') },
+        { id: 'runtime' as const, title: t('debug.center.workspace.tab.runtime') },
+        { id: 'telemetry' as const, title: t('debug.center.workspace.tab.telemetry') },
+        { id: 'magnets' as const, title: t('debug.center.workspace.tab.magnets') },
+        { id: 'memory' as const, title: t('debug.center.workspace.tab.memory') },
+      ] satisfies Array<{ id: DebugWorkspaceId; title: string }>,
+    [t]
+  );
+  const subTabItems = useMemo<DebugSubTabItem[]>(() => {
+    if (activePage?.id === 'debug-center') {
+      return debugCenterWorkspaceTabs.map((workspace) => ({
+        id: workspace.id,
+        title: workspace.title,
+        active: workspace.id === debugCenterWorkspace,
+        onClick: () => setDebugCenterWorkspace(workspace.id),
+      }));
+    }
+
+    if (visiblePages.length <= 1) return [];
+
+    return visiblePages.map((page) => ({
+      id: page.id,
+      title: page.title,
+      active: page.id === activePageId,
+      onClick: () => {
+        openDebugTab(page.id);
+        setActivePageId(page.id);
+        setActiveSectionId(resolveDebugSectionId(page));
+      },
+    }));
+  }, [
+    activePage?.id,
+    activePageId,
+    debugCenterWorkspace,
+    debugCenterWorkspaceTabs,
+    openDebugTab,
+    visiblePages,
+  ]);
+  const shouldShowSectionSubbar = subTabItems.length > 0;
   const shouldShowContentHeader =
     activePage !== null && !DEBUG_PAGES_WITH_OWN_HEADER.has(activePage.id);
 
   return (
-    <div className="page-settings page-settings--deltaforce page-settings--debug">
+    <div className="page-settings page-settings--deltaforce page-settings--debug debug-page">
       {pages.length === 0 ? (
         <div className="settings-card-note">{t('pages.debug.empty')}</div>
       ) : (
@@ -333,25 +379,21 @@ export const DebugPage: React.FC = () => {
                     e.preventDefault();
                   }}
                 >
-                  {visiblePages.map((page, index) => (
+                  {subTabItems.map((item, index) => (
                     <PmpChoiceButton
-                      key={page.id}
+                      key={item.id}
                       type="button"
                       role="tab"
                       surfaceId="page.debug.sub-tab"
                       className="settings-sub-tab"
-                      active={page.id === activePageId}
-                      aria-selected={page.id === activePageId}
-                      tabIndex={page.id === activePageId ? 0 : -1}
-                      data-has-separator={index < visiblePages.length - 1}
-                      onClick={() => {
-                        openDebugTab(page.id);
-                        setActivePageId(page.id);
-                        setActiveSectionId(resolveDebugSectionId(page));
-                      }}
-                      title={page.title}
+                      active={item.active}
+                      aria-selected={item.active}
+                      tabIndex={item.active ? 0 : -1}
+                      data-has-separator={index < subTabItems.length - 1}
+                      onClick={item.onClick}
+                      title={item.title}
                     >
-                      <span className="settings-sub-tab-label">{page.title}</span>
+                      <span className="settings-sub-tab-label">{item.title}</span>
                     </PmpChoiceButton>
                   ))}
                 </div>
@@ -371,7 +413,19 @@ export const DebugPage: React.FC = () => {
                   </div>
                 ) : null}
                 <div className="settings-content-body">
-                  {activePage.render({ type: activePage.id }) as React.ReactNode}
+                  {activePage.id === 'debug-center' ? (
+                    <React.Suspense
+                      fallback={<div className="settings-card-note">{t('common.state.loading')}</div>}
+                    >
+                      <DebugCenterPageWithWorkspace
+                        activeWorkspace={debugCenterWorkspace}
+                        onWorkspaceChange={setDebugCenterWorkspace}
+                        hideWorkspaceNav
+                      />
+                    </React.Suspense>
+                  ) : (
+                    activePage.render({ type: activePage.id }) as React.ReactNode
+                  )}
                 </div>
               </section>
             ) : (

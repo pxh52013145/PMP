@@ -42,7 +42,7 @@ export function parseNavigationParams<K extends NavigationPageType>(
         tab === 'perf-monitor' ||
         tab === 'native-debug'
       ) {
-        return { tab } as NavigationParamsFor<K>;
+        return { tab: tab === 'observability' ? 'perf-monitor' : tab } as NavigationParamsFor<K>;
       }
       return undefined;
     }

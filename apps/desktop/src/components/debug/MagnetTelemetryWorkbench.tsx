@@ -237,7 +237,7 @@ export function MagnetTelemetryWorkbench({
 
         <p className="settings-card-note">{t('debug.center.magnetTelemetry.summary')}</p>
         {error ? (
-          <p className="settings-card-note" style={{ color: 'rgba(255,120,120,0.92)' }}>
+          <p className="settings-card-note magnet-telemetry-error">
             {error}
           </p>
         ) : null}
@@ -414,7 +414,7 @@ export function MagnetTelemetryWorkbench({
                     </div>
                   </div>
 
-                  <div style={{ marginTop: 12 }}>
+                  <div className="magnet-telemetry-section-block">
                     <p className="settings-card-note">{t('debug.center.telemetry.query.recentRecords')}</p>
                     <pre className="magnet-telemetry-pre magnet-telemetry-pre--tall">
                       {selectedEntry.records

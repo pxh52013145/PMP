@@ -56,7 +56,7 @@ function parseInitialNavigationFromHash(hash: string): NavigationPageData | unde
     case 'debug-center':
       return { type: 'debug', params: { tab: 'debug-center' } };
     case 'observability':
-      return { type: 'debug', params: { tab: 'observability' } };
+      return { type: 'debug', params: { tab: 'perf-monitor' } };
     case 'perf-monitor':
       return { type: 'debug', params: { tab: 'perf-monitor' } };
     case 'native-debug':

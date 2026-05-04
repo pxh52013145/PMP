@@ -33,8 +33,7 @@ export type TelemetryAiContextPresetId =
   | 'general'
   | 'magnets'
   | 'plugins'
-  | 'performance'
-  | 'music-platform';
+  | 'performance';
 
 export type TelemetryAiContextPreset = {
   id: TelemetryAiContextPresetId;
@@ -142,20 +141,6 @@ export function getPerformanceTelemetryAiQuery(): TelemetryQueryInput {
   };
 }
 
-export function getMusicPlatformTelemetryAiQuery(): TelemetryQueryInput {
-  return {
-    moduleIds: ['music-platform', 'magnet.platform'],
-    eventPrefixes: [
-      'music-platform.pack.',
-      'music-platform.instance-auth.',
-      'music-platform.facade.',
-      'music-platform.sidecar.',
-    ],
-    levels: [...DEFAULT_AI_LEVELS],
-    limit: DEFAULT_AI_LIMIT,
-  };
-}
-
 export function getTelemetryAiContextPreset(
   presetId: TelemetryAiContextPresetId = 'general'
 ): TelemetryAiContextPreset {
@@ -165,12 +150,6 @@ export function getTelemetryAiContextPreset(
         id: 'magnets',
         fileStem: 'magnet-context',
         query: cloneQuery(getMagnetTelemetryAiQuery()),
-      };
-    case 'music-platform':
-      return {
-        id: 'music-platform',
-        fileStem: 'music-platform-context',
-        query: cloneQuery(getMusicPlatformTelemetryAiQuery()),
       };
     case 'plugins':
       return {

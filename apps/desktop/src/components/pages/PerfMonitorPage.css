@@ -1,0 +1,197 @@
+.perf-monitor-page {
+  width: 100%;
+  min-height: 100%;
+  padding: 18px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.perf-monitor-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 14px;
+  min-width: 0;
+}
+
+.perf-monitor-heading {
+  min-width: 0;
+}
+
+.perf-monitor-heading .settings-card-label,
+.perf-monitor-heading .settings-card-desc {
+  overflow-wrap: anywhere;
+}
+
+.perf-monitor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.perf-monitor-refresh-toggle {
+  flex: 0 0 auto;
+}
+
+.perf-monitor-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.perf-monitor-metric {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow: hidden;
+}
+
+.perf-monitor-metric--accent {
+  border-color: rgba(var(--settings-accent-rgb), 0.28);
+  background: rgba(var(--settings-accent-rgb), 0.075);
+}
+
+.perf-monitor-metric--muted {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.perf-monitor-metric-label,
+.perf-monitor-metric-detail {
+  font-size: 12px;
+  line-height: 1.25;
+  color: var(--settings-text-desc);
+  overflow-wrap: anywhere;
+}
+
+.perf-monitor-metric-value {
+  font-size: 20px;
+  line-height: 1.1;
+  font-weight: 760;
+  color: var(--settings-text);
+  overflow-wrap: anywhere;
+}
+
+.perf-monitor-card {
+  min-width: 0;
+}
+
+.perf-monitor-note,
+.perf-monitor-summary .settings-card-note,
+.perf-monitor-summary .settings-card-desc {
+  overflow-wrap: anywhere;
+}
+
+.perf-monitor-error {
+  color: rgba(255, 140, 140, 0.92);
+}
+
+.perf-monitor-summary {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.perf-monitor-process-list {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.perf-monitor-process-head,
+.perf-monitor-process-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.4fr) minmax(86px, 0.62fr) minmax(70px, 0.42fr) minmax(104px, 0.62fr) minmax(104px, 0.62fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.perf-monitor-process-head {
+  padding: 0 10px 4px;
+  color: var(--settings-text-sub);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.perf-monitor-process-row {
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.perf-monitor-process-title {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.perf-monitor-process-title > span {
+  min-width: 0;
+  color: var(--settings-text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.perf-monitor-process-title > small,
+.perf-monitor-process-kind,
+.perf-monitor-process-value {
+  min-width: 0;
+  color: var(--settings-text-desc);
+  font-size: 12px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.perf-monitor-process-value {
+  color: var(--settings-text);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 760px) {
+  .perf-monitor-page {
+    padding: 14px;
+  }
+
+  .perf-monitor-header {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .perf-monitor-toolbar {
+    justify-content: flex-start;
+  }
+
+  .perf-monitor-process-head {
+    display: none;
+  }
+
+  .perf-monitor-process-row {
+    grid-template-columns: minmax(0, 1fr) minmax(96px, auto);
+  }
+
+  .perf-monitor-process-kind {
+    justify-self: end;
+  }
+
+  .perf-monitor-process-value {
+    grid-column: span 1;
+  }
+}

@@ -33,43 +33,7 @@ import {
   type VstSidechainModeOverride,
 } from '../../modules/debug';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
-import {
-  MusicLibraryService,
-  type UnifiedMusicSource,
-  type UnifiedTrackCandidate,
-} from '../../services/audio/MusicLibraryService';
-import {
-  beginPlatformInstanceQrLogin,
-  getPlatformInstanceAuthSnapshot,
-  getPlatformPackStartupHealth,
-  inspectPlatformPackDoctor,
-  listPlatformConnectorDefinitions,
-  logoutPlatformInstance,
-  pollPlatformInstanceQrLogin,
-  refreshPlatformInstanceAuthSnapshot,
-  resolvePlatformInstanceId,
-  subscribePlatformPackStartupHealth,
-  subscribePlatformConnectorDefinitions,
-  type PlatformConnectorDefinition,
-  type PlatformConnectorId,
-  type PlatformInstanceAuthSnapshot,
-  type PlatformInstanceQrLoginPollResult,
-  type PlatformInstanceQrLoginSession,
-  type PlatformPackBootStage,
-  type PlatformPackDoctorIssue,
-  type PlatformPackDoctorReport,
-  type PlatformPackDoctorStatus,
-  type PlatformPackWorkspaceReadinessDiagnostic,
-  type PlatformPackStartupHealth,
-  type PlatformPackStartupState,
-} from '../../modules/music-platform';
-import {
-  type NativeLibrarySyncFailureOverview,
-  type NativeLibrarySyncFailureSourceSummary,
-  type NativeLibrarySyncSchedulerStatus,
-  type NativeLibrarySyncStatus,
-  type NativeLibrarySyncTickResult,
-} from '../../modules/music-library';
+import { MusicLibraryService } from '../../services/audio/MusicLibraryService';
 import {
   TELEMETRY_SERVICE_TOKEN,
 } from '../../services/telemetry/TelemetryService';
@@ -92,11 +56,7 @@ import {
 } from '../../services/telemetry/aiContextReport';
 import { buildTelemetryScenarioReport } from '../../services/telemetry/scenarioReport';
 import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
-import {
-  STORAGE_KEYS,
-  TAURI_EVENTS,
-  setupTauriListenerWithPayload,
-} from '../../utils/windowCommunication';
+import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import {
   readPersistedStartupMemoryTrace,
   type StartupMemoryCheckpoint,
@@ -104,7 +64,7 @@ import {
 } from '../../modules/startup/startupMemoryTrace';
 import { MagnetTelemetryWorkbench } from './MagnetTelemetryWorkbench';
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
-import { PmpButton, PmpCard, PmpCheckbox, PmpChoiceButton, PmpSegmented } from '../primitives';
+import { PmpButton, PmpCard, PmpChoiceButton, PmpSegmented } from '../primitives';
 
 const WINDOW_COMM_DEBUG_KEY = 'pixel-matrix-debug-window-comm';
 
@@ -154,13 +114,6 @@ type MusicLibraryRuntimeMemorySnapshot = {
   };
 };
 
-type MusicLibrarySyncStatusEventPayload = {
-  source?: string;
-  emittedAtMs?: number;
-  syncStatus?: NativeLibrarySyncStatus;
-  schedulerStatus?: NativeLibrarySyncSchedulerStatus;
-  tickResult?: NativeLibrarySyncTickResult;
-};
 
 type MemoryBaselineSample = {
   id: string;
@@ -232,9 +185,8 @@ type StartupMemoryTraceDelta = {
   webview2PrivateDeltaBytes: number | null;
 };
 
-type DebugWorkspaceId =
+export type DebugWorkspaceId =
   | 'overview'
-  | 'platforms'
   | 'runtime'
   | 'telemetry'
   | 'magnets'
@@ -243,6 +195,9 @@ type DebugWorkspaceId =
 type DebugCenterProps = {
   variant?: 'page' | 'settings';
   initialWorkspace?: DebugWorkspaceId;
+  activeWorkspace?: DebugWorkspaceId;
+  onWorkspaceChange?: (workspace: DebugWorkspaceId) => void;
+  hideWorkspaceNav?: boolean;
   title?: string;
   subtitle?: string;
 };
@@ -275,6 +230,15 @@ function formatBytesToMb(value: number | undefined | null): string {
   const mb = value / 1024 / 1024;
   const normalized = Object.is(mb, -0) ? 0 : mb;
   return normalized.toFixed(1);
+}
+
+function formatBytesToMbLabel(value: number | undefined | null): string {
+  const mb = formatBytesToMb(value);
+  return mb === '-' ? '-' : `${mb}MB`;
+}
+
+function formatCount(value: number | undefined | null): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : '-';
 }
 
 function formatSignedBytesToMb(value: number | undefined | null): string {
@@ -331,11 +295,6 @@ function formatTelemetryCountList(
     .join('\n');
 }
 
-function formatDebugTimestamp(value: number | null | undefined): string {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '-';
-  return new Date(value).toLocaleTimeString();
-}
-
 function formatDebugDateTime(value: number | null | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '-';
   return new Date(value).toLocaleString();
@@ -344,17 +303,6 @@ function formatDebugDateTime(value: number | null | undefined): string {
 function formatElapsedMs(value: number | null | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return '-';
   return `${Math.round(value)}ms`;
-}
-
-function formatOptionalText(value: unknown): string {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return String(value);
-  }
-  if (typeof value === 'string') {
-    const normalized = value.trim();
-    return normalized || '-';
-  }
-  return '-';
 }
 
 function diffTraceNumber(current: number | null | undefined, previous: number | null | undefined): number | null {
@@ -407,131 +355,7 @@ function buildStartupTraceDelta(
   };
 }
 
-function formatNullableToggleState(
-  value: boolean | null | undefined,
-  t: (key: string, params?: Record<string, unknown>) => string
-): string {
-  if (value === true) return t('common.state.on');
-  if (value === false) return t('common.state.off');
-  return t('common.state.unknown');
-}
 
-function formatPlatformPackStartupStateLabel(
-  state: PlatformPackStartupState,
-  t: (key: string, params?: Record<string, unknown>) => string
-): string {
-  switch (state) {
-    case 'scheduled':
-      return t('debug.center.musicPlatformPack.state.scheduled');
-    case 'running':
-      return t('debug.center.musicPlatformPack.state.running');
-    case 'ready':
-      return t('debug.center.musicPlatformPack.state.ready');
-    case 'degraded':
-      return t('debug.center.musicPlatformPack.state.degraded');
-    case 'idle':
-    default:
-      return t('debug.center.musicPlatformPack.state.idle');
-  }
-}
-
-function formatPlatformPackBootStageLabel(
-  stage: PlatformPackBootStage,
-  t: (key: string, params?: Record<string, unknown>) => string
-): string {
-  switch (stage) {
-    case 'scheduled':
-      return t('debug.center.musicPlatformPack.stage.scheduled');
-    case 'restore-store':
-      return t('debug.center.musicPlatformPack.stage.restoreStore');
-    case 'reconcile-inline':
-      return t('debug.center.musicPlatformPack.stage.reconcileInline');
-    case 'inspect-store':
-      return t('debug.center.musicPlatformPack.stage.inspectStore');
-    case 'background-reconcile':
-      return t('debug.center.musicPlatformPack.stage.backgroundReconcile');
-    case 'completed':
-      return t('debug.center.musicPlatformPack.stage.completed');
-    case 'idle':
-    default:
-      return t('debug.center.musicPlatformPack.stage.idle');
-  }
-}
-
-function formatPlatformPackDoctorStatusLabel(
-  status: PlatformPackDoctorStatus,
-  t: (key: string, params?: Record<string, unknown>) => string
-): string {
-  switch (status) {
-    case 'error':
-      return t('debug.center.musicPlatformPack.doctor.status.error');
-    case 'degraded':
-      return t('debug.center.musicPlatformPack.doctor.status.degraded');
-    case 'ready':
-    default:
-      return t('debug.center.musicPlatformPack.doctor.status.ready');
-  }
-}
-
-function formatPlatformPackDoctorFlowStatusLabel(
-  status: 'ready' | 'degraded' | 'error' | 'unsupported',
-  t: (key: string, params?: Record<string, unknown>) => string
-): string {
-  switch (status) {
-    case 'error':
-      return t('debug.center.musicPlatformPack.doctor.flow.error');
-    case 'degraded':
-      return t('debug.center.musicPlatformPack.doctor.flow.degraded');
-    case 'unsupported':
-      return t('debug.center.musicPlatformPack.doctor.flow.unsupported');
-    case 'ready':
-    default:
-      return t('debug.center.musicPlatformPack.doctor.flow.ready');
-  }
-}
-
-function formatPlatformWorkspaceOwnershipModeLabel(
-  mode: 'legacy' | 'pack' | 'auto',
-  t: (key: string, params?: Record<string, unknown>) => string
-): string {
-  return t(`magnet.platform.workspace.ownership.${mode}`);
-}
-
-function formatPlatformWorkspacePathLabel(
-  path: 'legacy' | 'pack' | 'none',
-  t: (key: string, params?: Record<string, unknown>) => string
-): string {
-  return t(`magnet.platform.workspace.path.${path}`);
-}
-
-function formatPlatformWorkspaceStatusLabel(
-  status: 'active' | 'fallback' | 'blocked',
-  t: (key: string, params?: Record<string, unknown>) => string
-): string {
-  return t(`magnet.platform.workspace.status.${status}`);
-}
-
-function formatPlatformPackDoctorIssueDetails(issue: PlatformPackDoctorIssue): string {
-  const entries = Object.entries(issue.fields ?? {}).filter(([, value]) => value !== null);
-  if (entries.length < 1) {
-    return '-';
-  }
-  return entries
-    .map(([key, value]) => `${key}=${String(value)}`)
-    .join(' | ');
-}
-
-function formatPlatformWorkspaceDiagnosticDetails(
-  diagnostic: PlatformPackWorkspaceReadinessDiagnostic
-): string {
-  const entries = Object.entries(diagnostic.fields ?? {}).filter(([, value]) => value !== null);
-  if (entries.length < 1) {
-    return diagnostic.message || '-';
-  }
-  return [diagnostic.message, ...entries.map(([key, value]) => `${key}=${String(value)}`)]
-    .filter((value) => value.trim().length > 0)
-    .join(' | ');
-}
 
 function getLatestMusicLibraryRuntimeSnapshot(): MusicLibraryRuntimeMemorySnapshot | null {
   if (typeof window === 'undefined') return null;
@@ -682,9 +506,6 @@ type SettingsToggleGroupProps = {
 };
 
 type SettingsToggleButtonProps = ComponentPropsWithoutRef<typeof PmpChoiceButton>;
-type SettingsCheckboxProps = Omit<ComponentPropsWithoutRef<typeof PmpCheckbox>, 'className' | 'variant'> & {
-  className?: string;
-};
 type SettingsCardProps = Omit<ComponentPropsWithoutRef<typeof PmpCard>, 'className' | 'surfaceId'> & {
   className?: string;
   surfaceId?: ComponentPropsWithoutRef<typeof PmpCard>['surfaceId'];
@@ -715,15 +536,6 @@ function SettingsToggleButton(props: SettingsToggleButtonProps) {
   return <PmpChoiceButton {...props} />;
 }
 
-function SettingsCheckbox({ className, ...props }: SettingsCheckboxProps) {
-  return (
-    <PmpCheckbox
-      variant="settings"
-      className={['settings-checkbox', className].filter(Boolean).join(' ')}
-      {...props}
-    />
-  );
-}
 
 function SettingsCard({
   className,
@@ -739,26 +551,50 @@ function SettingsCard({
   );
 }
 
-function resolvePreferredDebugConnectorId(
-  requestedConnectorId: string | null | undefined,
-  definitions: PlatformConnectorDefinition[]
-): PlatformConnectorId | null {
-  if (definitions.length === 0) return null;
+type DebugMemoryActionGroupProps = {
+  label: string;
+  children: ReactNode;
+};
 
-  const normalizedRequested =
-    typeof requestedConnectorId === 'string' ? requestedConnectorId.trim().toLowerCase() : '';
-  if (!normalizedRequested) {
-    return definitions[0]?.connectorId ?? null;
-  }
-
+function DebugMemoryActionGroup({ label, children }: DebugMemoryActionGroupProps) {
   return (
-    definitions.find(
-      (definition) => definition.connectorId.trim().toLowerCase() === normalizedRequested
-    )?.connectorId ??
-    definitions[0]?.connectorId ??
-    null
+    <div className="debug-center-memory-action-group">
+      <div className="debug-center-memory-action-title">{label}</div>
+      <div className="debug-center-memory-actions">{children}</div>
+    </div>
   );
 }
+
+type DebugMemoryMetricProps = {
+  label: string;
+  value: ReactNode;
+  detail?: ReactNode;
+  muted?: boolean;
+};
+
+function DebugMemoryMetric({ label, value, detail, muted = false }: DebugMemoryMetricProps) {
+  return (
+    <div className={['debug-center-memory-metric', muted ? 'debug-center-memory-metric--muted' : ''].filter(Boolean).join(' ')}>
+      <span className="debug-center-memory-metric-label">{label}</span>
+      <strong className="debug-center-memory-metric-value">{value}</strong>
+      {detail ? <span className="debug-center-memory-metric-detail">{detail}</span> : null}
+    </div>
+  );
+}
+
+type DebugMemoryTokenProps = {
+  children: ReactNode;
+  muted?: boolean;
+};
+
+function DebugMemoryToken({ children, muted = false }: DebugMemoryTokenProps) {
+  return (
+    <span className={['debug-center-memory-token', muted ? 'debug-center-memory-token--muted' : ''].filter(Boolean).join(' ')}>
+      {children}
+    </span>
+  );
+}
+
 
 function buildMemoryBaselineExportPayload(samples: MemoryBaselineSample[]): MemoryBaselineExportPayload {
   return {
@@ -870,6 +706,9 @@ function buildMemoryBaselineCsv(payload: MemoryBaselineExportPayload): string {
 export function DebugCenter({
   variant = 'page',
   initialWorkspace = 'overview',
+  activeWorkspace: controlledActiveWorkspace,
+  onWorkspaceChange,
+  hideWorkspaceNav = false,
   title,
   subtitle,
 }: DebugCenterProps) {
@@ -917,42 +756,23 @@ export function DebugCenter({
   const [pendingRestart, setPendingRestart] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [activeWorkspace, setActiveWorkspace] = useState<DebugWorkspaceId>(initialWorkspace);
+  const [internalActiveWorkspace, setInternalActiveWorkspace] =
+    useState<DebugWorkspaceId>(initialWorkspace);
+  const activeWorkspace = controlledActiveWorkspace ?? internalActiveWorkspace;
+  const setActiveWorkspace = useCallback(
+    (workspace: DebugWorkspaceId) => {
+      if (controlledActiveWorkspace === undefined) {
+        setInternalActiveWorkspace(workspace);
+      }
+      onWorkspaceChange?.(workspace);
+    },
+    [controlledActiveWorkspace, onWorkspaceChange]
+  );
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmRestartIntoDebug, setConfirmRestartIntoDebug] = useState(false);
   const [confirmDestroyEditorWindows, setConfirmDestroyEditorWindows] = useState(false);
   const [confirmClearCoverCaches, setConfirmClearCoverCaches] = useState(false);
   const [minidumpDirDraft, setMinidumpDirDraft] = useState('');
-  const [syncStatus, setSyncStatus] = useState<NativeLibrarySyncStatus | null>(null);
-  const [syncSchedulerStatus, setSyncSchedulerStatus] =
-    useState<NativeLibrarySyncSchedulerStatus | null>(null);
-  const [syncFailureOverview, setSyncFailureOverview] =
-    useState<NativeLibrarySyncFailureOverview | null>(null);
-  const [selectedSyncFailureSourceIds, setSelectedSyncFailureSourceIds] = useState<string[]>([]);
-  const [lastSyncTickResult, setLastSyncTickResult] = useState<NativeLibrarySyncTickResult | null>(null);
-  const [syncBusy, setSyncBusy] = useState(false);
-  const [syncSchedulerIntervalMs, setSyncSchedulerIntervalMs] = useState(60_000);
-  const [unifiedSources, setUnifiedSources] = useState<UnifiedMusicSource[]>([]);
-  const [unifiedSearchQuery, setUnifiedSearchQuery] = useState('');
-  const [unifiedSearchResults, setUnifiedSearchResults] = useState<UnifiedTrackCandidate[]>([]);
-  const [unifiedBusy, setUnifiedBusy] = useState(false);
-  const [platformConnectorDefinitions, setPlatformConnectorDefinitions] = useState<
-    PlatformConnectorDefinition[]
-  >(() => listPlatformConnectorDefinitions());
-  const [selectedAuthConnectorId, setSelectedAuthConnectorId] = useState<PlatformConnectorId | null>(
-    null
-  );
-  const [platformAuthStatus, setPlatformAuthStatus] = useState<PlatformInstanceAuthSnapshot | null>(null);
-  const [platformQrSession, setPlatformQrSession] = useState<PlatformInstanceQrLoginSession | null>(null);
-  const [platformQrPollResult, setPlatformQrPollResult] =
-    useState<PlatformInstanceQrLoginPollResult | null>(null);
-  const [platformAuthBusy, setPlatformAuthBusy] = useState(false);
-  const [platformPackStartupHealth, setPlatformPackStartupHealth] =
-    useState<PlatformPackStartupHealth>(() => getPlatformPackStartupHealth());
-  const [platformPackDoctorReport, setPlatformPackDoctorReport] =
-    useState<PlatformPackDoctorReport | null>(null);
-  const [platformPackDoctorBusy, setPlatformPackDoctorBusy] = useState(false);
-  const [platformPackDoctorError, setPlatformPackDoctorError] = useState<string | null>(null);
   const [memoryBaselines, setMemoryBaselines] = useState<MemoryBaselineSample[]>(() =>
     readJson<MemoryBaselineSample[]>(STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1, [])
   );
@@ -1071,10 +891,6 @@ export function DebugCenter({
         { id: 'magnets' as const, label: t('debug.center.telemetry.query.preset.magnets') },
         { id: 'plugins' as const, label: t('debug.center.telemetry.query.preset.plugins') },
         { id: 'performance' as const, label: t('debug.center.telemetry.query.preset.performance') },
-        {
-          id: 'music-platform' as const,
-          label: t('debug.center.telemetry.query.preset.musicPlatform'),
-        },
         { id: 'general' as const, label: t('debug.center.telemetry.query.preset.general') },
       ] satisfies Array<{ id: TelemetryAiContextPresetId; label: string }>,
     [t]
@@ -1086,11 +902,6 @@ export function DebugCenter({
           id: 'overview' as const,
           label: t('debug.center.workspace.tab.overview'),
           desc: t('debug.center.workspace.desc.overview'),
-        },
-        {
-          id: 'platforms' as const,
-          label: t('debug.center.workspace.tab.platforms'),
-          desc: t('debug.center.workspace.desc.platforms'),
         },
         {
           id: 'runtime' as const,
@@ -1119,39 +930,6 @@ export function DebugCenter({
     () => workspaceOptions.find((option) => option.id === activeWorkspace) ?? workspaceOptions[0],
     [activeWorkspace, workspaceOptions]
   );
-  const qrAuthConnectorDefinitions = useMemo(
-    () =>
-      platformConnectorDefinitions.filter(
-        (definition) => definition.enabled !== false && definition.authFlow === 'qr'
-      ),
-    [platformConnectorDefinitions]
-  );
-  const selectedAuthConnectorDefinition = useMemo(
-    () =>
-      qrAuthConnectorDefinitions.find(
-        (definition) => definition.connectorId === selectedAuthConnectorId
-      ) ??
-      qrAuthConnectorDefinitions[0] ??
-      null,
-    [qrAuthConnectorDefinitions, selectedAuthConnectorId]
-  );
-  const selectedAuthConnectorDisplayName = useMemo(() => {
-    const snapshotDisplayName = platformAuthStatus?.displayName?.trim();
-    if (snapshotDisplayName) return snapshotDisplayName;
-    const definitionDisplayName = selectedAuthConnectorDefinition?.displayName?.trim();
-    if (definitionDisplayName) return definitionDisplayName;
-    const connectorId = selectedAuthConnectorDefinition?.connectorId?.trim() ?? '';
-    return connectorId.replace(/^connector\.platform\./, '') || 'Platform';
-  }, [platformAuthStatus?.displayName, selectedAuthConnectorDefinition]);
-  const selectedAuthInstanceId = useMemo(
-    () =>
-      selectedAuthConnectorDefinition
-        ? resolvePlatformInstanceId({
-            connectorId: selectedAuthConnectorDefinition.connectorId,
-          }) ?? null
-        : null,
-    [selectedAuthConnectorDefinition]
-  );
 
   useEffect(() => {
     setTelemetrySnapshot(telemetryService.getSnapshot());
@@ -1160,51 +938,9 @@ export function DebugCenter({
     });
   }, [telemetryService]);
 
-  useEffect(() => {
-    setPlatformConnectorDefinitions(listPlatformConnectorDefinitions());
-    return subscribePlatformConnectorDefinitions((definitions) => {
-      setPlatformConnectorDefinitions(definitions);
-    });
-  }, []);
 
-  useEffect(() => {
-    setPlatformPackStartupHealth(getPlatformPackStartupHealth());
-    return subscribePlatformPackStartupHealth((health) => {
-      setPlatformPackStartupHealth(health);
-    });
-  }, []);
 
-  const refreshPlatformPackDoctor = useCallback(async () => {
-    setPlatformPackDoctorBusy(true);
-    setPlatformPackDoctorError(null);
-    try {
-      const report = await inspectPlatformPackDoctor();
-      setPlatformPackDoctorReport(report);
-    } catch (error) {
-      setPlatformPackDoctorReport(null);
-      setPlatformPackDoctorError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPlatformPackDoctorBusy(false);
-    }
-  }, []);
 
-  useEffect(() => {
-    if (activeWorkspace !== 'telemetry') return;
-    if (!debugPollingAllowed) return;
-    void refreshPlatformPackDoctor();
-  }, [
-    activeWorkspace,
-    debugPollingAllowed,
-    refreshPlatformPackDoctor,
-    platformPackStartupHealth.currentStage,
-    platformPackStartupHealth.registeredBuiltinCount,
-  ]);
-
-  useEffect(() => {
-    setSelectedAuthConnectorId((current) =>
-      resolvePreferredDebugConnectorId(current, qrAuthConnectorDefinitions)
-    );
-  }, [qrAuthConnectorDefinitions]);
 
   const navigationHistoryStats = useMemo(() => {
     let bytes = 0;
@@ -1322,410 +1058,6 @@ export function DebugCenter({
     void runTelemetryPresetQuery('plugins');
   }, [isTauri, runTelemetryPresetQuery]);
 
-  const refreshSyncOrchestrator = useCallback(async () => {
-    if (!isTauri) {
-      setSyncStatus(null);
-      setSyncSchedulerStatus(null);
-      setSyncFailureOverview(null);
-      return;
-    }
-
-    const service = MusicLibraryService.getInstance();
-    const [status, schedulerStatus, failureOverview] = await Promise.all([
-      service.getSyncOrchestratorStatus(),
-      service.getSyncSchedulerStatus(),
-      service.getSyncFailureOverview(200),
-    ]);
-
-    setSyncStatus(status);
-    setSyncSchedulerStatus(schedulerStatus);
-    setSyncFailureOverview(failureOverview);
-    if (typeof schedulerStatus?.intervalMs === 'number' && Number.isFinite(schedulerStatus.intervalMs)) {
-      setSyncSchedulerIntervalMs(Math.max(5_000, Math.floor(schedulerStatus.intervalMs)));
-    }
-  }, [isTauri]);
-
-  const runSyncTick = useCallback(async () => {
-    if (!isTauri || syncBusy) return;
-    setSyncBusy(true);
-    setError(null);
-
-    try {
-      const service = MusicLibraryService.getInstance();
-      const result = await service.runSyncOrchestratorTick('debug-manual');
-      if (!result) {
-        setError(t('debug.center.sync.status.actionFailed'));
-        return;
-      }
-
-      setLastSyncTickResult(result);
-      setStatusMessage(
-        t('debug.center.sync.status.tickDone', {
-          scanned: result.scannedSources,
-          changed: result.changedSources,
-          queued: result.enqueuedMetadataJobs,
-        })
-      );
-      await refreshSyncOrchestrator();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('debug.center.sync.status.actionFailed'));
-    } finally {
-      setSyncBusy(false);
-    }
-  }, [isTauri, refreshSyncOrchestrator, syncBusy, t]);
-
-  const startSyncScheduler = useCallback(async () => {
-    if (!isTauri || syncBusy) return;
-    setSyncBusy(true);
-    setError(null);
-
-    try {
-      const intervalMs = Math.max(5_000, Math.min(60 * 60 * 1_000, Math.floor(syncSchedulerIntervalMs)));
-      const service = MusicLibraryService.getInstance();
-      const status = await service.startSyncScheduler(intervalMs);
-      if (!status) {
-        setError(t('debug.center.sync.status.actionFailed'));
-        return;
-      }
-
-      setSyncSchedulerStatus(status);
-      setStatusMessage(t('debug.center.sync.status.schedulerStarted', { intervalMs: status.intervalMs }));
-      await refreshSyncOrchestrator();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('debug.center.sync.status.actionFailed'));
-    } finally {
-      setSyncBusy(false);
-    }
-  }, [isTauri, refreshSyncOrchestrator, syncBusy, syncSchedulerIntervalMs, t]);
-
-  const stopSyncScheduler = useCallback(async () => {
-    if (!isTauri || syncBusy) return;
-    setSyncBusy(true);
-    setError(null);
-
-    try {
-      const service = MusicLibraryService.getInstance();
-      const status = await service.stopSyncScheduler();
-      if (!status) {
-        setError(t('debug.center.sync.status.actionFailed'));
-        return;
-      }
-
-      setSyncSchedulerStatus(status);
-      setStatusMessage(t('debug.center.sync.status.schedulerStopped'));
-      await refreshSyncOrchestrator();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('debug.center.sync.status.actionFailed'));
-    } finally {
-      setSyncBusy(false);
-    }
-  }, [isTauri, refreshSyncOrchestrator, syncBusy, t]);
-
-  const retrySyncFailedSources = useCallback(async () => {
-    if (!isTauri || syncBusy) return;
-    setSyncBusy(true);
-    setError(null);
-
-    try {
-      const sourceIds =
-        selectedSyncFailureSourceIds.length > 0 ? selectedSyncFailureSourceIds : undefined;
-      const service = MusicLibraryService.getInstance();
-      const result = await service.retrySyncFailedSources({
-        sourceIds,
-        reason: 'debug-retry-failed-sources',
-      });
-      if (!result) {
-        setError(t('debug.center.sync.status.actionFailed'));
-        return;
-      }
-
-      setLastSyncTickResult(result.tickResult);
-      setStatusMessage(
-        t('debug.center.sync.status.retryDone', {
-          cleared: result.clearedSources,
-          selected: sourceIds?.length ?? 0,
-          scanned: result.tickResult.scannedSources,
-          changed: result.tickResult.changedSources,
-        })
-      );
-      await refreshSyncOrchestrator();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('debug.center.sync.status.actionFailed'));
-    } finally {
-      setSyncBusy(false);
-    }
-  }, [isTauri, refreshSyncOrchestrator, selectedSyncFailureSourceIds, syncBusy, t]);
-
-  const clearSyncFailedSources = useCallback(async () => {
-    if (!isTauri || syncBusy) return;
-    setSyncBusy(true);
-    setError(null);
-
-    try {
-      const sourceIds =
-        selectedSyncFailureSourceIds.length > 0 ? selectedSyncFailureSourceIds : undefined;
-      const service = MusicLibraryService.getInstance();
-      const result = await service.clearSyncFailedSources({
-        sourceIds,
-      });
-      if (!result) {
-        setError(t('debug.center.sync.status.actionFailed'));
-        return;
-      }
-
-      setStatusMessage(
-        t('debug.center.sync.status.clearDone', {
-          cleared: result.clearedSources,
-          selected: sourceIds?.length ?? 0,
-        })
-      );
-      await refreshSyncOrchestrator();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('debug.center.sync.status.actionFailed'));
-    } finally {
-      setSyncBusy(false);
-    }
-  }, [isTauri, refreshSyncOrchestrator, selectedSyncFailureSourceIds, syncBusy, t]);
-
-  const refreshUnifiedSources = useCallback(async () => {
-    if (!isTauri) {
-      setUnifiedSources([]);
-      return;
-    }
-
-    try {
-      const service = MusicLibraryService.getInstance();
-      const items = await service.listUnifiedMusicSources();
-      setUnifiedSources(items);
-    } catch {
-      setUnifiedSources([]);
-    }
-  }, [isTauri]);
-
-  const runUnifiedSearch = useCallback(async () => {
-    if (!isTauri || unifiedBusy) return;
-    const query = unifiedSearchQuery.trim();
-    if (!query) {
-      setUnifiedSearchResults([]);
-      return;
-    }
-
-    setUnifiedBusy(true);
-    try {
-      const service = MusicLibraryService.getInstance();
-      const items = await service.searchUnifiedTracks({ query, limit: 30 });
-      setUnifiedSearchResults(items);
-    } catch {
-      setUnifiedSearchResults([]);
-    } finally {
-      setUnifiedBusy(false);
-    }
-  }, [isTauri, unifiedBusy, unifiedSearchQuery]);
-
-  const resolveSelectedPlatformInstanceId = useCallback(
-    (preferredInstanceId?: string | null) => {
-      const connectorId = selectedAuthConnectorDefinition?.connectorId ?? null;
-      if (!connectorId) return null;
-
-      const explicitInstanceId =
-        typeof preferredInstanceId === 'string' ? preferredInstanceId.trim() : '';
-      return (
-        resolvePlatformInstanceId({
-          instanceId: explicitInstanceId || null,
-          connectorId,
-        }) ?? null
-      );
-    },
-    [selectedAuthConnectorDefinition?.connectorId]
-  );
-
-  const refreshSelectedPlatformAuthStatus = useCallback(async () => {
-    if (!isTauri || !selectedAuthConnectorDefinition) {
-      setPlatformAuthStatus(null);
-      return;
-    }
-
-    const instanceId = resolveSelectedPlatformInstanceId();
-    if (!instanceId) {
-      setPlatformAuthStatus(null);
-      return;
-    }
-
-    try {
-      const status =
-        (await refreshPlatformInstanceAuthSnapshot(instanceId)) ??
-        getPlatformInstanceAuthSnapshot(instanceId);
-      setPlatformAuthStatus(status);
-    } catch {
-      setPlatformAuthStatus(getPlatformInstanceAuthSnapshot(instanceId));
-    }
-  }, [isTauri, resolveSelectedPlatformInstanceId, selectedAuthConnectorDefinition]);
-
-  const pollSelectedPlatformQrSession = useCallback(
-    async (sessionId?: string) => {
-      if (!isTauri || platformAuthBusy) return;
-
-      const targetSessionId = (sessionId ?? platformQrSession?.sessionId ?? '').trim();
-      const targetInstanceId = resolveSelectedPlatformInstanceId(platformQrSession?.instanceId);
-      if (!targetSessionId || !targetInstanceId) return;
-
-      setPlatformAuthBusy(true);
-      try {
-        const result = await pollPlatformInstanceQrLogin(targetInstanceId, targetSessionId);
-        setPlatformQrPollResult(result);
-
-        if (!result) {
-          setError(
-            t('debug.center.sourceFacade.auth.pollFailed', {
-              platform: selectedAuthConnectorDisplayName,
-            })
-          );
-          return;
-        }
-
-        if (result.state === 'authorized') {
-          setStatusMessage(
-            t('debug.center.sourceFacade.auth.authorized', {
-              platform: selectedAuthConnectorDisplayName,
-              accountUid: result.accountUid ?? '-',
-            })
-          );
-          setPlatformQrSession(null);
-          await refreshUnifiedSources();
-        }
-
-        if (
-          result.state === 'authorized' ||
-          result.state === 'expired' ||
-          result.state === 'failed'
-        ) {
-          setPlatformQrSession(null);
-        }
-
-        await refreshSelectedPlatformAuthStatus();
-      } catch (err) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : t('debug.center.sourceFacade.auth.pollFailed', {
-                platform: selectedAuthConnectorDisplayName,
-              })
-        );
-      } finally {
-        setPlatformAuthBusy(false);
-      }
-    },
-    [
-      isTauri,
-      platformAuthBusy,
-      platformQrSession?.instanceId,
-      platformQrSession?.sessionId,
-      refreshSelectedPlatformAuthStatus,
-      refreshUnifiedSources,
-      resolveSelectedPlatformInstanceId,
-      selectedAuthConnectorDisplayName,
-      t,
-    ]
-  );
-
-  const generateSelectedPlatformQrSession = useCallback(async () => {
-    if (!isTauri || platformAuthBusy) return;
-
-    setPlatformAuthBusy(true);
-    try {
-      const instanceId = resolveSelectedPlatformInstanceId();
-      if (!instanceId) {
-        setError(
-          t('debug.center.sourceFacade.auth.generateFailed', {
-            platform: selectedAuthConnectorDisplayName,
-          })
-        );
-        return;
-      }
-
-      const session = await beginPlatformInstanceQrLogin(instanceId);
-      if (!session) {
-        setError(
-          t('debug.center.sourceFacade.auth.generateFailed', {
-            platform: selectedAuthConnectorDisplayName,
-          })
-        );
-        return;
-      }
-
-      setPlatformQrSession(session);
-      setPlatformQrPollResult(null);
-      setStatusMessage(
-        t('debug.center.sourceFacade.auth.generated', {
-          platform: selectedAuthConnectorDisplayName,
-        })
-      );
-      await refreshSelectedPlatformAuthStatus();
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : t('debug.center.sourceFacade.auth.generateFailed', {
-              platform: selectedAuthConnectorDisplayName,
-            })
-      );
-    } finally {
-      setPlatformAuthBusy(false);
-    }
-  }, [
-    isTauri,
-    platformAuthBusy,
-    refreshSelectedPlatformAuthStatus,
-    resolveSelectedPlatformInstanceId,
-    selectedAuthConnectorDisplayName,
-    t,
-  ]);
-
-  const logoutSelectedPlatformAuth = useCallback(async () => {
-    if (!isTauri || platformAuthBusy) return;
-
-    setPlatformAuthBusy(true);
-    try {
-      const instanceId = resolveSelectedPlatformInstanceId();
-      if (!instanceId) {
-        setPlatformAuthStatus(null);
-        setPlatformQrSession(null);
-        setPlatformQrPollResult(null);
-        setStatusMessage(
-          t('debug.center.sourceFacade.auth.loggedOut', {
-            platform: selectedAuthConnectorDisplayName,
-          })
-        );
-        return;
-      }
-
-      const status = await logoutPlatformInstance(instanceId);
-      setPlatformAuthStatus(status);
-      setPlatformQrSession(null);
-      setPlatformQrPollResult(null);
-      setStatusMessage(
-        t('debug.center.sourceFacade.auth.loggedOut', {
-          platform: selectedAuthConnectorDisplayName,
-        })
-      );
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : t('debug.center.sourceFacade.auth.logoutFailed', {
-              platform: selectedAuthConnectorDisplayName,
-            })
-      );
-    } finally {
-      setPlatformAuthBusy(false);
-    }
-  }, [
-    isTauri,
-    platformAuthBusy,
-    resolveSelectedPlatformInstanceId,
-    selectedAuthConnectorDisplayName,
-    t,
-  ]);
 
   const clearThreeStageCaptureTimers = useCallback(() => {
     if (threeStageCaptureTimersRef.current.length === 0) return;
@@ -1894,137 +1226,6 @@ export function DebugCenter({
     void refreshMemory();
   }, [activeWorkspace, debugPollingAllowed, refreshMemory]);
 
-  useEffect(() => {
-    if (activeWorkspace !== 'platforms') return;
-    if (!debugPollingAllowed) return;
-    void refreshSyncOrchestrator();
-    if (!isTauri) return;
-
-    const timer = window.setInterval(() => {
-      void refreshSyncOrchestrator();
-    }, 5_000);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [activeWorkspace, debugPollingAllowed, isTauri, refreshSyncOrchestrator]);
-
-  useEffect(() => {
-    if (activeWorkspace !== 'platforms') return;
-    if (!debugPollingAllowed) return;
-    void refreshUnifiedSources();
-    if (!isTauri) return;
-
-    const timer = window.setInterval(() => {
-      void refreshUnifiedSources();
-    }, 15_000);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [activeWorkspace, debugPollingAllowed, isTauri, refreshUnifiedSources]);
-
-  useEffect(() => {
-    setPlatformAuthStatus(null);
-    setPlatformQrSession(null);
-    setPlatformQrPollResult(null);
-  }, [selectedAuthConnectorDefinition?.connectorId]);
-
-  useEffect(() => {
-    if (activeWorkspace !== 'platforms') return;
-    if (!debugPollingAllowed) return;
-    void refreshSelectedPlatformAuthStatus();
-    if (!isTauri) return;
-
-    const timer = window.setInterval(() => {
-      void refreshSelectedPlatformAuthStatus();
-    }, 20_000);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [activeWorkspace, debugPollingAllowed, isTauri, refreshSelectedPlatformAuthStatus]);
-
-  useEffect(() => {
-    if (activeWorkspace !== 'platforms') return;
-    if (!debugPollingAllowed) return;
-    if (!isTauri) return;
-    const sessionId = platformQrSession?.sessionId;
-    if (!sessionId) return;
-
-    const timer = window.setInterval(() => {
-      void pollSelectedPlatformQrSession(sessionId);
-    }, 1_800);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [
-    activeWorkspace,
-    debugPollingAllowed,
-    platformQrSession?.sessionId,
-    isTauri,
-    pollSelectedPlatformQrSession,
-  ]);
-
-  useEffect(() => {
-    if (activeWorkspace !== 'platforms') return;
-    if (!isTauri) return;
-
-    let active = true;
-    let unlisten: (() => void) | null = null;
-
-    void setupTauriListenerWithPayload<MusicLibrarySyncStatusEventPayload>(
-      TAURI_EVENTS.MUSIC_LIBRARY_SYNC_STATUS_UPDATED,
-      (payload) => {
-        if (!active || !payload) return;
-
-        if (payload.syncStatus) {
-          setSyncStatus(payload.syncStatus);
-        }
-
-        if (payload.schedulerStatus) {
-          setSyncSchedulerStatus(payload.schedulerStatus);
-          if (
-            typeof payload.schedulerStatus.intervalMs === 'number' &&
-            Number.isFinite(payload.schedulerStatus.intervalMs)
-          ) {
-            setSyncSchedulerIntervalMs(
-              Math.max(5_000, Math.floor(payload.schedulerStatus.intervalMs))
-            );
-          }
-        }
-
-        if (payload.tickResult) {
-          setLastSyncTickResult(payload.tickResult);
-
-          void MusicLibraryService.getInstance()
-            .getSyncFailureOverview(200)
-            .then((overview) => {
-              if (!active) return;
-              setSyncFailureOverview(overview);
-            })
-            .catch(() => {
-              if (!active) return;
-              setSyncFailureOverview(null);
-            });
-        }
-      }
-    ).then((off) => {
-      if (!active) {
-        off();
-        return;
-      }
-      unlisten = off;
-    });
-
-    return () => {
-      active = false;
-      if (unlisten) {
-        unlisten();
-      }
-    };
-  }, [activeWorkspace, isTauri]);
 
   useEffect(() => {
     return () => {
@@ -2059,64 +1260,6 @@ export function DebugCenter({
     };
   }, [latestThreeStageComparison]);
 
-  const latestSyncTickResult = useMemo(
-    () => lastSyncTickResult ?? syncSchedulerStatus?.lastTickResult ?? null,
-    [lastSyncTickResult, syncSchedulerStatus?.lastTickResult]
-  );
-
-  const syncFailedSourceItems = useMemo<NativeLibrarySyncFailureSourceSummary[]>(
-    () => syncFailureOverview?.items ?? [],
-    [syncFailureOverview]
-  );
-
-  const selectedSyncFailureSourceIdSet = useMemo(
-    () => new Set(selectedSyncFailureSourceIds),
-    [selectedSyncFailureSourceIds]
-  );
-
-  const hasSelectedSyncFailureSources = selectedSyncFailureSourceIds.length > 0;
-
-  useEffect(() => {
-    if (syncFailedSourceItems.length === 0) {
-      if (selectedSyncFailureSourceIds.length > 0) {
-        setSelectedSyncFailureSourceIds([]);
-      }
-      return;
-    }
-
-    const availableSourceIds = new Set(syncFailedSourceItems.map((item) => item.sourceId));
-    const nextSelected = selectedSyncFailureSourceIds.filter((sourceId) =>
-      availableSourceIds.has(sourceId)
-    );
-
-    if (nextSelected.length !== selectedSyncFailureSourceIds.length) {
-      setSelectedSyncFailureSourceIds(nextSelected);
-    }
-  }, [selectedSyncFailureSourceIds, syncFailedSourceItems]);
-
-  const toggleSyncFailureSourceSelection = useCallback((sourceId: string) => {
-    const normalizedSourceId = sourceId.trim();
-    if (!normalizedSourceId) return;
-
-    setSelectedSyncFailureSourceIds((prev) => {
-      if (prev.includes(normalizedSourceId)) {
-        return prev.filter((item) => item !== normalizedSourceId);
-      }
-      return [...prev, normalizedSourceId];
-    });
-  }, []);
-
-  const selectAllSyncFailureSources = useCallback(() => {
-    if (syncFailedSourceItems.length === 0) {
-      setSelectedSyncFailureSourceIds([]);
-      return;
-    }
-    setSelectedSyncFailureSourceIds(syncFailedSourceItems.map((item) => item.sourceId));
-  }, [syncFailedSourceItems]);
-
-  const clearSelectedSyncFailureSources = useCallback(() => {
-    setSelectedSyncFailureSourceIds([]);
-  }, []);
 
   const handleCopyLatestScenarioSummary = useCallback(async () => {
     const comparison = latestThreeStageComparison;
@@ -2766,7 +1909,7 @@ export function DebugCenter({
   );
 
   const headerActions = (
-    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+    <div className="debug-center-actions">
       <SettingsActionButton type="button" onClick={() => setConfirmRestart(true)} disabled={!isTauri}>
         {t('debug.center.actions.restart')}
       </SettingsActionButton>
@@ -2781,64 +1924,97 @@ export function DebugCenter({
   );
   const headerTitle = title ?? t('pages.debug-center.title');
   const headerSubtitle = subtitle ?? t('pages.debug-center.subtitle');
+  const editorWindowCounts = editorWindowsState
+    ? {
+        alive: editorWindowsState.windows.filter((windowState) => windowState.exists).length,
+        visible: editorWindowsState.windows.filter(
+          (windowState) => windowState.exists && windowState.visible
+        ).length,
+      }
+    : null;
+  const editorHiddenCount = editorWindowCounts
+    ? Math.max(0, editorWindowCounts.alive - editorWindowCounts.visible)
+    : null;
+  const coverCachesEmpty = coverCacheStats
+    ? coverCacheStats.coverBlobUrlCacheEntries === 0 &&
+      coverCacheStats.coverBlobUrlTotalBytes === 0 &&
+      coverCacheStats.coverDecodedEstimateEntries === 0 &&
+      coverCacheStats.coverDecodedEstimateTotalBytes === 0 &&
+      coverCacheStats.coverUrlCacheEntries === 0 &&
+      coverCacheStats.coverUrlInflight === 0 &&
+      coverCacheStats.albumCoverUrlCacheEntries === 0 &&
+      coverCacheStats.albumCoverUrlInflight === 0
+    : false;
+  const desktopCoverLeaseSnapshotAvailable = desktopCoverLeaseStats !== null;
+  const desktopCoverLeasesEmpty = desktopCoverLeaseStats
+    ? desktopCoverLeaseStats.trackedEntries === 0 &&
+      desktopCoverLeaseStats.activeEntries === 0 &&
+      desktopCoverLeaseStats.leasedEntries === 0 &&
+      desktopCoverLeaseStats.trackedBytes === 0
+    : false;
+  const memoryCoverCachesEmpty =
+    coverCachesEmpty && (!desktopCoverLeaseSnapshotAvailable || desktopCoverLeasesEmpty);
+  const coverCacheSummaryText = !coverCacheStats
+    ? t('debug.center.memory.coverCaches.pending')
+    : memoryCoverCachesEmpty
+      ? t('debug.center.memory.coverCaches.emptyNormal')
+      : t('debug.center.memory.coverCaches.blobUrls.value', {
+          count: formatCount(coverCacheStats.coverBlobUrlCacheEntries),
+          mb: formatBytesToMb(coverCacheStats.coverBlobUrlTotalBytes),
+        });
 
   const header =
     variant === 'page' ? (
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          gap: 12,
-        }}
-      >
-        <div>
-          <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>{headerTitle}</h1>
+      <div className="debug-center-header">
+        <div className="debug-center-header-copy">
+          <h1 className="debug-center-title">{headerTitle}</h1>
           {headerSubtitle ? (
-            <p style={{ fontSize: 12, opacity: 0.72, margin: '6px 0 0' }}>{headerSubtitle}</p>
+            <p className="debug-center-subtitle">{headerSubtitle}</p>
           ) : null}
         </div>
         {headerActions}
       </div>
     ) : (
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>{headerActions}</div>
+      <div className="debug-center-header debug-center-header--settings">{headerActions}</div>
     );
 
   return (
-    <div style={{ width: '100%', height: '100%', padding: variant === 'page' ? 16 : 0 }}>
+    <div className={['debug-center-root', variant === 'page' ? 'debug-center-root--page' : ''].filter(Boolean).join(' ')}>
       {header}
 
       {!isTauri ? (
-        <div className="settings-card-note" style={{ marginTop: variant === 'page' ? 16 : 0 }}>
+        <div className="settings-card-note debug-center-runtime-note">
           {t('debug.center.note.requireTauri')}
         </div>
       ) : null}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: variant === 'page' ? 16 : 0 }}>
-        <SettingsCard>
-          <div className="settings-card-header">
-            <div>
-              <p className="settings-card-label">{t('debug.center.workspace.label')}</p>
-              <p className="settings-card-desc">{t('debug.center.workspace.desc')}</p>
+      <div className="debug-center-stack">
+        {!hideWorkspaceNav ? (
+          <SettingsCard>
+            <div className="settings-card-header">
+              <div>
+                <p className="settings-card-label">{t('debug.center.workspace.label')}</p>
+                <p className="settings-card-desc">{t('debug.center.workspace.desc')}</p>
+              </div>
+              <span className="settings-card-badge">{activeWorkspaceOption?.label ?? '-'}</span>
             </div>
-            <span className="settings-card-badge">{activeWorkspaceOption?.label ?? '-'}</span>
-          </div>
 
-          <SettingsToggleGroup className="settings-toggle debug-center-workspace-toggle">
-            {workspaceOptions.map((option) => (
-              <SettingsToggleButton
-                key={option.id}
-                type="button"
-                active={activeWorkspace === option.id}
-                onClick={() => setActiveWorkspace(option.id)}
-              >
-                {option.label}
-              </SettingsToggleButton>
-            ))}
-          </SettingsToggleGroup>
+            <SettingsToggleGroup className="settings-toggle debug-center-workspace-toggle">
+              {workspaceOptions.map((option) => (
+                <SettingsToggleButton
+                  key={option.id}
+                  type="button"
+                  active={activeWorkspace === option.id}
+                  onClick={() => setActiveWorkspace(option.id)}
+                >
+                  {option.label}
+                </SettingsToggleButton>
+              ))}
+            </SettingsToggleGroup>
 
-          <p className="settings-card-note">{activeWorkspaceOption?.desc ?? ''}</p>
-        </SettingsCard>
+            <p className="settings-card-note">{activeWorkspaceOption?.desc ?? ''}</p>
+          </SettingsCard>
+        ) : null}
 
         {activeWorkspace === 'overview' ? (
           <SettingsCard>
@@ -2872,423 +2048,14 @@ export function DebugCenter({
           {pendingRestart ? <p className="settings-card-note">{t('debug.center.mode.note.restartRequired')}</p> : null}
           {busy ? <p className="settings-card-note">{t('debug.center.mode.note.saving')}</p> : null}
           {statusMessage ? (
-            <p className="settings-card-note" style={{ color: 'rgba(140,255,190,0.9)' }}>
+            <p className="settings-card-note debug-center-feedback debug-center-feedback--success">
               {statusMessage}
             </p>
           ) : null}
-          {error ? <p className="settings-card-note" style={{ color: 'rgba(255,120,120,0.9)' }}>{error}</p> : null}
+          {error ? <p className="settings-card-note debug-center-feedback debug-center-feedback--error">{error}</p> : null}
           </SettingsCard>
         ) : null}
 
-        {activeWorkspace === 'platforms' ? (
-          <SettingsCard>
-          <div className="settings-card-header">
-            <div>
-              <p className="settings-card-label">{t('debug.center.sourceFacade.title')}</p>
-              <p className="settings-card-desc">{t('debug.center.sourceFacade.desc')}</p>
-            </div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <SettingsActionButton
-                type="button"
-                onClick={() => {
-                  void refreshUnifiedSources();
-                }}
-                disabled={unifiedBusy}
-              >
-                {t('common.action.refresh')}
-              </SettingsActionButton>
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gap: 8 }}>
-            <p className="settings-card-note">
-              {t('debug.center.sourceFacade.summary', { total: unifiedSources.length })}
-            </p>
-
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              <input
-                type="text"
-                value={unifiedSearchQuery}
-                onChange={(event) => {
-                  setUnifiedSearchQuery(event.target.value);
-                }}
-                placeholder={t('debug.center.sourceFacade.searchPlaceholder')}
-                style={{
-                  minWidth: 260,
-                  padding: '6px 8px',
-                  borderRadius: 8,
-                  border: '1px solid rgba(255,255,255,0.14)',
-                  background: 'rgba(0,0,0,0.18)',
-                  color: 'rgba(255,255,255,0.9)',
-                }}
-              />
-              <SettingsActionButton
-                type="button"
-                onClick={() => {
-                  void runUnifiedSearch();
-                }}
-                disabled={unifiedBusy}
-              >
-                {t('debug.center.sourceFacade.searchAction')}
-              </SettingsActionButton>
-            </div>
-
-            <div
-              style={{
-                display: 'grid',
-                gap: 8,
-                padding: '10px 12px',
-                borderRadius: 10,
-                border: '1px solid rgba(255,255,255,0.12)',
-                background: 'rgba(0,0,0,0.18)',
-              }}
-            >
-              <p className="settings-card-note">{t('debug.center.sourceFacade.auth.title')}</p>
-              {qrAuthConnectorDefinitions.length > 1 ? (
-                <SettingsToggleGroup>
-                  {qrAuthConnectorDefinitions.map((definition) => (
-                    <SettingsToggleButton
-                      key={definition.connectorId}
-                      active={definition.connectorId === selectedAuthConnectorDefinition?.connectorId}
-                      onClick={() => setSelectedAuthConnectorId(definition.connectorId)}
-                    >
-                      {definition.displayName}
-                    </SettingsToggleButton>
-                  ))}
-                </SettingsToggleGroup>
-              ) : null}
-              {selectedAuthConnectorDefinition ? (
-                <>
-                  <p className="settings-card-note">
-                    {t('debug.center.sourceFacade.auth.authStatus', {
-                      platform: selectedAuthConnectorDisplayName,
-                      authState: platformAuthStatus?.authState ?? 'unauthorized',
-                      accountUid: platformAuthStatus?.accountUid ?? '-',
-                      instanceId: platformAuthStatus?.instanceId ?? selectedAuthInstanceId ?? '-',
-                    })}
-                  </p>
-                  {!selectedAuthInstanceId ? (
-                    <p className="settings-card-note">
-                      {t('debug.center.sourceFacade.auth.noInstance', {
-                        platform: selectedAuthConnectorDisplayName,
-                      })}
-                    </p>
-                  ) : null}
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <SettingsActionButton
-                      type="button"
-                      onClick={() => {
-                        void generateSelectedPlatformQrSession();
-                      }}
-                      disabled={platformAuthBusy || !selectedAuthInstanceId}
-                    >
-                      {t('debug.center.sourceFacade.auth.generateAction')}
-                    </SettingsActionButton>
-                    <SettingsActionButton
-                      type="button"
-                      onClick={() => {
-                        void pollSelectedPlatformQrSession();
-                      }}
-                      disabled={platformAuthBusy || !platformQrSession}
-                    >
-                      {t('debug.center.sourceFacade.auth.pollAction')}
-                    </SettingsActionButton>
-                    <SettingsActionButton
-                      type="button"
-                      onClick={() => {
-                        void logoutSelectedPlatformAuth();
-                      }}
-                      disabled={platformAuthBusy || !selectedAuthInstanceId}
-                    >
-                      {t('debug.center.sourceFacade.auth.logoutAction')}
-                    </SettingsActionButton>
-                  </div>
-                  {platformQrSession ? (
-                    <div style={{ display: 'grid', gap: 6 }}>
-                      <img
-                        src={platformQrSession.qrImageDataUrl}
-                        alt={t('debug.center.sourceFacade.auth.qrAlt', {
-                          platform: selectedAuthConnectorDisplayName,
-                        })}
-                        style={{ width: 180, height: 180, borderRadius: 8, background: '#fff' }}
-                      />
-                      <p className="settings-card-note">
-                        {t('debug.center.sourceFacade.auth.qrExpires', {
-                          expiresAt: new Date(platformQrSession.expiresAtMs).toLocaleString(),
-                        })}
-                      </p>
-                      <p className="settings-card-note">
-                        {t('debug.center.sourceFacade.auth.qrHint', {
-                          platform: selectedAuthConnectorDisplayName,
-                        })}
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="settings-card-note">{t('debug.center.sourceFacade.auth.noQr')}</p>
-                  )}
-                  {platformQrPollResult ? (
-                    <p className="settings-card-note">
-                      {t('debug.center.sourceFacade.auth.pollState', {
-                        state: platformQrPollResult.state,
-                        message: platformQrPollResult.stateMessage,
-                      })}
-                    </p>
-                  ) : null}
-                </>
-              ) : (
-                <p className="settings-card-note">{t('debug.center.sourceFacade.auth.noConnectors')}</p>
-              )}
-            </div>
-
-            {unifiedSources.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {unifiedSources.slice(0, 8).map((item) => (
-                  <p className="settings-card-note" key={`${item.sourceId}:${item.connectorId}`}>
-                    {t('debug.center.sourceFacade.sourceItem', {
-                      sourceId: item.sourceId,
-                      kind: item.kind,
-                      driver: item.driver,
-                      status: item.status,
-                      name: item.displayName,
-                    })}
-                  </p>
-                ))}
-              </div>
-            ) : (
-              <p className="settings-card-note">{t('debug.center.sourceFacade.empty')}</p>
-            )}
-
-            {unifiedSearchResults.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <p className="settings-card-note">
-                  {t('debug.center.sourceFacade.searchResultSummary', {
-                    count: unifiedSearchResults.length,
-                  })}
-                </p>
-                {unifiedSearchResults.slice(0, 8).map((item) => (
-                  <p className="settings-card-note" key={`${item.trackId}:${item.sourceId}`}>
-                    {t('debug.center.sourceFacade.searchResultItem', {
-                      title: item.title ?? '-',
-                      artist: item.artist ?? '-',
-                      sourceId: item.sourceId,
-                      availability: item.availability,
-                    })}
-                  </p>
-                ))}
-              </div>
-            ) : null}
-          </div>
-          </SettingsCard>
-        ) : null}
-
-        {activeWorkspace === 'platforms' ? (
-          <SettingsCard>
-          <div className="settings-card-header">
-            <div>
-              <p className="settings-card-label">{t('debug.center.sync.title')}</p>
-              <p className="settings-card-desc">{t('debug.center.sync.desc')}</p>
-            </div>
-            <span className="settings-card-badge">
-              {syncSchedulerStatus?.running ? t('common.state.on') : t('common.state.off')}
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <SettingsActionButton
-              type="button"
-              onClick={() => {
-                void refreshSyncOrchestrator();
-              }}
-              disabled={syncBusy}
-            >
-              {t('common.action.refresh')}
-            </SettingsActionButton>
-            <SettingsActionButton
-              type="button"
-              onClick={() => {
-                void runSyncTick();
-              }}
-              disabled={syncBusy}
-            >
-              {t('debug.center.sync.actions.tick')}
-            </SettingsActionButton>
-            <SettingsActionButton
-              type="button"
-              onClick={() => {
-                void retrySyncFailedSources();
-              }}
-              disabled={syncBusy}
-            >
-              {t('debug.center.sync.actions.retryFailedSources')}
-            </SettingsActionButton>
-            <SettingsActionButton
-              type="button"
-              onClick={() => {
-                void clearSyncFailedSources();
-              }}
-              disabled={syncBusy}
-            >
-              {t('debug.center.sync.actions.clearFailedSources')}
-            </SettingsActionButton>
-            <SettingsActionButton
-              type="button"
-              onClick={() => {
-                void startSyncScheduler();
-              }}
-              disabled={syncBusy}
-            >
-              {t('debug.center.sync.actions.startScheduler')}
-            </SettingsActionButton>
-            <SettingsActionButton
-              type="button"
-              onClick={() => {
-                void stopSyncScheduler();
-              }}
-              disabled={syncBusy}
-            >
-              {t('debug.center.sync.actions.stopScheduler')}
-            </SettingsActionButton>
-          </div>
-
-          <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
-            <div>
-              <p className="settings-card-label">{t('debug.center.sync.scheduler.intervalLabel')}</p>
-              <p className="settings-card-desc">{t('debug.center.sync.scheduler.intervalDesc')}</p>
-              <input
-                type="number"
-                min={5000}
-                max={3600000}
-                step={1000}
-                value={syncSchedulerIntervalMs}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  if (!Number.isFinite(next)) return;
-                  setSyncSchedulerIntervalMs(Math.max(5_000, Math.min(60 * 60 * 1_000, Math.floor(next))));
-                }}
-                style={{
-                  marginTop: 6,
-                  width: 180,
-                  padding: '6px 8px',
-                  borderRadius: 8,
-                  border: '1px solid rgba(255,255,255,0.14)',
-                  background: 'rgba(0,0,0,0.18)',
-                  color: 'rgba(255,255,255,0.9)',
-                }}
-              />
-            </div>
-
-            <p className="settings-card-note">
-              {t('debug.center.sync.scheduler.status', {
-                running: syncSchedulerStatus?.running === true ? t('common.state.on') : t('common.state.off'),
-                intervalMs:
-                  typeof syncSchedulerStatus?.intervalMs === 'number'
-                    ? syncSchedulerStatus.intervalMs
-                    : syncSchedulerIntervalMs,
-                nextRunAt:
-                  typeof syncSchedulerStatus?.nextRunAtMs === 'number'
-                    ? new Date(syncSchedulerStatus.nextRunAtMs).toLocaleString()
-                    : '-',
-              })}
-            </p>
-
-            <p className="settings-card-note">
-              {t('debug.center.sync.orchestrator.status', {
-                running: syncStatus?.running === true ? t('common.state.on') : t('common.state.off'),
-                totalTicks: syncStatus?.totalTicks ?? 0,
-                lastReason: syncStatus?.lastTickReason ?? '-',
-                lastError: syncStatus?.lastError ?? '-',
-              })}
-            </p>
-
-            {latestSyncTickResult ? (
-              <p className="settings-card-note">
-                {t('debug.center.sync.lastTick.result', {
-                  startedAt: new Date(latestSyncTickResult.startedAtMs).toLocaleString(),
-                  scanned: latestSyncTickResult.scannedSources,
-                  changed: latestSyncTickResult.changedSources,
-                  failed: latestSyncTickResult.failedSources,
-                  queued: latestSyncTickResult.enqueuedMetadataJobs,
-                })}
-              </p>
-            ) : null}
-
-            <div>
-              <p className="settings-card-label">{t('debug.center.sync.failedSources.title')}</p>
-              <p className="settings-card-note">
-                {t('debug.center.sync.failedSources.summary', {
-                  total: syncFailureOverview?.totalFailedSources ?? 0,
-                  backoff: syncFailureOverview?.backoffActiveSources ?? 0,
-                })}
-              </p>
-              {syncFailedSourceItems.length > 0 ? (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6, marginBottom: 6 }}>
-                  <SettingsActionButton
-                    type="button"
-                    onClick={selectAllSyncFailureSources}
-                    disabled={syncBusy}
-                  >
-                    {t('debug.center.sync.failedSources.selectAll')}
-                  </SettingsActionButton>
-                  <SettingsActionButton
-                    type="button"
-                    onClick={clearSelectedSyncFailureSources}
-                    disabled={syncBusy || !hasSelectedSyncFailureSources}
-                  >
-                    {t('debug.center.sync.failedSources.clearSelection')}
-                  </SettingsActionButton>
-                  <p className="settings-card-note" style={{ margin: 0, alignSelf: 'center' }}>
-                    {t('debug.center.sync.failedSources.selectedSummary', {
-                      selected: selectedSyncFailureSourceIds.length,
-                    })}
-                  </p>
-                </div>
-              ) : null}
-              {syncFailedSourceItems.length === 0 ? (
-                <p className="settings-card-note">{t('debug.center.sync.failedSources.empty')}</p>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {syncFailedSourceItems.slice(0, 8).map((item) => {
-                    const backoffSeconds =
-                      typeof item.backoffRemainingMs === 'number'
-                        ? Math.max(0, Math.ceil(item.backoffRemainingMs / 1000))
-                        : 0;
-
-                    return (
-                      <SettingsCheckbox
-                        className="settings-checkbox--note"
-                        key={`${item.sourceId}:${item.updatedAtMs}:${item.lastError ?? '-'}`}
-                        checked={selectedSyncFailureSourceIdSet.has(item.sourceId)}
-                        onCheckedChange={() => {
-                          toggleSyncFailureSourceSelection(item.sourceId);
-                        }}
-                        disabled={syncBusy}
-                        style={{
-                          alignItems: 'flex-start',
-                          color: 'var(--settings-text-dim)',
-                        }}
-                      >
-                        {t('debug.center.sync.failedSources.itemSummary', {
-                          sourceId: item.sourceId,
-                          sourceDisplayName: item.sourceDisplayName ?? '-',
-                          connectorId: item.connectorId,
-                          path: item.sourcePath,
-                          error: item.lastError ?? '-',
-                          lastScanAt:
-                            typeof item.incrementalScanAtMs === 'number'
-                              ? new Date(item.incrementalScanAtMs).toLocaleString()
-                              : '-',
-                          updatedAt: new Date(item.updatedAtMs).toLocaleString(),
-                          backoffSeconds,
-                        })}
-                      </SettingsCheckbox>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-          </SettingsCard>
-        ) : null}
 
         {activeWorkspace === 'runtime' ? (
           <SettingsCard>
@@ -3297,7 +2064,7 @@ export function DebugCenter({
               <p className="settings-card-label">{t('debug.center.vstBridge.title')}</p>
               <p className="settings-card-desc">{t('debug.center.vstBridge.desc')}</p>
             </div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <div className="debug-center-actions">
               <SettingsActionButton type="button" onClick={() => void refresh()} disabled={!isTauri}>
                 {t('debug.center.actions.refreshEnv')}
               </SettingsActionButton>
@@ -3307,9 +2074,9 @@ export function DebugCenter({
             </div>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div className="debug-center-setting-stack">
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+              <div className="debug-center-setting-row">
                 <div>
                   <p className="settings-card-label">{t('debug.center.vstBridge.stderr.label')}</p>
                   <p className="settings-card-desc">{t('debug.center.vstBridge.stderr.desc')}</p>
@@ -3337,7 +2104,7 @@ export function DebugCenter({
             </div>
 
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+              <div className="debug-center-setting-row">
                 <div>
                   <p className="settings-card-label">{t('debug.center.vstBridge.logEditor.label')}</p>
                   <p className="settings-card-desc">{t('debug.center.vstBridge.logEditor.desc')}</p>
@@ -3369,7 +2136,7 @@ export function DebugCenter({
             </div>
 
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+              <div className="debug-center-setting-row">
                 <div>
                   <p className="settings-card-label">{t('debug.center.vstBridge.minidump.label')}</p>
                   <p className="settings-card-desc">{t('debug.center.vstBridge.minidump.desc')}</p>
@@ -3399,23 +2166,14 @@ export function DebugCenter({
                 </SettingsToggleButton>
               </SettingsToggleGroup>
 
-              <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+              <div className="debug-center-field-row">
                 <input
                   type="text"
                   value={minidumpDirDraft}
                   onChange={(e) => setMinidumpDirDraft(e.target.value)}
                   onBlur={handleMinidumpDirBlur}
                   placeholder={t('debug.center.vstBridge.minidumpDir.placeholder')}
-                  style={{
-                    flex: 1,
-                    minWidth: 220,
-                    padding: '10px 12px',
-                    borderRadius: 10,
-                    border: '1px solid rgba(255,255,255,0.12)',
-                    background: 'rgba(0,0,0,0.2)',
-                    color: 'rgba(255,255,255,0.92)',
-                    outline: 'none',
-                  }}
+                  className="debug-center-text-input"
                   disabled={!isTauri}
                 />
                 <SettingsActionButton type="button" onClick={() => void handlePickMinidumpDir()}>
@@ -3425,7 +2183,7 @@ export function DebugCenter({
             </div>
 
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+              <div className="debug-center-setting-row">
                 <div>
                   <p className="settings-card-label">{t('debug.center.vstBridge.editorSafeMode.label')}</p>
                   <p className="settings-card-desc">{t('debug.center.vstBridge.editorSafeMode.desc')}</p>
@@ -3455,7 +2213,7 @@ export function DebugCenter({
             </div>
 
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+              <div className="debug-center-setting-row">
                 <div>
                   <p className="settings-card-label">{t('debug.center.vstBridge.sidechainMode.label')}</p>
                   <p className="settings-card-desc">{t('debug.center.vstBridge.sidechainMode.desc')}</p>
@@ -3487,18 +2245,7 @@ export function DebugCenter({
             <div>
               <p className="settings-card-label">{t('debug.center.env.title')}</p>
               <p className="settings-card-desc">{t('debug.center.env.desc')}</p>
-              <pre
-                style={{
-                  marginTop: 10,
-                  padding: 12,
-                  borderRadius: 10,
-                  background: 'rgba(0,0,0,0.25)',
-                  border: '1px solid rgba(255,255,255,0.08)',
-                  overflowX: 'auto',
-                  fontSize: 12,
-                  color: 'rgba(255,255,255,0.88)',
-                }}
-              >
+              <pre className="debug-center-code-block">
                 {Object.keys(envSnapshot).length === 0
                   ? t('debug.center.env.empty')
                   : Object.entries(envSnapshot)
@@ -3557,7 +2304,7 @@ export function DebugCenter({
             })}
           </p>
 
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 10 }}>
+          <div className="debug-center-actions debug-center-actions--start">
             <SettingsActionButton type="button" onClick={refreshStartupMemoryTrace}>
               {t('common.action.refresh')}
             </SettingsActionButton>
@@ -3574,7 +2321,7 @@ export function DebugCenter({
           </div>
 
           {startupMemoryTrace ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+            <div className="debug-center-note-stack">
               <p className="settings-card-desc">
                 {t('debug.center.startupMemoryTrace.summary', {
                   sessionId: startupMemoryTrace.sessionId,
@@ -3635,15 +2382,7 @@ export function DebugCenter({
                   })}
                 </p>
               ) : null}
-              <div
-                style={{
-                  marginTop: 8,
-                  padding: 12,
-                  borderRadius: 10,
-                  background: 'rgba(0,0,0,0.14)',
-                  border: '1px solid rgba(255,255,255,0.08)',
-                }}
-              >
+              <div className="debug-center-inset-panel">
                 <p className="settings-card-label">
                   {t('debug.center.startupMemoryTrace.visualDeltas.title')}
                 </p>
@@ -3651,11 +2390,11 @@ export function DebugCenter({
                   {t('debug.center.startupMemoryTrace.visualDeltas.desc')}
                 </p>
                 {startupMemoryTraceVisualDeltas.length === 0 ? (
-                  <p className="settings-card-note" style={{ marginTop: 8 }}>
+                  <p className="settings-card-note debug-center-note-offset">
                     {t('debug.center.startupMemoryTrace.visualDeltas.empty')}
                   </p>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+                  <div className="debug-center-note-stack debug-center-note-stack--compact">
                     {startupMemoryTraceVisualDeltas.map((delta) => (
                       <p className="settings-card-note" key={delta.id}>
                         {t('debug.center.startupMemoryTrace.visualDeltas.item', {
@@ -3676,7 +2415,7 @@ export function DebugCenter({
               </div>
             </div>
           ) : (
-            <p className="settings-card-note" style={{ marginTop: 12 }}>
+            <p className="settings-card-note debug-center-note-offset">
               {t('debug.center.startupMemoryTrace.empty')}
             </p>
           )}
@@ -3684,13 +2423,7 @@ export function DebugCenter({
           {startupMemoryTraceFeedback ? (
             <p
               className="settings-card-note"
-              style={{
-                marginTop: 10,
-                color:
-                  startupMemoryTraceFeedback.tone === 'success'
-                    ? 'rgba(140,255,190,0.9)'
-                    : 'rgba(255,120,120,0.9)',
-              }}
+              data-tone={startupMemoryTraceFeedback.tone}
             >
               {startupMemoryTraceFeedback.message}
             </p>
@@ -3733,7 +2466,7 @@ export function DebugCenter({
             </span>
           </div>
 
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+          <div className="debug-center-actions debug-center-actions--start debug-center-actions--spaced">
             <SettingsActionButton type="button" onClick={() => void refreshTelemetryRuntime()}>
               {t('debug.center.telemetry.runtime.action.refresh')}
             </SettingsActionButton>
@@ -3745,7 +2478,7 @@ export function DebugCenter({
             </SettingsActionButton>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="debug-center-note-stack">
             <p className="settings-card-desc">
               session={telemetrySnapshot.status.currentSessionId} | bootstrap={telemetrySnapshot.bootstrapState} |
               enabled={telemetrySnapshot.policy.enabled ? 'on' : 'off'} | uiTail=
@@ -3771,31 +2504,18 @@ export function DebugCenter({
               <p className="settings-card-note">filePath={telemetrySnapshot.status.currentFilePath}</p>
             ) : null}
             {telemetrySnapshot.status.lastError ? (
-              <p className="settings-card-note" style={{ color: 'rgba(255,120,120,0.9)' }}>
+              <p className="settings-card-note debug-center-feedback debug-center-feedback--error">
                 lastError={telemetrySnapshot.status.lastError}
               </p>
             ) : null}
           </div>
 
-          <div style={{ marginTop: 14 }}>
+          <div className="debug-center-section-block">
             <p className="settings-card-label">{t('debug.center.telemetry.runtime.recentTail')}</p>
             {telemetrySnapshot.tail.length === 0 ? (
               <p className="settings-card-note">{t('debug.center.telemetry.runtime.empty')}</p>
             ) : (
-              <pre
-                style={{
-                  marginTop: 10,
-                  padding: 12,
-                  borderRadius: 10,
-                  background: 'rgba(0,0,0,0.25)',
-                  border: '1px solid rgba(255,255,255,0.08)',
-                  overflowX: 'auto',
-                  maxHeight: 220,
-                  fontSize: 12,
-                  color: 'rgba(255,255,255,0.88)',
-                  whiteSpace: 'pre-wrap',
-                }}
-              >
+              <pre className="debug-center-code-block debug-center-code-block--tall">
                 {telemetrySnapshot.tail
                   .slice(-12)
                   .reverse()
@@ -3804,1001 +2524,8 @@ export function DebugCenter({
               </pre>
             )}
           </div>
-          <div
-            style={{
-              marginTop: 14,
-              padding: 12,
-              borderRadius: 12,
-              background: 'rgba(255,255,255,0.04)',
-              border: '1px solid rgba(255,255,255,0.08)',
-            }}
-          >
-            <div className="settings-card-header">
-              <div>
-                <p className="settings-card-label">{t('debug.center.musicPlatformPack.title')}</p>
-                <p className="settings-card-desc">{t('debug.center.musicPlatformPack.desc')}</p>
-              </div>
-              <span className="settings-card-badge">
-                {formatPlatformPackStartupStateLabel(platformPackStartupHealth.state, t)}
-              </span>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
-              <p className="settings-card-desc">
-                {t('debug.center.musicPlatformPack.summary', {
-                  state: formatPlatformPackStartupStateLabel(platformPackStartupHealth.state, t),
-                  stage: formatPlatformPackBootStageLabel(platformPackStartupHealth.currentStage, t),
-                  registered: platformPackStartupHealth.registeredBuiltinCount,
-                  expected: platformPackStartupHealth.expectedBuiltinCount,
-                })}
-              </p>
-              <p className="settings-card-note">
-                {t('debug.center.musicPlatformPack.timing', {
-                  scheduled: formatNullableToggleState(platformPackStartupHealth.bootScheduled, t),
-                  startedAt: formatDebugTimestamp(platformPackStartupHealth.bootStartedAtMs),
-                  finishedAt: formatDebugTimestamp(platformPackStartupHealth.bootFinishedAtMs),
-                  duration:
-                    typeof platformPackStartupHealth.durationMs === 'number'
-                      ? `${platformPackStartupHealth.durationMs}ms`
-                      : '-',
-                })}
-              </p>
-              <p className="settings-card-note">
-                {t('debug.center.musicPlatformPack.storeStatus', {
-                  bootstrapFailed: formatNullableToggleState(
-                    platformPackStartupHealth.storeBootstrapFailed,
-                    t
-                  ),
-                  indexAvailable: formatNullableToggleState(
-                    platformPackStartupHealth.storeIndexAvailable,
-                    t
-                  ),
-                  readyWithoutIndex: formatNullableToggleState(
-                    platformPackStartupHealth.storeReadyWithoutIndex,
-                    t
-                  ),
-                  current: formatNullableToggleState(platformPackStartupHealth.storeAlreadyCurrent, t),
-                })}
-              </p>
-              <p className="settings-card-note">
-                {t('debug.center.musicPlatformPack.reconcileStatus', {
-                  scheduled: formatNullableToggleState(
-                    platformPackStartupHealth.backgroundReconcileScheduled,
-                    t
-                  ),
-                  running: formatNullableToggleState(
-                    platformPackStartupHealth.backgroundReconcileRunning,
-                    t
-                  ),
-                  staleConnectorIds:
-                    platformPackStartupHealth.staleConnectorIds.length > 0
-                      ? platformPackStartupHealth.staleConnectorIds.join(', ')
-                      : '-',
-                  relaxedDevConnectorIds:
-                    platformPackStartupHealth.relaxedDevConnectorIds.length > 0
-                      ? platformPackStartupHealth.relaxedDevConnectorIds.join(', ')
-                      : '-',
-                })}
-              </p>
-              {platformPackStartupHealth.lastError ? (
-                <p className="settings-card-note" style={{ color: 'rgba(255,120,120,0.9)' }}>
-                  {t('debug.center.musicPlatformPack.lastError', {
-                    message: platformPackStartupHealth.lastError,
-                  })}
-                </p>
-              ) : null}
-            </div>
-
-            <div
-              style={{
-                marginTop: 12,
-                padding: 12,
-                borderRadius: 10,
-                background: 'rgba(0,0,0,0.14)',
-                border: '1px solid rgba(255,255,255,0.08)',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  gap: 12,
-                  justifyContent: 'space-between',
-                  alignItems: 'flex-start',
-                  flexWrap: 'wrap',
-                }}
-              >
-                <div>
-                  <p className="settings-card-label">
-                    {t('debug.center.musicPlatformPack.doctor.title')}
-                  </p>
-                  <p className="settings-card-desc">
-                    {t('debug.center.musicPlatformPack.doctor.desc')}
-                  </p>
-                </div>
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: 8,
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <span className="settings-card-badge">
-                    {platformPackDoctorReport
-                      ? formatPlatformPackDoctorStatusLabel(platformPackDoctorReport.status, t)
-                      : t('common.state.unknown')}
-                  </span>
-                  <SettingsActionButton
-                    type="button"
-                    onClick={() => {
-                      void refreshPlatformPackDoctor();
-                    }}
-                    disabled={platformPackDoctorBusy}
-                  >
-                    {platformPackDoctorBusy
-                      ? t('debug.center.musicPlatformPack.doctor.actionRefreshing')
-                      : t('debug.center.musicPlatformPack.doctor.actionRefresh')}
-                  </SettingsActionButton>
-                </div>
-              </div>
-
-              {platformPackDoctorReport ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
-                  <p className="settings-card-note">
-                    {t('debug.center.musicPlatformPack.doctor.summary', {
-                      status: formatPlatformPackDoctorStatusLabel(
-                        platformPackDoctorReport.status,
-                        t
-                      ),
-                      total: platformPackDoctorReport.connectors.length,
-                      installations: platformPackDoctorReport.installationCount,
-                      instances: platformPackDoctorReport.instanceCount,
-                      ready: platformPackDoctorReport.readyConnectorCount,
-                      degraded: platformPackDoctorReport.degradedConnectorCount,
-                      error: platformPackDoctorReport.errorConnectorCount,
-                      globalIssues: platformPackDoctorReport.issues.length,
-                    })}
-                  </p>
-                  <p className="settings-card-note">
-                    {t('debug.center.musicPlatformPack.doctor.refreshedAt', {
-                      refreshedAt: formatDebugTimestamp(platformPackDoctorReport.generatedAtMs),
-                      duration: `${platformPackDoctorReport.durationMs}ms`,
-                    })}
-                  </p>
-                  {platformPackDoctorError ? (
-                    <p className="settings-card-note" style={{ color: 'rgba(255,120,120,0.9)' }}>
-                      {t('debug.center.musicPlatformPack.doctor.error', {
-                        message: platformPackDoctorError,
-                      })}
-                    </p>
-                  ) : null}
-                  {platformPackDoctorReport.issues.length > 0 ? (
-                    <pre
-                      style={{
-                        marginTop: 2,
-                        padding: 12,
-                        borderRadius: 10,
-                        background: 'rgba(0,0,0,0.2)',
-                        border: '1px solid rgba(255,255,255,0.08)',
-                        overflowX: 'auto',
-                        maxHeight: 160,
-                        fontSize: 12,
-                        color: 'rgba(255,255,255,0.88)',
-                        whiteSpace: 'pre-wrap',
-                      }}
-                    >
-                      {platformPackDoctorReport.issues
-                        .map((issue) =>
-                          t('debug.center.musicPlatformPack.doctor.issueLine', {
-                            severity: issue.severity.toUpperCase(),
-                            code: issue.code,
-                            details: formatPlatformPackDoctorIssueDetails(issue),
-                          })
-                        )
-                        .join('\n')}
-                    </pre>
-                  ) : null}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {platformPackDoctorReport.connectors.map((connector) => (
-                      <div
-                        key={connector.connectorId}
-                        style={{
-                          padding: 10,
-                          borderRadius: 10,
-                          background: 'rgba(255,255,255,0.03)',
-                          border: '1px solid rgba(255,255,255,0.06)',
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: 'flex',
-                            gap: 8,
-                            justifyContent: 'space-between',
-                            alignItems: 'flex-start',
-                            flexWrap: 'wrap',
-                          }}
-                        >
-                          <div>
-                            <p className="settings-card-note" style={{ fontWeight: 600 }}>
-                              {connector.displayName}
-                            </p>
-                            <p className="settings-card-note">{connector.connectorId}</p>
-                          </div>
-                          <span className="settings-card-badge">
-                            {formatPlatformPackDoctorStatusLabel(connector.status, t)}
-                          </span>
-                        </div>
-                        <div
-                          style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: 6,
-                            marginTop: 8,
-                          }}
-                        >
-                          <p className="settings-card-note">
-                            {t('debug.center.musicPlatformPack.doctor.connectorState', {
-                              builtin: formatNullableToggleState(connector.expectedBuiltin, t),
-                              installed: formatNullableToggleState(
-                                connector.installedRecord.installedAtMs !== null,
-                                t
-                              ),
-                              registration: formatNullableToggleState(
-                                connector.registrationPresent,
-                                t
-                              ),
-                              descriptor: formatNullableToggleState(connector.descriptorPresent, t),
-                              definition: formatNullableToggleState(
-                                connector.connectorDefinitionPresent,
-                                t
-                              ),
-                            })}
-                          </p>
-                          <p className="settings-card-note">
-                            {t('debug.center.musicPlatformPack.doctor.connectorFlows', {
-                              recommendations: formatPlatformPackDoctorFlowStatusLabel(
-                                connector.requiredFlows.recommendations,
-                                t
-                              ),
-                              quality: formatPlatformPackDoctorFlowStatusLabel(
-                                connector.requiredFlows.quality,
-                                t
-                              ),
-                              pages: formatPlatformPackDoctorFlowStatusLabel(
-                                connector.requiredFlows.pages,
-                                t
-                              ),
-                            })}
-                          </p>
-                          <p className="settings-card-note">
-                            {t('debug.center.musicPlatformPack.doctor.connectorWorkspace', {
-                              mode: formatPlatformWorkspaceOwnershipModeLabel(
-                                connector.workspaceRouting.ownershipMode,
-                                t
-                              ),
-                              path: formatPlatformWorkspacePathLabel(
-                                connector.workspaceRouting.path,
-                                t
-                              ),
-                              status: formatPlatformWorkspaceStatusLabel(
-                                connector.workspaceRouting.status,
-                                t
-                              ),
-                              packReady: formatNullableToggleState(
-                                connector.workspaceRouting.packWorkspaceReady,
-                                t
-                              ),
-                            })}
-                          </p>
-                          {connector.workspaceRouting.fallbackReasonCode ||
-                          connector.workspaceRouting.fallbackReasonMessage ? (
-                            <p className="settings-card-note">
-                              {t('debug.center.musicPlatformPack.doctor.connectorWorkspaceFallback', {
-                                code:
-                                  connector.workspaceRouting.fallbackReasonCode ??
-                                  t('common.state.unknown'),
-                                message:
-                                  connector.workspaceRouting.fallbackReasonMessage ??
-                                  t('common.state.unknown'),
-                              })}
-                            </p>
-                          ) : null}
-                          {connector.workspaceRouting.diagnostics.length > 0 ? (
-                            <pre
-                              style={{
-                                marginTop: 2,
-                                padding: 10,
-                                borderRadius: 8,
-                                background: 'rgba(0,0,0,0.16)',
-                                border: '1px solid rgba(255,255,255,0.06)',
-                                overflowX: 'auto',
-                                maxHeight: 140,
-                                fontSize: 12,
-                                color: 'rgba(255,255,255,0.88)',
-                                whiteSpace: 'pre-wrap',
-                              }}
-                            >
-                              {connector.workspaceRouting.diagnostics
-                                .map((diagnostic) =>
-                                  t('debug.center.musicPlatformPack.doctor.workspaceDiagnosticLine', {
-                                    severity: diagnostic.severity.toUpperCase(),
-                                    code: diagnostic.code,
-                                    details: formatPlatformWorkspaceDiagnosticDetails(diagnostic),
-                                  })
-                                )
-                                .join('\n')}
-                            </pre>
-                          ) : null}
-                          <div
-                            style={{
-                              marginTop: 4,
-                              padding: 10,
-                              borderRadius: 8,
-                              background: 'rgba(255,255,255,0.02)',
-                              border: '1px solid rgba(255,255,255,0.06)',
-                            }}
-                          >
-                            <p className="settings-card-note" style={{ fontWeight: 600 }}>
-                              {t('debug.center.musicPlatformPack.doctor.installationsTitle', {
-                                count: connector.installations.length,
-                              })}
-                            </p>
-                            {connector.installations.length > 0 ? (
-                              <div
-                                style={{
-                                  display: 'flex',
-                                  flexDirection: 'column',
-                                  gap: 8,
-                                  marginTop: 8,
-                                }}
-                              >
-                                {connector.installations.map((installation) => (
-                                  <div
-                                    key={installation.installationId}
-                                    style={{
-                                      padding: 10,
-                                      borderRadius: 8,
-                                      background: 'rgba(0,0,0,0.16)',
-                                      border: '1px solid rgba(255,255,255,0.06)',
-                                    }}
-                                  >
-                                    <div
-                                      style={{
-                                        display: 'flex',
-                                        gap: 8,
-                                        justifyContent: 'space-between',
-                                        alignItems: 'flex-start',
-                                        flexWrap: 'wrap',
-                                      }}
-                                    >
-                                      <div>
-                                        <p className="settings-card-note" style={{ fontWeight: 600 }}>
-                                          {t('debug.center.musicPlatformPack.doctor.installationHeader', {
-                                            installationId: installation.installationId,
-                                          })}
-                                        </p>
-                                        <p className="settings-card-note">
-                                          {t('debug.center.musicPlatformPack.doctor.installationIdentity', {
-                                            connectorId: installation.connectorId,
-                                            platformId: installation.platformId,
-                                            packId: installation.packId,
-                                            packVersion: installation.packVersion,
-                                          })}
-                                        </p>
-                                      </div>
-                                      <span className="settings-card-badge">
-                                        {formatPlatformPackDoctorStatusLabel(installation.status, t)}
-                                      </span>
-                                    </div>
-                                    <div
-                                      style={{
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        gap: 6,
-                                        marginTop: 8,
-                                      }}
-                                    >
-                                      <p className="settings-card-note">
-                                        {t('debug.center.musicPlatformPack.doctor.installationSource', {
-                                          sourceType: formatOptionalText(installation.sourceType),
-                                          source: formatOptionalText(installation.source),
-                                          installedAt: formatDebugTimestamp(installation.installedAtMs),
-                                          activeRegistration: formatNullableToggleState(
-                                            installation.activeConnectorRegistration,
-                                            t
-                                          ),
-                                          registration: formatNullableToggleState(
-                                            installation.registrationPresent,
-                                            t
-                                          ),
-                                        })}
-                                      </p>
-                                      <p className="settings-card-note">
-                                        {t(
-                                          'debug.center.musicPlatformPack.doctor.installationPackageDigest',
-                                          {
-                                            packageDigest: formatOptionalText(
-                                              installation.packageDigest
-                                            ),
-                                          }
-                                        )}
-                                      </p>
-                                      <p className="settings-card-note">
-                                        {t('debug.center.musicPlatformPack.doctor.installationArtifacts', {
-                                          artifactRoot: formatOptionalText(
-                                            installation.artifactRoot.path
-                                          ),
-                                          artifactRootResolved: formatNullableToggleState(
-                                            installation.artifactRoot.resolved,
-                                            t
-                                          ),
-                                          artifactsPresent: formatNullableToggleState(
-                                            installation.artifactsPresent,
-                                            t
-                                          ),
-                                        })}
-                                      </p>
-                                      <p className="settings-card-note">
-                                        {t('debug.center.musicPlatformPack.doctor.installationRuntime', {
-                                          runtimeResolved: formatNullableToggleState(
-                                            installation.runtime.resolved,
-                                            t
-                                          ),
-                                          runtimePath: formatOptionalText(installation.runtime.path),
-                                        })}
-                                      </p>
-                                      <p className="settings-card-note">
-                                        {t('debug.center.musicPlatformPack.doctor.installationIcon', {
-                                          iconResolved: formatNullableToggleState(
-                                            installation.icon.resolved,
-                                            t
-                                          ),
-                                          iconPath: formatOptionalText(installation.icon.path),
-                                        })}
-                                      </p>
-                                      <p className="settings-card-note">
-                                        {t('debug.center.musicPlatformPack.doctor.installationWorkspace', {
-                                          surfaceResolved: formatNullableToggleState(
-                                            installation.workspaceSurface.resolved,
-                                            t
-                                          ),
-                                          source: formatOptionalText(
-                                            installation.workspaceSurface.source
-                                          ),
-                                          rootViewId: formatOptionalText(
-                                            installation.workspaceSurface.rootViewId
-                                          ),
-                                          viewType: formatOptionalText(
-                                            installation.workspaceSurface.viewType
-                                          ),
-                                          runtimeCarrier: formatOptionalText(
-                                            installation.workspaceSurface.requiredRuntimeCarrier
-                                          ),
-                                          runtimeImportUrl: formatOptionalText(
-                                            installation.workspaceSurface.runtimeImportUrl
-                                          ),
-                                        })}
-                                      </p>
-                                      <p className="settings-card-note">
-                                        {t('debug.center.musicPlatformPack.doctor.installationReadiness', {
-                                          ready: formatNullableToggleState(
-                                            installation.workspaceReadiness.ready,
-                                            t
-                                          ),
-                                          registration: formatNullableToggleState(
-                                            installation.workspaceReadiness.registrationPresent,
-                                            t
-                                          ),
-                                          contract: formatNullableToggleState(
-                                            installation.workspaceReadiness.contractPresent,
-                                            t
-                                          ),
-                                          runtime: formatNullableToggleState(
-                                            installation.workspaceReadiness.runtimePresent,
-                                            t
-                                          ),
-                                          ownership: formatNullableToggleState(
-                                            installation.workspaceReadiness.workspaceOwnershipDeclared,
-                                            t
-                                          ),
-                                          mount: formatNullableToggleState(
-                                            installation.workspaceReadiness.mountSurfaceDeclared,
-                                            t
-                                          ),
-                                        })}
-                                      </p>
-                                      {installation.workspaceReadiness.diagnostics.length > 0 ? (
-                                        <pre
-                                          style={{
-                                            marginTop: 2,
-                                            padding: 10,
-                                            borderRadius: 8,
-                                            background: 'rgba(255,255,255,0.03)',
-                                            border: '1px solid rgba(255,255,255,0.06)',
-                                            overflowX: 'auto',
-                                            maxHeight: 140,
-                                            fontSize: 12,
-                                            color: 'rgba(255,255,255,0.88)',
-                                            whiteSpace: 'pre-wrap',
-                                          }}
-                                        >
-                                          {installation.workspaceReadiness.diagnostics
-                                            .map((diagnostic) =>
-                                              t(
-                                                'debug.center.musicPlatformPack.doctor.workspaceDiagnosticLine',
-                                                {
-                                                  severity: diagnostic.severity.toUpperCase(),
-                                                  code: diagnostic.code,
-                                                  details:
-                                                    formatPlatformWorkspaceDiagnosticDetails(
-                                                      diagnostic
-                                                    ),
-                                                }
-                                              )
-                                            )
-                                            .join('\n')}
-                                        </pre>
-                                      ) : null}
-                                      {installation.issues.length > 0 ? (
-                                        <pre
-                                          style={{
-                                            marginTop: 2,
-                                            padding: 10,
-                                            borderRadius: 8,
-                                            background: 'rgba(255,255,255,0.03)',
-                                            border: '1px solid rgba(255,255,255,0.06)',
-                                            overflowX: 'auto',
-                                            maxHeight: 140,
-                                            fontSize: 12,
-                                            color: 'rgba(255,255,255,0.88)',
-                                            whiteSpace: 'pre-wrap',
-                                          }}
-                                        >
-                                          {installation.issues
-                                            .map((issue) =>
-                                              t('debug.center.musicPlatformPack.doctor.issueLine', {
-                                                severity: issue.severity.toUpperCase(),
-                                                code: issue.code,
-                                                details:
-                                                  formatPlatformPackDoctorIssueDetails(issue),
-                                              })
-                                            )
-                                            .join('\n')}
-                                        </pre>
-                                      ) : null}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <p className="settings-card-note" style={{ marginTop: 8 }}>
-                                {t('debug.center.musicPlatformPack.doctor.emptyInstallations')}
-                              </p>
-                            )}
-                          </div>
-                          <div
-                            style={{
-                              marginTop: 4,
-                              padding: 10,
-                              borderRadius: 8,
-                              background: 'rgba(255,255,255,0.02)',
-                              border: '1px solid rgba(255,255,255,0.06)',
-                            }}
-                          >
-                            <p className="settings-card-note" style={{ fontWeight: 600 }}>
-                              {t('debug.center.musicPlatformPack.doctor.instancesTitle', {
-                                count: connector.instances.length,
-                              })}
-                            </p>
-                            {connector.instances.length > 0 ? (
-                              <div
-                                style={{
-                                  display: 'flex',
-                                  flexDirection: 'column',
-                                  gap: 8,
-                                  marginTop: 8,
-                                }}
-                              >
-                                {connector.instances.map((instance) => (
-                                  <div
-                                    key={instance.instanceId}
-                                    style={{
-                                      padding: 10,
-                                      borderRadius: 8,
-                                      background: 'rgba(0,0,0,0.16)',
-                                      border: '1px solid rgba(255,255,255,0.06)',
-                                    }}
-                                  >
-                                    <div
-                                      style={{
-                                        display: 'flex',
-                                        gap: 8,
-                                        justifyContent: 'space-between',
-                                        alignItems: 'flex-start',
-                                        flexWrap: 'wrap',
-                                      }}
-                                    >
-                                      <div>
-                                        <p className="settings-card-note" style={{ fontWeight: 600 }}>
-                                          {t('debug.center.musicPlatformPack.doctor.instanceHeader', {
-                                            instanceId: instance.instanceId,
-                                          })}
-                                        </p>
-                                        <p className="settings-card-note">
-                                          {t('debug.center.musicPlatformPack.doctor.instanceIdentity', {
-                                            installationId: formatOptionalText(
-                                              instance.installationId
-                                            ),
-                                            connectorId: instance.connectorId,
-                                            platformId: instance.platformId,
-                                          })}
-                                        </p>
-                                      </div>
-                                      <span className="settings-card-badge">
-                                        {formatPlatformPackDoctorStatusLabel(instance.status, t)}
-                                      </span>
-                                    </div>
-                                    <div
-                                      style={{
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        gap: 6,
-                                        marginTop: 8,
-                                      }}
-                                    >
-                                      <p className="settings-card-note">
-                                        {t('debug.center.musicPlatformPack.doctor.instanceState', {
-                                          displayName: formatOptionalText(instance.displayName),
-                                          instanceLabel: formatOptionalText(instance.instanceLabel),
-                                          imported: formatNullableToggleState(instance.imported, t),
-                                          importedRegistry: formatNullableToggleState(
-                                            instance.importedRegistryPresent,
-                                            t
-                                          ),
-                                          instanceRecord: formatNullableToggleState(
-                                            instance.instanceRecordPresent,
-                                            t
-                                          ),
-                                          descriptor: formatNullableToggleState(
-                                            instance.descriptorPresent,
-                                            t
-                                          ),
-                                          installationPresent: formatNullableToggleState(
-                                            instance.installationPresent,
-                                            t
-                                          ),
-                                        })}
-                                      </p>
-                                      <p className="settings-card-note">
-                                        {t('debug.center.musicPlatformPack.doctor.instanceSource', {
-                                          sourceType: formatOptionalText(instance.sourceType),
-                                          source: formatOptionalText(instance.source),
-                                          authState: formatOptionalText(instance.authState),
-                                          availability: formatOptionalText(instance.availability),
-                                        })}
-                                      </p>
-                                      <p className="settings-card-note">
-                                        {t('debug.center.musicPlatformPack.doctor.instanceWorkspace', {
-                                          mode: formatPlatformWorkspaceOwnershipModeLabel(
-                                            instance.workspaceRouting.ownershipMode,
-                                            t
-                                          ),
-                                          path: formatPlatformWorkspacePathLabel(
-                                            instance.workspaceRouting.path,
-                                            t
-                                          ),
-                                          status: formatPlatformWorkspaceStatusLabel(
-                                            instance.workspaceRouting.status,
-                                            t
-                                          ),
-                                          packReady: formatNullableToggleState(
-                                            instance.workspaceRouting.packWorkspaceReady,
-                                            t
-                                          ),
-                                        })}
-                                      </p>
-                                      <p className="settings-card-note">
-                                        {t('debug.center.musicPlatformPack.doctor.instanceMount', {
-                                          resolutionSource: formatOptionalText(
-                                            instance.workspaceMount.resolutionSource
-                                          ),
-                                          installationId: formatOptionalText(
-                                            instance.workspaceMount.installationId
-                                          ),
-                                          sourceType: formatOptionalText(
-                                            instance.workspaceMount.sourceType
-                                          ),
-                                          source: formatOptionalText(
-                                            instance.workspaceMount.source
-                                          ),
-                                          pack:
-                                            instance.workspaceMount.packId ||
-                                            instance.workspaceMount.packVersion
-                                              ? `${formatOptionalText(
-                                                  instance.workspaceMount.packId
-                                                )}@${formatOptionalText(
-                                                  instance.workspaceMount.packVersion
-                                                )}`
-                                              : '-',
-                                          packageDigest: formatOptionalText(
-                                            instance.workspaceMount.packageDigest
-                                          ),
-                                        })}
-                                      </p>
-                                      <p className="settings-card-note">
-                                        {t('debug.center.musicPlatformPack.doctor.instanceMountPaths', {
-                                          artifactRoot: formatOptionalText(
-                                            instance.workspaceMount.artifactRootPath
-                                          ),
-                                          runtimePath: formatOptionalText(
-                                            instance.workspaceMount.runtimePath
-                                          ),
-                                          runtimeImportUrl: formatOptionalText(
-                                            instance.workspaceMount.runtimeImportUrl
-                                          ),
-                                          iconPath: formatOptionalText(
-                                            instance.workspaceMount.iconPath
-                                          ),
-                                          surfaceResolved: formatNullableToggleState(
-                                            instance.workspaceMount.surfaceResolved,
-                                            t
-                                          ),
-                                          surfaceSource: formatOptionalText(
-                                            instance.workspaceMount.surfaceSource
-                                          ),
-                                          rootViewId: formatOptionalText(
-                                            instance.workspaceMount.rootViewId
-                                          ),
-                                          viewType: formatOptionalText(
-                                            instance.workspaceMount.viewType
-                                          ),
-                                        })}
-                                      </p>
-                                      <p className="settings-card-note">
-                                        {t(
-                                          'debug.center.musicPlatformPack.doctor.instanceRenderSelectionCurrent',
-                                          {
-                                            registryReady: formatNullableToggleState(
-                                              instance.renderSelection.registryInitialized,
-                                              t
-                                            ),
-                                            present: formatNullableToggleState(
-                                              instance.renderSelection.currentPresent,
-                                              t
-                                            ),
-                                            mounted: formatNullableToggleState(
-                                              instance.renderSelection.currentMounted,
-                                              t
-                                            ),
-                                            mountedAt: formatDebugTimestamp(
-                                              instance.renderSelection.currentMountedAtMs
-                                            ),
-                                            order: formatOptionalText(
-                                              instance.renderSelection.currentOrder
-                                            ),
-                                          }
-                                        )}
-                                      </p>
-                                      <p className="settings-card-note">
-                                        {t(
-                                          'debug.center.musicPlatformPack.doctor.instanceRenderSelectionPersisted',
-                                          {
-                                            present: formatNullableToggleState(
-                                              instance.renderSelection.persistedPresent,
-                                              t
-                                            ),
-                                            mounted: formatNullableToggleState(
-                                              instance.renderSelection.persistedMounted,
-                                              t
-                                            ),
-                                            mountedAt: formatDebugTimestamp(
-                                              instance.renderSelection.persistedMountedAtMs
-                                            ),
-                                            order: formatOptionalText(
-                                              instance.renderSelection.persistedOrder
-                                            ),
-                                            inSync: formatNullableToggleState(
-                                              instance.renderSelection.inSync,
-                                              t
-                                            ),
-                                          }
-                                        )}
-                                      </p>
-                                      {instance.workspaceRouting.fallbackReasonCode ||
-                                      instance.workspaceRouting.fallbackReasonMessage ? (
-                                        <p className="settings-card-note">
-                                          {t(
-                                            'debug.center.musicPlatformPack.doctor.connectorWorkspaceFallback',
-                                            {
-                                              code:
-                                                instance.workspaceRouting.fallbackReasonCode ??
-                                                t('common.state.unknown'),
-                                              message:
-                                                instance.workspaceRouting
-                                                  .fallbackReasonMessage ??
-                                                t('common.state.unknown'),
-                                            }
-                                          )}
-                                        </p>
-                                      ) : null}
-                                      {instance.workspaceRouting.diagnostics.length > 0 ? (
-                                        <pre
-                                          style={{
-                                            marginTop: 2,
-                                            padding: 10,
-                                            borderRadius: 8,
-                                            background: 'rgba(255,255,255,0.03)',
-                                            border: '1px solid rgba(255,255,255,0.06)',
-                                            overflowX: 'auto',
-                                            maxHeight: 140,
-                                            fontSize: 12,
-                                            color: 'rgba(255,255,255,0.88)',
-                                            whiteSpace: 'pre-wrap',
-                                          }}
-                                        >
-                                          {instance.workspaceRouting.diagnostics
-                                            .map((diagnostic) =>
-                                              t(
-                                                'debug.center.musicPlatformPack.doctor.workspaceDiagnosticLine',
-                                                {
-                                                  severity: diagnostic.severity.toUpperCase(),
-                                                  code: diagnostic.code,
-                                                  details:
-                                                    formatPlatformWorkspaceDiagnosticDetails(
-                                                      diagnostic
-                                                    ),
-                                                }
-                                              )
-                                            )
-                                            .join('\n')}
-                                        </pre>
-                                      ) : null}
-                                      {instance.issues.length > 0 ? (
-                                        <pre
-                                          style={{
-                                            marginTop: 2,
-                                            padding: 10,
-                                            borderRadius: 8,
-                                            background: 'rgba(255,255,255,0.03)',
-                                            border: '1px solid rgba(255,255,255,0.06)',
-                                            overflowX: 'auto',
-                                            maxHeight: 140,
-                                            fontSize: 12,
-                                            color: 'rgba(255,255,255,0.88)',
-                                            whiteSpace: 'pre-wrap',
-                                          }}
-                                        >
-                                          {instance.issues
-                                            .map((issue) =>
-                                              t('debug.center.musicPlatformPack.doctor.issueLine', {
-                                                severity: issue.severity.toUpperCase(),
-                                                code: issue.code,
-                                                details:
-                                                  formatPlatformPackDoctorIssueDetails(issue),
-                                              })
-                                            )
-                                            .join('\n')}
-                                        </pre>
-                                      ) : null}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <p className="settings-card-note" style={{ marginTop: 8 }}>
-                                {t('debug.center.musicPlatformPack.doctor.emptyInstances')}
-                              </p>
-                            )}
-                          </div>
-                          {connector.issues.length > 0 ? (
-                            <pre
-                              style={{
-                                marginTop: 2,
-                                padding: 10,
-                                borderRadius: 8,
-                                background: 'rgba(0,0,0,0.16)',
-                                border: '1px solid rgba(255,255,255,0.06)',
-                                overflowX: 'auto',
-                                maxHeight: 160,
-                                fontSize: 12,
-                                color: 'rgba(255,255,255,0.88)',
-                                whiteSpace: 'pre-wrap',
-                              }}
-                            >
-                              {connector.issues
-                                .map((issue) =>
-                                  t('debug.center.musicPlatformPack.doctor.issueLine', {
-                                    severity: issue.severity.toUpperCase(),
-                                    code: issue.code,
-                                    details: formatPlatformPackDoctorIssueDetails(issue),
-                                  })
-                                )
-                                .join('\n')}
-                            </pre>
-                          ) : (
-                            <p className="settings-card-note">
-                              {t('debug.center.musicPlatformPack.doctor.emptyConnectorIssues')}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : platformPackDoctorError ? (
-                <p
-                  className="settings-card-note"
-                  style={{ marginTop: 10, color: 'rgba(255,120,120,0.9)' }}
-                >
-                  {t('debug.center.musicPlatformPack.doctor.error', {
-                    message: platformPackDoctorError,
-                  })}
-                </p>
-              ) : (
-                <p className="settings-card-note" style={{ marginTop: 10 }}>
-                  {t('debug.center.musicPlatformPack.doctor.empty')}
-                </p>
-              )}
-            </div>
-
-            <div style={{ marginTop: 12 }}>
-              <p className="settings-card-note">{t('debug.center.musicPlatformPack.recentStages')}</p>
-              {platformPackStartupHealth.recentStages.length === 0 ? (
-                <p className="settings-card-note" style={{ marginTop: 8 }}>
-                  {t('debug.center.musicPlatformPack.emptyStages')}
-                </p>
-              ) : (
-                <pre
-                  style={{
-                    marginTop: 8,
-                    padding: 12,
-                    borderRadius: 10,
-                    background: 'rgba(0,0,0,0.2)',
-                    border: '1px solid rgba(255,255,255,0.08)',
-                    overflowX: 'auto',
-                    maxHeight: 220,
-                    fontSize: 12,
-                    color: 'rgba(255,255,255,0.88)',
-                    whiteSpace: 'pre-wrap',
-                  }}
-                >
-                  {platformPackStartupHealth.recentStages
-                    .slice(-8)
-                    .reverse()
-                    .map((entry) =>
-                      [
-                        `[${formatDebugTimestamp(entry.ts)}]`,
-                        entry.level.toUpperCase(),
-                        formatPlatformPackStartupStateLabel(entry.state, t),
-                        formatPlatformPackBootStageLabel(entry.stage, t),
-                        entry.message,
-                      ]
-                        .filter((part) => typeof part === 'string' && part.length > 0)
-                        .join(' | ')
-                    )
-                    .join('\n')}
-                </pre>
-              )}
-            </div>
-          </div>
-          <div
-            style={{
-              marginTop: 14,
-              padding: 12,
-              borderRadius: 12,
-              background: 'rgba(255,255,255,0.04)',
-              border: '1px solid rgba(255,255,255,0.08)',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                gap: 12,
-                justifyContent: 'space-between',
-                alignItems: 'flex-start',
-                flexWrap: 'wrap',
-              }}
-            >
+          <div className="debug-center-inset-panel debug-center-inset-panel--prominent">
+            <div className="debug-center-setting-row">
               <div>
                 <p className="settings-card-label">{t('debug.center.telemetry.query.title')}</p>
                 <p className="settings-card-desc">{t('debug.center.telemetry.query.desc')}</p>
@@ -4814,7 +2541,7 @@ export function DebugCenter({
               </SettingsActionButton>
             </div>
 
-            <div style={{ marginTop: 12 }}>
+            <div className="debug-center-section-block">
               <SettingsToggleGroup>
                 {telemetryQueryPresetOptions.map((option) => (
                   <SettingsToggleButton
@@ -4831,7 +2558,7 @@ export function DebugCenter({
               </SettingsToggleGroup>
             </div>
 
-            <p className="settings-card-note" style={{ marginTop: 12 }}>
+            <p className="settings-card-note debug-center-note-offset">
               {t('debug.center.telemetry.query.filters', {
                 events: formatTelemetryQueryFilterList(telemetryQueryPreset.query.eventPrefixes),
                 modules: formatTelemetryQueryFilterList(telemetryQueryPreset.query.moduleIds),
@@ -4844,14 +2571,14 @@ export function DebugCenter({
             </p>
 
             {telemetryQueryError ? (
-              <p className="settings-card-note" style={{ marginTop: 10, color: 'rgba(255,120,120,0.9)' }}>
+              <p className="settings-card-note debug-center-feedback debug-center-feedback--error debug-center-note-offset">
                 {telemetryQueryError}
               </p>
             ) : null}
 
             {telemetryQueryResult ? (
               <>
-                <p className="settings-card-desc" style={{ marginTop: 12 }}>
+                <p className="settings-card-desc debug-center-note-offset">
                   {t('debug.center.telemetry.query.results', {
                     matched: telemetryQueryResult.matchedRecordCount,
                     scanned: telemetryQueryResult.scannedRecordCount,
@@ -4860,88 +2587,35 @@ export function DebugCenter({
                   })}
                 </p>
 
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-                    gap: 12,
-                    marginTop: 12,
-                  }}
-                >
+                <div className="debug-center-result-grid">
                   <div>
                     <p className="settings-card-note">{t('debug.center.telemetry.query.topEvents')}</p>
-                    <pre
-                      style={{
-                        marginTop: 8,
-                        padding: 10,
-                        borderRadius: 10,
-                        background: 'rgba(0,0,0,0.2)',
-                        border: '1px solid rgba(255,255,255,0.08)',
-                        minHeight: 92,
-                        whiteSpace: 'pre-wrap',
-                        overflowX: 'auto',
-                      }}
-                    >
+                    <pre className="debug-center-code-block debug-center-code-block--compact">
                       {formatTelemetryCountList(telemetryQueryResult.eventCounts)}
                     </pre>
                   </div>
                   <div>
                     <p className="settings-card-note">{t('debug.center.telemetry.query.topModules')}</p>
-                    <pre
-                      style={{
-                        marginTop: 8,
-                        padding: 10,
-                        borderRadius: 10,
-                        background: 'rgba(0,0,0,0.2)',
-                        border: '1px solid rgba(255,255,255,0.08)',
-                        minHeight: 92,
-                        whiteSpace: 'pre-wrap',
-                        overflowX: 'auto',
-                      }}
-                    >
+                    <pre className="debug-center-code-block debug-center-code-block--compact">
                       {formatTelemetryCountList(telemetryQueryResult.moduleCounts)}
                     </pre>
                   </div>
                   <div>
                     <p className="settings-card-note">{t('debug.center.telemetry.query.topLevels')}</p>
-                    <pre
-                      style={{
-                        marginTop: 8,
-                        padding: 10,
-                        borderRadius: 10,
-                        background: 'rgba(0,0,0,0.2)',
-                        border: '1px solid rgba(255,255,255,0.08)',
-                        minHeight: 92,
-                        whiteSpace: 'pre-wrap',
-                        overflowX: 'auto',
-                      }}
-                    >
+                    <pre className="debug-center-code-block debug-center-code-block--compact">
                       {formatTelemetryCountList(telemetryQueryResult.levelCounts)}
                     </pre>
                   </div>
                 </div>
 
-                <div style={{ marginTop: 12 }}>
+                <div className="debug-center-section-block">
                   <p className="settings-card-note">{t('debug.center.telemetry.query.recentRecords')}</p>
                   {telemetryQueryResult.records.length === 0 ? (
-                    <p className="settings-card-note" style={{ marginTop: 8 }}>
+                    <p className="settings-card-note debug-center-note-offset">
                       {t('debug.center.telemetry.query.empty')}
                     </p>
                   ) : (
-                    <pre
-                      style={{
-                        marginTop: 8,
-                        padding: 12,
-                        borderRadius: 10,
-                        background: 'rgba(0,0,0,0.25)',
-                        border: '1px solid rgba(255,255,255,0.08)',
-                        overflowX: 'auto',
-                        maxHeight: 220,
-                        fontSize: 12,
-                        color: 'rgba(255,255,255,0.88)',
-                        whiteSpace: 'pre-wrap',
-                      }}
-                    >
+                    <pre className="debug-center-code-block debug-center-code-block--tall">
                       {telemetryQueryResult.records
                         .slice(-10)
                         .reverse()
@@ -4953,7 +2627,7 @@ export function DebugCenter({
               </>
             ) : null}
           </div>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
+          <div className="debug-center-actions debug-center-actions--start debug-center-actions--section">
             <SettingsActionButton
               type="button"
               disabled={telemetryArtifactBusyAction !== null}
@@ -5003,15 +2677,7 @@ export function DebugCenter({
           {telemetryArtifactFeedback ? (
             <p
               className="settings-card-note"
-              style={{
-                marginTop: 10,
-                color:
-                  telemetryArtifactFeedback.tone === 'error'
-                    ? 'rgba(255,140,140,0.95)'
-                    : telemetryArtifactFeedback.tone === 'progress'
-                      ? 'rgba(255,225,150,0.95)'
-                      : 'rgba(140,255,190,0.95)',
-              }}
+              data-tone={telemetryArtifactFeedback.tone}
             >
               {telemetryArtifactFeedback.message}
             </p>
@@ -5022,344 +2688,504 @@ export function DebugCenter({
         {activeWorkspace === 'magnets' ? <MagnetTelemetryWorkbench active /> : null}
 
         {activeWorkspace === 'memory' ? (
-          <SettingsCard>
-          <div className="settings-card-header">
-            <div>
-              <p className="settings-card-label">{t('debug.center.memory.title')}</p>
-              <p className="settings-card-desc">{t('debug.center.memory.desc')}</p>
-            </div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              <SettingsActionButton
-                type="button"
-                onClick={() => {
-                  void refreshMemory();
-                }}
-              >
-                {t('common.action.refresh')}
-              </SettingsActionButton>
-              <SettingsActionButton
-                type="button"
-                onClick={() => {
-                  void captureMemoryBaseline();
-                }}
-              >
-                {t('debug.center.memory.actions.captureBaseline')}
-              </SettingsActionButton>
-              <SettingsActionButton
-                type="button"
-                onClick={() => {
-                  void runThreeStageBaselineCapture();
-                }}
-                disabled={threeStageBaselineRunning}
-              >
-                {t('debug.center.memory.actions.captureThreeStage')}
-              </SettingsActionButton>
-              <SettingsActionButton type="button" onClick={clearMemoryBaselines}>
-                {t('debug.center.memory.actions.clearBaselines')}
-              </SettingsActionButton>
-              <SettingsActionButton
-                type="button"
-                onClick={handleExportBaselinesJson}
-                disabled={memoryBaselines.length === 0}
-              >
-                {t('debug.center.memory.actions.exportBaselinesJson')}
-              </SettingsActionButton>
-              <SettingsActionButton
-                type="button"
-                onClick={handleExportBaselinesCsv}
-                disabled={memoryBaselines.length === 0}
-              >
-                {t('debug.center.memory.actions.exportBaselinesCsv')}
-              </SettingsActionButton>
-              <SettingsActionButton
-                type="button"
-                onClick={() => {
-                  void handleCopyLatestScenarioSummary();
-                }}
-                disabled={!latestThreeStageComparison}
-              >
-                {t('debug.center.memory.actions.copyLatestScenarioSummary')}
-              </SettingsActionButton>
-              <SettingsActionButton
-                type="button"
-                onClick={() => {
-                  void handleWriteLatestScenarioReport();
-                }}
-                disabled={!latestThreeStageComparison}
-              >
-                {t('debug.center.memory.actions.writeLatestScenarioReport')}
-              </SettingsActionButton>
-              <SettingsActionButton type="button" onClick={() => setConfirmClearCoverCaches(true)}>
-                {t('debug.center.memory.actions.clearCoverCaches')}
-              </SettingsActionButton>
-              <SettingsActionButton
-                type="button"
-                onClick={() => setConfirmDestroyEditorWindows(true)}
-                disabled={!isTauri}
-              >
-                {t('debug.center.memory.actions.destroyEditorWindows')}
-              </SettingsActionButton>
-            </div>
-          </div>
-
-          {threeStageBaselineRunning && (
-            <p className="settings-card-note">{t('debug.center.memory.baselines.running')}</p>
-          )}
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div>
-              <p className="settings-card-label">{t('debug.center.memory.runtimeCapsules.label')}</p>
-              {runtimeCapsuleSnapshot ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <p className="settings-card-desc">
-                    {t('debug.center.memory.runtimeCapsules.summary', {
-                      capsules: runtimeCapsuleSnapshot.capsules.length,
-                      leases: runtimeCapsuleSnapshot.activeLeaseCount,
-                      capabilities: runtimeCapsuleSnapshot.registeredCapabilityCount,
-                    })}
-                  </p>
-                  {runtimeCapsuleSnapshot.capsules.map((capsule) => (
-                    <p className="settings-card-note" key={capsule.manifest.id}>
-                      {t('debug.center.memory.runtimeCapsules.item', {
-                        id: capsule.manifest.id,
-                        state: capsule.state,
-                        tier: capsule.manifest.memoryTier,
-                        leases: capsule.activeLeases.length,
-                        startup: capsule.manifest.startup,
-                        background: capsule.manifest.backgroundPolicy,
-                      })}
-                    </p>
-                  ))}
+          <>
+            <SettingsCard className="debug-center-memory-card">
+              <div className="settings-card-header debug-center-memory-header">
+                <div className="debug-center-memory-copy">
+                  <p className="settings-card-label">{t('debug.center.memory.title')}</p>
+                  <p className="settings-card-desc">{t('debug.center.memory.desc')}</p>
                 </div>
-              ) : (
-                <p className="settings-card-note">{t('debug.center.memory.runtimeCapsules.empty')}</p>
-              )}
-            </div>
+              </div>
 
-            <div>
-              <p className="settings-card-label">{t('debug.center.memory.spaceRuntime.label')}</p>
-              {spaceRuntimeSnapshot ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <p className="settings-card-desc">
-                    {t('debug.center.memory.spaceRuntime.summary', {
-                      active: spaceRuntimeSnapshot.activeSpaceId ?? '-',
-                      frozen: spaceRuntimeSnapshot.frozenSpaceIds.length,
-                      hibernated: spaceRuntimeSnapshot.hibernatedSpaceIds.length,
-                      reclaimable: spaceRuntimeSnapshot.reclaimableSpaceIds.length,
-                    })}
-                  </p>
-                  {spaceRuntimeSnapshot.descriptors.map((descriptor) => (
-                    <div className="settings-card-note" key={descriptor.spaceId}>
-                      <p>
-                        {t('debug.center.memory.spaceRuntime.item', {
-                          id: descriptor.spaceId,
-                          state: descriptor.state,
-                          kind: descriptor.kind,
-                          tier: descriptor.memoryTier,
-                          associations: descriptor.activeAssociationCount,
-                          participants: descriptor.participants.length,
-                        })}
-                      </p>
-                      {descriptor.participants.map((participant) => (
-                        <p key={participant.id}>
-                          {t('debug.center.memory.spaceRuntime.participant', {
-                            id: participant.id,
-                            capsule: participant.capsuleId,
-                            state: participant.state,
-                            timers: participant.timers ?? 0,
-                            listeners: participant.listeners ?? 0,
-                          })}
-                        </p>
+              <div className="debug-center-memory-actions-grid">
+                <DebugMemoryActionGroup label={t('debug.center.memory.actionGroup.capture')}>
+                  <SettingsActionButton type="button" onClick={() => void refreshMemory()}>
+                    {t('common.action.refresh')}
+                  </SettingsActionButton>
+                  <SettingsActionButton type="button" onClick={() => void captureMemoryBaseline()}>
+                    {t('debug.center.memory.actions.captureBaseline')}
+                  </SettingsActionButton>
+                  <SettingsActionButton
+                    type="button"
+                    onClick={() => void runThreeStageBaselineCapture()}
+                    disabled={threeStageBaselineRunning}
+                  >
+                    {t('debug.center.memory.actions.captureThreeStage')}
+                  </SettingsActionButton>
+                  <SettingsActionButton type="button" onClick={clearMemoryBaselines}>
+                    {t('debug.center.memory.actions.clearBaselines')}
+                  </SettingsActionButton>
+                </DebugMemoryActionGroup>
+
+                <DebugMemoryActionGroup label={t('debug.center.memory.actionGroup.report')}>
+                  <SettingsActionButton
+                    type="button"
+                    onClick={handleExportBaselinesJson}
+                    disabled={memoryBaselines.length === 0}
+                  >
+                    {t('debug.center.memory.actions.exportBaselinesJson')}
+                  </SettingsActionButton>
+                  <SettingsActionButton
+                    type="button"
+                    onClick={handleExportBaselinesCsv}
+                    disabled={memoryBaselines.length === 0}
+                  >
+                    {t('debug.center.memory.actions.exportBaselinesCsv')}
+                  </SettingsActionButton>
+                  <SettingsActionButton
+                    type="button"
+                    onClick={() => void handleCopyLatestScenarioSummary()}
+                    disabled={!latestThreeStageComparison}
+                  >
+                    {t('debug.center.memory.actions.copyLatestScenarioSummary')}
+                  </SettingsActionButton>
+                  <SettingsActionButton
+                    type="button"
+                    onClick={() => void handleWriteLatestScenarioReport()}
+                    disabled={!latestThreeStageComparison}
+                  >
+                    {t('debug.center.memory.actions.writeLatestScenarioReport')}
+                  </SettingsActionButton>
+                </DebugMemoryActionGroup>
+
+                <DebugMemoryActionGroup label={t('debug.center.memory.actionGroup.cleanup')}>
+                  <SettingsActionButton type="button" onClick={() => setConfirmClearCoverCaches(true)}>
+                    {t('debug.center.memory.actions.clearCoverCaches')}
+                  </SettingsActionButton>
+                  <SettingsActionButton
+                    type="button"
+                    onClick={() => setConfirmDestroyEditorWindows(true)}
+                    disabled={!isTauri}
+                  >
+                    {t('debug.center.memory.actions.destroyEditorWindows')}
+                  </SettingsActionButton>
+                </DebugMemoryActionGroup>
+              </div>
+
+              {threeStageBaselineRunning ? (
+                <p className="settings-card-note">{t('debug.center.memory.baselines.running')}</p>
+              ) : null}
+            </SettingsCard>
+
+            <div className="debug-center-memory-grid">
+              <SettingsCard className="debug-center-memory-section debug-center-memory-section--wide">
+                <div className="debug-center-memory-section-header">
+                  <div>
+                    <p className="settings-card-label">{t('debug.center.memory.runtimeCapsules.label')}</p>
+                    <p className="settings-card-desc">
+                      {runtimeCapsuleSnapshot
+                        ? t('debug.center.memory.runtimeCapsules.summary', {
+                            capsules: runtimeCapsuleSnapshot.capsules.length,
+                            leases: runtimeCapsuleSnapshot.activeLeaseCount,
+                            capabilities: runtimeCapsuleSnapshot.registeredCapabilityCount,
+                          })
+                        : t('debug.center.memory.runtimeCapsules.empty')}
+                    </p>
+                  </div>
+                </div>
+
+                {runtimeCapsuleSnapshot ? (
+                  <>
+                    <div className="debug-center-memory-metric-grid">
+                      <DebugMemoryMetric
+                        label={t('debug.center.memory.metric.capsules')}
+                        value={runtimeCapsuleSnapshot.capsules.length}
+                      />
+                      <DebugMemoryMetric
+                        label={t('debug.center.memory.metric.activeLeases')}
+                        value={runtimeCapsuleSnapshot.activeLeaseCount}
+                      />
+                      <DebugMemoryMetric
+                        label={t('debug.center.memory.metric.capabilities')}
+                        value={runtimeCapsuleSnapshot.registeredCapabilityCount}
+                      />
+                    </div>
+                    <div className="debug-center-memory-list">
+                      {runtimeCapsuleSnapshot.capsules.map((capsule) => (
+                        <div className="debug-center-memory-list-row" key={capsule.manifest.id}>
+                          <span className="debug-center-memory-list-title">
+                            {capsule.manifest.id}
+                          </span>
+                          <div className="debug-center-memory-token-row">
+                            <DebugMemoryToken>{capsule.state}</DebugMemoryToken>
+                            <DebugMemoryToken muted>
+                              {t('debug.center.memory.token.tier', {
+                                value: capsule.manifest.memoryTier,
+                              })}
+                            </DebugMemoryToken>
+                            <DebugMemoryToken muted={capsule.activeLeases.length === 0}>
+                              {t('debug.center.memory.token.lease', {
+                                value: capsule.activeLeases.length,
+                              })}
+                            </DebugMemoryToken>
+                            <DebugMemoryToken muted>
+                              {t('debug.center.memory.token.startup', {
+                                value: capsule.manifest.startup,
+                              })}
+                            </DebugMemoryToken>
+                            <DebugMemoryToken muted>
+                              {t('debug.center.memory.token.background', {
+                                value: capsule.manifest.backgroundPolicy,
+                              })}
+                            </DebugMemoryToken>
+                          </div>
+                        </div>
                       ))}
                     </div>
-                  ))}
+                  </>
+                ) : null}
+              </SettingsCard>
+
+              <SettingsCard className="debug-center-memory-section debug-center-memory-section--wide">
+                <div className="debug-center-memory-section-header">
+                  <div>
+                    <p className="settings-card-label">{t('debug.center.memory.spaceRuntime.label')}</p>
+                    <p className="settings-card-desc">
+                      {spaceRuntimeSnapshot
+                        ? t('debug.center.memory.spaceRuntime.summary', {
+                            active: spaceRuntimeSnapshot.activeSpaceId ?? '-',
+                            frozen: spaceRuntimeSnapshot.frozenSpaceIds.length,
+                            hibernated: spaceRuntimeSnapshot.hibernatedSpaceIds.length,
+                            reclaimable: spaceRuntimeSnapshot.reclaimableSpaceIds.length,
+                          })
+                        : t('debug.center.memory.spaceRuntime.empty')}
+                    </p>
+                  </div>
                 </div>
-              ) : (
-                <p className="settings-card-note">{t('debug.center.memory.spaceRuntime.empty')}</p>
-              )}
-            </div>
 
-            <div>
-              <p className="settings-card-label">{t('debug.center.memory.editorWindows.label')}</p>
-              <p className="settings-card-desc">
-                {t('debug.center.memory.editorWindows.stats', {
-                  alive: editorWindowsState?.windows.filter((w) => w.exists).length ?? 0,
-                  visible:
-                    editorWindowsState?.windows.filter((w) => w.exists && w.visible).length ?? 0,
-                  hidden:
-                    (editorWindowsState?.windows.filter((w) => w.exists).length ?? 0) -
-                    (editorWindowsState?.windows.filter((w) => w.exists && w.visible).length ?? 0),
-                })}
-              </p>
-              <p className="settings-card-note">
-                {t('debug.center.memory.editorWindows.cachedHidden', {
-                  type: editorWindowsState?.cachedHidden ?? '-',
-                })}
-              </p>
-            </div>
+                {spaceRuntimeSnapshot ? (
+                  <>
+                    <div className="debug-center-memory-metric-grid">
+                      <DebugMemoryMetric
+                        label={t('debug.center.memory.metric.activeSpace')}
+                        value={spaceRuntimeSnapshot.activeSpaceId ?? '-'}
+                      />
+                      <DebugMemoryMetric
+                        label={t('debug.center.memory.metric.frozen')}
+                        value={spaceRuntimeSnapshot.frozenSpaceIds.length}
+                      />
+                      <DebugMemoryMetric
+                        label={t('debug.center.memory.metric.hibernated')}
+                        value={spaceRuntimeSnapshot.hibernatedSpaceIds.length}
+                      />
+                      <DebugMemoryMetric
+                        label={t('debug.center.memory.metric.reclaimable')}
+                        value={spaceRuntimeSnapshot.reclaimableSpaceIds.length}
+                      />
+                    </div>
+                    <div className="debug-center-memory-list">
+                      {spaceRuntimeSnapshot.descriptors.map((descriptor) => (
+                        <div className="debug-center-memory-list-row" key={descriptor.spaceId}>
+                          <span className="debug-center-memory-list-title">
+                            {descriptor.spaceId}
+                          </span>
+                          <div className="debug-center-memory-token-row">
+                            <DebugMemoryToken>{descriptor.state}</DebugMemoryToken>
+                            <DebugMemoryToken muted>{descriptor.kind}</DebugMemoryToken>
+                            <DebugMemoryToken muted>
+                              {t('debug.center.memory.token.tier', {
+                                value: descriptor.memoryTier,
+                              })}
+                            </DebugMemoryToken>
+                            <DebugMemoryToken muted={descriptor.activeAssociationCount === 0}>
+                              {t('debug.center.memory.token.associations', {
+                                value: descriptor.activeAssociationCount,
+                              })}
+                            </DebugMemoryToken>
+                            <DebugMemoryToken muted={descriptor.participants.length === 0}>
+                              {t('debug.center.memory.token.participants', {
+                                value: descriptor.participants.length,
+                              })}
+                            </DebugMemoryToken>
+                          </div>
+                          {descriptor.participants.length > 0 ? (
+                            <div className="debug-center-memory-sublist">
+                              {descriptor.participants.map((participant) => (
+                                <div className="debug-center-memory-subrow" key={participant.id}>
+                                  <span className="debug-center-memory-list-subtitle">
+                                    {participant.id}
+                                  </span>
+                                  <div className="debug-center-memory-token-row">
+                                    <DebugMemoryToken>{participant.state}</DebugMemoryToken>
+                                    <DebugMemoryToken muted>{participant.capsuleId}</DebugMemoryToken>
+                                    <DebugMemoryToken muted>
+                                      {t('debug.center.memory.token.timers', {
+                                        value: participant.timers ?? 0,
+                                      })}
+                                    </DebugMemoryToken>
+                                    <DebugMemoryToken muted>
+                                      {t('debug.center.memory.token.listeners', {
+                                        value: participant.listeners ?? 0,
+                                      })}
+                                    </DebugMemoryToken>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
+              </SettingsCard>
 
-            <div>
-              <p className="settings-card-label">{t('debug.center.memory.coverCaches.label')}</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <p className="settings-card-desc">
-                  {t('debug.center.memory.coverCaches.blobUrls.value', {
-                    count: coverCacheStats?.coverBlobUrlCacheEntries ?? 0,
-                    mb: ((coverCacheStats?.coverBlobUrlTotalBytes ?? 0) / 1024 / 1024).toFixed(1),
-                  })}
-                </p>
-                <p className="settings-card-desc">
-                  {t('debug.center.memory.coverCaches.decoded.value', {
-                    count: coverCacheStats?.coverDecodedEstimateEntries ?? 0,
-                    mb: ((coverCacheStats?.coverDecodedEstimateTotalBytes ?? 0) / 1024 / 1024).toFixed(1),
-                  })}
-                </p>
-                <p className="settings-card-desc">
-                  {t('debug.center.memory.coverCaches.urls.value', {
-                    count: coverCacheStats?.coverUrlCacheEntries ?? 0,
-                  })}
-                </p>
-                <p className="settings-card-desc">
-                  {t('debug.center.memory.coverCaches.inflight.value', {
-                    count: coverCacheStats?.coverUrlInflight ?? 0,
-                  })}
-                </p>
-                <p className="settings-card-desc">
-                  {t('debug.center.memory.coverCaches.album.value', {
-                    count: coverCacheStats?.albumCoverUrlCacheEntries ?? 0,
-                  })}
-                </p>
-                <p className="settings-card-desc">
-                  {t('debug.center.memory.coverCaches.leases.value', {
-                    leased: desktopCoverLeaseStats?.leasedEntries ?? 0,
-                    active: desktopCoverLeaseStats?.activeEntries ?? 0,
-                    tracked: desktopCoverLeaseStats?.trackedEntries ?? 0,
-                    mb: ((desktopCoverLeaseStats?.trackedBytes ?? 0) / 1024 / 1024).toFixed(1),
-                  })}
-                </p>
-              </div>
-            </div>
-
-            <div>
-              <p className="settings-card-label">{t('debug.center.memory.musicLibrary.label')}</p>
-              <p className="settings-card-desc">{t('debug.center.memory.musicLibrary.desc')}</p>
-              {musicLibrarySnapshot ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <p className="settings-card-note">
-                    {t('debug.center.memory.musicLibrary.captured', {
-                      at: new Date(musicLibrarySnapshot.timestampMs).toLocaleString(),
-                    })}
-                  </p>
-                  <p className="settings-card-desc">
-                    {t('debug.center.memory.musicLibrary.mode', {
-                      sourceMode: musicLibrarySnapshot.sourceMode,
-                      baseView: musicLibrarySnapshot.baseView,
-                      searchQuery: musicLibrarySnapshot.searchQuery || '-',
-                      nativeBase: t(
-                        `common.state.${musicLibrarySnapshot.shouldUseNativeBaseQuery ? 'on' : 'off'}`
-                      ),
-                      coverPolicy: musicLibrarySnapshot.coverPolicy,
-                    })}
-                  </p>
-                  <p className="settings-card-desc">
-                    {t('debug.center.memory.musicLibrary.counts', {
-                      tracks: musicLibrarySnapshot.counts.tracks,
-                      nativeBaseTracks: musicLibrarySnapshot.counts.nativeBaseTracks,
-                      filteredTracks: musicLibrarySnapshot.counts.filteredTracks,
-                      renderedTracks: musicLibrarySnapshot.counts.renderedTracks,
-                      groupedRows: musicLibrarySnapshot.counts.groupedRows,
-                    })}
-                  </p>
-                  <p className="settings-card-desc">
-                    {t('debug.center.memory.musicLibrary.arrays', {
-                      trackArrayMb: formatBytesToMb(musicLibrarySnapshot.attribution.trackArrayBytes),
-                      tracksMb: formatBytesToMb(musicLibrarySnapshot.estimatedBytes.tracks),
-                      nativeBaseMb: formatBytesToMb(musicLibrarySnapshot.estimatedBytes.nativeBaseTracks),
-                    })}
-                  </p>
-                  <p className="settings-card-desc">
-                    {t('debug.center.memory.musicLibrary.attribution', {
-                      trackedRuntimeMb: formatBytesToMb(
-                        musicLibrarySnapshot.attribution.trackedRuntimeBytes
-                      ),
-                      residualMb: formatBytesToMb(
-                        musicLibrarySnapshot.attribution.webview2PrivateResidualBytes
-                      ),
-                      privateMinusTrackArraysMb: formatBytesToMb(
-                        musicLibrarySnapshot.attribution.webview2PrivateMinusTrackArraysBytes
-                      ),
-                    })}
-                  </p>
-                  <p className="settings-card-note">
-                    {t('debug.center.memory.musicLibrary.process', {
-                      webview2PrivateMb: formatBytesToMb(
-                        musicLibrarySnapshot.process.webview2PrivateBytes
-                      ),
-                      webview2WsMb: formatBytesToMb(
-                        musicLibrarySnapshot.process.webview2WorkingSetBytes
-                      ),
-                      treePrivateMb: formatBytesToMb(musicLibrarySnapshot.process.treePrivateBytes),
-                      treeWsMb: formatBytesToMb(musicLibrarySnapshot.process.treeWorkingSetBytes),
-                      webview2Cpu:
-                        typeof musicLibrarySnapshot.process.webview2CpuPercent === 'number' &&
-                        Number.isFinite(musicLibrarySnapshot.process.webview2CpuPercent)
-                          ? musicLibrarySnapshot.process.webview2CpuPercent.toFixed(1)
-                          : '-',
-                    })}
-                  </p>
+              <SettingsCard className="debug-center-memory-section">
+                <div className="debug-center-memory-section-header">
+                  <div>
+                    <p className="settings-card-label">{t('debug.center.memory.editorWindows.label')}</p>
+                    <p className="settings-card-desc">
+                      {editorWindowCounts
+                        ? t('debug.center.memory.editorWindows.stats', {
+                            alive: editorWindowCounts.alive,
+                            visible: editorWindowCounts.visible,
+                            hidden: editorHiddenCount ?? 0,
+                          })
+                        : t('debug.center.memory.editorWindows.unavailable')}
+                    </p>
+                  </div>
                 </div>
-              ) : (
-                <p className="settings-card-note">{t('debug.center.memory.musicLibrary.empty')}</p>
-              )}
-            </div>
+                {editorWindowCounts ? (
+                  <div className="debug-center-memory-metric-grid">
+                    <DebugMemoryMetric
+                      label={t('debug.center.memory.metric.alive')}
+                      value={editorWindowCounts.alive}
+                    />
+                    <DebugMemoryMetric
+                      label={t('debug.center.memory.metric.visible')}
+                      value={editorWindowCounts.visible}
+                    />
+                    <DebugMemoryMetric
+                      label={t('debug.center.memory.metric.hidden')}
+                      value={editorHiddenCount ?? 0}
+                    />
+                    <DebugMemoryMetric
+                      label={t('debug.center.memory.metric.cachedHidden')}
+                      value={editorWindowsState?.cachedHidden ?? '-'}
+                      muted={!editorWindowsState?.cachedHidden}
+                    />
+                  </div>
+                ) : null}
+              </SettingsCard>
 
-            <div>
-              <p className="settings-card-label">{t('debug.center.memory.navigation.label')}</p>
-              <p className="settings-card-desc">{t('debug.center.memory.navigation.desc')}</p>
-              <p className="settings-card-note">
-                {t('debug.center.memory.navigation.history.value', {
-                  count: navigationHistoryStats.count,
-                  kb: (navigationHistoryStats.bytes / 1024).toFixed(1),
-                })}
-              </p>
-            </div>
+              <SettingsCard className="debug-center-memory-section">
+                <div className="debug-center-memory-section-header">
+                  <div>
+                    <p className="settings-card-label">{t('debug.center.memory.coverCaches.label')}</p>
+                    <p className="settings-card-desc">{coverCacheSummaryText}</p>
+                  </div>
+                </div>
+                <div className="debug-center-memory-metric-grid">
+                  <DebugMemoryMetric
+                    label={t('debug.center.memory.metric.blobUrls')}
+                    value={formatCount(coverCacheStats?.coverBlobUrlCacheEntries)}
+                    detail={formatBytesToMbLabel(coverCacheStats?.coverBlobUrlTotalBytes)}
+                    muted={coverCacheStats?.coverBlobUrlCacheEntries === 0}
+                  />
+                  <DebugMemoryMetric
+                    label={t('debug.center.memory.metric.decoded')}
+                    value={formatCount(coverCacheStats?.coverDecodedEstimateEntries)}
+                    detail={formatBytesToMbLabel(coverCacheStats?.coverDecodedEstimateTotalBytes)}
+                    muted={coverCacheStats?.coverDecodedEstimateEntries === 0}
+                  />
+                  <DebugMemoryMetric
+                    label={t('debug.center.memory.metric.urlMap')}
+                    value={formatCount(coverCacheStats?.coverUrlCacheEntries)}
+                    muted={coverCacheStats?.coverUrlCacheEntries === 0}
+                  />
+                  <DebugMemoryMetric
+                    label={t('debug.center.memory.metric.inflight')}
+                    value={formatCount(coverCacheStats?.coverUrlInflight)}
+                    muted={coverCacheStats?.coverUrlInflight === 0}
+                  />
+                  <DebugMemoryMetric
+                    label={t('debug.center.memory.metric.albumCovers')}
+                    value={formatCount(coverCacheStats?.albumCoverUrlCacheEntries)}
+                    muted={coverCacheStats?.albumCoverUrlCacheEntries === 0}
+                  />
+                  <DebugMemoryMetric
+                    label={t('debug.center.memory.metric.rustLeases')}
+                    value={formatCount(desktopCoverLeaseStats?.leasedEntries)}
+                    detail={
+                      desktopCoverLeaseSnapshotAvailable
+                        ? t('debug.center.memory.metric.rustLeases.detail', {
+                            active: desktopCoverLeaseStats?.activeEntries ?? 0,
+                            tracked: desktopCoverLeaseStats?.trackedEntries ?? 0,
+                            mb: formatBytesToMb(desktopCoverLeaseStats?.trackedBytes),
+                          })
+                        : t('debug.center.memory.coverCaches.leasesUnavailable')
+                    }
+                    muted={!desktopCoverLeaseSnapshotAvailable || desktopCoverLeaseStats?.leasedEntries === 0}
+                  />
+                </div>
+              </SettingsCard>
 
-            <div>
-              <p className="settings-card-label">{t('debug.center.memory.baselines.label')}</p>
-              <p className="settings-card-desc">{t('debug.center.memory.baselines.desc')}</p>
-              {memoryBaselines.length === 0 ? (
-                <p className="settings-card-note">{t('debug.center.memory.baselines.empty')}</p>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {memoryBaselines.slice(0, 8).map((sample) => (
-                    <p className="settings-card-note" key={sample.id}>
-                      {t('debug.center.memory.baselines.item', {
-                        stage: t(`debug.center.memory.baselines.stage.${sample.stage}`),
-                        at: new Date(sample.capturedAtMs).toLocaleString(),
-                        jsHeapMb: formatBytesToMb(sample.jsHeapUsedBytes),
-                        webview2PrivateMb: formatBytesToMb(sample.webview2PrivateBytes),
-                        webview2WsMb: formatBytesToMb(sample.webview2WorkingSetBytes),
-                        coverBlobMb: formatBytesToMb(sample.coverBlobUrlTotalBytes),
-                        coverDecodedMb: formatBytesToMb(sample.coverDecodedEstimateTotalBytes),
+              <SettingsCard className="debug-center-memory-section debug-center-memory-section--wide">
+                <div className="debug-center-memory-section-header">
+                  <div>
+                    <p className="settings-card-label">{t('debug.center.memory.musicLibrary.label')}</p>
+                    <p className="settings-card-desc">{t('debug.center.memory.musicLibrary.desc')}</p>
+                  </div>
+                </div>
+                {musicLibrarySnapshot ? (
+                  <>
+                    <p className="settings-card-note">
+                      {t('debug.center.memory.musicLibrary.captured', {
+                        at: new Date(musicLibrarySnapshot.timestampMs).toLocaleString(),
                       })}
                     </p>
-                  ))}
+                    <div className="debug-center-memory-metric-grid">
+                      <DebugMemoryMetric
+                        label={t('debug.center.memory.metric.tracks')}
+                        value={musicLibrarySnapshot.counts.tracks}
+                      />
+                      <DebugMemoryMetric
+                        label={t('debug.center.memory.metric.renderedTracks')}
+                        value={musicLibrarySnapshot.counts.renderedTracks}
+                      />
+                      <DebugMemoryMetric
+                        label={t('debug.center.memory.metric.trackArrays')}
+                        value={formatBytesToMbLabel(musicLibrarySnapshot.attribution.trackArrayBytes)}
+                      />
+                      <DebugMemoryMetric
+                        label={t('debug.center.memory.metric.webview2Private')}
+                        value={formatBytesToMbLabel(
+                          musicLibrarySnapshot.process.webview2PrivateBytes
+                        )}
+                      />
+                    </div>
+                    <div className="debug-center-memory-note-stack">
+                      <p className="settings-card-desc">
+                        {t('debug.center.memory.musicLibrary.mode', {
+                          sourceMode: musicLibrarySnapshot.sourceMode,
+                          baseView: musicLibrarySnapshot.baseView,
+                          searchQuery: musicLibrarySnapshot.searchQuery || '-',
+                          nativeBase: t(
+                            `common.state.${musicLibrarySnapshot.shouldUseNativeBaseQuery ? 'on' : 'off'}`
+                          ),
+                          coverPolicy: musicLibrarySnapshot.coverPolicy,
+                        })}
+                      </p>
+                      <p className="settings-card-desc">
+                        {t('debug.center.memory.musicLibrary.counts', {
+                          tracks: musicLibrarySnapshot.counts.tracks,
+                          nativeBaseTracks: musicLibrarySnapshot.counts.nativeBaseTracks,
+                          filteredTracks: musicLibrarySnapshot.counts.filteredTracks,
+                          renderedTracks: musicLibrarySnapshot.counts.renderedTracks,
+                          groupedRows: musicLibrarySnapshot.counts.groupedRows,
+                        })}
+                      </p>
+                      <p className="settings-card-desc">
+                        {t('debug.center.memory.musicLibrary.attribution', {
+                          trackedRuntimeMb: formatBytesToMb(
+                            musicLibrarySnapshot.attribution.trackedRuntimeBytes
+                          ),
+                          residualMb: formatBytesToMb(
+                            musicLibrarySnapshot.attribution.webview2PrivateResidualBytes
+                          ),
+                          privateMinusTrackArraysMb: formatBytesToMb(
+                            musicLibrarySnapshot.attribution.webview2PrivateMinusTrackArraysBytes
+                          ),
+                        })}
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <p className="settings-card-note">{t('debug.center.memory.musicLibrary.empty')}</p>
+                )}
+              </SettingsCard>
+
+              <SettingsCard className="debug-center-memory-section">
+                <div className="debug-center-memory-section-header">
+                  <div>
+                    <p className="settings-card-label">{t('debug.center.memory.navigation.label')}</p>
+                    <p className="settings-card-desc">{t('debug.center.memory.navigation.desc')}</p>
+                  </div>
                 </div>
-              )}
-              {latestThreeStageDelta && (
-                <p className="settings-card-note">
-                  {t('debug.center.memory.baselines.lastScenarioDelta', {
-                    sampleCount: latestThreeStageDelta.sampleCount,
-                    jsHeapDeltaMb: latestThreeStageDelta.jsHeapDeltaMb,
-                    webview2PrivateDeltaMb: latestThreeStageDelta.webview2PrivateDeltaMb,
-                    webview2WsDeltaMb: latestThreeStageDelta.webview2WsDeltaMb,
-                    coverBlobDeltaMb: latestThreeStageDelta.coverBlobDeltaMb,
-                    coverDecodedDeltaMb: latestThreeStageDelta.coverDecodedDeltaMb,
-                  })}
-                </p>
-              )}
+                <div className="debug-center-memory-metric-grid">
+                  <DebugMemoryMetric
+                    label={t('debug.center.memory.metric.historyEntries')}
+                    value={navigationHistoryStats.count}
+                  />
+                  <DebugMemoryMetric
+                    label={t('debug.center.memory.metric.historySize')}
+                    value={`${(navigationHistoryStats.bytes / 1024).toFixed(1)}KB`}
+                  />
+                </div>
+              </SettingsCard>
+
+              <SettingsCard className="debug-center-memory-section">
+                <div className="debug-center-memory-section-header">
+                  <div>
+                    <p className="settings-card-label">{t('debug.center.memory.baselines.label')}</p>
+                    <p className="settings-card-desc">{t('debug.center.memory.baselines.desc')}</p>
+                  </div>
+                </div>
+                <div className="debug-center-memory-metric-grid">
+                  <DebugMemoryMetric
+                    label={t('debug.center.memory.metric.baselineCount')}
+                    value={memoryBaselines.length}
+                    muted={memoryBaselines.length === 0}
+                  />
+                  <DebugMemoryMetric
+                    label={t('debug.center.memory.metric.latestDelta')}
+                    value={latestThreeStageDelta ? latestThreeStageDelta.sampleCount : '-'}
+                    muted={!latestThreeStageDelta}
+                  />
+                </div>
+                {memoryBaselines.length === 0 ? (
+                  <p className="settings-card-note">{t('debug.center.memory.baselines.empty')}</p>
+                ) : (
+                  <div className="debug-center-memory-list">
+                    {memoryBaselines.slice(0, 8).map((sample) => (
+                      <div className="debug-center-memory-list-row" key={sample.id}>
+                        <span className="debug-center-memory-list-title">
+                          {t(`debug.center.memory.baselines.stage.${sample.stage}`)}
+                        </span>
+                        <span className="debug-center-memory-list-subtitle">
+                          {new Date(sample.capturedAtMs).toLocaleString()}
+                        </span>
+                        <div className="debug-center-memory-token-row">
+                          <DebugMemoryToken muted>
+                            {t('debug.center.memory.baselines.token.js', {
+                              value: formatBytesToMbLabel(sample.jsHeapUsedBytes),
+                            })}
+                          </DebugMemoryToken>
+                          <DebugMemoryToken muted>
+                            {t('debug.center.memory.baselines.token.webview2', {
+                              value: formatBytesToMbLabel(sample.webview2PrivateBytes),
+                            })}
+                          </DebugMemoryToken>
+                          <DebugMemoryToken muted>
+                            {t('debug.center.memory.baselines.token.blob', {
+                              value: formatBytesToMbLabel(sample.coverBlobUrlTotalBytes),
+                            })}
+                          </DebugMemoryToken>
+                          <DebugMemoryToken muted>
+                            {t('debug.center.memory.baselines.token.decoded', {
+                              value: formatBytesToMbLabel(sample.coverDecodedEstimateTotalBytes),
+                            })}
+                          </DebugMemoryToken>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {latestThreeStageDelta ? (
+                  <p className="settings-card-note">
+                    {t('debug.center.memory.baselines.lastScenarioDelta', {
+                      sampleCount: latestThreeStageDelta.sampleCount,
+                      jsHeapDeltaMb: latestThreeStageDelta.jsHeapDeltaMb,
+                      webview2PrivateDeltaMb: latestThreeStageDelta.webview2PrivateDeltaMb,
+                      webview2WsDeltaMb: latestThreeStageDelta.webview2WsDeltaMb,
+                      coverBlobDeltaMb: latestThreeStageDelta.coverBlobDeltaMb,
+                      coverDecodedDeltaMb: latestThreeStageDelta.coverDecodedDeltaMb,
+                    })}
+                  </p>
+                ) : null}
+              </SettingsCard>
             </div>
-          </div>
-          </SettingsCard>
+          </>
         ) : null}
 
         {activeWorkspace === 'overview' ? (
@@ -5371,7 +3197,7 @@ export function DebugCenter({
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div className="debug-center-actions debug-center-actions--start">
             <SettingsActionButton
               type="button"
               onClick={() => void handleOpenPerfMonitor()}

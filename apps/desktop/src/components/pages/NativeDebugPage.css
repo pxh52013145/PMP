@@ -793,3 +793,402 @@
 .queue-buttons button {
   border-color: rgba(var(--debug-orange-rgb), 0.3);
 }
+
+.native-debug-page {
+  --debug-accent-rgb: 74, 205, 196;
+  --debug-warn-rgb: 255, 181, 83;
+  --debug-danger-rgb: 255, 112, 112;
+  --debug-panel-bg: rgba(10, 16, 22, 0.72);
+  --debug-panel-bg-strong: rgba(6, 11, 16, 0.82);
+  --debug-panel-border: rgba(255, 255, 255, 0.105);
+  --debug-text-primary: rgba(246, 250, 252, 0.94);
+  --debug-text-secondary: rgba(211, 225, 231, 0.76);
+  --debug-text-dim: rgba(184, 199, 206, 0.58);
+  padding: 16px;
+  color: var(--debug-text-primary);
+}
+
+.native-debug-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.38fr) minmax(320px, 0.62fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.native-debug-card {
+  min-width: 0;
+  border-radius: 8px;
+  border-color: var(--debug-panel-border);
+  background: var(--debug-panel-bg);
+  box-shadow:
+    0 14px 28px rgba(0, 0, 0, 0.24),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.025);
+}
+
+.native-debug-controls header,
+.native-debug-state-panel header {
+  min-width: 0;
+  margin-bottom: 12px;
+}
+
+.native-debug-controls h2,
+.native-debug-state-panel h3 {
+  font-size: 17px;
+}
+
+.section-label {
+  color: var(--debug-text-dim);
+}
+
+.state-pill {
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.state-playing {
+  border-color: rgba(var(--debug-accent-rgb), 0.64);
+  color: rgb(156, 241, 233);
+}
+
+.state-loading {
+  border-color: rgba(var(--debug-warn-rgb), 0.68);
+  color: rgb(255, 222, 159);
+}
+
+.state-error {
+  border-color: rgba(var(--debug-danger-rgb), 0.68);
+  color: rgb(255, 174, 174);
+}
+
+.native-debug-panel-group,
+.native-debug-robustness-panel {
+  margin: 0 0 14px;
+  padding: 12px;
+  border-radius: 8px;
+  border-color: var(--debug-panel-border);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.native-debug-panel-group--playback,
+.native-debug-panel-group--engine {
+  box-shadow: none;
+}
+
+.current-track,
+.device-row,
+.native-debug-visual-card,
+.robustness-item,
+.native-debug-timeline,
+.debug-queue li {
+  border-radius: 8px;
+  border-color: rgba(255, 255, 255, 0.085);
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.current-track {
+  min-width: 0;
+  padding: 12px;
+}
+
+.current-track-title,
+.current-track-path,
+.device-value,
+.device-hint,
+.queue-track-title,
+.queue-track-meta {
+  overflow-wrap: anywhere;
+}
+
+.control-row,
+.volume-row,
+.device-row,
+.queue-actions {
+  min-width: 0;
+}
+
+.control-row {
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.control-row > button,
+.volume-row button,
+.device-controls button,
+.queue-actions button,
+.queue-buttons button {
+  min-height: 34px;
+  border-radius: 8px;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--debug-text-primary);
+  white-space: normal;
+  line-height: 1.2;
+}
+
+.control-row > button:hover:not(:disabled),
+.volume-row button:hover:not(:disabled),
+.device-controls button:hover:not(:disabled),
+.queue-actions button:hover:not(:disabled),
+.queue-buttons button:hover:not(:disabled) {
+  border-color: rgba(var(--debug-accent-rgb), 0.48);
+  background: rgba(var(--debug-accent-rgb), 0.08);
+}
+
+.transport-buttons {
+  gap: 8px;
+}
+
+.transport-buttons button {
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+}
+
+.volume-row {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(160px, 1fr) auto;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.volume-row input[type='range'] {
+  width: 100%;
+  min-width: 0;
+}
+
+.device-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.28fr);
+  align-items: start;
+  gap: 12px;
+  padding: 12px;
+}
+
+.device-meta {
+  min-width: 0;
+}
+
+.device-controls {
+  width: 100%;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.native-debug-inline-controls {
+  align-items: center;
+}
+
+.native-debug-check-field,
+.native-debug-number-field {
+  min-width: 0;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--debug-text-secondary);
+  font-size: 12px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.native-debug-check-field {
+  flex: 1 1 150px;
+}
+
+.native-debug-number-field {
+  flex: 1 1 180px;
+  flex-wrap: wrap;
+}
+
+.native-debug-check-field input[type='checkbox'] {
+  flex: 0 0 auto;
+}
+
+.native-debug-number-input {
+  width: 88px;
+  min-width: 72px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--debug-text-primary);
+}
+
+.native-debug-number-input--short {
+  width: 72px;
+}
+
+.device-controls select,
+.src-target-rate-input,
+.device-controls input[type='number'] {
+  min-width: min(100%, 170px);
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+.device-controls .native-debug-number-input {
+  min-width: 72px;
+}
+
+.src-preset-controls {
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  width: 100%;
+}
+
+.dynamic-src-param-controls {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.dynamic-src-param-item input {
+  border-radius: 8px;
+}
+
+.native-debug-metrics-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+  background-image: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+.native-debug-metrics-divider {
+  display: none;
+}
+
+.native-debug-metrics-section {
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 8px;
+  background: var(--debug-panel-bg-strong);
+}
+
+.native-debug-metrics-section-title {
+  color: var(--debug-text-dim);
+  letter-spacing: 0.08em;
+}
+
+.native-debug-metrics-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(82px, auto);
+  align-items: start;
+  gap: 10px;
+}
+
+.native-debug-metrics-label,
+.native-debug-metrics-value {
+  min-width: 0;
+  color: var(--debug-text-secondary);
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.native-debug-metrics-value {
+  color: var(--debug-text-primary);
+  white-space: normal;
+}
+
+.native-debug-metrics-row--progress {
+  grid-template-columns: minmax(0, 0.8fr) minmax(80px, 1fr) minmax(42px, auto);
+  align-items: center;
+}
+
+.native-debug-metrics-progress-track {
+  min-width: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.native-debug-metrics-progress-fill {
+  border-radius: inherit;
+  background: rgb(var(--debug-accent-rgb));
+}
+
+.native-debug-robustness-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+}
+
+.robustness-item {
+  min-width: 0;
+}
+
+.debug-queue li {
+  min-width: 0;
+  align-items: flex-start;
+}
+
+.debug-queue li[data-active='true'] {
+  border-color: rgba(var(--debug-accent-rgb), 0.48);
+  box-shadow: 0 10px 20px rgba(var(--debug-accent-rgb), 0.08);
+}
+
+.queue-buttons {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.native-debug-state {
+  max-height: 300px;
+  min-width: 0;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--debug-text-secondary);
+  scrollbar-width: thin;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.native-debug-logs li {
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1120px) {
+  .native-debug-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .native-debug-page {
+    padding: 12px;
+  }
+
+  .native-debug-card {
+    padding: 14px;
+  }
+
+  .native-debug-controls header,
+  .native-debug-state-panel header,
+  .queue-actions,
+  .debug-queue li {
+    flex-direction: column;
+  }
+
+  .device-row,
+  .volume-row {
+    grid-template-columns: 1fr;
+  }
+
+  .device-controls {
+    justify-content: flex-start;
+  }
+
+  .native-debug-check-field,
+  .native-debug-number-field {
+    flex-basis: 100%;
+  }
+
+  .native-debug-metrics-row,
+  .native-debug-metrics-row--progress {
+    grid-template-columns: 1fr;
+  }
+}
