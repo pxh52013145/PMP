@@ -848,6 +848,72 @@ export interface NativeLibraryUserEntryRecord {
   updatedAtMs: number;
 }
 
+export type NativeLibraryStableEntrySourceKind =
+  | 'local'
+  | 'nas'
+  | 'platform'
+  | 'cache'
+  | 'pmp-server';
+
+export type NativeLibraryStableEntrySourceAvailability =
+  | 'available'
+  | 'missing'
+  | 'remote-only'
+  | 'stale'
+  | 'auth-required'
+  | 'unknown';
+
+export interface NativeLibraryStableEntrySourceUpsertInput {
+  id?: string;
+  entryId: string;
+  sourceKind: NativeLibraryStableEntrySourceKind | string;
+  connectorId?: string;
+  sourceId?: string;
+  sourceItemId?: string;
+  locator?: string;
+  trackId?: string;
+  quickFingerprint?: string;
+  fullFingerprint?: string;
+  availability?: NativeLibraryStableEntrySourceAvailability | string;
+  qualityScore?: number;
+  confidence?: number;
+  priority?: number;
+  lastVerifiedAtMs?: number;
+  createdAtMs?: number;
+  updatedAtMs?: number;
+}
+
+export interface NativeLibraryStableEntrySourceQuery {
+  entryId?: string;
+  sourceKind?: NativeLibraryStableEntrySourceKind | string;
+  connectorId?: string;
+  sourceId?: string;
+  trackId?: string;
+  availability?: NativeLibraryStableEntrySourceAvailability | string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface NativeLibraryStableEntrySourceRecord {
+  id: string;
+  entryId: string;
+  sourceKind: NativeLibraryStableEntrySourceKind;
+  connectorId?: string;
+  sourceId?: string;
+  sourceItemId?: string;
+  locator?: string;
+  trackId?: string;
+  quickFingerprint?: string;
+  fullFingerprint?: string;
+  availability: NativeLibraryStableEntrySourceAvailability;
+  qualityScore?: number;
+  confidence: number;
+  priority: number;
+  lastVerifiedAtMs?: number;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
 export interface NativeLibraryPlaylistUpsertInput {
   id: string;
   ownerUid: string;
@@ -2435,6 +2501,86 @@ function ensureUserEntryRecord(value: unknown): NativeLibraryUserEntryRecord | n
     isMissing,
     playCount: Math.max(0, Math.floor(playCount)),
     lastPlayedAtMs: asNumber(value.lastPlayedAtMs),
+    createdAtMs,
+    updatedAtMs,
+  };
+}
+
+function normalizeStableEntrySourceKind(value: unknown): NativeLibraryStableEntrySourceKind {
+  const raw = asTrimmedString(value).toLowerCase();
+  if (raw === 'nas' || raw === 'platform' || raw === 'cache') return raw;
+  if (raw === 'pmp-server' || raw === 'pmp_server' || raw === 'server') return 'pmp-server';
+  return 'local';
+}
+
+function normalizeStableEntrySourceAvailability(
+  value: unknown
+): NativeLibraryStableEntrySourceAvailability {
+  const raw = asTrimmedString(value).toLowerCase();
+  if (
+    raw === 'available' ||
+    raw === 'missing' ||
+    raw === 'remote-only' ||
+    raw === 'stale' ||
+    raw === 'auth-required'
+  ) {
+    return raw;
+  }
+  if (raw === 'remote_only') return 'remote-only';
+  if (raw === 'auth_required') return 'auth-required';
+  return 'unknown';
+}
+
+function normalizeOptionalUnitNumber(value: unknown): number | undefined {
+  const parsed = asNumber(value);
+  if (parsed === undefined) return undefined;
+  return Math.max(0, Math.min(1, parsed));
+}
+
+function normalizeOptionalInteger(value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER) {
+  const parsed = asNumber(value);
+  if (parsed === undefined) return undefined;
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+function ensureStableEntrySourceRecord(
+  value: unknown
+): NativeLibraryStableEntrySourceRecord | null {
+  if (!isRecord(value)) return null;
+
+  const id = asTrimmedString(value.id);
+  const entryId = asTrimmedString(value.entryId);
+  const createdAtMs = asNumber(value.createdAtMs);
+  const updatedAtMs = asNumber(value.updatedAtMs);
+  const confidence = asNumber(value.confidence);
+  const priority = asNumber(value.priority);
+  if (
+    !id ||
+    !entryId ||
+    createdAtMs === undefined ||
+    updatedAtMs === undefined ||
+    confidence === undefined ||
+    priority === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    entryId,
+    sourceKind: normalizeStableEntrySourceKind(value.sourceKind),
+    connectorId: asOptionalString(value.connectorId),
+    sourceId: asOptionalString(value.sourceId),
+    sourceItemId: asOptionalString(value.sourceItemId),
+    locator: asOptionalString(value.locator),
+    trackId: asOptionalString(value.trackId),
+    quickFingerprint: normalizeQuickFingerprint(value.quickFingerprint),
+    fullFingerprint: asOptionalString(value.fullFingerprint),
+    availability: normalizeStableEntrySourceAvailability(value.availability),
+    qualityScore: normalizeOptionalUnitNumber(value.qualityScore),
+    confidence: Math.max(0, Math.min(1, confidence)),
+    priority: Math.max(0, Math.floor(priority)),
+    lastVerifiedAtMs: asNumber(value.lastVerifiedAtMs),
     createdAtMs,
     updatedAtMs,
   };
@@ -4353,6 +4499,86 @@ export async function markNativeLibraryUserEntryPlayed(
   const raw = await invoke<unknown>('music_library_db_mark_user_entry_played', {
     entryId: normalizedEntryId,
     playedAtMs,
+  }).catch(() => null);
+  return raw === true;
+}
+
+export async function upsertNativeLibraryStableEntrySource(
+  source: NativeLibraryStableEntrySourceUpsertInput
+): Promise<NativeLibraryStableEntrySourceRecord | null> {
+  if (!isTauriRuntime()) return null;
+
+  const payload: NativeLibraryStableEntrySourceUpsertInput = {
+    id: asOptionalString(source.id),
+    entryId: asTrimmedString(source.entryId),
+    sourceKind: normalizeStableEntrySourceKind(source.sourceKind),
+    connectorId: asOptionalString(source.connectorId),
+    sourceId: asOptionalString(source.sourceId),
+    sourceItemId: asOptionalString(source.sourceItemId),
+    locator: asOptionalString(source.locator),
+    trackId: asOptionalString(source.trackId),
+    quickFingerprint: normalizeQuickFingerprint(source.quickFingerprint),
+    fullFingerprint: asOptionalString(source.fullFingerprint),
+    availability: normalizeStableEntrySourceAvailability(source.availability),
+    qualityScore: normalizeOptionalUnitNumber(source.qualityScore),
+    confidence: normalizeOptionalUnitNumber(source.confidence),
+    priority: normalizeOptionalInteger(source.priority, 0, 10000),
+    lastVerifiedAtMs: normalizeOptionalInteger(source.lastVerifiedAtMs),
+    createdAtMs: normalizeOptionalInteger(source.createdAtMs),
+    updatedAtMs: normalizeOptionalInteger(source.updatedAtMs),
+  };
+
+  if (!payload.entryId) return null;
+
+  const raw = await invoke<unknown>('music_library_db_upsert_stable_entry_source', {
+    source: payload,
+  }).catch(() => null);
+  return ensureStableEntrySourceRecord(raw);
+}
+
+export async function listNativeLibraryStableEntrySources(
+  query?: NativeLibraryStableEntrySourceQuery
+): Promise<NativeLibraryStableEntrySourceRecord[]> {
+  if (!isTauriRuntime()) return [];
+
+  const payload: NativeLibraryStableEntrySourceQuery = {
+    entryId: asOptionalString(query?.entryId),
+    sourceKind:
+      typeof query?.sourceKind === 'string' && query.sourceKind.trim().length > 0
+        ? normalizeStableEntrySourceKind(query.sourceKind)
+        : undefined,
+    connectorId: asOptionalString(query?.connectorId),
+    sourceId: asOptionalString(query?.sourceId),
+    trackId: asOptionalString(query?.trackId),
+    availability:
+      typeof query?.availability === 'string' && query.availability.trim().length > 0
+        ? normalizeStableEntrySourceAvailability(query.availability)
+        : undefined,
+    limit: normalizeOptionalInteger(query?.limit, 1, 2000),
+    offset: normalizeOptionalInteger(query?.offset),
+  };
+
+  const raw = await invoke<unknown>('music_library_db_list_stable_entry_sources', {
+    query: payload,
+  }).catch(() => null);
+  if (!Array.isArray(raw)) return [];
+
+  const sources: NativeLibraryStableEntrySourceRecord[] = [];
+  for (const item of raw) {
+    const parsed = ensureStableEntrySourceRecord(item);
+    if (!parsed) continue;
+    sources.push(parsed);
+  }
+  return sources;
+}
+
+export async function deleteNativeLibraryStableEntrySource(sourceId: string): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  const normalizedSourceId = sourceId.trim();
+  if (!normalizedSourceId) return false;
+
+  const raw = await invoke<unknown>('music_library_db_delete_stable_entry_source', {
+    sourceId: normalizedSourceId,
   }).catch(() => null);
   return raw === true;
 }

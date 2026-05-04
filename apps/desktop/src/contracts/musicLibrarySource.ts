@@ -1,4 +1,4 @@
-export type MusicLibrarySourceMode = 'local' | 'stable';
+export type MusicLibrarySourceMode = 'local' | 'nas' | 'stable';
 
 export interface MusicLibrarySourceChangeDetail {
   mode: MusicLibrarySourceMode;

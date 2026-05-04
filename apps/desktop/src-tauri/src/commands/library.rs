@@ -332,6 +332,42 @@ pub async fn music_library_db_mark_user_entry_played(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_upsert_stable_entry_source(
+    app: tauri::AppHandle,
+    source: music_library_db::LibraryStableEntrySourceUpsertInput,
+) -> Result<music_library_db::LibraryStableEntrySourceRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::upsert_stable_entry_source(&app, source)
+    })
+    .await
+    .map_err(|e| format!("Music library upsert stable entry source task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_list_stable_entry_sources(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibraryStableEntrySourceQueryInput>,
+) -> Result<Vec<music_library_db::LibraryStableEntrySourceRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::list_stable_entry_sources(&app, query)
+    })
+    .await
+    .map_err(|e| format!("Music library list stable entry sources task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_delete_stable_entry_source(
+    app: tauri::AppHandle,
+    source_id: String,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::delete_stable_entry_source(&app, &source_id)
+    })
+    .await
+    .map_err(|e| format!("Music library delete stable entry source task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_db_upsert_playlist(
     app: tauri::AppHandle,
     playlist: music_library_db::LibraryPlaylistUpsertInput,

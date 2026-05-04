@@ -149,6 +149,12 @@ export const StandardNavigationPage: React.FC<NavigationPageVariantProps> = ({
                   {t('pages.music-library.source.local')}
                 </button>
                 <button
+                  className={`page-info-inline-option ${librarySourceMode === 'nas' ? 'active' : ''}`}
+                  onClick={() => handleSelectLibrarySource('nas')}
+                >
+                  {t('pages.music-library.source.nas')}
+                </button>
+                <button
                   className={`page-info-inline-option ${librarySourceMode === 'stable' ? 'active' : ''}`}
                   onClick={() => handleSelectLibrarySource('stable')}
                 >
@@ -173,6 +179,12 @@ export const StandardNavigationPage: React.FC<NavigationPageVariantProps> = ({
                     onClick={() => handleSelectLibrarySource('local')}
                   >
                     {t('pages.music-library.source.local')}
+                  </button>
+                  <button
+                    className={`page-info-popup-option ${librarySourceMode === 'nas' ? 'active' : ''}`}
+                    onClick={() => handleSelectLibrarySource('nas')}
+                  >
+                    {t('pages.music-library.source.nas')}
                   </button>
                   <button
                     className={`page-info-popup-option ${librarySourceMode === 'stable' ? 'active' : ''}`}

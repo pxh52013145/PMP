@@ -525,6 +525,12 @@
   color: var(--music-library-text-muted);
 }
 
+.music-library-search input:disabled {
+  cursor: default;
+  color: var(--music-library-text-tertiary);
+  opacity: 0.72;
+}
+
 .music-library-search-icon,
 .music-library-search-clear {
   position: absolute;

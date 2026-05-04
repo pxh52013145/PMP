@@ -3347,6 +3347,24 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
+      if (nextMode === 'nas') {
+        libraryLoadTokenRef.current += 1;
+        stableLoadTokenRef.current += 1;
+        searchTokenRef.current += 1;
+        releaseLocalLibraryViewState();
+        releaseStableLibraryViewState();
+        releaseMusicLibraryRuntimeResources();
+        setMainViewport((prev) => ({ ...prev, scrollTop: 0 }));
+
+        const root = getMainScrollRoot(moduleScrollMemory[viewMode]?.rootKind);
+
+        root?.scrollTo({ top: 0 });
+
+        return;
+      }
+
+
+
       libraryLoadTokenRef.current += 1;
       searchTokenRef.current += 1;
       releaseLocalLibraryViewState();
@@ -3399,7 +3417,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       const nextMode = customEvent.detail?.mode;
 
-      if (nextMode !== 'local' && nextMode !== 'stable') return;
+      if (nextMode !== 'local' && nextMode !== 'nas' && nextMode !== 'stable') return;
 
       handleLibrarySourceChange(nextMode);
 
@@ -3423,7 +3441,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     if (!isOpen) return;
 
-    if (librarySourceMode === 'stable') return;
+    if (librarySourceMode !== 'local') return;
 
     if (shouldUseNativeBaseQuery) {
 
@@ -3891,6 +3909,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
           return;
 
+        }
+        if (librarySourceMode === 'nas') {
+          return;
         }
 
         if (shouldUseNativeBaseQuery) {
@@ -8135,6 +8156,24 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
+    if (librarySourceMode === 'nas') {
+      return [
+        {
+          value: '0',
+          unit: t('pages.music-library.nas.stats.sources'),
+        },
+        {
+          value: '0',
+          unit: t('pages.music-library.nas.stats.tracks'),
+        },
+        {
+          value: t('pages.music-library.nas.stats.statusPending'),
+        },
+      ];
+    }
+
+
+
     if (librarySourceMode === 'stable') {
 
       return [
@@ -8414,6 +8453,18 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               <button
 
+                className={`music-library-source-btn ${librarySourceMode === 'nas' ? 'active' : ''}`}
+
+                onClick={() => handleLibrarySourceChange('nas')}
+
+              >
+
+                {t('pages.music-library.source.nas')}
+
+              </button>
+
+              <button
+
                 className={`music-library-source-btn ${librarySourceMode === 'stable' ? 'active' : ''}`}
 
                 onClick={() => handleLibrarySourceChange('stable')}
@@ -8509,7 +8560,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               </div>
 
-            ) : (
+            ) : librarySourceMode === 'stable' ? (
 
               <>
 
@@ -8539,6 +8590,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               </>
 
+            ) : (
+
+              <div className="music-library-base-toolbar-left">
+                <span className="music-library-base-results-hint">
+                  {t('pages.music-library.nas.toolbar.placeholder')}
+                </span>
+              </div>
+
             )}
 
           </div>
@@ -8557,11 +8616,16 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                   ? t('pages.music-library.search.placeholder')
 
-                  : t('pages.music-library.stable.search.placeholder')
+                  : librarySourceMode === 'stable'
+
+                    ? t('pages.music-library.stable.search.placeholder')
+
+                    : t('pages.music-library.nas.search.placeholder')
 
               }
 
               value={searchQuery}
+              disabled={librarySourceMode === 'nas'}
 
               onChange={(e) => handleSearchInputChange(e.target.value)}
               onFocus={() => setIsSearchFocused(true)}
@@ -9828,6 +9892,20 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
             )}
 
+            </div>
+          </div>
+
+        ) : librarySourceMode === 'nas' ? (
+
+          <div className="music-library-main music-library-main-nas">
+            <div className="music-library-main-scroll" ref={mainScrollRef}>
+              <div className="music-library-empty">
+                <div className="music-library-empty-icon">NAS</div>
+                <div className="music-library-empty-text">{t('pages.music-library.nas.empty.title')}</div>
+                <div className="music-library-empty-subtext">
+                  {t('pages.music-library.nas.empty.hint')}
+                </div>
+              </div>
             </div>
           </div>
 

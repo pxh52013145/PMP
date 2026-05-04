@@ -85,10 +85,6 @@ import {
   setupAudioPlaybackPreferencesListener,
   type AudioPlaybackPreferences,
 } from './audioPlaybackPreferences';
-import {
-  markNativeLibraryUserEntryPlayed,
-  upsertNativeLibraryUserEntry,
-} from '../../modules/music-library';
 import { readString, removeKey } from '../../modules/storage';
 import {
   cancelScheduledProcessWorkingSetTrim,
@@ -592,7 +588,6 @@ export class NativeAudioService implements IAudioService {
   private static readonly ROBUSTNESS_EMISSION_MIN_INTERVAL_MS = 120;
   private static readonly ROBUSTNESS_FORCE_BURST_WINDOW_MS = 300;
   private static readonly ROBUSTNESS_FORCE_BURST_LIMIT = 3;
-  private static readonly PLAYLIST_OWNER_UID = 'local:default';
   private static readonly SMART_PLAYLIST_RECENT_ID = 'smart-recently-played';
   private static readonly SMART_PLAYLIST_RECENT_NAME = 'Recently Played';
   private static readonly SMART_PLAYLIST_RECENT_LIMIT = 1000;
@@ -771,43 +766,6 @@ export class NativeAudioService implements IAudioService {
     });
   }
 
-  private markPlatformTrackPlayedBestEffort(
-    track: Track,
-    playedAtMs: number,
-    identity = resolvePlatformPlaybackIdentity(track)
-  ): void {
-    if (!isTauriRuntime()) return;
-
-    if (!identity) return;
-
-    const { sourceLocator, sourceKey, entryId } = identity;
-    const title = typeof track.title === 'string' ? track.title.trim() : '';
-    const artist = typeof track.artist === 'string' ? track.artist.trim() : '';
-
-    void upsertNativeLibraryUserEntry({
-      id: entryId,
-      ownerUid: NativeAudioService.PLAYLIST_OWNER_UID,
-      quickFingerprint: track.quickFingerprint,
-      cloudContentId: sourceLocator || sourceKey,
-      displayTitle: title || undefined,
-      displayArtist: artist || undefined,
-      inCloud: true,
-      isMissing: false,
-      createdAtMs: playedAtMs,
-      updatedAtMs: playedAtMs,
-    })
-      .then((entry) => {
-        if (!entry) return false;
-        return markNativeLibraryUserEntryPlayed(entry.id, { playedAtMs });
-      })
-      .catch((error) => {
-        this.telemetry.warn('audio.platform-entry.played-mark.failed', {
-          message: readTelemetryErrorMessage(error),
-          fields: buildTrackTelemetryFields(track),
-        });
-      });
-  }
-
   private async prepareSourceForNativePlayback(track: Track): Promise<PreparedAudioSource> {
     return this.sourcePreparation.prepare(track);
   }
@@ -867,7 +825,6 @@ export class NativeAudioService implements IAudioService {
     const playedAtMs = Date.now();
     const platformIdentity = resolvePlatformPlaybackIdentity(track);
     this.enqueueRecentSmartPlaylistTrackBestEffort(track, playedAtMs);
-    this.markPlatformTrackPlayedBestEffort(track, playedAtMs, platformIdentity);
 
     const trackId = typeof track?.id === 'string' ? track.id.trim() : '';
     if (!trackId || platformIdentity) return;

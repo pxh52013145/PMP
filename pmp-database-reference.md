@@ -50,7 +50,7 @@
 
 | 名称 | 类型 | 运行侧 | 路径 / 名称 | 当前版本 | 用途 |
 | --- | --- | --- | --- | --- | --- |
-| `music-library-v1.sqlite3` | SQLite | Tauri Native | `<AppData>/music-library/music-library-v1.sqlite3` | `8` | 音乐库主数据库 |
+| `music-library-v1.sqlite3` | SQLite | Tauri Native | `<AppData>/music-library/music-library-v1.sqlite3` | `11` | 音乐库主数据库 |
 | `vst-library-v1.sqlite3` | SQLite | Tauri Native | `<AppData>/audio/vst-library-v1.sqlite3` | `3` | VST 插件索引与扫描历史 |
 | `MusicLibrary` | IndexedDB | 浏览器 / WebView | `indexedDB["MusicLibrary"]` | `5` | 音乐库前端回退存储 |
 | `pixel-matrix-player` | IndexedDB | 浏览器 / WebView | `indexedDB["pixel-matrix-player"]` | `1` | durable text 文本持久化 |
@@ -81,7 +81,7 @@ flowchart TB
 
 - `music-library-v1.sqlite3`
   - 当前最核心的音乐库真源。
-  - 承载本地音轨、用户条目、连接器、歌词、播放列表、云回退任务。
+  - 承载本地音轨、稳定条目、稳定条目的多来源链接、连接器、歌词、播放列表、云回退任务。
 - `vst-library-v1.sqlite3`
   - 面向音频插件扫描与索引。
   - 与音乐库域完全分开。
@@ -95,12 +95,13 @@ flowchart TB
 
 ## 3. 音乐库主数据库：`music-library-v1.sqlite3`
 
-### 3.0 先说结论：它是“一个物理库，两个逻辑库”
+### 3.0 先说结论：它是“一个物理库，三个音乐库入口”
 
 你说的这个记忆是对的。  
 当前 PMP 的音乐库在**逻辑设计**上，确实可以分成：
 
 - **本地库（Local Library）**
+- **NAS 库（NAS Library）**
 - **稳定库（Stable Library）**
 
 但在**物理落地**上，它们目前并不是两个独立 SQLite 文件，而是共同落在同一个数据库文件：
@@ -110,16 +111,18 @@ flowchart TB
 所以这份手册里需要同时区分两层含义：
 
 1. **物理数据库层**：实际只有一个音乐库主库文件。
-2. **逻辑领域层**：主库内部又分“本地库域”和“稳定库域”。
+2. **逻辑入口层**：UI 上有本地库、NAS 库、稳定库三个入口。
+3. **领域模型层**：主库内部以本地资源、稳定条目、稳定条目的多来源链接作为核心结构。
 
 ### 3.0.1 逻辑分层总览
 
 | 逻辑库 | 核心目标 | 核心实体 | 典型特征 |
 | --- | --- | --- | --- |
 | 本地库 | 描述“本机磁盘上真实存在的音频文件” | `sources`、`local_tracks` | 面向扫描、文件路径、元数据、可播放本地资源 |
-| 稳定库 | 描述“用户视角下稳定存在的音乐条目” | `user_entries` | 面向用户条目、云关联、缺失状态、回退策略、标签与评分 |
+| NAS 库 | 描述“局域网 / NAS 服务中的远程音频资源” | 当前先作为 UI 入口与 `stable_entry_sources.source_kind = 'nas'` 的预留来源 | 面向远程服务、可迁移 locator、可用性检测；专门的 NAS 扫描表尚未落地 |
+| 稳定库 | 描述“用户视角下稳定存在的音乐条目” | `user_entries`、`stable_entry_sources` | `user_entries` 保持稳定身份；`stable_entry_sources` 记录本地 / NAS / 平台 / 缓存 / PMP 服务器来源 |
 
-### 3.0.2 双库关系图
+### 3.0.2 音乐库入口关系图
 
 ```mermaid
 flowchart LR
@@ -128,8 +131,13 @@ flowchart LR
     tracks["local_tracks"]
   end
 
+  subgraph nas["NAS 库 NAS Library"]
+    nasSources["NAS source links\nstable_entry_sources.source_kind = nas"]
+  end
+
   subgraph stable["稳定库 Stable Library"]
     entries["user_entries"]
+    entrySources["stable_entry_sources"]
     refs["track_provider_refs"]
     covers["cover_refs"]
     lyrics["lyric_refs / lyric_documents / lyric_candidates / lyric_selection"]
@@ -139,7 +147,9 @@ flowchart LR
   end
 
   sources --> tracks
-  tracks -. 通过 track_id / quick_fingerprint .-> entries
+  tracks -. 通过 track_id / quick_fingerprint .-> entrySources
+  nasSources -. 通过 locator / source_item_id .-> entrySources
+  entries --> entrySources
   entries --> refs
   entries --> covers
   entries --> lyrics
@@ -148,7 +158,7 @@ flowchart LR
   entries --> hashjobs
 ```
 
-### 3.0.3 双库类图
+### 3.0.3 音乐库入口类图
 
 ```mermaid
 classDiagram
@@ -161,6 +171,7 @@ classDiagram
 
   class StableLibrary {
     +user_entries
+    +stable_entry_sources
     +fallback_tasks
     +cloud_hash_jobs
     +resolvePlayback()
@@ -185,13 +196,22 @@ classDiagram
   class StableEntry {
     +id: string
     +owner_uid: string
-    +track_id: string?
-    +quick_fingerprint: string?
-    +cloud_content_id: string?
     +rating: number?
     +tags_json: string?
     +in_cloud: bool
     +is_missing: bool
+  }
+
+  class StableEntrySource {
+    +id: string
+    +entry_id: string
+    +source_kind: string
+    +connector_id: string?
+    +source_id: string?
+    +source_item_id: string?
+    +locator: string?
+    +availability: string
+    +priority: number
   }
 
   class FallbackTask {
@@ -207,9 +227,11 @@ classDiagram
   LocalLibrary *-- Source
   LocalLibrary *-- LocalTrack
   StableLibrary *-- StableEntry
+  StableLibrary *-- StableEntrySource
   StableLibrary *-- FallbackTask
   StableLibrary *-- CloudHashJob
-  LocalTrack --> StableEntry : track_id / quick_fingerprint
+  StableEntry "1" --> "many" StableEntrySource : has_sources
+  LocalTrack --> StableEntrySource : local source
 ```
 
 ### 3.0.4 为什么叫“稳定库”
@@ -222,16 +244,17 @@ classDiagram
 - 但用户视角下的条目仍然可以保留：
   - 条目 ID
   - 所属用户
-  - 云内容 ID
+  - 显示标题 / 艺术家
   - 标签
   - 评分
   - 缺失状态
+  - 多个可替换音源链接
   - 回退任务
 
 所以稳定库更像是：
 
 - **用户音乐身份层**
-- **云 / 本地桥接层**
+- **来源解析与桥接层**
 - **条目持久层**
 
 而本地库更像是：
@@ -244,7 +267,7 @@ classDiagram
 
 - 类型：SQLite
 - 路径：`<AppData>/music-library/music-library-v1.sqlite3`
-- 当前 schema version：`8`
+- 当前 schema version：`11`
 - 代码真源：`apps/desktop/src-tauri/src/music_library_db.rs`
 - 初始化 PRAGMA：
   - `PRAGMA foreign_keys = ON`
@@ -263,41 +286,45 @@ classDiagram
 | `v6` | 增加歌词流水线表：`lyric_documents`、`lyric_candidates`、`lyric_selection`、`lyric_fetch_jobs` |
 | `v7` | 增加播放列表表：`playlists`、`playlist_items` |
 | `v8` | `playlists` 增加 `cover_url` |
+| `v9` | `local_tracks` 增加 `year`、`format` |
+| `v10` | 增加平台实例授权表：`platform_instance_auth` |
+| `v11` | 增加稳定条目多来源表：`stable_entry_sources` |
 
 ### 3.3 结构目录
 
 | 域 | 表 |
 | --- | --- |
-| 核心音乐库 | `sources`、`local_tracks`、`user_entries` |
+| 核心音乐库 | `sources`、`local_tracks`、`user_entries`、`stable_entry_sources` |
 | 连接器与同步 | `connectors`、`connector_accounts`、`source_sync_state`、`source_fingerprint_state` |
 | 云端映射与元数据引用 | `track_provider_refs`、`cover_refs`、`lyric_refs`、`metadata_refresh_jobs` |
 | 歌词流水线 | `lyric_documents`、`lyric_candidates`、`lyric_selection`、`lyric_fetch_jobs` |
 | 播放列表 | `playlists`、`playlist_items` |
 | 云回退与哈希任务 | `fallback_tasks`、`cloud_hash_jobs` |
 
-### 3.3.1 按“本地库 / 稳定库”重排后的结构目录
+### 3.3.1 按“本地库 / NAS 库 / 稳定库”重排后的结构目录
 
 | 逻辑库 | 主表 | 辅助表 |
 | --- | --- | --- |
 | 本地库 `Local Library` | `sources`、`local_tracks` | `source_sync_state`、`source_fingerprint_state` |
-| 稳定库 `Stable Library` | `user_entries` | `track_provider_refs`、`cover_refs`、`lyric_refs`、`metadata_refresh_jobs`、`fallback_tasks`、`cloud_hash_jobs` |
-| 共享能力域 | `playlists`、`playlist_items`、`lyric_documents`、`lyric_candidates`、`lyric_selection`、`lyric_fetch_jobs` | 由本地库与稳定库共同引用 |
+| NAS 库 `NAS Library` | 暂无独立主表 | 当前通过 `stable_entry_sources.source_kind = 'nas'` 预留来源链接 |
+| 稳定库 `Stable Library` | `user_entries` | `stable_entry_sources`、`track_provider_refs`、`cover_refs`、`lyric_refs`、`metadata_refresh_jobs`、`fallback_tasks`、`cloud_hash_jobs` |
+| 共享能力域 | `playlists`、`playlist_items`、`lyric_documents`、`lyric_candidates`、`lyric_selection`、`lyric_fetch_jobs` | 由本地库、NAS 库与稳定库共同引用 |
 
 ### 3.3.2 当前代码中的“稳定库”落点
 
 当前稳定库在代码里的落点是明确存在的，不只是概念：
 
-- UI 源切换：`apps/desktop/src/components/pages/MusicLibrary.tsx:3128`
-- 稳定库列表加载：`apps/desktop/src/components/pages/MusicLibrary.tsx:1170`
-- 稳定库统计模型：`apps/desktop/src/modules/music-library/stableLibraryModel.ts:30`
-- 稳定库统计计算：`apps/desktop/src/modules/music-library/stableLibraryModel.ts:176`
-- 稳定库列表服务：`apps/desktop/src/services/audio/MusicLibraryService.ts:4152`
-- 稳定库底层实体：`apps/desktop/src/modules/music-library/nativeLibraryDb.ts:580`
+- UI 源切换：`apps/desktop/src/components/pages/MusicLibrary.tsx`
+- 稳定库统计模型：`apps/desktop/src/modules/music-library/stableLibraryModel.ts`
+- 稳定库列表服务：`apps/desktop/src/services/audio/MusicLibraryService.ts`
+- 稳定库底层实体 / TS 桥接：`apps/desktop/src/modules/music-library/nativeLibraryDb.ts`
+- 稳定条目来源链接：`apps/desktop/src-tauri/src/music_library_db.rs` 的 `stable_entry_sources`
 
 因此更准确的说法应该是：
 
 - **有本地库，也有稳定库；**
-- **但它们当前是共享一个物理 SQLite 主库的两个逻辑域。**
+- **现在 UI 还会出现 NAS 库入口；**
+- **但它们当前共享一个物理 SQLite 主库，并通过来源链接区分本地 / NAS / 平台 / 缓存。**
 
 ### 3.3.3 本地库字段矩阵
 
@@ -339,15 +366,20 @@ classDiagram
 
 ### 3.3.4 稳定库字段矩阵
 
-> 稳定库以“用户条目身份”而不是“文件资源”作为中心。
+> 稳定库以“用户条目身份”而不是“文件资源”作为中心。  
+> `user_entries.track_id`、`quick_fingerprint`、`cloud_content_id` 仍是兼容字段；新的来源结构应优先落到 `stable_entry_sources`。
 
 | 语义字段 | 稳定库 UI | `NativeLibraryUserEntryRecord` | SQLite | 说明 |
 | --- | --- | --- | --- | --- |
 | 条目 ID | 间接使用 | `id` | `user_entries.id` | 稳定条目主键 |
 | 所属用户 | 是 | `ownerUid` | `user_entries.owner_uid` | 稳定库主视图直接显示 |
-| 关联本地音轨 ID | 不直接展示 | `trackId` | `user_entries.track_id` | 用于桥接本地库 |
-| 快速指纹 | 不直接展示 | `quickFingerprint` | `user_entries.quick_fingerprint` | 本地 / 稳定桥接关键字段 |
-| 云内容 ID | 不直接展示 | `cloudContentId` | `user_entries.cloud_content_id` | 云平台关联关键字段 |
+| 关联本地音轨 ID | 不直接展示 | `trackId` | `user_entries.track_id` / `stable_entry_sources.track_id` | `user_entries` 中为兼容字段；新来源记录优先写 `stable_entry_sources` |
+| 快速指纹 | 不直接展示 | `quickFingerprint` | `user_entries.quick_fingerprint` / `stable_entry_sources.quick_fingerprint` | 本地 / 稳定桥接关键字段 |
+| 云内容 ID | 不直接展示 | `cloudContentId` | `user_entries.cloud_content_id` / `stable_entry_sources.locator` | `user_entries` 中为兼容字段；平台 URI 应进入来源链接 |
+| 来源类型 | 不直接展示 | `sourceKind` | `stable_entry_sources.source_kind` | `local` / `nas` / `platform` / `cache` / `pmp-server` |
+| 来源定位 | 不直接展示 | `locator` | `stable_entry_sources.locator` | 本地路径、NAS URI、平台 URI、缓存路径等 |
+| 来源可用性 | 间接显示为状态 | `availability` | `stable_entry_sources.availability` | `available` / `missing` / `remote-only` / `stale` / `auth-required` / `unknown` |
+| 来源优先级 | 后续解析使用 | `priority` | `stable_entry_sources.priority` | 多来源同时存在时决定优先解析顺序 |
 | 显示标题 | 是 | `displayTitle` | `user_entries.display_title` | 稳定库主显示字段 |
 | 显示艺术家 | 是 | `displayArtist` | `user_entries.display_artist` | 稳定库主显示字段 |
 | 评分 | 在元数据编辑器中编辑 | `rating` | `user_entries.rating` | 稳定库当前可编辑字段之一 |
@@ -426,7 +458,7 @@ classDiagram
 
 - **本地库核心播放与检索字段**已经有较好的 Native SQLite 承接。
 - **本地库展示字段**仍有不少只存在于前端 `Track` 宽对象层。
-- **稳定库字段**则已经形成较稳定的条目层结构，但目前主要围绕 `user_entries` 展开。
+- **稳定库字段**现在拆成 `user_entries` 的稳定身份层和 `stable_entry_sources` 的来源链接层，后续 resolver 应围绕这两层展开。
 
 这也是为什么后续如果要做：
 
@@ -436,6 +468,15 @@ classDiagram
 - 更彻底的 Native 查询下推
 
 就不能只看现有表结构，还必须把字段注册层补起来。
+
+### 3.3.7 稳定库的来源解析原则
+
+稳定库不应该把“听过一个平台音源”直接等同于“用户有一个稳定条目”。新的落点是：
+
+- `user_entries`：稳定身份、用户编辑属性、播放统计、缺失状态。
+- `stable_entry_sources`：这个稳定条目有哪些可尝试音源。
+- 平台播放 / 搜索：默认只作为临时播放或候选来源，不自动创建 `user_entries`。
+- 本地 / NAS / 平台 / 缓存 / PMP 服务器同时存在时，resolver 应按 `availability`、`priority`、`confidence`、`last_verified_at_ms` 选择音源；文件移动或 NAS 断连时只更新来源可用性，不删除稳定条目。
 
 ### 3.4 核心类图
 
@@ -476,6 +517,16 @@ classDiagram
     +display_artist: string?
     +rating: number?
     +tags_json: string?
+  }
+
+  class StableEntrySource {
+    +id: string
+    +entry_id: string
+    +source_kind: string
+    +source_item_id: string?
+    +locator: string?
+    +availability: string
+    +priority: number
   }
 
   class Connector {
@@ -553,8 +604,10 @@ classDiagram
   }
 
   Source "1" --> "many" LocalTrack : contains
-  LocalTrack "0..1" --> "many" UserEntry : linked_by
+  UserEntry "1" --> "many" StableEntrySource : has_sources
+  LocalTrack "0..1" --> "many" StableEntrySource : local_link
   Connector "1" --> "many" ConnectorAccount : owns
+  Connector "1" --> "many" StableEntrySource : source_auth
   Connector "1" --> "many" TrackProviderRef : provides
   UserEntry "1" --> "many" TrackProviderRef : maps_to
   LyricDocument "1" --> "many" LyricCandidate : has
@@ -572,12 +625,15 @@ classDiagram
 ```mermaid
 erDiagram
   sources ||--o{ local_tracks : contains
-  local_tracks o|--o{ user_entries : links
+  sources ||--o{ stable_entry_sources : roots
+  local_tracks o|--o{ stable_entry_sources : local_links
   connectors ||--o{ connector_accounts : owns
   connectors ||--o{ source_sync_state : syncs
   sources ||--o| source_sync_state : has
   sources ||--o| source_fingerprint_state : snapshots
   connectors ||--o{ track_provider_refs : provides
+  connectors ||--o{ stable_entry_sources : source_auth
+  user_entries ||--o{ stable_entry_sources : sources
   user_entries ||--o{ track_provider_refs : maps
   user_entries ||--o{ cover_refs : covers
   user_entries ||--o{ lyric_refs : lyrics
@@ -702,7 +758,60 @@ erDiagram
 
 维护备注：
 
+- `track_id`、`quick_fingerprint`、`cloud_content_id` 是兼容字段；新增来源定位不要继续扩宽这张表，优先写入 `stable_entry_sources`。
 - 后续如果做类似 `musictag` 的用户层标签编辑，优先评估是写回 `user_entries` 还是新增扩展字段表，不要把所有新属性都硬塞进这张表。
+
+#### 3.6.3.1 `stable_entry_sources`
+
+- 用途：稳定条目的多来源链接表。
+- 主键：`id`
+- 外键：
+  - `entry_id -> user_entries.id`，`ON DELETE CASCADE`
+  - `connector_id -> connectors.id`，`ON DELETE SET NULL`
+  - `source_id -> sources.id`，`ON DELETE SET NULL`
+  - `track_id -> local_tracks.id`，`ON DELETE SET NULL`
+- 约束：
+  - `source_kind` 取值：`local`、`nas`、`platform`、`cache`、`pmp-server`
+  - `availability` 取值：`available`、`missing`、`remote-only`、`stale`、`auth-required`、`unknown`
+
+核心列：
+
+| 列名 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `TEXT PRIMARY KEY` | 来源链接 ID |
+| `entry_id` | `TEXT NOT NULL` | 所属稳定条目 |
+| `source_kind` | `TEXT NOT NULL` | 来源类型 |
+| `connector_id` | `TEXT` | 平台 / NAS / 服务器连接器 |
+| `source_id` | `TEXT` | 本地或远程来源根记录 |
+| `source_item_id` | `TEXT` | 来源内部条目 ID |
+| `locator` | `TEXT` | 路径、URI、缓存定位符 |
+| `track_id` | `TEXT` | 本地音轨 ID |
+| `quick_fingerprint` | `TEXT` | 快速指纹 |
+| `full_fingerprint` | `TEXT` | 完整指纹 |
+| `availability` | `TEXT NOT NULL DEFAULT 'unknown'` | 当前可用性 |
+| `quality_score` | `REAL` | 质量评分，范围 `0..1` |
+| `confidence` | `REAL NOT NULL DEFAULT 1.0` | 匹配置信度，范围 `0..1` |
+| `priority` | `INTEGER NOT NULL DEFAULT 100` | resolver 优先级 |
+| `last_verified_at_ms` | `INTEGER` | 最近验证时间 |
+| `created_at_ms` | `INTEGER NOT NULL` | 创建时间 |
+| `updated_at_ms` | `INTEGER NOT NULL` | 更新时间 |
+
+索引：
+
+- `stable_entry_sources_entry_id_idx`
+- `stable_entry_sources_source_kind_idx`
+- `stable_entry_sources_connector_id_idx`
+- `stable_entry_sources_source_id_idx`
+- `stable_entry_sources_source_item_id_idx`
+- `stable_entry_sources_track_id_idx`
+- `stable_entry_sources_quick_fingerprint_idx`
+- `stable_entry_sources_availability_idx`
+- `stable_entry_sources_priority_idx`
+
+维护备注：
+
+- 平台搜索和平台播放不应默认自动创建 `user_entries`；只有用户明确收藏 / 加入稳定库，或已经存在稳定条目时，才应写入来源链接。
+- 文件移动、NAS 断连、平台授权过期时，优先更新 `availability`、`locator`、`last_verified_at_ms`，不要删除 `user_entries`。
 
 #### 3.6.4 `connectors`
 
@@ -1641,9 +1750,9 @@ classDiagram
 
 如果你只是想快速定位某块结构：
 
-- 本地库 / 稳定库逻辑分层看 `3.0 先说结论：它是“一个物理库，两个逻辑库”`
-- 本地库 / 稳定库关系图看 `3.0.2 双库关系图`
-- 本地库 / 稳定库类图看 `3.0.3 双库类图`
+- 本地库 / NAS 库 / 稳定库逻辑分层看 `3.0 先说结论：它是“一个物理库，三个音乐库入口”`
+- 音乐库入口关系图看 `3.0.2 音乐库入口关系图`
+- 音乐库入口类图看 `3.0.3 音乐库入口类图`
 - 本地库 / 稳定库字段矩阵看 `3.3.3` 到 `3.3.6`
 - 音乐库主库看 `3. 音乐库主数据库`
 - VST 看 `4. VST 数据库`

@@ -5628,18 +5628,6 @@ export class MusicLibraryService {
       throw new Error('Cloud playback blueprint requires entryId and ownerUid');
     }
 
-    if (isTauriRuntime()) {
-      void this.upsertCloudLibraryEntry({
-        entryId,
-        ownerUid,
-        trackId: blueprint.trackId,
-        quickFingerprint: blueprint.quickFingerprint,
-        cloudContentId: blueprint.cloudContentId,
-        inCloud: true,
-        updatedAtMs: Date.now(),
-      });
-    }
-
     const local = await this.resolveLocalPlaybackCandidate({
       trackId: blueprint.trackId,
       quickFingerprint: blueprint.quickFingerprint,
