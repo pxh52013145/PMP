@@ -68,6 +68,7 @@ import {
   readInstalledExtensionPmpHostContributions,
 } from './installedExtensionHostPmp';
 import { INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN } from './installedExtensionRuntimeManager';
+import { SHELL_SURFACE_MANAGER_TOKEN } from './shellSurfaceManager';
 import {
   completePluginSurfaceMount,
   createPluginRuntimeResolveTelemetryContext,
@@ -165,6 +166,7 @@ function InstalledExtensionSurfaceHost({
     SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN
   ) as SpaceRuntimeGovernanceService | null;
   const runtimeManager = kernel.services.get(INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN);
+  const shellSurfaceManager = kernel.services.getOptional(SHELL_SURFACE_MANAGER_TOKEN);
   const restartToken = useInstalledExtensionRuntimeRestartToken(pluginId);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const surfaceMountTelemetryRef = useRef<PluginLifecycleTelemetryHandle | null>(null);
@@ -225,6 +227,7 @@ function InstalledExtensionSurfaceHost({
       permissions,
       audioService,
       commands,
+      shellSurfaceManager,
       navigation,
       keybindings,
       onHostCapabilityActivity: (activity) => {
@@ -247,6 +250,7 @@ function InstalledExtensionSurfaceHost({
     permissions,
     pluginId,
     runtimeManager,
+    shellSurfaceManager,
   ]);
 
   const runtimeResolution = useMemo(() => {

@@ -6,6 +6,7 @@ import type { PlayMode, Track } from '../../../services/audio';
 import type { AudioSpectrumTap } from '../../../services/audio/types';
 import { musicLibraryService } from '../../../services/audio/MusicLibraryService';
 import type { CommandsService } from '../../../services/commands';
+import type { ShellSurfaceManager } from '../shellSurfaceManager';
 import { flushStorageWrites } from '../../../modules/storage';
 import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import { invokeWithTelemetry } from '../../../services/telemetry/tauriInvokeTelemetry';
@@ -195,6 +196,7 @@ export function createPluginMountApi({
   navigation,
   keybindings,
   commands,
+  shellSurfaceManager,
   trayApi: trayApiOverride,
   onHostCapabilityActivity,
 }: {
@@ -206,6 +208,7 @@ export function createPluginMountApi({
   navigation: HostNavigation;
   keybindings?: KeybindingsService | null;
   commands?: CommandsService | null;
+  shellSurfaceManager?: ShellSurfaceManager | null;
   trayApi?: PluginHostTrayApi | null;
   onHostCapabilityActivity?: (activity: {
     capabilityId: string;
@@ -568,6 +571,7 @@ export function createPluginMountApi({
     keybindings: keybindings ?? undefined,
     navigation,
     configApi,
+    shellSurfaceManager: shellSurfaceManager ?? undefined,
     sourceKind,
     trayApi,
     windowApi,

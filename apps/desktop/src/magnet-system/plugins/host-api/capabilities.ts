@@ -4,6 +4,7 @@ import type { CommandContribution } from '../../../contracts/contributions';
 import {
   PMP_HOST_CAPABILITY_FAMILIES,
   PMP_HOST_CAPABILITY_PACK_DESCRIPTOR,
+  type ShellSurfaceType,
   type PmpHostCapabilityFamilyId,
   type PmpHostCapabilityPackDescriptor,
 } from '@pixel-matrix/plugin-platform-contracts';
@@ -73,6 +74,7 @@ import {
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
 import { readExtensionConfigSyncState } from '../pluginConfig';
 import { recordInstalledExtensionAuditEvent } from '../extensionsGovernance';
+import { readPluginShellSurfaceDescriptor } from '../shellSurfaceDescriptors';
 import { hasPermission } from './permissions';
 import type {
   PluginHostAudioInputAdapterGovernanceOptions,
@@ -211,6 +213,7 @@ const SHELL_MENU_ITEM_PERMISSION_BY_COMMAND_ID: Record<string, string | null> = 
   'app:navigate-home': 'api:navigation',
   'app:navigate-settings': 'api:navigation',
   'app:navigate-music-library': 'api:navigation',
+  'musicTag.openWorkbench': 'api:navigation',
   'app:navigate-dsp-rack': 'api:navigation',
   'app:navigate-perf-monitor': 'api:navigation',
   'app:navigate-native-debug': 'api:navigation',
@@ -437,6 +440,10 @@ function asWindowId(value: unknown): string | null {
   const normalized = asNonEmptyString(value);
   if (!normalized) return null;
   return /^[a-z0-9-]{1,48}$/.test(normalized) ? normalized : null;
+}
+
+function asShellSurfaceType(value: unknown): ShellSurfaceType | null {
+  return value === 'overlay' || value === 'desktop-widget' ? value : null;
 }
 
 function resolvePayloadRecord(value: unknown, key?: string): Record<string, unknown> | null {
@@ -3062,20 +3069,19 @@ function createPmpWindowHandler(): PluginHostCapabilityHandler {
       return denied;
     }
 
-    const windowApi = request.context.windowApi;
-    if (!windowApi) {
-      return resultError('NOT_AVAILABLE', 'Window bridge is not available');
-    }
-
     switch (request.method) {
       case 'describe':
         return resultOk({
           capabilityId: HOST_PMP_WINDOW_CAPABILITY_ID,
           stage: 'host-pack',
           implementation: 'pmp-host-window-shell',
-          methods: ['describe', 'open', 'close'],
+          methods: ['describe', 'open', 'close', 'summonSurface', 'dismissSurface'],
         });
       case 'open': {
+        const windowApi = request.context.windowApi;
+        if (!windowApi) {
+          return resultError('NOT_AVAILABLE', 'Window bridge is not available');
+        }
         const payload = asObject(request.payload);
         const windowId = asWindowId(payload?.windowId);
         if (!windowId) {
@@ -3097,6 +3103,10 @@ function createPmpWindowHandler(): PluginHostCapabilityHandler {
         });
       }
       case 'close': {
+        const windowApi = request.context.windowApi;
+        if (!windowApi) {
+          return resultError('NOT_AVAILABLE', 'Window bridge is not available');
+        }
         const payload = asObject(request.payload);
         const windowId = asWindowId(payload?.windowId);
         if (!windowId) {
@@ -3108,6 +3118,91 @@ function createPmpWindowHandler(): PluginHostCapabilityHandler {
           capabilityId: HOST_PMP_WINDOW_CAPABILITY_ID,
           closed: true,
           windowId,
+        });
+      }
+      case 'summonSurface': {
+        const shellSurfaceManager = request.context.shellSurfaceManager;
+        if (!shellSurfaceManager) {
+          return resultError('NOT_AVAILABLE', 'Shell surface manager is not available', {
+            retryable: true,
+          });
+        }
+
+        const payload = asObject(request.payload);
+        const surfaceId = asWindowId(payload?.surfaceId);
+        if (!surfaceId) {
+          return resultError('INVALID_PAYLOAD', 'payload.surfaceId is required');
+        }
+
+        const sourceKind = request.context.sourceKind ?? 'extv2';
+        const surfaceType = asShellSurfaceType(payload?.surfaceType);
+        const lookup = readPluginShellSurfaceDescriptor({
+          sourceKind,
+          pluginId: request.context.pluginId,
+          surfaceId,
+          ...(surfaceType ? { surfaceType } : {}),
+        });
+
+        if (lookup.status !== 'present') {
+          return resultError('NOT_FOUND', `Shell surface is not available: ${surfaceId}`, {
+            details: {
+              status: lookup.status,
+              surfaceId,
+            },
+          });
+        }
+
+        await shellSurfaceManager.summonSurface(lookup.record);
+        return resultOk({
+          capabilityId: HOST_PMP_WINDOW_CAPABILITY_ID,
+          summoned: true,
+          surfaceId,
+          surfaceType: lookup.record.descriptor.surfaceType,
+        });
+      }
+      case 'dismissSurface': {
+        const shellSurfaceManager = request.context.shellSurfaceManager;
+        if (!shellSurfaceManager) {
+          return resultError('NOT_AVAILABLE', 'Shell surface manager is not available', {
+            retryable: true,
+          });
+        }
+
+        const payload = asObject(request.payload);
+        const surfaceId = asWindowId(payload?.surfaceId);
+        if (!surfaceId) {
+          return resultError('INVALID_PAYLOAD', 'payload.surfaceId is required');
+        }
+
+        const sourceKind = request.context.sourceKind ?? 'extv2';
+        const surfaceType = asShellSurfaceType(payload?.surfaceType);
+        const lookup = readPluginShellSurfaceDescriptor({
+          sourceKind,
+          pluginId: request.context.pluginId,
+          surfaceId,
+          ...(surfaceType ? { surfaceType } : {}),
+        });
+
+        if (lookup.status !== 'present') {
+          return resultError('NOT_FOUND', `Shell surface is not available: ${surfaceId}`, {
+            details: {
+              status: lookup.status,
+              surfaceId,
+            },
+          });
+        }
+
+        await shellSurfaceManager.dismissSurface({
+          sourceKind,
+          pluginId: request.context.pluginId,
+          surfaceId,
+          surfaceType: lookup.record.descriptor.surfaceType,
+        });
+        return resultOk({
+          capabilityId: HOST_PMP_WINDOW_CAPABILITY_ID,
+          dismissed: true,
+          surfaceId,
+          surfaceType: lookup.record.descriptor.surfaceType,
         });
       }
       default:

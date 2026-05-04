@@ -14,6 +14,7 @@ import type { CommandsService } from '../../../services/commands';
 import type { KeybindingsService } from '../../../services/keybindings';
 import type { PluginSurfaceSourceKind } from '../../../contracts/pluginSurfaceSource';
 import type { DynamicColors } from '../../../utils/dynamicColors';
+import type { ShellSurfaceManager } from '../shellSurfaceManager';
 
 export type PluginCoverSnapshot = {
   url: string;
@@ -39,6 +40,7 @@ export type PluginHostCapabilityInvokeContext = SharedHostCapabilityInvokeContex
   keybindings?: KeybindingsService;
   navigation?: HostNavigation;
   configApi?: PluginConfigApi;
+  shellSurfaceManager?: ShellSurfaceManager;
   sourceKind?: PluginSurfaceSourceKind;
   trayApi?: PluginHostTrayApi;
   windowApi?: PluginWindowApi;
