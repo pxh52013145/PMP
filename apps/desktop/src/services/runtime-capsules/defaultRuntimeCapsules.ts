@@ -17,6 +17,7 @@ export const DEFAULT_RUNTIME_CAPSULE_MANIFESTS: RuntimeCapsuleManifest[] = [
     memoryTier: 'medium',
     startup: 'first-use',
     backgroundPolicy: 'realtime-critical',
+    reclaimableWhenIdle: true,
     warmRetentionMs: 60_000,
     hibernateAfterMs: 300_000,
     dependencies: ['audio.shell'],

@@ -391,6 +391,7 @@ describe('DefaultRuntimeCapsuleManagerService', () => {
       memoryTier: 'medium',
       startup: 'first-use',
       backgroundPolicy: 'realtime-critical',
+      reclaimableWhenIdle: true,
       warmRetentionMs: 60_000,
       hibernateAfterMs: 300_000,
       provides: ['audio.transport'],
@@ -428,6 +429,43 @@ describe('DefaultRuntimeCapsuleManagerService', () => {
     ]);
     expect(service.collectSnapshot().capsules[0]).toMatchObject({
       state: 'hibernated',
+      activeLeases: [],
+    });
+  });
+
+  it('keeps generic realtime-critical capsules pinned unless they opt into idle reclaim', () => {
+    let now = 1_000;
+    const service = new DefaultRuntimeCapsuleManagerService(() => now);
+    service.registerCapsule({
+      ...TEST_CAPSULE,
+      id: 'critical.recorder',
+      kind: 'tool',
+      memoryTier: 'medium',
+      startup: 'first-use',
+      backgroundPolicy: 'realtime-critical',
+      warmRetentionMs: 1,
+      hibernateAfterMs: 1,
+      provides: ['critical.recorder'],
+    });
+    const lease = service.acquireLease({
+      capabilityId: 'critical.recorder',
+      ownerKind: 'system',
+      ownerId: 'recorder',
+    });
+
+    now = 2_000;
+    service.releaseLease(lease?.id ?? '');
+
+    expect(
+      service.reclaimInactiveCapsules({
+        mode: 'hibernate',
+        minMemoryTier: 'medium',
+        bypassWarmRetention: true,
+        reason: { kind: 'memory-pressure', pressureLevel: 'high' },
+      })
+    ).toEqual([]);
+    expect(service.collectSnapshot().capsules[0]).toMatchObject({
+      state: 'idle-warm',
       activeLeases: [],
     });
   });

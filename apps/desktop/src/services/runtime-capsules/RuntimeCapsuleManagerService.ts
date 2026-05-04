@@ -743,7 +743,12 @@ export class DefaultRuntimeCapsuleManagerService implements RuntimeCapsuleManage
     if (record.activeLeases.size > 0) return false;
     if (record.manifest.startup === 'core') return false;
     if (memoryTierScore(record.manifest.memoryTier) < memoryTierScore(minMemoryTier)) return false;
-    if (options.includePinned !== true && record.manifest.backgroundPolicy === 'pinned') {
+    if (
+      options.includePinned !== true &&
+      (record.manifest.backgroundPolicy === 'pinned' ||
+        (record.manifest.backgroundPolicy === 'realtime-critical' &&
+          record.manifest.reclaimableWhenIdle !== true))
+    ) {
       return false;
     }
 

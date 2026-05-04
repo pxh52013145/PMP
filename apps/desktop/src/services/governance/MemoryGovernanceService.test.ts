@@ -150,6 +150,52 @@ describe('DefaultMemoryGovernanceService', () => {
     });
   });
 
+  it('runs terminal hidden cleanup immediately while an interval run is in flight', async () => {
+    mocks.isTauri = true;
+    const firstRefresh = createDeferred<null>();
+    const refreshTotalsSnapshot = vi.fn().mockReturnValueOnce(firstRefresh.promise);
+    const service = createService({
+      processPerfService: createProcessPerfService(refreshTotalsSnapshot),
+    });
+
+    const intervalRun = service.runOnce('interval');
+    const terminalRun = service.runOnce('beforeunload');
+
+    expect(refreshTotalsSnapshot).toHaveBeenCalledTimes(1);
+    await expect(terminalRun).resolves.toMatchObject({
+      reason: 'beforeunload',
+      snapshot: {
+        webview2: undefined,
+      },
+      executed: expect.arrayContaining([
+        'trim-webview2-working-set',
+        'trim-tree-working-set',
+        'destroy-hidden-editor-windows',
+      ]),
+    });
+    expect(refreshTotalsSnapshot).toHaveBeenCalledTimes(1);
+
+    firstRefresh.resolve(null);
+    await expect(intervalRun).resolves.toMatchObject({ reason: 'interval' });
+  });
+
+  it('skips WebView2 sampling for terminal runs even without an active run', async () => {
+    mocks.isTauri = true;
+    const refreshTotalsSnapshot = vi.fn(() => Promise.resolve(null));
+    const service = createService({
+      processPerfService: createProcessPerfService(refreshTotalsSnapshot),
+    });
+
+    await expect(service.runOnce('pagehide')).resolves.toMatchObject({
+      reason: 'pagehide',
+      snapshot: {
+        webview2: undefined,
+      },
+      executed: expect.arrayContaining(['trim-webview2-working-set']),
+    });
+    expect(refreshTotalsSnapshot).not.toHaveBeenCalled();
+  });
+
   it('hibernates idle capsules that exceed declared participant budgets before retention expires', async () => {
     mocks.isTauri = false;
     let now = 1_000;

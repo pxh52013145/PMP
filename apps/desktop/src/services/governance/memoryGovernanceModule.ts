@@ -208,13 +208,13 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
           } catch {
             // best-effort
           }
+          return;
         }
 
         if (!enabled) return;
         if (
           reason === 'beforeunload' ||
           reason === 'pagehide' ||
-          reason === 'visibility-hidden' ||
           reason === 'tauri-window-hidden'
         ) {
           void service.runOnce(reason);

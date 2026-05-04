@@ -55,6 +55,11 @@ const HIDDEN_PHASE_REASONS: ReadonlySet<MemoryGovernanceReason> = new Set([
   'tauri-window-hidden',
 ]);
 
+const TERMINAL_PHASE_REASONS: ReadonlySet<MemoryGovernanceReason> = new Set([
+  'pagehide',
+  'beforeunload',
+]);
+
 const HIDDEN_PHASE_BASE_ACTIONS: readonly MemoryGovernanceAction[] = [
   'tighten-cover-runtime-caches-hidden',
   'hibernate-idle-runtime-capsules',
@@ -103,6 +108,10 @@ type QueuedMemoryGovernanceRun = {
   promise: Promise<MemoryGovernanceRunResult>;
 };
 
+type MemoryGovernanceRunOptions = {
+  skipWebview2Snapshot?: boolean;
+};
+
 function runtimeCapsuleMemoryTierScore(
   tier: MemoryGovernanceRuntimeCapsuleDescriptor['memoryTier']
 ): number {
@@ -119,7 +128,9 @@ function isRuntimeCapsuleReclaimable(
   if (descriptor.startup === 'core') return false;
   if (runtimeCapsuleMemoryTierScore(descriptor.memoryTier) < 1) return false;
   if (
-    descriptor.backgroundPolicy === 'pinned'
+    descriptor.backgroundPolicy === 'pinned' ||
+    (descriptor.backgroundPolicy === 'realtime-critical' &&
+      descriptor.reclaimableWhenIdle !== true)
   ) {
     return false;
   }
@@ -240,6 +251,7 @@ function buildRuntimeCapsulesSnapshot(
       memoryTier: capsule.manifest.memoryTier,
       startup: capsule.manifest.startup,
       backgroundPolicy: capsule.manifest.backgroundPolicy,
+      reclaimableWhenIdle: capsule.manifest.reclaimableWhenIdle,
       activeLeaseCount: capsule.activeLeases.length,
       lastActiveAtMs: capsule.lastActiveAtMs,
       lastSuspendedAtMs: capsule.lastSuspendedAtMs,
@@ -341,6 +353,10 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
   }
 
   runOnce(reason: MemoryGovernanceReason): Promise<MemoryGovernanceRunResult> {
+    if (TERMINAL_PHASE_REASONS.has(reason)) {
+      return this.runOnceInternal(reason, { skipWebview2Snapshot: true });
+    }
+
     if (this.activeRun) {
       if (this.queuedRun) {
         this.queuedRun.reason = chooseHigherPriorityReason(this.queuedRun.reason, reason);
@@ -374,9 +390,10 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
   }
 
   private async runOnceInternal(
-    reason: MemoryGovernanceReason
+    reason: MemoryGovernanceReason,
+    options: MemoryGovernanceRunOptions = {}
   ): Promise<MemoryGovernanceRunResult> {
-    const snapshot = await this.collectSnapshot();
+    const snapshot = await this.collectSnapshot(options);
     const plan = decideMemoryGovernancePlan(snapshot);
     const plannedActions = buildPlannedActions(plan.actions, reason, snapshot.isTauri);
 
@@ -588,7 +605,9 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
     return result;
   }
 
-  private async collectSnapshot(): Promise<MemoryGovernanceSnapshot> {
+  private async collectSnapshot(
+    options: MemoryGovernanceRunOptions = {}
+  ): Promise<MemoryGovernanceSnapshot> {
     const atMs = Date.now();
     const isTauri = isTauriRuntime();
 
@@ -609,7 +628,10 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       }
     })();
 
-    const webview2 = await this.collectWebview2Snapshot(isTauri);
+    const webview2 =
+      options.skipWebview2Snapshot === true
+        ? undefined
+        : await this.collectWebview2Snapshot(isTauri);
     const spaceRuntimeSnapshot = this.spaceRuntimeGovernance?.collectSnapshot();
     const runtimeCapsules = buildRuntimeCapsulesSnapshot(this.runtimeCapsuleManager, atMs);
 

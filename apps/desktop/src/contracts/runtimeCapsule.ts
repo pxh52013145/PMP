@@ -81,6 +81,7 @@ export interface RuntimeCapsuleManifest {
   memoryTier: RuntimeCapsuleMemoryTier;
   startup: RuntimeCapsuleStartupPolicy;
   backgroundPolicy: RuntimeCapsuleBackgroundPolicy;
+  reclaimableWhenIdle?: boolean;
   warmRetentionMs: number;
   hibernateAfterMs: number;
   dependencies?: string[];

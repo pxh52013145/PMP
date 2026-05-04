@@ -53,6 +53,7 @@ export type MemoryGovernanceRuntimeCapsuleDescriptor = {
   memoryTier: RuntimeCapsuleMemoryTier;
   startup: RuntimeCapsuleStartupPolicy;
   backgroundPolicy: RuntimeCapsuleBackgroundPolicy;
+  reclaimableWhenIdle?: boolean;
   activeLeaseCount: number;
   lastActiveAtMs: number | null;
   lastSuspendedAtMs: number | null;
