@@ -29,6 +29,7 @@ import {
   createDefaultMagnetLibrary,
   createDefaultMagnetSpaceLayout,
   createDefaultMagnetSpacesState,
+  createInitialMagnetSpaceTemplateLayout,
   ensureMagnetCatalogState,
   magnetLayoutStoreApplyPatchWithRetry,
   magnetLayoutStoreBootstrap,
@@ -936,8 +937,13 @@ export function EditorWindowApp() {
             const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
             if (store) {
               activeSpaceId = store.spaces.activeSpaceId;
+              const activeSpace = store.spaces.spaces.find((space) => space.id === activeSpaceId);
               layout =
                 store.layoutsBySpaceId[activeSpaceId] ??
+                createInitialMagnetSpaceTemplateLayout(
+                  activeSpace?.seedTemplateId,
+                  DEFAULT_ACTIVE_MAGNET_IDS
+                ) ??
                 createDefaultMagnetSpaceLayout(activeSpaceId, DEFAULT_ACTIVE_MAGNET_IDS);
             }
           }

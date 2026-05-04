@@ -28,6 +28,7 @@ describe('magnet layout store bootstrap request', () => {
     expect(request.mode).toBe('active-only');
     expect(request.activeSpaceId).toBe('space2');
     expect(Object.keys(request.layoutsBySpaceId)).toEqual(['space2']);
+    expect(request.layoutsBySpaceId.space2.activeMagnetIds).toContain('music-tag-workbench');
   });
 
   it('can still bootstrap every known space for explicit repair flows', () => {
@@ -38,5 +39,8 @@ describe('magnet layout store bootstrap request', () => {
 
     expect(request.mode).toBe('all-known-spaces');
     expect(Object.keys(request.layoutsBySpaceId)).toEqual(['space1', 'space2', 'space3']);
+    expect(request.layoutsBySpaceId.space3.activeMagnetIds).toContain(
+      'plugin-development-workspace'
+    );
   });
 });

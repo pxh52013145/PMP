@@ -102,7 +102,11 @@ export function buildMagnetLayoutStoreBootstrapRequest(
     mode === 'all-known-spaces' ? spaces.spaces.map((space) => space.id) : [spaces.activeSpaceId];
 
   for (const spaceId of spaceIdsToBootstrap) {
-    const { layout } = ensureMagnetSpaceLayout(spaceId, { defaultActiveMagnetIds });
+    const space = spaces.spaces.find((entry) => entry.id === spaceId);
+    const { layout } = ensureMagnetSpaceLayout(spaceId, {
+      defaultActiveMagnetIds,
+      seedTemplateId: space?.seedTemplateId,
+    });
     layoutsBySpaceId[spaceId] = layout;
   }
 

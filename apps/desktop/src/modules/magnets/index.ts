@@ -30,6 +30,13 @@ export {
   getNextSpaceId,
   sanitizeMagnetSpacesState,
 } from './spaces';
+export {
+  createInitialMagnetSpaceTemplateLayout,
+  getInitialMagnetSpaceTemplate,
+  INITIAL_MAGNET_SPACE_TEMPLATE_IDS,
+  INITIAL_MAGNET_SPACE_TEMPLATES,
+} from './spaceTemplates';
+export type { InitialMagnetSpaceTemplateId } from './spaceTemplates';
 export type { MagnetSpaceLayout, MagnetSpaceLayoutV1 } from './layout';
 export { resolveMagnetLayoutStorageKey, sanitizeMagnetSpaceLayout } from './layout';
 export type {
@@ -66,6 +73,7 @@ export {
 export {
   cancelScheduledMagnetSpaceLayoutSave,
   createDefaultMagnetSpaceLayout,
+  createInitialMagnetSpaceLayout,
   ensureMagnetSpaceLayout,
   flushScheduledMagnetSpaceLayoutSave,
   loadMagnetSpaceLayout,

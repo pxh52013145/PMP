@@ -51,6 +51,7 @@ import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readJson, usePersistentSetting } from '../storage';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { createDefaultMagnetSpacesState, sanitizeMagnetSpacesState } from './spaces';
+import { createInitialMagnetSpaceTemplateLayout } from './spaceTemplates';
 import { parsePerformanceRuntimeProfile } from '../../contracts/performanceControl';
 import type { SpaceRuntimeGovernanceService } from '../../services/governance';
 import type { RuntimeCapsuleManagerService } from '../../services/runtime-capsules';
@@ -258,6 +259,10 @@ export function MagnetLibraryProvider({
     () => resolveDefaultActiveMagnetIdsForSpace(activeSpaceId),
     [activeSpaceId, resolveDefaultActiveMagnetIdsForSpace]
   );
+  const activeSpaceSeedTemplateId = useMemo(
+    () => magnetSpaces.spaces.find((space) => space.id === activeSpaceId)?.seedTemplateId,
+    [activeSpaceId, magnetSpaces.spaces]
+  );
 
   const defaultCatalogState = useMemo(() => createDefaultMagnetCatalogState(), []);
   const [catalogRaw] = usePersistentSetting(STORAGE_KEYS.MAGNET_CATALOG, defaultCatalogState, {
@@ -295,6 +300,7 @@ export function MagnetLibraryProvider({
     const primaryConfig = loadMagnetConfig(magnetConfigStorageKey);
     const layout = ensureMagnetSpaceLayout(activeSpaceId, {
       defaultActiveMagnetIds: resolvedDefaultActiveMagnetIds,
+      seedTemplateId: activeSpaceSeedTemplateId,
     }).layout;
 
     const activeFromLayout = new Set(layout.activeMagnetIds);
@@ -590,10 +596,14 @@ export function MagnetLibraryProvider({
       const normalizedSpaceId = spaceId.trim();
       if (!normalizedSpaceId) return null;
       const defaultActive = resolveDefaultActiveMagnetIdsForSpace(normalizedSpaceId);
+      const seedTemplateId = magnetSpaces.spaces.find(
+        (space) => space.id === normalizedSpaceId
+      )?.seedTemplateId;
 
       if (!isTauri) {
         const layoutResult = ensureMagnetSpaceLayout(normalizedSpaceId, {
           defaultActiveMagnetIds: defaultActive,
+          seedTemplateId,
         });
         const normalized = normalizeSpaceLayoutWithSystemAnchors(normalizedSpaceId, layoutResult.layout);
         if (normalized.changed) {
@@ -613,6 +623,7 @@ export function MagnetLibraryProvider({
 
       const layout =
         store.layoutsBySpaceId[normalizedSpaceId] ??
+        createInitialMagnetSpaceTemplateLayout(seedTemplateId, defaultActive) ??
         createDefaultMagnetSpaceLayout(normalizedSpaceId, defaultActive);
 
       const normalized = normalizeSpaceLayoutWithSystemAnchors(normalizedSpaceId, layout);
@@ -633,6 +644,7 @@ export function MagnetLibraryProvider({
       buildLoadedSpaceSnapshot,
       isTauri,
       loadTauriLayoutStoreState,
+      magnetSpaces.spaces,
       resolveDefaultActiveMagnetIdsForSpace,
     ]
   );

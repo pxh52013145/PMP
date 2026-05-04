@@ -5,17 +5,95 @@ import {
   sanitizeMagnetSpaceLayout,
   type MagnetSpaceLayout,
 } from './layout';
-import { getSystemAnchorsForActiveMagnets } from './systemLayouts';
+import {
+  getSystemAnchorsForActiveMagnets,
+  MUSIC_TAG_WORKBENCH_DEFAULT_ANCHORS,
+} from './systemLayouts';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import {
+  createInitialMagnetSpaceTemplateLayout,
+  getInitialMagnetSpaceTemplateLayoutForSpace,
+} from './spaceTemplates';
 
-const SPACE2_DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
-  ...REQUIRED_MAGNET_IDS,
-]);
-const SPACE3_DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
-  ...REQUIRED_MAGNET_IDS,
-  'plugin-development-workspace',
-]);
 const telemetry = getTelemetryLogger('magnets', 'layoutStorage');
+
+const MUSIC_TAG_WORKBENCH_LEGACY_ANCHOR_SETS = [
+  [
+    { id: 'top-left', gridX: 0, gridY: 1, role: 'anchor' },
+    { id: 'top-right', gridX: 9, gridY: 1, role: 'boundary' },
+    { id: 'bottom-left', gridX: 0, gridY: 7, role: 'boundary' },
+    { id: 'bottom-right', gridX: 9, gridY: 7, role: 'boundary' },
+  ],
+  [
+    { id: 'top-left', gridX: 0, gridY: 1, role: 'anchor' },
+    { id: 'top-right', gridX: 5, gridY: 1, role: 'boundary' },
+    { id: 'bottom-left', gridX: 0, gridY: 7, role: 'boundary' },
+    { id: 'bottom-right', gridX: 5, gridY: 7, role: 'boundary' },
+  ],
+] as const;
+
+const MUSIC_TAG_WORKBENCH_NAVIGATION_PAGE_COMPANION_ANCHORS = [
+  { id: 'top-left', gridX: 6, gridY: 1, role: 'anchor' },
+  { id: 'top-right', gridX: 26, gridY: 1, role: 'boundary' },
+  { id: 'bottom-left', gridX: 6, gridY: 17, role: 'boundary' },
+  { id: 'bottom-right', gridX: 26, gridY: 17, role: 'boundary' },
+] as const;
+
+function hasSameAnchors(
+  left: MagnetSpaceLayout['anchorsByMagnetId'][string] | undefined,
+  right: readonly {
+    id: string;
+    gridX: number;
+    gridY: number;
+    role: 'anchor' | 'boundary';
+  }[]
+): boolean {
+  if (!Array.isArray(left) || left.length !== right.length) return false;
+  return left.every((anchor, index) => {
+    const expected = right[index];
+    return (
+      anchor.id === expected.id &&
+      anchor.gridX === expected.gridX &&
+      anchor.gridY === expected.gridY &&
+      anchor.role === expected.role
+    );
+  });
+}
+
+function hasAnySameAnchors(
+  left: MagnetSpaceLayout['anchorsByMagnetId'][string] | undefined,
+  candidates: readonly (readonly {
+    id: string;
+    gridX: number;
+    gridY: number;
+    role: 'anchor' | 'boundary';
+  }[])[]
+): boolean {
+  return candidates.some((candidate) => hasSameAnchors(left, candidate));
+}
+
+function cloneAnchors(
+  anchors: MagnetSpaceLayout['anchorsByMagnetId'][string]
+): MagnetSpaceLayout['anchorsByMagnetId'][string] {
+  return anchors.map((anchor) => ({ ...anchor }));
+}
+
+function shouldUpgradeLegacyMusicTagWorkbenchLayout(
+  active: ReadonlySet<string>,
+  anchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId']
+): boolean {
+  if (!active.has('music-tag-workbench')) return false;
+  return (
+    hasAnySameAnchors(
+      anchorsByMagnetId['music-tag-workbench'],
+      MUSIC_TAG_WORKBENCH_LEGACY_ANCHOR_SETS
+    ) ||
+    hasSameAnchors(
+      anchorsByMagnetId['navigation-page'],
+      MUSIC_TAG_WORKBENCH_NAVIGATION_PAGE_COMPANION_ANCHORS
+    )
+  );
+}
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -139,14 +217,7 @@ export function createDefaultMagnetSpaceLayout(
   defaultActiveMagnetIds: ReadonlySet<string> = DEFAULT_ACTIVE_MAGNET_IDS
 ): MagnetSpaceLayout {
   const normalized = spaceId.trim();
-  const seed =
-    normalized === 'space1'
-      ? defaultActiveMagnetIds
-      : normalized === 'space2'
-        ? SPACE2_DEFAULT_ACTIVE_MAGNET_IDS
-        : normalized === 'space3'
-          ? SPACE3_DEFAULT_ACTIVE_MAGNET_IDS
-        : REQUIRED_MAGNET_IDS;
+  const seed = normalized === 'space1' ? defaultActiveMagnetIds : REQUIRED_MAGNET_IDS;
   const active = new Set<string>();
   for (const id of seed) active.add(id);
   for (const id of REQUIRED_MAGNET_IDS) active.add(id);
@@ -157,9 +228,19 @@ export function createDefaultMagnetSpaceLayout(
   };
 }
 
+export function createInitialMagnetSpaceLayout(
+  spaceId: string,
+  defaultActiveMagnetIds: ReadonlySet<string> = DEFAULT_ACTIVE_MAGNET_IDS
+): MagnetSpaceLayout {
+  return (
+    getInitialMagnetSpaceTemplateLayoutForSpace(spaceId, defaultActiveMagnetIds) ??
+    createDefaultMagnetSpaceLayout(spaceId, defaultActiveMagnetIds)
+  );
+}
+
 export function ensureMagnetSpaceLayout(
   spaceId: string,
-  options: { defaultActiveMagnetIds?: ReadonlySet<string> } = {}
+  options: { defaultActiveMagnetIds?: ReadonlySet<string>; seedTemplateId?: string } = {}
 ): {
   layout: MagnetSpaceLayout;
   storageKey: string;
@@ -172,13 +253,28 @@ export function ensureMagnetSpaceLayout(
     const normalized = spaceId.trim();
     const active = new Set(existing.activeMagnetIds);
     let changed = false;
+    const nextAnchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId'] = { ...existing.anchorsByMagnetId };
+    const shouldUpgradeMusicTagWorkbench = shouldUpgradeLegacyMusicTagWorkbenchLayout(
+      active,
+      nextAnchorsByMagnetId
+    );
+
+    if (shouldUpgradeMusicTagWorkbench) {
+      if (active.delete('btn-back')) changed = true;
+      if (active.delete('navigation-page')) changed = true;
+      delete nextAnchorsByMagnetId['btn-back'];
+      delete nextAnchorsByMagnetId['navigation-page'];
+      nextAnchorsByMagnetId['music-tag-workbench'] = cloneAnchors(
+        MUSIC_TAG_WORKBENCH_DEFAULT_ANCHORS
+      );
+      changed = true;
+    }
 
     const systemAnchors = getSystemAnchorsForActiveMagnets(normalized, active);
     if (Object.keys(systemAnchors).length === 0) {
       return { layout: existing, storageKey, didCreate: false };
     }
 
-    const nextAnchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId'] = { ...existing.anchorsByMagnetId };
     for (const [magnetId, anchors] of Object.entries(systemAnchors)) {
       if (Array.isArray(nextAnchorsByMagnetId[magnetId]) && nextAnchorsByMagnetId[magnetId]!.length > 0) continue;
       nextAnchorsByMagnetId[magnetId] = anchors;
@@ -195,7 +291,9 @@ export function ensureMagnetSpaceLayout(
     return { layout: nextLayout, storageKey, didCreate: false };
   }
 
-  const createdLayout = createDefaultMagnetSpaceLayout(spaceId, defaultActiveMagnetIds);
+  const createdLayout =
+    createInitialMagnetSpaceTemplateLayout(options.seedTemplateId, defaultActiveMagnetIds) ??
+    createDefaultMagnetSpaceLayout(spaceId, defaultActiveMagnetIds);
 
   saveMagnetSpaceLayout(createdLayout, storageKey);
   return { layout: createdLayout, storageKey, didCreate: true };

@@ -1,8 +1,16 @@
+import {
+  INITIAL_MAGNET_SPACE_TEMPLATE_IDS,
+  INITIAL_MAGNET_SPACE_TEMPLATES,
+  isInitialMagnetSpaceTemplateId,
+  type InitialMagnetSpaceTemplateId,
+} from './spaceTemplates';
+
 export type MagnetSpace = {
   id: string;
   name: string;
   order: number;
   createdAt: number;
+  seedTemplateId?: InitialMagnetSpaceTemplateId;
 };
 
 export type MagnetSpacesState = {
@@ -11,21 +19,17 @@ export type MagnetSpacesState = {
   spaces: MagnetSpace[];
 };
 
-const DEFAULT_SPACE_NAMES = {
-  space1: '\u7a7a\u95f41',
-  space2: '\u7a7a\u95f42',
-  space3: '\u7a7a\u95f43',
-} as const;
-
 export function createDefaultMagnetSpacesState(now: number = Date.now()): MagnetSpacesState {
   return {
     version: 1,
     activeSpaceId: 'space1',
-    spaces: [
-      { id: 'space1', name: DEFAULT_SPACE_NAMES.space1, order: 1, createdAt: now },
-      { id: 'space2', name: DEFAULT_SPACE_NAMES.space2, order: 2, createdAt: now },
-      { id: 'space3', name: DEFAULT_SPACE_NAMES.space3, order: 3, createdAt: now },
-    ],
+    spaces: INITIAL_MAGNET_SPACE_TEMPLATES.map((template) => ({
+      id: template.id,
+      name: template.name,
+      order: template.order,
+      createdAt: now,
+      seedTemplateId: template.seedTemplateId,
+    })),
   };
 }
 
@@ -43,8 +47,13 @@ function sanitizeSpace(value: unknown): MagnetSpace | null {
   const order = typeof value.order === 'number' && Number.isFinite(value.order) ? value.order : 0;
   const createdAt =
     typeof value.createdAt === 'number' && Number.isFinite(value.createdAt) ? value.createdAt : 0;
+  const seedTemplateIdRaw =
+    typeof value.seedTemplateId === 'string' ? value.seedTemplateId.trim() : '';
+  const seedTemplateId = isInitialMagnetSpaceTemplateId(seedTemplateIdRaw)
+    ? seedTemplateIdRaw
+    : undefined;
 
-  return { id, name, order, createdAt };
+  return seedTemplateId ? { id, name, order, createdAt, seedTemplateId } : { id, name, order, createdAt };
 }
 
 export function sanitizeMagnetSpacesState(
@@ -67,18 +76,21 @@ export function sanitizeMagnetSpacesState(
     spaces.push(space);
   }
 
-  const ensureDefault = (
-    id: keyof typeof DEFAULT_SPACE_NAMES,
-    name: string,
-    order: number
-  ) => {
-    if (seen.has(id)) return;
-    seen.add(id);
-    spaces.push({ id, name, order, createdAt: now });
-  };
-  ensureDefault('space1', DEFAULT_SPACE_NAMES.space1, 1);
-  ensureDefault('space2', DEFAULT_SPACE_NAMES.space2, 2);
-  ensureDefault('space3', DEFAULT_SPACE_NAMES.space3, 3);
+  if (spaces.length === 0) return fallback;
+
+  if (!seen.has('space1')) {
+    const mainTemplate = INITIAL_MAGNET_SPACE_TEMPLATES.find(
+      (template) => template.seedTemplateId === INITIAL_MAGNET_SPACE_TEMPLATE_IDS.main
+    );
+    seen.add('space1');
+    spaces.push({
+      id: 'space1',
+      name: mainTemplate?.name ?? 'space1',
+      order: mainTemplate?.order ?? 1,
+      createdAt: now,
+      seedTemplateId: INITIAL_MAGNET_SPACE_TEMPLATE_IDS.main,
+    });
+  }
 
   const withOrder = spaces.map((space, idx) => ({
     ...space,
@@ -105,8 +117,15 @@ export function sanitizeMagnetSpacesState(
 }
 
 export function createNextSpaceId(state: MagnetSpacesState): string {
-  const taken = new Set(state.spaces.map((s) => s.id));
-  for (let i = 1; i < 1000; i += 1) {
+  const usedNumbers = state.spaces
+    .map((space) => {
+      const match = space.id.match(/^space(\d+)$/);
+      return match ? Number(match[1]) : 0;
+    })
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const start = Math.max(0, ...usedNumbers) + 1;
+  const taken = new Set(state.spaces.map((space) => space.id));
+  for (let i = start; i < start + 1000; i += 1) {
     const id = `space${i}`;
     if (!taken.has(id)) return id;
   }

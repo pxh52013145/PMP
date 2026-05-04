@@ -6,6 +6,7 @@ import { useT } from '../../i18n';
 import {
   createDefaultMagnetSpaceLayout,
   createDefaultMagnetSpacesState,
+  createInitialMagnetSpaceTemplateLayout,
   createNextSpaceId,
   ensureMagnetSpaceLayout,
   magnetLayoutStoreApplyPatch,
@@ -1353,7 +1354,12 @@ function MatrixChangeMagnetDefaultRenderer({ skinProps: rawSkinProps }: MatrixCh
           removeKey(resolveMagnetLayoutStorageKey(dialog.spaceId));
 
           if (isTauri) {
-            const layout = createDefaultMagnetSpaceLayout(dialog.spaceId, DEFAULT_ACTIVE_MAGNET_IDS);
+            const resetSpace = spacesState.spaces.find((space) => space.id === dialog.spaceId);
+            const layout =
+              createInitialMagnetSpaceTemplateLayout(
+                resetSpace?.seedTemplateId,
+                DEFAULT_ACTIVE_MAGNET_IDS
+              ) ?? createDefaultMagnetSpaceLayout(dialog.spaceId, DEFAULT_ACTIVE_MAGNET_IDS);
             void applyLayoutStorePatch(
               [
                 { kind: 'pushSpaceHistory', spaceId: dialog.spaceId, item: historyItem },

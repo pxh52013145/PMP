@@ -50,6 +50,10 @@ const DEFAULT_ACTIVE_MAGNET_IDS_SPACE1: [&str; 22] = [
     "btn-back",
 ];
 
+const SEED_TEMPLATE_MAIN: &str = "main";
+const SEED_TEMPLATE_MUSIC_TAG_WORKBENCH: &str = "music-tag-workbench";
+const SEED_TEMPLATE_PLUGIN_DEVELOPMENT_WORKSPACE: &str = "plugin-development-workspace";
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -136,6 +140,24 @@ fn system_space1_additional_anchors(magnet_id: &str) -> Option<Vec<PixelAnchor>>
     }
 }
 
+fn music_tag_workbench_default_anchors() -> Vec<PixelAnchor> {
+    vec![
+        build_anchor("top-left", 0.0, 1.0, "anchor"),
+        build_anchor("top-right", 26.0, 1.0, "boundary"),
+        build_anchor("bottom-left", 0.0, 17.0, "boundary"),
+        build_anchor("bottom-right", 26.0, 17.0, "boundary"),
+    ]
+}
+
+fn plugin_development_workspace_default_anchors() -> Vec<PixelAnchor> {
+    vec![
+        build_anchor("top-left", 0.0, 1.0, "anchor"),
+        build_anchor("top-right", 26.0, 1.0, "boundary"),
+        build_anchor("bottom-left", 0.0, 17.0, "boundary"),
+        build_anchor("bottom-right", 26.0, 17.0, "boundary"),
+    ]
+}
+
 fn system_anchors_for_space(space_id: &str, magnet_id: &str) -> Option<Vec<PixelAnchor>> {
     let normalized_space_id = space_id.trim();
     if normalized_space_id == "space1" {
@@ -207,6 +229,8 @@ pub struct MagnetSpace {
     pub name: String,
     pub order: i32,
     pub created_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_template_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -348,12 +372,21 @@ fn default_spaces_state() -> MagnetSpacesState {
                 name: "空间1".to_string(),
                 order: 1,
                 created_at: now,
+                seed_template_id: Some(SEED_TEMPLATE_MAIN.to_string()),
             },
             MagnetSpace {
                 id: "space2".to_string(),
                 name: "空间2".to_string(),
                 order: 2,
                 created_at: now,
+                seed_template_id: Some(SEED_TEMPLATE_MUSIC_TAG_WORKBENCH.to_string()),
+            },
+            MagnetSpace {
+                id: "space3".to_string(),
+                name: "空间3".to_string(),
+                order: 3,
+                created_at: now,
+                seed_template_id: Some(SEED_TEMPLATE_PLUGIN_DEVELOPMENT_WORKSPACE.to_string()),
             },
         ],
     }
@@ -394,11 +427,53 @@ fn default_layout_for_space(space_id: &str) -> MagnetSpaceLayout {
     layout
 }
 
+fn default_layout_for_seed_template(
+    space_id: &str,
+    seed_template_id: Option<&str>,
+) -> MagnetSpaceLayout {
+    let normalized_seed = seed_template_id.map(str::trim).unwrap_or("");
+    match normalized_seed {
+        SEED_TEMPLATE_MAIN => default_layout_for_space("space1"),
+        SEED_TEMPLATE_MUSIC_TAG_WORKBENCH => {
+            let mut layout = default_layout_for_space(space_id);
+            let mut seen: HashSet<String> = layout.active_magnet_ids.iter().cloned().collect();
+            if seen.insert("music-tag-workbench".to_string()) {
+                layout
+                    .active_magnet_ids
+                    .push("music-tag-workbench".to_string());
+            }
+            layout.anchors_by_magnet_id.insert(
+                "music-tag-workbench".to_string(),
+                music_tag_workbench_default_anchors(),
+            );
+            layout
+        }
+        SEED_TEMPLATE_PLUGIN_DEVELOPMENT_WORKSPACE => {
+            let mut layout = default_layout_for_space(space_id);
+            let mut seen: HashSet<String> = layout.active_magnet_ids.iter().cloned().collect();
+            if seen.insert("plugin-development-workspace".to_string()) {
+                layout
+                    .active_magnet_ids
+                    .push("plugin-development-workspace".to_string());
+            }
+            layout.anchors_by_magnet_id.insert(
+                "plugin-development-workspace".to_string(),
+                plugin_development_workspace_default_anchors(),
+            );
+            layout
+        }
+        _ => default_layout_for_space(space_id),
+    }
+}
+
 fn default_store_state() -> MagnetLayoutStoreState {
     let spaces = default_spaces_state();
     let mut layouts_by_space_id = HashMap::new();
     for space in &spaces.spaces {
-        layouts_by_space_id.insert(space.id.clone(), default_layout_for_space(&space.id));
+        layouts_by_space_id.insert(
+            space.id.clone(),
+            default_layout_for_seed_template(&space.id, space.seed_template_id.as_deref()),
+        );
     }
     MagnetLayoutStoreState {
         version: STORE_VERSION,
@@ -489,13 +564,27 @@ fn sanitize_spaces_state(value: &MagnetSpacesState) -> MagnetSpacesState {
         } else {
             now
         };
+        let seed_template_id = entry.seed_template_id.as_deref().and_then(|raw| {
+            let trimmed = raw.trim();
+            match trimmed {
+                SEED_TEMPLATE_MAIN
+                | SEED_TEMPLATE_MUSIC_TAG_WORKBENCH
+                | SEED_TEMPLATE_PLUGIN_DEVELOPMENT_WORKSPACE => Some(trimmed.to_string()),
+                _ => None,
+            }
+        });
 
         spaces.push(MagnetSpace {
             id: id.to_string(),
             name,
             order,
             created_at,
+            seed_template_id,
         });
+    }
+
+    if spaces.is_empty() {
+        return default_spaces_state();
     }
 
     let mut ensure_default = |id: &str, name: &str, order: i32| {
@@ -508,10 +597,10 @@ fn sanitize_spaces_state(value: &MagnetSpacesState) -> MagnetSpacesState {
             name: name.to_string(),
             order,
             created_at: now,
+            seed_template_id: Some(SEED_TEMPLATE_MAIN.to_string()),
         });
     };
     ensure_default("space1", "空间1", 1);
-    ensure_default("space2", "空间2", 2);
 
     for (idx, space) in spaces.iter_mut().enumerate() {
         if space.order <= 0 {
@@ -655,6 +744,187 @@ fn sanitize_layout_for_space(space_id: &str, value: &MagnetSpaceLayout) -> Magne
     layout
 }
 
+fn anchors_equal(left: &[PixelAnchor], right: &[PixelAnchor]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter().zip(right.iter()).all(|(a, b)| {
+        a.id == b.id && a.grid_x == b.grid_x && a.grid_y == b.grid_y && a.role == b.role
+    })
+}
+
+fn legacy_music_tag_workbench_anchor_sets() -> Vec<Vec<PixelAnchor>> {
+    vec![
+        vec![
+            build_anchor("top-left", 0.0, 1.0, "anchor"),
+            build_anchor("top-right", 9.0, 1.0, "boundary"),
+            build_anchor("bottom-left", 0.0, 7.0, "boundary"),
+            build_anchor("bottom-right", 9.0, 7.0, "boundary"),
+        ],
+        vec![
+            build_anchor("top-left", 0.0, 1.0, "anchor"),
+            build_anchor("top-right", 5.0, 1.0, "boundary"),
+            build_anchor("bottom-left", 0.0, 7.0, "boundary"),
+            build_anchor("bottom-right", 5.0, 7.0, "boundary"),
+        ],
+    ]
+}
+
+fn legacy_music_tag_navigation_companion_anchors() -> Vec<PixelAnchor> {
+    vec![
+        build_anchor("top-left", 6.0, 1.0, "anchor"),
+        build_anchor("top-right", 26.0, 1.0, "boundary"),
+        build_anchor("bottom-left", 6.0, 17.0, "boundary"),
+        build_anchor("bottom-right", 26.0, 17.0, "boundary"),
+    ]
+}
+
+fn has_active_magnet(layout: &MagnetSpaceLayout, magnet_id: &str) -> bool {
+    layout.active_magnet_ids.iter().any(|id| id == magnet_id)
+}
+
+fn is_required_only_layout(layout: &MagnetSpaceLayout) -> bool {
+    let required: HashSet<String> = REQUIRED_MAGNET_IDS
+        .iter()
+        .map(|id| id.to_string())
+        .collect();
+    let active: HashSet<String> = layout.active_magnet_ids.iter().cloned().collect();
+    if active != required {
+        return false;
+    }
+    layout
+        .anchors_by_magnet_id
+        .keys()
+        .all(|magnet_id| required.contains(magnet_id))
+}
+
+fn should_upgrade_legacy_music_tag_workbench_layout(layout: &MagnetSpaceLayout) -> bool {
+    if !has_active_magnet(layout, "music-tag-workbench") {
+        return false;
+    }
+
+    if let Some(existing) = layout.anchors_by_magnet_id.get("music-tag-workbench") {
+        for candidate in legacy_music_tag_workbench_anchor_sets() {
+            if anchors_equal(existing, &candidate) {
+                return true;
+            }
+        }
+    }
+
+    layout
+        .anchors_by_magnet_id
+        .get("navigation-page")
+        .map(|anchors| anchors_equal(anchors, &legacy_music_tag_navigation_companion_anchors()))
+        .unwrap_or(false)
+}
+
+fn migrate_legacy_music_tag_workbench_layout(layout: &mut MagnetSpaceLayout) -> bool {
+    if !should_upgrade_legacy_music_tag_workbench_layout(layout) {
+        return false;
+    }
+
+    layout
+        .active_magnet_ids
+        .retain(|id| id != "btn-back" && id != "navigation-page");
+    layout.anchors_by_magnet_id.remove("btn-back");
+    layout.anchors_by_magnet_id.remove("navigation-page");
+    layout.anchors_by_magnet_id.insert(
+        "music-tag-workbench".to_string(),
+        music_tag_workbench_default_anchors(),
+    );
+    true
+}
+
+fn is_default_named_space(space: &MagnetSpace, id: &str, name: &str, order: i32) -> bool {
+    space.id == id && space.name == name && space.order == order
+}
+
+fn contains_default_named_space(spaces: &[MagnetSpace], id: &str, name: &str, order: i32) -> bool {
+    spaces
+        .iter()
+        .any(|space| is_default_named_space(space, id, name, order))
+}
+
+fn migrate_legacy_initial_space_templates(
+    spaces: &mut MagnetSpacesState,
+    layouts_by_space_id: &HashMap<String, MagnetSpaceLayout>,
+) -> HashSet<String> {
+    let mut seed_layout_upgrades: HashSet<String> = HashSet::new();
+    for space in &mut spaces.spaces {
+        if is_default_named_space(space, "space1", "空间1", 1) && space.seed_template_id.is_none()
+        {
+            space.seed_template_id = Some(SEED_TEMPLATE_MAIN.to_string());
+        } else if is_default_named_space(space, "space2", "空间2", 2)
+            && space.seed_template_id.is_none()
+        {
+            let layout = layouts_by_space_id.get("space2");
+            if layout
+                .map(|value| {
+                    is_required_only_layout(value)
+                        || should_upgrade_legacy_music_tag_workbench_layout(value)
+                })
+                .unwrap_or(true)
+            {
+                space.seed_template_id = Some(SEED_TEMPLATE_MUSIC_TAG_WORKBENCH.to_string());
+                seed_layout_upgrades.insert(space.id.clone());
+            }
+        }
+    }
+
+    if spaces.spaces.iter().any(|space| space.id == "space3") {
+        return seed_layout_upgrades;
+    }
+    if spaces.spaces.len() != 2 {
+        return seed_layout_upgrades;
+    }
+    if !contains_default_named_space(&spaces.spaces, "space1", "空间1", 1)
+        || !contains_default_named_space(&spaces.spaces, "space2", "空间2", 2)
+    {
+        return seed_layout_upgrades;
+    }
+    if layouts_by_space_id
+        .get("space2")
+        .map(|layout| {
+            is_required_only_layout(layout)
+                || should_upgrade_legacy_music_tag_workbench_layout(layout)
+        })
+        .unwrap_or(true)
+    {
+        spaces.spaces.push(MagnetSpace {
+            id: "space3".to_string(),
+            name: "空间3".to_string(),
+            order: 3,
+            created_at: now_ms(),
+            seed_template_id: Some(SEED_TEMPLATE_PLUGIN_DEVELOPMENT_WORKSPACE.to_string()),
+        });
+        seed_layout_upgrades.insert("space3".to_string());
+    }
+
+    seed_layout_upgrades
+}
+
+fn sanitize_layout_for_space_instance(
+    space: &MagnetSpace,
+    value: Option<&MagnetSpaceLayout>,
+    force_seed_layout: bool,
+) -> MagnetSpaceLayout {
+    let mut layout = if force_seed_layout {
+        default_layout_for_seed_template(&space.id, space.seed_template_id.as_deref())
+    } else {
+        value
+            .map(|layout| sanitize_layout_for_space(&space.id, layout))
+            .unwrap_or_else(|| {
+                default_layout_for_seed_template(&space.id, space.seed_template_id.as_deref())
+            })
+    };
+
+    if migrate_legacy_music_tag_workbench_layout(&mut layout) {
+        return layout;
+    }
+
+    layout
+}
+
 fn sanitize_store_state(
     spaces: &MagnetSpacesState,
     layouts_by_space_id: &HashMap<String, MagnetSpaceLayout>,
@@ -666,7 +936,9 @@ fn sanitize_store_state(
     HashMap<String, Vec<MagnetSpacePreset>>,
     HashMap<String, Vec<MagnetSpaceHistoryItem>>,
 ) {
-    let spaces_clean = sanitize_spaces_state(spaces);
+    let mut spaces_clean = sanitize_spaces_state(spaces);
+    let seed_layout_upgrades =
+        migrate_legacy_initial_space_templates(&mut spaces_clean, layouts_by_space_id);
     let valid_space_ids: HashSet<String> =
         spaces_clean.spaces.iter().map(|s| s.id.clone()).collect();
 
@@ -676,10 +948,11 @@ fn sanitize_store_state(
         if space_id.is_empty() {
             continue;
         }
-        let layout = layouts_by_space_id
-            .get(space_id)
-            .map(|value| sanitize_layout_for_space(space_id, value))
-            .unwrap_or_else(|| default_layout_for_space(space_id));
+        let layout = sanitize_layout_for_space_instance(
+            space,
+            layouts_by_space_id.get(space_id),
+            seed_layout_upgrades.contains(space_id),
+        );
         layouts_clean.insert(space_id.to_string(), layout);
     }
 
@@ -755,7 +1028,9 @@ fn sanitize_bootstrap_store_state(
         );
     }
 
-    let spaces_clean = sanitize_spaces_state(&request.spaces);
+    let mut spaces_clean = sanitize_spaces_state(&request.spaces);
+    let seed_layout_upgrades =
+        migrate_legacy_initial_space_templates(&mut spaces_clean, &request.layouts_by_space_id);
     let active_space_id = if spaces_clean
         .spaces
         .iter()
@@ -768,10 +1043,18 @@ fn sanitize_bootstrap_store_state(
 
     let mut layouts_clean: HashMap<String, MagnetSpaceLayout> = HashMap::new();
     if !active_space_id.is_empty() {
-        let layout = request
-            .layouts_by_space_id
-            .get(&active_space_id)
-            .map(|value| sanitize_layout_for_space(&active_space_id, value))
+        let space = spaces_clean
+            .spaces
+            .iter()
+            .find(|space| space.id == active_space_id);
+        let layout = space
+            .map(|space| {
+                sanitize_layout_for_space_instance(
+                    space,
+                    request.layouts_by_space_id.get(&active_space_id),
+                    seed_layout_upgrades.contains(&active_space_id),
+                )
+            })
             .unwrap_or_else(|| default_layout_for_space(&active_space_id));
         layouts_clean.insert(active_space_id, layout);
     }
@@ -1295,6 +1578,99 @@ mod tests {
             .expect("space1 should include system anchors for audio-visualizer");
         assert_eq!(visualizer[0].grid_x, 0.0);
         assert_eq!(visualizer[0].grid_y, 9.0);
+    }
+
+    #[test]
+    fn default_store_seeds_initial_space_templates_without_generic_space2_semantics() {
+        let generic_space2 = default_layout_for_space("space2");
+        assert!(
+            !generic_space2
+                .active_magnet_ids
+                .iter()
+                .any(|id| id == "music-tag-workbench"),
+            "generic non-space1 layouts should remain required-only"
+        );
+
+        let store = default_store_state();
+        assert!(
+            store.spaces.spaces.iter().any(|space| {
+                space.id == "space3"
+                    && space.seed_template_id.as_deref()
+                        == Some(SEED_TEMPLATE_PLUGIN_DEVELOPMENT_WORKSPACE)
+            }),
+            "initial store should seed the plugin workspace instance"
+        );
+        assert!(
+            store.layouts_by_space_id["space2"]
+                .active_magnet_ids
+                .iter()
+                .any(|id| id == "music-tag-workbench"),
+            "space2 gets MusicTag only from its initial seed template"
+        );
+        assert!(
+            store.layouts_by_space_id["space3"]
+                .active_magnet_ids
+                .iter()
+                .any(|id| id == "plugin-development-workspace"),
+            "space3 gets plugin workspace only from its initial seed template"
+        );
+    }
+
+    #[test]
+    fn sanitize_spaces_state_does_not_readd_removed_non_main_spaces() {
+        let mut spaces = default_spaces_state();
+        spaces.spaces.retain(|space| space.id != "space3");
+
+        let clean = sanitize_spaces_state(&spaces);
+
+        assert_eq!(clean.spaces.len(), 2);
+        assert!(
+            clean.spaces.iter().all(|space| space.id != "space3"),
+            "space3 should be an initial instance, not a sanitizer-enforced singleton"
+        );
+    }
+
+    #[test]
+    fn sanitize_store_migrates_untouched_legacy_initial_templates() {
+        let now = now_ms();
+        let spaces = MagnetSpacesState {
+            version: 1,
+            active_space_id: "space1".to_string(),
+            spaces: vec![
+                MagnetSpace {
+                    id: "space1".to_string(),
+                    name: "空间1".to_string(),
+                    order: 1,
+                    created_at: now,
+                    seed_template_id: None,
+                },
+                MagnetSpace {
+                    id: "space2".to_string(),
+                    name: "空间2".to_string(),
+                    order: 2,
+                    created_at: now,
+                    seed_template_id: None,
+                },
+            ],
+        };
+        let mut layouts = HashMap::new();
+        layouts.insert("space1".to_string(), default_layout_for_space("space1"));
+        layouts.insert("space2".to_string(), default_layout_for_space("space2"));
+
+        let (spaces_clean, layouts_clean, _, _) =
+            sanitize_store_state(&spaces, &layouts, &HashMap::new(), &HashMap::new());
+
+        assert!(
+            spaces_clean.spaces.iter().any(|space| space.id == "space3"),
+            "untouched two-space seed stores should receive the new third initial instance"
+        );
+        assert!(
+            layouts_clean["space2"]
+                .active_magnet_ids
+                .iter()
+                .any(|id| id == "music-tag-workbench"),
+            "legacy required-only space2 seed should migrate to the MusicTag template"
+        );
     }
 
     #[test]
