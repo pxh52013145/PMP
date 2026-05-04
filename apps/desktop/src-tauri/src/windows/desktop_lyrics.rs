@@ -24,6 +24,8 @@ struct DesktopLyricLine {
 struct OverlayText {
     primary: String,
     secondary: Option<String>,
+    previous: Option<String>,
+    next: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +59,7 @@ enum OverlayCommand {
     SetPositionPreset(OverlayPositionPreset),
     SetPositionOffset(i32, i32),
     SetRegionSize(i32, i32),
+    SetLayout(i32, i32, i32, i32),
     SetText(Option<OverlayText>),
     Shutdown,
 }
@@ -168,6 +171,8 @@ struct DesktopLyricsControlsChangedPayload {
 pub struct DesktopLyricsOverlaySnapshotText {
     pub primary: String,
     pub secondary: Option<String>,
+    pub previous: Option<String>,
+    pub next: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -177,6 +182,8 @@ pub struct DesktopLyricsOverlaySnapshot {
     pub click_through: bool,
     pub font_size: u32,
     pub opacity_percent: u8,
+    pub region_width: i32,
+    pub region_height: i32,
     pub text: Option<DesktopLyricsOverlaySnapshotText>,
 }
 
@@ -216,15 +223,23 @@ pub fn get_overlay_snapshot() -> Result<DesktopLyricsOverlaySnapshot, String> {
         click_through: state.click_through,
         font_size: state.font_size,
         opacity_percent: state.opacity_percent,
+        region_width: state.region_width,
+        region_height: state.region_height,
         text: state
             .debug_override_text
             .as_ref()
             .or(state.last_rendered_text.as_ref())
-            .map(|value| DesktopLyricsOverlaySnapshotText {
-                primary: value.primary.clone(),
-                secondary: value.secondary.clone(),
-            }),
+            .map(snapshot_text_from_overlay_text),
     })
+}
+
+fn snapshot_text_from_overlay_text(value: &OverlayText) -> DesktopLyricsOverlaySnapshotText {
+    DesktopLyricsOverlaySnapshotText {
+        primary: value.primary.clone(),
+        secondary: value.secondary.clone(),
+        previous: value.previous.clone(),
+        next: value.next.clone(),
+    }
 }
 
 pub fn set_visible(visible: bool) -> Result<(), String> {
@@ -294,6 +309,8 @@ pub fn debug_set_text(
         Some(OverlayText {
             primary: normalized_primary,
             secondary: normalized_secondary,
+            previous: None,
+            next: None,
         })
     };
 
@@ -399,6 +416,62 @@ pub fn set_region_size(width: i32, height: i32) -> Result<(), String> {
         Some(&state),
     );
     Ok(())
+}
+
+pub fn set_layout(offset_x: i32, offset_y: i32, width: i32, height: i32) -> Result<(), String> {
+    let normalized_x = normalize_overlay_position_offset(offset_x);
+    let normalized_y = normalize_overlay_position_offset(offset_y);
+    let normalized_width = normalize_explicit_overlay_region_width(width);
+    let normalized_height = normalize_explicit_overlay_region_height(height);
+
+    let mut state = DESKTOP_LYRICS_STATE
+        .lock()
+        .map_err(|_| "Desktop lyrics state lock poisoned".to_string())?;
+    state.position_offset_x = normalized_x;
+    state.position_offset_y = normalized_y;
+    state.region_width = normalized_width;
+    state.region_height = normalized_height;
+    send_overlay_command_with_recover(
+        OverlayCommand::SetLayout(
+            normalized_x,
+            normalized_y,
+            normalized_width,
+            normalized_height,
+        ),
+        Some(&state),
+    );
+    Ok(())
+}
+
+pub fn preview_layout(
+    app: &AppHandle,
+    offset_x: i32,
+    offset_y: i32,
+    width: i32,
+    height: i32,
+) -> Result<(), String> {
+    register_app_handle(app);
+    let normalized_x = normalize_overlay_position_offset(offset_x);
+    let normalized_y = normalize_overlay_position_offset(offset_y);
+    let normalized_width = normalize_explicit_overlay_region_width(width);
+    let normalized_height = normalize_explicit_overlay_region_height(height);
+
+    #[cfg(target_os = "windows")]
+    {
+        backend::preview_layout(
+            app,
+            normalized_x,
+            normalized_y,
+            normalized_width,
+            normalized_height,
+        )
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (normalized_x, normalized_y, normalized_width, normalized_height);
+        Ok(())
+    }
 }
 
 pub fn set_lyric_offset_ms(offset_ms: i32) -> Result<(), String> {
@@ -691,14 +764,23 @@ fn bootstrap_overlay_runtime_state(state: &DesktopLyricsState) {
     let _ = send_overlay_command(OverlayCommand::SetFontSize(state.font_size));
     let _ = send_overlay_command(OverlayCommand::SetOpacityPercent(state.opacity_percent));
     let _ = send_overlay_command(OverlayCommand::SetPositionPreset(state.position_preset));
-    let _ = send_overlay_command(OverlayCommand::SetPositionOffset(
-        state.position_offset_x,
-        state.position_offset_y,
-    ));
-    let _ = send_overlay_command(OverlayCommand::SetRegionSize(
-        state.region_width,
-        state.region_height,
-    ));
+    if state.region_width > 0 && state.region_height > 0 {
+        let _ = send_overlay_command(OverlayCommand::SetLayout(
+            state.position_offset_x,
+            state.position_offset_y,
+            state.region_width,
+            state.region_height,
+        ));
+    } else {
+        let _ = send_overlay_command(OverlayCommand::SetPositionOffset(
+            state.position_offset_x,
+            state.position_offset_y,
+        ));
+        let _ = send_overlay_command(OverlayCommand::SetRegionSize(
+            state.region_width,
+            state.region_height,
+        ));
+    }
     let _ = send_overlay_command(OverlayCommand::SetVisible(state.visible));
 
     match state
@@ -801,6 +883,14 @@ fn normalize_overlay_region_height(value: i32) -> i32 {
     if value <= 0 {
         return DEFAULT_OVERLAY_REGION_HEIGHT;
     }
+    value.clamp(MIN_OVERLAY_REGION_HEIGHT, MAX_OVERLAY_REGION_HEIGHT)
+}
+
+fn normalize_explicit_overlay_region_width(value: i32) -> i32 {
+    value.clamp(MIN_OVERLAY_REGION_WIDTH, MAX_OVERLAY_REGION_WIDTH)
+}
+
+fn normalize_explicit_overlay_region_height(value: i32) -> i32 {
     value.clamp(MIN_OVERLAY_REGION_HEIGHT, MAX_OVERLAY_REGION_HEIGHT)
 }
 
@@ -1018,6 +1108,10 @@ fn refresh_overlay_locked(state: &mut DesktopLyricsState) {
     let next_rendered_text = OverlayText {
         primary: primary.to_string(),
         secondary,
+        previous: active_index
+            .checked_sub(1)
+            .and_then(|index| nearby_line_text(lines, index)),
+        next: nearby_line_text(lines, active_index + 1),
     };
 
     if state
@@ -1048,6 +1142,8 @@ fn render_track_fallback_text_locked(state: &mut DesktopLyricsState) {
     let fallback_text = OverlayText {
         primary: primary.to_string(),
         secondary: None,
+        previous: None,
+        next: None,
     };
 
     if state
@@ -1060,6 +1156,14 @@ fn render_track_fallback_text_locked(state: &mut DesktopLyricsState) {
 
     state.last_rendered_text = Some(fallback_text.clone());
     send_overlay_command_with_recover(OverlayCommand::SetText(Some(fallback_text)), Some(state));
+}
+
+fn nearby_line_text(lines: &[DesktopLyricLine], index: usize) -> Option<String> {
+    lines
+        .get(index)
+        .map(|line| line.text.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn clear_rendered_text_locked(state: &mut DesktopLyricsState) {
@@ -1111,6 +1215,15 @@ mod tests {
         }
     }
 
+    fn overlay_text(primary: &str, secondary: Option<&str>) -> OverlayText {
+        OverlayText {
+            primary: primary.to_string(),
+            secondary: secondary.map(str::to_string),
+            previous: None,
+            next: None,
+        }
+    }
+
     #[test]
     fn resolve_active_line_respects_explicit_end() {
         let lines = vec![line(0, Some(1000), "a"), line(1000, Some(2000), "b")];
@@ -1137,19 +1250,13 @@ mod tests {
         let mut state = DesktopLyricsState::default();
         state.visible = true;
         state.latest_playback_state = "playing".to_string();
-        state.last_rendered_text = Some(OverlayText {
-            primary: "keep".to_string(),
-            secondary: None,
-        });
+        state.last_rendered_text = Some(overlay_text("keep", None));
 
         refresh_overlay_locked(&mut state);
 
         assert_eq!(
             state.last_rendered_text,
-            Some(OverlayText {
-                primary: "keep".to_string(),
-                secondary: None,
-            })
+            Some(overlay_text("keep", None))
         );
     }
 
@@ -1158,10 +1265,7 @@ mod tests {
         let mut state = DesktopLyricsState::default();
         state.visible = true;
         state.latest_playback_state = "stopped".to_string();
-        state.last_rendered_text = Some(OverlayText {
-            primary: "clear".to_string(),
-            secondary: None,
-        });
+        state.last_rendered_text = Some(overlay_text("clear", None));
 
         refresh_overlay_locked(&mut state);
 
@@ -1174,19 +1278,13 @@ mod tests {
         state.visible = true;
         state.latest_playback_state = "playing".to_string();
         state.latest_track_key = Some("track-a".to_string());
-        state.last_rendered_text = Some(OverlayText {
-            primary: "keep".to_string(),
-            secondary: None,
-        });
+        state.last_rendered_text = Some(overlay_text("keep", None));
 
         refresh_overlay_locked(&mut state);
 
         assert_eq!(
             state.last_rendered_text,
-            Some(OverlayText {
-                primary: "keep".to_string(),
-                secondary: None,
-            })
+            Some(overlay_text("keep", None))
         );
     }
 
@@ -1202,9 +1300,35 @@ mod tests {
 
         assert_eq!(
             state.last_rendered_text,
+            Some(overlay_text("fallback-track", None))
+        );
+    }
+
+    #[test]
+    fn refresh_overlay_includes_neighbor_line_context() {
+        let mut state = DesktopLyricsState::default();
+        state.visible = true;
+        state.latest_playback_state = "playing".to_string();
+        state.latest_track_key = Some("track-a".to_string());
+        state.latest_current_ms = 1_500;
+        state.track_lines.insert(
+            "track-a".to_string(),
+            vec![
+                line(0, Some(1_000), "previous"),
+                line(1_000, Some(2_000), "current"),
+                line(2_000, Some(3_000), "next"),
+            ],
+        );
+
+        refresh_overlay_locked(&mut state);
+
+        assert_eq!(
+            state.last_rendered_text,
             Some(OverlayText {
-                primary: "fallback-track".to_string(),
+                primary: "current".to_string(),
                 secondary: None,
+                previous: Some("previous".to_string()),
+                next: Some("next".to_string()),
             })
         );
     }
@@ -1214,19 +1338,13 @@ mod tests {
         let mut state = DesktopLyricsState::default();
         state.visible = true;
         state.latest_playback_state = "stopped".to_string();
-        state.debug_override_text = Some(OverlayText {
-            primary: "debug-primary".to_string(),
-            secondary: Some("debug-secondary".to_string()),
-        });
+        state.debug_override_text = Some(overlay_text("debug-primary", Some("debug-secondary")));
 
         refresh_overlay_locked(&mut state);
 
         assert_eq!(
             state.last_rendered_text,
-            Some(OverlayText {
-                primary: "debug-primary".to_string(),
-                secondary: Some("debug-secondary".to_string()),
-            })
+            Some(overlay_text("debug-primary", Some("debug-secondary")))
         );
     }
 
@@ -1234,14 +1352,8 @@ mod tests {
     fn refresh_overlay_hidden_state_clears_debug_text_render() {
         let mut state = DesktopLyricsState::default();
         state.visible = false;
-        state.debug_override_text = Some(OverlayText {
-            primary: "debug-primary".to_string(),
-            secondary: None,
-        });
-        state.last_rendered_text = Some(OverlayText {
-            primary: "stale".to_string(),
-            secondary: None,
-        });
+        state.debug_override_text = Some(overlay_text("debug-primary", None));
+        state.last_rendered_text = Some(overlay_text("stale", None));
 
         refresh_overlay_locked(&mut state);
 

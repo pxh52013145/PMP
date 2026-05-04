@@ -62,12 +62,16 @@ impl OverlayRuntimeState {
             click_through: self.click_through,
             font_size: self.font_size,
             opacity_percent: self.opacity_percent,
+            region_width: self.region_width,
+            region_height: self.region_height,
             text: self
                 .text
                 .as_ref()
                 .map(|text| DesktopLyricsOverlaySnapshotText {
                     primary: text.primary.clone(),
                     secondary: text.secondary.clone(),
+                    previous: text.previous.clone(),
+                    next: text.next.clone(),
                 }),
         }
     }
@@ -146,6 +150,23 @@ fn apply_command(state: &mut OverlayRuntimeState, command: OverlayCommand) -> Co
                 effects.layout_changed = true;
             }
         }
+        OverlayCommand::SetLayout(offset_x, offset_y, width, height) => {
+            if state.position_offset_x != offset_x
+                || state.position_offset_y != offset_y
+                || !state.has_explicit_position
+                || state.region_width != width
+                || state.region_height != height
+                || !state.has_explicit_region
+            {
+                state.position_offset_x = offset_x;
+                state.position_offset_y = offset_y;
+                state.has_explicit_position = true;
+                state.region_width = width;
+                state.region_height = height;
+                state.has_explicit_region = width > 0 && height > 0;
+                effects.layout_changed = true;
+            }
+        }
         OverlayCommand::SetText(text) => {
             if state.text != text {
                 state.text = text;
@@ -165,6 +186,7 @@ fn apply_command(state: &mut OverlayRuntimeState, command: OverlayCommand) -> Co
 #[cfg(target_os = "windows")]
 fn ensure_overlay_window(app: &tauri::AppHandle) -> Result<(Window, bool), String> {
     if let Some(existing) = app.get_window(super::DESKTOP_LYRICS_OVERLAY_WINDOW_LABEL) {
+        let _ = existing.set_resizable(false);
         return Ok((existing, false));
     }
 
@@ -178,7 +200,7 @@ fn ensure_overlay_window(app: &tauri::AppHandle) -> Result<(Window, bool), Strin
     .center()
     .transparent(true)
     .decorations(false)
-    .resizable(true)
+    .resizable(false)
     .maximizable(false)
     .minimizable(false)
     .always_on_top(true)
@@ -235,8 +257,8 @@ fn read_layout_from_window(window: &Window) -> Option<(i32, i32, i32, i32)> {
     Some((
         logical_position.0,
         logical_position.1,
-        logical_size.0,
-        logical_size.1,
+        logical_size.0.max(1),
+        logical_size.1.max(1),
     ))
 }
 
@@ -253,11 +275,57 @@ fn to_logical_size(size: PhysicalSize<u32>, scale: f64) -> (i32, i32) {
 }
 
 #[cfg(target_os = "windows")]
+fn apply_window_geometry(window: &Window, x: i32, y: i32, width: i32, height: i32) {
+    use std::ptr::null_mut;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER,
+    };
+
+    let width = width.max(1);
+    let height = height.max(1);
+
+    if let (Ok(hwnd), Ok(scale)) = (window.hwnd(), window.scale_factor()) {
+        let physical_x = (x as f64 * scale).round() as i32;
+        let physical_y = (y as f64 * scale).round() as i32;
+        let physical_width = (width as f64 * scale).round().max(1.0) as i32;
+        let physical_height = (height as f64 * scale).round().max(1.0) as i32;
+
+        unsafe {
+            let ok = SetWindowPos(
+                hwnd.0 as _,
+                null_mut(),
+                physical_x,
+                physical_y,
+                physical_width,
+                physical_height,
+                SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER,
+            );
+            if ok != 0 {
+                return;
+            }
+        }
+    }
+
+    let _ = window.set_position(Position::Logical(LogicalPosition::new(
+        x as f64, y as f64,
+    )));
+    let _ = window.set_size(Size::Logical(LogicalSize::new(
+        width as f64,
+        height as f64,
+    )));
+}
+
+#[cfg(target_os = "windows")]
 fn apply_window_layout(window: &Window, state: &OverlayRuntimeState) {
-    if state.has_explicit_region {
-        let width = state.region_width.max(1) as f64;
-        let height = state.region_height.max(1) as f64;
-        let _ = window.set_size(Size::Logical(LogicalSize::new(width, height)));
+    if state.has_explicit_position && state.has_explicit_region {
+        apply_window_geometry(
+            window,
+            state.position_offset_x,
+            state.position_offset_y,
+            state.region_width,
+            state.region_height,
+        );
+        return;
     }
 
     if state.has_explicit_position {
@@ -265,11 +333,34 @@ fn apply_window_layout(window: &Window, state: &OverlayRuntimeState) {
         let y = state.position_offset_y as f64;
         let _ = window.set_position(Position::Logical(LogicalPosition::new(x, y)));
     }
+
+    if state.has_explicit_region {
+        let width = state.region_width.max(1) as f64;
+        let height = state.region_height.max(1) as f64;
+        let _ = window.set_size(Size::Logical(LogicalSize::new(width, height)));
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn preview_layout(
+    app: &tauri::AppHandle,
+    offset_x: i32,
+    offset_y: i32,
+    width: i32,
+    height: i32,
+) -> Result<(), String> {
+    let window = app
+        .get_window(super::DESKTOP_LYRICS_OVERLAY_WINDOW_LABEL)
+        .ok_or_else(|| "Desktop lyrics overlay window not found".to_string())?;
+
+    apply_window_geometry(&window, offset_x, offset_y, width, height);
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
 fn apply_window_controls(window: &Window, state: &OverlayRuntimeState) {
     let _ = window.set_always_on_top(true);
+    let _ = window.set_resizable(false);
     let _ = window.set_ignore_cursor_events(state.click_through);
 }
 

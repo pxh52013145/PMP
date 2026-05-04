@@ -281,6 +281,27 @@ pub async fn desktop_lyrics_set_region_size(width: i32, height: i32) -> Result<(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_set_layout(
+    offset_x: i32,
+    offset_y: i32,
+    width: i32,
+    height: i32,
+) -> Result<(), String> {
+    windows::desktop_lyrics::set_layout(offset_x, offset_y, width, height)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_preview_layout(
+    app: tauri::AppHandle,
+    offset_x: i32,
+    offset_y: i32,
+    width: i32,
+    height: i32,
+) -> Result<(), String> {
+    windows::desktop_lyrics::preview_layout(&app, offset_x, offset_y, width, height)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn desktop_lyrics_set_lyric_offset_ms(offset_ms: i32) -> Result<(), String> {
     windows::desktop_lyrics::set_lyric_offset_ms(offset_ms)
 }

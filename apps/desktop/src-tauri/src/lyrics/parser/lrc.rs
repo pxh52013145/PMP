@@ -91,31 +91,12 @@ fn extract_inline_tokens(text: &str) -> (String, Vec<LyricToken>) {
     let mut tokens = Vec::new();
     let mut cursor = 0usize;
 
-    while cursor < text.len() {
-        let Some(open_rel) = text[cursor..].find('<') else {
-            plain.push_str(&text[cursor..]);
-            break;
-        };
-        let open = cursor + open_rel;
-        plain.push_str(&text[cursor..open]);
+    while let Some(marker) = find_next_inline_timestamp_marker(text, cursor) {
+        plain.push_str(&text[cursor..marker.open]);
 
-        let Some(close_rel) = text[open + 1..].find('>') else {
-            plain.push_str(&text[open..]);
-            break;
-        };
-        let close = open + 1 + close_rel;
-        let marker = text[open + 1..close].trim();
-
-        let Some(start_ms) = parse_timestamp(marker) else {
-            plain.push_str(&text[open..=close]);
-            cursor = close + 1;
-            continue;
-        };
-
-        let token_start = close + 1;
-        let token_end = text[token_start..]
-            .find('<')
-            .map(|next| token_start + next)
+        let token_start = marker.close + 1;
+        let token_end = find_next_inline_timestamp_marker(text, token_start)
+            .map(|next| next.open)
             .unwrap_or(text.len());
         let token_text = text[token_start..token_end].to_string();
         plain.push_str(&token_text);
@@ -123,8 +104,8 @@ fn extract_inline_tokens(text: &str) -> (String, Vec<LyricToken>) {
         let normalized = token_text.trim();
         if !normalized.is_empty() {
             tokens.push(LyricToken {
-                start_ms,
-                end_ms: start_ms,
+                start_ms: marker.start_ms,
+                end_ms: marker.start_ms,
                 text: normalized.to_string(),
             });
         }
@@ -132,7 +113,48 @@ fn extract_inline_tokens(text: &str) -> (String, Vec<LyricToken>) {
         cursor = token_end;
     }
 
+    plain.push_str(&text[cursor..]);
     (plain.trim().to_string(), tokens)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InlineTimestampMarker {
+    open: usize,
+    close: usize,
+    start_ms: u64,
+}
+
+fn find_next_inline_timestamp_marker(text: &str, cursor: usize) -> Option<InlineTimestampMarker> {
+    let mut search = cursor;
+
+    while search < text.len() {
+        let angle_open = text[search..].find('<').map(|offset| search + offset);
+        let bracket_open = text[search..].find('[').map(|offset| search + offset);
+        let open = match (angle_open, bracket_open) {
+            (Some(angle), Some(bracket)) => angle.min(bracket),
+            (Some(angle), None) => angle,
+            (None, Some(bracket)) => bracket,
+            (None, None) => return None,
+        };
+        let close_char = if text[open..].starts_with('<') { '>' } else { ']' };
+        let Some(close_rel) = text[open + 1..].find(close_char) else {
+            return None;
+        };
+        let close = open + 1 + close_rel;
+        let marker = text[open + 1..close].trim();
+
+        if let Some(start_ms) = parse_timestamp(marker) {
+            return Some(InlineTimestampMarker {
+                open,
+                close,
+                start_ms,
+            });
+        }
+
+        search = open + 1;
+    }
+
+    None
 }
 
 fn parse_timestamp(marker: &str) -> Option<u64> {
@@ -200,6 +222,26 @@ mod tests {
         assert_eq!(parsed.lines[0].tokens[0].start_ms, 1_100);
         assert_eq!(parsed.lines[0].tokens[1].text, "World");
         assert_eq!(parsed.lines[0].text, "Hello World");
+    }
+
+    #[test]
+    fn parse_inline_bracket_word_timing_tokens() {
+        let parsed = parse_lrc("[00:01.00]Hello [00:01.60]World");
+        assert_eq!(parsed.lines.len(), 1);
+        assert!(parsed.has_word_timing);
+        assert_eq!(parsed.lines[0].tokens.len(), 1);
+        assert_eq!(parsed.lines[0].tokens[0].text, "World");
+        assert_eq!(parsed.lines[0].tokens[0].start_ms, 1_600);
+        assert_eq!(parsed.lines[0].text, "Hello World");
+    }
+
+    #[test]
+    fn preserve_plain_bracket_text_without_timestamp() {
+        let parsed = parse_lrc("[00:01.00]Hello [world]");
+        assert_eq!(parsed.lines.len(), 1);
+        assert!(!parsed.has_word_timing);
+        assert_eq!(parsed.lines[0].tokens.len(), 0);
+        assert_eq!(parsed.lines[0].text, "Hello [world]");
     }
 
     #[test]
