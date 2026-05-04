@@ -32,6 +32,7 @@ export const BUILTIN_MAGNET_ID_LIST = [
   'btn-debug', // 调试按钮
   'audio-visualizer',
   'dsp-vst',
+  'music-tag-workbench',
   'plugin-development-workspace',
 ] as const;
 

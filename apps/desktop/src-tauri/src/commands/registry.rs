@@ -140,6 +140,13 @@ pub const LIBRARY_COMMAND_NAMES: &[&str] = &[
     "music_library_db_get_stats",
 ];
 
+pub const MUSIC_TAG_COMMAND_NAMES: &[&str] = &[
+    "music_tag_read_local_tags",
+    "music_tag_preview_db_patch",
+    "music_tag_apply_db_patch",
+    "music_tag_search_candidates",
+];
+
 pub const AUDIO_COMMAND_NAMES: &[&str] = &[
     "native_audio_load",
     "native_audio_load_source",
@@ -271,6 +278,10 @@ pub fn list_command_catalog() -> Vec<CommandDomainCatalogEntry> {
         CommandDomainCatalogEntry {
             domain: "library",
             commands: LIBRARY_COMMAND_NAMES,
+        },
+        CommandDomainCatalogEntry {
+            domain: "music-tag",
+            commands: MUSIC_TAG_COMMAND_NAMES,
         },
         CommandDomainCatalogEntry {
             domain: "audio",
@@ -437,6 +448,10 @@ macro_rules! pmp_generate_handler {
             crate::commands::library::music_library_db_list_genres,
             crate::commands::library::music_library_db_list_albums,
             crate::commands::library::music_library_db_get_stats,
+            crate::commands::music_tag::music_tag_read_local_tags,
+            crate::commands::music_tag::music_tag_preview_db_patch,
+            crate::commands::music_tag::music_tag_apply_db_patch,
+            crate::commands::music_tag::music_tag_search_candidates,
             crate::commands::audio::native_audio_load,
             crate::commands::audio::native_audio_load_source,
             crate::commands::audio::native_audio_load_and_play,

@@ -13,6 +13,7 @@ import { AUDIO_VISUALIZER_MAGNET } from '../../data/builtin/audioVisualizerMagne
 import { PROCESS_PERF_MONITOR_MAGNET } from '../../data/builtin/processPerfMonitorMagnet';
 import { PLUGIN_DEVELOPMENT_WORKSPACE_MAGNET } from '../../data/builtin/pluginDevelopmentWorkspaceMagnet';
 import { DESKTOP_LYRICS_MAGNET } from '../../data/builtin/desktopLyricsMagnet';
+import { MUSIC_TAG_WORKBENCH_MAGNET } from '../../data/builtin/musicTagWorkbenchMagnet';
 import {
   PLAY_QUEUE_MAGNET,
   PLAYLISTS_MAGNET,
@@ -34,6 +35,7 @@ export function createDefaultMagnetLibrary(): Magnet[] {
     AUDIO_VISUALIZER_MAGNET,
     PROCESS_PERF_MONITOR_MAGNET,
     PLUGIN_DEVELOPMENT_WORKSPACE_MAGNET,
+    MUSIC_TAG_WORKBENCH_MAGNET,
     EDITOR_BUTTON_MAGNET,
     DEBUG_BUTTON_MAGNET,
     MATRIX_CHANGE_MAGNET,

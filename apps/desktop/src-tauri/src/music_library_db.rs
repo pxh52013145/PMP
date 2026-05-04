@@ -8,7 +8,8 @@ use rusqlite::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap, VecDeque},
+    collections::{hash_map::DefaultHasher, BTreeSet, HashMap, VecDeque},
+    fs,
     hash::{Hash, Hasher},
     path::PathBuf,
     sync::Mutex,
@@ -16,7 +17,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-const DB_VERSION: i32 = 10;
+const DB_VERSION: i32 = 12;
 pub const EVENT_MUSIC_LIBRARY_SCHEMA_CHANGED: &str = "music-library-schema-changed";
 
 static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
@@ -201,6 +202,68 @@ pub struct LibraryTrackUpsertInput {
     pub replay_gain_album_db: Option<f32>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicTagCandidateUpsertInput {
+    pub id: String,
+    pub track_id: String,
+    pub provider: String,
+    pub provider_entity_type: String,
+    pub provider_entity_id: Option<String>,
+    pub score: f64,
+    pub confidence: String,
+    pub metadata_json: String,
+    pub reasons_json: String,
+    pub warnings_json: Option<String>,
+    pub raw_payload_json: Option<String>,
+    pub fetched_at_ms: i64,
+    pub expires_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicTagDbPatchInput {
+    pub track_id: String,
+    pub source_metadata_json: String,
+    pub selected_candidate_ids: Vec<String>,
+    pub locked_fields: Vec<String>,
+    pub lock_mode: Option<String>,
+    pub tag_source: Option<String>,
+    pub tag_confidence: Option<f64>,
+    pub expected_mtime_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicTagDbFieldChangeRecord {
+    pub field: String,
+    pub column_name: String,
+    pub before: JsonValue,
+    pub after: JsonValue,
+    pub locked: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicTagDbPatchResult {
+    pub track_id: String,
+    pub file_path: String,
+    pub file_mtime_ms: Option<i64>,
+    pub existing_locked_fields: Vec<String>,
+    pub locked_fields: Vec<String>,
+    pub changed_fields: Vec<MusicTagDbFieldChangeRecord>,
+    pub before_db_json: JsonValue,
+    pub after_db_json: JsonValue,
+    pub selected_candidate_ids: Vec<String>,
+    pub tag_source: Option<String>,
+    pub tag_confidence: Option<f64>,
+    pub tag_last_audit_id: Option<String>,
+    pub tag_updated_at_ms: i64,
+    pub applied: bool,
+    pub can_apply: bool,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryTrackSyncResult {
@@ -278,8 +341,15 @@ pub struct LibraryTrackRecord {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
+    pub album_artist: Option<String>,
     pub genre: Option<String>,
     pub year: Option<i64>,
+    pub date: Option<String>,
+    pub original_date: Option<String>,
+    pub track_number: Option<i64>,
+    pub track_total: Option<i64>,
+    pub disc_number: Option<i64>,
+    pub disc_total: Option<i64>,
     pub format: Option<String>,
     pub duration_seconds: Option<f64>,
     pub sample_rate: Option<u32>,
@@ -288,6 +358,30 @@ pub struct LibraryTrackRecord {
     pub mtime_ms: Option<i64>,
     pub replay_gain_track_db: Option<f32>,
     pub replay_gain_album_db: Option<f32>,
+    pub composer: Option<String>,
+    pub lyricist: Option<String>,
+    pub conductor: Option<String>,
+    pub arranger: Option<String>,
+    pub label: Option<String>,
+    pub catalog_number: Option<String>,
+    pub barcode: Option<String>,
+    pub isrc: Option<String>,
+    pub bpm: Option<f64>,
+    pub musical_key: Option<String>,
+    pub language: Option<String>,
+    pub comment: Option<String>,
+    pub lyrics: Option<String>,
+    pub mbid_recording: Option<String>,
+    pub mbid_release: Option<String>,
+    pub mbid_release_group: Option<String>,
+    pub mbid_artist: Option<String>,
+    pub mbid_album_artist: Option<String>,
+    pub acoustid: Option<String>,
+    pub tag_source: Option<String>,
+    pub tag_confidence: Option<f64>,
+    pub tag_updated_at_ms: Option<i64>,
+    pub tag_locked_fields: Option<Vec<String>>,
+    pub tag_last_audit_id: Option<String>,
     pub play_count: u64,
     pub last_played_at_ms: Option<i64>,
     pub status: String,
@@ -490,6 +584,63 @@ pub struct LibraryUserEntryRecord {
     pub is_missing: bool,
     pub play_count: u64,
     pub last_played_at_ms: Option<i64>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryStableEntrySourceUpsertInput {
+    pub id: Option<String>,
+    pub entry_id: String,
+    pub source_kind: String,
+    pub connector_id: Option<String>,
+    pub source_id: Option<String>,
+    pub source_item_id: Option<String>,
+    pub locator: Option<String>,
+    pub track_id: Option<String>,
+    pub quick_fingerprint: Option<String>,
+    pub full_fingerprint: Option<String>,
+    pub availability: Option<String>,
+    pub quality_score: Option<f64>,
+    pub confidence: Option<f64>,
+    pub priority: Option<i64>,
+    pub last_verified_at_ms: Option<i64>,
+    pub created_at_ms: Option<i64>,
+    pub updated_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryStableEntrySourceQueryInput {
+    pub entry_id: Option<String>,
+    pub source_kind: Option<String>,
+    pub connector_id: Option<String>,
+    pub source_id: Option<String>,
+    pub track_id: Option<String>,
+    pub availability: Option<String>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryStableEntrySourceRecord {
+    pub id: String,
+    pub entry_id: String,
+    pub source_kind: String,
+    pub connector_id: Option<String>,
+    pub source_id: Option<String>,
+    pub source_item_id: Option<String>,
+    pub locator: Option<String>,
+    pub track_id: Option<String>,
+    pub quick_fingerprint: Option<String>,
+    pub full_fingerprint: Option<String>,
+    pub availability: String,
+    pub quality_score: Option<f64>,
+    pub confidence: f64,
+    pub priority: i64,
+    pub last_verified_at_ms: Option<i64>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }
@@ -1226,6 +1377,325 @@ fn ensure_sangreal_v10_platform_instance_auth_schema(conn: &Connection) -> Resul
     })
 }
 
+fn ensure_sangreal_v11_stable_entry_sources_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS stable_entry_sources (
+          id TEXT PRIMARY KEY NOT NULL,
+          entry_id TEXT NOT NULL,
+          source_kind TEXT NOT NULL,
+          connector_id TEXT,
+          source_id TEXT,
+          source_item_id TEXT,
+          locator TEXT,
+          track_id TEXT,
+          quick_fingerprint TEXT,
+          full_fingerprint TEXT,
+          availability TEXT NOT NULL DEFAULT 'unknown',
+          quality_score REAL,
+          confidence REAL NOT NULL DEFAULT 1.0,
+          priority INTEGER NOT NULL DEFAULT 100,
+          last_verified_at_ms INTEGER,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          FOREIGN KEY(entry_id) REFERENCES user_entries(id) ON DELETE CASCADE,
+          FOREIGN KEY(connector_id) REFERENCES connectors(id) ON DELETE SET NULL,
+          FOREIGN KEY(source_id) REFERENCES sources(id) ON DELETE SET NULL,
+          FOREIGN KEY(track_id) REFERENCES local_tracks(id) ON DELETE SET NULL,
+          CHECK(source_kind IN ('local', 'nas', 'platform', 'cache', 'pmp-server')),
+          CHECK(availability IN ('available', 'missing', 'remote-only', 'stale', 'auth-required', 'unknown'))
+        );
+
+        CREATE INDEX IF NOT EXISTS stable_entry_sources_entry_id_idx
+          ON stable_entry_sources(entry_id);
+        CREATE INDEX IF NOT EXISTS stable_entry_sources_source_kind_idx
+          ON stable_entry_sources(source_kind);
+        CREATE INDEX IF NOT EXISTS stable_entry_sources_connector_id_idx
+          ON stable_entry_sources(connector_id);
+        CREATE INDEX IF NOT EXISTS stable_entry_sources_source_id_idx
+          ON stable_entry_sources(source_id);
+        CREATE INDEX IF NOT EXISTS stable_entry_sources_source_item_id_idx
+          ON stable_entry_sources(source_item_id);
+        CREATE INDEX IF NOT EXISTS stable_entry_sources_track_id_idx
+          ON stable_entry_sources(track_id);
+        CREATE INDEX IF NOT EXISTS stable_entry_sources_quick_fingerprint_idx
+          ON stable_entry_sources(quick_fingerprint);
+        CREATE INDEX IF NOT EXISTS stable_entry_sources_availability_idx
+          ON stable_entry_sources(availability);
+        CREATE INDEX IF NOT EXISTS stable_entry_sources_priority_idx
+          ON stable_entry_sources(entry_id, priority, updated_at_ms);
+        "#,
+    )
+    .map_err(|error| {
+        format!("Failed to ensure music library schema v11 stable entry sources: {error}")
+    })
+}
+
+fn ensure_column_if_missing(
+    conn: &Connection,
+    columns: &mut Vec<String>,
+    column_name: &str,
+    ddl: &str,
+) -> Result<(), String> {
+    if columns.iter().any(|column| column == column_name) {
+        return Ok(());
+    }
+    conn.execute_batch(ddl)
+        .map_err(|error| format!("Failed to add music tag column {column_name}: {error}"))?;
+    columns.push(column_name.to_string());
+    Ok(())
+}
+
+fn ensure_sangreal_v12_music_tag_schema(conn: &Connection) -> Result<(), String> {
+    let mut local_track_columns = list_table_columns(conn, "local_tracks")?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "album_artist",
+        "ALTER TABLE local_tracks ADD COLUMN album_artist TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "date",
+        "ALTER TABLE local_tracks ADD COLUMN date TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "original_date",
+        "ALTER TABLE local_tracks ADD COLUMN original_date TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "track_number",
+        "ALTER TABLE local_tracks ADD COLUMN track_number INTEGER;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "track_total",
+        "ALTER TABLE local_tracks ADD COLUMN track_total INTEGER;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "disc_number",
+        "ALTER TABLE local_tracks ADD COLUMN disc_number INTEGER;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "disc_total",
+        "ALTER TABLE local_tracks ADD COLUMN disc_total INTEGER;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "composer",
+        "ALTER TABLE local_tracks ADD COLUMN composer TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "lyricist",
+        "ALTER TABLE local_tracks ADD COLUMN lyricist TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "conductor",
+        "ALTER TABLE local_tracks ADD COLUMN conductor TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "arranger",
+        "ALTER TABLE local_tracks ADD COLUMN arranger TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "label",
+        "ALTER TABLE local_tracks ADD COLUMN label TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "catalog_number",
+        "ALTER TABLE local_tracks ADD COLUMN catalog_number TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "barcode",
+        "ALTER TABLE local_tracks ADD COLUMN barcode TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "isrc",
+        "ALTER TABLE local_tracks ADD COLUMN isrc TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "bpm",
+        "ALTER TABLE local_tracks ADD COLUMN bpm REAL;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "musical_key",
+        "ALTER TABLE local_tracks ADD COLUMN musical_key TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "language",
+        "ALTER TABLE local_tracks ADD COLUMN language TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "comment",
+        "ALTER TABLE local_tracks ADD COLUMN comment TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "lyrics",
+        "ALTER TABLE local_tracks ADD COLUMN lyrics TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "mbid_recording",
+        "ALTER TABLE local_tracks ADD COLUMN mbid_recording TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "mbid_release",
+        "ALTER TABLE local_tracks ADD COLUMN mbid_release TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "mbid_release_group",
+        "ALTER TABLE local_tracks ADD COLUMN mbid_release_group TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "mbid_artist",
+        "ALTER TABLE local_tracks ADD COLUMN mbid_artist TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "mbid_album_artist",
+        "ALTER TABLE local_tracks ADD COLUMN mbid_album_artist TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "acoustid",
+        "ALTER TABLE local_tracks ADD COLUMN acoustid TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "tag_source",
+        "ALTER TABLE local_tracks ADD COLUMN tag_source TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "tag_confidence",
+        "ALTER TABLE local_tracks ADD COLUMN tag_confidence REAL;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "tag_updated_at_ms",
+        "ALTER TABLE local_tracks ADD COLUMN tag_updated_at_ms INTEGER;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "tag_locked_fields_json",
+        "ALTER TABLE local_tracks ADD COLUMN tag_locked_fields_json TEXT;",
+    )?;
+    ensure_column_if_missing(
+        conn,
+        &mut local_track_columns,
+        "tag_last_audit_id",
+        "ALTER TABLE local_tracks ADD COLUMN tag_last_audit_id TEXT;",
+    )?;
+
+    conn.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS local_tracks_album_artist_idx ON local_tracks(album_artist);
+        CREATE INDEX IF NOT EXISTS local_tracks_mbid_recording_idx ON local_tracks(mbid_recording);
+        CREATE INDEX IF NOT EXISTS local_tracks_mbid_release_idx ON local_tracks(mbid_release);
+        CREATE INDEX IF NOT EXISTS local_tracks_isrc_idx ON local_tracks(isrc);
+        CREATE INDEX IF NOT EXISTS local_tracks_acoustid_idx ON local_tracks(acoustid);
+        CREATE INDEX IF NOT EXISTS local_tracks_tag_updated_at_ms_idx ON local_tracks(tag_updated_at_ms);
+
+        CREATE TABLE IF NOT EXISTS track_metadata_candidates (
+          id TEXT PRIMARY KEY NOT NULL,
+          track_id TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          provider_entity_type TEXT NOT NULL,
+          provider_entity_id TEXT,
+          score REAL NOT NULL,
+          confidence TEXT NOT NULL,
+          metadata_json TEXT NOT NULL,
+          reasons_json TEXT NOT NULL,
+          warnings_json TEXT,
+          raw_payload_json TEXT,
+          fetched_at_ms INTEGER NOT NULL,
+          expires_at_ms INTEGER,
+          FOREIGN KEY(track_id) REFERENCES local_tracks(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS track_metadata_candidates_track_idx
+          ON track_metadata_candidates(track_id, score DESC);
+        CREATE INDEX IF NOT EXISTS track_metadata_candidates_provider_idx
+          ON track_metadata_candidates(provider, provider_entity_id);
+
+        CREATE TABLE IF NOT EXISTS track_metadata_apply_audit (
+          id TEXT PRIMARY KEY NOT NULL,
+          track_id TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          selected_candidate_ids_json TEXT NOT NULL,
+          before_db_json TEXT NOT NULL,
+          after_db_json TEXT NOT NULL,
+          before_file_json TEXT,
+          after_file_json TEXT,
+          changed_fields_json TEXT NOT NULL,
+          write_db INTEGER NOT NULL,
+          write_file INTEGER NOT NULL,
+          file_mtime_before_ms INTEGER,
+          file_mtime_after_ms INTEGER,
+          status TEXT NOT NULL,
+          error_message TEXT,
+          created_at_ms INTEGER NOT NULL,
+          applied_by TEXT NOT NULL,
+          FOREIGN KEY(track_id) REFERENCES local_tracks(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS track_metadata_apply_audit_track_idx
+          ON track_metadata_apply_audit(track_id, created_at_ms DESC);
+        "#,
+    )
+    .map_err(|error| format!("Failed to ensure music tag schema v12: {error}"))?;
+
+    Ok(())
+}
+
 fn migrate(conn: &Connection) -> Result<(), String> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|error| format!("Failed to enable foreign keys: {error}"))?;
@@ -1264,8 +1734,15 @@ fn migrate(conn: &Connection) -> Result<(), String> {
               title TEXT,
               artist TEXT,
               album TEXT,
+              album_artist TEXT,
               genre TEXT,
               year INTEGER,
+              date TEXT,
+              original_date TEXT,
+              track_number INTEGER,
+              track_total INTEGER,
+              disc_number INTEGER,
+              disc_total INTEGER,
               format TEXT,
               duration_seconds REAL,
               sample_rate INTEGER,
@@ -1274,6 +1751,30 @@ fn migrate(conn: &Connection) -> Result<(), String> {
               mtime_ms INTEGER,
               replay_gain_track_db REAL,
               replay_gain_album_db REAL,
+              composer TEXT,
+              lyricist TEXT,
+              conductor TEXT,
+              arranger TEXT,
+              label TEXT,
+              catalog_number TEXT,
+              barcode TEXT,
+              isrc TEXT,
+              bpm REAL,
+              musical_key TEXT,
+              language TEXT,
+              comment TEXT,
+              lyrics TEXT,
+              mbid_recording TEXT,
+              mbid_release TEXT,
+              mbid_release_group TEXT,
+              mbid_artist TEXT,
+              mbid_album_artist TEXT,
+              acoustid TEXT,
+              tag_source TEXT,
+              tag_confidence REAL,
+              tag_updated_at_ms INTEGER,
+              tag_locked_fields_json TEXT,
+              tag_last_audit_id TEXT,
               play_count INTEGER NOT NULL DEFAULT 0,
               last_played_at_ms INTEGER,
               status TEXT NOT NULL DEFAULT 'available',
@@ -1287,6 +1788,59 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             CREATE INDEX IF NOT EXISTS local_tracks_source_id_idx ON local_tracks(source_id);
             CREATE INDEX IF NOT EXISTS local_tracks_quick_fingerprint_idx ON local_tracks(quick_fingerprint);
             CREATE INDEX IF NOT EXISTS local_tracks_status_idx ON local_tracks(status);
+            CREATE INDEX IF NOT EXISTS local_tracks_album_artist_idx ON local_tracks(album_artist);
+            CREATE INDEX IF NOT EXISTS local_tracks_mbid_recording_idx ON local_tracks(mbid_recording);
+            CREATE INDEX IF NOT EXISTS local_tracks_mbid_release_idx ON local_tracks(mbid_release);
+            CREATE INDEX IF NOT EXISTS local_tracks_isrc_idx ON local_tracks(isrc);
+            CREATE INDEX IF NOT EXISTS local_tracks_acoustid_idx ON local_tracks(acoustid);
+            CREATE INDEX IF NOT EXISTS local_tracks_tag_updated_at_ms_idx ON local_tracks(tag_updated_at_ms);
+
+            CREATE TABLE IF NOT EXISTS track_metadata_candidates (
+              id TEXT PRIMARY KEY NOT NULL,
+              track_id TEXT NOT NULL,
+              provider TEXT NOT NULL,
+              provider_entity_type TEXT NOT NULL,
+              provider_entity_id TEXT,
+              score REAL NOT NULL,
+              confidence TEXT NOT NULL,
+              metadata_json TEXT NOT NULL,
+              reasons_json TEXT NOT NULL,
+              warnings_json TEXT,
+              raw_payload_json TEXT,
+              fetched_at_ms INTEGER NOT NULL,
+              expires_at_ms INTEGER,
+              FOREIGN KEY(track_id) REFERENCES local_tracks(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS track_metadata_candidates_track_idx
+              ON track_metadata_candidates(track_id, score DESC);
+
+            CREATE INDEX IF NOT EXISTS track_metadata_candidates_provider_idx
+              ON track_metadata_candidates(provider, provider_entity_id);
+
+            CREATE TABLE IF NOT EXISTS track_metadata_apply_audit (
+              id TEXT PRIMARY KEY NOT NULL,
+              track_id TEXT NOT NULL,
+              file_path TEXT NOT NULL,
+              selected_candidate_ids_json TEXT NOT NULL,
+              before_db_json TEXT NOT NULL,
+              after_db_json TEXT NOT NULL,
+              before_file_json TEXT,
+              after_file_json TEXT,
+              changed_fields_json TEXT NOT NULL,
+              write_db INTEGER NOT NULL,
+              write_file INTEGER NOT NULL,
+              file_mtime_before_ms INTEGER,
+              file_mtime_after_ms INTEGER,
+              status TEXT NOT NULL,
+              error_message TEXT,
+              created_at_ms INTEGER NOT NULL,
+              applied_by TEXT NOT NULL,
+              FOREIGN KEY(track_id) REFERENCES local_tracks(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS track_metadata_apply_audit_track_idx
+              ON track_metadata_apply_audit(track_id, created_at_ms DESC);
 
             CREATE TABLE IF NOT EXISTS user_entries (
               id TEXT PRIMARY KEY NOT NULL,
@@ -1515,6 +2069,20 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         version = 10;
     }
 
+    if version == 10 {
+        ensure_sangreal_v11_stable_entry_sources_schema(conn)?;
+        conn.execute_batch("PRAGMA user_version = 11;")
+            .map_err(|error| format!("Failed to migrate music library schema to v11: {error}"))?;
+        version = 11;
+    }
+
+    if version == 11 {
+        ensure_sangreal_v12_music_tag_schema(conn)?;
+        conn.execute_batch("PRAGMA user_version = 12;")
+            .map_err(|error| format!("Failed to migrate music library schema to v12: {error}"))?;
+        version = 12;
+    }
+
     if version != DB_VERSION {
         return Err(format!(
             "Unsupported music library DB schema version: {version} (expected {DB_VERSION})"
@@ -1612,12 +2180,399 @@ fn normalize_quick_fingerprint(value: Option<&str>) -> Option<String> {
     Some(format!("qf2:{normalized}"))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MusicTagFieldValueKind {
+    Text,
+    Integer,
+    Real,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MusicTagFieldColumn {
+    field: &'static str,
+    column: &'static str,
+    kind: MusicTagFieldValueKind,
+}
+
+const MUSIC_TAG_FIELD_COLUMNS: &[MusicTagFieldColumn] = &[
+    MusicTagFieldColumn {
+        field: "title",
+        column: "title",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "artist",
+        column: "artist",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "album",
+        column: "album",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "albumArtist",
+        column: "album_artist",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "genre",
+        column: "genre",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "year",
+        column: "year",
+        kind: MusicTagFieldValueKind::Integer,
+    },
+    MusicTagFieldColumn {
+        field: "date",
+        column: "date",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "originalDate",
+        column: "original_date",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "trackNumber",
+        column: "track_number",
+        kind: MusicTagFieldValueKind::Integer,
+    },
+    MusicTagFieldColumn {
+        field: "trackTotal",
+        column: "track_total",
+        kind: MusicTagFieldValueKind::Integer,
+    },
+    MusicTagFieldColumn {
+        field: "discNumber",
+        column: "disc_number",
+        kind: MusicTagFieldValueKind::Integer,
+    },
+    MusicTagFieldColumn {
+        field: "discTotal",
+        column: "disc_total",
+        kind: MusicTagFieldValueKind::Integer,
+    },
+    MusicTagFieldColumn {
+        field: "composer",
+        column: "composer",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "lyricist",
+        column: "lyricist",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "conductor",
+        column: "conductor",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "arranger",
+        column: "arranger",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "label",
+        column: "label",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "catalogNumber",
+        column: "catalog_number",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "barcode",
+        column: "barcode",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "isrc",
+        column: "isrc",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "bpm",
+        column: "bpm",
+        kind: MusicTagFieldValueKind::Real,
+    },
+    MusicTagFieldColumn {
+        field: "musicalKey",
+        column: "musical_key",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "language",
+        column: "language",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "comment",
+        column: "comment",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "lyrics",
+        column: "lyrics",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "mbidRecording",
+        column: "mbid_recording",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "mbidRelease",
+        column: "mbid_release",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "mbidReleaseGroup",
+        column: "mbid_release_group",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "mbidArtist",
+        column: "mbid_artist",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "mbidAlbumArtist",
+        column: "mbid_album_artist",
+        kind: MusicTagFieldValueKind::Text,
+    },
+    MusicTagFieldColumn {
+        field: "acoustid",
+        column: "acoustid",
+        kind: MusicTagFieldValueKind::Text,
+    },
+];
+
+fn music_tag_field_columns() -> &'static [MusicTagFieldColumn] {
+    MUSIC_TAG_FIELD_COLUMNS
+}
+
+fn music_tag_field_column(field: &str) -> Option<&'static MusicTagFieldColumn> {
+    music_tag_field_columns().iter().find(|entry| entry.field == field)
+}
+
+fn music_tag_normalize_locked_fields(fields: &[String]) -> Vec<String> {
+    let mut locked = BTreeSet::new();
+    for field in fields {
+        let Some(column) = music_tag_field_column(field) else {
+            continue;
+        };
+        locked.insert(column.field.to_string());
+    }
+    locked.into_iter().collect()
+}
+
+fn parse_music_tag_locked_fields_json(raw: Option<String>) -> Vec<String> {
+    let Some(raw) = raw else {
+        return Vec::new();
+    };
+    match serde_json::from_str::<Vec<String>>(raw.as_str()) {
+        Ok(fields) => music_tag_normalize_locked_fields(&fields),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn music_tag_json_value_for_field(kind: MusicTagFieldValueKind, value: ValueRef<'_>) -> JsonValue {
+    match kind {
+        MusicTagFieldValueKind::Text => match value {
+            ValueRef::Null => JsonValue::Null,
+            ValueRef::Integer(item) => JsonValue::String(item.to_string()),
+            ValueRef::Real(item) => JsonValue::String(item.to_string()),
+            ValueRef::Text(item) => JsonValue::String(String::from_utf8_lossy(item).to_string()),
+            ValueRef::Blob(_) => JsonValue::Null,
+        },
+        MusicTagFieldValueKind::Integer => match value {
+            ValueRef::Null => JsonValue::Null,
+            ValueRef::Integer(item) => JsonValue::Number(item.into()),
+            ValueRef::Real(item) => serde_json::Number::from_f64(item)
+                .map(JsonValue::Number)
+                .unwrap_or(JsonValue::Null),
+            ValueRef::Text(item) => std::str::from_utf8(item)
+                .ok()
+                .and_then(|text| text.trim().parse::<i64>().ok())
+                .map(|item| JsonValue::Number(item.into()))
+                .unwrap_or(JsonValue::Null),
+            ValueRef::Blob(_) => JsonValue::Null,
+        },
+        MusicTagFieldValueKind::Real => match value {
+            ValueRef::Null => JsonValue::Null,
+            ValueRef::Integer(item) => serde_json::Number::from_f64(item as f64)
+                .map(JsonValue::Number)
+                .unwrap_or(JsonValue::Null),
+            ValueRef::Real(item) => serde_json::Number::from_f64(item)
+                .map(JsonValue::Number)
+                .unwrap_or(JsonValue::Null),
+            ValueRef::Text(item) => std::str::from_utf8(item)
+                .ok()
+                .and_then(|text| text.trim().replace(',', ".").parse::<f64>().ok())
+                .and_then(serde_json::Number::from_f64)
+                .map(JsonValue::Number)
+                .unwrap_or(JsonValue::Null),
+            ValueRef::Blob(_) => JsonValue::Null,
+        },
+    }
+}
+
+fn music_tag_json_value_to_sql(value: &JsonValue, kind: MusicTagFieldValueKind) -> Value {
+    match value {
+        JsonValue::Null => Value::Null,
+        JsonValue::String(text) if text.trim().is_empty() => Value::Null,
+        JsonValue::String(text) => match kind {
+            MusicTagFieldValueKind::Text => Value::Text(text.trim().to_string()),
+            MusicTagFieldValueKind::Integer => text
+                .trim()
+                .parse::<i64>()
+                .map(Value::Integer)
+                .unwrap_or(Value::Null),
+            MusicTagFieldValueKind::Real => text
+                .trim()
+                .replace(',', ".")
+                .parse::<f64>()
+                .map(Value::Real)
+                .unwrap_or(Value::Null),
+        },
+        JsonValue::Number(number) => match kind {
+            MusicTagFieldValueKind::Text => Value::Text(number.to_string()),
+            MusicTagFieldValueKind::Integer => number
+                .as_i64()
+                .map(Value::Integer)
+                .or_else(|| number.as_f64().map(Value::Real))
+                .unwrap_or(Value::Null),
+            MusicTagFieldValueKind::Real => number.as_f64().map(Value::Real).unwrap_or(Value::Null),
+        },
+        JsonValue::Bool(value) => match kind {
+            MusicTagFieldValueKind::Text => Value::Text(value.to_string()),
+            MusicTagFieldValueKind::Integer => Value::Integer(if *value { 1 } else { 0 }),
+            MusicTagFieldValueKind::Real => Value::Real(if *value { 1.0 } else { 0.0 }),
+        },
+        _ => Value::Null,
+    }
+}
+
+fn music_tag_row_value_to_json(row: &rusqlite::Row<'_>, column: &str, kind: MusicTagFieldValueKind) -> Result<JsonValue, rusqlite::Error> {
+    Ok(match kind {
+        MusicTagFieldValueKind::Text => match row.get_ref(column)? {
+            ValueRef::Null => JsonValue::Null,
+            value => music_tag_json_value_for_field(MusicTagFieldValueKind::Text, value),
+        },
+        MusicTagFieldValueKind::Integer => match row.get_ref(column)? {
+            ValueRef::Null => JsonValue::Null,
+            value => music_tag_json_value_for_field(MusicTagFieldValueKind::Integer, value),
+        },
+        MusicTagFieldValueKind::Real => match row.get_ref(column)? {
+            ValueRef::Null => JsonValue::Null,
+            value => music_tag_json_value_for_field(MusicTagFieldValueKind::Real, value),
+        },
+    })
+}
+
+fn music_tag_metadata_map_from_json(value: &JsonValue) -> JsonMap<String, JsonValue> {
+    let mut map = JsonMap::new();
+    let Some(source) = value.as_object() else {
+        return map;
+    };
+
+    for column in music_tag_field_columns() {
+        let Some(raw) = source.get(column.field) else {
+            continue;
+        };
+        if raw.is_null() {
+            continue;
+        }
+        let normalized = match column.kind {
+            MusicTagFieldValueKind::Text => raw
+                .as_str()
+                .map(|text| text.trim().to_string())
+                .filter(|text| !text.is_empty())
+                .map(JsonValue::String),
+            MusicTagFieldValueKind::Integer => raw
+                .as_i64()
+                .or_else(|| raw.as_f64().and_then(|item| if item.is_finite() { Some(item as i64) } else { None }))
+                .map(|item| JsonValue::Number(item.into())),
+            MusicTagFieldValueKind::Real => raw
+                .as_f64()
+                .or_else(|| raw.as_i64().map(|item| item as f64))
+                .and_then(serde_json::Number::from_f64)
+                .map(JsonValue::Number),
+        };
+        if let Some(value) = normalized {
+            map.insert(column.field.to_string(), value);
+        }
+    }
+
+    map
+}
+
+fn music_tag_metadata_from_json_map(map: &JsonMap<String, JsonValue>) -> JsonValue {
+    let mut result = JsonMap::new();
+    for column in music_tag_field_columns() {
+        let value = map.get(column.field).cloned().unwrap_or(JsonValue::Null);
+        result.insert(column.field.to_string(), value);
+    }
+    JsonValue::Object(result)
+}
+
+fn music_tag_hash_id(prefix: &str, payload: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    prefix.hash(&mut hasher);
+    payload.hash(&mut hasher);
+    format!("{prefix}-{:016x}", hasher.finish())
+}
+
+fn system_time_to_ms(value: SystemTime) -> Option<i64> {
+    value.duration_since(UNIX_EPOCH).ok().map(|duration| duration.as_millis() as i64)
+}
+
 fn normalize_owner_uid(value: Option<&str>) -> Option<String> {
     normalize_text(value)
 }
 
 fn normalize_rating(value: Option<i64>) -> Option<i64> {
     value.map(|score| score.clamp(0, 100))
+}
+
+fn normalize_stable_entry_source_kind(value: Option<&str>) -> String {
+    match value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .filter(|item| !item.is_empty())
+        .as_deref()
+    {
+        Some("nas") => "nas".to_string(),
+        Some("platform") => "platform".to_string(),
+        Some("cache") => "cache".to_string(),
+        Some("pmp-server") | Some("pmp_server") | Some("server") => "pmp-server".to_string(),
+        _ => "local".to_string(),
+    }
+}
+
+fn normalize_stable_entry_source_availability(value: Option<&str>) -> String {
+    match value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .filter(|item| !item.is_empty())
+        .as_deref()
+    {
+        Some("available") => "available".to_string(),
+        Some("missing") => "missing".to_string(),
+        Some("remote-only") | Some("remote_only") => "remote-only".to_string(),
+        Some("stale") => "stale".to_string(),
+        Some("auth-required") | Some("auth_required") => "auth-required".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+fn normalize_optional_score(value: Option<f64>) -> Option<f64> {
+    value
+        .filter(|item| item.is_finite())
+        .map(|item| item.clamp(0.0, 1.0))
 }
 
 fn normalize_playlist_kind(value: Option<&str>) -> String {
@@ -1727,6 +2682,33 @@ fn normalize_offset(value: Option<u32>) -> i64 {
     value.map(|item| item as i64).unwrap_or(0)
 }
 
+fn build_stable_entry_source_id(
+    entry_id: &str,
+    source_kind: &str,
+    connector_id: Option<&str>,
+    source_id: Option<&str>,
+    source_item_id: Option<&str>,
+    locator: Option<&str>,
+    track_id: Option<&str>,
+    quick_fingerprint: Option<&str>,
+) -> String {
+    let fingerprint = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        entry_id,
+        source_kind,
+        connector_id.unwrap_or_default(),
+        source_id.unwrap_or_default(),
+        source_item_id.unwrap_or_default(),
+        locator.unwrap_or_default(),
+        track_id.unwrap_or_default(),
+        quick_fingerprint.unwrap_or_default()
+    );
+    format!(
+        "stable-entry-source::{entry_id}::{source_kind}::{:x}",
+        md5::compute(fingerprint)
+    )
+}
+
 fn build_fallback_task_id(
     owner_uid: &str,
     entry_id: &str,
@@ -1800,6 +2782,59 @@ fn user_entry_record_by_id(
         },
     )
     .map_err(|error| format!("Failed to load user entry record: {error}"))
+}
+
+fn stable_entry_source_record_by_id(
+    conn: &Connection,
+    source_ref_id: &str,
+) -> Result<LibraryStableEntrySourceRecord, String> {
+    conn.query_row(
+        r#"
+        SELECT
+          id,
+          entry_id,
+          source_kind,
+          connector_id,
+          source_id,
+          source_item_id,
+          locator,
+          track_id,
+          quick_fingerprint,
+          full_fingerprint,
+          availability,
+          quality_score,
+          confidence,
+          priority,
+          last_verified_at_ms,
+          created_at_ms,
+          updated_at_ms
+        FROM stable_entry_sources
+        WHERE id = ?1
+        "#,
+        params![source_ref_id],
+        |row| {
+            Ok(LibraryStableEntrySourceRecord {
+                id: row.get(0)?,
+                entry_id: row.get(1)?,
+                source_kind: row.get(2)?,
+                connector_id: row.get(3)?,
+                source_id: row.get(4)?,
+                source_item_id: row.get(5)?,
+                locator: row.get(6)?,
+                track_id: row.get(7)?,
+                quick_fingerprint: row.get(8)?,
+                full_fingerprint: row.get(9)?,
+                availability: row.get(10)?,
+                quality_score: row.get(11)?,
+                confidence: row.get::<_, f64>(12)?.clamp(0.0, 1.0),
+                priority: row.get(13)?,
+                last_verified_at_ms: row.get(14)?,
+                created_at_ms: row.get(15)?,
+                updated_at_ms: row.get(16)?,
+            })
+        },
+    )
+    .map_err(|error| format!("Failed to load stable entry source record: {error}"))
 }
 
 fn playlist_record_by_id(
@@ -4153,11 +5188,31 @@ pub fn sync_source_tracks(
                   source_id = excluded.source_id,
                   file_path = excluded.file_path,
                   quick_fingerprint = excluded.quick_fingerprint,
-                  title = excluded.title,
-                  artist = excluded.artist,
-                  album = excluded.album,
-                  genre = excluded.genre,
-                  year = excluded.year,
+                  title = CASE
+                    WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"title"%'
+                    THEN local_tracks.title
+                    ELSE excluded.title
+                  END,
+                  artist = CASE
+                    WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"artist"%'
+                    THEN local_tracks.artist
+                    ELSE excluded.artist
+                  END,
+                  album = CASE
+                    WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"album"%'
+                    THEN local_tracks.album
+                    ELSE excluded.album
+                  END,
+                  genre = CASE
+                    WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"genre"%'
+                    THEN local_tracks.genre
+                    ELSE excluded.genre
+                  END,
+                  year = CASE
+                    WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"year"%'
+                    THEN local_tracks.year
+                    ELSE excluded.year
+                  END,
                   format = excluded.format,
                   duration_seconds = excluded.duration_seconds,
                   sample_rate = excluded.sample_rate,
@@ -4564,6 +5619,285 @@ pub fn mark_user_entry_played(
             )
             .map_err(|error| format!("Failed to mark user entry played: {error}"))?;
 
+        Ok(affected > 0)
+    })
+}
+
+pub fn upsert_stable_entry_source(
+    app: &AppHandle,
+    input: LibraryStableEntrySourceUpsertInput,
+) -> Result<LibraryStableEntrySourceRecord, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let entry_id = normalize_text(Some(input.entry_id.as_str()))
+            .ok_or_else(|| "Stable entry source entryId is required".to_string())?;
+        let source_kind = normalize_stable_entry_source_kind(Some(input.source_kind.as_str()));
+        let connector_id = normalize_text(input.connector_id.as_deref());
+        let source_id = normalize_text(input.source_id.as_deref());
+        let source_item_id = normalize_text(input.source_item_id.as_deref());
+        let locator = normalize_text(input.locator.as_deref());
+        let track_id = normalize_text(input.track_id.as_deref());
+        let quick_fingerprint = normalize_quick_fingerprint(input.quick_fingerprint.as_deref());
+        let full_fingerprint = normalize_text(input.full_fingerprint.as_deref());
+        let availability =
+            normalize_stable_entry_source_availability(input.availability.as_deref());
+        let quality_score = normalize_optional_score(input.quality_score);
+        let confidence = normalize_optional_score(input.confidence).unwrap_or(1.0);
+        let priority = input.priority.unwrap_or(100).clamp(0, 10_000);
+
+        if connector_id.is_none()
+            && source_id.is_none()
+            && source_item_id.is_none()
+            && locator.is_none()
+            && track_id.is_none()
+            && quick_fingerprint.is_none()
+        {
+            return Err(
+                "Stable entry source needs at least one locator or identity field".to_string(),
+            );
+        }
+
+        let source_ref_id = normalize_text(input.id.as_deref()).unwrap_or_else(|| {
+            build_stable_entry_source_id(
+                entry_id.as_str(),
+                source_kind.as_str(),
+                connector_id.as_deref(),
+                source_id.as_deref(),
+                source_item_id.as_deref(),
+                locator.as_deref(),
+                track_id.as_deref(),
+                quick_fingerprint.as_deref(),
+            )
+        });
+        if source_ref_id.is_empty() {
+            return Err("Stable entry source id is required".to_string());
+        }
+
+        let now = now_ms();
+        let created_at_ms = input.created_at_ms.unwrap_or(now).max(0);
+        let updated_at_ms = input.updated_at_ms.unwrap_or(now).max(created_at_ms);
+
+        conn.execute(
+            r#"
+            INSERT INTO stable_entry_sources(
+              id,
+              entry_id,
+              source_kind,
+              connector_id,
+              source_id,
+              source_item_id,
+              locator,
+              track_id,
+              quick_fingerprint,
+              full_fingerprint,
+              availability,
+              quality_score,
+              confidence,
+              priority,
+              last_verified_at_ms,
+              created_at_ms,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+            ON CONFLICT(id) DO UPDATE SET
+              entry_id = excluded.entry_id,
+              source_kind = excluded.source_kind,
+              connector_id = excluded.connector_id,
+              source_id = excluded.source_id,
+              source_item_id = excluded.source_item_id,
+              locator = excluded.locator,
+              track_id = excluded.track_id,
+              quick_fingerprint = excluded.quick_fingerprint,
+              full_fingerprint = excluded.full_fingerprint,
+              availability = excluded.availability,
+              quality_score = excluded.quality_score,
+              confidence = excluded.confidence,
+              priority = excluded.priority,
+              last_verified_at_ms = excluded.last_verified_at_ms,
+              updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                source_ref_id,
+                entry_id,
+                source_kind,
+                connector_id,
+                source_id,
+                source_item_id,
+                locator,
+                track_id,
+                quick_fingerprint,
+                full_fingerprint,
+                availability,
+                quality_score,
+                confidence,
+                priority,
+                input.last_verified_at_ms.map(|value| value.max(0)),
+                created_at_ms,
+                updated_at_ms,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert stable entry source: {error}"))?;
+
+        stable_entry_source_record_by_id(conn, source_ref_id.as_str())
+    })
+}
+
+pub fn list_stable_entry_sources(
+    app: &AppHandle,
+    query: Option<LibraryStableEntrySourceQueryInput>,
+) -> Result<Vec<LibraryStableEntrySourceRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_entry_id = query
+            .as_ref()
+            .and_then(|item| normalize_text(item.entry_id.as_deref()));
+        let normalized_source_kind = query
+            .as_ref()
+            .and_then(|item| item.source_kind.as_ref())
+            .map(|value| normalize_stable_entry_source_kind(Some(value.as_str())));
+        let normalized_connector_id = query
+            .as_ref()
+            .and_then(|item| normalize_text(item.connector_id.as_deref()));
+        let normalized_source_id = query
+            .as_ref()
+            .and_then(|item| normalize_text(item.source_id.as_deref()));
+        let normalized_track_id = query
+            .as_ref()
+            .and_then(|item| normalize_text(item.track_id.as_deref()));
+        let normalized_availability = query
+            .as_ref()
+            .and_then(|item| item.availability.as_ref())
+            .map(|value| normalize_stable_entry_source_availability(Some(value.as_str())));
+        let normalized_limit = normalize_limit(query.as_ref().and_then(|item| item.limit));
+        let normalized_offset = normalize_offset(query.as_ref().and_then(|item| item.offset));
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  id,
+                  entry_id,
+                  source_kind,
+                  connector_id,
+                  source_id,
+                  source_item_id,
+                  locator,
+                  track_id,
+                  quick_fingerprint,
+                  full_fingerprint,
+                  availability,
+                  quality_score,
+                  confidence,
+                  priority,
+                  last_verified_at_ms,
+                  created_at_ms,
+                  updated_at_ms
+                FROM stable_entry_sources
+                WHERE (?1 = 0 OR entry_id = ?2)
+                  AND (?3 = 0 OR source_kind = ?4)
+                  AND (?5 = 0 OR connector_id = ?6)
+                  AND (?7 = 0 OR source_id = ?8)
+                  AND (?9 = 0 OR track_id = ?10)
+                  AND (?11 = 0 OR availability = ?12)
+                ORDER BY priority ASC, updated_at_ms DESC, id ASC
+                LIMIT ?13
+                OFFSET ?14
+                "#,
+            )
+            .map_err(|error| {
+                format!("Failed to prepare list stable entry sources statement: {error}")
+            })?;
+
+        let rows = stmt
+            .query_map(
+                params![
+                    if normalized_entry_id.is_some() {
+                        1_i64
+                    } else {
+                        0_i64
+                    },
+                    normalized_entry_id.unwrap_or_default(),
+                    if normalized_source_kind.is_some() {
+                        1_i64
+                    } else {
+                        0_i64
+                    },
+                    normalized_source_kind.unwrap_or_default(),
+                    if normalized_connector_id.is_some() {
+                        1_i64
+                    } else {
+                        0_i64
+                    },
+                    normalized_connector_id.unwrap_or_default(),
+                    if normalized_source_id.is_some() {
+                        1_i64
+                    } else {
+                        0_i64
+                    },
+                    normalized_source_id.unwrap_or_default(),
+                    if normalized_track_id.is_some() {
+                        1_i64
+                    } else {
+                        0_i64
+                    },
+                    normalized_track_id.unwrap_or_default(),
+                    if normalized_availability.is_some() {
+                        1_i64
+                    } else {
+                        0_i64
+                    },
+                    normalized_availability.unwrap_or_default(),
+                    normalized_limit,
+                    normalized_offset,
+                ],
+                |row| {
+                    Ok(LibraryStableEntrySourceRecord {
+                        id: row.get(0)?,
+                        entry_id: row.get(1)?,
+                        source_kind: row.get(2)?,
+                        connector_id: row.get(3)?,
+                        source_id: row.get(4)?,
+                        source_item_id: row.get(5)?,
+                        locator: row.get(6)?,
+                        track_id: row.get(7)?,
+                        quick_fingerprint: row.get(8)?,
+                        full_fingerprint: row.get(9)?,
+                        availability: row.get(10)?,
+                        quality_score: row.get(11)?,
+                        confidence: row.get::<_, f64>(12)?.clamp(0.0, 1.0),
+                        priority: row.get(13)?,
+                        last_verified_at_ms: row.get(14)?,
+                        created_at_ms: row.get(15)?,
+                        updated_at_ms: row.get(16)?,
+                    })
+                },
+            )
+            .map_err(|error| format!("Failed to query stable entry sources: {error}"))?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(
+                row.map_err(|error| format!("Failed to parse stable entry source row: {error}"))?,
+            );
+        }
+        Ok(items)
+    })
+}
+
+pub fn delete_stable_entry_source(app: &AppHandle, source_ref_id: &str) -> Result<bool, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_source_ref_id = source_ref_id.trim();
+        if normalized_source_ref_id.is_empty() {
+            return Ok(false);
+        }
+
+        let affected = conn
+            .execute(
+                "DELETE FROM stable_entry_sources WHERE id = ?1",
+                params![normalized_source_ref_id],
+            )
+            .map_err(|error| format!("Failed to delete stable entry source: {error}"))?;
         Ok(affected > 0)
     })
 }
@@ -6537,8 +7871,15 @@ fn track_query_select_clause(use_list_projection: bool) -> &'static str {
                   t.title,
                   t.artist,
                   t.album,
+                  t.album_artist,
                   t.genre,
                   t.year,
+                  t.date,
+                  t.original_date,
+                  t.track_number,
+                  t.track_total,
+                  t.disc_number,
+                  t.disc_total,
                   t.format,
                   t.duration_seconds,
                   t.sample_rate,
@@ -6547,6 +7888,30 @@ fn track_query_select_clause(use_list_projection: bool) -> &'static str {
                   t.mtime_ms,
                   t.replay_gain_track_db,
                   t.replay_gain_album_db,
+                  t.composer,
+                  t.lyricist,
+                  t.conductor,
+                  t.arranger,
+                  t.label,
+                  t.catalog_number,
+                  t.barcode,
+                  t.isrc,
+                  t.bpm,
+                  t.musical_key,
+                  t.language,
+                  t.comment,
+                  t.lyrics,
+                  t.mbid_recording,
+                  t.mbid_release,
+                  t.mbid_release_group,
+                  t.mbid_artist,
+                  t.mbid_album_artist,
+                  t.acoustid,
+                  t.tag_source,
+                  t.tag_confidence,
+                  t.tag_updated_at_ms,
+                  t.tag_locked_fields_json,
+                  t.tag_last_audit_id,
                   t.play_count,
                   t.last_played_at_ms,
                   t.status,
@@ -6818,8 +8183,15 @@ fn execute_track_query(
                             | "title"
                             | "artist"
                             | "album"
+                            | "album_artist"
                             | "genre"
                             | "year"
+                            | "date"
+                            | "original_date"
+                            | "track_number"
+                            | "track_total"
+                            | "disc_number"
+                            | "disc_total"
                             | "format"
                             | "duration_seconds"
                             | "sample_rate"
@@ -6828,6 +8200,30 @@ fn execute_track_query(
                             | "mtime_ms"
                             | "replay_gain_track_db"
                             | "replay_gain_album_db"
+                            | "composer"
+                            | "lyricist"
+                            | "conductor"
+                            | "arranger"
+                            | "label"
+                            | "catalog_number"
+                            | "barcode"
+                            | "isrc"
+                            | "bpm"
+                            | "musical_key"
+                            | "language"
+                            | "comment"
+                            | "lyrics"
+                            | "mbid_recording"
+                            | "mbid_release"
+                            | "mbid_release_group"
+                            | "mbid_artist"
+                            | "mbid_album_artist"
+                            | "acoustid"
+                            | "tag_source"
+                            | "tag_confidence"
+                            | "tag_updated_at_ms"
+                            | "tag_locked_fields_json"
+                            | "tag_last_audit_id"
                             | "play_count"
                             | "last_played_at_ms"
                             | "status"
@@ -6861,8 +8257,15 @@ fn execute_track_query(
                 title: row.get("title")?,
                 artist: row.get("artist")?,
                 album: row.get("album")?,
+                album_artist: row.get("album_artist")?,
                 genre: row.get("genre")?,
                 year: row.get("year")?,
+                date: row.get("date")?,
+                original_date: row.get("original_date")?,
+                track_number: row.get("track_number")?,
+                track_total: row.get("track_total")?,
+                disc_number: row.get("disc_number")?,
+                disc_total: row.get("disc_total")?,
                 format: row.get("format")?,
                 duration_seconds: row.get("duration_seconds")?,
                 sample_rate: row
@@ -6877,6 +8280,38 @@ fn execute_track_query(
                 mtime_ms: row.get("mtime_ms")?,
                 replay_gain_track_db: row.get("replay_gain_track_db")?,
                 replay_gain_album_db: row.get("replay_gain_album_db")?,
+                composer: row.get("composer")?,
+                lyricist: row.get("lyricist")?,
+                conductor: row.get("conductor")?,
+                arranger: row.get("arranger")?,
+                label: row.get("label")?,
+                catalog_number: row.get("catalog_number")?,
+                barcode: row.get("barcode")?,
+                isrc: row.get("isrc")?,
+                bpm: row.get("bpm")?,
+                musical_key: row.get("musical_key")?,
+                language: row.get("language")?,
+                comment: row.get("comment")?,
+                lyrics: row.get("lyrics")?,
+                mbid_recording: row.get("mbid_recording")?,
+                mbid_release: row.get("mbid_release")?,
+                mbid_release_group: row.get("mbid_release_group")?,
+                mbid_artist: row.get("mbid_artist")?,
+                mbid_album_artist: row.get("mbid_album_artist")?,
+                acoustid: row.get("acoustid")?,
+                tag_source: row.get("tag_source")?,
+                tag_confidence: row.get("tag_confidence")?,
+                tag_updated_at_ms: row.get("tag_updated_at_ms")?,
+                tag_locked_fields: {
+                    let raw: Option<String> = row.get("tag_locked_fields_json")?;
+                    let parsed = parse_music_tag_locked_fields_json(raw);
+                    if parsed.is_empty() {
+                        None
+                    } else {
+                        Some(parsed)
+                    }
+                },
+                tag_last_audit_id: row.get("tag_last_audit_id")?,
                 play_count: row.get::<_, i64>("play_count")?.max(0) as u64,
                 last_played_at_ms: row.get("last_played_at_ms")?,
                 status: row.get("status")?,
@@ -7034,6 +8469,436 @@ pub fn query_tracks_page(
         )?;
 
         Ok(LibraryTrackQueryPageResult { items, total })
+    })
+}
+
+#[derive(Debug, Clone)]
+struct MusicTagDbTrackSnapshot {
+    file_path: String,
+    file_mtime_ms: Option<i64>,
+    metadata: JsonMap<String, JsonValue>,
+    locked_fields: Vec<String>,
+    tag_source: Option<String>,
+    tag_confidence: Option<f64>,
+    tag_updated_at_ms: Option<i64>,
+    tag_last_audit_id: Option<String>,
+}
+
+fn read_music_tag_track_snapshot(
+    conn: &Connection,
+    track_id: &str,
+) -> Result<Option<MusicTagDbTrackSnapshot>, String> {
+    let mut sql = String::from(
+        r#"
+        SELECT
+          file_path,
+          tag_locked_fields_json,
+          tag_source,
+          tag_confidence,
+          tag_updated_at_ms,
+          tag_last_audit_id
+        "#,
+    );
+    for column in music_tag_field_columns() {
+        sql.push_str(",\n          ");
+        sql.push_str(quote_sqlite_identifier(column.column).as_str());
+    }
+    sql.push_str("\n        FROM local_tracks WHERE id = ?1 LIMIT 1");
+
+    conn.query_row(sql.as_str(), params![track_id], |row| {
+        let file_path: String = row.get("file_path")?;
+        let raw_locked_fields: Option<String> = row.get("tag_locked_fields_json")?;
+        let mut metadata = JsonMap::new();
+        for column in music_tag_field_columns() {
+            metadata.insert(
+                column.field.to_string(),
+                music_tag_row_value_to_json(row, column.column, column.kind)?,
+            );
+        }
+
+        let file_mtime_ms = fs::metadata(file_path.as_str())
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(system_time_to_ms);
+
+        Ok(MusicTagDbTrackSnapshot {
+            file_path,
+            file_mtime_ms,
+            metadata,
+            locked_fields: parse_music_tag_locked_fields_json(raw_locked_fields),
+            tag_source: row.get("tag_source")?,
+            tag_confidence: row.get("tag_confidence")?,
+            tag_updated_at_ms: row.get("tag_updated_at_ms")?,
+            tag_last_audit_id: row.get("tag_last_audit_id")?,
+        })
+    })
+    .optional()
+    .map_err(|error| format!("Failed to read music tag DB snapshot: {error}"))
+}
+
+fn music_tag_db_state_json(
+    metadata: JsonValue,
+    locked_fields: &[String],
+    tag_source: Option<&str>,
+    tag_confidence: Option<f64>,
+    tag_updated_at_ms: Option<i64>,
+    tag_last_audit_id: Option<&str>,
+) -> JsonValue {
+    serde_json::json!({
+        "metadata": metadata,
+        "lockedFields": locked_fields,
+        "tagSource": tag_source,
+        "tagConfidence": tag_confidence,
+        "tagUpdatedAtMs": tag_updated_at_ms,
+        "tagLastAuditId": tag_last_audit_id,
+    })
+}
+
+fn normalize_music_tag_candidate_ids(candidate_ids: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    for candidate_id in candidate_ids {
+        let Some(candidate_id) = normalize_text(Some(candidate_id.as_str())) else {
+            continue;
+        };
+        if result.iter().any(|existing| existing == &candidate_id) {
+            continue;
+        }
+        result.push(candidate_id);
+        if result.len() >= 16 {
+            break;
+        }
+    }
+    result
+}
+
+fn music_tag_db_patch_inner(
+    conn: &mut Connection,
+    input: MusicTagDbPatchInput,
+    apply: bool,
+) -> Result<MusicTagDbPatchResult, String> {
+    let track_id = normalize_text(Some(input.track_id.as_str()))
+        .ok_or_else(|| "MusicTag DB patch requires track_id".to_string())?;
+    let source_value = serde_json::from_str::<JsonValue>(input.source_metadata_json.as_str())
+        .map_err(|error| format!("Invalid MusicTag source metadata JSON: {error}"))?;
+    let source_metadata = music_tag_metadata_map_from_json(&source_value);
+    let selected_candidate_ids = normalize_music_tag_candidate_ids(&input.selected_candidate_ids);
+    let requested_locked_fields = music_tag_normalize_locked_fields(&input.locked_fields);
+    let tag_source = normalize_text(input.tag_source.as_deref()).or_else(|| {
+        if selected_candidate_ids.is_empty() {
+            Some("local-tags".to_string())
+        } else {
+            Some("candidate".to_string())
+        }
+    });
+    let tag_confidence = input
+        .tag_confidence
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.0, 1.0));
+
+    let Some(snapshot) = read_music_tag_track_snapshot(conn, track_id.as_str())? else {
+        return Err("MusicTag DB patch target track was not found".to_string());
+    };
+
+    let mut final_locked_set = match input.lock_mode.as_deref() {
+        Some("replace") => BTreeSet::new(),
+        _ => snapshot.locked_fields.iter().cloned().collect::<BTreeSet<_>>(),
+    };
+    for field in &requested_locked_fields {
+        final_locked_set.insert(field.clone());
+    }
+    let final_locked_fields = final_locked_set.into_iter().collect::<Vec<_>>();
+    let existing_locked_fields = snapshot.locked_fields.clone();
+    let lock_changed = final_locked_fields != existing_locked_fields;
+
+    let mut after_metadata = snapshot.metadata.clone();
+    let mut changed_fields = Vec::new();
+    let existing_locked_set = existing_locked_fields.iter().cloned().collect::<BTreeSet<_>>();
+
+    for column in music_tag_field_columns() {
+        let Some(after_value) = source_metadata.get(column.field) else {
+            continue;
+        };
+        let before_value = snapshot
+            .metadata
+            .get(column.field)
+            .cloned()
+            .unwrap_or(JsonValue::Null);
+        if &before_value == after_value {
+            continue;
+        }
+        after_metadata.insert(column.field.to_string(), after_value.clone());
+        changed_fields.push(MusicTagDbFieldChangeRecord {
+            field: column.field.to_string(),
+            column_name: column.column.to_string(),
+            before: before_value,
+            after: after_value.clone(),
+            locked: existing_locked_set.contains(column.field),
+        });
+    }
+
+    let mut warnings = Vec::new();
+    if source_metadata.is_empty() {
+        warnings.push("no-supported-metadata-fields".to_string());
+    }
+    if let Some(expected_mtime_ms) = input.expected_mtime_ms {
+        match snapshot.file_mtime_ms {
+            Some(current_mtime_ms) if current_mtime_ms == expected_mtime_ms => {}
+            Some(_) => warnings.push("file-mtime-changed".to_string()),
+            None => warnings.push("file-mtime-unavailable".to_string()),
+        }
+    }
+
+    let has_blocking_warning = warnings
+        .iter()
+        .any(|warning| matches!(warning.as_str(), "file-mtime-changed" | "file-mtime-unavailable"));
+    let has_work = !changed_fields.is_empty() || lock_changed;
+    let can_apply = has_work && !has_blocking_warning;
+    let now = now_ms();
+    let before_metadata_json = music_tag_metadata_from_json_map(&snapshot.metadata);
+    let mut tag_last_audit_id = snapshot.tag_last_audit_id.clone();
+    let planned_audit_id = if apply && can_apply {
+        Some(music_tag_hash_id(
+            "music-tag-audit",
+            format!(
+                "{}|{}|{}",
+                track_id,
+                now,
+                serde_json::to_string(&changed_fields).unwrap_or_default()
+            )
+            .as_str(),
+        ))
+    } else {
+        None
+    };
+    if let Some(audit_id) = &planned_audit_id {
+        tag_last_audit_id = Some(audit_id.clone());
+    }
+
+    let after_metadata_json = music_tag_metadata_from_json_map(&after_metadata);
+    let before_db_json = music_tag_db_state_json(
+        before_metadata_json,
+        existing_locked_fields.as_slice(),
+        snapshot.tag_source.as_deref(),
+        snapshot.tag_confidence,
+        snapshot.tag_updated_at_ms,
+        snapshot.tag_last_audit_id.as_deref(),
+    );
+    let after_db_json = music_tag_db_state_json(
+        after_metadata_json,
+        final_locked_fields.as_slice(),
+        tag_source.as_deref(),
+        tag_confidence,
+        Some(now),
+        tag_last_audit_id.as_deref(),
+    );
+
+    let mut result = MusicTagDbPatchResult {
+        track_id: track_id.clone(),
+        file_path: snapshot.file_path.clone(),
+        file_mtime_ms: snapshot.file_mtime_ms,
+        existing_locked_fields,
+        locked_fields: final_locked_fields.clone(),
+        changed_fields: changed_fields.clone(),
+        before_db_json: before_db_json.clone(),
+        after_db_json: after_db_json.clone(),
+        selected_candidate_ids: selected_candidate_ids.clone(),
+        tag_source: tag_source.clone(),
+        tag_confidence,
+        tag_last_audit_id,
+        tag_updated_at_ms: now,
+        applied: false,
+        can_apply,
+        warnings,
+    };
+
+    if !apply || !can_apply {
+        return Ok(result);
+    }
+
+    let audit_id = planned_audit_id.expect("planned audit id when apply can run");
+    let selected_candidate_ids_json = serde_json::to_string(&selected_candidate_ids)
+        .map_err(|error| format!("Failed to serialize selected candidate ids: {error}"))?;
+    let changed_fields_json = serde_json::to_string(&changed_fields)
+        .map_err(|error| format!("Failed to serialize changed fields: {error}"))?;
+    let before_db_json_text = serde_json::to_string(&before_db_json)
+        .map_err(|error| format!("Failed to serialize before DB JSON: {error}"))?;
+    let after_db_json_text = serde_json::to_string(&after_db_json)
+        .map_err(|error| format!("Failed to serialize after DB JSON: {error}"))?;
+    let locked_fields_json = serde_json::to_string(&final_locked_fields)
+        .map_err(|error| format!("Failed to serialize locked fields: {error}"))?;
+
+    let tx = conn
+        .transaction()
+        .map_err(|error| format!("Failed to start MusicTag DB patch transaction: {error}"))?;
+
+    let mut assignments = Vec::new();
+    let mut values = Vec::new();
+    for change in &changed_fields {
+        let Some(column) = music_tag_field_column(change.field.as_str()) else {
+            continue;
+        };
+        assignments.push(format!("{} = ?", quote_sqlite_identifier(column.column)));
+        values.push(music_tag_json_value_to_sql(&change.after, column.kind));
+    }
+    assignments.push("tag_source = ?".to_string());
+    values.push(tag_source.clone().map(Value::Text).unwrap_or(Value::Null));
+    assignments.push("tag_confidence = ?".to_string());
+    values.push(tag_confidence.map(Value::Real).unwrap_or(Value::Null));
+    assignments.push("tag_updated_at_ms = ?".to_string());
+    values.push(Value::Integer(now));
+    assignments.push("tag_locked_fields_json = ?".to_string());
+    values.push(Value::Text(locked_fields_json));
+    assignments.push("tag_last_audit_id = ?".to_string());
+    values.push(Value::Text(audit_id.clone()));
+    assignments.push("updated_at_ms = ?".to_string());
+    values.push(Value::Integer(now));
+    values.push(Value::Text(track_id.clone()));
+
+    let update_sql = format!(
+        "UPDATE local_tracks SET {} WHERE id = ?",
+        assignments.join(", ")
+    );
+    tx.execute(update_sql.as_str(), params_from_iter(values.iter()))
+        .map_err(|error| format!("Failed to apply MusicTag DB patch: {error}"))?;
+
+    tx.execute(
+        r#"
+        INSERT INTO track_metadata_apply_audit(
+          id,
+          track_id,
+          file_path,
+          selected_candidate_ids_json,
+          before_db_json,
+          after_db_json,
+          before_file_json,
+          after_file_json,
+          changed_fields_json,
+          write_db,
+          write_file,
+          file_mtime_before_ms,
+          file_mtime_after_ms,
+          status,
+          error_message,
+          created_at_ms,
+          applied_by
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7, 1, 0, ?8, ?9, 'applied', NULL, ?10, 'user')
+        "#,
+        params![
+            audit_id,
+            track_id,
+            snapshot.file_path,
+            selected_candidate_ids_json,
+            before_db_json_text,
+            after_db_json_text,
+            changed_fields_json,
+            snapshot.file_mtime_ms,
+            snapshot.file_mtime_ms,
+            now,
+        ],
+    )
+    .map_err(|error| format!("Failed to write MusicTag apply audit: {error}"))?;
+
+    tx.commit()
+        .map_err(|error| format!("Failed to commit MusicTag DB patch: {error}"))?;
+    invalidate_track_query_count_cache();
+    result.applied = true;
+    Ok(result)
+}
+
+pub fn preview_music_tag_db_patch(
+    app: &AppHandle,
+    input: MusicTagDbPatchInput,
+) -> Result<MusicTagDbPatchResult, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| music_tag_db_patch_inner(conn, input, false))
+}
+
+pub fn apply_music_tag_db_patch(
+    app: &AppHandle,
+    input: MusicTagDbPatchInput,
+) -> Result<MusicTagDbPatchResult, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| music_tag_db_patch_inner(conn, input, true))
+}
+
+pub fn replace_music_tag_candidates(
+    app: &AppHandle,
+    track_id: &str,
+    candidates: Vec<MusicTagCandidateUpsertInput>,
+) -> Result<usize, String> {
+    ensure_initialized(app)?;
+    let normalized_track_id =
+        normalize_text(Some(track_id)).ok_or_else(|| "MusicTag candidate track_id is required".to_string())?;
+    with_conn(|conn| {
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("Failed to start MusicTag candidate transaction: {error}"))?;
+        tx.execute(
+            "DELETE FROM track_metadata_candidates WHERE track_id = ?1",
+            params![normalized_track_id],
+        )
+        .map_err(|error| format!("Failed to clear MusicTag candidates: {error}"))?;
+
+        let mut inserted = 0usize;
+        for candidate in candidates {
+            let candidate_id = match normalize_text(Some(candidate.id.as_str())) {
+                Some(value) => value,
+                None => continue,
+            };
+            let provider = match normalize_text(Some(candidate.provider.as_str())) {
+                Some(value) => value,
+                None => continue,
+            };
+            let provider_entity_type =
+                match normalize_text(Some(candidate.provider_entity_type.as_str())) {
+                    Some(value) => value,
+                    None => continue,
+                };
+            let confidence = normalize_text(Some(candidate.confidence.as_str()))
+                .unwrap_or_else(|| "low".to_string());
+            tx.execute(
+                r#"
+                INSERT OR REPLACE INTO track_metadata_candidates(
+                  id,
+                  track_id,
+                  provider,
+                  provider_entity_type,
+                  provider_entity_id,
+                  score,
+                  confidence,
+                  metadata_json,
+                  reasons_json,
+                  warnings_json,
+                  raw_payload_json,
+                  fetched_at_ms,
+                  expires_at_ms
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                "#,
+                params![
+                    candidate_id,
+                    normalized_track_id,
+                    provider,
+                    provider_entity_type,
+                    normalize_text(candidate.provider_entity_id.as_deref()),
+                    candidate.score.clamp(0.0, 1.0),
+                    confidence,
+                    candidate.metadata_json,
+                    candidate.reasons_json,
+                    candidate.warnings_json,
+                    candidate.raw_payload_json,
+                    candidate.fetched_at_ms,
+                    candidate.expires_at_ms,
+                ],
+            )
+            .map_err(|error| format!("Failed to upsert MusicTag candidate: {error}"))?;
+            inserted += 1;
+        }
+
+        tx.commit()
+            .map_err(|error| format!("Failed to commit MusicTag candidates: {error}"))?;
+        Ok(inserted)
     })
 }
 
@@ -7898,13 +9763,14 @@ mod tests {
     }
 
     #[test]
-    fn migrate_empty_db_to_v10_schema() {
+    fn migrate_empty_db_to_v12_schema() {
         let (conn, path) = open_temp_db("music-library-migrate-empty");
         migrate(&conn).expect("migrate empty db");
 
-        assert_eq!(read_user_version(&conn), 10);
+        assert_eq!(read_user_version(&conn), 12);
         assert!(has_table(&conn, "connectors"));
         assert!(has_table(&conn, "platform_instance_auth"));
+        assert!(has_table(&conn, "stable_entry_sources"));
         assert!(has_table(&conn, "source_sync_state"));
         assert!(has_table(&conn, "source_fingerprint_state"));
         assert!(has_table(&conn, "track_provider_refs"));
@@ -7915,23 +9781,30 @@ mod tests {
         assert!(has_table(&conn, "lyric_fetch_jobs"));
         assert!(has_table(&conn, "playlists"));
         assert!(has_table(&conn, "playlist_items"));
+        assert!(has_table(&conn, "track_metadata_candidates"));
+        assert!(has_table(&conn, "track_metadata_apply_audit"));
         assert!(has_index(&conn, "source_sync_state_backoff_until_ms_idx"));
         assert!(has_index(&conn, "metadata_refresh_jobs_next_run_at_ms_idx"));
         assert!(has_index(&conn, "lyric_documents_selection_key_idx"));
         assert!(has_index(&conn, "lyric_fetch_jobs_status_idx"));
         assert!(has_index(&conn, "playlists_owner_uid_idx"));
         assert!(has_index(&conn, "playlist_items_playlist_id_idx"));
+        assert!(has_index(&conn, "stable_entry_sources_entry_id_idx"));
         let local_track_columns =
             list_table_columns(&conn, "local_tracks").expect("read local_tracks columns");
         assert!(local_track_columns.iter().any(|column| column == "year"));
         assert!(local_track_columns.iter().any(|column| column == "format"));
+        assert!(local_track_columns.iter().any(|column| column == "mbid_recording"));
+        assert!(local_track_columns
+            .iter()
+            .any(|column| column == "tag_locked_fields_json"));
 
         drop(conn);
         cleanup_temp_db(&path);
     }
 
     #[test]
-    fn migrate_v4_db_to_v10_schema() {
+    fn migrate_v4_db_to_v12_schema() {
         let (conn, path) = open_temp_db("music-library-migrate-v4");
         conn.execute_batch(
             r#"
@@ -7966,9 +9839,10 @@ mod tests {
 
         migrate(&conn).expect("migrate v4 db");
 
-        assert_eq!(read_user_version(&conn), 10);
+        assert_eq!(read_user_version(&conn), 12);
         assert!(has_table(&conn, "connector_accounts"));
         assert!(has_table(&conn, "platform_instance_auth"));
+        assert!(has_table(&conn, "stable_entry_sources"));
         assert!(has_table(&conn, "cover_refs"));
         assert!(has_table(&conn, "lyric_refs"));
         assert!(has_table(&conn, "lyric_documents"));
@@ -7976,16 +9850,23 @@ mod tests {
         assert!(has_table(&conn, "lyric_fetch_jobs"));
         assert!(has_table(&conn, "playlists"));
         assert!(has_table(&conn, "playlist_items"));
+        assert!(has_table(&conn, "track_metadata_candidates"));
+        assert!(has_table(&conn, "track_metadata_apply_audit"));
         assert!(has_index(
             &conn,
             "track_provider_refs_provider_track_id_idx"
         ));
         assert!(has_index(&conn, "lyric_candidates_document_id_idx"));
         assert!(has_index(&conn, "playlists_owner_last_opened_idx"));
+        assert!(has_index(&conn, "stable_entry_sources_track_id_idx"));
         let local_track_columns =
             list_table_columns(&conn, "local_tracks").expect("read local_tracks columns");
         assert!(local_track_columns.iter().any(|column| column == "year"));
         assert!(local_track_columns.iter().any(|column| column == "format"));
+        assert!(local_track_columns.iter().any(|column| column == "mbid_recording"));
+        assert!(local_track_columns
+            .iter()
+            .any(|column| column == "tag_locked_fields_json"));
 
         drop(conn);
         cleanup_temp_db(&path);

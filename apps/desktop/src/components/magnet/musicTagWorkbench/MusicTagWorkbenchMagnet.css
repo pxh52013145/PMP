@@ -1,0 +1,435 @@
+.music-tag-workbench-magnet {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 12px;
+  padding: 16px;
+  color: rgba(246, 248, 250, 0.94);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  overflow: hidden;
+}
+
+.music-tag-workbench-magnet__header,
+.music-tag-workbench-magnet__title,
+.music-tag-workbench-magnet__trackBand,
+.music-tag-workbench-magnet__trackState,
+.music-tag-workbench-magnet__status,
+.music-tag-workbench-magnet__panelHeader,
+.music-tag-workbench-magnet__panelHeader button,
+.music-tag-workbench-magnet__readNotice,
+.music-tag-workbench-magnet__queueItem {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.music-tag-workbench-magnet__header {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.music-tag-workbench-magnet__title {
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 15px;
+  font-weight: 760;
+  line-height: 1.1;
+}
+
+.music-tag-workbench-magnet__title svg {
+  flex: 0 0 auto;
+  color: rgba(122, 205, 214, 0.94);
+}
+
+.music-tag-workbench-magnet__phase {
+  flex: 0 0 auto;
+  max-width: 96px;
+  padding: 5px 8px;
+  border: 1px solid rgba(247, 202, 116, 0.28);
+  border-radius: 7px;
+  color: rgba(247, 202, 116, 0.92);
+  background: rgba(247, 202, 116, 0.08);
+  font-size: 11px;
+  font-weight: 720;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-tag-workbench-magnet__trackBand {
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.music-tag-workbench-magnet__trackBand > svg {
+  flex: 0 0 auto;
+  color: rgba(143, 176, 255, 0.96);
+}
+
+.music-tag-workbench-magnet__trackText {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.music-tag-workbench-magnet__trackTitle,
+.music-tag-workbench-magnet__trackArtist,
+.music-tag-workbench-magnet__status span,
+.music-tag-workbench-magnet__fieldRow strong,
+.music-tag-workbench-magnet__queueItem span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-tag-workbench-magnet__trackTitle {
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 17px;
+  font-weight: 740;
+  line-height: 1.15;
+}
+
+.music-tag-workbench-magnet__trackArtist {
+  color: rgba(213, 219, 226, 0.68);
+  font-size: 12px;
+  line-height: 1.15;
+}
+
+.music-tag-workbench-magnet__trackState {
+  flex: 0 0 auto;
+  gap: 7px;
+  max-width: 150px;
+  padding: 7px 10px;
+  border: 1px solid rgba(247, 202, 116, 0.24);
+  border-radius: 7px;
+  color: rgba(247, 202, 116, 0.92);
+  background: rgba(247, 202, 116, 0.08);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.music-tag-workbench-magnet__trackState span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-tag-workbench-magnet__statusGrid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.music-tag-workbench-magnet__status {
+  gap: 8px;
+  min-height: 42px;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(224, 230, 236, 0.78);
+  font-size: 12px;
+  line-height: 1.15;
+}
+
+.music-tag-workbench-magnet__status.is-ready {
+  border-color: rgba(122, 205, 214, 0.28);
+  background: rgba(122, 205, 214, 0.08);
+}
+
+.music-tag-workbench-magnet__status.is-summary {
+  border-color: rgba(143, 176, 255, 0.24);
+  background: rgba(143, 176, 255, 0.08);
+}
+
+.music-tag-workbench-magnet__status svg {
+  flex: 0 0 auto;
+  color: rgba(122, 205, 214, 0.84);
+}
+
+.music-tag-workbench-magnet__status strong {
+  flex: 0 0 auto;
+  color: rgba(247, 202, 116, 0.84);
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.music-tag-workbench-magnet__body {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 12px;
+  overflow: hidden;
+}
+
+.music-tag-workbench-magnet__panel {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+}
+
+.music-tag-workbench-magnet__panelHeader {
+  flex: 0 0 auto;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.music-tag-workbench-magnet__panelHeader h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: rgba(248, 250, 252, 0.94);
+  font-size: 14px;
+  font-weight: 740;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-tag-workbench-magnet__panelHeader button {
+  flex: 0 1 auto;
+  gap: 7px;
+  height: 30px;
+  min-width: 0;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(248, 250, 252, 0.88);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.music-tag-workbench-magnet__panelHeader button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.music-tag-workbench-magnet__panelHeader button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-tag-workbench-magnet__fieldTable,
+.music-tag-workbench-magnet__comparisonTable,
+.music-tag-workbench-magnet__queue {
+  min-height: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.music-tag-workbench-magnet__readNotice {
+  flex: 0 0 auto;
+  gap: 8px;
+  min-height: 32px;
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  color: rgba(203, 213, 225, 0.76);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.music-tag-workbench-magnet__readNotice.is-ready {
+  color: rgba(122, 205, 214, 0.9);
+}
+
+.music-tag-workbench-magnet__readNotice.is-error {
+  color: rgba(255, 154, 129, 0.92);
+}
+
+.music-tag-workbench-magnet__readNotice svg {
+  flex: 0 0 auto;
+}
+
+.music-tag-workbench-magnet__readNotice span {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-tag-workbench-magnet__readNotice strong {
+  flex: 0 0 auto;
+  color: rgba(247, 202, 116, 0.86);
+  font-size: 10px;
+  font-weight: 720;
+  text-transform: uppercase;
+}
+
+.music-tag-workbench-magnet__comparisonHead,
+.music-tag-workbench-magnet__comparisonRow {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(70px, 0.8fr) minmax(0, 1fr) minmax(0, 1fr) minmax(62px, 0.72fr);
+  gap: 8px;
+  align-items: center;
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.music-tag-workbench-magnet__comparisonHead {
+  flex: 0 0 auto;
+  color: rgba(203, 213, 225, 0.56);
+  font-size: 10px;
+  font-weight: 720;
+  text-transform: uppercase;
+}
+
+.music-tag-workbench-magnet__comparisonRow:last-child {
+  border-bottom: none;
+}
+
+.music-tag-workbench-magnet__comparisonRow span,
+.music-tag-workbench-magnet__comparisonRow strong,
+.music-tag-workbench-magnet__comparisonRow em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-tag-workbench-magnet__comparisonRow span {
+  color: rgba(203, 213, 225, 0.7);
+  font-size: 11px;
+}
+
+.music-tag-workbench-magnet__comparisonRow strong {
+  color: rgba(248, 250, 252, 0.9);
+  font-size: 11px;
+  font-weight: 640;
+}
+
+.music-tag-workbench-magnet__comparisonRow em {
+  color: rgba(203, 213, 225, 0.66);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 720;
+}
+
+.music-tag-workbench-magnet__comparisonRow.is-same em {
+  color: rgba(122, 205, 214, 0.88);
+}
+
+.music-tag-workbench-magnet__comparisonRow.is-different em,
+.music-tag-workbench-magnet__comparisonRow.is-missingDb em,
+.music-tag-workbench-magnet__comparisonRow.is-missingFile em {
+  color: rgba(247, 202, 116, 0.9);
+}
+
+.music-tag-workbench-magnet__spin {
+  animation: music-tag-workbench-spin 900ms linear infinite;
+}
+
+@keyframes music-tag-workbench-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.music-tag-workbench-magnet__fieldRow {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(84px, 0.34fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.music-tag-workbench-magnet__fieldRow:last-child,
+.music-tag-workbench-magnet__queueItem:last-child {
+  border-bottom: none;
+}
+
+.music-tag-workbench-magnet__fieldRow span {
+  color: rgba(203, 213, 225, 0.68);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.music-tag-workbench-magnet__fieldRow strong {
+  color: rgba(248, 250, 252, 0.92);
+  font-size: 12px;
+  font-weight: 640;
+  line-height: 1.2;
+}
+
+.music-tag-workbench-magnet__queueItem {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 9px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.music-tag-workbench-magnet__queueItem svg {
+  color: rgba(143, 176, 255, 0.9);
+}
+
+.music-tag-workbench-magnet__queueItem span {
+  color: rgba(248, 250, 252, 0.9);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.music-tag-workbench-magnet__queueItem strong {
+  color: rgba(247, 202, 116, 0.86);
+  font-size: 11px;
+  font-weight: 680;
+}
+
+@media (max-width: 900px) {
+  .music-tag-workbench-magnet {
+    grid-template-rows: auto auto minmax(0, auto) minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .music-tag-workbench-magnet__trackBand {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .music-tag-workbench-magnet__trackState {
+    max-width: none;
+    justify-content: center;
+  }
+
+  .music-tag-workbench-magnet__statusGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .music-tag-workbench-magnet__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

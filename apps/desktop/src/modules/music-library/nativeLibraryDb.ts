@@ -644,8 +644,15 @@ export interface NativeLibraryTrackRecord {
   title?: string;
   artist?: string;
   album?: string;
+  albumArtist?: string;
   genre?: string;
   year?: number;
+  date?: string;
+  originalDate?: string;
+  trackNumber?: number;
+  trackTotal?: number;
+  discNumber?: number;
+  discTotal?: number;
   format?: string;
   durationSeconds?: number;
   sampleRate?: number;
@@ -654,6 +661,30 @@ export interface NativeLibraryTrackRecord {
   mtimeMs?: number;
   replayGainTrackDb?: number;
   replayGainAlbumDb?: number;
+  composer?: string;
+  lyricist?: string;
+  conductor?: string;
+  arranger?: string;
+  label?: string;
+  catalogNumber?: string;
+  barcode?: string;
+  isrc?: string;
+  bpm?: number;
+  musicalKey?: string;
+  language?: string;
+  comment?: string;
+  lyrics?: string;
+  mbidRecording?: string;
+  mbidRelease?: string;
+  mbidReleaseGroup?: string;
+  mbidArtist?: string;
+  mbidAlbumArtist?: string;
+  acoustid?: string;
+  tagSource?: string;
+  tagConfidence?: number;
+  tagUpdatedAtMs?: number;
+  tagLockedFields?: string[];
+  tagLastAuditId?: string;
   playCount: number;
   lastPlayedAtMs?: number;
   status: string;
@@ -1087,6 +1118,14 @@ function asBool(value: unknown): boolean | undefined {
 
 function asOptionalRecord(value: unknown): Record<string, unknown> | undefined {
   return isRecord(value) ? value : undefined;
+}
+
+function asStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value
+    .map((item) => asOptionalString(item))
+    .filter((item): item is string => typeof item === 'string');
+  return items.length > 0 ? items : undefined;
 }
 
 function normalizeQuickFingerprint(value: unknown): string | undefined {
@@ -1896,8 +1935,15 @@ function ensureTrackRecord(value: unknown): NativeLibraryTrackRecord | null {
     title: asOptionalString(readRecordField(value, 'title')),
     artist: asOptionalString(readRecordField(value, 'artist')),
     album: asOptionalString(readRecordField(value, 'album')),
+    albumArtist: asOptionalString(readRecordField(value, 'albumArtist', 'album_artist')),
     genre: asOptionalString(readRecordField(value, 'genre')),
     year: asNumber(readRecordField(value, 'year')),
+    date: asOptionalString(readRecordField(value, 'date')),
+    originalDate: asOptionalString(readRecordField(value, 'originalDate', 'original_date')),
+    trackNumber: asNumber(readRecordField(value, 'trackNumber', 'track_number')),
+    trackTotal: asNumber(readRecordField(value, 'trackTotal', 'track_total')),
+    discNumber: asNumber(readRecordField(value, 'discNumber', 'disc_number')),
+    discTotal: asNumber(readRecordField(value, 'discTotal', 'disc_total')),
     format: asOptionalString(readRecordField(value, 'format')),
     durationSeconds: asNumber(readRecordField(value, 'durationSeconds', 'duration_seconds')),
     sampleRate: asNumber(readRecordField(value, 'sampleRate', 'sample_rate')),
@@ -1909,6 +1955,36 @@ function ensureTrackRecord(value: unknown): NativeLibraryTrackRecord | null {
     ),
     replayGainAlbumDb: asNumber(
       readRecordField(value, 'replayGainAlbumDb', 'replay_gain_album_db')
+    ),
+    composer: asOptionalString(readRecordField(value, 'composer')),
+    lyricist: asOptionalString(readRecordField(value, 'lyricist')),
+    conductor: asOptionalString(readRecordField(value, 'conductor')),
+    arranger: asOptionalString(readRecordField(value, 'arranger')),
+    label: asOptionalString(readRecordField(value, 'label')),
+    catalogNumber: asOptionalString(readRecordField(value, 'catalogNumber', 'catalog_number')),
+    barcode: asOptionalString(readRecordField(value, 'barcode')),
+    isrc: asOptionalString(readRecordField(value, 'isrc')),
+    bpm: asNumber(readRecordField(value, 'bpm')),
+    musicalKey: asOptionalString(readRecordField(value, 'musicalKey', 'musical_key')),
+    language: asOptionalString(readRecordField(value, 'language')),
+    comment: asOptionalString(readRecordField(value, 'comment')),
+    lyrics: asOptionalString(readRecordField(value, 'lyrics')),
+    mbidRecording: asOptionalString(readRecordField(value, 'mbidRecording', 'mbid_recording')),
+    mbidRelease: asOptionalString(readRecordField(value, 'mbidRelease', 'mbid_release')),
+    mbidReleaseGroup: asOptionalString(
+      readRecordField(value, 'mbidReleaseGroup', 'mbid_release_group')
+    ),
+    mbidArtist: asOptionalString(readRecordField(value, 'mbidArtist', 'mbid_artist')),
+    mbidAlbumArtist: asOptionalString(
+      readRecordField(value, 'mbidAlbumArtist', 'mbid_album_artist')
+    ),
+    acoustid: asOptionalString(readRecordField(value, 'acoustid')),
+    tagSource: asOptionalString(readRecordField(value, 'tagSource', 'tag_source')),
+    tagConfidence: asNumber(readRecordField(value, 'tagConfidence', 'tag_confidence')),
+    tagUpdatedAtMs: asNumber(readRecordField(value, 'tagUpdatedAtMs', 'tag_updated_at_ms')),
+    tagLockedFields: asStringArray(readRecordField(value, 'tagLockedFields', 'tag_locked_fields')),
+    tagLastAuditId: asOptionalString(
+      readRecordField(value, 'tagLastAuditId', 'tag_last_audit_id')
     ),
     playCount: Math.max(0, Math.floor(playCount)),
     lastPlayedAtMs: asNumber(readRecordField(value, 'lastPlayedAtMs', 'last_played_at_ms')),

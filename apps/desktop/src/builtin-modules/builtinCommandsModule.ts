@@ -392,6 +392,24 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
 
         register({
           kind: 'command',
+          id: 'musicTag.openWorkbench',
+          title: t('commands.musicTag.openWorkbench.title'),
+          description: t('commands.musicTag.openWorkbench.description'),
+          source: 'builtin',
+          group: 'audio',
+          order: 45,
+          run: async () => {
+            await navigateBuiltinViaHostCapability(
+              services.get(NAVIGATION_SERVICE_TOKEN),
+              'music-tag-workbench',
+              undefined,
+              'musicTag.openWorkbench'
+            );
+          },
+        });
+
+        register({
+          kind: 'command',
           id: 'app:navigate-native-debug',
           title: t('commands.app.navigate-native-debug.title'),
           description: t('commands.app.navigate-native-debug.description'),
