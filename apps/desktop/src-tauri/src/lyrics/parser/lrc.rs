@@ -136,7 +136,11 @@ fn find_next_inline_timestamp_marker(text: &str, cursor: usize) -> Option<Inline
             (None, Some(bracket)) => bracket,
             (None, None) => return None,
         };
-        let close_char = if text[open..].starts_with('<') { '>' } else { ']' };
+        let close_char = if text[open..].starts_with('<') {
+            '>'
+        } else {
+            ']'
+        };
         let Some(close_rel) = text[open + 1..].find(close_char) else {
             return None;
         };
