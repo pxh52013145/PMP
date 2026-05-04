@@ -15,6 +15,7 @@ export { AUDIO_VISUALIZER_MAGNET } from './audioVisualizerMagnet';
 export { MATRIX_CHANGE_MAGNET } from './matrixChangeMagnet';
 export { PROCESS_PERF_MONITOR_MAGNET } from './processPerfMonitorMagnet';
 export { DESKTOP_LYRICS_MAGNET } from './desktopLyricsMagnet';
+export { MUSIC_TAG_WORKBENCH_MAGNET } from './musicTagWorkbenchMagnet';
 
 import { WINDOW_CONTROL_MAGNETS } from './windowControlMagnets';
 import { DRAG_HANDLE_MAGNET } from './dragHandleMagnet';
@@ -29,6 +30,7 @@ import { AUDIO_VISUALIZER_MAGNET } from './audioVisualizerMagnet';
 import { MATRIX_CHANGE_MAGNET } from './matrixChangeMagnet';
 import { PROCESS_PERF_MONITOR_MAGNET } from './processPerfMonitorMagnet';
 import { DESKTOP_LYRICS_MAGNET } from './desktopLyricsMagnet';
+import { MUSIC_TAG_WORKBENCH_MAGNET } from './musicTagWorkbenchMagnet';
 import { Magnet } from '../../types/pixel';
 
 /**
@@ -48,6 +50,7 @@ export const ALL_BUILTIN_MAGNETS: Magnet[] = [
   PLAY_QUEUE_MAGNET,
   PLAYLISTS_MAGNET,
   MUSIC_LIBRARY_MAGNET,
+  MUSIC_TAG_WORKBENCH_MAGNET,
   NAVIGATION_PAGE_MAGNET,
   BACK_BUTTON_MAGNET,
 ];

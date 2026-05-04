@@ -14,6 +14,7 @@ pub mod modules;
 pub mod music_library;
 pub mod music_library_db;
 pub mod music_library_sync;
+pub mod music_tag;
 pub mod music_platform_runtime;
 pub mod native_audio;
 pub mod perf_monitor;

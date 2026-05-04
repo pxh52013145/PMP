@@ -293,6 +293,13 @@ describe('builtin navigation convergence', () => {
         itemId: 'app:navigate-music-library',
       }
     );
+    const openMusicTagWorkbenchResult = await api.host.invokeCapability(
+      'host.pmp.shell.menu',
+      'activateItem',
+      {
+        itemId: 'musicTag.openWorkbench',
+      }
+    );
     const navigateDspRackResult = await api.host.invokeCapability(
       'host.pmp.shell.menu',
       'activateItem',
@@ -404,6 +411,14 @@ describe('builtin navigation convergence', () => {
       ok: true,
       data: {
         itemId: 'app:navigate-music-library',
+        activated: true,
+        requiredPermission: 'api:navigation',
+      },
+    });
+    expect(openMusicTagWorkbenchResult).toEqual({
+      ok: true,
+      data: {
+        itemId: 'musicTag.openWorkbench',
         activated: true,
         requiredPermission: 'api:navigation',
       },
@@ -569,6 +584,12 @@ describe('builtin navigation convergence', () => {
       'music-library',
       undefined,
       'app:navigate-music-library'
+    );
+    expect(mocks.navigateBuiltinViaHostCapabilityMock).toHaveBeenCalledWith(
+      navigation,
+      'music-tag-workbench',
+      undefined,
+      'musicTag.openWorkbench'
     );
     expect(mocks.navigateBuiltinViaHostCapabilityMock).toHaveBeenCalledWith(
       navigation,

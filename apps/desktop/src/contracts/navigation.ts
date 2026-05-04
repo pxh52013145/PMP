@@ -17,6 +17,7 @@ export type NavigationPageType =
   | 'perf-monitor'
   | 'keyboard-shortcuts'
   | 'music-library'
+  | 'music-tag-workbench'
   | 'playlists'
   | 'play-queue'
   | 'track'
@@ -37,6 +38,7 @@ export type NavigationParamsMap = {
   'perf-monitor': undefined;
   'keyboard-shortcuts': undefined;
   'music-library': undefined;
+  'music-tag-workbench': undefined;
   playlists: undefined;
   'play-queue': undefined;
   'native-debug': undefined;

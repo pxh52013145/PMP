@@ -24,6 +24,7 @@ const BUILTIN_MAGNET_LABEL_KEYS: Record<string, string> = {
   'btn-matrix-change': 'magnet.renderers.btn-matrix-change.preview',
   'dsp-vst': 'magnet.renderers.dsp-vst.preview',
   'audio-visualizer': 'magnet.renderers.audio-visualizer.preview',
+  'music-tag-workbench': 'magnet.renderers.music-tag-workbench.preview',
   'plugin-development-workspace': 'magnet.renderers.plugin-development-workspace.preview',
 };
 

@@ -46,6 +46,9 @@ const KeyboardShortcutsPageLazy = React.lazy(async () => ({
   default: (await import('../components/pages/KeyboardShortcutsPage')).KeyboardShortcutsPage,
 }));
 const MusicLibraryLazy = React.lazy(async () => ({ default: (await import('../components/pages/MusicLibrary')).MusicLibrary }));
+const MusicTagWorkbenchPageLazy = React.lazy(async () => ({
+  default: (await import('../components/music-tag/MusicTagWorkbenchPage')).MusicTagWorkbenchPage,
+}));
 const TrackDetailPageLazy = React.lazy(async () => ({
   default: (await import('../components/pages/TrackDetailPage')).TrackDetailPage,
 }));
@@ -328,6 +331,17 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           order: 30,
           group: 'core',
           tags: ['music', 'library'],
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'music-tag-workbench',
+          title: t('pages.musicTagWorkbench.title'),
+          render: () => renderWithLazyBoundary(<MusicTagWorkbenchPageLazy />),
+          source: 'builtin',
+          order: 35,
+          group: 'core',
+          tags: ['music', 'metadata', 'tags', 'lyrics'],
         });
 
         register<PageContribution>({

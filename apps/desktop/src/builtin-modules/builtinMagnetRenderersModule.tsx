@@ -89,6 +89,10 @@ const DspVstMagnetLazy = React.lazy(async () => ({
 const ProcessPerfMonitorMagnetLazy = React.lazy(async () => ({
   default: (await import('../components/magnet/ProcessPerfMonitorMagnet')).ProcessPerfMonitorMagnet,
 }));
+const MusicTagWorkbenchMagnetLazy = React.lazy(async () => ({
+  default: (await import('../components/magnet/musicTagWorkbench/MusicTagWorkbenchMagnet'))
+    .MusicTagWorkbenchMagnet,
+}));
 const PluginDevelopmentWorkspaceMagnetLazy = React.lazy(async () => ({
   default: (await import('../components/magnet/PluginDevelopmentWorkspaceMagnet'))
     .PluginDevelopmentWorkspaceMagnet,
@@ -263,6 +267,15 @@ function getBuiltinDefinitions(): MagnetRendererDefinition[] {
       description: t('magnet.renderers.audio-visualizer.description'),
       group: 'visualizer',
       tags: ['audio', 'fft', 'spectrum', 'visualizer', 'native'],
+      source: 'builtin',
+    },
+    {
+      id: 'music-tag-workbench',
+      render: () => renderWithLazyBoundary(<MusicTagWorkbenchMagnetLazy />),
+      preview: () => createTextPreview(t('magnet.renderers.music-tag-workbench.preview')),
+      description: t('magnet.renderers.music-tag-workbench.description'),
+      group: 'navigation',
+      tags: ['music', 'metadata', 'tags', 'lyrics', 'library'],
       source: 'builtin',
     },
     {
