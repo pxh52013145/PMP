@@ -239,7 +239,7 @@ function AppContent() {
   }, [performanceControlService, performanceSettings.editorLowPerformanceMode]);
 
   useEffect(() => {
-    if (!isTauri || !isWindowActive) return;
+    if (!isTauri) return;
     let cancelled = false;
     let syncFrame: number | null = null;
     let syncInFlight = false;
@@ -433,7 +433,7 @@ function AppContent() {
       detachGeometryListeners();
       releaseOrnamentsOverlayLease('ornaments overlay app content cleanup');
     };
-  }, [isTauri, isWindowActive, runtimeCapsuleManager, telemetry]);
+  }, [isTauri, runtimeCapsuleManager, telemetry]);
 
   useEffect(() => {
     const handler = (event: Event) => {

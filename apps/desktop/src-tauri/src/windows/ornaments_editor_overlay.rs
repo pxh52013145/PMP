@@ -337,9 +337,128 @@ pub fn close(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn start_native_main_window_drag(app: &AppHandle, main: &tauri::Window) -> Result<(), String> {
+    use std::{ptr::null_mut, thread, time::Duration};
+    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, ReleaseCapture, VK_LBUTTON,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, GetWindowRect, IsWindow, SetWindowPos, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
+        SWP_NOSIZE, SWP_NOZORDER,
+    };
+
+    #[derive(Clone, Copy)]
+    struct DragTarget {
+        hwnd: isize,
+        start_x: i32,
+        start_y: i32,
+    }
+
+    fn read_drag_target(window: &tauri::Window) -> Option<DragTarget> {
+        let hwnd = window.hwnd().ok()?.0 as isize;
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        let ok = unsafe { GetWindowRect(hwnd as _, &mut rect) };
+        if ok == 0 {
+            return None;
+        }
+        Some(DragTarget {
+            hwnd,
+            start_x: rect.left,
+            start_y: rect.top,
+        })
+    }
+
+    let mut point = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut point) } == 0 {
+        return Err("Unable to read cursor position for ornaments drag".to_string());
+    }
+
+    let mut targets = Vec::new();
+    if let Some(target) = read_drag_target(main) {
+        targets.push(target);
+    } else {
+        return Err("Unable to read main window geometry for ornaments drag".to_string());
+    }
+
+    for label in [
+        ORNAMENTS_EDITOR_OVERLAY_LABEL,
+        ORNAMENTS_RENDER_OVERLAY_ABOVE_LABEL,
+        ORNAMENTS_RENDER_OVERLAY_BEHIND_LABEL,
+    ] {
+        if let Some(window) = app.get_window(label) {
+            if let Some(target) = read_drag_target(&window) {
+                targets.push(target);
+            }
+        }
+    }
+
+    unsafe {
+        let _ = ReleaseCapture();
+    }
+
+    thread::spawn(move || {
+        let start_x = point.x;
+        let start_y = point.y;
+        let mut last_delta_x = 0;
+        let mut last_delta_y = 0;
+
+        loop {
+            let left_button_down = unsafe { GetAsyncKeyState(VK_LBUTTON as i32) } < 0;
+            if !left_button_down {
+                break;
+            }
+
+            let mut current = POINT { x: 0, y: 0 };
+            if unsafe { GetCursorPos(&mut current) } == 0 {
+                break;
+            }
+
+            let delta_x = current.x.saturating_sub(start_x);
+            let delta_y = current.y.saturating_sub(start_y);
+            if delta_x != last_delta_x || delta_y != last_delta_y {
+                for target in &targets {
+                    let hwnd = target.hwnd as _;
+                    if unsafe { IsWindow(hwnd) } == 0 {
+                        continue;
+                    }
+                    unsafe {
+                        let _ = SetWindowPos(
+                            hwnd,
+                            null_mut(),
+                            target.start_x.saturating_add(delta_x),
+                            target.start_y.saturating_add(delta_y),
+                            0,
+                            0,
+                            SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+                        );
+                    }
+                }
+                last_delta_x = delta_x;
+                last_delta_y = delta_y;
+            }
+
+            thread::sleep(Duration::from_millis(8));
+        }
+    });
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn start_native_main_window_drag(_app: &AppHandle, main: &tauri::Window) -> Result<(), String> {
+    main.start_dragging().map_err(|error| error.to_string())
+}
+
 pub fn drag_main_window(app: &AppHandle) -> Result<(), String> {
     let main = app
         .get_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "Main window not found".to_string())?;
-    main.start_dragging().map_err(|error| error.to_string())
+    start_native_main_window_drag(app, &main)
 }
