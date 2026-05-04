@@ -295,6 +295,7 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
   const handleOverlayPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     if (event.target !== event.currentTarget) return;
+    event.preventDefault();
     setSelectedId(null);
     void invokeWithTelemetry('ornaments_drag_main_window', undefined, {
       moduleId: 'ornaments',

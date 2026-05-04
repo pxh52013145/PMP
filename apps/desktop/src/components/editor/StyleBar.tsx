@@ -6,7 +6,12 @@ import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { TAURI_EVENTS, setupTauriListener, setupTauriListenerWithPayload } from '../../utils/windowCommunication';
 import { setMagnetChromeOverrideMode, useMagnetChromeOverrideMode, type MagnetChromeOverrideMode } from '../../modules/magnets';
-import { endOrnamentsEditSession, startOrnamentsEditSession } from '../../modules/ornaments-v2/session';
+import {
+  acquireOrnamentsDialogPinOverride,
+  endOrnamentsEditSession,
+  releaseOrnamentsDialogPinOverride,
+  startOrnamentsEditSession,
+} from '../../modules/ornaments-v2/session';
 import { createOrnamentItem, readOrnamentsConfig, persistOrnamentsConfig } from '../../modules/ornaments-v2/store';
 import { importOrnamentImage } from '../../modules/ornaments-v2/import';
 import { StyleOrnamentsPage } from './style/StyleOrnamentsPage';
@@ -162,7 +167,10 @@ export const StyleBar = memo(function StyleBar() {
   }, []);
 
   const addOrnament = useCallback(async () => {
+    let dialogPinOverrideAcquired = false;
     try {
+      await acquireOrnamentsDialogPinOverride();
+      dialogPinOverrideAcquired = true;
       const imported = await importOrnamentImage();
       if (!imported) return;
       const config = readOrnamentsConfig();
@@ -178,6 +186,16 @@ export const StyleBar = memo(function StyleBar() {
       telemetry.error('editor.style-ornaments.add.failed', {
         message: getErrorMessage(error),
       });
+    } finally {
+      if (dialogPinOverrideAcquired) {
+        try {
+          await releaseOrnamentsDialogPinOverride();
+        } catch (error) {
+          telemetry.warn('editor.style-ornaments.dialog-pin-release.failed', {
+            message: getErrorMessage(error),
+          });
+        }
+      }
     }
   }, []);
 
