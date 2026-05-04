@@ -1,6 +1,6 @@
-import { invoke } from '@tauri-apps/api/tauri';
 import { DEFAULT_ACTIVE_MAGNET_IDS } from '../../constants/magnets';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readJson } from '../storage';
@@ -112,7 +112,12 @@ export function buildMagnetLayoutStoreBootstrapRequest(
 export async function magnetLayoutStoreGetState(): Promise<MagnetLayoutStoreState | null> {
   if (!isTauriRuntime()) return null;
   try {
-    return (await invoke('magnet_layout_store_get_state')) as MagnetLayoutStoreState;
+    return (await invokeWithTelemetry('magnet_layout_store_get_state', undefined, {
+      moduleId: 'magnets',
+      component: 'layoutStore',
+      event: 'magnets.layout-store.get-state',
+      includeResultSize: true,
+    })) as MagnetLayoutStoreState;
   } catch (error) {
     telemetry.warn('layout_store.get_state.failed', {
       message: readErrorMessage(error),
@@ -129,7 +134,12 @@ export async function magnetLayoutStoreBootstrap(
 
   try {
     const request = buildMagnetLayoutStoreBootstrapRequest(defaultActiveMagnetIds, mode);
-    return (await invoke('magnet_layout_store_bootstrap', { request })) as MagnetLayoutStoreBootstrapResponse;
+    return (await invokeWithTelemetry('magnet_layout_store_bootstrap', { request }, {
+      moduleId: 'magnets',
+      component: 'layoutStore',
+      event: 'magnets.layout-store.bootstrap',
+      includeResultSize: true,
+    })) as MagnetLayoutStoreBootstrapResponse;
   } catch (error) {
     telemetry.warn('layout_store.bootstrap.failed', {
       message: readErrorMessage(error),
@@ -144,7 +154,13 @@ export async function magnetLayoutStoreApplyPatch(
   if (!isTauriRuntime()) return null;
 
   try {
-    return (await invoke('magnet_layout_store_apply_patch', { request })) as MagnetLayoutStoreApplyPatchResponse;
+    return (await invokeWithTelemetry('magnet_layout_store_apply_patch', { request }, {
+      moduleId: 'magnets',
+      component: 'layoutStore',
+      event: 'magnets.layout-store.apply-patch',
+      includeResultSize: true,
+      successLevel: 'info',
+    })) as MagnetLayoutStoreApplyPatchResponse;
   } catch (error) {
     telemetry.warn('layout_store.apply_patch.failed', {
       message: readErrorMessage(error),

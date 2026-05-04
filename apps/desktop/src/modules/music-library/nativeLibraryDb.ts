@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/tauri';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import {
   invokeWithTelemetry,
@@ -60,6 +59,46 @@ const PLATFORM_RECOMMENDATIONS_BINDING_ID =
   'host.pmp.platform-instance.recommendations';
 const PLATFORM_SEARCH_BINDING_ID = 'host.pmp.platform-instance.search';
 const PLATFORM_QUALITY_BINDING_ID = 'host.pmp.platform-instance.quality';
+
+function buildNativeLibraryInvokeEvent(command: string): string {
+  const tokens = command
+    .trim()
+    .toLowerCase()
+    .split('_')
+    .filter((token) => token.length > 0);
+
+  if (tokens[0] === 'music' && tokens[1] === 'library') {
+    tokens.splice(0, 2);
+  }
+
+  if (tokens[0] === 'music' && tokens[1] === 'platform') {
+    tokens.splice(0, 2);
+    if (tokens.length < 1) return 'music-library.platform';
+    return `music-library.platform.${tokens.join('-')}`;
+  }
+
+  if (tokens.length < 1) return 'music-library.command';
+  if (tokens.length === 1) return `music-library.${tokens[0]}`;
+  return `music-library.${tokens[0]}.${tokens.slice(1).join('-')}`;
+}
+
+async function invoke<TResult = unknown>(
+  command: string,
+  args?: Record<string, unknown>,
+  options: TauriInvokeTelemetryOptions = {}
+): Promise<TResult> {
+  const event =
+    typeof options.event === 'string' && options.event.trim().length > 0
+      ? options.event
+      : buildNativeLibraryInvokeEvent(command);
+
+  return invokeWithTelemetry<TResult>(command, args, {
+    ...options,
+    moduleId: options.moduleId ?? 'music-library',
+    component: options.component ?? 'nativeLibraryDb',
+    event,
+  });
+}
 
 export interface NativeBilibiliQrCodeSession {
   connectorId: string;

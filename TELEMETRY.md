@@ -37,24 +37,43 @@ Telemetry 不是“把 `console.log` 换个地方写”。
 
 Debug UI：
 - `apps/desktop/src/components/debug/DebugCenter.tsx`
+- `apps/desktop/src/components/pages/ObservabilityPage.tsx`
 
 Rust authoritative sink：
 - `apps/desktop/src-tauri/src/telemetry.rs`
 - `apps/desktop/src-tauri/src/telemetry_store.rs`
+- `apps/desktop/src-tauri/src/backend_telemetry.rs`
+- `apps/desktop/src-tauri/src/telemetry_query.rs`
+- `apps/desktop/src-tauri/src/telemetry_export.rs`
 - `apps/desktop/src-tauri/src/telemetry_policy.rs`
 - `apps/desktop/src-tauri/src/commands/debug.rs`
 
 一句话概括当前架构：
-- 前端负责产生日志、临时 UI tail、调用包装、场景快照。
-- Rust 负责当前 session 持久化、清理、查询、聚合统计。
-- Debug Center 是人类入口。
-- `queryTelemetryCurrentSession(...)` + `buildTelemetryAiContextReport(...)` 是 AI 入口。
+- 前端 `TelemetryService` 负责 scoped logger、内存 tail、批量缓冲、`consoleBridge`、`invokeWithTelemetry(...)`。
+- Rust `TelemetryCore` 负责当前 session 持久化、启动归档、retention 治理、recent/query/export、聚合统计。
+- Rust `backend_telemetry` 是后端新代码的统一结构化日志 helper。
+- `DebugCenter` 是嵌入式入口，`ObservabilityPage` 是独立页面入口。
+- `queryTelemetryCurrentSession(...)`、`getRecentTelemetryRecords(...)`、`exportTelemetryBundle(...)` 与 `buildTelemetryAiContextReport(...)` 是自动化与 AI 入口。
+
+当前要特别区分两类数据面：
+- 前端内存 tail：
+  - 来自 `TelemetryService`
+  - 默认保留最近 `2000` 条
+  - 受 `uiTailEnabled` 和前端级别过滤控制
+- 后端持久化 current session：
+  - 落到 `current-session.jsonl`
+  - query / recent / export bundle 都读取这里
+  - 默认只持久化 `warn` 及以上
 
 ## 3. 现在怎么查看 Telemetry
 
-### 3.1 Debug Center
+### 3.1 Debug Center / Observability
 
 主入口是应用内的 `Debug Center`。
+此外还新增了独立页面入口 `Observability`：
+- page id: `observability`
+- 作用：以页面模式直接打开 `DebugCenter` 的 telemetry workspace
+- 对应实现：`apps/desktop/src/components/pages/ObservabilityPage.tsx`
 
 当前与 telemetry 直接相关的能力包括：
 - `Telemetry / Runtime`
@@ -63,6 +82,7 @@ Rust authoritative sink：
 - `Flush`
 - `Clear Session`
 - `Export Session JSON`
+- `Export Bundle JSON`
 - `Export Scenario Report`
 - `Copy AI Context`
 - `Export AI Context`
@@ -91,6 +111,9 @@ DevTools Console 不是 telemetry 的权威入口，但仍然保留。
 当前 session 持久化文件：
 - `appData/debug/telemetry/current-session.jsonl`
 
+启动时如果发现上一次运行遗留的 `current-session.jsonl`，后端会先把它归档为：
+- `appData/debug/telemetry/session-archive-<timestamp>-<attempt>.jsonl`
+
 Windows 典型路径：
 - `%APPDATA%\\com.pixelmatrix.player\\debug\\telemetry\\current-session.jsonl`
 
@@ -100,11 +123,14 @@ Windows 典型路径：
 注意：
 - 真实路径以运行时 `app_data_dir()` 为准。
 - Debug Center 显示的 `currentFilePath` 是当前最可信路径。
+- `debugCurrentSessionOnly = true` 时，归档文件不会保留 `trace/debug` 级记录。
+- retention 会按 `maxTotalBytes`、`errorDays`、`infoDays` 清理 archive 文件；当前 active session 不会因为总量裁剪被删除。
 
 ## 4. 导出文件在哪里
 
 Debug Center 的导出文件目前写到：
 - `appData/logs/telemetry-session-<timestamp>-<sessionId>.json`
+- `appData/logs/telemetry-bundle-<timestamp>-<sessionId>.json`
 - `appData/logs/telemetry-scenario-<timestamp>-<sessionId>.md`
 - `appData/logs/telemetry-ai-context-<timestamp>-<sessionId>.md`
 
@@ -114,6 +140,17 @@ Debug Center 的导出文件目前写到：
 这些文件是调试产物，不是底层权威存储。
 权威原始 session 仍然是 `current-session.jsonl`。
 
+其中 `telemetry-bundle-*.json` 当前包含：
+- `status`
+- `query`
+- `queryResult`
+- `debugConfig`
+- `envSnapshot`
+- `backendModules`
+- `registeredCommands`
+- `processPerfTotals`
+- `errors`
+
 ## 5. 当前真实支持的命令
 
 当前已经落地并可直接使用的 Tauri telemetry 命令只有这些：
@@ -121,13 +158,23 @@ Debug Center 的导出文件目前写到：
 - `debug_telemetry_get_status`
 - `debug_telemetry_clear_session`
 - `debug_telemetry_read_current_session`
+- `debug_telemetry_get_recent`
 - `debug_telemetry_query`
+- `debug_telemetry_export_bundle`
 
 对应实现：
 - `apps/desktop/src-tauri/src/commands/debug.rs`
 - `apps/desktop/src/modules/debug/telemetry.ts`
 
-不要把旧规划文档里未落地的导出/查询能力当成当前事实。
+当前前端 bridge / facade 入口包括：
+- `getTelemetryStatus()`
+- `clearTelemetrySession()`
+- `readCurrentTelemetrySession()`
+- `getRecentTelemetryRecords(limit?)`
+- `queryTelemetryCurrentSession(query)`
+- `exportTelemetryBundle(query)`
+
+不要把旧规划文档里未落地的 anomaly engine、contribution model、跨 session 检索当成当前事实。
 
 ## 6. AI 如何使用 Telemetry
 
@@ -137,11 +184,15 @@ Debug Center 的导出文件目前写到：
 
 1. 使用结构化查询读取当前活动 session。
 2. 只取本次问题相关模块和时间窗口。
-3. 如需性能上下文，再补一份进程快照。
-4. 最后生成 AI context markdown。
+3. 如果需要最近的持久化尾部，再读取 `getRecentTelemetryRecords(...)`。
+4. 如果需要一次性交接完整上下文，再导出 `exportTelemetryBundle(...)`。
+5. 如需性能上下文，再补一份进程快照。
+6. 最后生成 AI context markdown。
 
 推荐 API：
 - `queryTelemetryCurrentSession(query)`
+- `getRecentTelemetryRecords(limit?)`
+- `exportTelemetryBundle(query)`
 - `getDefaultTelemetryAiQuery()`
 - `buildTelemetryAiContextReport(...)`
 - `getProcessPerfTotalsSnapshot()`
@@ -265,6 +316,10 @@ await invokeWithTelemetry('native_audio_select_output_backend', { backendId }, {
 规则：
 - 新增前端 Tauri 调用时，默认必须走 `invokeWithTelemetry(...)`。
 - 唯一例外是 `debug_telemetry_*` 自身命令，当前实现会主动 bypass，避免递归。
+- 当前另一个有意保留的业务例外是 `apps/desktop/src/App.tsx` 里的
+  `ornaments_overlay_sync_geometry`：
+  - 这是高频窗口几何同步
+  - 代码内已明确注释说明故意绕过 invoke telemetry，避免刷屏和额外负担
 
 ### 7.3 场景快照
 
@@ -300,9 +355,21 @@ captureTelemetryScenarioSnapshot({
 统一使用：
 - `getTelemetryStatus()`
 - `readCurrentTelemetrySession()`
+- `getRecentTelemetryRecords(limit?)`
 - `queryTelemetryCurrentSession(query)`
+- `exportTelemetryBundle(query)`
 - `buildTelemetryAiContextReport(...)`
 - `buildTelemetryScenarioReport(...)`
+
+区别要记清：
+- `readCurrentTelemetrySession()`：
+  - 读取当前 session 的完整持久化记录
+- `getRecentTelemetryRecords(limit?)`：
+  - 读取当前 session 持久化记录的最近 N 条
+- `queryTelemetryCurrentSession(query)`：
+  - 对当前 session 的持久化记录做结构化过滤与聚合
+- `exportTelemetryBundle(query)`：
+  - 把 query 结果连同 debug config、环境快照、命令清单、进程总览一起打包
 
 ## 8. 日志开发规范
 
@@ -468,6 +535,37 @@ Telemetry 不能反向伤害性能。
 - 不要为日志复制完整业务数组。
 - 快照使用 `minIntervalMs` 或 dedupe key，避免刷屏。
 
+### 8.10 Rust 侧规范
+
+Rust 新代码默认使用：
+- `apps/desktop/src-tauri/src/backend_telemetry.rs`
+
+推荐入口：
+- `backend_telemetry::debug(...)`
+- `backend_telemetry::info(...)`
+- `backend_telemetry::warn(...)`
+- `backend_telemetry::error(...)`
+- `backend_telemetry::fatal(...)`
+- `backend_telemetry::metric(...)`
+
+如果调用点没有 `AppHandle`，但已经处于正常运行期，可以使用：
+- `backend_telemetry::debug_global(...)`
+- `backend_telemetry::info_global(...)`
+- `backend_telemetry::warn_global(...)`
+- `backend_telemetry::error_global(...)`
+
+规则：
+- 常规运行期日志不要再扩散新的 `eprintln!`。
+- Tauri / plugin / runtime / governance / perf 类后端事件，优先走 `backend_telemetry`。
+- `stderr` 只保留给 telemetry core 不可用、极早期启动失败、崩溃路径等兜底场景。
+- 如果某个诊断必须跨 session 留痕且不适合 telemetry，再单独评估 scoped file log。
+
+当前允许保留的 `eprintln!` 例外：
+- `backend_telemetry` 自己的 fallback：telemetry core 不可用或写入失败时兜底。
+- `app_builder.rs` 极早期 debug config 读取失败：此时 telemetry core 尚未安装。
+- `audio_smoke.rs`、`asio_diag.rs`：独立命令行/设备诊断入口，不作为常规运行期日志。
+- `audio/input/streaming.rs` 的 `PMP_AUDIO_LOG_PAGE_LOCK_FAILURE`：显式 env-gated 的音频热路径取证输出，默认关闭。
+
 ## 9. 人类排障建议
 
 查问题时优先顺序建议如下：
@@ -493,7 +591,37 @@ Telemetry 不能反向伤害性能。
 - 高频路径是否有采样/去重/限流。
 - 是否真的需要 `console.*`，如果不需要就迁移到 telemetry。
 
-## 11. 旧文档定位
+## 11. 当前系统边界
+
+以下内容很重要，因为旧计划文档里提过，但当前行为需要和规划态能力区分开：
+
+1. 当前 query / recent / export 的范围只覆盖当前 active session
+- 不是跨 session 历史检索
+- 不是长期归档查询系统
+
+2. 当前 authoritative store 仍然是 active session 的 `current-session.jsonl`
+- 启动时会归档上一次运行遗留的 current session
+- archive 文件只参与 retention 治理，不参与 Debug Center 的 query/recent/export
+- retention 已执行 `maxTotalBytes`、`errorDays`、`infoDays`、`debugCurrentSessionOnly`
+
+3. `DebugCenter` 的 `Recent Tail` 仍然是前端内存 tail
+- 它可能比持久化文件更丰富
+- 因为默认 `persistMinLevel = warn`
+- `getRecentTelemetryRecords(...)` 读取的是后端持久化 current session，不是这份前端内存 tail
+
+4. 旧计划里的这些扩展点目前仍属于规划态
+- `TelemetryContextEnricherContribution`
+- `TelemetryExportContributor`
+- `TelemetryAnomalyRuleContribution`
+- `TelemetryPanelContribution`
+- 独立 anomaly engine
+
+5. Rust 侧常规运行期日志已收敛到 `backend_telemetry`
+- 新代码应该优先走 `backend_telemetry`
+- 剩余 `eprintln!` 只允许出现在第 8.10 节列出的 fallback / 早期启动 / 独立诊断 / 显式热路径取证例外中
+- 这些例外不应被复制扩散为新的业务日志模式
+
+## 12. 旧文档定位
 
 以下文档仍可保留，但它们是历史方案或执行拆分，不再是权威说明：
 - `documents/telemetry/desktop-telemetry-spec.md`

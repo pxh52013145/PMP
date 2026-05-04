@@ -17,7 +17,7 @@ export type PluginVisualizerParams = {
   visualizerId: string;
   sourceKind?: PluginSurfaceSourceKind;
 };
-export type DebugPageParams = { tab?: 'debug-center' | 'perf-monitor' | 'native-debug' };
+export type DebugPageParams = { tab?: 'debug-center' | 'observability' | 'perf-monitor' | 'native-debug' };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -36,7 +36,12 @@ export function parseNavigationParams<K extends NavigationPageType>(
       if (params === undefined || params === null) return undefined;
       if (!isRecord(params)) return undefined;
       const tab = typeof params.tab === 'string' ? params.tab : undefined;
-      if (tab === 'debug-center' || tab === 'perf-monitor' || tab === 'native-debug') {
+      if (
+        tab === 'debug-center' ||
+        tab === 'observability' ||
+        tab === 'perf-monitor' ||
+        tab === 'native-debug'
+      ) {
         return { tab } as NavigationParamsFor<K>;
       }
       return undefined;

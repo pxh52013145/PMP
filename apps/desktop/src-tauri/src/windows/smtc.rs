@@ -100,11 +100,21 @@ pub fn init(app: &AppHandle) {
     ensure_winrt_initialized();
 
     let Some(window) = app.get_window(crate::windows::MAIN_WINDOW_LABEL) else {
-        eprintln!("[SMTC] Main window not found");
+        crate::backend_telemetry::warn(
+            app,
+            "windowing",
+            "windows.smtc.main-window.missing",
+            crate::backend_telemetry::BackendTelemetryOptions::new().component("smtc"),
+        );
         return;
     };
     let Ok(hwnd) = window.hwnd() else {
-        eprintln!("[SMTC] Failed to get main window HWND");
+        crate::backend_telemetry::warn(
+            app,
+            "windowing",
+            "windows.smtc.hwnd.resolve.failed",
+            crate::backend_telemetry::BackendTelemetryOptions::new().component("smtc"),
+        );
         return;
     };
 
@@ -118,7 +128,14 @@ pub fn init(app: &AppHandle) {
     let controls = match controls {
         Ok(v) => v,
         Err(err) => {
-            eprintln!("[SMTC] Failed to get controls via interop: {err}");
+            crate::backend_telemetry::warn(
+                app,
+                "windowing",
+                "windows.smtc.controls.resolve.failed",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("smtc")
+                    .message(err),
+            );
             return;
         }
     };

@@ -427,9 +427,13 @@ fn start_symphonia_stream_from_input(
                         effective_sample_rate = requested_sample_rate;
                     }
                     Err(err) => {
-                        eprintln!(
-                            "[NativeAudio] Failed to init resampler from codec params, falling back: [{}] {}",
-                            err.code, err.message
+                        crate::backend_telemetry::warn_global(
+                            "audio",
+                            "audio.input.resampler.init-from-codec.failed",
+                            crate::backend_telemetry::BackendTelemetryOptions::new()
+                                .component("audio::input::symphonia")
+                                .message(err.message)
+                                .field("code", serde_json::json!(err.code)),
                         );
                     }
                 }
@@ -643,9 +647,13 @@ fn start_symphonia_stream_from_input(
                                         effective_sample_rate = requested_sample_rate;
                                     }
                                     Err(err) => {
-                                        eprintln!(
-                                            "[NativeAudio] Failed to init resampler, falling back: [{}] {}",
-                                            err.code, err.message
+                                        crate::backend_telemetry::warn_global(
+                                            "audio",
+                                            "audio.input.resampler.init.failed",
+                                            crate::backend_telemetry::BackendTelemetryOptions::new()
+                                                .component("audio::input::symphonia")
+                                                .message(err.message)
+                                                .field("code", serde_json::json!(err.code)),
                                         );
                                     }
                                 }
@@ -663,10 +671,15 @@ fn start_symphonia_stream_from_input(
                                 bit_depth,
                                 duration,
                             }));
-                            eprintln!(
-                                "[NativeAudio] Stream init: channels={} in_sr={input_sample_rate} out_sr={effective_sample_rate} resample={}",
-                                channels_usize,
-                                resampler.is_some()
+                            crate::backend_telemetry::debug_global(
+                                "audio",
+                                "audio.input.stream.initialized",
+                                crate::backend_telemetry::BackendTelemetryOptions::new()
+                                    .component("audio::input::symphonia")
+                                    .field("channels", serde_json::json!(channels_usize))
+                                    .field("inputSampleRate", serde_json::json!(input_sample_rate))
+                                    .field("outputSampleRate", serde_json::json!(effective_sample_rate))
+                                    .field("resample", serde_json::json!(resampler.is_some())),
                             );
                             meta_delivered = true;
                         }

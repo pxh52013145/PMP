@@ -98,10 +98,12 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
     let telemetry_policy = crate::debug_config::get_config(&app.handle())
         .map(|config| config.telemetry)
         .unwrap_or_default();
-    app.manage(Arc::new(crate::telemetry::TelemetryCore::new(
+    let telemetry_core = Arc::new(crate::telemetry::TelemetryCore::new(
         &app.handle(),
         telemetry_policy,
-    )));
+    ));
+    crate::backend_telemetry::install_global_core(telemetry_core.clone());
+    app.manage(telemetry_core);
 
     if let Some(payload) = crate::app_runtime::capture_startup_host_file_open_payload() {
         crate::app_runtime::enqueue_startup_host_file_open(&app.handle(), payload);
@@ -129,8 +131,15 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
             crate::windows::taskbar_thumbbar::init_main_window(&app.handle());
             crate::windows::smtc::init(&app.handle());
         } else {
-            eprintln!(
-                "[windows] Shell integrations disabled in dev mode (set PMPM_ENABLE_WINDOWS_SHELL_INTEGRATION=1 to re-enable)."
+            crate::backend_telemetry::info(
+                &app.handle(),
+                "windowing",
+                "windows.shell-integrations.disabled",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("app_builder")
+                    .message(
+                        "Shell integrations disabled in dev mode; set PMPM_ENABLE_WINDOWS_SHELL_INTEGRATION=1 to re-enable.",
+                    ),
             );
         }
     }
@@ -206,7 +215,14 @@ pub fn ensure_music_library_services_initialized(app: &tauri::AppHandle) -> Resu
     }
 
     if let Err(error) = crate::music_library::cleanup_legacy_cover_cache_dirs(app) {
-        eprintln!("[MusicLibrary] Failed to cleanup legacy cover caches: {error}");
+        crate::backend_telemetry::warn(
+            app,
+            "music-library",
+            "music-library.cover-cache.cleanup-legacy.failed",
+            crate::backend_telemetry::BackendTelemetryOptions::new()
+                .component("app_builder")
+                .message(error),
+        );
     }
     crate::music_library_db::init(app)?;
     crate::music_library_sync::init(app)?;

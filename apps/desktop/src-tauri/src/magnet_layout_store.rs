@@ -838,7 +838,14 @@ impl MagnetLayoutStore {
                 if file_path.exists() {
                     backup_corrupt_store_file(&file_path);
                 }
-                eprintln!("[magnet_layout_store] {error}");
+                crate::backend_telemetry::warn(
+                    app,
+                    "magnets",
+                    "magnets.layout-store.read.failed",
+                    crate::backend_telemetry::BackendTelemetryOptions::new()
+                        .component("MagnetLayoutStore")
+                        .message(error),
+                );
                 default_store_state()
             }
         };

@@ -208,11 +208,46 @@ pub fn debug_telemetry_read_current_session(
 }
 
 #[tauri::command]
+pub fn debug_telemetry_get_recent(
+    telemetry_core: tauri::State<'_, Arc<telemetry::TelemetryCore>>,
+    limit: Option<u32>,
+) -> telemetry_contract::TelemetryRecentRecordsResult {
+    telemetry_core.get_recent_records(limit)
+}
+
+#[tauri::command]
 pub fn debug_telemetry_query(
     telemetry_core: tauri::State<'_, Arc<telemetry::TelemetryCore>>,
     query: telemetry_contract::TelemetryQueryInput,
 ) -> telemetry_contract::TelemetryQueryResult {
     telemetry_core.query_current_session(query)
+}
+
+#[tauri::command]
+pub async fn debug_telemetry_export_bundle(
+    app: tauri::AppHandle,
+    telemetry_core: tauri::State<'_, Arc<telemetry::TelemetryCore>>,
+    perf_monitor: tauri::State<'_, Arc<perf_monitor::PerfMonitor>>,
+    query: Option<telemetry_contract::TelemetryQueryInput>,
+) -> Result<telemetry_contract::TelemetryExportBundle, String> {
+    let monitor = perf_monitor.inner().clone();
+    let perf_result = tauri::async_runtime::spawn_blocking(move || monitor.snapshot_totals())
+        .await
+        .map_err(|error| format!("Process perf snapshot task failed: {error}"))
+        .and_then(|result| result);
+
+    let (process_perf_totals, process_perf_error) = match perf_result {
+        Ok(snapshot) => (serde_json::to_value(snapshot).ok(), None),
+        Err(error) => (None, Some(error)),
+    };
+
+    Ok(crate::telemetry_export::build_export_bundle(
+        &app,
+        telemetry_core.inner().as_ref(),
+        query.unwrap_or_default(),
+        process_perf_totals,
+        process_perf_error,
+    ))
 }
 
 #[tauri::command]

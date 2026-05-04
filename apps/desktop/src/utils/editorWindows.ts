@@ -1,10 +1,7 @@
-﻿import { invoke } from '@tauri-apps/api/tauri';
-import { isTauriRuntime } from './tauriRuntime';
+﻿import { isTauriRuntime } from './tauriRuntime';
 import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
 import { invokeWithTelemetry } from '../services/telemetry/tauriInvokeTelemetry';
 import { getEffectiveWindowPinPolicy } from './windowPinRuntime';
-
-void invoke;
 
 export type EditorWindowType =
   | 'control'

@@ -486,9 +486,14 @@ fn spawn_track_lines_resolve(app: AppHandle, track_key: String, track_path: Stri
     std::thread::spawn(move || {
         let resolved_lines = resolve_track_lines_for_path(&app, track_path.as_str())
             .unwrap_or_else(|error| {
-                eprintln!(
-                    "[desktop-lyrics] failed to resolve lyrics for track \"{}\": {}",
-                    track_path, error
+                crate::backend_telemetry::warn(
+                    &app,
+                    "desktop-lyrics",
+                    "desktop-lyrics.track-lines.resolve.failed",
+                    crate::backend_telemetry::BackendTelemetryOptions::new()
+                        .component("desktop_lyrics")
+                        .message(error)
+                        .field("trackPath", serde_json::json!(track_path)),
                 );
                 Vec::new()
             });

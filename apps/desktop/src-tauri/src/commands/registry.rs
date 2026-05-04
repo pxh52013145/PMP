@@ -27,7 +27,9 @@ pub const DEBUG_COMMAND_NAMES: &[&str] = &[
     "debug_telemetry_ingest_batch",
     "debug_telemetry_clear_session",
     "debug_telemetry_read_current_session",
+    "debug_telemetry_get_recent",
     "debug_telemetry_query",
+    "debug_telemetry_export_bundle",
 ];
 
 pub const MEDIA_COMMAND_NAMES: &[&str] = &["background_import_media"];
@@ -331,7 +333,9 @@ macro_rules! pmp_generate_handler {
             crate::commands::debug::debug_telemetry_ingest_batch,
             crate::commands::debug::debug_telemetry_clear_session,
             crate::commands::debug::debug_telemetry_read_current_session,
+            crate::commands::debug::debug_telemetry_get_recent,
             crate::commands::debug::debug_telemetry_query,
+            crate::commands::debug::debug_telemetry_export_bundle,
             crate::commands::media::background_import_media,
             crate::commands::plugins::plugin_read_install_source,
             crate::commands::plugins::plugin_allow_dev_project_asset_scope,

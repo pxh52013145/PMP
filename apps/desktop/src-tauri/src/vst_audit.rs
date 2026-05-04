@@ -131,7 +131,13 @@ fn load_from_disk(path: &PathBuf) -> VstAuditLog {
         Ok(data) => data,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return VstAuditLog::default(),
         Err(err) => {
-            eprintln!("[VST][audit] Failed to read audit log: {err}");
+            crate::backend_telemetry::warn_global(
+                "vst",
+                "vst.audit.read.failed",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("vst_audit")
+                    .message(err.to_string()),
+            );
             return VstAuditLog::default();
         }
     };
@@ -144,7 +150,13 @@ fn load_from_disk(path: &PathBuf) -> VstAuditLog {
             log
         }
         Err(err) => {
-            eprintln!("[VST][audit] Failed to parse audit log: {err}");
+            crate::backend_telemetry::warn_global(
+                "vst",
+                "vst.audit.parse.failed",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("vst_audit")
+                    .message(err.to_string()),
+            );
             VstAuditLog::default()
         }
     }
@@ -199,7 +211,13 @@ pub fn record_event(
     }
 
     if let Err(err) = persist_to_disk(path, &guard) {
-        eprintln!("[VST][audit] Failed to persist audit log: {err}");
+        crate::backend_telemetry::warn_global(
+            "vst",
+            "vst.audit.persist.failed",
+            crate::backend_telemetry::BackendTelemetryOptions::new()
+                .component("vst_audit")
+                .message(err),
+        );
     }
 }
 
@@ -240,7 +258,13 @@ pub fn record_scan_snapshot(plugins: &[BridgePluginDescriptor]) {
     }
 
     if let Err(err) = persist_to_disk(path, &guard) {
-        eprintln!("[VST][audit] Failed to persist scan snapshot: {err}");
+        crate::backend_telemetry::warn_global(
+            "vst",
+            "vst.audit.scan-snapshot.persist.failed",
+            crate::backend_telemetry::BackendTelemetryOptions::new()
+                .component("vst_audit")
+                .message(err),
+        );
     }
 }
 

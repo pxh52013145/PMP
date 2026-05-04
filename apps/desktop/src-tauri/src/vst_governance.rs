@@ -72,7 +72,13 @@ fn load_from_disk(path: &PathBuf) -> VstGovernanceState {
             return VstGovernanceState::default()
         }
         Err(err) => {
-            eprintln!("[VST][governance] Failed to read governance file: {err}");
+            crate::backend_telemetry::warn_global(
+                "vst",
+                "vst.governance.read.failed",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("vst_governance")
+                    .message(err.to_string()),
+            );
             return VstGovernanceState::default();
         }
     };
@@ -85,7 +91,13 @@ fn load_from_disk(path: &PathBuf) -> VstGovernanceState {
             state
         }
         Err(err) => {
-            eprintln!("[VST][governance] Failed to parse governance file: {err}");
+            crate::backend_telemetry::warn_global(
+                "vst",
+                "vst.governance.parse.failed",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("vst_governance")
+                    .message(err.to_string()),
+            );
             VstGovernanceState::default()
         }
     }

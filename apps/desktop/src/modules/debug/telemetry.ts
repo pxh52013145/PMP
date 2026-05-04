@@ -1,10 +1,12 @@
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import type {
   TelemetryClearSessionResult,
+  TelemetryExportBundle,
   TelemetryIngestBatchResult,
   TelemetryQueryInput,
   TelemetryQueryResult,
   TelemetryReadSessionResult,
+  TelemetryRecentRecordsResult,
   TelemetryRecord,
   TelemetryStatus,
 } from '../../contracts/telemetry';
@@ -201,6 +203,62 @@ function ensureTelemetryQueryResult(value: unknown): TelemetryQueryResult {
   };
 }
 
+function ensureTelemetryRecentRecordsResult(value: unknown): TelemetryRecentRecordsResult {
+  const record = isRecord(value) ? value : null;
+  const recordsRaw = Array.isArray(record?.records) ? record.records : [];
+  const records: TelemetryRecord[] = [];
+  for (const item of recordsRaw) {
+    const parsed = ensureTelemetryRecord(item);
+    if (!parsed) continue;
+    records.push(parsed);
+  }
+
+  return {
+    status: ensureTelemetryStatus(record?.status),
+    recordCount: readNumber(record?.recordCount, records.length),
+    records,
+  };
+}
+
+function ensureTelemetryExportBundle(value: unknown): TelemetryExportBundle {
+  const record = isRecord(value) ? value : null;
+  const envSnapshot: Record<string, string | null> = {};
+  if (isRecord(record?.envSnapshot)) {
+    for (const [key, item] of Object.entries(record.envSnapshot)) {
+      envSnapshot[key] = typeof item === 'string' ? item : null;
+    }
+  }
+
+  const query = isRecord(record?.query) ? (record.query as TelemetryQueryInput) : {};
+  const queryResult = ensureTelemetryQueryResult(record?.queryResult);
+
+  return {
+    schemaVersion: record?.schemaVersion === 1 ? 1 : 1,
+    generatedAtMs: readNumber(record?.generatedAtMs, 0),
+    sessionId:
+      typeof record?.sessionId === 'string' && record.sessionId.trim().length > 0
+        ? record.sessionId
+        : queryResult.status.currentSessionId,
+    status: ensureTelemetryStatus(record?.status ?? queryResult.status),
+    query,
+    queryResult,
+    debugConfig: Object.prototype.hasOwnProperty.call(record ?? {}, 'debugConfig')
+      ? record?.debugConfig ?? null
+      : null,
+    envSnapshot,
+    backendModules: Array.isArray(record?.backendModules) ? record.backendModules : [],
+    registeredCommands: Array.isArray(record?.registeredCommands)
+      ? record.registeredCommands.filter((item): item is string => typeof item === 'string')
+      : [],
+    processPerfTotals: Object.prototype.hasOwnProperty.call(record ?? {}, 'processPerfTotals')
+      ? record?.processPerfTotals ?? null
+      : null,
+    errors: Array.isArray(record?.errors)
+      ? record.errors.filter((item): item is string => typeof item === 'string')
+      : [],
+  };
+}
+
 export async function ingestTelemetryBatch(
   records: TelemetryRecord[]
 ): Promise<TelemetryIngestBatchResult | null> {
@@ -238,6 +296,18 @@ export async function readCurrentTelemetrySession(): Promise<TelemetryReadSessio
   return ensureTelemetryReadSessionResult(raw);
 }
 
+export async function getRecentTelemetryRecords(
+  limit: number = 160
+): Promise<TelemetryRecentRecordsResult | null> {
+  if (!isTauriRuntime()) return null;
+  const normalizedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+  const raw = await invokeWithTelemetry<unknown>('debug_telemetry_get_recent', {
+    limit: normalizedLimit,
+  }).catch(() => null);
+  if (!raw) return null;
+  return ensureTelemetryRecentRecordsResult(raw);
+}
+
 export async function queryTelemetryCurrentSession(
   query: TelemetryQueryInput = {}
 ): Promise<TelemetryQueryResult | null> {
@@ -247,4 +317,15 @@ export async function queryTelemetryCurrentSession(
   );
   if (!raw) return null;
   return ensureTelemetryQueryResult(raw);
+}
+
+export async function exportTelemetryBundle(
+  query: TelemetryQueryInput = {}
+): Promise<TelemetryExportBundle | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invokeWithTelemetry<unknown>('debug_telemetry_export_bundle', { query }).catch(
+    () => null
+  );
+  if (!raw) return null;
+  return ensureTelemetryExportBundle(raw);
 }

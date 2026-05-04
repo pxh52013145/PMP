@@ -22,11 +22,16 @@ export const NAVIGATION_SERVICE_TOKEN = createServiceToken<NavigationService>('s
 export class InMemoryNavigationService implements NavigationService {
   private static readonly MAX_HISTORY_LENGTH = 50;
 
-  private history: NavigationPageData[] = [{ type: 'home' }];
+  private history: NavigationPageData[];
   private currentIndex = 0;
   private readonly telemetry = getTelemetryLogger('navigation', 'NavigationService');
 
-  constructor(private readonly events: ScopedEventBus<AppEvents>) {}
+  constructor(
+    private readonly events: ScopedEventBus<AppEvents>,
+    initialPage: NavigationPageData = { type: 'home' }
+  ) {
+    this.history = [initialPage];
+  }
 
   getSnapshot(): NavigationSnapshot {
     const currentPage = this.history[this.currentIndex] ?? { type: 'home' };

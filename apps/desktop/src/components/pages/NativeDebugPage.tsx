@@ -52,14 +52,125 @@ function getFileName(filePath: string, fallback: string): string {
 }
 
 const SUPPORTED_EXTENSIONS = ['mp3', 'flac', 'wav', 'ogg', 'm4a', 'aac'];
+const NATIVE_DEBUG_TRACK_SCAN_LIMIT = 2_000;
+const NATIVE_DEBUG_TRACK_BYTE_SAMPLE_LIMIT = 24;
+const NATIVE_DEBUG_QUEUE_PREVIEW_LIMIT = 24;
+const NATIVE_DEBUG_QUEUE_PATH_SCAN_LIMIT = NATIVE_DEBUG_TRACK_SCAN_LIMIT;
+const NATIVE_DEBUG_PLAYLIST_PREVIEW_LIMIT = 12;
+const NATIVE_DEBUG_PLAYLIST_TRACK_PREVIEW_LIMIT = 4;
+const NATIVE_DEBUG_JSON_PREVIEW_MAX_CHARS = 80_000;
+const NATIVE_DEBUG_TIMELINE_PREVIEW_LIMIT = 80;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object') return null;
   return value as Record<string, unknown>;
 }
 
+function truncateDebugString(value: string | undefined, maxLength: number = 180): string | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function getCoverUrlKind(value: string | undefined): string | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized.startsWith('blob:')) return 'blob';
+  if (normalized.startsWith('data:')) return 'data';
+  if (normalized.startsWith('asset:')) return 'asset';
+  if (normalized.startsWith('http://') || normalized.startsWith('https://')) return 'remote';
+  if (normalized.startsWith('file:')) return 'file';
+  return 'other';
+}
+
+function buildTrackDebugSummary(track: Track): Record<string, unknown> {
+  return {
+    id: track.id,
+    title: track.title,
+    artist: track.artist ?? null,
+    album: track.album ?? null,
+    duration: typeof track.duration === 'number' ? track.duration : null,
+    fileSize: typeof track.fileSize === 'number' ? track.fileSize : null,
+    sampleRate: typeof track.sampleRate === 'number' ? track.sampleRate : null,
+    bitrate: typeof track.bitrate === 'number' ? track.bitrate : null,
+    path: truncateDebugString(track.path),
+    filePath: truncateDebugString(track.filePath),
+    originalPath: truncateDebugString(track.originalPath),
+    coverKey: track.coverKey ?? null,
+    coverUrlKind: getCoverUrlKind(track.coverUrl),
+    hasFileHandle: Boolean(track.fileHandle),
+    fileContentBytes: track.fileContent instanceof ArrayBuffer ? track.fileContent.byteLength : 0,
+    lyricChars: typeof track.lyrics === 'string' ? track.lyrics.length : 0,
+    tagCount: Array.isArray(track.tags) ? track.tags.length : 0,
+    commentChars: typeof track.comment === 'string' ? track.comment.length : 0,
+  };
+}
+
+function buildPlaylistDebugSummary(playlist: Playlist): Record<string, unknown> {
+  const trackPreview = playlist.tracks
+    .slice(0, NATIVE_DEBUG_PLAYLIST_TRACK_PREVIEW_LIMIT)
+    .map((track) => buildTrackDebugSummary(track));
+
+  return {
+    id: playlist.id,
+    name: playlist.name,
+    kind: playlist.kind ?? null,
+    readonly: playlist.readonly ?? false,
+    sourceConnectorId: playlist.sourceConnectorId ?? null,
+    sourcePlaylistId: playlist.sourcePlaylistId ?? null,
+    trackCount: playlist.trackCount ?? playlist.tracks.length,
+    loadedTrackCount: playlist.tracks.length,
+    totalDuration: playlist.totalDuration ?? 0,
+    updatedAt: playlist.updatedAt,
+    tracksHydrated: playlist.tracksHydrated !== false,
+    trackPreview,
+    omittedLoadedTracks: Math.max(0, playlist.tracks.length - trackPreview.length),
+  };
+}
+
+function buildAudioStateDebugPreview(state: AudioState): Record<string, unknown> {
+  const queuePreview = state.queue
+    .slice(0, NATIVE_DEBUG_QUEUE_PREVIEW_LIMIT)
+    .map((track) => buildTrackDebugSummary(track));
+  const playlistPreview = state.playlists
+    .slice(0, NATIVE_DEBUG_PLAYLIST_PREVIEW_LIMIT)
+    .map((playlist) => buildPlaylistDebugSummary(playlist));
+
+  return {
+    currentTrack: state.currentTrack ? buildTrackDebugSummary(state.currentTrack) : null,
+    playbackState: state.playbackState,
+    currentTime: state.currentTime,
+    duration: state.duration,
+    bufferedTime: state.bufferedTime,
+    bufferedAhead: state.bufferedAhead,
+    decodeBufferedAhead: state.decodeBufferedAhead ?? null,
+    outputBufferedAhead: state.outputBufferedAhead ?? null,
+    volume: state.volume,
+    muted: state.muted,
+    playMode: state.playMode,
+    currentIndex: state.currentIndex,
+    queue: {
+      count: state.queue.length,
+      preview: queuePreview,
+      omittedTracks: Math.max(0, state.queue.length - queuePreview.length),
+    },
+    playlists: {
+      count: state.playlists.length,
+      loadedTrackCount: state.playlists.reduce(
+        (total, playlist) => total + playlist.tracks.length,
+        0
+      ),
+      preview: playlistPreview,
+      omittedPlaylists: Math.max(0, state.playlists.length - playlistPreview.length),
+    },
+    currentPlaylist: state.currentPlaylist ? buildPlaylistDebugSummary(state.currentPlaylist) : null,
+  };
+}
+
 type TrackResidencyDiagnostics = {
   trackCount: number;
+  scannedTrackCount: number;
+  scanTruncated: boolean;
   tracksWithFileContent: number;
   fileContentBytes: number;
   tracksWithLyrics: number;
@@ -93,7 +204,50 @@ function measureJsonBytes(value: unknown): number {
   }
 }
 
-function collectTrackResidencyDiagnostics(tracks: Track[]): TrackResidencyDiagnostics {
+function stringifyDebugPreview(value: unknown): string {
+  try {
+    const json = JSON.stringify(value, null, 2);
+    if (typeof json !== 'string') return '';
+    if (json.length <= NATIVE_DEBUG_JSON_PREVIEW_MAX_CHARS) return json;
+    const omittedChars = json.length - NATIVE_DEBUG_JSON_PREVIEW_MAX_CHARS;
+    return `${json.slice(0, NATIVE_DEBUG_JSON_PREVIEW_MAX_CHARS)}\n... truncated ${omittedChars} chars ...`;
+  } catch (error) {
+    return `Unable to serialize debug preview: ${getErrorMessage(error)}`;
+  }
+}
+
+function estimateTrackArrayJsonBytes(sampleTracks: Track[], totalTrackCount: number): number {
+  if (totalTrackCount <= 0 || sampleTracks.length === 0) return 0;
+  const sampleLimit = Math.min(NATIVE_DEBUG_TRACK_BYTE_SAMPLE_LIMIT, sampleTracks.length);
+  const sample = sampleTracks.slice(0, sampleLimit).map((track) => buildTrackDebugSummary(track));
+  const sampleBytes = measureJsonBytes(sample);
+  if (sampleBytes <= 0) return 0;
+  return Math.round((sampleBytes / sampleLimit) * totalTrackCount);
+}
+
+function collectTrackSampleFromPlaylists(
+  playlists: Playlist[],
+  limit: number
+): { sample: Track[]; totalTrackCount: number } {
+  const sample: Track[] = [];
+  let totalTrackCount = 0;
+
+  for (const playlist of playlists) {
+    totalTrackCount += playlist.tracks.length;
+    if (sample.length >= limit) continue;
+
+    const remaining = limit - sample.length;
+    sample.push(...playlist.tracks.slice(0, remaining));
+  }
+
+  return { sample, totalTrackCount };
+}
+
+function collectTrackResidencyDiagnostics(
+  tracks: Track[],
+  totalTrackCount: number = tracks.length
+): TrackResidencyDiagnostics {
+  const scannedTracks = tracks.slice(0, NATIVE_DEBUG_TRACK_SCAN_LIMIT);
   let tracksWithFileContent = 0;
   let fileContentBytes = 0;
   let tracksWithLyrics = 0;
@@ -111,7 +265,7 @@ function collectTrackResidencyDiagnostics(tracks: Track[]): TrackResidencyDiagno
   let originalPathChars = 0;
   const uniquePaths = new Set<string>();
 
-  for (const track of tracks) {
+  for (const track of scannedTracks) {
     if (track.fileContent instanceof ArrayBuffer) {
       tracksWithFileContent += 1;
       fileContentBytes += track.fileContent.byteLength;
@@ -163,7 +317,9 @@ function collectTrackResidencyDiagnostics(tracks: Track[]): TrackResidencyDiagno
   }
 
   return {
-    trackCount: tracks.length,
+    trackCount: totalTrackCount,
+    scannedTrackCount: scannedTracks.length,
+    scanTruncated: totalTrackCount > scannedTracks.length,
     tracksWithFileContent,
     fileContentBytes,
     tracksWithLyrics,
@@ -180,7 +336,7 @@ function collectTrackResidencyDiagnostics(tracks: Track[]): TrackResidencyDiagno
     filePathChars,
     originalPathChars,
     uniquePathCount: uniquePaths.size,
-    approxJsonBytes: measureJsonBytes(tracks),
+    approxJsonBytes: estimateTrackArrayJsonBytes(scannedTracks, totalTrackCount),
     approxHeavyFieldBytes:
       fileContentBytes +
       lyricChars * 2 +
@@ -190,8 +346,20 @@ function collectTrackResidencyDiagnostics(tracks: Track[]): TrackResidencyDiagno
   };
 }
 
+function collectPlaylistTrackResidencyDiagnostics(playlists: Playlist[]): TrackResidencyDiagnostics {
+  const { sample, totalTrackCount } = collectTrackSampleFromPlaylists(
+    playlists,
+    NATIVE_DEBUG_TRACK_SCAN_LIMIT
+  );
+  return collectTrackResidencyDiagnostics(sample, totalTrackCount);
+}
+
 type TrackDuplicationDiagnostics = {
   hydratedPlaylistCount: number;
+  sampledQueueTrackCount: number;
+  sampledHydratedPlaylistTrackCount: number;
+  sampledCurrentPlaylistTrackCount: number;
+  sampleTruncated: boolean;
   queueUniqueTrackCount: number;
   hydratedPlaylistTrackCount: number;
   hydratedPlaylistUniqueTrackCount: number;
@@ -234,8 +402,13 @@ function collectTrackDuplicationDiagnostics(
   const hydratedPlaylists = playlists.filter(
     (playlist) => playlist.tracksHydrated !== false && playlist.tracks.length > 0
   );
-  const hydratedTracks = hydratedPlaylists.flatMap((playlist) => playlist.tracks);
+  const hydratedSample = collectTrackSampleFromPlaylists(
+    hydratedPlaylists,
+    NATIVE_DEBUG_TRACK_SCAN_LIMIT
+  );
   const currentPlaylistTracks = currentPlaylist?.tracks ?? [];
+  const queueSample = queue.slice(0, NATIVE_DEBUG_TRACK_SCAN_LIMIT);
+  const currentPlaylistSample = currentPlaylistTracks.slice(0, NATIVE_DEBUG_TRACK_SCAN_LIMIT);
   const queueKeys = new Set<string>();
   const hydratedKeys = new Set<string>();
   const currentPlaylistKeys = new Set<string>();
@@ -274,9 +447,9 @@ function collectTrackDuplicationDiagnostics(
     }
   };
 
-  markTracks(queue, 'queue', queueKeys);
-  markTracks(hydratedTracks, 'hydratedPlaylists', hydratedKeys);
-  markTracks(currentPlaylistTracks, 'currentPlaylist', currentPlaylistKeys);
+  markTracks(queueSample, 'queue', queueKeys);
+  markTracks(hydratedSample.sample, 'hydratedPlaylists', hydratedKeys);
+  markTracks(currentPlaylistSample, 'currentPlaylist', currentPlaylistKeys);
 
   let queueHydratedOverlapCount = 0;
   let queueHydratedOverlapApproxJsonBytes = 0;
@@ -290,7 +463,7 @@ function collectTrackDuplicationDiagnostics(
   let logicalDuplicateApproxJsonBytesUpperBound = 0;
 
   for (const presence of trackPresence.values()) {
-    const sampleJsonBytes = measureJsonBytes(presence.sample);
+    const sampleJsonBytes = measureJsonBytes(buildTrackDebugSummary(presence.sample));
     const copies =
       Number(presence.inQueue) +
       Number(presence.inHydratedPlaylists) +
@@ -324,8 +497,15 @@ function collectTrackDuplicationDiagnostics(
 
   return {
     hydratedPlaylistCount: hydratedPlaylists.length,
+    sampledQueueTrackCount: queueSample.length,
+    sampledHydratedPlaylistTrackCount: hydratedSample.sample.length,
+    sampledCurrentPlaylistTrackCount: currentPlaylistSample.length,
+    sampleTruncated:
+      queue.length > queueSample.length ||
+      hydratedSample.totalTrackCount > hydratedSample.sample.length ||
+      currentPlaylistTracks.length > currentPlaylistSample.length,
     queueUniqueTrackCount: queueKeys.size,
-    hydratedPlaylistTrackCount: hydratedTracks.length,
+    hydratedPlaylistTrackCount: hydratedSample.totalTrackCount,
     hydratedPlaylistUniqueTrackCount: hydratedKeys.size,
     currentPlaylistTrackCount: currentPlaylistTracks.length,
     currentPlaylistUniqueTrackCount: currentPlaylistKeys.size,
@@ -1193,11 +1373,6 @@ export const NativeDebugPage: React.FC = () => {
     }
   }, [appendLog, fetchEnginePolicy, t]);
 
-  useEffect(() => {
-    if (!isNativeEngine) return;
-    void handleRefreshAudioComponents();
-  }, [handleRefreshAudioComponents, isNativeEngine]);
-
   const handleApplyOutputBackend = useCallback(async () => {
     const backendId = selectedBackend.length > 0 ? selectedBackend : null;
 
@@ -1600,7 +1775,7 @@ export const NativeDebugPage: React.FC = () => {
     [state.queue]
   );
   const playlistTrackResidencyDiagnostics = useMemo(
-    () => collectTrackResidencyDiagnostics(state.playlists.flatMap((playlist) => playlist.tracks)),
+    () => collectPlaylistTrackResidencyDiagnostics(state.playlists),
     [state.playlists]
   );
   const currentTrackResidencyDiagnostics = useMemo(
@@ -1612,13 +1787,36 @@ export const NativeDebugPage: React.FC = () => {
     [state.currentPlaylist, state.playlists, state.queue]
   );
   const queuePathsPayloadDiagnostics = useMemo(() => {
-    const queuePaths = state.queue
-      .map((track) => track.filePath || track.path || track.originalPath || '')
-      .filter((value) => value.length > 0);
+    const queuePaths: string[] = [];
+    const scannedQueue = state.queue.slice(0, NATIVE_DEBUG_QUEUE_PATH_SCAN_LIMIT);
+    let pathCount = 0;
+    let totalChars = 0;
+
+    for (const track of scannedQueue) {
+      const path = track.filePath || track.path || track.originalPath || '';
+      if (path.length === 0) continue;
+      pathCount += 1;
+      totalChars += path.length;
+      if (queuePaths.length < NATIVE_DEBUG_QUEUE_PREVIEW_LIMIT) {
+        queuePaths.push(path);
+      }
+    }
+
+    const estimatedPathCount =
+      scannedQueue.length > 0
+        ? Math.round((pathCount / scannedQueue.length) * state.queue.length)
+        : 0;
+    const estimatedTotalChars =
+      scannedQueue.length > 0
+        ? Math.round((totalChars / scannedQueue.length) * state.queue.length)
+        : 0;
 
     return {
-      pathCount: queuePaths.length,
-      totalChars: queuePaths.reduce((total, value) => total + value.length, 0),
+      pathCount: estimatedPathCount,
+      scannedTrackCount: scannedQueue.length,
+      sampledPathCount: queuePaths.length,
+      sampleTruncated: state.queue.length > scannedQueue.length || pathCount > queuePaths.length,
+      totalChars: estimatedTotalChars,
       approxJsonBytes: measureJsonBytes(queuePaths),
     };
   }, [state.queue]);
@@ -1634,18 +1832,31 @@ export const NativeDebugPage: React.FC = () => {
       updatedAt: playlist.updatedAt,
       tracksHydrated: playlist.tracksHydrated !== false,
     }));
+    const playlistDebugPreview = {
+      preview: state.playlists
+        .slice(0, NATIVE_DEBUG_PLAYLIST_PREVIEW_LIMIT)
+        .map((playlist) => buildPlaylistDebugSummary(playlist)),
+      omittedPlaylists: Math.max(0, state.playlists.length - NATIVE_DEBUG_PLAYLIST_PREVIEW_LIMIT),
+    };
 
     return {
       playlistCount: state.playlists.length,
       loadedTrackCount: state.playlists.reduce((total, playlist) => total + playlist.tracks.length, 0),
-      approxJsonBytes: measureJsonBytes(state.playlists),
+      approxJsonBytes: measureJsonBytes(playlistDebugPreview),
       approxSummaryJsonBytes: measureJsonBytes(playlistSummaries),
+      debugPreviewCapped: true,
       currentPlaylistId: state.currentPlaylist?.id ?? null,
       currentPlaylistTrackCount: state.currentPlaylist?.tracks.length ?? 0,
-      currentPlaylistJsonBytes: measureJsonBytes(state.currentPlaylist),
+      currentPlaylistJsonBytes: measureJsonBytes(
+        state.currentPlaylist ? buildPlaylistDebugSummary(state.currentPlaylist) : null
+      ),
     };
   }, [state.currentPlaylist, state.playlists]);
-  const audioStateJsonBytes = useMemo(() => measureJsonBytes(state), [state]);
+  const audioStateDebugPreview = useMemo(() => buildAudioStateDebugPreview(state), [state]);
+  const audioStateJsonBytes = useMemo(
+    () => measureJsonBytes(audioStateDebugPreview),
+    [audioStateDebugPreview]
+  );
   const processResidencyComparison = useMemo(() => {
     const webview2 = performanceSnapshot.webview2;
     const webview2PrivateBytes = webview2?.webview2PrivateBytes ?? null;
@@ -1685,7 +1896,7 @@ export const NativeDebugPage: React.FC = () => {
 
   const displayedDiagnostics = useMemo(
     () =>
-      JSON.stringify(
+      stringifyDebugPreview(
         {
           retire: retireStats,
           currentBuffers: currentBufferDebugSnapshot,
@@ -1708,9 +1919,7 @@ export const NativeDebugPage: React.FC = () => {
           nativeAudio: {
             estimatedAudioBufferBytes: robustness.estimatedAudioBufferBytes ?? 0,
           },
-        },
-        null,
-        2
+        }
       ),
     [
       audioStateJsonBytes,
@@ -1728,14 +1937,33 @@ export const NativeDebugPage: React.FC = () => {
       trackSwitchSnapshot,
     ]
   );
-  const displayedState = useMemo(() => JSON.stringify(state, null, 2), [state]);
-  const displayedRobustness = useMemo(() => JSON.stringify(robustness, null, 2), [robustness]);
+  const robustnessDebugPreview = useMemo(() => {
+    const timeline = robustness.diagnosticTimeline ?? [];
+    return {
+      ...robustness,
+      diagnosticTimeline: timeline.slice(-NATIVE_DEBUG_TIMELINE_PREVIEW_LIMIT),
+      diagnosticTimelineOmittedEvents: Math.max(
+        0,
+        timeline.length - NATIVE_DEBUG_TIMELINE_PREVIEW_LIMIT
+      ),
+    };
+  }, [robustness]);
+  const displayedState = useMemo(
+    () => stringifyDebugPreview(audioStateDebugPreview),
+    [audioStateDebugPreview]
+  );
+  const displayedRobustness = useMemo(
+    () => stringifyDebugPreview(robustnessDebugPreview),
+    [robustnessDebugPreview]
+  );
   const diagnosticTimelineRows = useMemo(
     () =>
-      (robustness.diagnosticTimeline ?? []).map((event) => {
-        const timestamp = new Date(event.timestampMs).toLocaleTimeString(locale);
-        return `${timestamp} #${event.seq} ${event.kind} value=${event.value} aux=${event.aux}`;
-      }),
+      (robustness.diagnosticTimeline ?? [])
+        .slice(-NATIVE_DEBUG_TIMELINE_PREVIEW_LIMIT)
+        .map((event) => {
+          const timestamp = new Date(event.timestampMs).toLocaleTimeString(locale);
+          return `${timestamp} #${event.seq} ${event.kind} value=${event.value} aux=${event.aux}`;
+        }),
     [locale, robustness.diagnosticTimeline]
   );
 

@@ -53,6 +53,20 @@ fn parse_env_bool_wasapi(key: &str, default_value: bool) -> bool {
         .unwrap_or(default_value)
 }
 
+fn log_wasapi_info(event: &str, options: crate::backend_telemetry::BackendTelemetryOptions) {
+    crate::backend_telemetry::info_global("audio", event, options.component("wasapi_exclusive"));
+}
+
+fn log_wasapi_warn(message: impl Into<String>, event: &str) {
+    crate::backend_telemetry::warn_global(
+        "audio",
+        event,
+        crate::backend_telemetry::BackendTelemetryOptions::new()
+            .component("wasapi_exclusive")
+            .message(message),
+    );
+}
+
 #[inline]
 fn quantization_mode_to_bits(mode: NativeAudioOutputQuantizationMode) -> u32 {
     match mode {
@@ -2733,8 +2747,10 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
                     ) {
                         Ok(new_stream) => {
                             if let Some(period_frames) = new_stream.low_latency_period_frames {
-                                eprintln!(
-                                    "[NativeAudio][wasapi-shared-raw] Negotiated low-latency period_frames={period_frames}"
+                                log_wasapi_info(
+                                    "audio.output.wasapi-shared-raw.low-latency-period.negotiated",
+                                    crate::backend_telemetry::BackendTelemetryOptions::new()
+                                        .field("periodFrames", serde_json::json!(period_frames)),
                                 );
                             }
                             memory_pool::reserve_f32_capacity(
@@ -2803,8 +2819,10 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
                 ) {
                     Ok(new_stream) => {
                         if let Some(period_frames) = new_stream.low_latency_period_frames {
-                            eprintln!(
-                                "[NativeAudio][wasapi-shared-raw] Negotiated low-latency period_frames={period_frames}"
+                            log_wasapi_info(
+                                "audio.output.wasapi-shared-raw.low-latency-period.negotiated",
+                                crate::backend_telemetry::BackendTelemetryOptions::new()
+                                    .field("periodFrames", serde_json::json!(period_frames)),
                             );
                         }
                         memory_pool::reserve_f32_capacity(
@@ -4420,8 +4438,11 @@ fn open_wasapi_stream(
                     let low_latency_raw_ready = match low_latency_client.cast::<IAudioClient2>() {
                         Ok(client2) => {
                             if let Err(err) = client2.SetClientProperties(&raw_props as *const _) {
-                                eprintln!(
-                                    "[NativeAudio][wasapi-shared-raw] IAudioClient3 path failed to reapply RAW properties: {err}, falling back"
+                                log_wasapi_warn(
+                                    format!(
+                                        "IAudioClient3 path failed to reapply RAW properties: {err}; falling back"
+                                    ),
+                                    "audio.output.wasapi-shared-raw.client3.raw-properties.failed",
                                 );
                                 false
                             } else {
@@ -4429,8 +4450,9 @@ fn open_wasapi_stream(
                             }
                         }
                         Err(_) => {
-                            eprintln!(
-                                "[NativeAudio][wasapi-shared-raw] IAudioClient3 path could not query IAudioClient2, falling back"
+                            log_wasapi_warn(
+                                "IAudioClient3 path could not query IAudioClient2; falling back",
+                                "audio.output.wasapi-shared-raw.client2.query.failed",
                             );
                             false
                         }
@@ -4459,14 +4481,30 @@ fn open_wasapi_stream(
                                     fundamental_period_frames,
                                 );
 
-                                eprintln!(
-                                "[NativeAudio][wasapi-shared-raw] IAudioClient3 periods: default={} fundamental={} min={} max={} selected={}",
-                                default_period_frames,
-                                fundamental_period_frames,
-                                min_period_frames,
-                                max_period_frames,
-                                selected_period
-                            );
+                                log_wasapi_info(
+                                    "audio.output.wasapi-shared-raw.client3.periods",
+                                    crate::backend_telemetry::BackendTelemetryOptions::new()
+                                        .field(
+                                            "defaultPeriodFrames",
+                                            serde_json::json!(default_period_frames),
+                                        )
+                                        .field(
+                                            "fundamentalPeriodFrames",
+                                            serde_json::json!(fundamental_period_frames),
+                                        )
+                                        .field(
+                                            "minPeriodFrames",
+                                            serde_json::json!(min_period_frames),
+                                        )
+                                        .field(
+                                            "maxPeriodFrames",
+                                            serde_json::json!(max_period_frames),
+                                        )
+                                        .field(
+                                            "selectedPeriodFrames",
+                                            serde_json::json!(selected_period),
+                                        ),
+                                );
 
                                 match CreateEventW(None, false, false, PCWSTR::null()) {
                                     Ok(event_handle) => {
@@ -4483,22 +4521,26 @@ fn open_wasapi_stream(
                                                     let _ = windows::Win32::Foundation::CloseHandle(
                                                         event_handle,
                                                     );
-                                                    eprintln!(
-                                                    "[NativeAudio][wasapi-shared-raw] IAudioClient3 SetEventHandle failed: {err}, falling back"
+                                                    log_wasapi_warn(
+                                                        format!(
+                                                            "IAudioClient3 SetEventHandle failed: {err}; falling back"
+                                                        ),
+                                                        "audio.output.wasapi-shared-raw.client3.set-event.failed",
                                                 );
                                                 } else {
                                                     match low_latency_client.GetBufferSize() {
                                                         Ok(buffer_frame_count) => {
                                                             match low_latency_client.GetService() {
                                                                 Ok(render_client) => {
-                                                                    eprintln!(
-                                                                    "[NativeAudio][wasapi-shared-raw] IAudioClient3 low-latency stream: format={} channels={} sample_rate={} period_frames={} buffer_frames={}",
-                                                                    attempt.label,
-                                                                    channels,
-                                                                    sample_rate,
-                                                                    selected_period,
-                                                                    buffer_frame_count
-                                                                );
+                                                                    log_wasapi_info(
+                                                                        "audio.output.wasapi-shared-raw.client3.stream.initialized",
+                                                                        crate::backend_telemetry::BackendTelemetryOptions::new()
+                                                                            .field("format", serde_json::json!(attempt.label))
+                                                                            .field("channels", serde_json::json!(channels))
+                                                                            .field("sampleRate", serde_json::json!(sample_rate))
+                                                                            .field("periodFrames", serde_json::json!(selected_period))
+                                                                            .field("bufferFrames", serde_json::json!(buffer_frame_count)),
+                                                                    );
                                                                     return Ok(WasapiStream {
                                                                         audio_client:
                                                                             low_latency_client,
@@ -4518,8 +4560,11 @@ fn open_wasapi_stream(
                                                                 }
                                                                 Err(err) => {
                                                                     let _ = windows::Win32::Foundation::CloseHandle(event_handle);
-                                                                    eprintln!(
-                                                                    "[NativeAudio][wasapi-shared-raw] IAudioClient3 GetService failed: {err}, falling back"
+                                                                    log_wasapi_warn(
+                                                                        format!(
+                                                                            "IAudioClient3 GetService failed: {err}; falling back"
+                                                                        ),
+                                                                        "audio.output.wasapi-shared-raw.client3.get-service.failed",
                                                                 );
                                                                 }
                                                             }
@@ -4529,8 +4574,11 @@ fn open_wasapi_stream(
                                                             windows::Win32::Foundation::CloseHandle(
                                                                 event_handle,
                                                             );
-                                                            eprintln!(
-                                                            "[NativeAudio][wasapi-shared-raw] IAudioClient3 GetBufferSize failed: {err}, falling back"
+                                                            log_wasapi_warn(
+                                                                format!(
+                                                                    "IAudioClient3 GetBufferSize failed: {err}; falling back"
+                                                                ),
+                                                                "audio.output.wasapi-shared-raw.client3.get-buffer-size.failed",
                                                         );
                                                         }
                                                     }
@@ -4540,32 +4588,41 @@ fn open_wasapi_stream(
                                                 let _ = windows::Win32::Foundation::CloseHandle(
                                                     event_handle,
                                                 );
-                                                eprintln!(
-                                                "[NativeAudio][wasapi-shared-raw] IAudioClient3 InitializeSharedAudioStream failed: {err}, falling back to classic path"
+                                                log_wasapi_warn(
+                                                    format!(
+                                                        "IAudioClient3 InitializeSharedAudioStream failed: {err}; falling back to classic path"
+                                                    ),
+                                                    "audio.output.wasapi-shared-raw.client3.initialize.failed",
                                             );
                                             }
                                         }
                                     }
                                     Err(err) => {
-                                        eprintln!(
-                                        "[NativeAudio][wasapi-shared-raw] IAudioClient3 CreateEventW failed: {err}, falling back"
+                                        log_wasapi_warn(
+                                            format!(
+                                                "IAudioClient3 CreateEventW failed: {err}; falling back"
+                                            ),
+                                            "audio.output.wasapi-shared-raw.client3.create-event.failed",
                                     );
                                     }
                                 }
                             } else {
-                                eprintln!(
-                                "[NativeAudio][wasapi-shared-raw] IAudioClient3 GetSharedModeEnginePeriod failed, falling back"
+                                log_wasapi_warn(
+                                    "IAudioClient3 GetSharedModeEnginePeriod failed; falling back",
+                                    "audio.output.wasapi-shared-raw.client3.get-engine-period.failed",
                             );
                             }
                         } else {
-                            eprintln!(
-                                "[NativeAudio][wasapi-shared-raw] IAudioClient3 not available, falling back to classic path"
+                            log_wasapi_warn(
+                                "IAudioClient3 not available; falling back to classic path",
+                                "audio.output.wasapi-shared-raw.client3.unavailable",
                             );
                         }
                     }
                 } else {
-                    eprintln!(
-                        "[NativeAudio][wasapi-shared-raw] Failed to activate dedicated client for IAudioClient3, falling back"
+                    log_wasapi_warn(
+                        "Failed to activate dedicated client for IAudioClient3; falling back",
+                        "audio.output.wasapi-shared-raw.client3.activate.failed",
                     );
                 }
             }
@@ -4720,13 +4777,15 @@ fn open_wasapi_stream(
                             }
                         })?;
 
-                        eprintln!(
-                            "[NativeAudio][{backend_log_label}] Open stream: format={} channels={} sample_rate={} frames={} buffer_duration_100ns={}",
-                            attempt.label,
-                            channels,
-                            sample_rate,
-                            buffer_frame_count,
-                            aligned_duration
+                        log_wasapi_info(
+                            "audio.output.wasapi.stream.opened",
+                            crate::backend_telemetry::BackendTelemetryOptions::new()
+                                .field("backend", serde_json::json!(backend_log_label))
+                                .field("format", serde_json::json!(attempt.label))
+                                .field("channels", serde_json::json!(channels))
+                                .field("sampleRate", serde_json::json!(sample_rate))
+                                .field("bufferFrames", serde_json::json!(buffer_frame_count))
+                                .field("bufferDuration100ns", serde_json::json!(aligned_duration)),
                         );
                         return Ok(WasapiStream {
                             audio_client: aligned_audio_client,
@@ -4779,13 +4838,15 @@ fn open_wasapi_stream(
                         }
                     })?;
 
-                eprintln!(
-                    "[NativeAudio][{backend_log_label}] Open stream: format={} channels={} sample_rate={} frames={} buffer_duration_100ns={}",
-                    attempt.label,
-                    channels,
-                    sample_rate,
-                    buffer_frame_count,
-                    buffer_duration
+                log_wasapi_info(
+                    "audio.output.wasapi.stream.opened",
+                    crate::backend_telemetry::BackendTelemetryOptions::new()
+                        .field("backend", serde_json::json!(backend_log_label))
+                        .field("format", serde_json::json!(attempt.label))
+                        .field("channels", serde_json::json!(channels))
+                        .field("sampleRate", serde_json::json!(sample_rate))
+                        .field("bufferFrames", serde_json::json!(buffer_frame_count))
+                        .field("bufferDuration100ns", serde_json::json!(buffer_duration)),
                 );
                 return Ok(WasapiStream {
                     audio_client,

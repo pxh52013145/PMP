@@ -127,6 +127,27 @@ export type TelemetryQueryResult = {
   eventCounts: TelemetryCountBucket[];
 };
 
+export type TelemetryRecentRecordsResult = {
+  status: TelemetryStatus;
+  recordCount: number;
+  records: TelemetryRecord[];
+};
+
+export type TelemetryExportBundle = {
+  schemaVersion: 1;
+  generatedAtMs: number;
+  sessionId: string;
+  status: TelemetryStatus;
+  query: TelemetryQueryInput;
+  queryResult: TelemetryQueryResult;
+  debugConfig: unknown | null;
+  envSnapshot: Record<string, string | null>;
+  backendModules: unknown[];
+  registeredCommands: string[];
+  processPerfTotals: unknown | null;
+  errors: string[];
+};
+
 const TELEMETRY_LEVEL_ORDER: Record<TelemetryLevel, number> = {
   trace: 10,
   debug: 20,

@@ -55,6 +55,9 @@ const AlbumDetailPageLazy = React.lazy(async () => ({
 const DebugCenterPageLazy = React.lazy(async () => ({
   default: (await import('../components/pages/DebugCenterPage')).DebugCenterPage,
 }));
+const ObservabilityPageLazy = React.lazy(async () => ({
+  default: (await import('../components/pages/ObservabilityPage')).ObservabilityPage,
+}));
 const NativeDebugPageLazy = React.lazy(async () => ({
   default: (await import('../components/pages/NativeDebugPage')).NativeDebugPage,
 }));
@@ -395,6 +398,17 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           source: 'builtin',
           order: 80,
           group: 'details',
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'observability',
+          title: t('pages.observability.title'),
+          render: () => renderWithLazyBoundary(<ObservabilityPageLazy />),
+          source: 'builtin',
+          order: 87,
+          group: 'debug',
+          tags: ['debug', 'telemetry', 'observability'],
         });
 
         register<PageContribution>({

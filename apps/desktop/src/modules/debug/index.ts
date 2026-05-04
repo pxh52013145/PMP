@@ -36,6 +36,8 @@ export {
 
 export {
   clearTelemetrySession,
+  exportTelemetryBundle,
+  getRecentTelemetryRecords,
   getTelemetryStatus,
   ingestTelemetryBatch,
   queryTelemetryCurrentSession,

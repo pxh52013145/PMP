@@ -22,6 +22,7 @@ import {
   getDefaultDebugConfig,
   getProcessPerfTotalsSnapshot,
   getRecentGitCommits,
+  exportTelemetryBundle,
   queryTelemetryCurrentSession,
   readCurrentTelemetrySession,
   restartApp,
@@ -206,6 +207,7 @@ type MemoryBaselineExportPayload = {
 
 type TelemetryArtifactAction =
   | 'session-json'
+  | 'bundle-json'
   | 'scenario-report'
   | 'copy-ai-context'
   | 'export-ai-context';
@@ -237,6 +239,13 @@ type DebugWorkspaceId =
   | 'telemetry'
   | 'magnets'
   | 'memory';
+
+type DebugCenterProps = {
+  variant?: 'page' | 'settings';
+  initialWorkspace?: DebugWorkspaceId;
+  title?: string;
+  subtitle?: string;
+};
 
 const MEMORY_BASELINE_MAX_ENTRIES = 20;
 const THREE_STAGE_CAPTURE_PLAN: ReadonlyArray<{
@@ -858,7 +867,12 @@ function buildMemoryBaselineCsv(payload: MemoryBaselineExportPayload): string {
   ].join('\n');
 }
 
-export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings' }) {
+export function DebugCenter({
+  variant = 'page',
+  initialWorkspace = 'overview',
+  title,
+  subtitle,
+}: DebugCenterProps) {
   const kernel = useKernel();
   const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const t = useT();
@@ -903,7 +917,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [pendingRestart, setPendingRestart] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [activeWorkspace, setActiveWorkspace] = useState<DebugWorkspaceId>('overview');
+  const [activeWorkspace, setActiveWorkspace] = useState<DebugWorkspaceId>(initialWorkspace);
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmRestartIntoDebug, setConfirmRestartIntoDebug] = useState(false);
   const [confirmDestroyEditorWindows, setConfirmDestroyEditorWindows] = useState(false);
@@ -2175,6 +2189,8 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     const labelKey =
       action === 'session-json'
         ? 'debug.center.telemetry.artifacts.label.sessionJson'
+        : action === 'bundle-json'
+          ? 'debug.center.telemetry.artifacts.label.bundleJson'
         : action === 'scenario-report'
           ? 'debug.center.telemetry.artifacts.label.scenarioReport'
           : 'debug.center.telemetry.artifacts.label.aiContext';
@@ -2257,6 +2273,44 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       failTelemetryArtifactAction(action, 'export', err);
     }
   }, [beginTelemetryArtifactAction, completeTelemetryArtifactAction, failTelemetryArtifactAction, saveDebugArtifact, t]);
+
+  const handleExportTelemetryBundleJson = useCallback(async () => {
+    const action: TelemetryArtifactAction = 'bundle-json';
+    setError(null);
+    beginTelemetryArtifactAction(action, 'export');
+    try {
+      const bundle = await exportTelemetryBundle(telemetryQueryPreset.query);
+      if (!bundle) {
+        throw new Error(t('debug.center.telemetry.query.unavailable'));
+      }
+
+      const safeTs = new Date().toISOString().replace(/[:.]/g, '-');
+      const safeSessionId = sanitizeFileSegment(bundle.sessionId, 'session');
+      const content = JSON.stringify(bundle, null, 2);
+      const fileName = `telemetry-bundle-${safeTs}-${safeSessionId}.json`;
+      const result = await saveDebugArtifact(fileName, content, 'application/json;charset=utf-8');
+      completeTelemetryArtifactAction(
+        action,
+        result.kind === 'saved'
+          ? t('debug.center.telemetry.artifacts.feedback.exportedTo', {
+              label: t('debug.center.telemetry.artifacts.label.bundleJson'),
+              path: result.path,
+            })
+          : t('debug.center.telemetry.artifacts.feedback.downloadStarted', {
+              label: t('debug.center.telemetry.artifacts.label.bundleJson'),
+            })
+      );
+    } catch (err) {
+      failTelemetryArtifactAction(action, 'export', err);
+    }
+  }, [
+    beginTelemetryArtifactAction,
+    completeTelemetryArtifactAction,
+    failTelemetryArtifactAction,
+    saveDebugArtifact,
+    t,
+    telemetryQueryPreset.query,
+  ]);
 
   const handleExportTelemetryScenarioReport = useCallback(async () => {
     const action: TelemetryArtifactAction = 'scenario-report';
@@ -2725,6 +2779,8 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       </SettingsActionButton>
     </div>
   );
+  const headerTitle = title ?? t('pages.debug-center.title');
+  const headerSubtitle = subtitle ?? t('pages.debug-center.subtitle');
 
   const header =
     variant === 'page' ? (
@@ -2737,8 +2793,10 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
         }}
       >
         <div>
-          <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>{t('pages.debug-center.title')}</h1>
-          <p style={{ fontSize: 12, opacity: 0.72, margin: '6px 0 0' }}>{t('pages.debug-center.subtitle')}</p>
+          <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>{headerTitle}</h1>
+          {headerSubtitle ? (
+            <p style={{ fontSize: 12, opacity: 0.72, margin: '6px 0 0' }}>{headerSubtitle}</p>
+          ) : null}
         </div>
         {headerActions}
       </div>
@@ -4904,6 +4962,15 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               }}
             >
               {t('debug.center.telemetry.artifacts.action.exportSessionJson')}
+            </SettingsActionButton>
+            <SettingsActionButton
+              type="button"
+              disabled={telemetryArtifactBusyAction !== null}
+              onClick={() => {
+                void handleExportTelemetryBundleJson();
+              }}
+            >
+              {t('debug.center.telemetry.artifacts.action.exportBundleJson')}
             </SettingsActionButton>
             <SettingsActionButton
               type="button"

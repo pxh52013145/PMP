@@ -224,7 +224,15 @@ fn maybe_log_editor_open_ping_timeout(node_id: &str, plugin_id: &str, err: &str)
     }
     map.insert(node_id.to_string(), now);
 
-    eprintln!("[VST] editor-open ping timed out (node={node_id}, plugin={plugin_id}): {err}");
+    crate::backend_telemetry::warn_global(
+        "vst",
+        "vst.editor-open.ping.timeout",
+        crate::backend_telemetry::BackendTelemetryOptions::new()
+            .component("vst_runtime")
+            .message(err.to_string())
+            .field("nodeId", serde_json::json!(node_id))
+            .field("pluginId", serde_json::json!(plugin_id)),
+    );
 }
 
 fn cache_editor_open(node_id: &str, value: bool) {
@@ -477,8 +485,14 @@ fn ensure_session_internal(
             if result.is_ok() {
                 session.applied_generation = desired_generation;
             } else if let Err(err) = result {
-                eprintln!(
-                    "[VST] Failed to refresh params (node={node_id}, plugin={plugin_id}): {err}"
+                crate::backend_telemetry::warn_global(
+                    "vst",
+                    "vst.params.refresh.failed",
+                    crate::backend_telemetry::BackendTelemetryOptions::new()
+                        .component("vst_runtime")
+                        .message(err)
+                        .field("nodeId", serde_json::json!(node_id))
+                        .field("pluginId", serde_json::json!(plugin_id)),
                 );
             }
 
@@ -657,8 +671,14 @@ fn ensure_session_internal(
         if desired_params.is_empty() {
             applied_generation = desired_generation;
         } else if let Err(err) = client.set_params(&desired_params) {
-            eprintln!(
-                "[VST] Failed to apply cached params (node={node_id}, plugin={plugin_id}): {err}"
+            crate::backend_telemetry::warn_global(
+                "vst",
+                "vst.params.cached-apply.failed",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("vst_runtime")
+                    .message(err)
+                    .field("nodeId", serde_json::json!(node_id))
+                    .field("pluginId", serde_json::json!(plugin_id)),
             );
         } else {
             applied_generation = desired_generation;
@@ -764,7 +784,14 @@ pub fn init_session_status_broadcaster(app: &AppHandle) {
 
             if current_core != last_core {
                 if let Err(err) = app.emit_all(EVENT_VST_SESSION_STATUSES, statuses.clone()) {
-                    eprintln!("[VST] Failed to emit session statuses: {err}");
+                    crate::backend_telemetry::warn(
+                        &app,
+                        "vst",
+                        "vst.session-status.emit.failed",
+                        crate::backend_telemetry::BackendTelemetryOptions::new()
+                            .component("vst_runtime")
+                            .message(err.to_string()),
+                    );
                 }
                 last_core = current_core;
             }
@@ -1128,7 +1155,16 @@ pub fn set_params(
         plugin_id.as_str(),
         desired_snapshot,
     ) {
-        eprintln!("[VST] Failed to persist params to DSP graph (node={node_id}, plugin={plugin_id}): {err}");
+        crate::backend_telemetry::warn(
+            app,
+            "vst",
+            "vst.params.persist-dsp-graph.failed",
+            crate::backend_telemetry::BackendTelemetryOptions::new()
+                .component("vst_runtime")
+                .message(err)
+                .field("nodeId", serde_json::json!(node_id))
+                .field("pluginId", serde_json::json!(plugin_id)),
+        );
     }
     let desired_generation =
         crate::vst_instance_manager::desired_generation(node_id.as_str(), plugin_id.as_str())
@@ -1252,7 +1288,16 @@ pub fn set_param_value(
         plugin_id.as_str(),
         desired_snapshot,
     ) {
-        eprintln!("[VST] Failed to persist params to DSP graph (node={node_id}, plugin={plugin_id}): {err}");
+        crate::backend_telemetry::warn(
+            app,
+            "vst",
+            "vst.params.persist-dsp-graph.failed",
+            crate::backend_telemetry::BackendTelemetryOptions::new()
+                .component("vst_runtime")
+                .message(err)
+                .field("nodeId", serde_json::json!(node_id))
+                .field("pluginId", serde_json::json!(plugin_id)),
+        );
     }
 
     let desired_generation =

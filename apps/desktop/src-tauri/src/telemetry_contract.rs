@@ -238,6 +238,37 @@ pub struct TelemetryQueryResult {
     pub event_counts: Vec<TelemetryCountBucket>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetryRecentRecordsResult {
+    pub status: TelemetryStatus,
+    pub record_count: u64,
+    pub records: Vec<TelemetryRecord>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetryExportBundle {
+    pub schema_version: u32,
+    pub generated_at_ms: u64,
+    pub session_id: String,
+    pub status: TelemetryStatus,
+    pub query: TelemetryQueryInput,
+    pub query_result: TelemetryQueryResult,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_config: Option<serde_json::Value>,
+    #[serde(default)]
+    pub env_snapshot: BTreeMap<String, Option<String>>,
+    #[serde(default)]
+    pub backend_modules: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub registered_commands: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_perf_totals: Option<serde_json::Value>,
+    #[serde(default)]
+    pub errors: Vec<String>,
+}
+
 pub fn default_telemetry_enabled() -> bool {
     true
 }

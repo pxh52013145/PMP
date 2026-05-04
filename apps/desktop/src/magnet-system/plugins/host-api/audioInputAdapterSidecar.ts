@@ -1,6 +1,5 @@
-import { invoke } from '@tauri-apps/api/tauri';
-
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
+import { invokeWithTelemetry } from '../../../services/telemetry/tauriInvokeTelemetry';
 import { registerAudioInputAdapterProvider } from './capabilities';
 import type {
   PluginHostAudioInputAdapterProviderHealth,
@@ -109,7 +108,14 @@ function buildCommandMap(options: AudioInputAdapterSidecarProviderOptions): Side
 export function registerAudioInputAdapterSidecarProvider(
   options: AudioInputAdapterSidecarProviderOptions
 ): () => void {
-  const invokeFn = options.invokeFn ?? ((command: string, payload?: Record<string, unknown>) => invoke(command, payload));
+  const invokeFn =
+    options.invokeFn ??
+    ((command: string, payload?: Record<string, unknown>) =>
+      invokeWithTelemetry(command, payload, {
+        moduleId: 'audio',
+        component: 'audioInputAdapterSidecar',
+        event: 'audio.input-adapter.sidecar.invoke',
+      }));
   const runtimeCheck = options.isTauriRuntimeFn ?? isTauriRuntime;
   const commandMap = buildCommandMap(options);
   const handshakeCacheTtlMs =
@@ -316,4 +322,3 @@ export function registerAudioInputAdapterSidecarProvider(
     { setAsDefault: options.setAsDefault }
   );
 }
-

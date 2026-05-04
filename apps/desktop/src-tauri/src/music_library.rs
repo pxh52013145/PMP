@@ -1086,7 +1086,11 @@ fn paths_equivalent(a: &Path, b: &Path) -> bool {
     }
 }
 
-fn merge_legacy_cover_cache_dir(source_dir: &Path, active_dir: &Path) -> Result<usize, String> {
+fn merge_legacy_cover_cache_dir(
+    app: &AppHandle,
+    source_dir: &Path,
+    active_dir: &Path,
+) -> Result<usize, String> {
     if !source_dir.exists() {
         return Ok(0);
     }
@@ -1104,9 +1108,17 @@ fn merge_legacy_cover_cache_dir(source_dir: &Path, active_dir: &Path) -> Result<
         let entry = match entry {
             Ok(value) => value,
             Err(error) => {
-                eprintln!(
-                    "[MusicLibrary] Failed to read legacy cover cache entry '{}': {error}",
-                    source_dir.to_string_lossy()
+                crate::backend_telemetry::warn(
+                    app,
+                    "music-library",
+                    "music-library.cover-cache.legacy-entry.read.failed",
+                    crate::backend_telemetry::BackendTelemetryOptions::new()
+                        .component("music_library")
+                        .message(error.to_string())
+                        .field(
+                            "sourceDir",
+                            serde_json::json!(source_dir.to_string_lossy().to_string()),
+                        ),
                 );
                 continue;
             }
@@ -1134,10 +1146,21 @@ fn merge_legacy_cover_cache_dir(source_dir: &Path, active_dir: &Path) -> Result<
                 let _ = fs::remove_file(&source_path);
             }
             Err(error) => {
-                eprintln!(
-                    "[MusicLibrary] Failed to migrate legacy cover '{}' -> '{}': {error}",
-                    source_path.to_string_lossy(),
-                    target_path.to_string_lossy()
+                crate::backend_telemetry::warn(
+                    app,
+                    "music-library",
+                    "music-library.cover-cache.legacy-file.migrate.failed",
+                    crate::backend_telemetry::BackendTelemetryOptions::new()
+                        .component("music_library")
+                        .message(error.to_string())
+                        .field(
+                            "sourcePath",
+                            serde_json::json!(source_path.to_string_lossy().to_string()),
+                        )
+                        .field(
+                            "targetPath",
+                            serde_json::json!(target_path.to_string_lossy().to_string()),
+                        ),
                 );
             }
         }
@@ -1145,9 +1168,17 @@ fn merge_legacy_cover_cache_dir(source_dir: &Path, active_dir: &Path) -> Result<
 
     if let Err(error) = fs::remove_dir_all(source_dir) {
         if error.kind() != std::io::ErrorKind::NotFound {
-            eprintln!(
-                "[MusicLibrary] Failed to remove legacy cover cache directory '{}': {error}",
-                source_dir.to_string_lossy()
+            crate::backend_telemetry::warn(
+                app,
+                "music-library",
+                "music-library.cover-cache.legacy-dir.remove.failed",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("music_library")
+                    .message(error.to_string())
+                    .field(
+                        "sourceDir",
+                        serde_json::json!(source_dir.to_string_lossy().to_string()),
+                    ),
             );
         }
     }
@@ -1163,14 +1194,22 @@ pub fn cleanup_legacy_cover_cache_dirs(app: &AppHandle) -> Result<(), String> {
     if let Some(cache_root) = resolver.app_cache_dir() {
         let candidate = cache_root.join("music-covers");
         if !paths_equivalent(&candidate, &active_dir) {
-            migrated_total = migrated_total
-                .saturating_add(merge_legacy_cover_cache_dir(&candidate, &active_dir)?);
+            migrated_total = migrated_total.saturating_add(merge_legacy_cover_cache_dir(
+                app,
+                &candidate,
+                &active_dir,
+            )?);
         }
     }
 
     if migrated_total > 0 {
-        eprintln!(
-            "[MusicLibrary] Migrated {migrated_total} cover file(s) from legacy cache path(s)"
+        crate::backend_telemetry::info(
+            app,
+            "music-library",
+            "music-library.cover-cache.legacy.migrated",
+            crate::backend_telemetry::BackendTelemetryOptions::new()
+                .component("music_library")
+                .field("migratedFiles", serde_json::json!(migrated_total)),
         );
     }
 
@@ -1885,7 +1924,15 @@ pub fn get_or_create_cover(
                 }
             }
 
-            eprintln!("[MusicLibrary] Failed to probe format for cover (fallback to none): {err}");
+            crate::backend_telemetry::debug(
+                app,
+                "music-library",
+                "music-library.cover.probe.failed",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("music_library")
+                    .message(err.to_string())
+                    .field("fallback", serde_json::json!("none")),
+            );
             return Ok(None);
         }
     };

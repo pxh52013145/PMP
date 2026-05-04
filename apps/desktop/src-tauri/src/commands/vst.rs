@@ -284,7 +284,14 @@ pub async fn native_audio_vst_set_settings(
     tauri::async_runtime::spawn_blocking(move || {
         vst_settings::set_settings(&app, settings)?;
         if let Err(err) = native_audio::refresh_dsp_chain(&app) {
-            eprintln!("[VST] Failed to refresh DSP chain after settings update: {err}");
+            crate::backend_telemetry::warn(
+                &app,
+                "vst",
+                "vst.settings.refresh-dsp-chain.failed",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("commands::vst")
+                    .message(err),
+            );
         }
         Ok(())
     })

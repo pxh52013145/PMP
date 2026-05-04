@@ -295,7 +295,16 @@ fn bridge_executable_path() -> Result<PathBuf, String> {
     if matches!(std::env::var("PMP_VST_BRIDGE_DEBUG").as_deref(), Ok("1"))
         || matches!(std::env::var("PMP_VST_BRIDGE_STDERR").as_deref(), Ok("1"))
     {
-        eprintln!("[VST] Using bridge executable: {}", resolved.display());
+        crate::backend_telemetry::info_global(
+            "vst",
+            "vst.bridge.executable.resolved",
+            crate::backend_telemetry::BackendTelemetryOptions::new()
+                .component("vst_bridge")
+                .field(
+                    "path",
+                    serde_json::json!(resolved.to_string_lossy().to_string()),
+                ),
+        );
     }
 
     Ok(resolved)

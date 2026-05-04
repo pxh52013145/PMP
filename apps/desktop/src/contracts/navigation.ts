@@ -13,6 +13,7 @@ export type NavigationPageType =
   | 'settings'
   | 'debug'
   | 'debug-center'
+  | 'observability'
   | 'perf-monitor'
   | 'keyboard-shortcuts'
   | 'music-library'
@@ -30,8 +31,9 @@ export type NavigationPageType =
 export type NavigationParamsMap = {
   home: undefined;
   settings: undefined;
-  debug: { tab?: 'debug-center' | 'perf-monitor' | 'native-debug' } | undefined;
+  debug: { tab?: 'debug-center' | 'observability' | 'perf-monitor' | 'native-debug' } | undefined;
   'debug-center': undefined;
+  observability: undefined;
   'perf-monitor': undefined;
   'keyboard-shortcuts': undefined;
   'music-library': undefined;

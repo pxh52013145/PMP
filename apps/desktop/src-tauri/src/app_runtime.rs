@@ -252,15 +252,28 @@ pub fn request_app_exit(app: &tauri::AppHandle) {
         return;
     }
 
-    eprintln!("[App] Exit requested");
+    crate::backend_telemetry::info(
+        app,
+        "app",
+        "app.exit.requested",
+        crate::backend_telemetry::BackendTelemetryOptions::new().component("app_runtime"),
+    );
     let exit_flag = app.state::<ExitFlag>().0.clone();
     exit_flag.store(true, Ordering::SeqCst);
 
     let exit_flag_for_watchdog = exit_flag.clone();
+    let app_for_watchdog = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(4));
         if exit_flag_for_watchdog.load(Ordering::SeqCst) {
-            eprintln!("[App] Exit watchdog: forcing process exit");
+            crate::backend_telemetry::fatal(
+                &app_for_watchdog,
+                "app",
+                "app.exit.watchdog.force-exit",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("app_runtime")
+                    .message("Exit watchdog forced process exit after timeout."),
+            );
             std::process::exit(0);
         }
     });

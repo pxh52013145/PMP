@@ -2,12 +2,15 @@ use crate::telemetry::TelemetryCore;
 use crate::telemetry_contract::{
     TelemetryIngestBatchResult, TelemetryKind, TelemetryLevel, TelemetryRecord, TelemetrySide,
 };
+use once_cell::sync::OnceCell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, Runtime};
 
 pub type BackendTelemetryFields = BTreeMap<String, serde_json::Value>;
+
+static GLOBAL_TELEMETRY_CORE: OnceCell<Arc<TelemetryCore>> = OnceCell::new();
 
 #[derive(Debug, Clone, Default)]
 pub struct BackendTelemetryOptions {
@@ -63,6 +66,10 @@ impl BackendTelemetryOptions {
             .insert(key.into(), value);
         self
     }
+}
+
+pub fn install_global_core(telemetry_core: Arc<TelemetryCore>) {
+    let _ = GLOBAL_TELEMETRY_CORE.set(telemetry_core);
 }
 
 #[allow(dead_code)]
@@ -165,6 +172,63 @@ pub fn metric<R: Runtime>(
     )
 }
 
+#[allow(dead_code)]
+pub fn debug_global(
+    module_id: &str,
+    event: &str,
+    options: BackendTelemetryOptions,
+) -> Option<TelemetryIngestBatchResult> {
+    dispatch_global(
+        TelemetryLevel::Debug,
+        TelemetryKind::Log,
+        module_id,
+        event,
+        options,
+    )
+}
+
+pub fn info_global(
+    module_id: &str,
+    event: &str,
+    options: BackendTelemetryOptions,
+) -> Option<TelemetryIngestBatchResult> {
+    dispatch_global(
+        TelemetryLevel::Info,
+        TelemetryKind::Log,
+        module_id,
+        event,
+        options,
+    )
+}
+
+pub fn warn_global(
+    module_id: &str,
+    event: &str,
+    options: BackendTelemetryOptions,
+) -> Option<TelemetryIngestBatchResult> {
+    dispatch_global(
+        TelemetryLevel::Warn,
+        TelemetryKind::Log,
+        module_id,
+        event,
+        options,
+    )
+}
+
+pub fn error_global(
+    module_id: &str,
+    event: &str,
+    options: BackendTelemetryOptions,
+) -> Option<TelemetryIngestBatchResult> {
+    dispatch_global(
+        TelemetryLevel::Error,
+        TelemetryKind::Log,
+        module_id,
+        event,
+        options,
+    )
+}
+
 fn dispatch<R: Runtime>(
     app: &AppHandle<R>,
     level: TelemetryLevel,
@@ -176,11 +240,43 @@ fn dispatch<R: Runtime>(
     let record = build_record(level, kind, module_id, event, options);
 
     let Some(telemetry_core) = app.try_state::<Arc<TelemetryCore>>() else {
-        emit_stderr_fallback(&record, "telemetry core unavailable");
+        return dispatch_record_with_global(record, "tauri telemetry state unavailable");
+    };
+
+    Some(dispatch_record_with_core(
+        telemetry_core.inner().as_ref(),
+        record,
+    ))
+}
+
+fn dispatch_global(
+    level: TelemetryLevel,
+    kind: TelemetryKind,
+    module_id: &str,
+    event: &str,
+    options: BackendTelemetryOptions,
+) -> Option<TelemetryIngestBatchResult> {
+    let record = build_record(level, kind, module_id, event, options);
+    dispatch_record_with_global(record, "global telemetry core unavailable")
+}
+
+fn dispatch_record_with_global(
+    record: TelemetryRecord,
+    unavailable_reason: &str,
+) -> Option<TelemetryIngestBatchResult> {
+    let Some(telemetry_core) = GLOBAL_TELEMETRY_CORE.get() else {
+        emit_stderr_fallback(&record, unavailable_reason);
         return None;
     };
 
-    let result = dispatch_with_core(telemetry_core.inner().as_ref(), record.clone());
+    Some(dispatch_record_with_core(telemetry_core.as_ref(), record))
+}
+
+fn dispatch_record_with_core(
+    telemetry_core: &TelemetryCore,
+    record: TelemetryRecord,
+) -> TelemetryIngestBatchResult {
+    let result = dispatch_with_core(telemetry_core, record.clone());
     if result.accepted_count == 0
         && result.dropped_count > 0
         && result.status.last_error.as_deref().is_some()
@@ -195,7 +291,7 @@ fn dispatch<R: Runtime>(
         );
     }
 
-    Some(result)
+    result
 }
 
 fn dispatch_with_core(

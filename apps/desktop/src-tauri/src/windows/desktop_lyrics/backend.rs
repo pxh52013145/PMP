@@ -332,7 +332,14 @@ pub fn run(rx: Receiver<OverlayCommand>) {
                         }
                     }
                     Err(error) => {
-                        eprintln!("[desktop-lyrics] {error}");
+                        crate::backend_telemetry::warn(
+                            &app,
+                            "desktop-lyrics",
+                            "desktop-lyrics.overlay.ensure.failed",
+                            crate::backend_telemetry::BackendTelemetryOptions::new()
+                                .component("desktop_lyrics::backend")
+                                .message(error),
+                        );
                     }
                 }
             }

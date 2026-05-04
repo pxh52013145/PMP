@@ -173,11 +173,18 @@ impl AsioBackend {
                     };
 
                     let device_label = device.name().ok();
-                    eprintln!(
-                        "[NativeAudio] ASIO stream init: device={device_label:?} cfg={}ch @ {}Hz ({:?})",
-                        opened_config.channels(),
-                        opened_config.sample_rate().0,
-                        opened_config.sample_format()
+                    crate::backend_telemetry::info_global(
+                        "audio",
+                        "audio.output.asio.stream.initialized",
+                        crate::backend_telemetry::BackendTelemetryOptions::new()
+                            .component("audio::output::asio")
+                            .field("device", serde_json::json!(device_label))
+                            .field("channels", serde_json::json!(opened_config.channels()))
+                            .field("sampleRate", serde_json::json!(opened_config.sample_rate().0))
+                            .field(
+                                "sampleFormat",
+                                serde_json::json!(format!("{:?}", opened_config.sample_format())),
+                            ),
                     );
 
                     Ok((stream, handle, output_sample_rate))

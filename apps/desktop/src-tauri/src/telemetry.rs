@@ -1,7 +1,7 @@
 use crate::telemetry_contract::{
     TelemetryClearSessionResult, TelemetryCountBucket, TelemetryIngestBatchResult, TelemetryPolicy,
-    TelemetryQueryInput, TelemetryQueryResult, TelemetryReadSessionResult, TelemetryRecord,
-    TelemetryStatus,
+    TelemetryQueryInput, TelemetryQueryResult, TelemetryReadSessionResult,
+    TelemetryRecentRecordsResult, TelemetryRecord, TelemetryStatus,
 };
 use crate::telemetry_policy::should_accept_record;
 use crate::telemetry_store::TelemetryStore;
@@ -48,6 +48,13 @@ impl TelemetryCore {
         store: Option<TelemetryStore>,
         last_error: Option<String>,
     ) -> Self {
+        let last_error = match (store.as_ref(), last_error) {
+            (Some(store), None) => match store.prepare_active_session(&policy.retention) {
+                Ok(()) => None,
+                Err(error) => Some(error),
+            },
+            (_, error) => error,
+        };
         let current_file_bytes = store
             .as_ref()
             .map(TelemetryStore::current_file_len)
@@ -77,6 +84,11 @@ impl TelemetryCore {
 
     pub fn update_policy(&self, policy: TelemetryPolicy) {
         let mut guard = lock_inner(&self.inner);
+        if let Some(store) = guard.store.clone() {
+            if let Err(error) = store.enforce_retention(&policy.retention) {
+                guard.last_error = Some(error);
+            }
+        }
         guard.policy = policy;
     }
 
@@ -188,6 +200,29 @@ impl TelemetryCore {
             status: guard.status(),
             record_count: records.len() as u64,
             records,
+        }
+    }
+
+    pub fn get_recent_records(&self, limit: Option<u32>) -> TelemetryRecentRecordsResult {
+        let guard = lock_inner(&self.inner);
+        let normalized_limit = crate::telemetry_query::normalize_recent_limit(limit);
+        let records = match guard.store.as_ref() {
+            Some(store) => match store.read_current_session_records() {
+                Ok(records) => records
+                    .into_iter()
+                    .filter(|record| record.session_id == guard.current_session_id)
+                    .collect::<Vec<_>>(),
+                Err(_) => Vec::new(),
+            },
+            None => Vec::new(),
+        };
+        let record_count = records.len() as u64;
+        let start_index = records.len().saturating_sub(normalized_limit);
+
+        TelemetryRecentRecordsResult {
+            status: guard.status(),
+            record_count,
+            records: records.into_iter().skip(start_index).collect(),
         }
     }
 
@@ -496,6 +531,48 @@ mod tests {
         std::env::temp_dir().join(format!("pmp-telemetry-test-{nanos}"))
     }
 
+    fn write_jsonl(path: &std::path::Path, records: &[TelemetryRecord]) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("test telemetry directory should be created");
+        }
+        let mut body = String::new();
+        for record in records {
+            body.push_str(
+                &serde_json::to_string(record).expect("test telemetry record should serialize"),
+            );
+            body.push('\n');
+        }
+        std::fs::write(path, body).expect("test telemetry file should be written");
+    }
+
+    fn archive_paths(root_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut paths = std::fs::read_dir(root_dir)
+            .expect("test telemetry directory should be readable")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|value| value.to_str())
+                    .map(|name| name.starts_with("session-archive-") && name.ends_with(".jsonl"))
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths
+    }
+
+    fn read_jsonl(path: &std::path::Path) -> Vec<TelemetryRecord> {
+        std::fs::read_to_string(path)
+            .expect("test telemetry archive should be readable")
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                serde_json::from_str::<TelemetryRecord>(line)
+                    .expect("test telemetry archive should contain valid records")
+            })
+            .collect()
+    }
+
     #[test]
     fn ingest_batch_tracks_accepted_and_dropped_records() {
         let mut policy = TelemetryPolicy::default();
@@ -511,6 +588,51 @@ mod tests {
         assert_eq!(result.dropped_count, 1);
         assert_eq!(result.status.flushed_records, 1);
         assert_eq!(result.status.dropped_records, 1);
+
+        let _ = std::fs::remove_dir_all(root_dir);
+    }
+
+    #[test]
+    fn startup_archives_stale_current_session_and_filters_debug_records() {
+        let root_dir = test_root_dir();
+        let current_path = root_dir.join("current-session.jsonl");
+        let mut debug = record(TelemetryLevel::Debug);
+        debug.session_id = "old-session".to_string();
+        let mut error = record(TelemetryLevel::Error);
+        error.session_id = "old-session".to_string();
+        write_jsonl(&current_path, &[debug, error]);
+
+        let core = TelemetryCore::new_for_tests(root_dir.clone(), TelemetryPolicy::default());
+        assert_eq!(core.status().current_file_bytes, 0);
+        assert!(!current_path.exists());
+
+        let archives = archive_paths(&root_dir);
+        assert_eq!(archives.len(), 1);
+        let records = read_jsonl(&archives[0]);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].level, TelemetryLevel::Error);
+        assert_eq!(records[0].session_id, "old-session");
+
+        let _ = std::fs::remove_dir_all(root_dir);
+    }
+
+    #[test]
+    fn startup_retention_prunes_archives_by_total_bytes() {
+        let root_dir = test_root_dir();
+        let mut info = record(TelemetryLevel::Info);
+        info.session_id = "archive-session".to_string();
+        write_jsonl(
+            &root_dir.join("session-archive-old-1.jsonl"),
+            &[info.clone()],
+        );
+        write_jsonl(&root_dir.join("session-archive-old-2.jsonl"), &[info]);
+
+        let mut policy = TelemetryPolicy::default();
+        policy.retention.max_total_bytes = 1;
+        let core = TelemetryCore::new_for_tests(root_dir.clone(), policy);
+
+        assert_eq!(core.status().current_file_bytes, 0);
+        assert!(archive_paths(&root_dir).is_empty());
 
         let _ = std::fs::remove_dir_all(root_dir);
     }
@@ -692,6 +814,34 @@ mod tests {
             ..TelemetryQueryInput::default()
         });
         assert_eq!(combined_result.matched_record_count, 2);
+
+        let _ = std::fs::remove_dir_all(root_dir);
+    }
+
+    #[test]
+    fn get_recent_records_keeps_latest_records() {
+        let root_dir = test_root_dir();
+        let mut policy = TelemetryPolicy::default();
+        policy.persist_min_level = TelemetryLevel::Info;
+        let core = TelemetryCore::new_for_tests(root_dir.clone(), policy);
+
+        let mut first = record(TelemetryLevel::Info);
+        first.ts = 10;
+        first.event = "one".to_string();
+        let mut second = record(TelemetryLevel::Info);
+        second.ts = 20;
+        second.event = "two".to_string();
+        let mut third = record(TelemetryLevel::Info);
+        third.ts = 30;
+        third.event = "three".to_string();
+
+        let _ = core.ingest_batch(vec![first, second, third]);
+        let result = core.get_recent_records(Some(2));
+
+        assert_eq!(result.record_count, 3);
+        assert_eq!(result.records.len(), 2);
+        assert_eq!(result.records[0].event, "two");
+        assert_eq!(result.records[1].event, "three");
 
         let _ = std::fs::remove_dir_all(root_dir);
     }
