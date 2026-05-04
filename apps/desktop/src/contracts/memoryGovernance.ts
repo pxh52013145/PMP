@@ -1,4 +1,5 @@
 import type {
+  RuntimeCapsuleBudget,
   RuntimeCapsuleBackgroundPolicy,
   RuntimeCapsuleKind,
   RuntimeCapsuleMemoryTier,
@@ -57,6 +58,14 @@ export type MemoryGovernanceRuntimeCapsuleDescriptor = {
   lastSuspendedAtMs: number | null;
   warmRetentionMs: number;
   hibernateAfterMs: number;
+  budgetViolationCount?: number;
+};
+
+export type MemoryGovernanceRuntimeCapsuleBudgetViolation = {
+  capsuleId: string;
+  budgetKey: keyof RuntimeCapsuleBudget;
+  actual: number;
+  limit: number;
 };
 
 export type MemoryGovernanceRuntimeCapsulesSnapshot = {
@@ -66,6 +75,8 @@ export type MemoryGovernanceRuntimeCapsulesSnapshot = {
   hibernatedCapsuleIds: string[];
   reclaimableCapsuleIds: string[];
   heavyReclaimableCapsuleIds: string[];
+  budgetViolationCapsuleIds?: string[];
+  budgetViolations?: MemoryGovernanceRuntimeCapsuleBudgetViolation[];
   descriptors?: MemoryGovernanceRuntimeCapsuleDescriptor[];
 };
 

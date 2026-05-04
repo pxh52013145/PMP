@@ -4,6 +4,7 @@ import type { AppEvents } from '../../contracts/events';
 import {
   computeJsonSizeBytes,
   decideMemoryGovernancePlan,
+  type MemoryGovernanceRuntimeCapsuleBudgetViolation,
   type MemoryGovernanceRuntimeCapsuleDescriptor,
   type MemoryGovernanceRuntimeCapsulesSnapshot,
   type MemoryGovernanceWebview2Snapshot,
@@ -25,6 +26,10 @@ import { scheduleProcessWorkingSetTrim } from '../../utils/processWorkingSetTrim
 import type { ProcessPerfService } from '../performance-control';
 import type { SpaceRuntimeGovernanceService } from './SpaceRuntimeGovernanceService';
 import type { RuntimeCapsuleManagerService } from '../runtime-capsules';
+import type {
+  RuntimeCapsuleSnapshot,
+  RuntimeParticipantSnapshot,
+} from '../../contracts/runtimeCapsule';
 
 export type MemoryGovernanceAuditEntry = {
   atMs: number;
@@ -81,6 +86,23 @@ const EMPTY_COVER_RUNTIME_CACHE_STATS = {
   albumCoverUrlInflight: 0,
 };
 
+const MEMORY_GOVERNANCE_REASON_PRIORITY: Record<MemoryGovernanceReason, number> = {
+  interval: 0,
+  'playback-active': 1,
+  manual: 2,
+  'visibility-hidden': 3,
+  'tauri-window-hidden': 3,
+  pagehide: 4,
+  beforeunload: 4,
+};
+
+type QueuedMemoryGovernanceRun = {
+  reason: MemoryGovernanceReason;
+  resolve: (result: MemoryGovernanceRunResult) => void;
+  reject: (error: unknown) => void;
+  promise: Promise<MemoryGovernanceRunResult>;
+};
+
 function runtimeCapsuleMemoryTierScore(
   tier: MemoryGovernanceRuntimeCapsuleDescriptor['memoryTier']
 ): number {
@@ -97,8 +119,7 @@ function isRuntimeCapsuleReclaimable(
   if (descriptor.startup === 'core') return false;
   if (runtimeCapsuleMemoryTierScore(descriptor.memoryTier) < 1) return false;
   if (
-    descriptor.backgroundPolicy === 'pinned' ||
-    descriptor.backgroundPolicy === 'realtime-critical'
+    descriptor.backgroundPolicy === 'pinned'
   ) {
     return false;
   }
@@ -112,7 +133,85 @@ function isRuntimeCapsuleReclaimable(
 
   const inactiveSince = descriptor.lastSuspendedAtMs ?? descriptor.lastActiveAtMs;
   if (inactiveSince === null) return false;
+  if ((descriptor.budgetViolationCount ?? 0) > 0) return true;
   return Math.max(0, atMs - inactiveSince) >= descriptor.warmRetentionMs;
+}
+
+function sumParticipantMetric(
+  participants: readonly RuntimeParticipantSnapshot[] | undefined,
+  key: keyof Pick<
+    RuntimeParticipantSnapshot,
+    'timers' | 'listeners' | 'blobUrls' | 'decodedImageBytes' | 'estimatedJsHeapBytes'
+  >
+): number | null {
+  if (!participants || participants.length === 0) return null;
+
+  let total = 0;
+  let seen = false;
+  for (const participant of participants) {
+    const value = participant[key];
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+    total += Math.max(0, Math.floor(value));
+    seen = true;
+  }
+  return seen ? total : null;
+}
+
+function collectRuntimeCapsuleBudgetViolations(
+  capsule: RuntimeCapsuleSnapshot
+): MemoryGovernanceRuntimeCapsuleBudgetViolation[] {
+  const budget = capsule.manifest.budget;
+  if (!budget) return [];
+
+  const checks: Array<{
+    budgetKey: MemoryGovernanceRuntimeCapsuleBudgetViolation['budgetKey'];
+    actual: number | null;
+    limit: number | undefined;
+  }> = [
+    {
+      budgetKey: 'maxTimers',
+      actual: sumParticipantMetric(capsule.participants, 'timers'),
+      limit: budget.maxTimers,
+    },
+    {
+      budgetKey: 'maxListeners',
+      actual: sumParticipantMetric(capsule.participants, 'listeners'),
+      limit: budget.maxListeners,
+    },
+    {
+      budgetKey: 'maxBlobUrls',
+      actual: sumParticipantMetric(capsule.participants, 'blobUrls'),
+      limit: budget.maxBlobUrls,
+    },
+    {
+      budgetKey: 'maxDecodedImageBytes',
+      actual: sumParticipantMetric(capsule.participants, 'decodedImageBytes'),
+      limit: budget.maxDecodedImageBytes,
+    },
+    {
+      budgetKey: 'jsHeapSoftBytes',
+      actual: sumParticipantMetric(capsule.participants, 'estimatedJsHeapBytes'),
+      limit: budget.jsHeapSoftBytes,
+    },
+    {
+      budgetKey: 'jsHeapHardBytes',
+      actual: sumParticipantMetric(capsule.participants, 'estimatedJsHeapBytes'),
+      limit: budget.jsHeapHardBytes,
+    },
+  ];
+
+  return checks.flatMap(({ budgetKey, actual, limit }) => {
+    if (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 0) return [];
+    if (actual === null || actual <= limit) return [];
+    return [
+      {
+        capsuleId: capsule.manifest.id,
+        budgetKey,
+        actual,
+        limit: Math.max(0, Math.floor(limit)),
+      },
+    ];
+  });
 }
 
 function buildRuntimeCapsulesSnapshot(
@@ -121,6 +220,17 @@ function buildRuntimeCapsulesSnapshot(
 ): MemoryGovernanceRuntimeCapsulesSnapshot | undefined {
   const managerSnapshot = runtimeCapsuleManager?.collectSnapshot();
   if (!managerSnapshot) return undefined;
+
+  const budgetViolations = managerSnapshot.capsules.flatMap((capsule) =>
+    collectRuntimeCapsuleBudgetViolations(capsule)
+  );
+  const budgetViolationCounts = new Map<string, number>();
+  for (const violation of budgetViolations) {
+    budgetViolationCounts.set(
+      violation.capsuleId,
+      (budgetViolationCounts.get(violation.capsuleId) ?? 0) + 1
+    );
+  }
 
   const descriptors: MemoryGovernanceRuntimeCapsuleDescriptor[] = managerSnapshot.capsules.map(
     (capsule) => ({
@@ -135,6 +245,7 @@ function buildRuntimeCapsulesSnapshot(
       lastSuspendedAtMs: capsule.lastSuspendedAtMs,
       warmRetentionMs: capsule.manifest.warmRetentionMs,
       hibernateAfterMs: capsule.manifest.hibernateAfterMs,
+      budgetViolationCount: budgetViolationCounts.get(capsule.manifest.id) ?? 0,
     })
   );
   const reclaimable = descriptors.filter((descriptor) =>
@@ -156,6 +267,8 @@ function buildRuntimeCapsulesSnapshot(
     heavyReclaimableCapsuleIds: reclaimable
       .filter((descriptor) => descriptor.memoryTier === 'heavy')
       .map((descriptor) => descriptor.id),
+    budgetViolationCapsuleIds: [...budgetViolationCounts.keys()],
+    budgetViolations,
     descriptors,
   };
 }
@@ -190,8 +303,29 @@ function buildPlannedActions(
   return plannedActions;
 }
 
+function chooseHigherPriorityReason(
+  current: MemoryGovernanceReason,
+  next: MemoryGovernanceReason
+): MemoryGovernanceReason {
+  return MEMORY_GOVERNANCE_REASON_PRIORITY[next] > MEMORY_GOVERNANCE_REASON_PRIORITY[current]
+    ? next
+    : current;
+}
+
+function createQueuedRun(reason: MemoryGovernanceReason): QueuedMemoryGovernanceRun {
+  let resolve!: (result: MemoryGovernanceRunResult) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<MemoryGovernanceRunResult>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { reason, resolve, reject, promise };
+}
+
 export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
   private lastResult: MemoryGovernanceRunResult | null = null;
+  private activeRun: Promise<MemoryGovernanceRunResult> | null = null;
+  private queuedRun: QueuedMemoryGovernanceRun | null = null;
   private readonly telemetry = getTelemetryLogger('memory-governance', 'MemoryGovernanceService');
 
   constructor(
@@ -206,7 +340,42 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
     return this.lastResult;
   }
 
-  async runOnce(reason: MemoryGovernanceReason): Promise<MemoryGovernanceRunResult> {
+  runOnce(reason: MemoryGovernanceReason): Promise<MemoryGovernanceRunResult> {
+    if (this.activeRun) {
+      if (this.queuedRun) {
+        this.queuedRun.reason = chooseHigherPriorityReason(this.queuedRun.reason, reason);
+        return this.queuedRun.promise;
+      }
+
+      this.queuedRun = createQueuedRun(reason);
+      return this.queuedRun.promise;
+    }
+
+    return this.startRun(reason);
+  }
+
+  private startRun(reason: MemoryGovernanceReason): Promise<MemoryGovernanceRunResult> {
+    const run = this.runOnceInternal(reason);
+    this.activeRun = run;
+
+    const finish = () => {
+      if (this.activeRun !== run) return;
+      this.activeRun = null;
+
+      const queued = this.queuedRun;
+      this.queuedRun = null;
+      if (!queued) return;
+
+      this.startRun(queued.reason).then(queued.resolve, queued.reject);
+    };
+    void run.then(finish, finish);
+
+    return run;
+  }
+
+  private async runOnceInternal(
+    reason: MemoryGovernanceReason
+  ): Promise<MemoryGovernanceRunResult> {
     const snapshot = await this.collectSnapshot();
     const plan = decideMemoryGovernancePlan(snapshot);
     const plannedActions = buildPlannedActions(plan.actions, reason, snapshot.isTauri);
@@ -241,9 +410,14 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       }
 
       if (action === 'hibernate-idle-runtime-capsules') {
+        const targetCapsuleIds = snapshot.runtimeCapsules?.reclaimableCapsuleIds ?? [];
+        const budgetViolationCapsuleIds =
+          snapshot.runtimeCapsules?.budgetViolationCapsuleIds ?? [];
         const reclaimed = this.runtimeCapsuleManager?.reclaimInactiveCapsules({
           mode: 'hibernate',
           minMemoryTier: 'medium',
+          bypassWarmRetention: budgetViolationCapsuleIds.length > 0,
+          targetCapsuleIds: targetCapsuleIds.length > 0 ? targetCapsuleIds : undefined,
           reason: {
             kind: 'memory-pressure',
             sourceId: 'memory-governance',
@@ -265,10 +439,15 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       }
 
       if (action === 'teardown-idle-runtime-capsules') {
+        const targetCapsuleIds = [
+          ...(snapshot.runtimeCapsules?.reclaimableCapsuleIds ?? []),
+          ...(snapshot.runtimeCapsules?.hibernatedCapsuleIds ?? []),
+        ];
         const reclaimed = this.runtimeCapsuleManager?.reclaimInactiveCapsules({
           mode: 'teardown',
           minMemoryTier: 'medium',
           bypassWarmRetention: plan.tier >= 2,
+          targetCapsuleIds: targetCapsuleIds.length > 0 ? targetCapsuleIds : undefined,
           reason: {
             kind: 'memory-pressure',
             sourceId: 'memory-governance',

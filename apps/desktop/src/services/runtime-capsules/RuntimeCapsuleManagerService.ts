@@ -44,6 +44,7 @@ export interface RuntimeCapsuleReclaimOptions {
   minMemoryTier?: RuntimeCapsuleMemoryTier;
   bypassWarmRetention?: boolean;
   includePinned?: boolean;
+  targetCapsuleIds?: readonly string[];
 }
 
 export interface RuntimeCapsuleReclaimResult {
@@ -369,6 +370,9 @@ export class DefaultRuntimeCapsuleManagerService implements RuntimeCapsuleManage
     const minMemoryTier = options.minMemoryTier ?? DEFAULT_RECLAIM_MIN_TIER;
     const nextState: RuntimeCapsuleState = options.mode === 'teardown' ? 'cold' : 'hibernated';
     const reclaimed: RuntimeCapsuleReclaimResult[] = [];
+    const targetCapsuleIds = options.targetCapsuleIds
+      ? new Set(options.targetCapsuleIds.map((id) => id.trim()).filter(Boolean))
+      : null;
 
     const records = [...this.capsules.values()].sort((a, b) => {
       const tierDelta =
@@ -377,6 +381,7 @@ export class DefaultRuntimeCapsuleManagerService implements RuntimeCapsuleManage
     });
 
     for (const record of records) {
+      if (targetCapsuleIds && !targetCapsuleIds.has(record.manifest.id)) continue;
       if (!this.canReclaimRecord(record, options, minMemoryTier, now)) continue;
 
       const from = record.state;
@@ -738,11 +743,7 @@ export class DefaultRuntimeCapsuleManagerService implements RuntimeCapsuleManage
     if (record.activeLeases.size > 0) return false;
     if (record.manifest.startup === 'core') return false;
     if (memoryTierScore(record.manifest.memoryTier) < memoryTierScore(minMemoryTier)) return false;
-    if (
-      options.includePinned !== true &&
-      (record.manifest.backgroundPolicy === 'pinned' ||
-        record.manifest.backgroundPolicy === 'realtime-critical')
-    ) {
+    if (options.includePinned !== true && record.manifest.backgroundPolicy === 'pinned') {
       return false;
     }
 

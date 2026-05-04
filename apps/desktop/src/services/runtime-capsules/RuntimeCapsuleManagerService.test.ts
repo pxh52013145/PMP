@@ -381,6 +381,57 @@ describe('DefaultRuntimeCapsuleManagerService', () => {
     });
   });
 
+  it('allows realtime-critical capsules to hibernate after their playback lease is released', () => {
+    let now = 1_000;
+    const service = new DefaultRuntimeCapsuleManagerService(() => now);
+    service.registerCapsule({
+      ...TEST_CAPSULE,
+      id: 'audio.transport',
+      kind: 'audio',
+      memoryTier: 'medium',
+      startup: 'first-use',
+      backgroundPolicy: 'realtime-critical',
+      warmRetentionMs: 60_000,
+      hibernateAfterMs: 300_000,
+      provides: ['audio.transport'],
+    });
+    const lease = service.acquireLease({
+      capabilityId: 'audio.transport',
+      ownerKind: 'system',
+      ownerId: 'audio-engine',
+    });
+
+    now = 2_000;
+    expect(
+      service.reclaimInactiveCapsules({
+        mode: 'hibernate',
+        minMemoryTier: 'medium',
+        bypassWarmRetention: true,
+        reason: { kind: 'memory-pressure', pressureLevel: 'high' },
+      })
+    ).toEqual([]);
+
+    service.releaseLease(lease?.id ?? '');
+    const reclaimed = service.reclaimInactiveCapsules({
+      mode: 'hibernate',
+      minMemoryTier: 'medium',
+      bypassWarmRetention: true,
+      reason: { kind: 'memory-pressure', pressureLevel: 'watch' },
+    });
+
+    expect(reclaimed).toEqual([
+      expect.objectContaining({
+        capsuleId: 'audio.transport',
+        from: 'idle-warm',
+        to: 'hibernated',
+      }),
+    ]);
+    expect(service.collectSnapshot().capsules[0]).toMatchObject({
+      state: 'hibernated',
+      activeLeases: [],
+    });
+  });
+
   it('tears down inactive capsules under high pressure without touching active leases', () => {
     let now = 1_000;
     const service = new DefaultRuntimeCapsuleManagerService(() => now);
