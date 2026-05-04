@@ -12,6 +12,14 @@ import type {
   NativeAudioSpectrumPayload,
   NativeAudioStatePayload,
 } from './nativeAudioServiceTypes';
+import {
+  normalizeNativeAudioDiagnosticTimeline,
+  type NativeAudioDiagnosticTimelineEntry,
+} from './nativeAudioDiagnosticTimelineAdapter';
+import { resolveNativeAudioPlaybackStatePayload } from './nativeAudioPlaybackStatePayloadAdapter';
+import { resolveNativeAudioQueueStatePayload } from './nativeAudioQueueStatePayloadAdapter';
+import { applyNativeAudioRuntimeMetricsPayload } from './nativeAudioRuntimeMetricsAdapter';
+import { applyNativeAudioSpectrumPayload } from './nativeAudioSpectrumPayloadAdapter';
 import { getTelemetryLogger } from '../telemetry/TelemetryService';
 
 const telemetry = getTelemetryLogger('audio', 'nativeAudioNativeListeners');
@@ -21,14 +29,6 @@ function readErrorMessage(error: unknown): string {
 }
 
 type NativeAudioListenerCleanup = (() => void) | null;
-
-type NativeAudioDiagnosticTimelineEntry = {
-  seq: number;
-  timestampMs: number;
-  kind: string;
-  value: number;
-  aux: number;
-};
 
 type DynamicSrcAutoDegradationOptions = {
   nowMs?: number;
@@ -156,59 +156,16 @@ export async function setupNativeListenersImpl(
           payload && 'state' in payload ? (payload.state as NativeAudioStatePayload) : (payload as NativeAudioStatePayload);
         if (!next) return;
 
-        const hasCurrentTime =
-          typeof next.currentTime === 'number' && Number.isFinite(next.currentTime);
-        const nextCurrentTime = hasCurrentTime ? next.currentTime : null;
+        const playbackStateResolution = resolveNativeAudioPlaybackStatePayload({
+          payload: next,
+          state: this.state,
+        });
+        const { update, currentTime: nextCurrentTime } = playbackStateResolution;
         const shouldApplyCurrentTime =
           typeof nextCurrentTime === 'number' &&
           !this.shouldIgnoreBackendCurrentTime(nextCurrentTime);
-
-        const update: Partial<AudioState> = {};
-        if (typeof next.playbackState !== 'undefined') update.playbackState = next.playbackState;
-        if (typeof next.volume !== 'undefined') update.volume = next.volume;
-        if (typeof next.muted !== 'undefined') update.muted = next.muted;
         if (shouldApplyCurrentTime && typeof nextCurrentTime === 'number') {
           update.currentTime = nextCurrentTime;
-        }
-        if (typeof next.duration !== 'undefined') {
-          const reportedDuration =
-            typeof next.duration === 'number' && Number.isFinite(next.duration) ? next.duration : 0;
-          const trackDuration = this.state.currentTrack?.duration;
-          const hasTrackDuration =
-            typeof trackDuration === 'number' && Number.isFinite(trackDuration) && trackDuration > 0;
-
-          if (reportedDuration > 0) {
-            update.duration = reportedDuration;
-          } else if (hasTrackDuration) {
-            update.duration = trackDuration;
-          } else {
-            update.duration = reportedDuration;
-          }
-        } else {
-          const trackDuration = this.state.currentTrack?.duration;
-          const hasTrackDuration =
-            typeof trackDuration === 'number' && Number.isFinite(trackDuration) && trackDuration > 0;
-          if ((this.state.duration ?? 0) <= 0 && hasTrackDuration) {
-            update.duration = trackDuration;
-          }
-        }
-        if (typeof next.bufferedTime !== 'undefined') update.bufferedTime = next.bufferedTime;
-        if (typeof next.bufferedAhead !== 'undefined') update.bufferedAhead = next.bufferedAhead;
-        if (typeof next.decodeBufferedAhead !== 'undefined') {
-          update.decodeBufferedAhead = next.decodeBufferedAhead;
-        }
-        if (typeof next.outputBufferedAhead !== 'undefined') {
-          update.outputBufferedAhead = next.outputBufferedAhead;
-        }
-
-        if (typeof next.sampleRate === 'number' && Number.isFinite(next.sampleRate)) {
-          this.outputSampleRate = Math.max(0, Math.floor(next.sampleRate));
-        }
-        if (
-          typeof next.sourceSampleRate === 'number' &&
-          Number.isFinite(next.sourceSampleRate)
-        ) {
-          this.sourceSampleRate = Math.max(0, Math.floor(next.sourceSampleRate));
         }
 
         if (typeof next.underrunEvents === 'number' && Number.isFinite(next.underrunEvents)) {
@@ -349,464 +306,17 @@ export async function setupNativeListenersImpl(
           this.transportExactInt32Container = next.transportExactInt32Container;
         }
 
-        if (typeof next.outputCallbackMetricsValid === 'boolean') {
-          this.outputCallbackMetricsValid = next.outputCallbackMetricsValid;
-          if (!this.outputCallbackMetricsValid) {
-            this.outputCallbackP99Us = 0;
-            this.outputWaitTimeoutCount = 0;
-            this.outputRenderUnderrunEvents = 0;
-            this.outputRenderUnderrunFrames = 0;
-            this.outputCallbackIntervalJitterP99Us = 0;
-            this.outputCallbackIntervalOverrunCount = 0;
-            this.outputCallbackExpectedIntervalUs = 0;
-          }
-        }
-
-        if (
-          this.outputCallbackMetricsValid &&
-          typeof next.outputCallbackP99Us === 'number' &&
-          Number.isFinite(next.outputCallbackP99Us)
-        ) {
-          this.outputCallbackP99Us = Math.max(0, Math.floor(next.outputCallbackP99Us));
-        }
-
-        if (
-          this.outputCallbackMetricsValid &&
-          typeof next.outputWaitTimeoutCount === 'number' &&
-          Number.isFinite(next.outputWaitTimeoutCount)
-        ) {
-          this.outputWaitTimeoutCount = Math.max(0, Math.floor(next.outputWaitTimeoutCount));
-        }
-
-        if (
-          this.outputCallbackMetricsValid &&
-          typeof next.outputRenderUnderrunEvents === 'number' &&
-          Number.isFinite(next.outputRenderUnderrunEvents)
-        ) {
-          this.outputRenderUnderrunEvents = Math.max(0, Math.floor(next.outputRenderUnderrunEvents));
-        }
-
-        if (
-          this.outputCallbackMetricsValid &&
-          typeof next.outputRenderUnderrunFrames === 'number' &&
-          Number.isFinite(next.outputRenderUnderrunFrames)
-        ) {
-          this.outputRenderUnderrunFrames = Math.max(0, Math.floor(next.outputRenderUnderrunFrames));
-        }
-
-        if (
-          this.outputCallbackMetricsValid &&
-          typeof next.outputCallbackIntervalJitterP99Us === 'number' &&
-          Number.isFinite(next.outputCallbackIntervalJitterP99Us)
-        ) {
-          this.outputCallbackIntervalJitterP99Us = Math.max(
-            0,
-            Math.floor(next.outputCallbackIntervalJitterP99Us)
-          );
-        }
-
-        if (
-          this.outputCallbackMetricsValid &&
-          typeof next.outputCallbackIntervalOverrunCount === 'number' &&
-          Number.isFinite(next.outputCallbackIntervalOverrunCount)
-        ) {
-          this.outputCallbackIntervalOverrunCount = Math.max(
-            0,
-            Math.floor(next.outputCallbackIntervalOverrunCount)
-          );
-        }
-
-        if (
-          this.outputCallbackMetricsValid &&
-          typeof next.outputCallbackExpectedIntervalUs === 'number' &&
-          Number.isFinite(next.outputCallbackExpectedIntervalUs)
-        ) {
-          this.outputCallbackExpectedIntervalUs = Math.max(
-            0,
-            Math.floor(next.outputCallbackExpectedIntervalUs)
-          );
-        }
-
-        if (
-          typeof next.transferLowWatermarkSamples === 'number' &&
-          Number.isFinite(next.transferLowWatermarkSamples)
-        ) {
-          this.transferMetricsValid = true;
-          this.transferLowWatermarkSamples = Math.max(0, Math.floor(next.transferLowWatermarkSamples));
-        } else {
-          this.transferMetricsValid = false;
-          this.transferLowWatermarkSamples = 0;
-          this.transferRenderLowHitCount = 0;
-          this.transferDecodeLowHitCount = 0;
-          this.transferAdaptationLevel = 0;
-          this.transferOscillationStreak = 0;
-          this.renderQueuePageLocked = false;
-          this.renderQueuePageLockFailureCount = 0;
-          this.renderQueuePageLockAttemptedBytes = 0;
-          this.renderQueuePageLockSucceededBytes = 0;
-          this.renderQueuePageLockFailedBytes = 0;
-        }
-
-        if (
-          typeof next.transferRenderLowHitCount === 'number' &&
-          Number.isFinite(next.transferRenderLowHitCount)
-        ) {
-          this.transferRenderLowHitCount = Math.max(0, Math.floor(next.transferRenderLowHitCount));
-        }
-
-        if (
-          typeof next.transferDecodeLowHitCount === 'number' &&
-          Number.isFinite(next.transferDecodeLowHitCount)
-        ) {
-          this.transferDecodeLowHitCount = Math.max(0, Math.floor(next.transferDecodeLowHitCount));
-        }
-
-        if (
-          typeof next.transferAdaptationLevel === 'number' &&
-          Number.isFinite(next.transferAdaptationLevel)
-        ) {
-          this.transferAdaptationLevel = Math.max(0, Math.floor(next.transferAdaptationLevel));
-        }
-
-        if (
-          typeof next.transferOscillationStreak === 'number' &&
-          Number.isFinite(next.transferOscillationStreak)
-        ) {
-          this.transferOscillationStreak = Math.max(0, Math.floor(next.transferOscillationStreak));
-        }
-
-        if (typeof next.renderQueuePageLocked === 'boolean') {
-          this.renderQueuePageLocked = next.renderQueuePageLocked;
-          this.handleRenderQueuePageLockStatus(next.renderQueuePageLocked, next.playbackState);
-        }
-
-        if (
-          typeof next.renderQueuePageLockFailureCount === 'number' &&
-          Number.isFinite(next.renderQueuePageLockFailureCount)
-        ) {
-          this.renderQueuePageLockFailureCount = Math.max(
-            0,
-            Math.floor(next.renderQueuePageLockFailureCount)
-          );
-        }
-
-        if (
-          typeof next.renderQueuePageLockAttemptedBytes === 'number' &&
-          Number.isFinite(next.renderQueuePageLockAttemptedBytes)
-        ) {
-          this.renderQueuePageLockAttemptedBytes = Math.max(
-            0,
-            Math.floor(next.renderQueuePageLockAttemptedBytes)
-          );
-        }
-
-        if (
-          typeof next.renderQueuePageLockSucceededBytes === 'number' &&
-          Number.isFinite(next.renderQueuePageLockSucceededBytes)
-        ) {
-          this.renderQueuePageLockSucceededBytes = Math.max(
-            0,
-            Math.floor(next.renderQueuePageLockSucceededBytes)
-          );
-        }
-
-        if (
-          typeof next.renderQueuePageLockFailedBytes === 'number' &&
-          Number.isFinite(next.renderQueuePageLockFailedBytes)
-        ) {
-          this.renderQueuePageLockFailedBytes = Math.max(
-            0,
-            Math.floor(next.renderQueuePageLockFailedBytes)
-          );
-        }
-
-        if (typeof next.sharedRenderAheadEnabled === 'boolean') {
-          this.sharedRenderAheadEnabled = next.sharedRenderAheadEnabled;
-          if (!this.sharedRenderAheadEnabled) {
-            this.sharedRenderUnderrunEvents = 0;
-            this.sharedRenderUnderrunFrames = 0;
-            this.sharedRenderLowHitCount = 0;
-            this.sharedRenderLowWatermarkSamples = 0;
-          }
-        }
-
-        if (
-          this.sharedRenderAheadEnabled &&
-          typeof next.sharedRenderUnderrunEvents === 'number' &&
-          Number.isFinite(next.sharedRenderUnderrunEvents)
-        ) {
-          this.sharedRenderUnderrunEvents = Math.max(0, Math.floor(next.sharedRenderUnderrunEvents));
-        }
-
-        if (
-          this.sharedRenderAheadEnabled &&
-          typeof next.sharedRenderUnderrunFrames === 'number' &&
-          Number.isFinite(next.sharedRenderUnderrunFrames)
-        ) {
-          this.sharedRenderUnderrunFrames = Math.max(0, Math.floor(next.sharedRenderUnderrunFrames));
-        }
-
-        if (
-          this.sharedRenderAheadEnabled &&
-          typeof next.sharedRenderLowHitCount === 'number' &&
-          Number.isFinite(next.sharedRenderLowHitCount)
-        ) {
-          this.sharedRenderLowHitCount = Math.max(0, Math.floor(next.sharedRenderLowHitCount));
-        }
-
-        if (
-          this.sharedRenderAheadEnabled &&
-          typeof next.sharedRenderLowWatermarkSamples === 'number' &&
-          Number.isFinite(next.sharedRenderLowWatermarkSamples)
-        ) {
-          this.sharedRenderLowWatermarkSamples = Math.max(
-            0,
-            Math.floor(next.sharedRenderLowWatermarkSamples)
-          );
-        }
-
-        if (typeof next.controlQueueLockFree === 'boolean') {
-          this.controlQueueLockFree = next.controlQueueLockFree;
-        }
-
-        if (typeof next.controlQueueMode === 'string' && next.controlQueueMode.trim().length > 0) {
-          this.controlQueueMode = next.controlQueueMode.trim();
-        }
-
-        if (
-          typeof next.controlQueueCapacity === 'number' &&
-          Number.isFinite(next.controlQueueCapacity)
-        ) {
-          this.controlQueueCapacity = Math.max(0, Math.floor(next.controlQueueCapacity));
-        }
-
-        if (
-          typeof next.controlQueueOverwriteEvents === 'number' &&
-          Number.isFinite(next.controlQueueOverwriteEvents)
-        ) {
-          this.controlQueueOverwriteEvents = Math.max(0, Math.floor(next.controlQueueOverwriteEvents));
-        }
-
-        if (
-          typeof next.controlQueueDropNewestEvents === 'number' &&
-          Number.isFinite(next.controlQueueDropNewestEvents)
-        ) {
-          this.controlQueueDropNewestEvents = Math.max(
-            0,
-            Math.floor(next.controlQueueDropNewestEvents)
-          );
-        }
-
-        if (
-          typeof next.controlQueueCoalescedOverflowEvents === 'number' &&
-          Number.isFinite(next.controlQueueCoalescedOverflowEvents)
-        ) {
-          this.controlQueueCoalescedOverflowEvents = Math.max(
-            0,
-            Math.floor(next.controlQueueCoalescedOverflowEvents)
-          );
-        }
-
-        if (
-          typeof next.controlQueueCriticalOverflowEvents === 'number' &&
-          Number.isFinite(next.controlQueueCriticalOverflowEvents)
-        ) {
-          this.controlQueueCriticalOverflowEvents = Math.max(
-            0,
-            Math.floor(next.controlQueueCriticalOverflowEvents)
-          );
-        }
-
-        if (
-          typeof next.estimatedAudioBufferBytes === 'number' &&
-          Number.isFinite(next.estimatedAudioBufferBytes)
-        ) {
-          this.estimatedAudioBufferBytes = Math.max(0, Math.floor(next.estimatedAudioBufferBytes));
-        }
-
-        if (
-          typeof next.memoryPoolF32GrowthEvents === 'number' &&
-          Number.isFinite(next.memoryPoolF32GrowthEvents)
-        ) {
-          this.memoryPoolF32GrowthEvents = Math.max(
-            0,
-            Math.floor(next.memoryPoolF32GrowthEvents)
-          );
-        }
-
-        if (
-          typeof next.memoryPoolF32GrowthBytes === 'number' &&
-          Number.isFinite(next.memoryPoolF32GrowthBytes)
-        ) {
-          this.memoryPoolF32GrowthBytes = Math.max(0, Math.floor(next.memoryPoolF32GrowthBytes));
-        }
-
-        if (
-          typeof next.memoryPoolF32PrewarmHits === 'number' &&
-          Number.isFinite(next.memoryPoolF32PrewarmHits)
-        ) {
-          this.memoryPoolF32PrewarmHits = Math.max(
-            0,
-            Math.floor(next.memoryPoolF32PrewarmHits)
-          );
-        }
-
-        if (
-          typeof next.realtimeMemoryLockAttemptedBytes === 'number' &&
-          Number.isFinite(next.realtimeMemoryLockAttemptedBytes)
-        ) {
-          this.realtimeMemoryLockAttemptedBytes = Math.max(
-            0,
-            Math.floor(next.realtimeMemoryLockAttemptedBytes)
-          );
-        }
-
-        if (
-          typeof next.realtimeMemoryLockSucceededBytes === 'number' &&
-          Number.isFinite(next.realtimeMemoryLockSucceededBytes)
-        ) {
-          this.realtimeMemoryLockSucceededBytes = Math.max(
-            0,
-            Math.floor(next.realtimeMemoryLockSucceededBytes)
-          );
-        }
-
-        if (
-          typeof next.realtimeMemoryLockFailedBytes === 'number' &&
-          Number.isFinite(next.realtimeMemoryLockFailedBytes)
-        ) {
-          this.realtimeMemoryLockFailedBytes = Math.max(
-            0,
-            Math.floor(next.realtimeMemoryLockFailedBytes)
-          );
-        }
-
-        if (
-          typeof next.realtimeMemoryLockSkippedBytes === 'number' &&
-          Number.isFinite(next.realtimeMemoryLockSkippedBytes)
-        ) {
-          this.realtimeMemoryLockSkippedBytes = Math.max(
-            0,
-            Math.floor(next.realtimeMemoryLockSkippedBytes)
-          );
-        }
-
-        if (
-          typeof next.realtimeMemoryLockFailureCount === 'number' &&
-          Number.isFinite(next.realtimeMemoryLockFailureCount)
-        ) {
-          this.realtimeMemoryLockFailureCount = Math.max(
-            0,
-            Math.floor(next.realtimeMemoryLockFailureCount)
-          );
-        }
-
-        if (
-          typeof next.realtimeMemoryLockSkippedCount === 'number' &&
-          Number.isFinite(next.realtimeMemoryLockSkippedCount)
-        ) {
-          this.realtimeMemoryLockSkippedCount = Math.max(
-            0,
-            Math.floor(next.realtimeMemoryLockSkippedCount)
-          );
-        }
-
-        if (
-          typeof next.realtimeMemoryLockedRoleMask === 'number' &&
-          Number.isFinite(next.realtimeMemoryLockedRoleMask)
-        ) {
-          this.realtimeMemoryLockedRoleMask = Math.max(
-            0,
-            Math.floor(next.realtimeMemoryLockedRoleMask)
-          );
-        }
-
-        if (
-          typeof next.realtimeMemoryFailedRoleMask === 'number' &&
-          Number.isFinite(next.realtimeMemoryFailedRoleMask)
-        ) {
-          this.realtimeMemoryFailedRoleMask = Math.max(
-            0,
-            Math.floor(next.realtimeMemoryFailedRoleMask)
-          );
-        }
-
-        if (
-          typeof next.realtimeMemorySkippedRoleMask === 'number' &&
-          Number.isFinite(next.realtimeMemorySkippedRoleMask)
-        ) {
-          this.realtimeMemorySkippedRoleMask = Math.max(
-            0,
-            Math.floor(next.realtimeMemorySkippedRoleMask)
-          );
-        }
-
-        if (
-          typeof next.realtimeMemoryPressureEvents === 'number' &&
-          Number.isFinite(next.realtimeMemoryPressureEvents)
-        ) {
-          this.realtimeMemoryPressureEvents = Math.max(
-            0,
-            Math.floor(next.realtimeMemoryPressureEvents)
-          );
-        }
-
-        if (
-          typeof next.diagnosticTimelineDroppedEvents === 'number' &&
-          Number.isFinite(next.diagnosticTimelineDroppedEvents)
-        ) {
-          this.diagnosticTimelineDroppedEvents = Math.max(
-            0,
-            Math.floor(next.diagnosticTimelineDroppedEvents)
+        const runtimeMetricsResult = applyNativeAudioRuntimeMetricsPayload(this, next);
+        if (runtimeMetricsResult.renderQueuePageLockStatus) {
+          this.handleRenderQueuePageLockStatus(
+            runtimeMetricsResult.renderQueuePageLockStatus.locked,
+            runtimeMetricsResult.renderQueuePageLockStatus.playbackState
           );
         }
 
         if (Array.isArray(next.diagnosticTimeline)) {
-          const normalized = next.diagnosticTimeline
-            .map((entry) => {
-              const seq =
-                typeof entry?.seq === 'number' && Number.isFinite(entry.seq)
-                  ? Math.max(0, Math.floor(entry.seq))
-                  : null;
-              const timestampMs =
-                typeof entry?.timestampMs === 'number' && Number.isFinite(entry.timestampMs)
-                  ? Math.max(0, Math.floor(entry.timestampMs))
-                  : null;
-              const kind = typeof entry?.kind === 'string' ? entry.kind.trim() : '';
-              const value =
-                typeof entry?.value === 'number' && Number.isFinite(entry.value)
-                  ? Math.max(0, Math.floor(entry.value))
-                  : 0;
-              const aux =
-                typeof entry?.aux === 'number' && Number.isFinite(entry.aux)
-                  ? Math.max(0, Math.floor(entry.aux))
-                  : 0;
-
-              if (seq === null || timestampMs === null || !kind) {
-                return null;
-              }
-
-              return {
-                seq,
-                timestampMs,
-                kind,
-                value,
-                aux,
-              };
-            })
-            .filter(
-              (
-                value
-              ): value is {
-                seq: number;
-                timestampMs: number;
-                kind: string;
-                value: number;
-                aux: number;
-              } => value !== null
-            );
-
-          this.diagnosticTimeline = normalized.slice(-24);
+          this.diagnosticTimeline =
+            normalizeNativeAudioDiagnosticTimeline(next.diagnosticTimeline) ?? [];
           this.applySharedTimelineStressIfNeeded(this.diagnosticTimeline);
         }
 
@@ -814,74 +324,14 @@ export async function setupNativeListenersImpl(
           this.recordBufferedAheadSample(next.bufferedAhead);
         }
 
-        if (Array.isArray(next.queue) && !this.isSameQueuePaths(next.queue)) {
-          update.queue = this.resolveQueueFromPaths(next.queue);
-        }
-        if (typeof next.currentIndex === 'number') {
-          update.currentIndex = next.currentIndex;
-        }
-
-        if (typeof next.trackPath !== 'undefined') {
-          const currentTrackPath = this.state.currentTrack
-            ? this.getTrackPath(this.state.currentTrack)
-            : null;
-          const normalizedCurrentTrackPath =
-            this.normalizeTrackPathForCompare(currentTrackPath);
-          const normalizedPlaybackState =
-            typeof next.playbackState === 'string' ? next.playbackState : null;
-          const queueClearedByPayload = Array.isArray(next.queue) && next.queue.length === 0;
-          const indexClearedByPayload =
-            typeof next.currentIndex === 'number' && next.currentIndex < 0;
-          const localQueueEmpty =
-            (Array.isArray(update.queue) ? update.queue.length === 0 : this.state.queue.length === 0) ||
-            queueClearedByPayload;
-          const playbackNotActive =
-            normalizedPlaybackState !== 'playing' &&
-            normalizedPlaybackState !== 'buffering' &&
-            normalizedPlaybackState !== 'loading';
-
-          if (typeof next.trackPath === 'string') {
-            const nextTrackPath = next.trackPath.trim();
-            if (nextTrackPath.length > 0) {
-              const shouldIgnoreStaleTrackPath = localQueueEmpty && playbackNotActive;
-              if (shouldIgnoreStaleTrackPath) {
-                update.currentTrack = null;
-                update.currentIndex = -1;
-              } else {
-                const normalizedNextTrackPath = this.normalizeTrackPathForCompare(nextTrackPath);
-                if (normalizedNextTrackPath !== normalizedCurrentTrackPath) {
-                  const resolved = this.resolveTrackFromPath(nextTrackPath);
-                  if (resolved) {
-                    update.currentTrack = resolved.track;
-                  update.currentIndex = resolved.index;
-                } else {
-                  update.currentTrack = {
-                    id: `native-${nextTrackPath}`,
-                    title: this.deriveTitleFromPath(nextTrackPath),
-                    filePath: nextTrackPath,
-                    path: nextTrackPath,
-                      originalPath: nextTrackPath,
-                    };
-                  }
-                }
-              }
-            }
-          } else if (next.trackPath === null && currentTrackPath) {
-            const shouldClearCurrentTrack =
-              next.ended === true ||
-              normalizedPlaybackState === 'stopped' ||
-              normalizedPlaybackState === 'idle' ||
-              queueClearedByPayload ||
-              indexClearedByPayload ||
-              this.state.queue.length === 0;
-            if (shouldClearCurrentTrack) {
-              update.currentTrack = null;
-              if (indexClearedByPayload) {
-                update.currentIndex = -1;
-              }
-            }
-          }
-        }
+        Object.assign(
+          update,
+          resolveNativeAudioQueueStatePayload({
+            payload: next,
+            state: this.state,
+            resolver: this,
+          })
+        );
 
         const transientOnlyStateUpdate =
           Object.keys(update).length > 0 &&
@@ -929,81 +379,7 @@ export async function setupNativeListenersImpl(
 
       this.spectrumListener = await listen('native_audio_spectrum', (event) => {
         const payload = event.payload as NativeAudioSpectrumPayload;
-        if (!payload?.bins || !Array.isArray(payload.bins)) return;
-        const bins = payload.bins;
-
-        const isByteEncodedBins = (() => {
-          const probeCount = Math.min(8, bins.length);
-          for (let index = 0; index < probeCount; index += 1) {
-            const value = bins[index];
-            if (typeof value === 'number' && Number.isFinite(value) && value > 1.001) {
-              return true;
-            }
-          }
-          return false;
-        })();
-
-        const tap =
-          payload.tapId === 'pre-dsp' || payload.tap === 'pre-dsp'
-            ? 'pre-dsp'
-            : payload.tapId === 'post-dsp' || payload.tap === 'post-dsp'
-              ? 'post-dsp'
-              : null;
-
-        const ensureBuffer = (current: Uint8Array | null | undefined): Uint8Array => {
-          if (current && current.length === bins.length) return current;
-          return new Uint8Array(bins.length);
-        };
-
-        const copyBinsToTarget = (target: Uint8Array) => {
-          for (let i = 0; i < bins.length; i += 1) {
-            const value = typeof bins[i] === 'number' && Number.isFinite(bins[i]) ? bins[i] : 0;
-            if (isByteEncodedBins) {
-              target[i] = Math.max(0, Math.min(255, Math.round(value)));
-              continue;
-            }
-
-            const clamped = Math.max(0, Math.min(1, value));
-            target[i] = Math.round(clamped * 255);
-          }
-        };
-
-        if (!tap) {
-          const target = ensureBuffer(this.spectrumData);
-          copyBinsToTarget(target);
-          this.spectrumData = target;
-          return;
-        }
-
-        const frameId =
-          typeof payload.frameId === 'number' && Number.isFinite(payload.frameId)
-            ? payload.frameId
-            : 0;
-        const timestampMs =
-          typeof payload.timestampMs === 'number' && Number.isFinite(payload.timestampMs)
-            ? payload.timestampMs
-            : Date.now();
-        const sampleRate =
-          typeof payload.sampleRate === 'number' && Number.isFinite(payload.sampleRate)
-            ? payload.sampleRate
-            : this.outputSampleRate || this.sourceSampleRate || 0;
-
-        const existingBins = this.spectrumFrames[tap]?.bins;
-        const target = ensureBuffer(existingBins);
-        copyBinsToTarget(target);
-
-        this.spectrumFrames[tap] = {
-          frameId,
-          timestampMs,
-          tap,
-          sampleRate,
-          bins: target,
-        };
-
-        // Default frequency data drives most visualizers: prefer post-dsp when available.
-        if (tap === 'post-dsp' || !this.spectrumData) {
-          this.spectrumData = target;
-        }
+        applyNativeAudioSpectrumPayload(this, payload);
       });
 
       this.errorListener = await listen('native_audio_error', (event) => {
