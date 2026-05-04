@@ -4,7 +4,7 @@ import { toDynamicSrcAutoDegradationLabel } from './robustnessDegradation';
 import type { AudioRobustnessSnapshot, AudioState } from './types';
 import type { ProcessWorkingSetTrimEvent } from '../../utils/processWorkingSetTrim';
 
-type NativeAudioRobustnessSnapshotSourceRecord = {
+export type NativeAudioRobustnessSnapshotSourceRecord = {
   currentOutputBackendId: AudioRobustnessSnapshot['outputBackendId'];
   availableOutputBackends: AudioRobustnessSnapshot['outputBackends'];
   lastSchedulerProfile?: AudioRobustnessSnapshot['schedulerProfile'];

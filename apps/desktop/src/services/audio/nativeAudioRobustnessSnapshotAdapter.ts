@@ -2,6 +2,7 @@ import type { DynamicSrcEffectiveTiming } from './dynamicSrcAdaptiveTiming';
 import {
   buildNativeAudioRobustnessSnapshot,
   type NativeAudioRobustnessSnapshotSource,
+  type NativeAudioRobustnessSnapshotSourceRecord,
 } from './nativeAudioRobustnessSnapshot';
 import type { AudioRobustnessSnapshot, AudioState } from './types';
 import type { ProcessWorkingSetTrimEvent } from '../../utils/processWorkingSetTrim';
@@ -54,6 +55,11 @@ export type NativeAudioRobustnessSnapshotAdapterInput = {
   hasActiveSharedStressWindow(nowMs: number): boolean;
   lastWorkingSetTrimEvent: ProcessWorkingSetTrimEvent | null;
 };
+
+export type NativeAudioRobustnessSnapshotHost = Omit<
+  NativeAudioRobustnessSnapshotAdapterInput,
+  'record'
+> & NativeAudioRobustnessSnapshotSourceRecord;
 
 export function createNativeAudioRobustnessSnapshotSource(
   input: NativeAudioRobustnessSnapshotAdapterInput,
@@ -113,6 +119,63 @@ export function createNativeAudioRobustnessSnapshotSource(
   }
 
   return source;
+}
+
+export function buildNativeAudioRobustnessSnapshotAdapterInputFromHost(
+  host: NativeAudioRobustnessSnapshotHost,
+): NativeAudioRobustnessSnapshotAdapterInput {
+  return {
+    record: host as Record<string, unknown>,
+    state: host.state,
+    stabilityActionProfile: host.stabilityActionProfile,
+    sourcePrepareProfile: host.sourcePrepareProfile,
+    stabilityPrimaryReason: host.stabilityPrimaryReason,
+    stabilityReasonCodes: host.stabilityReasonCodes,
+    stabilityHintProfile: host.stabilityHintProfile,
+    stabilityHintPrimaryReason: host.stabilityHintPrimaryReason,
+    stabilityHintReasonCodes: host.stabilityHintReasonCodes,
+    estimatedAudioBufferBytes: host.estimatedAudioBufferBytes,
+    renderQueuePageLockFailureCount: host.renderQueuePageLockFailureCount,
+    renderQueuePageLockAttemptedBytes: host.renderQueuePageLockAttemptedBytes,
+    renderQueuePageLockSucceededBytes: host.renderQueuePageLockSucceededBytes,
+    renderQueuePageLockFailedBytes: host.renderQueuePageLockFailedBytes,
+    memoryPoolF32GrowthEvents: host.memoryPoolF32GrowthEvents,
+    memoryPoolF32GrowthBytes: host.memoryPoolF32GrowthBytes,
+    memoryPoolF32PrewarmHits: host.memoryPoolF32PrewarmHits,
+    realtimeMemoryLockAttemptedBytes: host.realtimeMemoryLockAttemptedBytes,
+    realtimeMemoryLockSucceededBytes: host.realtimeMemoryLockSucceededBytes,
+    realtimeMemoryLockFailedBytes: host.realtimeMemoryLockFailedBytes,
+    realtimeMemoryLockSkippedBytes: host.realtimeMemoryLockSkippedBytes,
+    realtimeMemoryLockFailureCount: host.realtimeMemoryLockFailureCount,
+    realtimeMemoryLockSkippedCount: host.realtimeMemoryLockSkippedCount,
+    realtimeMemoryLockedRoleMask: host.realtimeMemoryLockedRoleMask,
+    realtimeMemoryFailedRoleMask: host.realtimeMemoryFailedRoleMask,
+    realtimeMemorySkippedRoleMask: host.realtimeMemorySkippedRoleMask,
+    realtimeMemoryPressureEvents: host.realtimeMemoryPressureEvents,
+    bufferedAheadRollingWindow: host.bufferedAheadRollingWindow,
+    bufferedAheadRollingSum: host.bufferedAheadRollingSum,
+    underrunRecoveryUntilMs: host.underrunRecoveryUntilMs,
+    dynamicSrcAdaptiveProfile: host.dynamicSrcAdaptiveProfile,
+    dynamicSrcLearningProfile: host.dynamicSrcLearningProfile,
+    pruneUnderrunSpikeWindow: host.pruneUnderrunSpikeWindow,
+    getEffectiveDynamicSrcTiming: host.getEffectiveDynamicSrcTiming,
+    evaluateDynamicSrcAutoDegradation: host.evaluateDynamicSrcAutoDegradation,
+    buildDynamicSrcLearningDeviceKey: host.buildDynamicSrcLearningDeviceKey,
+    getDynamicSrcLearningScale: host.getDynamicSrcLearningScale,
+    hasActiveProtectionWindow: host.hasActiveProtectionWindow,
+    hasActiveSharedStressWindow: host.hasActiveSharedStressWindow,
+    lastWorkingSetTrimEvent: host.lastWorkingSetTrimEvent,
+  };
+}
+
+export function buildNativeAudioRobustnessSnapshotFromHost(
+  host: NativeAudioRobustnessSnapshotHost,
+  nowMs: number = Date.now()
+): AudioRobustnessSnapshot {
+  return buildNativeAudioRobustnessSnapshotFromAdapterInput(
+    buildNativeAudioRobustnessSnapshotAdapterInputFromHost(host),
+    nowMs
+  );
 }
 
 export function buildNativeAudioRobustnessSnapshotFromAdapterInput(

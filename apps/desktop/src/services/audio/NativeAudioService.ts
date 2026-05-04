@@ -96,9 +96,13 @@ import {
   cancelScheduledProcessWorkingSetTrim,
   getLastProcessWorkingSetTrimEvent,
   scheduleProcessWorkingSetTrim,
+  type ProcessWorkingSetTrimEvent,
 } from '../../utils/processWorkingSetTrim';
 import { NativeAudioRobustnessController } from './nativeAudioRobustnessController';
-import { buildNativeAudioRobustnessSnapshotFromAdapterInput } from './nativeAudioRobustnessSnapshotAdapter';
+import {
+  buildNativeAudioRobustnessSnapshotFromHost,
+  type NativeAudioRobustnessSnapshotHost,
+} from './nativeAudioRobustnessSnapshotAdapter';
 import {
   clearPendingSeekGuardImpl,
   clearPendingSeekImpl,
@@ -1031,6 +1035,13 @@ export class NativeAudioService implements IAudioService {
     void this.lastAutoBackendSwitchAtMs;
     void this.lastAutoBackendSwitchReason;
     void this.lastSchedulerProfile;
+    void this.stabilityActionProfile;
+    void this.sourcePrepareProfile;
+    void this.stabilityPrimaryReason;
+    void this.stabilityReasonCodes;
+    void this.stabilityHintProfile;
+    void this.stabilityHintPrimaryReason;
+    void this.stabilityHintReasonCodes;
     void this.dynamicSrcAutoEnabled;
     void this.dynamicSrcProfile;
     void this.dynamicSrcAutoDegradationLevel;
@@ -1047,6 +1058,8 @@ export class NativeAudioService implements IAudioService {
     void this.dynamicSrcSharedStressHoldMs;
     void this.dynamicSrcOutputErrorHoldMs;
     void this.dynamicSrcAdaptiveEnabled;
+    void this.dynamicSrcAdaptiveProfile;
+    void this.dynamicSrcLearningProfile;
     void this.hqSrcStopbandDb;
     void this.hqSrcActive;
     void this.hqSrcRatio;
@@ -1059,8 +1072,26 @@ export class NativeAudioService implements IAudioService {
     void this.transferLowWatermarkSamples;
     void this.transferAdaptationLevel;
     void this.transferOscillationStreak;
+    void this.renderQueuePageLockFailureCount;
+    void this.renderQueuePageLockAttemptedBytes;
+    void this.renderQueuePageLockSucceededBytes;
+    void this.renderQueuePageLockFailedBytes;
     void this.sharedRenderUnderrunFrames;
     void this.sharedRenderLowWatermarkSamples;
+    void this.estimatedAudioBufferBytes;
+    void this.memoryPoolF32GrowthEvents;
+    void this.memoryPoolF32GrowthBytes;
+    void this.memoryPoolF32PrewarmHits;
+    void this.realtimeMemoryLockAttemptedBytes;
+    void this.realtimeMemoryLockSucceededBytes;
+    void this.realtimeMemoryLockFailedBytes;
+    void this.realtimeMemoryLockSkippedBytes;
+    void this.realtimeMemoryLockFailureCount;
+    void this.realtimeMemoryLockSkippedCount;
+    void this.realtimeMemoryLockedRoleMask;
+    void this.realtimeMemoryFailedRoleMask;
+    void this.realtimeMemorySkippedRoleMask;
+    void this.realtimeMemoryPressureEvents;
     void this.controlQueueLockFree;
     void this.controlQueueMode;
     void this.controlQueueCapacity;
@@ -1090,6 +1121,8 @@ export class NativeAudioService implements IAudioService {
     void this.flushPendingVolumeCommand;
     void this.scheduleVolumeFlush;
     void this.updateDynamicSrcLearningFromStress;
+    void this.buildDynamicSrcLearningDeviceKey;
+    void this.getDynamicSrcLearningScale;
     void this.applySharedTimelineStressIfNeeded;
     void this.recordBufferedAheadSample;
     void this.trackPlaybackStateForMetrics;
@@ -1099,6 +1132,7 @@ export class NativeAudioService implements IAudioService {
     void this.isSameQueuePaths;
     void this.resolveTrackFromPath;
     void this.handleTrackEnded;
+    void this.lastWorkingSetTrimEvent;
   }
 
   constructor() {
@@ -2599,53 +2633,13 @@ export class NativeAudioService implements IAudioService {
     }, delayMs);
   }
 
+  private get lastWorkingSetTrimEvent(): ProcessWorkingSetTrimEvent | null {
+    return getLastProcessWorkingSetTrimEvent();
+  }
+
   private buildRobustnessSnapshot(nowMs: number = Date.now()): AudioRobustnessSnapshot {
-    return buildNativeAudioRobustnessSnapshotFromAdapterInput(
-      {
-        record: this as unknown as Record<string, unknown>,
-        state: this.state,
-        stabilityActionProfile: this.stabilityActionProfile,
-        sourcePrepareProfile: this.sourcePrepareProfile,
-        stabilityPrimaryReason: this.stabilityPrimaryReason,
-        stabilityReasonCodes: this.stabilityReasonCodes,
-        stabilityHintProfile: this.stabilityHintProfile,
-        stabilityHintPrimaryReason: this.stabilityHintPrimaryReason,
-        stabilityHintReasonCodes: this.stabilityHintReasonCodes,
-        estimatedAudioBufferBytes: this.estimatedAudioBufferBytes,
-        renderQueuePageLockFailureCount: this.renderQueuePageLockFailureCount,
-        renderQueuePageLockAttemptedBytes: this.renderQueuePageLockAttemptedBytes,
-        renderQueuePageLockSucceededBytes: this.renderQueuePageLockSucceededBytes,
-        renderQueuePageLockFailedBytes: this.renderQueuePageLockFailedBytes,
-        memoryPoolF32GrowthEvents: this.memoryPoolF32GrowthEvents,
-        memoryPoolF32GrowthBytes: this.memoryPoolF32GrowthBytes,
-        memoryPoolF32PrewarmHits: this.memoryPoolF32PrewarmHits,
-        realtimeMemoryLockAttemptedBytes: this.realtimeMemoryLockAttemptedBytes,
-        realtimeMemoryLockSucceededBytes: this.realtimeMemoryLockSucceededBytes,
-        realtimeMemoryLockFailedBytes: this.realtimeMemoryLockFailedBytes,
-        realtimeMemoryLockSkippedBytes: this.realtimeMemoryLockSkippedBytes,
-        realtimeMemoryLockFailureCount: this.realtimeMemoryLockFailureCount,
-        realtimeMemoryLockSkippedCount: this.realtimeMemoryLockSkippedCount,
-        realtimeMemoryLockedRoleMask: this.realtimeMemoryLockedRoleMask,
-        realtimeMemoryFailedRoleMask: this.realtimeMemoryFailedRoleMask,
-        realtimeMemorySkippedRoleMask: this.realtimeMemorySkippedRoleMask,
-        realtimeMemoryPressureEvents: this.realtimeMemoryPressureEvents,
-        bufferedAheadRollingWindow: this.bufferedAheadRollingWindow,
-        bufferedAheadRollingSum: this.bufferedAheadRollingSum,
-        underrunRecoveryUntilMs: this.underrunRecoveryUntilMs,
-        dynamicSrcAdaptiveProfile: this.dynamicSrcAdaptiveProfile,
-        dynamicSrcLearningProfile: this.dynamicSrcLearningProfile,
-        pruneUnderrunSpikeWindow: (timestampMs) => this.pruneUnderrunSpikeWindow(timestampMs),
-        getEffectiveDynamicSrcTiming: (timestampMs) =>
-          this.getEffectiveDynamicSrcTiming(timestampMs),
-        evaluateDynamicSrcAutoDegradation: (options) =>
-          this.evaluateDynamicSrcAutoDegradation(options),
-        buildDynamicSrcLearningDeviceKey: () => this.buildDynamicSrcLearningDeviceKey(),
-        getDynamicSrcLearningScale: () => this.getDynamicSrcLearningScale(),
-        hasActiveProtectionWindow: (timestampMs) => this.hasActiveProtectionWindow(timestampMs),
-        hasActiveSharedStressWindow: (timestampMs) =>
-          this.hasActiveSharedStressWindow(timestampMs),
-        lastWorkingSetTrimEvent: getLastProcessWorkingSetTrimEvent(),
-      },
+    return buildNativeAudioRobustnessSnapshotFromHost(
+      this as unknown as NativeAudioRobustnessSnapshotHost,
       nowMs
     );
   }
