@@ -70,9 +70,44 @@ export interface MusicPlatformWorkspaceShellSlotDescriptor {
   viewType?: string;
 }
 
+export type MusicPlatformWorkspaceTemplateId =
+  | 'music-generic-workspace'
+  | string;
+
+export type MusicPlatformWorkspaceTemplateVariant =
+  | 'library-first'
+  | 'search-first'
+  | 'recommendation-first'
+  | 'video-resource'
+  | string;
+
+export type MusicPlatformWorkspaceTemplateResourceLayout =
+  | 'dense-list'
+  | 'comfortable-list'
+  | 'grid'
+  | 'compact-grid'
+  | string;
+
+export interface MusicPlatformWorkspaceTemplatePersonalization {
+  accent?: string;
+  icon?: string;
+  defaultPageId?: string;
+  resourceLayout?: MusicPlatformWorkspaceTemplateResourceLayout;
+  preferQualitySelector?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MusicPlatformWorkspaceTemplateDescriptor {
+  id: MusicPlatformWorkspaceTemplateId;
+  variant?: MusicPlatformWorkspaceTemplateVariant;
+  personalization?: MusicPlatformWorkspaceTemplatePersonalization;
+  metadata?: Record<string, unknown>;
+}
+
 export interface MusicPlatformWorkspaceDescriptor {
   ownership: MusicPlatformWorkspaceOwnership;
   requiredRuntimeCarrier?: RuntimeCarrier;
+  template?: MusicPlatformWorkspaceTemplateDescriptor;
   root?: MusicPlatformWorkspaceRootDescriptor;
   shellSlots?: MusicPlatformWorkspaceShellSlotDescriptor[];
   capabilityFamilies?: MusicPlatformWorkspaceCapabilityFamilies;

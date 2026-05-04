@@ -115,16 +115,187 @@ export interface PlatformWorkspaceResolvedResourceResult {
   item: PlatformWorkspaceResourceItem | null;
 }
 
-export interface PlatformWorkspacePreparedPlayback {
+export type PlatformConnectorId = `connector.platform.${string}`;
+
+export type PlatformResourceKind =
+  | 'song'
+  | 'video'
+  | 'album'
+  | 'playlist'
+  | 'podcast'
+  | 'episode'
+  | 'artist'
+  | 'folder'
+  | string;
+
+export type PreparedPlaybackSchemaVersion = 'prepared-playback.v2';
+
+export type PreparedPlaybackSourceKind =
+  | 'cache-file'
+  | 'remote-url'
+  | 'host-proxy'
+  | 'sidecar-proxy';
+
+export type PreparedPlaybackSourceV2 =
+  | {
+      kind: 'cache-file';
+      cachePath: string;
+      mimeType?: string;
+      contentLengthBytes?: number;
+      checksum?: {
+        algorithm: 'sha256' | 'md5' | string;
+        value: string;
+      };
+    }
+  | {
+      kind: 'remote-url';
+      streamUrl: string;
+      method?: 'GET';
+      headers?: Record<string, string>;
+      referrer?: string;
+      userAgent?: string;
+      mimeType?: string;
+      contentLengthBytes?: number;
+      expiresAtMs?: number;
+      seekable?: boolean;
+      rangeRequests?: boolean;
+    }
+  | {
+      kind: 'host-proxy';
+      proxyStreamId: string;
+      streamUrl?: string;
+      mimeType?: string;
+      contentLengthBytes?: number;
+      expiresAtMs?: number;
+      seekable?: boolean;
+      rangeRequests?: boolean;
+    }
+  | {
+      kind: 'sidecar-proxy';
+      sidecarStreamId: string;
+      streamUrl?: string;
+      mimeType?: string;
+      contentLengthBytes?: number;
+      expiresAtMs?: number;
+      seekable?: boolean;
+      rangeRequests?: boolean;
+    };
+
+export interface PreparedPlaybackQualityV2 {
+  requestedKey?: string;
+  selectedKey?: string;
+  selectedLabel?: string;
+  bitrateKbps?: number;
+  sampleRateHz?: number;
+  bitDepth?: number;
+  codec?: string;
+  lossless?: boolean;
+}
+
+export interface PreparedPlaybackArtworkV2 {
+  coverUrl?: string;
+  coverCachePath?: string;
+  coverAssetUrl?: string;
+  dominantColor?: string;
+}
+
+export interface PreparedPlaybackLyricsV2 {
+  lyricLocator?: string;
+  lyricUrl?: string;
+  lyricCachePath?: string;
+  format?: 'lrc' | 'qrc' | 'ttml' | 'plain' | string;
+  language?: string;
+}
+
+export interface PreparedPlaybackRightsV2 {
+  playable: boolean;
+  reason?:
+    | 'vip-required'
+    | 'region-restricted'
+    | 'copyright-unavailable'
+    | 'auth-required'
+    | 'quality-unavailable'
+    | 'provider-error'
+    | string;
+  message?: string;
+  retryable?: boolean;
+}
+
+export interface PreparedPlaybackCachePolicyV2 {
+  cacheKey?: string;
+  scope: 'instance' | 'installation' | 'session';
+  mode?: 'streaming-prefix' | 'full-track' | 'no-cache' | 'sidecar-managed';
+  complete?: boolean;
+  expiresAtMs?: number;
+}
+
+export interface PreparedPlaybackRefreshPolicyV2 {
+  refreshable: boolean;
+  refreshBeforeMs?: number;
+  method?: 'preparePlayback' | 'refreshPreparedPlayback' | string;
+}
+
+export type PreparedPlaybackDiagnosticSeverityV2 = 'info' | 'warn' | 'error';
+
+export interface PreparedPlaybackDiagnosticV2 {
+  code: string;
+  message: string;
+  severity?: PreparedPlaybackDiagnosticSeverityV2;
+  retryable?: boolean;
+  details?: unknown;
+}
+
+export interface PreparedPlaybackV2 {
+  schemaVersion: PreparedPlaybackSchemaVersion;
+  preparedId: string;
+  connectorId: PlatformConnectorId;
+  instanceId: string;
   sourceLocator: string;
+  resourceId?: string;
+  resourceKind?: PlatformResourceKind;
+  title?: string;
+  artistNames?: string;
+  albumName?: string;
+  durationSeconds?: number;
+  source: PreparedPlaybackSourceV2;
+  quality?: PreparedPlaybackQualityV2;
+  artwork?: PreparedPlaybackArtworkV2;
+  lyrics?: PreparedPlaybackLyricsV2;
+  rights?: PreparedPlaybackRightsV2;
+  cache?: PreparedPlaybackCachePolicyV2;
+  refresh?: PreparedPlaybackRefreshPolicyV2;
+  diagnostics?: PreparedPlaybackDiagnosticV2[];
+  providerMetadata?: Record<string, unknown>;
+}
+
+export interface PlatformWorkspacePreparedPlayback {
+  schemaVersion?: PreparedPlaybackSchemaVersion;
+  preparedId?: string;
+  connectorId?: PlatformConnectorId | string;
+  instanceId?: string;
+  sourceLocator: string;
+  source?: PreparedPlaybackSourceV2;
   streamUrl?: string;
   cachePath?: string;
   mimeType?: string;
+  headers?: Record<string, string>;
+  expiresAtMs?: number;
+  seekable?: boolean;
+  rangeRequests?: boolean;
   durationSeconds?: number;
   resourceId?: string;
+  resourceKind?: PlatformResourceKind;
   selectedQualityKey?: string;
   selectedQualityLabel?: string;
   contentKind?: string;
+  quality?: PreparedPlaybackQualityV2;
+  artwork?: PreparedPlaybackArtworkV2;
+  lyrics?: PreparedPlaybackLyricsV2;
+  rights?: PreparedPlaybackRightsV2;
+  cache?: PreparedPlaybackCachePolicyV2;
+  refresh?: PreparedPlaybackRefreshPolicyV2;
+  diagnostics?: PreparedPlaybackDiagnosticV2[];
+  providerMetadata?: Record<string, unknown>;
 }
 
 export interface PlatformWorkspaceQualityOption {
@@ -162,6 +333,12 @@ export interface PlatformWorkspaceFeatureFlags {
   recommendations: boolean;
   search: boolean;
   quality: boolean;
+  favorites?: boolean;
+  playlist?: boolean;
+  history?: boolean;
+  lyrics?: boolean;
+  covers?: boolean;
+  prepare?: boolean;
 }
 
 export interface PlatformWorkspacePageItem {
@@ -193,6 +370,128 @@ export interface PlatformCompatCapabilityMap {
   navigation: boolean;
   settings: boolean;
   pages: boolean;
+  history?: boolean;
+  lyrics?: boolean;
+  covers?: boolean;
+  prepare?: boolean;
+}
+
+export const PLATFORM_API_BUCKET_IDS = [
+  'auth',
+  'library',
+  'favorites',
+  'playlist',
+  'recommendations',
+  'search',
+  'quality',
+  'lyrics',
+  'covers',
+  'history',
+  'user-actions',
+  'settings',
+  'pages',
+  'prepare',
+] as const;
+
+export type PlatformApiBucketId =
+  | (typeof PLATFORM_API_BUCKET_IDS)[number]
+  | string;
+
+export const PLATFORM_API_BUCKET_CANONICAL_METHODS = {
+  favorites: ['listCollections', 'listResources', 'addResource', 'removeResource'],
+  playlist: [
+    'listCollections',
+    'listResources',
+    'createPlaylist',
+    'deletePlaylist',
+    'renamePlaylist',
+    'addResource',
+    'removeResource',
+    'reorderResources',
+  ],
+  history: ['listResources', 'recordPlayback', 'syncRecent', 'clearHistory'],
+  prepare: ['preparePlayback', 'refreshPreparedPlayback', 'validatePreparedPlayback'],
+} as const;
+
+export type PlatformApiBucketCapabilityState =
+  | 'unsupported'
+  | 'read-only'
+  | 'read-write'
+  | 'degraded'
+  | 'requires-auth'
+  | 'requires-sidecar';
+
+export type PlatformApiMethodRequirement = 'none' | 'optional' | 'required';
+
+export type PlatformApiMutationConsistency = 'immediate' | 'eventual' | 'unknown';
+
+export type PlatformApiMutationRollbackSupport = 'supported' | 'unsupported' | 'unknown';
+
+export type PlatformApiMutationDuplicateBehavior =
+  | 'allow'
+  | 'ignore'
+  | 'replace'
+  | 'error'
+  | 'unknown';
+
+export type PlatformApiMutationConflictBehavior =
+  | 'last-write-wins'
+  | 'provider-defined'
+  | 'error'
+  | 'unknown';
+
+export interface PlatformApiBucketMethodCapability {
+  required?: boolean;
+  state?: PlatformApiBucketCapabilityState;
+  auth?: PlatformApiMethodRequirement;
+  sidecar?: PlatformApiMethodRequirement;
+  consistency?: PlatformApiMutationConsistency;
+  rollback?: PlatformApiMutationRollbackSupport;
+  duplicateBehavior?: PlatformApiMutationDuplicateBehavior;
+  conflictBehavior?: PlatformApiMutationConflictBehavior;
+  inputModel?: string;
+  outputModel?: string;
+  errors?: string[];
+  description?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PlatformApiBucketConstraints {
+  supportsMultipleFavoriteCollections?: boolean;
+  requiresResourceResolveBeforeMutation?: boolean;
+  mutationConsistency?: PlatformApiMutationConsistency;
+  rollback?: PlatformApiMutationRollbackSupport;
+  duplicateBehavior?: PlatformApiMutationDuplicateBehavior;
+  conflictBehavior?: PlatformApiMutationConflictBehavior;
+  [key: string]: unknown;
+}
+
+export interface PlatformApiBucketCapabilityDescriptor {
+  state: PlatformApiBucketCapabilityState;
+  methods?: Record<string, PlatformApiBucketMethodCapability>;
+  constraints?: PlatformApiBucketConstraints;
+  degradedReason?: string;
+  requiresAuth?: boolean;
+  requiresSidecar?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PlatformApiBucketCapabilitySchema {
+  [bucketId: string]: PlatformApiBucketCapabilityDescriptor | undefined;
+  auth?: PlatformApiBucketCapabilityDescriptor;
+  library?: PlatformApiBucketCapabilityDescriptor;
+  favorites?: PlatformApiBucketCapabilityDescriptor;
+  playlist?: PlatformApiBucketCapabilityDescriptor;
+  recommendations?: PlatformApiBucketCapabilityDescriptor;
+  search?: PlatformApiBucketCapabilityDescriptor;
+  quality?: PlatformApiBucketCapabilityDescriptor;
+  lyrics?: PlatformApiBucketCapabilityDescriptor;
+  covers?: PlatformApiBucketCapabilityDescriptor;
+  history?: PlatformApiBucketCapabilityDescriptor;
+  'user-actions'?: PlatformApiBucketCapabilityDescriptor;
+  settings?: PlatformApiBucketCapabilityDescriptor;
+  pages?: PlatformApiBucketCapabilityDescriptor;
+  prepare?: PlatformApiBucketCapabilityDescriptor;
 }
 
 export interface PlatformCompatContractFile {
@@ -214,13 +513,20 @@ export interface PlatformCompatContractFile {
   apiBindings: {
     auth: string;
     library?: string;
+    favorites?: string;
+    playlist?: string;
     recommendations?: string;
     search?: string;
     quality?: string;
+    lyrics?: string;
+    covers?: string;
+    history?: string;
     navigation?: string;
     settings?: string;
     pages?: string;
+    prepare?: string;
   };
+  api?: PlatformApiBucketCapabilitySchema;
   workspace?: MusicPlatformWorkspaceDescriptor;
   extension?: Record<string, unknown>;
 }

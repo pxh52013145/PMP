@@ -104,7 +104,7 @@ export interface ViewMountRequest extends RuntimeBridgeEnvelope {
     instanceId?: string;
     workspace?: Pick<
       MusicPlatformWorkspaceDescriptor,
-      'ownership' | 'requiredRuntimeCarrier'
+      'ownership' | 'requiredRuntimeCarrier' | 'template'
     >;
     root?: MusicPlatformWorkspaceRootDescriptor;
     shellSlot?: MusicPlatformWorkspaceShellSlotDescriptor;
