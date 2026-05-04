@@ -1,12 +1,5 @@
 ﻿import { listen } from '@tauri-apps/api/event';
-import type {
-  AudioSourcePrepareProfile,
-  AudioSpectrumFrame,
-  AudioSpectrumTap,
-  AudioStabilityActionProfile,
-  AudioStabilityProfile,
-  AudioState,
-} from './types';
+import type { AudioState } from './types';
 import type {
   NativeAudioErrorPayload,
   NativeAudioSpectrumPayload,
@@ -18,8 +11,18 @@ import {
 } from './nativeAudioDiagnosticTimelineAdapter';
 import { resolveNativeAudioPlaybackStatePayload } from './nativeAudioPlaybackStatePayloadAdapter';
 import { resolveNativeAudioQueueStatePayload } from './nativeAudioQueueStatePayloadAdapter';
-import { applyNativeAudioRuntimeMetricsPayload } from './nativeAudioRuntimeMetricsAdapter';
-import { applyNativeAudioSpectrumPayload } from './nativeAudioSpectrumPayloadAdapter';
+import {
+  applyNativeAudioEngineStatePayload,
+  type NativeAudioEngineState,
+} from './nativeAudioEngineStatePayloadAdapter';
+import {
+  applyNativeAudioRuntimeMetricsPayload,
+  type NativeAudioRuntimeMetricsState,
+} from './nativeAudioRuntimeMetricsAdapter';
+import {
+  applyNativeAudioSpectrumPayload,
+  type NativeAudioSpectrumPayloadState,
+} from './nativeAudioSpectrumPayloadAdapter';
 import { getTelemetryLogger } from '../telemetry/TelemetryService';
 
 const telemetry = getTelemetryLogger('audio', 'nativeAudioNativeListeners');
@@ -36,7 +39,9 @@ type DynamicSrcAutoDegradationOptions = {
   triggerActions: boolean;
 };
 
-export type NativeAudioListenerHost = {
+export type NativeAudioListenerHost = NativeAudioEngineState &
+  NativeAudioRuntimeMetricsState &
+  NativeAudioSpectrumPayloadState & {
   state: AudioState;
   stateListener: NativeAudioListenerCleanup;
   errorListener: NativeAudioListenerCleanup;
@@ -44,81 +49,12 @@ export type NativeAudioListenerHost = {
   lastUnderrunEvents: number;
   lastUnderrunFrames: number;
   lastNativeErrorSeq: number;
-  lastSchedulerProfile?: 'normal' | 'guarded' | 'critical';
-  stabilityActionProfile?: AudioStabilityActionProfile;
-  stabilityProfile?: AudioStabilityProfile;
-  sourcePrepareProfile?: AudioSourcePrepareProfile;
-  stabilityPrimaryReason?: string | null;
-  stabilityReasonCodes?: string[];
-  stabilityHintProfile?: AudioStabilityActionProfile;
-  stabilityHintPrimaryReason?: string | null;
-  stabilityHintReasonCodes?: string[];
-  transportMode?: 'robust' | 'transport-exact';
-  hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
-  srcMode?: 'source-native' | 'match-output' | 'target-rate';
-  srcBackend?: 'rubato' | 'linear-simd';
-  srcTargetSampleRate: number | null;
-  outputQuantizationMode?: 'round' | 'tpdf';
-  outputSampleRate: number;
-  sourceSampleRate: number;
-  hqSrcStopbandDb: number;
-  hqSrcActive: boolean;
-  hqSrcRatio: number;
-  transportExactInt32Container: boolean;
-  outputCallbackMetricsValid: boolean;
-  outputCallbackP99Us: number;
-  outputWaitTimeoutCount: number;
-  outputRenderUnderrunEvents: number;
-  outputRenderUnderrunFrames: number;
-  outputCallbackIntervalJitterP99Us: number;
-  outputCallbackIntervalOverrunCount: number;
-  outputCallbackExpectedIntervalUs: number;
-  transferLowWatermarkSamples: number;
-  transferRenderLowHitCount: number;
-  transferDecodeLowHitCount: number;
-  transferAdaptationLevel: number;
-  transferOscillationStreak: number;
-  renderQueuePageLocked: boolean;
-  renderQueuePageLockFailureCount: number;
-  renderQueuePageLockAttemptedBytes: number;
-  renderQueuePageLockSucceededBytes: number;
-  renderQueuePageLockFailedBytes: number;
-  transferMetricsValid: boolean;
-  sharedRenderAheadEnabled: boolean;
-  sharedRenderUnderrunEvents: number;
-  sharedRenderUnderrunFrames: number;
-  sharedRenderLowHitCount: number;
-  sharedRenderLowWatermarkSamples: number;
-  controlQueueLockFree: boolean;
-  controlQueueMode: string;
-  controlQueueCapacity: number;
-  controlQueueOverwriteEvents: number;
-  controlQueueDropNewestEvents: number;
-  controlQueueCoalescedOverflowEvents: number;
-  controlQueueCriticalOverflowEvents: number;
-  estimatedAudioBufferBytes: number;
-  memoryPoolF32GrowthEvents: number;
-  memoryPoolF32GrowthBytes: number;
-  memoryPoolF32PrewarmHits: number;
-  realtimeMemoryLockAttemptedBytes: number;
-  realtimeMemoryLockSucceededBytes: number;
-  realtimeMemoryLockFailedBytes: number;
-  realtimeMemoryLockSkippedBytes: number;
-  realtimeMemoryLockFailureCount: number;
-  realtimeMemoryLockSkippedCount: number;
-  realtimeMemoryLockedRoleMask: number;
-  realtimeMemoryFailedRoleMask: number;
-  realtimeMemorySkippedRoleMask: number;
-  realtimeMemoryPressureEvents: number;
-  diagnosticTimelineDroppedEvents: number;
   diagnosticTimeline: NativeAudioDiagnosticTimelineEntry[];
   fallbackClockBaseTimeSec: number;
   fallbackClockStartedAtMs: number | null;
   lastBackendTimeUpdateAtMs: number;
   timeUpdateCallbacks: Set<(time: number) => void>;
   endedCallbacks: Set<() => void>;
-  spectrumData: Uint8Array | null;
-  spectrumFrames: Partial<Record<AudioSpectrumTap, AudioSpectrumFrame>>;
   shouldIgnoreBackendCurrentTime(nextTime: number): boolean;
   handleUnderrunSpike(nextUnderrunEvents: number, nextUnderrunFrames?: number): void;
   handleRenderQueuePageLockStatus(
@@ -181,130 +117,7 @@ export async function setupNativeListenersImpl(
           this.lastUnderrunFrames = Math.max(0, Math.floor(next.underrunFrames));
         }
 
-        if (
-          next.schedulerProfile === 'normal' ||
-          next.schedulerProfile === 'guarded' ||
-          next.schedulerProfile === 'critical'
-        ) {
-          this.lastSchedulerProfile = next.schedulerProfile;
-        }
-
-        if (
-          next.stabilityActionProfile === 'normal' ||
-          next.stabilityActionProfile === 'guarded' ||
-          next.stabilityActionProfile === 'critical'
-        ) {
-          this.stabilityActionProfile = next.stabilityActionProfile;
-        }
-
-        if (
-          next.stabilityProfile === 'low-latency' ||
-          next.stabilityProfile === 'balanced' ||
-          next.stabilityProfile === 'stable' ||
-          next.stabilityProfile === 'game-safe' ||
-          next.stabilityProfile === 'safe-mode'
-        ) {
-          this.stabilityProfile = next.stabilityProfile;
-        }
-
-        if (
-          next.sourcePrepareProfile === 'baseline' ||
-          next.sourcePrepareProfile === 'steady' ||
-          next.sourcePrepareProfile === 'aggressive' ||
-          next.sourcePrepareProfile === 'failsafe'
-        ) {
-          this.sourcePrepareProfile = next.sourcePrepareProfile;
-        }
-
-        if (typeof next.stabilityPrimaryReason === 'string') {
-          this.stabilityPrimaryReason = next.stabilityPrimaryReason;
-        } else if (next.stabilityPrimaryReason === null) {
-          this.stabilityPrimaryReason = null;
-        }
-
-        if (Array.isArray(next.stabilityReasonCodes)) {
-          this.stabilityReasonCodes = next.stabilityReasonCodes.filter(
-            (reason): reason is string => typeof reason === 'string' && reason.length > 0
-          );
-        }
-
-        if (
-          next.stabilityHintProfile === 'normal' ||
-          next.stabilityHintProfile === 'guarded' ||
-          next.stabilityHintProfile === 'critical'
-        ) {
-          this.stabilityHintProfile = next.stabilityHintProfile;
-        } else if (next.stabilityHintProfile === null) {
-          this.stabilityHintProfile = undefined;
-        }
-
-        if (typeof next.stabilityHintPrimaryReason === 'string') {
-          this.stabilityHintPrimaryReason = next.stabilityHintPrimaryReason;
-        } else if (next.stabilityHintPrimaryReason === null) {
-          this.stabilityHintPrimaryReason = null;
-        }
-
-        if (Array.isArray(next.stabilityHintReasonCodes)) {
-          this.stabilityHintReasonCodes = next.stabilityHintReasonCodes.filter(
-            (reason): reason is string => typeof reason === 'string' && reason.length > 0
-          );
-        } else if (next.stabilityHintReasonCodes === null) {
-          this.stabilityHintReasonCodes = [];
-        }
-
-        if (next.transportMode === 'robust' || next.transportMode === 'transport-exact') {
-          this.transportMode = next.transportMode;
-        }
-
-        if (
-          next.hqSrcPhaseMode === 'linear' ||
-          next.hqSrcPhaseMode === 'minimum' ||
-          next.hqSrcPhaseMode === 'intermediate'
-        ) {
-          this.hqSrcPhaseMode = next.hqSrcPhaseMode;
-        }
-
-        if (
-          next.srcMode === 'source-native' ||
-          next.srcMode === 'match-output' ||
-          next.srcMode === 'target-rate'
-        ) {
-          this.srcMode = next.srcMode;
-        }
-
-        if (next.srcBackend === 'rubato' || next.srcBackend === 'linear-simd') {
-          this.srcBackend = next.srcBackend;
-        }
-
-        if (
-          typeof next.srcTargetSampleRate === 'number' &&
-          Number.isFinite(next.srcTargetSampleRate) &&
-          next.srcTargetSampleRate > 0
-        ) {
-          this.srcTargetSampleRate = Math.max(8000, Math.min(768000, Math.floor(next.srcTargetSampleRate)));
-        } else if (next.srcTargetSampleRate == null) {
-          this.srcTargetSampleRate = null;
-        }
-
-        if (next.outputQuantizationMode === 'round' || next.outputQuantizationMode === 'tpdf') {
-          this.outputQuantizationMode = next.outputQuantizationMode;
-        }
-
-        if (typeof next.hqSrcStopbandDb === 'number' && Number.isFinite(next.hqSrcStopbandDb)) {
-          this.hqSrcStopbandDb = Math.max(0, Math.min(200, Math.floor(next.hqSrcStopbandDb)));
-        }
-
-        if (typeof next.hqSrcActive === 'boolean') {
-          this.hqSrcActive = next.hqSrcActive;
-        }
-
-        if (typeof next.hqSrcRatio === 'number' && Number.isFinite(next.hqSrcRatio)) {
-          this.hqSrcRatio = next.hqSrcRatio;
-        }
-
-        if (typeof next.transportExactInt32Container === 'boolean') {
-          this.transportExactInt32Container = next.transportExactInt32Container;
-        }
+        applyNativeAudioEngineStatePayload(this, next);
 
         const runtimeMetricsResult = applyNativeAudioRuntimeMetricsPayload(this, next);
         if (runtimeMetricsResult.renderQueuePageLockStatus) {
