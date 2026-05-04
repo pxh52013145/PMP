@@ -1,6 +1,8 @@
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
+use serde::Serialize;
+
 use super::{
     DesktopLyricsOverlaySnapshot, DesktopLyricsOverlaySnapshotText, OverlayCommand,
     OverlayPositionPreset, OverlayText,
@@ -16,6 +18,10 @@ use tauri::{
 const DEFAULT_OVERLAY_WIDTH: i32 = 960;
 #[cfg(target_os = "windows")]
 const DEFAULT_OVERLAY_HEIGHT: i32 = 188;
+#[cfg(target_os = "windows")]
+const UNLOCK_DOT_SIZE: i32 = 24;
+#[cfg(target_os = "windows")]
+const UNLOCK_DOT_MARGIN: i32 = 8;
 
 #[cfg(target_os = "windows")]
 #[derive(Debug, Clone)]
@@ -29,6 +35,7 @@ struct OverlayRuntimeState {
     position_offset_y: i32,
     region_width: i32,
     region_height: i32,
+    lyric_offset_ms: i32,
     has_explicit_position: bool,
     has_explicit_region: bool,
     text: Option<OverlayText>,
@@ -47,6 +54,7 @@ impl Default for OverlayRuntimeState {
             position_offset_y: 0,
             region_width: 0,
             region_height: 0,
+            lyric_offset_ms: 0,
             has_explicit_position: false,
             has_explicit_region: false,
             text: None,
@@ -64,14 +72,17 @@ impl OverlayRuntimeState {
             opacity_percent: self.opacity_percent,
             region_width: self.region_width,
             region_height: self.region_height,
+            lyric_offset_ms: self.lyric_offset_ms,
             text: self
                 .text
                 .as_ref()
                 .map(|text| DesktopLyricsOverlaySnapshotText {
                     primary: text.primary.clone(),
                     secondary: text.secondary.clone(),
-                    previous: text.previous.clone(),
-                    next: text.next.clone(),
+                    lines: text.lines.clone(),
+                    active_index: text.active_index,
+                    active_progress_percent: text.active_progress_percent,
+                    active_progress_remaining_ms: text.active_progress_remaining_ms,
                 }),
         }
     }
@@ -85,6 +96,16 @@ struct CommandEffects {
     controls_changed: bool,
     layout_changed: bool,
     text_changed: bool,
+    progress_changed: bool,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OverlayProgressPayload {
+    active_index: Option<usize>,
+    active_progress_percent: u8,
+    active_progress_remaining_ms: u32,
 }
 
 #[cfg(target_os = "windows")]
@@ -167,10 +188,32 @@ fn apply_command(state: &mut OverlayRuntimeState, command: OverlayCommand) -> Co
                 effects.layout_changed = true;
             }
         }
+        OverlayCommand::SetLyricOffsetMs(offset_ms) => {
+            if state.lyric_offset_ms != offset_ms {
+                state.lyric_offset_ms = offset_ms;
+                effects.controls_changed = true;
+            }
+        }
         OverlayCommand::SetText(text) => {
             if state.text != text {
                 state.text = text;
                 effects.text_changed = true;
+            }
+        }
+        OverlayCommand::SetActiveProgress {
+            active_index,
+            active_progress_percent,
+            active_progress_remaining_ms,
+        } => {
+            if let Some(text) = state.text.as_mut() {
+                if text.active_index == active_index
+                    && (text.active_progress_percent != active_progress_percent
+                        || text.active_progress_remaining_ms != active_progress_remaining_ms)
+                {
+                    text.active_progress_percent = active_progress_percent;
+                    text.active_progress_remaining_ms = active_progress_remaining_ms;
+                    effects.progress_changed = true;
+                }
             }
         }
         OverlayCommand::Shutdown => {
@@ -212,6 +255,33 @@ fn ensure_overlay_window(app: &tauri::AppHandle) -> Result<(Window, bool), Strin
 
     bind_overlay_window_events(&window);
     Ok((window, true))
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_unlock_window(app: &tauri::AppHandle) -> Result<Window, String> {
+    if let Some(existing) = app.get_window(super::DESKTOP_LYRICS_UNLOCK_WINDOW_LABEL) {
+        let _ = existing.set_resizable(false);
+        return Ok(existing);
+    }
+
+    WindowBuilder::new(
+        app,
+        super::DESKTOP_LYRICS_UNLOCK_WINDOW_LABEL,
+        WindowUrl::App("/#/desktop-lyrics-overlay/unlock".into()),
+    )
+    .title("Desktop Lyrics Unlock")
+    .inner_size(UNLOCK_DOT_SIZE as f64, UNLOCK_DOT_SIZE as f64)
+    .transparent(true)
+    .decorations(false)
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .focused(false)
+    .visible(false)
+    .build()
+    .map_err(|error| format!("Create desktop lyrics unlock window failed: {error}"))
 }
 
 #[cfg(target_os = "windows")]
@@ -306,13 +376,8 @@ fn apply_window_geometry(window: &Window, x: i32, y: i32, width: i32, height: i3
         }
     }
 
-    let _ = window.set_position(Position::Logical(LogicalPosition::new(
-        x as f64, y as f64,
-    )));
-    let _ = window.set_size(Size::Logical(LogicalSize::new(
-        width as f64,
-        height as f64,
-    )));
+    let _ = window.set_position(Position::Logical(LogicalPosition::new(x as f64, y as f64)));
+    let _ = window.set_size(Size::Logical(LogicalSize::new(width as f64, height as f64)));
 }
 
 #[cfg(target_os = "windows")]
@@ -342,6 +407,19 @@ fn apply_window_layout(window: &Window, state: &OverlayRuntimeState) {
 }
 
 #[cfg(target_os = "windows")]
+fn apply_unlock_window_layout(unlock_window: &Window, overlay_window: &Window) {
+    let Some((overlay_x, overlay_y, overlay_width, _overlay_height)) =
+        read_layout_from_window(overlay_window)
+    else {
+        return;
+    };
+
+    let x = overlay_x + overlay_width.saturating_sub(UNLOCK_DOT_SIZE + UNLOCK_DOT_MARGIN);
+    let y = overlay_y + UNLOCK_DOT_MARGIN;
+    apply_window_geometry(unlock_window, x, y, UNLOCK_DOT_SIZE, UNLOCK_DOT_SIZE);
+}
+
+#[cfg(target_os = "windows")]
 pub(super) fn preview_layout(
     app: &tauri::AppHandle,
     offset_x: i32,
@@ -365,10 +443,33 @@ fn apply_window_controls(window: &Window, state: &OverlayRuntimeState) {
 }
 
 #[cfg(target_os = "windows")]
+fn apply_unlock_window_controls(window: &Window) {
+    let _ = window.set_always_on_top(true);
+    let _ = window.set_resizable(false);
+    let _ = window.set_ignore_cursor_events(false);
+}
+
+#[cfg(target_os = "windows")]
 fn emit_overlay_sync(window: &Window, state: &OverlayRuntimeState) {
     let _ = window.emit(
         super::DESKTOP_LYRICS_OVERLAY_SYNC_EVENT,
         state.to_snapshot(),
+    );
+}
+
+#[cfg(target_os = "windows")]
+fn emit_overlay_progress(window: &Window, state: &OverlayRuntimeState) {
+    let Some(text) = state.text.as_ref() else {
+        return;
+    };
+
+    let _ = window.emit(
+        super::DESKTOP_LYRICS_OVERLAY_PROGRESS_EVENT,
+        OverlayProgressPayload {
+            active_index: text.active_index,
+            active_progress_percent: text.active_progress_percent,
+            active_progress_remaining_ms: text.active_progress_remaining_ms,
+        },
     );
 }
 
@@ -379,6 +480,46 @@ fn destroy_overlay_window(app: &tauri::AppHandle) {
     };
 
     let _ = window.close();
+}
+
+#[cfg(target_os = "windows")]
+fn destroy_unlock_window(app: &tauri::AppHandle) {
+    let Some(window) = app.get_window(super::DESKTOP_LYRICS_UNLOCK_WINDOW_LABEL) else {
+        return;
+    };
+
+    let _ = window.close();
+}
+
+#[cfg(target_os = "windows")]
+fn sync_unlock_window(
+    app: &tauri::AppHandle,
+    overlay_window: &Window,
+    state: &OverlayRuntimeState,
+) {
+    if !state.visible || !state.click_through {
+        destroy_unlock_window(app);
+        return;
+    }
+
+    match ensure_unlock_window(app) {
+        Ok(unlock_window) => {
+            apply_unlock_window_layout(&unlock_window, overlay_window);
+            apply_unlock_window_controls(&unlock_window);
+            let _ = unlock_window.show();
+            let _ = unlock_window.unminimize();
+        }
+        Err(error) => {
+            crate::backend_telemetry::warn(
+                app,
+                "desktop-lyrics",
+                "desktop-lyrics.unlock.ensure.failed",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("desktop_lyrics::backend")
+                    .message(error),
+            );
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -397,6 +538,7 @@ pub fn run(rx: Receiver<OverlayCommand>) {
         if let Some(app) = super::current_app_handle() {
             if effects.shutdown || !state.visible {
                 destroy_overlay_window(&app);
+                destroy_unlock_window(&app);
             } else {
                 match ensure_overlay_window(&app) {
                     Ok((window, created)) => {
@@ -406,6 +548,14 @@ pub fn run(rx: Receiver<OverlayCommand>) {
 
                         if created || effects.controls_changed {
                             apply_window_controls(&window, &state);
+                        }
+
+                        if created
+                            || effects.layout_changed
+                            || effects.controls_changed
+                            || effects.visible_changed
+                        {
+                            sync_unlock_window(&app, &window, &state);
                         }
 
                         if created || effects.visible_changed {
@@ -420,6 +570,8 @@ pub fn run(rx: Receiver<OverlayCommand>) {
                             || effects.visible_changed
                         {
                             emit_overlay_sync(&window, &state);
+                        } else if effects.progress_changed {
+                            emit_overlay_progress(&window, &state);
                         }
                     }
                     Err(error) => {
@@ -450,6 +602,7 @@ pub fn run(rx: Receiver<OverlayCommand>) {
 
     if let Some(app) = super::current_app_handle() {
         destroy_overlay_window(&app);
+        destroy_unlock_window(&app);
     }
 }
 

@@ -89,8 +89,6 @@ pub fn handle_system_tray_event(app: &tauri::AppHandle, event: SystemTrayEvent) 
 }
 
 pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    crate::windows::desktop_lyrics::init();
-
     if let Err(error) = crate::debug_config::apply_from_disk(&app.handle()) {
         eprintln!("[debug] Failed to apply debug config: {error}");
     }
@@ -104,6 +102,8 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
     ));
     crate::backend_telemetry::install_global_core(telemetry_core.clone());
     app.manage(telemetry_core);
+
+    crate::windows::desktop_lyrics::init(&app.handle());
 
     if let Some(payload) = crate::app_runtime::capture_startup_host_file_open_payload() {
         crate::app_runtime::enqueue_startup_host_file_open(&app.handle(), payload);

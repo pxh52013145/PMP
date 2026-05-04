@@ -31,6 +31,7 @@ interface DesktopLyricsControlsChangedPayload {
   clickThrough: boolean;
   fontSize: number;
   opacityPercent: number;
+  lyricOffsetMs: number;
 }
 
 const CHECKMARK_ICON = '✓';
@@ -159,6 +160,7 @@ export const DesktopLyricsButton: React.FC = () => {
           setClickThrough(payload.clickThrough === true);
           setFontSize(normalizeDesktopLyricsFontSize(payload.fontSize));
           setOpacityPercent(normalizeDesktopLyricsOpacityPercent(payload.opacityPercent));
+          setLyricOffsetMs(normalizeDesktopLyricsLyricOffsetMs(payload.lyricOffsetMs));
         }
       );
 
@@ -189,6 +191,7 @@ export const DesktopLyricsButton: React.FC = () => {
     setClickThrough,
     setEnabled,
     setFontSize,
+    setLyricOffsetMs,
     setOpacityPercent,
     setPositionOffsetX,
     setPositionOffsetY,
@@ -265,11 +268,11 @@ export const DesktopLyricsButton: React.FC = () => {
           onClick: () => void applyLyricOffsetMs(option.value),
         })),
         {
-          label: t('magnet.desktopLyricsButton.contextMenu.lyricOffset.earlier'),
+          label: t('magnet.desktopLyricsButton.contextMenu.lyricOffset.slower'),
           onClick: () => nudgeLyricOffset(-LYRIC_OFFSET_NUDGE_STEP),
         },
         {
-          label: t('magnet.desktopLyricsButton.contextMenu.lyricOffset.later'),
+          label: t('magnet.desktopLyricsButton.contextMenu.lyricOffset.faster'),
           onClick: () => nudgeLyricOffset(LYRIC_OFFSET_NUDGE_STEP),
         },
       ];

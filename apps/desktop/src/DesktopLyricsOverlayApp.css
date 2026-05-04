@@ -12,6 +12,54 @@ body.desktop-lyrics-overlay-page #root {
   overflow: hidden;
 }
 
+html.desktop-lyrics-unlock-page,
+html.desktop-lyrics-unlock-page body,
+html.desktop-lyrics-unlock-page #root,
+body.desktop-lyrics-unlock-page,
+body.desktop-lyrics-unlock-page #root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent !important;
+  border: 0;
+  outline: 0;
+  overflow: hidden;
+}
+
+.desktop-lyrics-unlock-dot {
+  width: 100vw;
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.desktop-lyrics-unlock-dot span {
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: rgba(115, 228, 255, 0.74);
+  box-shadow:
+    0 0 0 1px rgba(8, 11, 16, 0.54),
+    0 6px 16px rgba(0, 0, 0, 0.32);
+  transition:
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.desktop-lyrics-unlock-dot:hover span {
+  background: rgba(247, 251, 255, 0.92);
+  transform: scale(1.16);
+}
+
+.desktop-lyrics-unlock-dot:active span,
+.desktop-lyrics-unlock-dot.is-unlocking span {
+  transform: scale(0.86);
+}
+
 .desktop-lyrics-overlay {
   position: relative;
   width: 100vw;
@@ -82,8 +130,8 @@ body.desktop-lyrics-overlay-page #root {
   z-index: 5;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px;
+  gap: 3px;
+  padding: 3px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 10px;
   background: rgba(7, 10, 15, 0.54);
@@ -104,8 +152,8 @@ body.desktop-lyrics-overlay-page #root {
 
 .desktop-lyrics-overlay__drag-hint,
 .desktop-lyrics-overlay__toolbar button {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border-radius: 8px;
   display: inline-flex;
   align-items: center;
@@ -215,56 +263,107 @@ body.desktop-lyrics-overlay-page #root {
   position: absolute;
   inset: 0;
   z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   overflow: hidden;
   padding: 24px 76px 18px;
   text-align: center;
   pointer-events: none;
+  mask-image: linear-gradient(
+    180deg,
+    transparent 0,
+    rgba(0, 0, 0, 0.22) 8%,
+    #000 23%,
+    #000 77%,
+    rgba(0, 0, 0, 0.22) 92%,
+    transparent 100%
+  );
 }
 
 .desktop-lyrics-overlay__line-stack {
-  width: min(100%, 1120px);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
+  --desktop-lyrics-row-step: 64px;
+  --desktop-lyrics-active-progress: 0%;
+  position: absolute;
+  top: calc(50% - var(--desktop-lyrics-row-step) / 2);
+  left: 76px;
+  right: 76px;
+  display: block;
+  transform: translateY(var(--desktop-lyrics-stack-offset, 0));
+  transition: transform 260ms cubic-bezier(0.2, 0.72, 0.22, 1);
+  will-change: transform;
 }
 
-.desktop-lyrics-overlay__primary,
 .desktop-lyrics-overlay__secondary,
-.desktop-lyrics-overlay__context {
+.desktop-lyrics-overlay__lyric-line {
   max-width: 100%;
   margin: 0;
   overflow-wrap: anywhere;
   text-wrap: balance;
 }
 
-.desktop-lyrics-overlay__primary {
+.desktop-lyrics-overlay__lyric-line {
+  height: var(--desktop-lyrics-row-step);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--desktop-lyrics-font-size, 26px) * 0.76);
+  font-weight: 420;
+  line-height: 1.18;
+  letter-spacing: 0;
+  color: rgba(126, 236, 255, 0.26);
+  opacity: var(--desktop-lyrics-line-opacity, 1);
+  transition:
+    color 220ms ease,
+    opacity 220ms ease,
+    font-size 220ms ease,
+    font-weight 220ms ease;
+}
+
+.desktop-lyrics-overlay__lyric-line.is-past {
+  color: rgba(126, 236, 255, 0.46);
+}
+
+.desktop-lyrics-overlay__lyric-line.is-future {
+  color: rgba(235, 242, 255, 0.16);
+}
+
+.desktop-lyrics-overlay__lyric-line.is-active {
   font-size: var(--desktop-lyrics-font-size, 26px);
   font-weight: 760;
   line-height: 1.12;
+  color: rgba(239, 248, 255, 0.56);
+  opacity: 1;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.56);
+}
+
+.desktop-lyrics-overlay__lyric-current {
+  position: relative;
+  display: inline-block;
+  max-width: min(100%, 1120px);
+}
+
+.desktop-lyrics-overlay__lyric-base,
+.desktop-lyrics-overlay__lyric-fill {
+  display: block;
+}
+
+.desktop-lyrics-overlay__lyric-fill {
+  position: absolute;
+  inset: 0;
+  width: var(--desktop-lyrics-active-progress, 0%);
+  overflow: hidden;
+  white-space: nowrap;
   color: #fbfdff;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.68);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.58);
+  will-change: width;
 }
 
 .desktop-lyrics-overlay__secondary {
+  position: absolute;
+  top: var(--desktop-lyrics-secondary-top, 0);
+  left: 0;
+  right: 0;
   font-size: calc(var(--desktop-lyrics-font-size, 26px) * 0.56);
   font-weight: 560;
   line-height: 1.2;
   color: rgba(229, 239, 255, 0.82);
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
-}
-
-.desktop-lyrics-overlay__context {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
-  font-size: calc(var(--desktop-lyrics-font-size, 26px) * 0.5);
-  font-weight: 520;
-  line-height: 1.2;
-  color: rgba(229, 239, 255, 0.58);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.56);
 }
