@@ -398,6 +398,25 @@ pub struct LibraryTrackQueryPageResult {
     pub total: u64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryLocalPlaybackResolveInput {
+    pub track_id: Option<String>,
+    pub quick_fingerprint: Option<String>,
+    pub file_path: Option<String>,
+    pub source_id: Option<String>,
+    pub include_missing: Option<bool>,
+    pub visible_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryLocalPlaybackResolveResult {
+    pub track: Option<LibraryTrackRecord>,
+    pub strategy: String,
+    pub requires_network_fallback: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryTrackFieldCatalogRecord {
@@ -2357,7 +2376,9 @@ fn music_tag_field_columns() -> &'static [MusicTagFieldColumn] {
 }
 
 fn music_tag_field_column(field: &str) -> Option<&'static MusicTagFieldColumn> {
-    music_tag_field_columns().iter().find(|entry| entry.field == field)
+    music_tag_field_columns()
+        .iter()
+        .find(|entry| entry.field == field)
 }
 
 fn music_tag_normalize_locked_fields(fields: &[String]) -> Vec<String> {
@@ -2458,7 +2479,11 @@ fn music_tag_json_value_to_sql(value: &JsonValue, kind: MusicTagFieldValueKind) 
     }
 }
 
-fn music_tag_row_value_to_json(row: &rusqlite::Row<'_>, column: &str, kind: MusicTagFieldValueKind) -> Result<JsonValue, rusqlite::Error> {
+fn music_tag_row_value_to_json(
+    row: &rusqlite::Row<'_>,
+    column: &str,
+    kind: MusicTagFieldValueKind,
+) -> Result<JsonValue, rusqlite::Error> {
     Ok(match kind {
         MusicTagFieldValueKind::Text => match row.get_ref(column)? {
             ValueRef::Null => JsonValue::Null,
@@ -2496,7 +2521,15 @@ fn music_tag_metadata_map_from_json(value: &JsonValue) -> JsonMap<String, JsonVa
                 .map(JsonValue::String),
             MusicTagFieldValueKind::Integer => raw
                 .as_i64()
-                .or_else(|| raw.as_f64().and_then(|item| if item.is_finite() { Some(item as i64) } else { None }))
+                .or_else(|| {
+                    raw.as_f64().and_then(|item| {
+                        if item.is_finite() {
+                            Some(item as i64)
+                        } else {
+                            None
+                        }
+                    })
+                })
                 .map(|item| JsonValue::Number(item.into())),
             MusicTagFieldValueKind::Real => raw
                 .as_f64()
@@ -2529,7 +2562,10 @@ fn music_tag_hash_id(prefix: &str, payload: &str) -> String {
 }
 
 fn system_time_to_ms(value: SystemTime) -> Option<i64> {
-    value.duration_since(UNIX_EPOCH).ok().map(|duration| duration.as_millis() as i64)
+    value
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis() as i64)
 }
 
 fn normalize_owner_uid(value: Option<&str>) -> Option<String> {
@@ -8335,6 +8371,35 @@ fn execute_track_query(
     Ok(items)
 }
 
+fn query_tracks_from_conn(
+    conn: &Connection,
+    query_ref: Option<&LibraryTrackQueryInput>,
+) -> Result<Vec<LibraryTrackRecord>, String> {
+    let track_field_descriptors = list_local_track_field_descriptors(conn)?;
+    let normalized_limit = resolve_track_query_limit(query_ref);
+    let normalized_offset = resolve_track_query_offset(query_ref);
+    let use_list_projection = uses_list_track_projection(query_ref);
+    let sql_parts = build_track_query_sql(query_ref, &track_field_descriptors);
+
+    let mut sql = String::from(track_query_select_clause(use_list_projection));
+    sql.push_str(&sql_parts.from_where_sql);
+    sql.push_str("\n ORDER BY ");
+    sql.push_str(&sql_parts.order_clauses.join(", "));
+    sql.push_str("\n LIMIT ?\n OFFSET ?");
+
+    let mut bind_values = sql_parts.bind_values;
+    bind_values.push(Value::Integer(normalized_limit));
+    bind_values.push(Value::Integer(normalized_offset));
+
+    execute_track_query(
+        conn,
+        sql.as_str(),
+        bind_values.as_slice(),
+        use_list_projection,
+        &track_field_descriptors,
+    )
+}
+
 fn count_track_query(conn: &Connection, sql_parts: &TrackQuerySqlParts) -> Result<u64, String> {
     let cache_key = hash_track_query_count_key(
         sql_parts.from_where_sql.as_str(),
@@ -8406,32 +8471,7 @@ pub fn query_tracks(
     query: Option<LibraryTrackQueryInput>,
 ) -> Result<Vec<LibraryTrackRecord>, String> {
     ensure_initialized(app)?;
-    with_conn(|conn| {
-        let track_field_descriptors = list_local_track_field_descriptors(conn)?;
-        let query_ref = query.as_ref();
-        let normalized_limit = resolve_track_query_limit(query_ref);
-        let normalized_offset = resolve_track_query_offset(query_ref);
-        let use_list_projection = uses_list_track_projection(query_ref);
-        let sql_parts = build_track_query_sql(query_ref, &track_field_descriptors);
-
-        let mut sql = String::from(track_query_select_clause(use_list_projection));
-        sql.push_str(&sql_parts.from_where_sql);
-        sql.push_str("\n ORDER BY ");
-        sql.push_str(&sql_parts.order_clauses.join(", "));
-        sql.push_str("\n LIMIT ?\n OFFSET ?");
-
-        let mut bind_values = sql_parts.bind_values;
-        bind_values.push(Value::Integer(normalized_limit));
-        bind_values.push(Value::Integer(normalized_offset));
-
-        execute_track_query(
-            conn,
-            sql.as_str(),
-            bind_values.as_slice(),
-            use_list_projection,
-            &track_field_descriptors,
-        )
-    })
+    with_conn(|conn| query_tracks_from_conn(conn, query.as_ref()))
 }
 
 pub fn query_tracks_page(
@@ -8470,6 +8510,155 @@ pub fn query_tracks_page(
 
         Ok(LibraryTrackQueryPageResult { items, total })
     })
+}
+
+fn is_likely_absolute_track_path(path: &str) -> bool {
+    let trimmed = path.trim();
+    if trimmed.starts_with('/') {
+        return true;
+    }
+
+    let bytes = trimmed.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+}
+
+fn pick_preferred_local_playback_track(
+    records: &[LibraryTrackRecord],
+) -> Option<LibraryTrackRecord> {
+    records
+        .iter()
+        .find(|record| {
+            record.status == "available" && is_likely_absolute_track_path(record.file_path.as_str())
+        })
+        .cloned()
+        .or_else(|| {
+            records
+                .iter()
+                .find(|record| record.status == "available")
+                .cloned()
+        })
+        .or_else(|| records.first().cloned())
+}
+
+fn build_local_playback_lookup_query(
+    include_missing: bool,
+    visible_only: bool,
+    source_id: Option<&String>,
+    track_id: Option<String>,
+    quick_fingerprint: Option<String>,
+    file_path: Option<String>,
+    limit: u32,
+) -> LibraryTrackQueryInput {
+    LibraryTrackQueryInput {
+        limit: Some(limit),
+        offset: Some(0),
+        include_missing: Some(include_missing),
+        visible_only: Some(visible_only),
+        projection: None,
+        search_query: None,
+        artist: None,
+        album: None,
+        track_id,
+        source_id: source_id.cloned(),
+        quick_fingerprint,
+        file_path,
+        base_query: None,
+        filters: None,
+        group_by: None,
+        sort: None,
+    }
+}
+
+fn local_playback_resolve_miss() -> LibraryLocalPlaybackResolveResult {
+    LibraryLocalPlaybackResolveResult {
+        track: None,
+        strategy: "none".to_string(),
+        requires_network_fallback: true,
+    }
+}
+
+fn local_playback_resolve_hit(
+    track: LibraryTrackRecord,
+    strategy: &str,
+) -> LibraryLocalPlaybackResolveResult {
+    LibraryLocalPlaybackResolveResult {
+        track: Some(track),
+        strategy: strategy.to_string(),
+        requires_network_fallback: false,
+    }
+}
+
+fn resolve_local_playback_candidate_from_conn(
+    conn: &Connection,
+    input: &LibraryLocalPlaybackResolveInput,
+) -> Result<LibraryLocalPlaybackResolveResult, String> {
+    let track_id = normalize_text(input.track_id.as_deref());
+    let quick_fingerprint = normalize_quick_fingerprint(input.quick_fingerprint.as_deref());
+    let file_path = normalize_text(input.file_path.as_deref());
+    let source_id = normalize_text(input.source_id.as_deref());
+    let include_missing = input.include_missing.unwrap_or(false);
+    let visible_only = input.visible_only.unwrap_or(false);
+
+    if let Some(track_id) = track_id {
+        let query = build_local_playback_lookup_query(
+            include_missing,
+            visible_only,
+            source_id.as_ref(),
+            Some(track_id),
+            None,
+            None,
+            1,
+        );
+        let rows = query_tracks_from_conn(conn, Some(&query))?;
+        if let Some(track) = pick_preferred_local_playback_track(rows.as_slice()) {
+            return Ok(local_playback_resolve_hit(track, "trackId"));
+        }
+    }
+
+    if let Some(quick_fingerprint) = quick_fingerprint {
+        let query = build_local_playback_lookup_query(
+            include_missing,
+            visible_only,
+            source_id.as_ref(),
+            None,
+            Some(quick_fingerprint),
+            None,
+            16,
+        );
+        let rows = query_tracks_from_conn(conn, Some(&query))?;
+        if let Some(track) = pick_preferred_local_playback_track(rows.as_slice()) {
+            return Ok(local_playback_resolve_hit(track, "quickFingerprint"));
+        }
+    }
+
+    if let Some(file_path) = file_path {
+        let query = build_local_playback_lookup_query(
+            include_missing,
+            visible_only,
+            source_id.as_ref(),
+            None,
+            None,
+            Some(file_path),
+            1,
+        );
+        let rows = query_tracks_from_conn(conn, Some(&query))?;
+        if let Some(track) = pick_preferred_local_playback_track(rows.as_slice()) {
+            return Ok(local_playback_resolve_hit(track, "filePath"));
+        }
+    }
+
+    Ok(local_playback_resolve_miss())
+}
+
+pub fn resolve_local_playback_candidate(
+    app: &AppHandle,
+    input: LibraryLocalPlaybackResolveInput,
+) -> Result<LibraryLocalPlaybackResolveResult, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| resolve_local_playback_candidate_from_conn(conn, &input))
 }
 
 #[derive(Debug, Clone)]
@@ -8601,7 +8790,11 @@ fn music_tag_db_patch_inner(
 
     let mut final_locked_set = match input.lock_mode.as_deref() {
         Some("replace") => BTreeSet::new(),
-        _ => snapshot.locked_fields.iter().cloned().collect::<BTreeSet<_>>(),
+        _ => snapshot
+            .locked_fields
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
     };
     for field in &requested_locked_fields {
         final_locked_set.insert(field.clone());
@@ -8612,7 +8805,10 @@ fn music_tag_db_patch_inner(
 
     let mut after_metadata = snapshot.metadata.clone();
     let mut changed_fields = Vec::new();
-    let existing_locked_set = existing_locked_fields.iter().cloned().collect::<BTreeSet<_>>();
+    let existing_locked_set = existing_locked_fields
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
 
     for column in music_tag_field_columns() {
         let Some(after_value) = source_metadata.get(column.field) else {
@@ -8648,9 +8844,12 @@ fn music_tag_db_patch_inner(
         }
     }
 
-    let has_blocking_warning = warnings
-        .iter()
-        .any(|warning| matches!(warning.as_str(), "file-mtime-changed" | "file-mtime-unavailable"));
+    let has_blocking_warning = warnings.iter().any(|warning| {
+        matches!(
+            warning.as_str(),
+            "file-mtime-changed" | "file-mtime-unavailable"
+        )
+    });
     let has_work = !changed_fields.is_empty() || lock_changed;
     let can_apply = has_work && !has_blocking_warning;
     let now = now_ms();
@@ -8828,8 +9027,8 @@ pub fn replace_music_tag_candidates(
     candidates: Vec<MusicTagCandidateUpsertInput>,
 ) -> Result<usize, String> {
     ensure_initialized(app)?;
-    let normalized_track_id =
-        normalize_text(Some(track_id)).ok_or_else(|| "MusicTag candidate track_id is required".to_string())?;
+    let normalized_track_id = normalize_text(Some(track_id))
+        .ok_or_else(|| "MusicTag candidate track_id is required".to_string())?;
     with_conn(|conn| {
         let tx = conn
             .transaction()
@@ -9763,6 +9962,118 @@ mod tests {
     }
 
     #[test]
+    fn local_playback_resolve_prefers_track_id_then_available_absolute_match() {
+        let (conn, path) = open_temp_db("music-library-playback-resolve");
+        migrate(&conn).expect("migrate empty db");
+
+        conn.execute(
+            r#"
+            INSERT INTO sources(
+              id,
+              path,
+              display_name,
+              category,
+              is_visible,
+              is_scanned,
+              added_at_ms,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, NULL, 'music', 1, 1, 100, 100)
+            "#,
+            params!["source-a", "C:\\Music"],
+        )
+        .expect("insert source");
+
+        for (id, file_path, title, status) in [
+            ("missing", "C:\\Music\\missing.flac", "A", "missing"),
+            ("relative", "relative.flac", "B", "available"),
+            ("absolute", "C:\\Music\\absolute.flac", "C", "available"),
+        ] {
+            conn.execute(
+                r#"
+                INSERT INTO local_tracks(
+                  id,
+                  source_id,
+                  file_path,
+                  quick_fingerprint,
+                  title,
+                  status,
+                  created_at_ms,
+                  updated_at_ms,
+                  last_seen_at_ms
+                )
+                VALUES (?1, 'source-a', ?2, 'qf2:0000000000000001', ?3, ?4, 100, 100, 100)
+                "#,
+                params![id, file_path, title, status],
+            )
+            .expect("insert local track");
+        }
+
+        let track_id_result = resolve_local_playback_candidate_from_conn(
+            &conn,
+            &LibraryLocalPlaybackResolveInput {
+                track_id: Some("relative".to_string()),
+                quick_fingerprint: Some("qf2:0000000000000001".to_string()),
+                file_path: None,
+                source_id: None,
+                include_missing: Some(true),
+                visible_only: Some(true),
+            },
+        )
+        .expect("resolve by track id");
+
+        assert_eq!(track_id_result.strategy, "trackId");
+        assert_eq!(
+            track_id_result.track.as_ref().map(|track| track.id.as_str()),
+            Some("relative")
+        );
+        assert!(!track_id_result.requires_network_fallback);
+
+        let fingerprint_result = resolve_local_playback_candidate_from_conn(
+            &conn,
+            &LibraryLocalPlaybackResolveInput {
+                track_id: None,
+                quick_fingerprint: Some("0000000000000001".to_string()),
+                file_path: None,
+                source_id: None,
+                include_missing: Some(true),
+                visible_only: Some(true),
+            },
+        )
+        .expect("resolve by quick fingerprint");
+
+        assert_eq!(fingerprint_result.strategy, "quickFingerprint");
+        assert_eq!(
+            fingerprint_result
+                .track
+                .as_ref()
+                .map(|track| track.id.as_str()),
+            Some("absolute")
+        );
+        assert!(!fingerprint_result.requires_network_fallback);
+
+        let miss_result = resolve_local_playback_candidate_from_conn(
+            &conn,
+            &LibraryLocalPlaybackResolveInput {
+                track_id: None,
+                quick_fingerprint: None,
+                file_path: Some("missing-path.flac".to_string()),
+                source_id: None,
+                include_missing: Some(false),
+                visible_only: Some(true),
+            },
+        )
+        .expect("resolve miss");
+
+        assert_eq!(miss_result.strategy, "none");
+        assert!(miss_result.track.is_none());
+        assert!(miss_result.requires_network_fallback);
+
+        drop(conn);
+        cleanup_temp_db(&path);
+    }
+
+    #[test]
     fn migrate_empty_db_to_v12_schema() {
         let (conn, path) = open_temp_db("music-library-migrate-empty");
         migrate(&conn).expect("migrate empty db");
@@ -9794,7 +10105,9 @@ mod tests {
             list_table_columns(&conn, "local_tracks").expect("read local_tracks columns");
         assert!(local_track_columns.iter().any(|column| column == "year"));
         assert!(local_track_columns.iter().any(|column| column == "format"));
-        assert!(local_track_columns.iter().any(|column| column == "mbid_recording"));
+        assert!(local_track_columns
+            .iter()
+            .any(|column| column == "mbid_recording"));
         assert!(local_track_columns
             .iter()
             .any(|column| column == "tag_locked_fields_json"));
@@ -9863,7 +10176,9 @@ mod tests {
             list_table_columns(&conn, "local_tracks").expect("read local_tracks columns");
         assert!(local_track_columns.iter().any(|column| column == "year"));
         assert!(local_track_columns.iter().any(|column| column == "format"));
-        assert!(local_track_columns.iter().any(|column| column == "mbid_recording"));
+        assert!(local_track_columns
+            .iter()
+            .any(|column| column == "mbid_recording"));
         assert!(local_track_columns
             .iter()
             .any(|column| column == "tag_locked_fields_json"));

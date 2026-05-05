@@ -71,6 +71,7 @@ const {
         .map(([path, bytes]) => ({
           relativePath: path.slice(rootDir.length + 1),
           bytes: Array.from(bytes),
+          sha256: path.includes('/bin/') ? 'b'.repeat(64) : 'c'.repeat(64),
         }))
         .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 
@@ -78,6 +79,9 @@ const {
         manifestPath,
         rootDir,
         manifestRaw: Buffer.from(manifestBytes).toString('utf8'),
+        validatedManifest: JSON.parse(Buffer.from(manifestBytes).toString('utf8')),
+        validationDiagnostics: [],
+        packageDigest: 'a'.repeat(64),
         files,
       };
     }
@@ -499,13 +503,15 @@ describe('manifest-v2 extension install artifacts', () => {
     const artifactRoot = `pmp-durable/extensions-v2/sidecar-capability-demo/${installed.packageDigest ?? 'current'}`;
     const artifactRelative = `${artifactRoot}/bin/sidecar-capability-demo.js`;
 
+    expect(installed.packageDigest).toBe('a'.repeat(64));
     expect(installed.resolvedArtifacts).toEqual([
       {
         runtimeId: 'sidecar.main',
         path: `C:/Users/test/AppData/Roaming/PMP/${artifactRelative}`,
-        sha256: expect.any(String),
+        sha256: 'b'.repeat(64),
       },
     ]);
+    expect(digestMock).not.toHaveBeenCalled();
     expect(stored?.resolvedArtifacts).toEqual(installed.resolvedArtifacts);
     expect(listInstalledExtensionDerivedPermissions(installed)).toEqual([
       'api:audio-visual',

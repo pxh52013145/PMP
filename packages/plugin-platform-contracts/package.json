@@ -11,7 +11,8 @@
     "./core": "./src/core.ts",
     "./runtime-bridge": "./src/runtime-bridge.ts",
     "./host": "./src/host.ts",
-    "./platformCompat": "./src/platformCompat.ts"
+    "./platformCompat": "./src/platformCompat.ts",
+    "./utilsTelemetry": "./src/utilsTelemetry.ts"
   },
   "scripts": {
     "lint": "node ./scripts/run-eslint.mjs src --ext ts --report-unused-disable-directives --max-warnings 0",

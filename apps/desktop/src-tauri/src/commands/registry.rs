@@ -34,8 +34,11 @@ pub const DEBUG_COMMAND_NAMES: &[&str] = &[
 
 pub const MEDIA_COMMAND_NAMES: &[&str] = &["background_import_media"];
 
+pub const PACK_COMMAND_NAMES: &[&str] = &["pack_parse_pmps_pack_bytes"];
+
 pub const PLUGIN_COMMAND_NAMES: &[&str] = &[
     "plugin_read_install_source",
+    "plugin_verify_runtime_artifact_integrity",
     "plugin_allow_dev_project_asset_scope",
     "plugin_sidecar_bridge_open",
     "plugin_sidecar_bridge_send",
@@ -79,6 +82,7 @@ pub const WINDOW_COMMAND_NAMES: &[&str] = &[
 
 pub const LIBRARY_COMMAND_NAMES: &[&str] = &[
     "music_library_scan",
+    "music_library_parse_local_track_metadata",
     "music_library_cover_lease",
     "music_library_cover_touch",
     "music_library_cover_release",
@@ -132,6 +136,7 @@ pub const LIBRARY_COMMAND_NAMES: &[&str] = &[
     "music_library_db_cleanup_source_tracks",
     "music_library_db_query_tracks",
     "music_library_db_query_tracks_page",
+    "music_library_db_resolve_local_playback_candidate",
     "music_library_db_list_track_field_catalog",
     "music_library_db_list_facet_catalog",
     "music_library_db_get_schema_envelope",
@@ -272,6 +277,10 @@ pub fn list_command_catalog() -> Vec<CommandDomainCatalogEntry> {
             commands: MEDIA_COMMAND_NAMES,
         },
         CommandDomainCatalogEntry {
+            domain: "pack",
+            commands: PACK_COMMAND_NAMES,
+        },
+        CommandDomainCatalogEntry {
             domain: "plugins",
             commands: PLUGIN_COMMAND_NAMES,
         },
@@ -355,7 +364,9 @@ macro_rules! pmp_generate_handler {
             crate::commands::debug::debug_telemetry_query,
             crate::commands::debug::debug_telemetry_export_bundle,
             crate::commands::media::background_import_media,
+            crate::commands::pack::pack_parse_pmps_pack_bytes,
             crate::commands::plugins::plugin_read_install_source,
+            crate::commands::plugins::plugin_verify_runtime_artifact_integrity,
             crate::commands::plugins::plugin_allow_dev_project_asset_scope,
             crate::commands::plugins::plugin_sidecar_bridge_open,
             crate::commands::plugins::plugin_sidecar_bridge_send,
@@ -393,6 +404,7 @@ macro_rules! pmp_generate_handler {
             crate::commands::windows::desktop_lyrics_debug_set_text,
             crate::commands::windows::desktop_lyrics_overlay_get_snapshot,
             crate::commands::library::music_library_scan,
+            crate::commands::library::music_library_parse_local_track_metadata,
             crate::commands::library::music_library_cover_lease,
             crate::commands::library::music_library_cover_touch,
             crate::commands::library::music_library_cover_release,
@@ -446,6 +458,7 @@ macro_rules! pmp_generate_handler {
             crate::commands::library::music_library_db_cleanup_source_tracks,
             crate::commands::library::music_library_db_query_tracks,
             crate::commands::library::music_library_db_query_tracks_page,
+            crate::commands::library::music_library_db_resolve_local_playback_candidate,
             crate::commands::library::music_library_db_list_track_field_catalog,
             crate::commands::library::music_library_db_list_facet_catalog,
             crate::commands::library::music_library_db_get_schema_envelope,

@@ -52,8 +52,12 @@ export interface NativePlatformPackDevSourcePayload {
   rootDir: string;
   manifestPath: string;
   manifestRaw?: string | null;
+  manifest?: PlatformPackManifestV1 | null;
+  manifestModifiedAtMs?: number | null;
   contractPath?: string | null;
   contractRaw?: string | null;
+  contract?: PlatformCompatContractFile | null;
+  contractModifiedAtMs?: number | null;
   runtimePath?: string | null;
   runtimeRaw?: string | null;
   runtimeExists?: boolean | null;
@@ -73,9 +77,11 @@ export interface PlatformPackDevSource {
   manifestPath: string;
   manifestRaw: string | null;
   manifest: PlatformPackManifestV1 | null;
+  manifestModifiedAtMs: number | null;
   contractPath: string | null;
   contractRaw: string | null;
   contract: PlatformCompatContractFile | null;
+  contractModifiedAtMs: number | null;
   runtimePath: string | null;
   runtimeRaw: string | null;
   runtimeExists: boolean;
@@ -369,6 +375,14 @@ function normalizeNativeDiagnostics(
   });
 }
 
+function readNativeObject<T>(value: unknown): T | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as T) : null;
+}
+
+function readOptionalTimestamp(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 export function parsePlatformPackDevSourcePayload(
   payload: NativePlatformPackDevSourcePayload
 ): PlatformPackDevSource {
@@ -382,53 +396,61 @@ export function parsePlatformPackDevSourcePayload(
   const runtimePath = normalizeString(payload.runtimePath) || null;
   const iconPath = normalizeString(payload.iconPath) || null;
   const sidecarPath = normalizeString(payload.sidecarPath) || null;
-  const manifest = manifestRaw
-    ? (() => {
-        try {
-          return validateManifest(parseJsonText(manifestRaw, 'manifest.json'));
-        } catch (error) {
-          pushDiagnostic(diagnostics, {
-            severity: 'error',
-            code: 'manifest.invalid',
-            message: readErrorMessage(error),
-          });
-          return null;
-        }
-      })()
-    : (() => {
-        pushDiagnostic(diagnostics, {
-          severity: 'error',
-          code: 'manifest.missing',
-          message: 'Platform pack manifest.json was not found or could not be read.',
-        });
-        return null;
-      })();
-
-  const contract =
-    manifest && contractRaw
+  const nativeManifest = readNativeObject<PlatformPackManifestV1>(payload.manifest);
+  const manifest =
+    nativeManifest ??
+    (manifestRaw
       ? (() => {
           try {
-            const parsed = validateContract(parseJsonText(contractRaw, 'contract.json'));
-            const manifestConnectorId = manifest.connector.connectorId.toLowerCase();
-            const extensionConnectorId = normalizeString(
-              parsed.extension && (parsed.extension as Record<string, unknown>).connectorId
-            ).toLowerCase();
-            if (extensionConnectorId && extensionConnectorId !== manifestConnectorId) {
-              throw new Error(
-                `contract.extension.connectorId must match manifest.connector.connectorId (${manifestConnectorId})`
-              );
-            }
-            return parsed;
+            return validateManifest(parseJsonText(manifestRaw, 'manifest.json'));
           } catch (error) {
             pushDiagnostic(diagnostics, {
               severity: 'error',
-              code: 'contract.invalid',
+              code: 'manifest.invalid',
               message: readErrorMessage(error),
             });
             return null;
           }
         })()
-      : null;
+      : (() => {
+          pushDiagnostic(diagnostics, {
+            severity: 'error',
+            code: 'manifest.missing',
+            message: 'Platform pack manifest.json was not found or could not be read.',
+          });
+          return null;
+        })());
+
+  const nativeContract = manifest
+    ? readNativeObject<PlatformCompatContractFile>(payload.contract)
+    : null;
+  const contract =
+    manifest && nativeContract
+      ? nativeContract
+      : manifest && contractRaw
+        ? (() => {
+            try {
+              const parsed = validateContract(parseJsonText(contractRaw, 'contract.json'));
+              const manifestConnectorId = manifest.connector.connectorId.toLowerCase();
+              const extensionConnectorId = normalizeString(
+                parsed.extension && (parsed.extension as Record<string, unknown>).connectorId
+              ).toLowerCase();
+              if (extensionConnectorId && extensionConnectorId !== manifestConnectorId) {
+                throw new Error(
+                  `contract.extension.connectorId must match manifest.connector.connectorId (${manifestConnectorId})`
+                );
+              }
+              return parsed;
+            } catch (error) {
+              pushDiagnostic(diagnostics, {
+                severity: 'error',
+                code: 'contract.invalid',
+                message: readErrorMessage(error),
+              });
+              return null;
+            }
+          })()
+        : null;
 
   if (manifest && !contractRaw) {
     pushDiagnostic(diagnostics, {
@@ -476,30 +498,23 @@ export function parsePlatformPackDevSourcePayload(
     manifestPath,
     manifestRaw,
     manifest,
+    manifestModifiedAtMs: readOptionalTimestamp(payload.manifestModifiedAtMs),
     contractPath,
     contractRaw,
     contract,
+    contractModifiedAtMs: readOptionalTimestamp(payload.contractModifiedAtMs),
     runtimePath,
     runtimeRaw,
     runtimeExists: payload.runtimeExists === true,
-    runtimeModifiedAtMs:
-      typeof payload.runtimeModifiedAtMs === 'number' && Number.isFinite(payload.runtimeModifiedAtMs)
-        ? payload.runtimeModifiedAtMs
-        : null,
+    runtimeModifiedAtMs: readOptionalTimestamp(payload.runtimeModifiedAtMs),
     iconPath,
     iconRawBase64,
     iconExists: payload.iconExists === true,
-    iconModifiedAtMs:
-      typeof payload.iconModifiedAtMs === 'number' && Number.isFinite(payload.iconModifiedAtMs)
-        ? payload.iconModifiedAtMs
-        : null,
+    iconModifiedAtMs: readOptionalTimestamp(payload.iconModifiedAtMs),
     sidecarPath,
     sidecarExists:
       typeof payload.sidecarExists === 'boolean' ? payload.sidecarExists : null,
-    sidecarModifiedAtMs:
-      typeof payload.sidecarModifiedAtMs === 'number' && Number.isFinite(payload.sidecarModifiedAtMs)
-        ? payload.sidecarModifiedAtMs
-        : null,
+    sidecarModifiedAtMs: readOptionalTimestamp(payload.sidecarModifiedAtMs),
     status: readStatus(diagnostics),
     diagnostics,
   };
@@ -514,13 +529,13 @@ export function createPlatformPackDevSourceSnapshot(
       path: source.manifestPath,
       exists: source.manifestRaw !== null,
       content: source.manifestRaw,
-      modifiedAtMs: null,
+      modifiedAtMs: source.manifestModifiedAtMs,
     },
     contract: {
       path: source.contractPath,
       exists: source.contractRaw !== null,
       content: source.contractRaw,
-      modifiedAtMs: null,
+      modifiedAtMs: source.contractModifiedAtMs,
     },
     runtime: {
       path: source.runtimePath,

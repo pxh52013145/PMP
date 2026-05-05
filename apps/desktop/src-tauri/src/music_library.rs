@@ -171,6 +171,44 @@ pub struct ScannedTrack {
     pub replay_gain_album_db: Option<f32>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalTrackMetadata {
+    pub path: String,
+    pub file_name: String,
+    pub size: u64,
+    pub mtime_ms: i64,
+    pub quick_fingerprint: Option<String>,
+    pub duration: Option<f64>,
+    pub bitrate: Option<u32>,
+    pub sample_rate: Option<u32>,
+    pub bit_depth: Option<u32>,
+    pub format: Option<String>,
+    pub codec_name: Option<String>,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub year: Option<u32>,
+    pub genre: Option<String>,
+    pub track_number: Option<u32>,
+    pub track_total: Option<u32>,
+    pub disc_number: Option<u32>,
+    pub disc_total: Option<u32>,
+    pub composer: Option<String>,
+    pub comment: Option<String>,
+    pub lyrics: Option<String>,
+    pub replay_gain_track_db: Option<f32>,
+    pub replay_gain_album_db: Option<f32>,
+    pub cover_key: Option<String>,
+    pub cover_url: Option<String>,
+    pub cover_path: Option<String>,
+    pub cover_size: Option<u64>,
+    pub cover_media_type: Option<String>,
+    pub warnings: Vec<String>,
+    pub metadata_scanned_at_ms: i64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanOptions {
@@ -2103,6 +2141,213 @@ pub fn get_cover_lease_stats(app: &AppHandle) -> Result<CoverLeaseStats, String>
         .map_err(|_| "Cover lease state lock poisoned".to_string())?;
     let _ = prune_cover_cache_dir(&dir, &mut state, now_ms)?;
     Ok(compute_cover_lease_stats(&state, now_ms))
+}
+
+fn clean_metadata_text(value: Option<String>) -> Option<String> {
+    let value = value?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn format_from_extension(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.trim().to_ascii_lowercase();
+    if ext.is_empty() {
+        None
+    } else {
+        Some(ext)
+    }
+}
+
+fn estimate_bitrate_kbps(size: u64, duration: Option<f64>) -> Option<u32> {
+    let duration = duration?;
+    if !duration.is_finite() || duration <= 0.0 {
+        return None;
+    }
+
+    let kbps = ((size as f64 * 8.0) / duration / 1000.0).round();
+    if !kbps.is_finite() || kbps <= 0.0 || kbps > u32::MAX as f64 {
+        None
+    } else {
+        Some(kbps as u32)
+    }
+}
+
+fn classify_local_track_metadata_error(error: &str) -> &'static str {
+    if error.contains("requires path") {
+        "missing-path"
+    } else if error.contains("requires a file") {
+        "not-file"
+    } else if error.contains("Failed to stat") {
+        "stat-failed"
+    } else {
+        "unknown"
+    }
+}
+
+pub fn parse_local_track_metadata(
+    app: &AppHandle,
+    path: String,
+) -> Result<LocalTrackMetadata, String> {
+    let result = parse_local_track_metadata_inner(app, path);
+    match &result {
+        Ok(metadata) => {
+            crate::backend_telemetry::info(
+                app,
+                "music-library",
+                "music-library.local-track-metadata.parse.completed",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("music_library")
+                    .field("format", serde_json::json!(metadata.format.as_deref()))
+                    .field(
+                        "hasQuickFingerprint",
+                        serde_json::json!(metadata.quick_fingerprint.is_some()),
+                    )
+                    .field("hasCover", serde_json::json!(metadata.cover_key.is_some()))
+                    .field("warningCount", serde_json::json!(metadata.warnings.len())),
+            );
+        }
+        Err(error) => {
+            crate::backend_telemetry::warn(
+                app,
+                "music-library",
+                "music-library.local-track-metadata.parse.failed",
+                crate::backend_telemetry::BackendTelemetryOptions::new()
+                    .component("music_library")
+                    .message("local track metadata parse failed")
+                    .field(
+                        "errorKind",
+                        serde_json::json!(classify_local_track_metadata_error(error)),
+                    ),
+            );
+        }
+    }
+    result
+}
+
+fn parse_local_track_metadata_inner(
+    app: &AppHandle,
+    file_path: String,
+) -> Result<LocalTrackMetadata, String> {
+    let normalized_path = file_path.trim();
+    if normalized_path.is_empty() {
+        return Err("music library local track metadata requires path".to_string());
+    }
+
+    let path = PathBuf::from(normalized_path);
+    let metadata = fs::metadata(&path)
+        .map_err(|error| format!("Failed to stat local track metadata file: {error}"))?;
+    if !metadata.is_file() {
+        return Err("music library local track metadata requires a file".to_string());
+    }
+
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(normalized_path)
+        .to_string();
+    let size = metadata.len();
+    let mtime_ms = metadata.modified().map(system_time_to_millis).unwrap_or(0);
+    let quick_fingerprint = compute_quick_fingerprint(&path);
+    let mut warnings = Vec::new();
+
+    let (
+        duration,
+        sample_rate,
+        bit_depth,
+        quick_title,
+        quick_artist,
+        quick_album,
+        replay_gain_track_db,
+        replay_gain_album_db,
+    ) = match extract_quick_metadata(&path) {
+        Ok(value) => value,
+        Err(_) => {
+            warnings.push("quick-metadata-failed".to_string());
+            (None, None, None, None, None, None, None, None)
+        }
+    };
+
+    let tag_result = match crate::music_tag::read_local_tags_from_path(normalized_path) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            warnings.push("tag-read-failed".to_string());
+            None
+        }
+    };
+    let tag_metadata = tag_result.as_ref().map(|value| &value.metadata);
+
+    let cached_cover = match get_or_create_cover(
+        app,
+        normalized_path.to_string(),
+        Some(512 * 1024),
+        Some(256),
+    ) {
+        Ok(value) => value,
+        Err(_) => {
+            warnings.push("cover-cache-failed".to_string());
+            None
+        }
+    };
+
+    let format = tag_result
+        .as_ref()
+        .and_then(|value| clean_metadata_text(value.format.clone()))
+        .or_else(|| format_from_extension(&path));
+    let codec_name = format.clone();
+    let title = tag_metadata
+        .and_then(|value| clean_metadata_text(value.title.clone()))
+        .or_else(|| clean_metadata_text(quick_title));
+    let artist = tag_metadata
+        .and_then(|value| clean_metadata_text(value.artist.clone()))
+        .or_else(|| clean_metadata_text(quick_artist));
+    let album = tag_metadata
+        .and_then(|value| clean_metadata_text(value.album.clone()))
+        .or_else(|| clean_metadata_text(quick_album));
+
+    Ok(LocalTrackMetadata {
+        path: normalized_path.to_string(),
+        file_name,
+        size,
+        mtime_ms,
+        quick_fingerprint,
+        duration,
+        bitrate: estimate_bitrate_kbps(size, duration),
+        sample_rate,
+        bit_depth,
+        format,
+        codec_name,
+        title,
+        artist,
+        album,
+        album_artist: tag_metadata
+            .and_then(|value| clean_metadata_text(value.album_artist.clone())),
+        year: tag_metadata.and_then(|value| value.year),
+        genre: tag_metadata.and_then(|value| clean_metadata_text(value.genre.clone())),
+        track_number: tag_metadata.and_then(|value| value.track_number),
+        track_total: tag_metadata.and_then(|value| value.track_total),
+        disc_number: tag_metadata.and_then(|value| value.disc_number),
+        disc_total: tag_metadata.and_then(|value| value.disc_total),
+        composer: tag_metadata.and_then(|value| clean_metadata_text(value.composer.clone())),
+        comment: tag_metadata.and_then(|value| clean_metadata_text(value.comment.clone())),
+        lyrics: tag_metadata.and_then(|value| clean_metadata_text(value.lyrics.clone())),
+        replay_gain_track_db,
+        replay_gain_album_db,
+        cover_key: cached_cover.as_ref().map(|value| value.key.clone()),
+        cover_url: cached_cover
+            .as_ref()
+            .map(|value| build_pmp_cover_url(&value.key)),
+        cover_path: cached_cover.as_ref().map(|value| value.path.clone()),
+        cover_size: cached_cover.as_ref().map(|value| value.size),
+        cover_media_type: cached_cover
+            .as_ref()
+            .and_then(|value| value.media_type.clone()),
+        warnings,
+        metadata_scanned_at_ms: current_time_millis(),
+    })
 }
 
 pub fn scan_library_paths(

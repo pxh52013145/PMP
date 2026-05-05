@@ -1,5 +1,5 @@
 import { Track } from '../audio';
-import { parseAudioFile } from '../../utils/audioMetadata';
+import { parseAudioFile, parseLocalAudioFileMetadata } from '../../utils/audioMetadata';
 import { open } from '@tauri-apps/api/dialog';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { readDir, exists } from '@tauri-apps/api/fs';
@@ -28,6 +28,7 @@ import {
   listNativeLibraryUserEntries,
   queryNativeLibraryTracks,
   queryNativeLibraryTracksPage,
+  resolveNativeLibraryLocalPlaybackCandidate,
   getMusicLibraryFacetCollectionDescriptor,
   registerMusicLibrarySchemaFromNativeEnvelope,
   resolveMusicLibraryFieldFacetDescriptor,
@@ -1300,23 +1301,6 @@ export class MusicLibraryService {
   ): Promise<MusicLibraryCollectionFacetDescriptor | null> {
     await this.ensureNativeSchemaEnvelopeLoaded();
     return getMusicLibraryFacetCollectionDescriptor(id);
-  }
-
-  private pickPreferredNativeTrackRecord(records: NativeLibraryTrackRecord[]): NativeLibraryTrackRecord | null {
-    if (records.length === 0) return null;
-
-    const absoluteAvailable = records.find(
-      (record) =>
-        record.status === 'available' &&
-        typeof record.filePath === 'string' &&
-        this.isLikelyAbsolutePath(record.filePath)
-    );
-    if (absoluteAvailable) return absoluteAvailable;
-
-    const available = records.find((record) => record.status === 'available');
-    if (available) return available;
-
-    return records[0] || null;
   }
 
   private toNativeTrackFilterFromBase(
@@ -3900,14 +3884,20 @@ export class MusicLibraryService {
               filePath = audioFile.path;
 
               // ML.0 (Desktop/Tauri): do not read full audio contents in the frontend during scans.
-              // Store minimal metadata and rely on later phases for enrichment.
-              track = {
-                id: this.stableIdFromPath(filePath),
-                title: audioFile.name.replace(/\.[^/.]+$/, ''),
-                filePath,
-                originalPath: filePath,
-                path: filePath,
-              };
+              // Prefer native metadata for known local paths; keep a minimal fallback for web/path-only cases.
+              track =
+                (await parseLocalAudioFileMetadata(filePath).catch((error) => {
+                  this.logTelemetryWarn('music-library.scan.native-local-metadata.failed', error, {
+                    fileName: audioFile.name,
+                  });
+                  return null;
+                })) ?? {
+                  id: this.stableIdFromPath(filePath),
+                  title: audioFile.name.replace(/\.[^/.]+$/, ''),
+                  filePath,
+                  originalPath: filePath,
+                  path: filePath,
+                };
             }
 
             // 准备存储的数据
@@ -5533,61 +5523,21 @@ export class MusicLibraryService {
 
     if (isTauriRuntime()) {
       try {
-        if (normalizedTrackId) {
-          const rows = await queryNativeLibraryTracks({
-            limit: 1,
-            offset: 0,
-            includeMissing,
-            visibleOnly,
-            trackId: normalizedTrackId,
-            sourceId: normalizedSourceId || undefined,
-          });
-          const preferred = this.pickPreferredNativeTrackRecord(rows);
-          if (preferred) {
-            return {
-              track: this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(preferred)),
-              strategy: 'trackId',
-              requiresNetworkFallback: false,
-            };
-          }
-        }
+        const resolved = await resolveNativeLibraryLocalPlaybackCandidate({
+          trackId: normalizedTrackId || undefined,
+          quickFingerprint: normalizedQuickFingerprint,
+          filePath: normalizedFilePath || undefined,
+          sourceId: normalizedSourceId || undefined,
+          includeMissing,
+          visibleOnly,
+        });
 
-        if (normalizedQuickFingerprint) {
-          const rows = await queryNativeLibraryTracks({
-            limit: 16,
-            offset: 0,
-            includeMissing,
-            visibleOnly,
-            quickFingerprint: normalizedQuickFingerprint,
-            sourceId: normalizedSourceId || undefined,
-          });
-          const preferred = this.pickPreferredNativeTrackRecord(rows);
-          if (preferred) {
-            return {
-              track: this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(preferred)),
-              strategy: 'quickFingerprint',
-              requiresNetworkFallback: false,
-            };
-          }
-        }
-
-        if (normalizedFilePath) {
-          const rows = await queryNativeLibraryTracks({
-            limit: 1,
-            offset: 0,
-            includeMissing,
-            visibleOnly,
-            filePath: normalizedFilePath,
-            sourceId: normalizedSourceId || undefined,
-          });
-          const preferred = this.pickPreferredNativeTrackRecord(rows);
-          if (preferred) {
-            return {
-              track: this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(preferred)),
-              strategy: 'filePath',
-              requiresNetworkFallback: false,
-            };
-          }
+        if (resolved?.track && resolved.strategy !== 'none') {
+          return {
+            track: this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(resolved.track)),
+            strategy: resolved.strategy,
+            requiresNetworkFallback: resolved.requiresNetworkFallback,
+          };
         }
       } catch (error) {
         this.telemetry.warn('music-library.playback.resolve.native.failed', {

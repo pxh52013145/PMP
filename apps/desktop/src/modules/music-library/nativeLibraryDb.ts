@@ -699,6 +699,27 @@ export interface NativeLibraryTrackPageResult {
   total: number;
 }
 
+export type NativeLibraryLocalPlaybackResolveStrategy =
+  | 'trackId'
+  | 'quickFingerprint'
+  | 'filePath'
+  | 'none';
+
+export interface NativeLibraryLocalPlaybackResolveInput {
+  trackId?: string;
+  quickFingerprint?: string;
+  filePath?: string;
+  sourceId?: string;
+  includeMissing?: boolean;
+  visibleOnly?: boolean;
+}
+
+export interface NativeLibraryLocalPlaybackResolveResult {
+  track: NativeLibraryTrackRecord | null;
+  strategy: NativeLibraryLocalPlaybackResolveStrategy;
+  requiresNetworkFallback: boolean;
+}
+
 export interface NativeLibraryTrackFieldCatalogRecord {
   id: string;
   label: string;
@@ -2079,6 +2100,44 @@ function ensureTrackPageResult(value: unknown): NativeLibraryTrackPageResult | n
   return {
     items,
     total: Math.max(0, Math.floor(totalValue)),
+  };
+}
+
+function normalizeLocalPlaybackResolveStrategy(
+  value: unknown
+): NativeLibraryLocalPlaybackResolveStrategy | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  if (
+    normalized === 'trackId' ||
+    normalized === 'quickFingerprint' ||
+    normalized === 'filePath' ||
+    normalized === 'none'
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function ensureLocalPlaybackResolveResult(
+  value: unknown
+): NativeLibraryLocalPlaybackResolveResult | null {
+  if (!isRecord(value)) return null;
+
+  const strategy = normalizeLocalPlaybackResolveStrategy(readRecordField(value, 'strategy'));
+  const requiresNetworkFallback = asBool(
+    readRecordField(value, 'requiresNetworkFallback', 'requires_network_fallback')
+  );
+  const rawTrack = readRecordField(value, 'track');
+  const track = rawTrack == null ? null : ensureTrackRecord(rawTrack);
+
+  if (!strategy || requiresNetworkFallback === undefined) return null;
+  if (rawTrack != null && !track) return null;
+
+  return {
+    track,
+    strategy,
+    requiresNetworkFallback,
   };
 }
 
@@ -4277,6 +4336,43 @@ export async function queryNativeLibraryTracksPage(
   const parsed = ensureTrackPageResult(raw);
   if (!parsed) return { items: [], total: 0 };
   return parsed;
+}
+
+export async function resolveNativeLibraryLocalPlaybackCandidate(
+  input: NativeLibraryLocalPlaybackResolveInput
+): Promise<NativeLibraryLocalPlaybackResolveResult | null> {
+  const payload: NativeLibraryLocalPlaybackResolveInput = {
+    trackId: asOptionalString(input.trackId),
+    quickFingerprint: normalizeQuickFingerprint(input.quickFingerprint),
+    filePath: asOptionalString(input.filePath),
+    sourceId: asOptionalString(input.sourceId),
+    includeMissing: input.includeMissing === true,
+    visibleOnly: input.visibleOnly === true,
+  };
+
+  if (!payload.trackId && !payload.quickFingerprint && !payload.filePath) {
+    return {
+      track: null,
+      strategy: 'none',
+      requiresNetworkFallback: true,
+    };
+  }
+
+  if (!isTauriRuntime()) return null;
+
+  const raw = await invokeWithTelemetry<unknown>(
+    'music_library_db_resolve_local_playback_candidate',
+    {
+      input: payload,
+    },
+    {
+      moduleId: 'music-library',
+      component: 'nativeLibraryDb',
+      event: 'music-library.db.resolve-local-playback',
+    }
+  ).catch(() => null);
+
+  return ensureLocalPlaybackResolveResult(raw);
 }
 
 export async function getNativeLibrarySchemaEnvelope(): Promise<NativeLibrarySchemaEnvelope | null> {

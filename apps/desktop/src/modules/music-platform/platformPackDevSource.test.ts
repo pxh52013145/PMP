@@ -91,6 +91,78 @@ describe('platform pack dev source parser', () => {
     expect(source.diagnostics).toEqual([]);
   });
 
+  it('prefers native normalized manifest and contract when present', () => {
+    const nativeManifest = {
+      formatVersion: '1.0',
+      type: 'platform-pack',
+      metadata: {
+        id: 'native-pack',
+        name: 'Native Demo',
+        version: '0.2.0',
+      },
+      connector: {
+        connectorId: 'connector.platform.demo',
+        workspaceKind: 'demo',
+        workspaceMode: 'dedicated',
+      },
+      entry: {
+        contract: 'contract.json',
+        runtime: 'runtime.js',
+        icon: 'icon.svg',
+      },
+    } as const;
+    const nativeContract = {
+      contractVersion: '1.0',
+      platform: {
+        platformId: 'demo',
+        displayName: 'Native Demo',
+        staticIcon: 'demo',
+        supportsMultiInstance: false,
+      },
+      auth: {
+        loginMode: 'none',
+        requiresCookie: false,
+        requiresAccountId: false,
+        supportsRefresh: false,
+      },
+      capabilities: {
+        playlists: false,
+        favorites: false,
+        dailyRecommendations: false,
+        search: false,
+        quality: false,
+        navigation: false,
+        settings: false,
+        pages: true,
+      },
+      apiBindings: {
+        auth: 'host.pmp.connector-auth',
+      },
+      extension: {
+        connectorId: 'connector.platform.demo',
+      },
+    } as const;
+
+    const source = parsePlatformPackDevSourcePayload(
+      createValidPayload({
+        manifestRaw: '{',
+        manifest: nativeManifest,
+        manifestModifiedAtMs: 11,
+        contractRaw: '{',
+        contract: nativeContract,
+        contractModifiedAtMs: 12,
+      })
+    );
+    const snapshot = createPlatformPackDevSourceSnapshot(source);
+
+    expect(source.status).toBe('ready');
+    expect(source.manifest?.metadata.id).toBe('native-pack');
+    expect(source.contract?.platform.displayName).toBe('Native Demo');
+    expect(source.diagnostics).toEqual([]);
+    expect(snapshot.manifest.modifiedAtMs).toBe(11);
+    expect(snapshot.contract.modifiedAtMs).toBe(12);
+  });
+
   it('reports contract connector mismatches before the source is attached', () => {
     const source = parsePlatformPackDevSourcePayload(
       createValidPayload({

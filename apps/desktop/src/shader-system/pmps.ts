@@ -1,5 +1,6 @@
 ﻿import { strFromU8, unzip } from 'fflate';
 import type { Unzipped } from 'fflate';
+import { invokeWithTelemetry } from '../services/telemetry/tauriInvokeTelemetry';
 import {
   readDurableText,
   readJson,
@@ -10,6 +11,7 @@ import {
   writeJson,
   writeString,
 } from '../modules/storage';
+import { isTauriRuntime } from '../utils/tauriRuntime';
 import { STORAGE_KEYS, TAURI_EVENTS, broadcastSignal } from '../utils/windowCommunication';
 
 async function unzipAsync(bytes: Uint8Array): Promise<Unzipped> {
@@ -281,9 +283,55 @@ export function validatePmpsManifest(manifest: unknown): asserts manifest is Pmp
   }
 }
 
+type NativePmpsPackParseResult = {
+  manifest: unknown;
+  fragmentText: string;
+  packageSha256?: string;
+  manifestSha256?: string;
+  fragmentSha256?: string;
+};
+
+async function tryParsePmpsShaderPackWithNative(
+  bytes: Uint8Array
+): Promise<Omit<InstalledPmpsShaderPack, 'installedAt'> | null> {
+  if (!isTauriRuntime()) return null;
+
+  try {
+    const result = await invokeWithTelemetry<NativePmpsPackParseResult>(
+      'pack_parse_pmps_pack_bytes',
+      { bytes: Array.from(bytes) },
+      {
+        moduleId: 'shader-system',
+        component: 'pmps',
+        event: 'shader-system.pmps.parse-native',
+        failureLevel: 'debug',
+      }
+    );
+
+    validatePmpsManifest(result.manifest);
+    if (typeof result.fragmentText !== 'string') {
+      throw new Error('Native PMPS parser returned invalid fragmentText');
+    }
+
+    return {
+      manifest: result.manifest,
+      fragmentCode: result.fragmentText,
+      source: 'pmps',
+      packageSha256: result.packageSha256,
+      manifestSha256: result.manifestSha256,
+      fragmentSha256: result.fragmentSha256,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function parsePmpsShaderPackFromZipBytes(
   bytes: Uint8Array
 ): Promise<Omit<InstalledPmpsShaderPack, 'installedAt'>> {
+  const nativeParsed = await tryParsePmpsShaderPackWithNative(bytes);
+  if (nativeParsed) return nativeParsed;
+
   const files = await unzipAsync(bytes);
 
   const manifestBytes = findZipEntry(files, 'manifest.json');

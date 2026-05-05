@@ -477,6 +477,33 @@ export interface InstalledExtensionRecord<TManifest = PxpManifestV2> {
   lastErrorAt?: number;
 }
 
+export interface PluginInstallSourceDiagnostic {
+  severity: string;
+  code: string;
+  message: string;
+}
+
+export interface PluginInstallSourceFileDescriptor {
+  relativePath: string;
+  bytes: number[];
+  sha256?: string;
+}
+
+export interface PluginReadInstallSourcePayload<TManifest = PxpManifestV2> {
+  manifestPath: string;
+  rootDir: string;
+  manifestRaw: string;
+  validatedManifest?: TManifest | null;
+  validationDiagnostics?: PluginInstallSourceDiagnostic[];
+  packageDigest?: string;
+  files: PluginInstallSourceFileDescriptor[];
+}
+
+export interface PluginRuntimeArtifactIntegrityPayload {
+  artifactPath: string;
+  sha256: string;
+}
+
 export interface TelemetryIdentityDescriptor {
   loggerId: string;
   runtimeId?: string;

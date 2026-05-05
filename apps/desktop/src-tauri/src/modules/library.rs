@@ -7,6 +7,7 @@ pub const DESCRIPTOR: BackendModuleDescriptor = BackendModuleDescriptor {
     depends_on: &["performance", "tag"],
     command_domains: &[
         "music_library_scan",
+        "music_library_parse_local_track_metadata",
         "music_library_cover",
         "music_library_cancel_scan",
         "music_library_db_sources",

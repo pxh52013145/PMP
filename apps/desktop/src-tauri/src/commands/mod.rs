@@ -5,6 +5,7 @@ pub mod dsp;
 pub mod library;
 pub mod media;
 pub mod music_tag;
+pub mod pack;
 pub mod plugins;
 pub mod registry;
 pub mod vst;

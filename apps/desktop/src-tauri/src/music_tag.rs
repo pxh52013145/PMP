@@ -182,6 +182,12 @@ pub fn read_local_tags<R: Runtime>(
     result
 }
 
+pub fn read_local_tags_from_path(file_path: &str) -> Result<MusicTagReadLocalResult, String> {
+    read_local_tags_inner(MusicTagReadLocalRequest {
+        file_path: file_path.to_string(),
+    })
+}
+
 pub fn preview_db_patch(
     app: &AppHandle,
     request: MusicTagDbPatchRequest,
@@ -250,7 +256,9 @@ pub fn search_candidates(
             .filter_map(|candidate| candidate_to_persist_input(track_id, candidate).ok())
             .collect::<Vec<_>>();
         if !persist_inputs.is_empty() {
-            if let Err(error) = music_library_db::replace_music_tag_candidates(app, track_id, persist_inputs) {
+            if let Err(error) =
+                music_library_db::replace_music_tag_candidates(app, track_id, persist_inputs)
+            {
                 warnings.push(format!("candidate-cache: {error}"));
             }
         }
@@ -273,7 +281,10 @@ pub fn search_candidates(
             .field("candidateCount", json!(result.candidates.len()))
             .field("providerCount", json!(result.searched_providers.len()))
             .field("warningCount", json!(result.warnings.len()))
-            .field("hasLyricsResolution", json!(result.lyrics_resolution.is_some())),
+            .field(
+                "hasLyricsResolution",
+                json!(result.lyrics_resolution.is_some()),
+            ),
     );
 
     Ok(result)
@@ -335,7 +346,11 @@ fn metadata_from_candidate_request(
 ) -> MusicTagCanonicalMetadata {
     let mut metadata = request.metadata.clone().unwrap_or_default();
     if metadata.title.is_none() {
-        metadata.title = request.title.as_deref().and_then(normalize_text).map(str::to_string);
+        metadata.title = request
+            .title
+            .as_deref()
+            .and_then(normalize_text)
+            .map(str::to_string);
     }
     if metadata.artist.is_none() {
         metadata.artist = request
@@ -345,7 +360,11 @@ fn metadata_from_candidate_request(
             .map(str::to_string);
     }
     if metadata.album.is_none() {
-        metadata.album = request.album.as_deref().and_then(normalize_text).map(str::to_string);
+        metadata.album = request
+            .album
+            .as_deref()
+            .and_then(normalize_text)
+            .map(str::to_string);
     }
     if metadata.lyrics.is_none() {
         metadata.lyrics = request
@@ -399,7 +418,11 @@ fn search_musicbrainz_candidates(
         let Some(recording_id) = item.get("id").and_then(json_string) else {
             continue;
         };
-        let score = item.get("score").and_then(json_score).unwrap_or(0.0).clamp(0.0, 1.0);
+        let score = item
+            .get("score")
+            .and_then(json_score)
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
         let title = item.get("title").and_then(json_string);
         let artist = first_musicbrainz_artist_name(item);
         let artist_id = first_musicbrainz_artist_id(item);
@@ -407,8 +430,12 @@ fn search_musicbrainz_candidates(
             .get("releases")
             .and_then(|value| value.as_array())
             .and_then(|items| items.first());
-        let album = release.and_then(|value| value.get("title")).and_then(json_string);
-        let release_id = release.and_then(|value| value.get("id")).and_then(json_string);
+        let album = release
+            .and_then(|value| value.get("title"))
+            .and_then(json_string);
+        let release_id = release
+            .and_then(|value| value.get("id"))
+            .and_then(json_string);
         let release_group_id = release
             .and_then(|value| value.get("release-group"))
             .and_then(|value| value.get("id"))
@@ -517,12 +544,18 @@ fn search_acoustid_candidates(
     let mut candidates = Vec::new();
     for result in results.iter().take(limit) {
         let acoustid = result.get("id").and_then(json_string);
-        let score = result.get("score").and_then(json_score).unwrap_or(0.0).clamp(0.0, 1.0);
+        let score = result
+            .get("score")
+            .and_then(json_score)
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
         let recording = result
             .get("recordings")
             .and_then(|value| value.as_array())
             .and_then(|items| items.first());
-        let recording_id = recording.and_then(|value| value.get("id")).and_then(json_string);
+        let recording_id = recording
+            .and_then(|value| value.get("id"))
+            .and_then(json_string);
         let title = recording
             .and_then(|value| value.get("title"))
             .and_then(json_string)
@@ -573,13 +606,25 @@ fn resolve_lyrics_candidate(
     request: &MusicTagCandidateSearchRequest,
     metadata: &MusicTagCanonicalMetadata,
     fetched_at_ms: i64,
-) -> Result<(Option<MusicTagLyricsResolutionSummary>, Option<MusicTagCandidate>), String> {
+) -> Result<
+    (
+        Option<MusicTagLyricsResolutionSummary>,
+        Option<MusicTagCandidate>,
+    ),
+    String,
+> {
     let track_id = request.track_id.clone();
     let track_file_path = request.file_path.clone();
     let quick_fingerprint = request.quick_fingerprint.clone();
     if track_id.as_deref().and_then(normalize_text).is_none()
-        && track_file_path.as_deref().and_then(normalize_text).is_none()
-        && quick_fingerprint.as_deref().and_then(normalize_text).is_none()
+        && track_file_path
+            .as_deref()
+            .and_then(normalize_text)
+            .is_none()
+        && quick_fingerprint
+            .as_deref()
+            .and_then(normalize_text)
+            .is_none()
     {
         return Ok((None, None));
     }
@@ -598,7 +643,10 @@ fn resolve_lyrics_candidate(
             .or_else(|| metadata.lyrics.clone()),
         lyric_locator: request.lyric_locator.clone(),
         cache_key: quick_fingerprint.or(track_id.clone()),
-        language: request.language.clone().or_else(|| metadata.language.clone()),
+        language: request
+            .language
+            .clone()
+            .or_else(|| metadata.language.clone()),
         force_web_lookup: Some(false),
     };
     let resolved = lyrics::service::resolve_for_track(app, resolve_request)?;
@@ -610,7 +658,9 @@ fn resolve_lyrics_candidate(
         diagnostics: resolved.diagnostics.clone(),
         has_selected: selected.is_some(),
         format: selected.as_ref().map(|document| document.format.clone()),
-        language: selected.as_ref().and_then(|document| document.language.clone()),
+        language: selected
+            .as_ref()
+            .and_then(|document| document.language.clone()),
         confidence: selected.as_ref().map(|document| document.confidence),
         has_word_timing: selected
             .as_ref()
@@ -655,7 +705,9 @@ fn resolve_lyrics_candidate(
         confidence: confidence_from_score(score).to_string(),
         reasons: vec![format!(
             "lyrics-source:{}",
-            resolved.selected_source.unwrap_or_else(|| "unknown".to_string())
+            resolved
+                .selected_source
+                .unwrap_or_else(|| "unknown".to_string())
         )],
         warnings: resolved.diagnostics,
         fetched_at_ms,
@@ -680,10 +732,16 @@ fn build_musicbrainz_query(
         ));
     }
     if let Some(artist) = metadata.artist.as_deref().and_then(normalize_text) {
-        clauses.push(format!("artist:\"{}\"", escape_musicbrainz_query_token(artist)));
+        clauses.push(format!(
+            "artist:\"{}\"",
+            escape_musicbrainz_query_token(artist)
+        ));
     }
     if let Some(album) = metadata.album.as_deref().and_then(normalize_text) {
-        clauses.push(format!("release:\"{}\"", escape_musicbrainz_query_token(album)));
+        clauses.push(format!(
+            "release:\"{}\"",
+            escape_musicbrainz_query_token(album)
+        ));
     }
 
     if clauses.is_empty() {
@@ -707,9 +765,11 @@ fn first_musicbrainz_artist_name(recording: &JsonValue) -> Option<String> {
         .and_then(|value| value.as_array())
         .and_then(|items| items.first())
         .and_then(|item| {
-            item.get("name")
-                .and_then(json_string)
-                .or_else(|| item.get("artist").and_then(|artist| artist.get("name")).and_then(json_string))
+            item.get("name").and_then(json_string).or_else(|| {
+                item.get("artist")
+                    .and_then(|artist| artist.get("name"))
+                    .and_then(json_string)
+            })
         })
 }
 
@@ -871,22 +931,25 @@ fn extract_metadata_from_tags(tags: &[Tag]) -> MusicTagCanonicalMetadata {
     let date = first_text(tags, &[ItemKey::ReleaseDate, ItemKey::RecordingDate]);
 
     MusicTagCanonicalMetadata {
-        title: first_text(tags, &[ItemKey::TrackTitle]).or_else(|| first_accessor_text(tags, |tag| {
-            tag.title().map(|value| value.into_owned())
-        })),
-        artist: first_text(tags, &[ItemKey::TrackArtist]).or_else(|| first_accessor_text(tags, |tag| {
-            tag.artist().map(|value| value.into_owned())
-        })),
-        album: first_text(tags, &[ItemKey::AlbumTitle]).or_else(|| first_accessor_text(tags, |tag| {
-            tag.album().map(|value| value.into_owned())
-        })),
+        title: first_text(tags, &[ItemKey::TrackTitle]).or_else(|| {
+            first_accessor_text(tags, |tag| tag.title().map(|value| value.into_owned()))
+        }),
+        artist: first_text(tags, &[ItemKey::TrackArtist]).or_else(|| {
+            first_accessor_text(tags, |tag| tag.artist().map(|value| value.into_owned()))
+        }),
+        album: first_text(tags, &[ItemKey::AlbumTitle]).or_else(|| {
+            first_accessor_text(tags, |tag| tag.album().map(|value| value.into_owned()))
+        }),
         album_artist: first_text(tags, &[ItemKey::AlbumArtist]),
-        genre: first_text(tags, &[ItemKey::Genre]).or_else(|| first_accessor_text(tags, |tag| {
-            tag.genre().map(|value| value.into_owned())
-        })),
-        year: first_text(tags, &[ItemKey::Year, ItemKey::RecordingDate, ItemKey::ReleaseDate])
-            .and_then(|value| parse_year(&value))
-            .or_else(|| first_accessor_u32(tags, |tag| tag.year())),
+        genre: first_text(tags, &[ItemKey::Genre]).or_else(|| {
+            first_accessor_text(tags, |tag| tag.genre().map(|value| value.into_owned()))
+        }),
+        year: first_text(
+            tags,
+            &[ItemKey::Year, ItemKey::RecordingDate, ItemKey::ReleaseDate],
+        )
+        .and_then(|value| parse_year(&value))
+        .or_else(|| first_accessor_u32(tags, |tag| tag.year())),
         date,
         original_date: first_text(tags, &[ItemKey::OriginalReleaseDate]),
         track_number,
@@ -905,9 +968,9 @@ fn extract_metadata_from_tags(tags: &[Tag]) -> MusicTagCanonicalMetadata {
             .and_then(|value| parse_f64(&value)),
         musical_key: first_text(tags, &[ItemKey::InitialKey]),
         language: first_text(tags, &[ItemKey::Language]),
-        comment: first_text(tags, &[ItemKey::Comment]).or_else(|| first_accessor_text(tags, |tag| {
-            tag.comment().map(|value| value.into_owned())
-        })),
+        comment: first_text(tags, &[ItemKey::Comment]).or_else(|| {
+            first_accessor_text(tags, |tag| tag.comment().map(|value| value.into_owned()))
+        }),
         lyrics: first_text(tags, &[ItemKey::Lyrics]),
         mbid_recording: first_text(tags, &[ItemKey::MusicBrainzRecordingId]),
         mbid_release: first_text(tags, &[ItemKey::MusicBrainzReleaseId]),

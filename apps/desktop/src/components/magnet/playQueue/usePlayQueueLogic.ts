@@ -5,7 +5,7 @@
 
 import { useState } from 'react';
 import { Track } from '../../../services/audio';
-import { parseAudioFile } from '../../../utils/audioMetadata';
+import { parseAudioFile, parseLocalAudioFileMetadata } from '../../../utils/audioMetadata';
 import { useAudioService } from '../../../contexts/AudioEngineContext';
 import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import { open } from '@tauri-apps/api/dialog';
@@ -129,7 +129,17 @@ export function usePlayQueueLogic(): PlayQueueLogic {
         const tracks: Track[] = [];
         for (const filePath of paths) {
           const name = filePath.split(/[/\\]/).pop() || filePath;
-          tracks.push({
+          const nativeTrack = await parseLocalAudioFileMetadata(filePath).catch((error) => {
+            telemetry.warn('play_queue.add_files.native_metadata_failed', {
+              message: readErrorMessage(error),
+              fields: {
+                fileName: name,
+              },
+            });
+            return null;
+          });
+
+          tracks.push(nativeTrack ?? {
             id: stableIdFromPath(filePath),
             title: name.replace(/\.[^/.]+$/, ''),
             filePath,

@@ -7,3 +7,4 @@ export * from './host';
 export * from './nativeAdapter';
 export * from './platformCompat';
 export * from './musicPlatformWorkspace';
+export * from './utilsTelemetry';

@@ -6,11 +6,154 @@
 import { parseBlob, IAudioMetadata } from 'music-metadata';
 import { Track } from '../services/audio';
 import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../services/telemetry/tauriInvokeTelemetry';
+import { isTauriRuntime } from './tauriRuntime';
 
 const telemetry = getTelemetryLogger('audio', 'audioMetadata');
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+type NativeLocalTrackMetadata = {
+  path?: string | null;
+  fileName?: string | null;
+  file_name?: string | null;
+  size?: number | null;
+  fileSize?: number | null;
+  file_size?: number | null;
+  mtimeMs?: number | null;
+  mtime_ms?: number | null;
+  quickFingerprint?: string | null;
+  quick_fingerprint?: string | null;
+  duration?: number | null;
+  bitrate?: number | null;
+  sampleRate?: number | null;
+  sample_rate?: number | null;
+  bitDepth?: number | null;
+  bit_depth?: number | null;
+  format?: string | null;
+  codecName?: string | null;
+  codec_name?: string | null;
+  title?: string | null;
+  artist?: string | null;
+  album?: string | null;
+  albumArtist?: string | null;
+  album_artist?: string | null;
+  year?: number | null;
+  genre?: string | null;
+  trackNumber?: number | null;
+  track_number?: number | null;
+  discNumber?: number | null;
+  disc_number?: number | null;
+  composer?: string | null;
+  comment?: string | null;
+  lyrics?: string | null;
+  replayGainTrackDb?: number | null;
+  replay_gain_track_db?: number | null;
+  replayGainAlbumDb?: number | null;
+  replay_gain_album_db?: number | null;
+  coverKey?: string | null;
+  cover_key?: string | null;
+  coverUrl?: string | null;
+  cover_url?: string | null;
+  coverPath?: string | null;
+  cover_path?: string | null;
+  metadataScannedAtMs?: number | null;
+  metadata_scanned_at_ms?: number | null;
+};
+
+function stableIdFromPath(path: string): string {
+  const normalized = path.replace(/\\/g, '/').toLowerCase();
+  let hash = 2166136261;
+  for (let i = 0; i < normalized.length; i++) {
+    hash ^= normalized.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `track-${(hash >>> 0).toString(16)}`;
+}
+
+function toOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function toOptionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function nativeLocalTrackMetadataToTrack(
+  metadata: NativeLocalTrackMetadata,
+  fallbackPath: string
+): Track {
+  const path = toOptionalString(metadata.path) ?? fallbackPath;
+  const fileName =
+    toOptionalString(metadata.fileName ?? metadata.file_name) ??
+    path.split(/[\\/]/).pop() ??
+    path;
+  const title = toOptionalString(metadata.title) ?? getTitleFromFilename(fileName);
+  const coverPath = toOptionalString(metadata.coverPath ?? metadata.cover_path);
+
+  const track: Track & { bitDepth?: number; coverPath?: string } = {
+    id: stableIdFromPath(path),
+    title,
+    artist: toOptionalString(metadata.artist),
+    album: toOptionalString(metadata.album),
+    albumArtist: toOptionalString(metadata.albumArtist ?? metadata.album_artist),
+    duration: toOptionalNumber(metadata.duration),
+    coverKey: toOptionalString(metadata.coverKey ?? metadata.cover_key),
+    coverUrl: toOptionalString(metadata.coverUrl ?? metadata.cover_url),
+    year: toOptionalNumber(metadata.year),
+    genre: toOptionalString(metadata.genre),
+    trackNumber: toOptionalNumber(metadata.trackNumber ?? metadata.track_number),
+    discNumber: toOptionalNumber(metadata.discNumber ?? metadata.disc_number),
+    composer: toOptionalString(metadata.composer),
+    comment: toOptionalString(metadata.comment),
+    lyrics: toOptionalString(metadata.lyrics),
+    bitrate: toOptionalNumber(metadata.bitrate),
+    sampleRate: toOptionalNumber(metadata.sampleRate ?? metadata.sample_rate),
+    replayGainTrackGainDb: toOptionalNumber(
+      metadata.replayGainTrackDb ?? metadata.replay_gain_track_db
+    ),
+    replayGainAlbumGainDb: toOptionalNumber(
+      metadata.replayGainAlbumDb ?? metadata.replay_gain_album_db
+    ),
+    format: toOptionalString(metadata.format),
+    codecName: toOptionalString(metadata.codecName ?? metadata.codec_name ?? metadata.format),
+    fileSize: toOptionalNumber(metadata.fileSize ?? metadata.file_size ?? metadata.size),
+    mtimeMs: toOptionalNumber(metadata.mtimeMs ?? metadata.mtime_ms),
+    quickFingerprint: toOptionalString(metadata.quickFingerprint ?? metadata.quick_fingerprint),
+    metadataScannedAtMs: toOptionalNumber(
+      metadata.metadataScannedAtMs ?? metadata.metadata_scanned_at_ms
+    ),
+    path,
+    filePath: path,
+    originalPath: path,
+    addedAt: new Date(),
+  };
+
+  const bitDepth = toOptionalNumber(metadata.bitDepth ?? metadata.bit_depth);
+  if (bitDepth !== undefined) track.bitDepth = bitDepth;
+  if (coverPath) track.coverPath = coverPath;
+
+  return track;
+}
+
+export async function parseLocalAudioFileMetadata(path: string): Promise<Track | null> {
+  const normalizedPath = path.trim();
+  if (!normalizedPath || !isTauriRuntime()) return null;
+
+  const metadata = await invokeWithTelemetry<NativeLocalTrackMetadata>(
+    'music_library_parse_local_track_metadata',
+    { path: normalizedPath },
+    {
+      moduleId: 'audio',
+      component: 'audioMetadata',
+      event: 'audio.metadata.native-local.parse',
+      includeResultSize: true,
+    }
+  );
+
+  return nativeLocalTrackMetadataToTrack(metadata, normalizedPath);
 }
 
 /**

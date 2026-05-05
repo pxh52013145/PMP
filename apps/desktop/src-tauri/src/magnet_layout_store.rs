@@ -355,6 +355,152 @@ pub enum MagnetLayoutStorePatch {
     },
 }
 
+fn sanitize_magnet_id_list(raw_ids: Vec<String>) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for raw_id in raw_ids {
+        let id = trim_or_empty(&raw_id);
+        if id.is_empty() {
+            continue;
+        }
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        ids.push(id);
+    }
+
+    ids
+}
+
+fn sanitize_patch_anchors(raw_anchors: Vec<PixelAnchor>) -> Vec<PixelAnchor> {
+    raw_anchors
+        .into_iter()
+        .filter_map(|anchor| sanitize_anchor(&anchor))
+        .collect()
+}
+
+fn normalize_magnet_layout_patch(patch: MagnetLayoutStorePatch) -> Option<MagnetLayoutStorePatch> {
+    match patch {
+        MagnetLayoutStorePatch::SetActiveSpaceId { space_id } => {
+            let space_id = trim_or_empty(&space_id);
+            if space_id.is_empty() {
+                return None;
+            }
+            Some(MagnetLayoutStorePatch::SetActiveSpaceId { space_id })
+        }
+        MagnetLayoutStorePatch::SetSpacesState { spaces } => {
+            Some(MagnetLayoutStorePatch::SetSpacesState {
+                spaces: sanitize_spaces_state(&spaces),
+            })
+        }
+        MagnetLayoutStorePatch::SetSpaceLayout { space_id, layout } => {
+            let space_id = trim_or_empty(&space_id);
+            if space_id.is_empty() {
+                return None;
+            }
+            let layout = sanitize_layout_for_space(&space_id, &layout);
+            Some(MagnetLayoutStorePatch::SetSpaceLayout { space_id, layout })
+        }
+        MagnetLayoutStorePatch::SetActiveMagnetIds {
+            space_id,
+            active_magnet_ids,
+        } => {
+            let space_id = trim_or_empty(&space_id);
+            if space_id.is_empty() {
+                return None;
+            }
+            Some(MagnetLayoutStorePatch::SetActiveMagnetIds {
+                space_id,
+                active_magnet_ids: sanitize_magnet_id_list(active_magnet_ids),
+            })
+        }
+        MagnetLayoutStorePatch::SetMagnetActive {
+            space_id,
+            magnet_id,
+            active,
+        } => {
+            let space_id = trim_or_empty(&space_id);
+            let magnet_id = trim_or_empty(&magnet_id);
+            if space_id.is_empty() || magnet_id.is_empty() {
+                return None;
+            }
+            Some(MagnetLayoutStorePatch::SetMagnetActive {
+                space_id,
+                magnet_id,
+                active,
+            })
+        }
+        MagnetLayoutStorePatch::UpdateMagnetAnchors {
+            space_id,
+            magnet_id,
+            anchors,
+        } => {
+            let space_id = trim_or_empty(&space_id);
+            let magnet_id = trim_or_empty(&magnet_id);
+            if space_id.is_empty() || magnet_id.is_empty() {
+                return None;
+            }
+            Some(MagnetLayoutStorePatch::UpdateMagnetAnchors {
+                space_id,
+                magnet_id,
+                anchors: sanitize_patch_anchors(anchors),
+            })
+        }
+        MagnetLayoutStorePatch::UpsertSpacePreset { space_id, preset } => {
+            let space_id = trim_or_empty(&space_id);
+            if space_id.is_empty() {
+                return None;
+            }
+            let preset = sanitize_preset(&space_id, &preset)?;
+            Some(MagnetLayoutStorePatch::UpsertSpacePreset { space_id, preset })
+        }
+        MagnetLayoutStorePatch::DeleteSpacePreset {
+            space_id,
+            preset_id,
+        } => {
+            let space_id = trim_or_empty(&space_id);
+            let preset_id = trim_or_empty(&preset_id);
+            if space_id.is_empty() || preset_id.is_empty() {
+                return None;
+            }
+            Some(MagnetLayoutStorePatch::DeleteSpacePreset {
+                space_id,
+                preset_id,
+            })
+        }
+        MagnetLayoutStorePatch::PushSpaceHistory { space_id, item } => {
+            let space_id = trim_or_empty(&space_id);
+            if space_id.is_empty() {
+                return None;
+            }
+            let item = sanitize_history_item(&space_id, &item)?;
+            Some(MagnetLayoutStorePatch::PushSpaceHistory { space_id, item })
+        }
+        MagnetLayoutStorePatch::DeleteSpaceHistoryItem {
+            space_id,
+            history_id,
+        } => {
+            let space_id = trim_or_empty(&space_id);
+            let history_id = trim_or_empty(&history_id);
+            if space_id.is_empty() || history_id.is_empty() {
+                return None;
+            }
+            Some(MagnetLayoutStorePatch::DeleteSpaceHistoryItem {
+                space_id,
+                history_id,
+            })
+        }
+        MagnetLayoutStorePatch::ClearSpaceHistory { space_id } => {
+            let space_id = trim_or_empty(&space_id);
+            if space_id.is_empty() {
+                return None;
+            }
+            Some(MagnetLayoutStorePatch::ClearSpaceHistory { space_id })
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct MagnetLayoutStore {
     file_path: PathBuf,
@@ -1235,15 +1381,15 @@ impl MagnetLayoutStore {
         let mut next_presets = guard.presets_by_space_id.clone();
         let mut next_history = guard.history_by_space_id.clone();
 
-        for patch in request.patches {
+        for patch in request
+            .patches
+            .into_iter()
+            .filter_map(normalize_magnet_layout_patch)
+        {
             match patch {
                 MagnetLayoutStorePatch::SetActiveSpaceId { space_id } => {
-                    let trimmed = trim_or_empty(&space_id);
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    if next_spaces.active_space_id != trimmed {
-                        next_spaces.active_space_id = trimmed;
+                    if next_spaces.active_space_id != space_id {
+                        next_spaces.active_space_id = space_id;
                         spaces_changed = true;
                     }
                 }
@@ -1252,31 +1398,23 @@ impl MagnetLayoutStore {
                     spaces_changed = true;
                 }
                 MagnetLayoutStorePatch::SetSpaceLayout { space_id, layout } => {
-                    let trimmed = trim_or_empty(&space_id);
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    next_layouts.insert(trimmed, layout);
+                    next_layouts.insert(space_id, layout);
                     layout_changed = true;
                 }
                 MagnetLayoutStorePatch::SetActiveMagnetIds {
                     space_id,
                     active_magnet_ids,
                 } => {
-                    let trimmed_space_id = trim_or_empty(&space_id);
-                    if trimmed_space_id.is_empty() {
-                        continue;
-                    }
                     let existing = next_layouts
-                        .get(&trimmed_space_id)
+                        .get(&space_id)
                         .cloned()
-                        .unwrap_or_else(|| default_layout_for_space(&trimmed_space_id));
+                        .unwrap_or_else(|| default_layout_for_space(&space_id));
                     let next = MagnetSpaceLayout {
                         version: 1,
                         active_magnet_ids,
                         anchors_by_magnet_id: existing.anchors_by_magnet_id,
                     };
-                    next_layouts.insert(trimmed_space_id, next);
+                    next_layouts.insert(space_id, next);
                     layout_changed = true;
                 }
                 MagnetLayoutStorePatch::SetMagnetActive {
@@ -1284,31 +1422,20 @@ impl MagnetLayoutStore {
                     magnet_id,
                     active,
                 } => {
-                    let trimmed_space_id = trim_or_empty(&space_id);
-                    let trimmed_magnet_id = trim_or_empty(&magnet_id);
-                    if trimmed_space_id.is_empty() || trimmed_magnet_id.is_empty() {
-                        continue;
-                    }
                     let mut existing = next_layouts
-                        .get(&trimmed_space_id)
+                        .get(&space_id)
                         .cloned()
-                        .unwrap_or_else(|| default_layout_for_space(&trimmed_space_id));
+                        .unwrap_or_else(|| default_layout_for_space(&space_id));
 
                     if active {
-                        if !existing
-                            .active_magnet_ids
-                            .iter()
-                            .any(|id| id == &trimmed_magnet_id)
-                        {
-                            existing.active_magnet_ids.push(trimmed_magnet_id);
+                        if !existing.active_magnet_ids.iter().any(|id| id == &magnet_id) {
+                            existing.active_magnet_ids.push(magnet_id);
                         }
                     } else {
-                        existing
-                            .active_magnet_ids
-                            .retain(|id| id != &trimmed_magnet_id);
+                        existing.active_magnet_ids.retain(|id| id != &magnet_id);
                     }
 
-                    next_layouts.insert(trimmed_space_id, existing);
+                    next_layouts.insert(space_id, existing);
                     layout_changed = true;
                 }
                 MagnetLayoutStorePatch::UpdateMagnetAnchors {
@@ -1316,51 +1443,26 @@ impl MagnetLayoutStore {
                     magnet_id,
                     anchors,
                 } => {
-                    let trimmed_space_id = trim_or_empty(&space_id);
-                    let trimmed_magnet_id = trim_or_empty(&magnet_id);
-                    if trimmed_space_id.is_empty() || trimmed_magnet_id.is_empty() {
-                        continue;
-                    }
-
                     let mut existing = next_layouts
-                        .get(&trimmed_space_id)
+                        .get(&space_id)
                         .cloned()
-                        .unwrap_or_else(|| default_layout_for_space(&trimmed_space_id));
+                        .unwrap_or_else(|| default_layout_for_space(&space_id));
 
-                    let mut clean_anchors: Vec<PixelAnchor> = Vec::new();
-                    for anchor in anchors {
-                        if let Some(clean) = sanitize_anchor(&anchor) {
-                            clean_anchors.push(clean);
-                        }
-                    }
-
-                    if clean_anchors.is_empty() {
-                        existing.anchors_by_magnet_id.remove(&trimmed_magnet_id);
+                    if anchors.is_empty() {
+                        existing.anchors_by_magnet_id.remove(&magnet_id);
                     } else {
-                        existing
-                            .anchors_by_magnet_id
-                            .insert(trimmed_magnet_id, clean_anchors);
+                        existing.anchors_by_magnet_id.insert(magnet_id, anchors);
                     }
 
-                    next_layouts.insert(trimmed_space_id, existing);
+                    next_layouts.insert(space_id, existing);
                     layout_changed = true;
                 }
                 MagnetLayoutStorePatch::UpsertSpacePreset { space_id, preset } => {
-                    let trimmed_space_id = trim_or_empty(&space_id);
-                    if trimmed_space_id.is_empty() {
-                        continue;
-                    }
-                    let clean = match sanitize_preset(&trimmed_space_id, &preset) {
-                        Some(value) => value,
-                        None => continue,
-                    };
-                    let list = next_presets
-                        .entry(trimmed_space_id)
-                        .or_insert_with(Vec::new);
-                    if let Some(existing) = list.iter_mut().find(|p| p.id == clean.id) {
-                        *existing = clean;
+                    let list = next_presets.entry(space_id).or_insert_with(Vec::new);
+                    if let Some(existing) = list.iter_mut().find(|p| p.id == preset.id) {
+                        *existing = preset;
                     } else {
-                        list.push(clean);
+                        list.push(preset);
                     }
                     presets_changed = true;
                 }
@@ -1368,15 +1470,10 @@ impl MagnetLayoutStore {
                     space_id,
                     preset_id,
                 } => {
-                    let trimmed_space_id = trim_or_empty(&space_id);
-                    let trimmed_preset_id = trim_or_empty(&preset_id);
-                    if trimmed_space_id.is_empty() || trimmed_preset_id.is_empty() {
-                        continue;
-                    }
                     let mut should_remove_space = false;
-                    if let Some(list) = next_presets.get_mut(&trimmed_space_id) {
+                    if let Some(list) = next_presets.get_mut(&space_id) {
                         let before = list.len();
-                        list.retain(|p| p.id != trimmed_preset_id);
+                        list.retain(|p| p.id != preset_id);
                         if before != list.len() {
                             presets_changed = true;
                         }
@@ -1385,22 +1482,12 @@ impl MagnetLayoutStore {
                         }
                     }
                     if should_remove_space {
-                        next_presets.remove(&trimmed_space_id);
+                        next_presets.remove(&space_id);
                     }
                 }
                 MagnetLayoutStorePatch::PushSpaceHistory { space_id, item } => {
-                    let trimmed_space_id = trim_or_empty(&space_id);
-                    if trimmed_space_id.is_empty() {
-                        continue;
-                    }
-                    let clean = match sanitize_history_item(&trimmed_space_id, &item) {
-                        Some(value) => value,
-                        None => continue,
-                    };
-                    let list = next_history
-                        .entry(trimmed_space_id)
-                        .or_insert_with(Vec::new);
-                    list.push(clean);
+                    let list = next_history.entry(space_id).or_insert_with(Vec::new);
+                    list.push(item);
                     if list.len() > MAX_HISTORY_PER_SPACE {
                         let overflow = list.len() - MAX_HISTORY_PER_SPACE;
                         list.drain(0..overflow);
@@ -1411,15 +1498,10 @@ impl MagnetLayoutStore {
                     space_id,
                     history_id,
                 } => {
-                    let trimmed_space_id = trim_or_empty(&space_id);
-                    let trimmed_history_id = trim_or_empty(&history_id);
-                    if trimmed_space_id.is_empty() || trimmed_history_id.is_empty() {
-                        continue;
-                    }
                     let mut should_remove_space = false;
-                    if let Some(list) = next_history.get_mut(&trimmed_space_id) {
+                    if let Some(list) = next_history.get_mut(&space_id) {
                         let before = list.len();
-                        list.retain(|p| p.id != trimmed_history_id);
+                        list.retain(|p| p.id != history_id);
                         if before != list.len() {
                             history_changed = true;
                         }
@@ -1428,15 +1510,11 @@ impl MagnetLayoutStore {
                         }
                     }
                     if should_remove_space {
-                        next_history.remove(&trimmed_space_id);
+                        next_history.remove(&space_id);
                     }
                 }
                 MagnetLayoutStorePatch::ClearSpaceHistory { space_id } => {
-                    let trimmed_space_id = trim_or_empty(&space_id);
-                    if trimmed_space_id.is_empty() {
-                        continue;
-                    }
-                    if next_history.remove(&trimmed_space_id).is_some() {
+                    if next_history.remove(&space_id).is_some() {
                         history_changed = true;
                     }
                 }
@@ -1709,5 +1787,165 @@ mod tests {
             }
             _ => panic!("Expected SetActiveSpaceId patch"),
         }
+    }
+
+    #[test]
+    fn normalize_patch_sanitizes_set_space_layout_like_ts_layout_sanitizer() {
+        let mut anchors_by_magnet_id = HashMap::new();
+        anchors_by_magnet_id.insert(
+            " custom-panel ".to_string(),
+            vec![
+                PixelAnchor {
+                    id: " top-left ".to_string(),
+                    grid_x: 1.0,
+                    grid_y: 2.0,
+                    role: " anchor ".to_string(),
+                },
+                PixelAnchor {
+                    id: "".to_string(),
+                    grid_x: 1.0,
+                    grid_y: 2.0,
+                    role: "anchor".to_string(),
+                },
+                PixelAnchor {
+                    id: "bad-role".to_string(),
+                    grid_x: 1.0,
+                    grid_y: 2.0,
+                    role: "drag".to_string(),
+                },
+            ],
+        );
+
+        let patch = MagnetLayoutStorePatch::SetSpaceLayout {
+            space_id: " space2 ".to_string(),
+            layout: MagnetSpaceLayout {
+                version: 1,
+                active_magnet_ids: vec![
+                    " custom-panel ".to_string(),
+                    "".to_string(),
+                    "custom-panel".to_string(),
+                ],
+                anchors_by_magnet_id,
+            },
+        };
+
+        let normalized = normalize_magnet_layout_patch(patch).expect("patch should normalize");
+
+        match normalized {
+            MagnetLayoutStorePatch::SetSpaceLayout { space_id, layout } => {
+                assert_eq!(space_id, "space2");
+                assert_eq!(layout.active_magnet_ids[0], "custom-panel");
+                assert_eq!(
+                    layout
+                        .active_magnet_ids
+                        .iter()
+                        .filter(|id| id.as_str() == "custom-panel")
+                        .count(),
+                    1
+                );
+                assert!(
+                    layout.active_magnet_ids.iter().any(|id| id == "btn-close"),
+                    "required magnet ids should be repaired during layout normalization"
+                );
+
+                let custom_anchors = layout
+                    .anchors_by_magnet_id
+                    .get("custom-panel")
+                    .expect("custom-panel anchors should be kept under a trimmed id");
+                assert_eq!(custom_anchors.len(), 1);
+                assert_eq!(custom_anchors[0].id, "top-left");
+                assert_eq!(custom_anchors[0].role, "anchor");
+                assert!(
+                    layout.anchors_by_magnet_id.get("btn-close").is_some(),
+                    "required system anchors should be filled for active required magnets"
+                );
+            }
+            _ => panic!("Expected SetSpaceLayout patch"),
+        }
+    }
+
+    #[test]
+    fn normalize_patch_sanitizes_anchor_updates_and_keeps_empty_removal() {
+        let patch = MagnetLayoutStorePatch::UpdateMagnetAnchors {
+            space_id: " space2 ".to_string(),
+            magnet_id: " custom-panel ".to_string(),
+            anchors: vec![
+                PixelAnchor {
+                    id: "anchor".to_string(),
+                    grid_x: 3.0,
+                    grid_y: 4.0,
+                    role: "anchor".to_string(),
+                },
+                PixelAnchor {
+                    id: "bad-role".to_string(),
+                    grid_x: 3.0,
+                    grid_y: 4.0,
+                    role: "control".to_string(),
+                },
+            ],
+        };
+
+        let normalized = normalize_magnet_layout_patch(patch).expect("patch should normalize");
+
+        match normalized {
+            MagnetLayoutStorePatch::UpdateMagnetAnchors {
+                space_id,
+                magnet_id,
+                anchors,
+            } => {
+                assert_eq!(space_id, "space2");
+                assert_eq!(magnet_id, "custom-panel");
+                assert_eq!(anchors.len(), 1);
+                assert_eq!(anchors[0].id, "anchor");
+            }
+            _ => panic!("Expected UpdateMagnetAnchors patch"),
+        }
+
+        let remove_patch = MagnetLayoutStorePatch::UpdateMagnetAnchors {
+            space_id: "space2".to_string(),
+            magnet_id: "custom-panel".to_string(),
+            anchors: vec![PixelAnchor {
+                id: "bad-role".to_string(),
+                grid_x: 3.0,
+                grid_y: 4.0,
+                role: "control".to_string(),
+            }],
+        };
+
+        let normalized_remove =
+            normalize_magnet_layout_patch(remove_patch).expect("removal patch should normalize");
+        match normalized_remove {
+            MagnetLayoutStorePatch::UpdateMagnetAnchors { anchors, .. } => {
+                assert!(
+                    anchors.is_empty(),
+                    "an anchor update with no valid anchors remains a removal patch"
+                );
+            }
+            _ => panic!("Expected UpdateMagnetAnchors patch"),
+        }
+    }
+
+    #[test]
+    fn normalize_patch_drops_empty_space_or_magnet_ids() {
+        assert!(
+            normalize_magnet_layout_patch(MagnetLayoutStorePatch::SetActiveSpaceId {
+                space_id: "   ".to_string(),
+            })
+            .is_none()
+        );
+        assert!(
+            normalize_magnet_layout_patch(MagnetLayoutStorePatch::SetMagnetActive {
+                space_id: "space1".to_string(),
+                magnet_id: " ".to_string(),
+                active: true,
+            })
+            .is_none()
+        );
+        assert!(
+            normalize_magnet_layout_patch(MagnetLayoutStorePatch::ClearSpaceHistory {
+                space_id: "\t".to_string(),
+            })
+            .is_none()
+        );
     }
 }

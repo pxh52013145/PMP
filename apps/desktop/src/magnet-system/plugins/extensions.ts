@@ -1,6 +1,8 @@
 import type {
   CapabilityRequirement,
   InstalledExtensionRecord,
+  PluginInstallSourceDiagnostic,
+  PluginReadInstallSourcePayload,
   PxpManifestV2,
 } from '@pixel-matrix/plugin-platform-contracts';
 import { tryWriteJson, readJson } from '../../modules/storage';
@@ -31,6 +33,7 @@ type ParsedExtensionInstallSource = {
   files: Array<{
     relativePath: string;
     bytes: Uint8Array;
+    sha256?: string;
   }>;
   rootDir: string;
   manifestPath: string;
@@ -41,38 +44,32 @@ export type ParsedInstalledExtensionSource = Pick<
   'record' | 'rootDir' | 'manifestPath'
 >;
 
-type NativeInstalledExtensionInstallSource = {
-  manifestPath: string;
-  rootDir: string;
-  manifestRaw: string;
-  files: Array<{
-    relativePath: string;
-    bytes: number[];
-  }>;
-};
+type NativeInstalledExtensionInstallSource = PluginReadInstallSourcePayload<PxpManifestV2>;
 
-const CAPABILITY_PERMISSION_MAP: Record<string, string[]> = {
-  'core.capability-registry': [
-    PLUGIN_PERMISSIONS.host,
-    PLUGIN_PERMISSIONS.hostCapabilityInvoke,
-  ],
-  'host.pmp.audio-engine.playback': [
-    PLUGIN_PERMISSIONS.audioState,
-    PLUGIN_PERMISSIONS.audioControl,
-    PLUGIN_PERMISSIONS.audioCover,
-  ],
-  'host.pmp.audio-engine.analysis': [PLUGIN_PERMISSIONS.audioVisual],
-  'host.pmp.navigation': [PLUGIN_PERMISSIONS.navigation],
-  'host.pmp.shell.window': [PLUGIN_PERMISSIONS.window],
-  'host.pmp.storage.config': [PLUGIN_PERMISSIONS.configLocal],
-  'host.pmp.storage.durable-text': [PLUGIN_PERMISSIONS.durableText],
-  'host.pmp.connector-auth': [PLUGIN_PERMISSIONS.connectorAuth],
-  'host.pmp.magnets.catalog': [PLUGIN_PERMISSIONS.magnetsCatalog],
-  'host.pmp.magnets.layout': [PLUGIN_PERMISSIONS.magnetsLayout],
-  'host.pmp.music-platform.catalog': [PLUGIN_PERMISSIONS.musicPlatformCatalog],
-  'host.pmp.music-platform.search': [PLUGIN_PERMISSIONS.musicPlatformSearch],
-  'host.pmp.music-platform.prepare': [PLUGIN_PERMISSIONS.musicPlatformPrepare],
-};
+function readCapabilityPermissionMap(): Record<string, string[]> {
+  return {
+    'core.capability-registry': [
+      PLUGIN_PERMISSIONS.host,
+      PLUGIN_PERMISSIONS.hostCapabilityInvoke,
+    ],
+    'host.pmp.audio-engine.playback': [
+      PLUGIN_PERMISSIONS.audioState,
+      PLUGIN_PERMISSIONS.audioControl,
+      PLUGIN_PERMISSIONS.audioCover,
+    ],
+    'host.pmp.audio-engine.analysis': [PLUGIN_PERMISSIONS.audioVisual],
+    'host.pmp.navigation': [PLUGIN_PERMISSIONS.navigation],
+    'host.pmp.shell.window': [PLUGIN_PERMISSIONS.window],
+    'host.pmp.storage.config': [PLUGIN_PERMISSIONS.configLocal],
+    'host.pmp.storage.durable-text': [PLUGIN_PERMISSIONS.durableText],
+    'host.pmp.connector-auth': [PLUGIN_PERMISSIONS.connectorAuth],
+    'host.pmp.magnets.catalog': [PLUGIN_PERMISSIONS.magnetsCatalog],
+    'host.pmp.magnets.layout': [PLUGIN_PERMISSIONS.magnetsLayout],
+    'host.pmp.music-platform.catalog': [PLUGIN_PERMISSIONS.musicPlatformCatalog],
+    'host.pmp.music-platform.search': [PLUGIN_PERMISSIONS.musicPlatformSearch],
+    'host.pmp.music-platform.prepare': [PLUGIN_PERMISSIONS.musicPlatformPrepare],
+  };
+}
 
 let extensionStoreRevision = 0;
 const extensionStoreListeners = new Set<PluginStoreListener>();
@@ -585,8 +582,9 @@ export function listInstalledExtensionDerivedPermissions(
   record: InstalledHostExtensionRecord
 ): string[] {
   const permissions = new Set<string>();
+  const capabilityPermissionMap = readCapabilityPermissionMap();
   for (const capabilityId of listDeclaredCapabilityIds(record)) {
-    for (const permission of CAPABILITY_PERMISSION_MAP[capabilityId] ?? []) {
+    for (const permission of capabilityPermissionMap[capabilityId] ?? []) {
       permissions.add(permission);
     }
   }
@@ -641,6 +639,24 @@ async function sha256Hex(data: Uint8Array): Promise<string | undefined> {
     .join('');
 }
 
+function normalizeSha256Hex(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  return /^[a-f0-9]{64}$/.test(normalized) ? normalized : undefined;
+}
+
+function readNativeValidationError(
+  diagnostics: PluginInstallSourceDiagnostic[] | undefined
+): string | null {
+  if (!Array.isArray(diagnostics)) return null;
+  const diagnostic =
+    diagnostics.find((entry) => entry?.severity === 'error') ??
+    diagnostics.find((entry) => typeof entry?.message === 'string');
+  return typeof diagnostic?.message === 'string' && diagnostic.message.trim().length > 0
+    ? diagnostic.message.trim()
+    : null;
+}
+
 async function computeTreeDigest(
   files: Array<{ relativePath: string; bytes: Uint8Array }>
 ): Promise<string | undefined> {
@@ -666,7 +682,7 @@ async function computeTreeDigest(
 
 function normalizeNativeInstallSourceFiles(
   files: NativeInstalledExtensionInstallSource['files']
-): Array<{ relativePath: string; bytes: Uint8Array }> {
+): Array<{ relativePath: string; bytes: Uint8Array; sha256?: string }> {
   return files.map((file, index) => {
     const relativePath = normalizeManifestRelativePath(
       typeof file?.relativePath === 'string' ? file.relativePath : '',
@@ -680,6 +696,7 @@ function normalizeNativeInstallSourceFiles(
     return {
       relativePath,
       bytes: Uint8Array.from(file.bytes),
+      sha256: normalizeSha256Hex(file.sha256),
     };
   });
 }
@@ -711,9 +728,19 @@ async function parseInstalledExtensionInstallSourceFromFilePath(
   const installSource = await readInstalledExtensionInstallSourceFromNative(normalizedPath);
   const manifestPath = normalizeFsPath(installSource.manifestPath);
   const rootDir = normalizeFsPath(installSource.rootDir);
-  const manifestRaw = installSource.manifestRaw;
-  const manifestUnknown = JSON.parse(manifestRaw) as unknown;
-  validateInstalledExtensionManifest(manifestUnknown);
+  const nativeValidationError = readNativeValidationError(installSource.validationDiagnostics);
+  let manifestUnknown: PxpManifestV2;
+  if (installSource.validatedManifest) {
+    manifestUnknown = installSource.validatedManifest;
+  } else {
+    if (nativeValidationError) {
+      throw new Error(nativeValidationError);
+    }
+    const manifestRaw = installSource.manifestRaw;
+    const parsedManifest = JSON.parse(manifestRaw) as unknown;
+    validateInstalledExtensionManifest(parsedManifest);
+    manifestUnknown = parsedManifest;
+  }
 
   const files = normalizeNativeInstallSourceFiles(installSource.files);
   const fileMap = new Map(files.map((file) => [file.relativePath, file.bytes] as const));
@@ -728,7 +755,8 @@ async function parseInstalledExtensionInstallSourceFromFilePath(
     }
   }
 
-  const packageDigest = await computeTreeDigest(files);
+  const packageDigest =
+    normalizeSha256Hex(installSource.packageDigest) ?? (await computeTreeDigest(files));
   return {
     record: {
       manifest: manifestUnknown,
@@ -744,7 +772,7 @@ async function parseInstalledExtensionInstallSourceFromFilePath(
 
 async function persistInstalledExtensionArtifacts(
   record: InstalledHostExtensionRecord,
-  files: Array<{ relativePath: string; bytes: Uint8Array }>
+  files: Array<{ relativePath: string; bytes: Uint8Array; sha256?: string }>
 ): Promise<InstalledHostExtensionRecord['resolvedArtifacts']> {
   if (!isTauriRuntime()) {
     throw new Error('Installing manifest-v2 extensions requires the Tauri desktop runtime');
@@ -781,6 +809,11 @@ async function persistInstalledExtensionArtifacts(
   }
 
   const fileMap = new Map(files.map((file) => [file.relativePath, file.bytes] as const));
+  const fileDigestMap = new Map(
+    files
+      .map((file) => [file.relativePath, normalizeSha256Hex(file.sha256)] as const)
+      .filter((entry): entry is readonly [string, string] => typeof entry[1] === 'string')
+  );
   const resolvedArtifacts: NonNullable<InstalledHostExtensionRecord['resolvedArtifacts']> = [];
 
   for (const runtime of record.manifest.runtimes) {
@@ -792,7 +825,8 @@ async function persistInstalledExtensionArtifacts(
     resolvedArtifacts.push({
       runtimeId: runtime.runtimeId,
       path: absolutePath,
-      sha256: await sha256Hex(fileMap.get(entry) ?? new Uint8Array()),
+      sha256:
+        fileDigestMap.get(entry) ?? (await sha256Hex(fileMap.get(entry) ?? new Uint8Array())),
     });
   }
 

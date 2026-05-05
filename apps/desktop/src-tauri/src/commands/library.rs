@@ -18,6 +18,18 @@ pub async fn music_library_scan(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_parse_local_track_metadata(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<music_library::LocalTrackMetadata, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library::parse_local_track_metadata(&app, path)
+    })
+    .await
+    .map_err(|e| format!("Local track metadata parse task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_cover_lease(
     app: tauri::AppHandle,
     path: String,
@@ -613,6 +625,19 @@ pub async fn music_library_db_query_tracks_page(
     })
     .await
     .map_err(|e| format!("Music library paged track query task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_resolve_local_playback_candidate(
+    app: tauri::AppHandle,
+    input: music_library_db::LibraryLocalPlaybackResolveInput,
+) -> Result<music_library_db::LibraryLocalPlaybackResolveResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_music_library_services(&app)?;
+        music_library_db::resolve_local_playback_candidate(&app, input)
+    })
+    .await
+    .map_err(|e| format!("Music library local playback resolve task failed: {e}"))?
 }
 
 #[tauri::command]

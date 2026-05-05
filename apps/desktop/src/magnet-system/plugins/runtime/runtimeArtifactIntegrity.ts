@@ -1,3 +1,9 @@
+import type {
+  PluginRuntimeArtifactIntegrityPayload,
+} from '@pixel-matrix/plugin-platform-contracts';
+import { invokeWithTelemetry } from '../../../services/telemetry/tauriInvokeTelemetry';
+import { isTauriRuntime } from '../../../utils/tauriRuntime';
+
 export interface RuntimeArtifactIntegrityDeps {
   readArtifactBytes?: (artifactPath: string) => Promise<Uint8Array> | Uint8Array;
 }
@@ -20,6 +26,24 @@ async function defaultReadArtifactBytes(artifactPath: string): Promise<Uint8Arra
   return new Uint8Array(bytes);
 }
 
+async function assertRuntimeArtifactIntegrityWithNative(
+  artifactPath: string,
+  expectedSha256: string
+): Promise<void> {
+  await invokeWithTelemetry<PluginRuntimeArtifactIntegrityPayload>(
+    'plugin_verify_runtime_artifact_integrity',
+    {
+      artifactPath,
+      expectedSha256,
+    },
+    {
+      moduleId: 'extensions',
+      component: 'runtimeArtifactIntegrity',
+      event: 'plugin.runtime_artifact.verify',
+    }
+  );
+}
+
 export async function assertRuntimeArtifactIntegrity(
   options: AssertRuntimeArtifactIntegrityOptions,
   deps: RuntimeArtifactIntegrityDeps = {}
@@ -30,6 +54,11 @@ export async function assertRuntimeArtifactIntegrity(
 
   if (!/^[a-f0-9]{64}$/.test(expectedSha256)) {
     throw new Error(`Invalid runtime artifact digest metadata: ${options.artifactPath}`);
+  }
+
+  if (!deps.readArtifactBytes && isTauriRuntime()) {
+    await assertRuntimeArtifactIntegrityWithNative(options.artifactPath, expectedSha256);
+    return;
   }
 
   const readArtifactBytes = deps.readArtifactBytes ?? defaultReadArtifactBytes;
