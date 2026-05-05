@@ -38,13 +38,16 @@ mod windows_impl {
                     THUMBBUTTON,
                 },
                 WindowsAndMessaging::{
-                    CallWindowProcW, DefWindowProcW, GetWindowLongPtrW, LoadIconW,
-                    RegisterWindowMessageW, SetWindowLongPtrW, GWLP_WNDPROC, IDI_APPLICATION,
-                    WM_APPCOMMAND, WM_COMMAND, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDPROC,
+                    CallWindowProcW, CreateIcon, DefWindowProcW, GetWindowLongPtrW,
+                    RegisterWindowMessageW, SetWindowLongPtrW, GWLP_WNDPROC, HICON, WM_APPCOMMAND,
+                    WM_COMMAND, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDPROC,
                 },
             },
         },
     };
+
+    const TASKBAR_ICON_SIZE: usize = 16;
+    const ICON_SUPERSAMPLE: usize = 4;
 
     const THBN_CLICKED: u32 = 0x1800;
 
@@ -60,8 +63,29 @@ mod windows_impl {
     const APPCOMMAND_MEDIA_PLAY_PAUSE: u32 = 14;
 
     static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
+    static TASKBAR_ICONS: OnceCell<TaskbarIcons> = OnceCell::new();
     static TASKBAR_BUTTON_CREATED_MSG: Lazy<u32> =
         Lazy::new(|| unsafe { RegisterWindowMessageW(w!("TaskbarButtonCreated")) });
+
+    struct TaskbarIcons {
+        previous: isize,
+        play_pause: isize,
+        next: isize,
+    }
+
+    impl TaskbarIcons {
+        fn previous(&self) -> HICON {
+            HICON(self.previous)
+        }
+
+        fn play_pause(&self) -> HICON {
+            HICON(self.play_pause)
+        }
+
+        fn next(&self) -> HICON {
+            HICON(self.next)
+        }
+    }
 
     #[derive(Default)]
     struct WndProcRegistry {
@@ -98,18 +122,120 @@ mod windows_impl {
         Ok(taskbar)
     }
 
+    #[derive(Clone, Copy)]
+    enum TaskbarIconKind {
+        Previous,
+        PlayPause,
+        Next,
+    }
+
+    fn point_in_rect(x: f32, y: f32, left: f32, top: f32, right: f32, bottom: f32) -> bool {
+        x >= left && x <= right && y >= top && y <= bottom
+    }
+
+    fn point_in_triangle(x: f32, y: f32, a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> bool {
+        fn sign(p1: (f32, f32), p2: (f32, f32), p3: (f32, f32)) -> f32 {
+            (p1.0 - p3.0) * (p2.1 - p3.1) - (p2.0 - p3.0) * (p1.1 - p3.1)
+        }
+
+        let point = (x, y);
+        let d1 = sign(point, a, b);
+        let d2 = sign(point, b, c);
+        let d3 = sign(point, c, a);
+        let has_negative = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
+        let has_positive = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
+
+        !(has_negative && has_positive)
+    }
+
+    fn taskbar_icon_shape_contains(kind: TaskbarIconKind, x: f32, y: f32) -> bool {
+        match kind {
+            TaskbarIconKind::Previous => {
+                point_in_rect(x, y, 3.0, 3.25, 4.75, 12.75)
+                    || point_in_triangle(x, y, (13.0, 3.25), (13.0, 12.75), (5.0, 8.0))
+            }
+            TaskbarIconKind::PlayPause => {
+                point_in_triangle(x, y, (5.0, 3.25), (5.0, 12.75), (12.0, 8.0))
+            }
+            TaskbarIconKind::Next => {
+                point_in_rect(x, y, 11.25, 3.25, 13.0, 12.75)
+                    || point_in_triangle(x, y, (3.0, 3.25), (3.0, 12.75), (11.0, 8.0))
+            }
+        }
+    }
+
+    fn taskbar_icon_alpha(kind: TaskbarIconKind, x: usize, y: usize) -> u8 {
+        let mut hits = 0usize;
+        let samples = ICON_SUPERSAMPLE * ICON_SUPERSAMPLE;
+
+        for sy in 0..ICON_SUPERSAMPLE {
+            for sx in 0..ICON_SUPERSAMPLE {
+                let fx = x as f32 + (sx as f32 + 0.5) / ICON_SUPERSAMPLE as f32;
+                let fy = y as f32 + (sy as f32 + 0.5) / ICON_SUPERSAMPLE as f32;
+                if taskbar_icon_shape_contains(kind, fx, fy) {
+                    hits += 1;
+                }
+            }
+        }
+
+        ((hits * 255) / samples) as u8
+    }
+
+    unsafe fn create_taskbar_icon(kind: TaskbarIconKind) -> Result<HICON, String> {
+        let and_stride = ((TASKBAR_ICON_SIZE + 31) / 32) * 4;
+        let mut and_bits = vec![0u8; and_stride * TASKBAR_ICON_SIZE];
+        let mut xor_bits = vec![0u8; TASKBAR_ICON_SIZE * TASKBAR_ICON_SIZE * 4];
+
+        for y in 0..TASKBAR_ICON_SIZE {
+            for x in 0..TASKBAR_ICON_SIZE {
+                let alpha = taskbar_icon_alpha(kind, x, y);
+                let bitmap_y = TASKBAR_ICON_SIZE - 1 - y;
+                let xor_offset = (bitmap_y * TASKBAR_ICON_SIZE + x) * 4;
+
+                xor_bits[xor_offset] = 255;
+                xor_bits[xor_offset + 1] = 255;
+                xor_bits[xor_offset + 2] = 255;
+                xor_bits[xor_offset + 3] = alpha;
+
+                if alpha == 0 {
+                    let and_offset = bitmap_y * and_stride + x / 8;
+                    and_bits[and_offset] |= 0x80 >> (x % 8);
+                }
+            }
+        }
+
+        CreateIcon(
+            None,
+            TASKBAR_ICON_SIZE as i32,
+            TASKBAR_ICON_SIZE as i32,
+            1,
+            32,
+            and_bits.as_ptr(),
+            xor_bits.as_ptr(),
+        )
+        .map_err(|e| format!("CreateIcon(taskbar media control) failed: {e:?}"))
+    }
+
+    unsafe fn taskbar_icons() -> Result<&'static TaskbarIcons, String> {
+        TASKBAR_ICONS.get_or_try_init(|| {
+            Ok(TaskbarIcons {
+                previous: create_taskbar_icon(TaskbarIconKind::Previous)?.0,
+                play_pause: create_taskbar_icon(TaskbarIconKind::PlayPause)?.0,
+                next: create_taskbar_icon(TaskbarIconKind::Next)?.0,
+            })
+        })
+    }
+
     unsafe fn add_buttons(hwnd: HWND) -> Result<(), String> {
         let taskbar = create_taskbar_list3()?;
-
-        let icon = LoadIconW(None, IDI_APPLICATION)
-            .map_err(|e| format!("LoadIconW(IDI_APPLICATION) failed: {e:?}"))?;
+        let icons = taskbar_icons()?;
 
         let buttons = [
             THUMBBUTTON {
                 dwMask: THB_FLAGS | THB_ICON | THB_TOOLTIP,
                 iId: BUTTON_ID_PREV,
                 iBitmap: 0,
-                hIcon: icon,
+                hIcon: icons.previous(),
                 szTip: utf16_tip("Previous"),
                 dwFlags: THBF_ENABLED,
             },
@@ -117,7 +243,7 @@ mod windows_impl {
                 dwMask: THB_FLAGS | THB_ICON | THB_TOOLTIP,
                 iId: BUTTON_ID_PLAY_PAUSE,
                 iBitmap: 0,
-                hIcon: icon,
+                hIcon: icons.play_pause(),
                 szTip: utf16_tip("Play/Pause"),
                 dwFlags: THBF_ENABLED,
             },
@@ -125,7 +251,7 @@ mod windows_impl {
                 dwMask: THB_FLAGS | THB_ICON | THB_TOOLTIP,
                 iId: BUTTON_ID_NEXT,
                 iBitmap: 0,
-                hIcon: icon,
+                hIcon: icons.next(),
                 szTip: utf16_tip("Next"),
                 dwFlags: THBF_ENABLED,
             },
