@@ -380,6 +380,10 @@ export interface NativeLibraryTrackQuery {
   includeMissing?: boolean;
   visibleOnly?: boolean;
   projection?: 'list' | 'full';
+  includeGroupedRows?: boolean;
+  collapsedGroupKeys?: string[];
+  rowWindowStart?: number;
+  rowWindowEnd?: number;
   searchQuery?: string;
   artist?: string;
   album?: string;
@@ -694,9 +698,39 @@ export interface NativeLibraryTrackRecord {
   extraFields?: Record<string, unknown>;
 }
 
+export interface NativeLibraryTrackGroupHeaderRow {
+  kind: 'group-header';
+  id: string;
+  groupKey: string;
+  parentGroupKey?: string;
+  field: string;
+  title: string;
+  count: number;
+  depth: number;
+  startIndex: number;
+  collapsed: boolean;
+}
+
+export interface NativeLibraryTrackGroupedTrackRow {
+  kind: 'track';
+  id: string;
+  trackId: string;
+  trackIndex: number;
+  groupKey?: string;
+  parentGroupKeys: string[];
+}
+
+export type NativeLibraryTrackGroupedRow =
+  | NativeLibraryTrackGroupHeaderRow
+  | NativeLibraryTrackGroupedTrackRow;
+
 export interface NativeLibraryTrackPageResult {
   items: NativeLibraryTrackRecord[];
   total: number;
+  groupedRows?: NativeLibraryTrackGroupedRow[];
+  groupedRowTotal?: number;
+  topSpacerRowCount?: number;
+  bottomSpacerRowCount?: number;
 }
 
 export type NativeLibraryLocalPlaybackResolveStrategy =
@@ -2083,6 +2117,66 @@ function ensureTrackRecord(value: unknown): NativeLibraryTrackRecord | null {
   };
 }
 
+function ensureTrackGroupedRow(value: unknown): NativeLibraryTrackGroupedRow | null {
+  if (!isRecord(value)) return null;
+
+  const kind = asTrimmedString(readRecordField(value, 'kind'));
+  const id = asTrimmedString(readRecordField(value, 'id'));
+  if (!id) return null;
+
+  if (kind === 'group-header') {
+    const groupKey = asTrimmedString(readRecordField(value, 'groupKey', 'group_key'));
+    const field = asTrimmedString(readRecordField(value, 'field'));
+    const title = asOptionalString(readRecordField(value, 'title')) ?? '-';
+    const count = asNumber(readRecordField(value, 'count'));
+    const depth = asNumber(readRecordField(value, 'depth'));
+    const startIndex = asNumber(readRecordField(value, 'startIndex', 'start_index'));
+    const collapsed = asBool(readRecordField(value, 'collapsed'));
+    if (
+      !groupKey ||
+      !field ||
+      count === undefined ||
+      depth === undefined ||
+      startIndex === undefined ||
+      collapsed === undefined
+    ) {
+      return null;
+    }
+
+    return {
+      kind,
+      id,
+      groupKey,
+      parentGroupKey: asOptionalString(readRecordField(value, 'parentGroupKey', 'parent_group_key')),
+      field,
+      title,
+      count: Math.max(0, Math.floor(count)),
+      depth: Math.max(0, Math.floor(depth)),
+      startIndex: Math.max(0, Math.floor(startIndex)),
+      collapsed,
+    };
+  }
+
+  if (kind === 'track') {
+    const trackId = asTrimmedString(readRecordField(value, 'trackId', 'track_id'));
+    const trackIndex = asNumber(readRecordField(value, 'trackIndex', 'track_index'));
+    if (!trackId || trackIndex === undefined) return null;
+
+    return {
+      kind,
+      id,
+      trackId,
+      trackIndex: Math.max(0, Math.floor(trackIndex)),
+      groupKey: asOptionalString(readRecordField(value, 'groupKey', 'group_key')),
+      parentGroupKeys: asStringArray(
+        readRecordField(value, 'parentGroupKeys', 'parent_group_keys')
+      ) ?? [],
+    };
+  }
+
+  return null;
+}
+
 function ensureTrackPageResult(value: unknown): NativeLibraryTrackPageResult | null {
   if (!isRecord(value)) return null;
 
@@ -2097,10 +2191,43 @@ function ensureTrackPageResult(value: unknown): NativeLibraryTrackPageResult | n
     items.push(parsed);
   }
 
+  const groupedRowsRaw = readRecordField(value, 'groupedRows', 'grouped_rows');
+  const groupedRows: NativeLibraryTrackGroupedRow[] = [];
+  if (Array.isArray(groupedRowsRaw)) {
+    for (const item of groupedRowsRaw) {
+      const parsed = ensureTrackGroupedRow(item);
+      if (!parsed) continue;
+      groupedRows.push(parsed);
+    }
+  }
+
+  const groupedRowTotal = asNumber(readRecordField(value, 'groupedRowTotal', 'grouped_row_total'));
+  const topSpacerRowCount = asNumber(
+    readRecordField(value, 'topSpacerRowCount', 'top_spacer_row_count')
+  );
+  const bottomSpacerRowCount = asNumber(
+    readRecordField(value, 'bottomSpacerRowCount', 'bottom_spacer_row_count')
+  );
+
   return {
     items,
     total: Math.max(0, Math.floor(totalValue)),
+    groupedRows: Array.isArray(groupedRowsRaw) ? groupedRows : undefined,
+    groupedRowTotal:
+      groupedRowTotal === undefined ? undefined : Math.max(0, Math.floor(groupedRowTotal)),
+    topSpacerRowCount:
+      topSpacerRowCount === undefined ? undefined : Math.max(0, Math.floor(topSpacerRowCount)),
+    bottomSpacerRowCount:
+      bottomSpacerRowCount === undefined
+        ? undefined
+        : Math.max(0, Math.floor(bottomSpacerRowCount)),
   };
+}
+
+export function parseNativeLibraryTrackPageResult(
+  value: unknown
+): NativeLibraryTrackPageResult | null {
+  return ensureTrackPageResult(value);
 }
 
 function normalizeLocalPlaybackResolveStrategy(
@@ -4227,7 +4354,7 @@ export async function cleanupNativeLibrarySourceTracks(
   return Math.max(0, Math.floor(parsed));
 }
 
-function buildNativeLibraryTrackQueryPayload(
+export function buildNativeLibraryTrackQueryPayload(
   query?: NativeLibraryTrackQuery
 ): NativeLibraryTrackQuery {
   const normalizedFilters = normalizeNativeTrackFilters(query?.filters);
@@ -4252,6 +4379,21 @@ function buildNativeLibraryTrackQueryPayload(
     includeMissing: query?.includeMissing === true,
     visibleOnly: query?.visibleOnly !== false,
     projection: query?.projection === 'list' ? 'list' : query?.projection === 'full' ? 'full' : undefined,
+    includeGroupedRows: query?.includeGroupedRows === true,
+    collapsedGroupKeys: Array.isArray(query?.collapsedGroupKeys)
+      ? query.collapsedGroupKeys
+          .map((item) => (typeof item === 'string' ? item.trim() : ''))
+          .filter((item) => item.length > 0)
+          .slice(0, 500)
+      : undefined,
+    rowWindowStart:
+      typeof query?.rowWindowStart === 'number' && Number.isFinite(query.rowWindowStart)
+        ? Math.max(0, Math.floor(query.rowWindowStart))
+        : undefined,
+    rowWindowEnd:
+      typeof query?.rowWindowEnd === 'number' && Number.isFinite(query.rowWindowEnd)
+        ? Math.max(0, Math.floor(query.rowWindowEnd))
+        : undefined,
     searchQuery:
       typeof query?.searchQuery === 'string' && query.searchQuery.trim().length > 0
         ? query.searchQuery.trim()

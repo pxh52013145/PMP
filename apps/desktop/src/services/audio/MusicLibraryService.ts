@@ -61,6 +61,7 @@ import {
   type NativeLibraryTrackRecord,
   type NativeLibraryTrackFilterInput,
   type NativeLibraryTrackFilterGroupInput,
+  type NativeLibraryTrackGroupedRow,
   type NativeLibrarySchemaChangedEventPayload,
   type NativeLibrarySchemaEnvelope,
   type NativeLibraryTrackFieldCatalogRecord,
@@ -320,6 +321,10 @@ export interface LocalBaseTracksQuery {
 export interface LocalBaseTracksPageResult {
   tracks: Track[];
   total: number;
+  groupedRows?: NativeLibraryTrackGroupedRow[];
+  groupedRowTotal?: number;
+  topSpacerRowCount?: number;
+  bottomSpacerRowCount?: number;
 }
 
 export type CoverRuntimeCachePolicy = 'default' | 'watch' | 'high' | 'critical' | 'hidden';
@@ -1485,6 +1490,7 @@ export class MusicLibraryService {
 
       const result = await queryNativeLibraryTracksPage({
         projection,
+        includeGroupedRows: normalizedBaseQuery.groupByRules.length > 0,
         includeMissing: query.includeMissing === true,
         visibleOnly: query.visibleOnly !== false,
         searchQuery: normalizedSearchQuery,
@@ -1503,6 +1509,10 @@ export class MusicLibraryService {
       return {
         tracks: result.items.map((item) => this.mapNativeTrackRecordToListTrack(item)),
         total: Math.max(0, Math.floor(result.total)),
+        groupedRows: result.groupedRows,
+        groupedRowTotal: result.groupedRowTotal,
+        topSpacerRowCount: result.topSpacerRowCount,
+        bottomSpacerRowCount: result.bottomSpacerRowCount,
       };
     } catch (error) {
       this.telemetry.warn('music-library.base-query.native-page.failed', {

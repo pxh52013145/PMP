@@ -5,10 +5,24 @@ const pluginWindowMocks = vi.hoisted(() => ({
   openPluginWindow: vi.fn(async () => {}),
   closePluginWindow: vi.fn(async () => {}),
 }));
+const tauriRuntimeMocks = vi.hoisted(() => ({
+  isTauriRuntime: vi.fn(() => false),
+}));
+const tauriInvokeTelemetryMocks = vi.hoisted(() => ({
+  invokeWithTelemetry: vi.fn(async () => null as unknown),
+}));
 
 vi.mock('../../utils/pluginWindows', () => ({
   openPluginWindow: pluginWindowMocks.openPluginWindow,
   closePluginWindow: pluginWindowMocks.closePluginWindow,
+}));
+
+vi.mock('../../utils/tauriRuntime', () => ({
+  isTauriRuntime: tauriRuntimeMocks.isTauriRuntime,
+}));
+
+vi.mock('../../services/telemetry/tauriInvokeTelemetry', () => ({
+  invokeWithTelemetry: tauriInvokeTelemetryMocks.invokeWithTelemetry,
 }));
 
 vi.mock('../../modules/music-platform', async () => {
@@ -725,6 +739,8 @@ afterEach(() => {
   }
   vi.useRealTimers();
   vi.clearAllMocks();
+  tauriRuntimeMocks.isTauriRuntime.mockReturnValue(false);
+  tauriInvokeTelemetryMocks.invokeWithTelemetry.mockResolvedValue(null);
 });
 
 describe('host.pmp capabilities', () => {
@@ -907,7 +923,7 @@ describe('host.pmp capabilities', () => {
         capabilityId: 'host.pmp.shell.window',
         stage: 'host-pack',
         implementation: 'pmp-host-window-shell',
-        methods: ['describe', 'open', 'close'],
+        methods: ['describe', 'open', 'close', 'summonSurface', 'dismissSurface'],
       },
     });
     expect(openResult).toEqual({
@@ -941,6 +957,106 @@ describe('host.pmp capabilities', () => {
       'demo-window',
       'extv2'
     );
+  });
+
+  it('uses Rust preflight normalized payloads before dispatching host.pmp capabilities', async () => {
+    tauriRuntimeMocks.isTauriRuntime.mockReturnValue(true);
+    tauriInvokeTelemetryMocks.invokeWithTelemetry.mockResolvedValueOnce({
+      allow: true,
+      normalizedPayload: {
+        windowId: 'demo-window',
+        options: {
+          title: 'Normalized Window',
+          width: 500,
+          height: 320,
+        },
+      },
+      diagnosticCode: 'allow',
+    });
+
+    const api = createMountApi({
+      permissions: ['api:host', 'api:host-capability', 'api:window'],
+      sourceKind: 'extv2',
+      pluginId: 'shared-plugin',
+    });
+
+    const result = await api.host.invokeCapability('host.pmp.shell.window', 'open', {
+      windowId: ' demo-window ',
+      options: {
+        title: 'Raw Window',
+        width: 920,
+      },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      data: {
+        capabilityId: 'host.pmp.shell.window',
+        opened: true,
+        windowId: 'demo-window',
+      },
+    });
+    expect(tauriInvokeTelemetryMocks.invokeWithTelemetry).toHaveBeenCalledWith(
+      'plugin_host_capability_preflight',
+      {
+        request: expect.objectContaining({
+          pluginId: 'shared-plugin',
+          hostLabel: 'HostPmpCapabilityTest',
+          capabilityId: 'host.pmp.shell.window',
+          method: 'open',
+          requestKind: 'invoke',
+        }),
+      },
+      expect.objectContaining({
+        event: 'plugin.host-capability.preflight',
+      })
+    );
+    expect(pluginWindowMocks.openPluginWindow).toHaveBeenCalledWith({
+      sourceKind: 'extv2',
+      pluginId: 'shared-plugin',
+      windowId: 'demo-window',
+      title: 'Normalized Window',
+      width: 500,
+      height: 320,
+      x: undefined,
+      y: undefined,
+    });
+  });
+
+  it('returns Rust preflight payload denials without reaching host.pmp services', async () => {
+    tauriRuntimeMocks.isTauriRuntime.mockReturnValue(true);
+    tauriInvokeTelemetryMocks.invokeWithTelemetry.mockResolvedValueOnce({
+      allow: false,
+      diagnosticCode: 'payload.invalid',
+      message: 'payload.windowId is invalid',
+      details: {
+        field: 'payload.windowId',
+      },
+    });
+
+    const api = createMountApi({
+      permissions: ['api:host', 'api:host-capability', 'api:window'],
+      sourceKind: 'extv2',
+      pluginId: 'shared-plugin',
+    });
+
+    const result = await api.host.invokeCapability('host.pmp.shell.window', 'open', {
+      windowId: '../demo-window',
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: 'INVALID_PAYLOAD',
+        message: 'payload.windowId is invalid',
+        details: {
+          diagnosticCode: 'payload.invalid',
+          requiredPermission: undefined,
+          field: 'payload.windowId',
+        },
+      },
+    });
+    expect(pluginWindowMocks.openPluginWindow).not.toHaveBeenCalled();
   });
 
   it('exposes host.pmp.shell.menu as a permission-gated builtin command catalog', async () => {

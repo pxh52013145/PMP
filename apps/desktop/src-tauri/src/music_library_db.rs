@@ -8,7 +8,7 @@ use rusqlite::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::{
-    collections::{hash_map::DefaultHasher, BTreeSet, HashMap, VecDeque},
+    collections::{hash_map::DefaultHasher, BTreeSet, HashMap, HashSet, VecDeque},
     fs,
     hash::{Hash, Hasher},
     path::PathBuf,
@@ -279,6 +279,10 @@ pub struct LibraryTrackQueryInput {
     pub include_missing: Option<bool>,
     pub visible_only: Option<bool>,
     pub projection: Option<String>,
+    pub include_grouped_rows: Option<bool>,
+    pub collapsed_group_keys: Option<Vec<String>>,
+    pub row_window_start: Option<u32>,
+    pub row_window_end: Option<u32>,
     pub search_query: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
@@ -393,9 +397,31 @@ pub struct LibraryTrackRecord {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LibraryTrackGroupedRowRecord {
+    pub kind: String,
+    pub id: String,
+    pub group_key: Option<String>,
+    pub parent_group_key: Option<String>,
+    pub field: Option<String>,
+    pub title: Option<String>,
+    pub count: Option<u64>,
+    pub depth: Option<u32>,
+    pub start_index: Option<u64>,
+    pub collapsed: Option<bool>,
+    pub track_id: Option<String>,
+    pub track_index: Option<u64>,
+    pub parent_group_keys: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LibraryTrackQueryPageResult {
     pub items: Vec<LibraryTrackRecord>,
     pub total: u64,
+    pub grouped_rows: Option<Vec<LibraryTrackGroupedRowRecord>>,
+    pub grouped_row_total: Option<u64>,
+    pub top_spacer_row_count: Option<u64>,
+    pub bottom_spacer_row_count: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -7869,6 +7895,474 @@ fn build_track_filter_clause(
     None
 }
 
+fn normalize_track_group_key_value(value: &str) -> String {
+    let trimmed = value.trim().to_ascii_lowercase();
+    if trimmed.is_empty() {
+        return "__empty__".to_string();
+    }
+
+    let mut encoded = String::with_capacity(trimmed.len());
+    for byte in trimmed.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(*byte as char);
+            }
+            _ => {
+                encoded.push('%');
+                encoded.push_str(&format!("{:02X}", byte));
+            }
+        }
+    }
+    encoded
+}
+
+fn normalize_track_group_display_value(value: Option<String>) -> String {
+    let trimmed = value.unwrap_or_default().trim().to_string();
+    if trimmed.is_empty() {
+        "-".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn is_local_track_descriptor_covered_by_list_projection(
+    descriptor: &LocalTrackFieldDescriptor,
+) -> bool {
+    matches!(
+        descriptor.column_name.as_str(),
+        "id" | "source_id"
+            | "file_path"
+            | "quick_fingerprint"
+            | "title"
+            | "artist"
+            | "album"
+            | "album_artist"
+            | "genre"
+            | "year"
+            | "date"
+            | "original_date"
+            | "track_number"
+            | "track_total"
+            | "disc_number"
+            | "disc_total"
+            | "format"
+            | "duration_seconds"
+            | "sample_rate"
+            | "bit_depth"
+            | "file_size"
+            | "mtime_ms"
+            | "replay_gain_track_db"
+            | "replay_gain_album_db"
+            | "composer"
+            | "lyricist"
+            | "conductor"
+            | "arranger"
+            | "label"
+            | "catalog_number"
+            | "barcode"
+            | "isrc"
+            | "bpm"
+            | "musical_key"
+            | "language"
+            | "comment"
+            | "lyrics"
+            | "mbid_recording"
+            | "mbid_release"
+            | "mbid_release_group"
+            | "mbid_artist"
+            | "mbid_album_artist"
+            | "acoustid"
+            | "tag_source"
+            | "tag_confidence"
+            | "tag_updated_at_ms"
+            | "tag_locked_fields_json"
+            | "tag_last_audit_id"
+            | "play_count"
+            | "last_played_at_ms"
+            | "status"
+            | "created_at_ms"
+            | "updated_at_ms"
+            | "last_seen_at_ms"
+    )
+}
+
+fn library_track_record_group_value(
+    record: &LibraryTrackRecord,
+    descriptor: &LocalTrackFieldDescriptor,
+) -> Option<String> {
+    let raw_value = match descriptor.track_key.as_str() {
+        "title" => record.title.clone(),
+        "artist" => record.artist.clone(),
+        "album" => record.album.clone(),
+        "albumArtist" => record.album_artist.clone(),
+        "genre" => record.genre.clone(),
+        "year" => record.year.map(|value| value.to_string()),
+        "date" => record.date.clone(),
+        "originalDate" => record.original_date.clone(),
+        "trackNumber" => record.track_number.map(|value| value.to_string()),
+        "trackTotal" => record.track_total.map(|value| value.to_string()),
+        "discNumber" => record.disc_number.map(|value| value.to_string()),
+        "discTotal" => record.disc_total.map(|value| value.to_string()),
+        "format" => record.format.clone(),
+        "durationSeconds" => record.duration_seconds.map(|value| value.to_string()),
+        "sampleRate" => record.sample_rate.map(|value| value.to_string()),
+        "bitDepth" => record.bit_depth.map(|value| value.to_string()),
+        "fileSize" => record.file_size.map(|value| value.to_string()),
+        "mtimeMs" => record.mtime_ms.map(|value| value.to_string()),
+        "replayGainTrackGainDb" => record.replay_gain_track_db.map(|value| value.to_string()),
+        "replayGainAlbumGainDb" => record.replay_gain_album_db.map(|value| value.to_string()),
+        "composer" => record.composer.clone(),
+        "lyricist" => record.lyricist.clone(),
+        "conductor" => record.conductor.clone(),
+        "arranger" => record.arranger.clone(),
+        "label" => record.label.clone(),
+        "catalogNumber" => record.catalog_number.clone(),
+        "barcode" => record.barcode.clone(),
+        "isrc" => record.isrc.clone(),
+        "bpm" => record.bpm.map(|value| value.to_string()),
+        "musicalKey" => record.musical_key.clone(),
+        "language" => record.language.clone(),
+        "comment" => record.comment.clone(),
+        "lyrics" => record.lyrics.clone(),
+        "mbidRecording" => record.mbid_recording.clone(),
+        "mbidRelease" => record.mbid_release.clone(),
+        "mbidReleaseGroup" => record.mbid_release_group.clone(),
+        "mbidArtist" => record.mbid_artist.clone(),
+        "mbidAlbumArtist" => record.mbid_album_artist.clone(),
+        "acoustid" => record.acoustid.clone(),
+        "tagSource" => record.tag_source.clone(),
+        "tagConfidence" => record.tag_confidence.map(|value| value.to_string()),
+        "tagUpdatedAtMs" => record.tag_updated_at_ms.map(|value| value.to_string()),
+        "tagLastAuditId" => record.tag_last_audit_id.clone(),
+        "playCount" => Some(record.play_count.to_string()),
+        "lastPlayedAtMs" => record.last_played_at_ms.map(|value| value.to_string()),
+        "status" => Some(record.status.clone()),
+        "createdAtMs" | "dateAdded" => record.created_at_ms.map(|value| value.to_string()),
+        "updatedAtMs" => Some(record.updated_at_ms.to_string()),
+        "lastSeenAtMs" => record.last_seen_at_ms.map(|value| value.to_string()),
+        "sourceId" | "libraryPathId" => Some(record.source_id.clone()),
+        "filePath" | "path" => Some(record.file_path.clone()),
+        "quickFingerprint" => record.quick_fingerprint.clone(),
+        "extraFields" => None,
+        other => record
+            .extra_fields
+            .as_ref()
+            .and_then(|fields| fields.get(other))
+            .and_then(|value| match value {
+                JsonValue::Null => None,
+                JsonValue::Bool(item) => Some(item.to_string()),
+                JsonValue::Number(item) => Some(item.to_string()),
+                JsonValue::String(item) => Some(item.clone()),
+                _ => Some(value.to_string()),
+            }),
+    };
+
+    raw_value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn build_grouped_track_row_records(
+    items: &[LibraryTrackRecord],
+    query_ref: Option<&LibraryTrackQueryInput>,
+    descriptors: &[LocalTrackFieldDescriptor],
+) -> Result<(Vec<LibraryTrackGroupedRowRecord>, u64, u64, u64), String> {
+    let group_inputs = query_ref
+        .and_then(|item| item.base_query.as_ref())
+        .and_then(|base| base.group_by.as_ref())
+        .or_else(|| query_ref.and_then(|item| item.group_by.as_ref()));
+
+    let Some(group_inputs) = group_inputs else {
+        let rows = items
+            .iter()
+            .enumerate()
+            .map(|(track_index, record)| LibraryTrackGroupedRowRecord {
+                kind: "track".to_string(),
+                id: record.id.clone(),
+                group_key: None,
+                parent_group_key: None,
+                field: None,
+                title: None,
+                count: None,
+                depth: None,
+                start_index: None,
+                collapsed: None,
+                track_id: Some(record.id.clone()),
+                track_index: Some(track_index as u64),
+                parent_group_keys: Some(Vec::new()),
+            })
+            .collect::<Vec<_>>();
+        return Ok((rows, items.len() as u64, 0, 0));
+    };
+
+    let mut resolved_group_rules: Vec<&LocalTrackFieldDescriptor> = Vec::new();
+    for group in group_inputs.iter().take(4) {
+        let descriptor = resolve_local_track_field_descriptor(descriptors, group.field.as_str())
+            .ok_or_else(|| format!("Unsupported track group field: {}", group.field.trim()))?;
+        if !descriptor.groupable {
+            return Err(format!(
+                "Unsupported track group field: {}",
+                group.field.trim()
+            ));
+        }
+        resolved_group_rules.push(descriptor);
+    }
+
+    let collapsed_group_keys: HashSet<String> = query_ref
+        .and_then(|item| item.collapsed_group_keys.as_ref())
+        .map(|keys| {
+            keys.iter()
+                .map(|key| key.trim().to_string())
+                .filter(|key| !key.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    #[derive(Clone)]
+    struct GroupPathPart {
+        group_key: String,
+        parent_group_key: Option<String>,
+        field: String,
+        title: String,
+        depth: u32,
+    }
+
+    #[derive(Clone)]
+    struct GroupAggregate {
+        path: GroupPathPart,
+        count: u64,
+        start_index: u64,
+    }
+
+    let mut aggregates: HashMap<String, GroupAggregate> = HashMap::new();
+    let mut track_paths: Vec<Vec<GroupPathPart>> = Vec::with_capacity(items.len());
+
+    for (track_index, record) in items.iter().enumerate() {
+        let mut parts: Vec<GroupPathPart> = Vec::with_capacity(resolved_group_rules.len());
+        let mut parent_group_key: Option<String> = None;
+
+        for (depth, descriptor) in resolved_group_rules.iter().enumerate() {
+            let field = descriptor.field_id.clone();
+            let title = normalize_track_group_display_value(library_track_record_group_value(
+                record, descriptor,
+            ));
+            let key_part = format!(
+                "{}:{}",
+                field,
+                normalize_track_group_key_value(title.as_str())
+            );
+            let group_key = parent_group_key
+                .as_ref()
+                .map(|parent| format!("{parent}/{key_part}"))
+                .unwrap_or(key_part);
+
+            let path_part = GroupPathPart {
+                group_key: group_key.clone(),
+                parent_group_key: parent_group_key.clone(),
+                field,
+                title,
+                depth: depth as u32,
+            };
+
+            let entry = aggregates
+                .entry(group_key.clone())
+                .or_insert_with(|| GroupAggregate {
+                    path: path_part.clone(),
+                    count: 0,
+                    start_index: track_index as u64,
+                });
+            entry.count += 1;
+
+            parts.push(path_part.clone());
+            parent_group_key = Some(group_key);
+        }
+
+        track_paths.push(parts);
+    }
+
+    let mut rows: Vec<LibraryTrackGroupedRowRecord> = Vec::new();
+    let mut previous_visible_group_keys: Vec<String> = Vec::new();
+
+    for (track_index, record) in items.iter().enumerate() {
+        let path_parts = &track_paths[track_index];
+        let path_group_keys: Vec<String> = path_parts
+            .iter()
+            .map(|part| part.group_key.clone())
+            .collect();
+        let collapsed_depth = path_group_keys
+            .iter()
+            .position(|group_key| collapsed_group_keys.contains(group_key));
+        let visible_path_length = collapsed_depth
+            .map(|depth| depth + 1)
+            .unwrap_or(path_group_keys.len());
+        let visible_group_keys = path_group_keys
+            .iter()
+            .take(visible_path_length)
+            .cloned()
+            .collect::<Vec<_>>();
+        let first_changed_depth =
+            common_prefix_length(&previous_visible_group_keys, &visible_group_keys);
+
+        for depth in first_changed_depth..visible_path_length {
+            let part = &path_parts[depth];
+            let Some(aggregate) = aggregates.get(&part.group_key) else {
+                continue;
+            };
+
+            rows.push(LibraryTrackGroupedRowRecord {
+                kind: "group-header".to_string(),
+                id: format!("group-header:{}", aggregate.path.group_key),
+                group_key: Some(aggregate.path.group_key.clone()),
+                parent_group_key: aggregate.path.parent_group_key.clone(),
+                field: Some(aggregate.path.field.clone()),
+                title: Some(aggregate.path.title.clone()),
+                count: Some(aggregate.count),
+                depth: Some(aggregate.path.depth),
+                start_index: Some(aggregate.start_index),
+                collapsed: Some(collapsed_group_keys.contains(&aggregate.path.group_key)),
+                track_id: None,
+                track_index: None,
+                parent_group_keys: None,
+            });
+        }
+
+        if collapsed_depth.is_none() {
+            rows.push(LibraryTrackGroupedRowRecord {
+                kind: "track".to_string(),
+                id: record.id.clone(),
+                group_key: visible_group_keys.last().cloned(),
+                parent_group_key: visible_group_keys.iter().rev().nth(1).cloned(),
+                field: None,
+                title: None,
+                count: None,
+                depth: None,
+                start_index: None,
+                collapsed: None,
+                track_id: Some(record.id.clone()),
+                track_index: Some(track_index as u64),
+                parent_group_keys: Some(visible_group_keys.clone()),
+            });
+        }
+
+        previous_visible_group_keys = visible_group_keys;
+    }
+
+    let total_rows = rows.len() as u64;
+    let window_start = query_ref
+        .and_then(|item| item.row_window_start)
+        .map(|value| value as usize)
+        .unwrap_or(0);
+    let window_end = query_ref
+        .and_then(|item| item.row_window_end)
+        .map(|value| value as usize)
+        .unwrap_or(rows.len());
+    let (window_rows, top_spacer_row_count, bottom_spacer_row_count) =
+        slice_grouped_track_rows(rows, window_start, window_end);
+
+    Ok((
+        window_rows,
+        total_rows,
+        top_spacer_row_count as u64,
+        bottom_spacer_row_count as u64,
+    ))
+}
+
+fn common_prefix_length(left: &[String], right: &[String]) -> usize {
+    let max = left.len().min(right.len());
+    let mut index = 0;
+    while index < max && left[index] == right[index] {
+        index += 1;
+    }
+    index
+}
+
+fn slice_grouped_track_rows(
+    rows: Vec<LibraryTrackGroupedRowRecord>,
+    start: usize,
+    end: usize,
+) -> (Vec<LibraryTrackGroupedRowRecord>, usize, usize) {
+    let total = rows.len();
+    let start = start.min(total);
+    let end = end.max(start).min(total);
+    let window_rows = rows[start..end].to_vec();
+
+    if window_rows.is_empty() {
+        return (Vec::new(), start, total.saturating_sub(end));
+    }
+
+    if start == 0 {
+        return (window_rows, 0, total.saturating_sub(end));
+    }
+
+    let mut active_headers: Vec<LibraryTrackGroupedRowRecord> = Vec::new();
+    for index in 0..start {
+        let row = &rows[index];
+        if row.kind != "group-header" {
+            continue;
+        }
+        let depth = row.depth.unwrap_or(0) as usize;
+        if active_headers.len() > depth {
+            active_headers.truncate(depth);
+        }
+        if active_headers.len() == depth {
+            active_headers.push(row.clone());
+        } else if let Some(slot) = active_headers.get_mut(depth) {
+            *slot = row.clone();
+        }
+    }
+
+    let context_header_count = window_rows
+        .first()
+        .and_then(|row| row.depth.map(|depth| depth as usize))
+        .unwrap_or(active_headers.len());
+    let context_headers = active_headers
+        .into_iter()
+        .take(context_header_count)
+        .collect::<Vec<_>>();
+    let top_spacer_row_count = start.saturating_sub(context_headers.len());
+
+    (
+        context_headers
+            .into_iter()
+            .chain(window_rows.into_iter())
+            .collect(),
+        top_spacer_row_count,
+        total.saturating_sub(end),
+    )
+}
+
+fn normalize_group_inputs_from_query(
+    query_ref: Option<&LibraryTrackQueryInput>,
+) -> Option<&Vec<LibraryTrackGroupByInput>> {
+    query_ref
+        .and_then(|item| item.base_query.as_ref())
+        .and_then(|base| base.group_by.as_ref())
+        .or_else(|| query_ref.and_then(|item| item.group_by.as_ref()))
+}
+
+fn requires_full_track_projection_for_grouping(
+    query_ref: Option<&LibraryTrackQueryInput>,
+    descriptors: &[LocalTrackFieldDescriptor],
+) -> bool {
+    let Some(group_inputs) = normalize_group_inputs_from_query(query_ref) else {
+        return false;
+    };
+
+    for group in group_inputs.iter() {
+        let Some(descriptor) =
+            resolve_local_track_field_descriptor(descriptors, group.field.as_str())
+        else {
+            continue;
+        };
+        if !is_local_track_descriptor_covered_by_list_projection(descriptor) {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[derive(Debug)]
 struct TrackQuerySqlParts {
     from_where_sql: String,
     bind_values: Vec<Value>,
@@ -7963,10 +8457,46 @@ fn track_query_select_clause(use_list_projection: bool) -> &'static str {
     }
 }
 
+fn push_track_order_input(
+    track_field_descriptors: &[LocalTrackFieldDescriptor],
+    field_raw: &str,
+    order_raw: Option<&String>,
+    order_fields: &mut Vec<String>,
+    order_clauses: &mut Vec<String>,
+) -> Result<(), String> {
+    let field = normalize_track_field_token(field_raw);
+    if field.is_empty() {
+        return Ok(());
+    }
+
+    if order_fields.iter().any(|item| item == &field) {
+        return Ok(());
+    }
+
+    let descriptor = resolve_local_track_field_descriptor(track_field_descriptors, field_raw)
+        .ok_or_else(|| format!("Unsupported track order field: {}", field_raw.trim()))?;
+    if !descriptor.sortable {
+        return Err(format!(
+            "Unsupported track order field: {}",
+            field_raw.trim()
+        ));
+    }
+
+    let expr = build_order_expression(descriptor);
+    let direction = match order_raw {
+        Some(order) if order.trim().eq_ignore_ascii_case("desc") => "DESC",
+        _ => "ASC",
+    };
+
+    order_fields.push(field);
+    order_clauses.push(format!("{expr} {direction}"));
+    Ok(())
+}
+
 fn build_track_query_sql(
     query_ref: Option<&LibraryTrackQueryInput>,
     track_field_descriptors: &[LocalTrackFieldDescriptor],
-) -> TrackQuerySqlParts {
+) -> Result<TrackQuerySqlParts, String> {
     let include_missing = query_ref
         .and_then(|item| item.include_missing)
         .unwrap_or(false);
@@ -8082,12 +8612,16 @@ fn build_track_query_sql(
             let mut rendered_filter_bind_values: Vec<Value> = Vec::new();
 
             for filter in filters.iter().take(20) {
-                if let Some((clause, values)) =
-                    build_track_filter_clause(filter, track_field_descriptors)
-                {
-                    rendered_filter_clauses.push(clause);
-                    rendered_filter_bind_values.extend(values);
-                }
+                let (clause, values) = build_track_filter_clause(filter, track_field_descriptors)
+                    .ok_or_else(|| {
+                    format!(
+                        "Unsupported track filter: {} {}",
+                        filter.field.trim(),
+                        filter.operator.trim()
+                    )
+                })?;
+                rendered_filter_clauses.push(clause);
+                rendered_filter_bind_values.extend(values);
             }
 
             if rendered_filter_clauses.is_empty() {
@@ -8117,13 +8651,17 @@ fn build_track_query_sql(
 
         if let Some(filters) = filter_inputs {
             for filter in filters.iter().take(20) {
-                if let Some((clause, values)) =
-                    build_track_filter_clause(filter, track_field_descriptors)
-                {
-                    sql.push_str("\n AND ");
-                    sql.push_str(&clause);
-                    bind_values.extend(values);
-                }
+                let (clause, values) = build_track_filter_clause(filter, track_field_descriptors)
+                    .ok_or_else(|| {
+                    format!(
+                        "Unsupported track filter: {} {}",
+                        filter.field.trim(),
+                        filter.operator.trim()
+                    )
+                })?;
+                sql.push_str("\n AND ");
+                sql.push_str(&clause);
+                bind_values.extend(values);
             }
         }
     }
@@ -8131,38 +8669,17 @@ fn build_track_query_sql(
     let mut order_clauses: Vec<String> = Vec::new();
     let mut order_fields: Vec<String> = Vec::new();
 
-    let mut push_order_input = |field_raw: &str, order_raw: Option<&String>| {
-        let field = normalize_track_field_token(field_raw);
-        if field.is_empty() {
-            return;
-        }
-
-        if order_fields.iter().any(|item| item == &field) {
-            return;
-        }
-
-        let maybe_expr = resolve_local_track_field_descriptor(track_field_descriptors, field_raw)
-            .map(build_order_expression);
-
-        if let Some(expr) = maybe_expr {
-            let direction = match order_raw {
-                Some(order) if order.trim().eq_ignore_ascii_case("desc") => "DESC",
-                _ => "ASC",
-            };
-
-            order_fields.push(field);
-            order_clauses.push(format!("{expr} {direction}"));
-        }
-    };
-
-    let group_inputs = query_ref
-        .and_then(|item| item.base_query.as_ref())
-        .and_then(|base| base.group_by.as_ref())
-        .or_else(|| query_ref.and_then(|item| item.group_by.as_ref()));
+    let group_inputs = normalize_group_inputs_from_query(query_ref);
 
     if let Some(groups) = group_inputs {
         for group in groups.iter().take(4) {
-            push_order_input(group.field.as_str(), group.order.as_ref());
+            push_track_order_input(
+                track_field_descriptors,
+                group.field.as_str(),
+                group.order.as_ref(),
+                &mut order_fields,
+                &mut order_clauses,
+            )?;
         }
     }
 
@@ -8173,7 +8690,13 @@ fn build_track_query_sql(
 
     if let Some(sorts) = sort_inputs {
         for sort in sorts.iter().take(4) {
-            push_order_input(sort.field.as_str(), sort.order.as_ref());
+            push_track_order_input(
+                track_field_descriptors,
+                sort.field.as_str(),
+                sort.order.as_ref(),
+                &mut order_fields,
+                &mut order_clauses,
+            )?;
         }
     }
 
@@ -8183,11 +8706,11 @@ fn build_track_query_sql(
     }
     order_clauses.push("t.id ASC".to_string());
 
-    TrackQuerySqlParts {
+    Ok(TrackQuerySqlParts {
         from_where_sql: sql,
         bind_values,
         order_clauses,
-    }
+    })
 }
 
 fn execute_track_query(
@@ -8378,8 +8901,9 @@ fn query_tracks_from_conn(
     let track_field_descriptors = list_local_track_field_descriptors(conn)?;
     let normalized_limit = resolve_track_query_limit(query_ref);
     let normalized_offset = resolve_track_query_offset(query_ref);
-    let use_list_projection = uses_list_track_projection(query_ref);
-    let sql_parts = build_track_query_sql(query_ref, &track_field_descriptors);
+    let use_list_projection = uses_list_track_projection(query_ref)
+        && !requires_full_track_projection_for_grouping(query_ref, &track_field_descriptors);
+    let sql_parts = build_track_query_sql(query_ref, &track_field_descriptors)?;
 
     let mut sql = String::from(track_query_select_clause(use_list_projection));
     sql.push_str(&sql_parts.from_where_sql);
@@ -8485,8 +9009,9 @@ pub fn query_tracks_page(
         let query_ref = query.as_ref();
         let normalized_limit = resolve_track_query_limit(query_ref);
         let normalized_offset = resolve_track_query_offset(query_ref);
-        let use_list_projection = uses_list_track_projection(query_ref);
-        let sql_parts = build_track_query_sql(query_ref, &track_field_descriptors);
+        let use_list_projection = uses_list_track_projection(query_ref)
+            && !requires_full_track_projection_for_grouping(query_ref, &track_field_descriptors);
+        let sql_parts = build_track_query_sql(query_ref, &track_field_descriptors)?;
 
         let total = count_track_query(conn, &sql_parts)?;
 
@@ -8508,7 +9033,31 @@ pub fn query_tracks_page(
             &track_field_descriptors,
         )?;
 
-        Ok(LibraryTrackQueryPageResult { items, total })
+        let include_grouped_rows = query_ref
+            .and_then(|item| item.include_grouped_rows)
+            .unwrap_or(false);
+
+        if include_grouped_rows {
+            let (grouped_rows, grouped_row_total, top_spacer_row_count, bottom_spacer_row_count) =
+                build_grouped_track_row_records(&items, query_ref, &track_field_descriptors)?;
+            Ok(LibraryTrackQueryPageResult {
+                items,
+                total,
+                grouped_rows: Some(grouped_rows),
+                grouped_row_total: Some(grouped_row_total),
+                top_spacer_row_count: Some(top_spacer_row_count),
+                bottom_spacer_row_count: Some(bottom_spacer_row_count),
+            })
+        } else {
+            Ok(LibraryTrackQueryPageResult {
+                items,
+                total,
+                grouped_rows: None,
+                grouped_row_total: None,
+                top_spacer_row_count: None,
+                bottom_spacer_row_count: None,
+            })
+        }
     })
 }
 
@@ -8558,6 +9107,10 @@ fn build_local_playback_lookup_query(
         include_missing: Some(include_missing),
         visible_only: Some(visible_only),
         projection: None,
+        include_grouped_rows: None,
+        collapsed_group_keys: None,
+        row_window_start: None,
+        row_window_end: None,
         search_query: None,
         artist: None,
         album: None,
@@ -9762,6 +10315,7 @@ mod tests {
     use std::{
         fs,
         path::{Path, PathBuf},
+        time::Instant,
     };
 
     fn open_temp_db(prefix: &str) -> (Connection, PathBuf) {
@@ -9962,6 +10516,205 @@ mod tests {
     }
 
     #[test]
+    fn track_query_rejects_unsupported_base_filters_in_rust() {
+        let (conn, path) = open_temp_db("music-library-query-normalization");
+        migrate(&conn).expect("migrate empty db");
+        let descriptors =
+            list_local_track_field_descriptors(&conn).expect("read local track field descriptors");
+
+        let query = LibraryTrackQueryInput {
+            limit: Some(50),
+            offset: Some(0),
+            include_missing: Some(false),
+            visible_only: Some(true),
+            projection: Some("list".to_string()),
+            include_grouped_rows: None,
+            collapsed_group_keys: None,
+            row_window_start: None,
+            row_window_end: None,
+            search_query: None,
+            artist: None,
+            album: None,
+            track_id: None,
+            source_id: None,
+            quick_fingerprint: None,
+            file_path: None,
+            base_query: Some(LibraryTrackBaseQueryInput {
+                filter_operator: Some("and".to_string()),
+                filter_groups: Some(vec![LibraryTrackFilterGroupInput {
+                    operator: Some("and".to_string()),
+                    filters: Some(vec![LibraryTrackFilterInput {
+                        field: "rating".to_string(),
+                        operator: "gte".to_string(),
+                        value: Some("4".to_string()),
+                    }]),
+                }]),
+                filters: None,
+                group_by: None,
+                sort: None,
+            }),
+            filters: None,
+            group_by: None,
+            sort: None,
+        };
+
+        let error = build_track_query_sql(Some(&query), &descriptors)
+            .expect_err("unsupported filter should fail closed");
+        assert!(error.contains("Unsupported track filter"));
+
+        drop(conn);
+        cleanup_temp_db(&path);
+    }
+
+    #[test]
+    fn track_query_grouped_rows_stays_windowed_for_large_libraries() {
+        let (mut conn, path) = open_temp_db("music-library-large-grouped-query");
+        migrate(&conn).expect("migrate empty db");
+
+        let tx = conn.transaction().expect("open seed transaction");
+        tx.execute(
+            r#"
+            INSERT INTO sources(
+              id,
+              path,
+              display_name,
+              category,
+              is_visible,
+              is_scanned,
+              added_at_ms,
+              updated_at_ms
+            )
+            VALUES ('source-a', 'C:\\Music', NULL, 'music', 1, 1, 100, 100)
+            "#,
+            [],
+        )
+        .expect("insert source");
+
+        {
+            let mut stmt = tx
+                .prepare(
+                    r#"
+                    INSERT INTO local_tracks(
+                      id,
+                      source_id,
+                      file_path,
+                      title,
+                      artist,
+                      album,
+                      genre,
+                      year,
+                      status,
+                      created_at_ms,
+                      updated_at_ms,
+                      last_seen_at_ms
+                    )
+                    VALUES (?1, 'source-a', ?2, ?3, ?4, ?5, ?6, ?7, 'available', ?8, ?8, ?8)
+                    "#,
+                )
+                .expect("prepare track insert");
+
+            for index in 0..6_000_i64 {
+                let genre = if index % 2 == 0 { "Jazz" } else { "Rock" };
+                stmt.execute(params![
+                    format!("track-{index:05}"),
+                    format!("C:\\Music\\track-{index:05}.flac"),
+                    format!("Track {index:05}"),
+                    format!("Artist {}", index % 24),
+                    format!("Album {}", index % 80),
+                    genre,
+                    1990 + (index % 30),
+                    1_000_i64 + index,
+                ])
+                .expect("insert track");
+            }
+        }
+        tx.commit().expect("commit seed transaction");
+
+        let descriptors =
+            list_local_track_field_descriptors(&conn).expect("read local track field descriptors");
+        let query = LibraryTrackQueryInput {
+            limit: Some(500),
+            offset: Some(0),
+            include_missing: Some(false),
+            visible_only: Some(true),
+            projection: Some("list".to_string()),
+            include_grouped_rows: Some(true),
+            collapsed_group_keys: None,
+            row_window_start: Some(0),
+            row_window_end: Some(40),
+            search_query: None,
+            artist: None,
+            album: None,
+            track_id: None,
+            source_id: None,
+            quick_fingerprint: None,
+            file_path: None,
+            base_query: Some(LibraryTrackBaseQueryInput {
+                filter_operator: Some("and".to_string()),
+                filter_groups: Some(vec![LibraryTrackFilterGroupInput {
+                    operator: Some("and".to_string()),
+                    filters: Some(vec![LibraryTrackFilterInput {
+                        field: "genre".to_string(),
+                        operator: "equals".to_string(),
+                        value: Some("Jazz".to_string()),
+                    }]),
+                }]),
+                filters: None,
+                group_by: Some(vec![LibraryTrackGroupByInput {
+                    field: "artist".to_string(),
+                    order: Some("asc".to_string()),
+                }]),
+                sort: Some(vec![LibraryTrackSortInput {
+                    field: "year".to_string(),
+                    order: Some("desc".to_string()),
+                }]),
+            }),
+            filters: None,
+            group_by: None,
+            sort: None,
+        };
+
+        let start = Instant::now();
+        let sql_parts = build_track_query_sql(Some(&query), &descriptors).expect("build query sql");
+        let total = count_track_query(&conn, &sql_parts).expect("count filtered query");
+        let mut sql = String::from(track_query_select_clause(true));
+        sql.push_str(&sql_parts.from_where_sql);
+        sql.push_str("\n ORDER BY ");
+        sql.push_str(&sql_parts.order_clauses.join(", "));
+        sql.push_str("\n LIMIT ?\n OFFSET ?");
+        let mut bind_values = sql_parts.bind_values;
+        bind_values.push(Value::Integer(resolve_track_query_limit(Some(&query))));
+        bind_values.push(Value::Integer(resolve_track_query_offset(Some(&query))));
+        let items = execute_track_query(
+            &conn,
+            sql.as_str(),
+            bind_values.as_slice(),
+            true,
+            &descriptors,
+        )
+        .expect("query page items");
+        let (grouped_rows, grouped_row_total, top_spacer, bottom_spacer) =
+            build_grouped_track_row_records(&items, Some(&query), &descriptors)
+                .expect("build grouped row window");
+        let elapsed = start.elapsed();
+
+        assert_eq!(total, 3_000);
+        assert_eq!(items.len(), 500);
+        assert!(!grouped_rows.is_empty());
+        assert!(grouped_rows.len() <= 42);
+        assert!(grouped_row_total >= grouped_rows.len() as u64);
+        assert_eq!(top_spacer, 0);
+        assert!(bottom_spacer > 0);
+        assert!(
+            elapsed.as_secs() < 5,
+            "large grouped query should stay comfortably under debug-test budget: {elapsed:?}"
+        );
+
+        drop(conn);
+        cleanup_temp_db(&path);
+    }
+
+    #[test]
     fn local_playback_resolve_prefers_track_id_then_available_absolute_match() {
         let (conn, path) = open_temp_db("music-library-playback-resolve");
         migrate(&conn).expect("migrate empty db");
@@ -10024,7 +10777,10 @@ mod tests {
 
         assert_eq!(track_id_result.strategy, "trackId");
         assert_eq!(
-            track_id_result.track.as_ref().map(|track| track.id.as_str()),
+            track_id_result
+                .track
+                .as_ref()
+                .map(|track| track.id.as_str()),
             Some("relative")
         );
         assert!(!track_id_result.requires_network_fallback);

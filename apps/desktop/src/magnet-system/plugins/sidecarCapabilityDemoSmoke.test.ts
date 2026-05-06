@@ -586,9 +586,18 @@ vi.mock('../../services/telemetry/tauriInvokeTelemetry', async () => {
     invokeWithTelemetry: async (
       command: string,
       args?: {
+        artifactPath?: string;
+        expectedSha256?: string;
         filePath?: string;
       }
     ) => {
+      if (command === 'plugin_verify_runtime_artifact_integrity') {
+        return {
+          artifactPath: normalizePath(args?.artifactPath ?? ''),
+          sha256: args?.expectedSha256 ?? '',
+        };
+      }
+
       if (command !== 'plugin_read_install_source') {
         throw new Error(`Unexpected invoke command during smoke test: ${command}`);
       }

@@ -2,7 +2,7 @@ use crate::sidecar_bridge::{
     SidecarBridgeOpenRequest, SidecarBridgeOpenResponse, SidecarBridgeRegistry,
 };
 use base64::{engine::general_purpose, Engine as _};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
@@ -84,6 +84,994 @@ pub struct PlatformPackDevSourcePayload {
     pub sidecar_exists: Option<bool>,
     pub sidecar_modified_at_ms: Option<u64>,
     pub diagnostics: Vec<PlatformPackDevSourceDiagnostic>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginHostCapabilityPreflightRequest {
+    pub plugin_id: String,
+    pub host_label: String,
+    pub capability_id: String,
+    pub method: String,
+    pub payload: Option<serde_json::Value>,
+    pub permissions: Vec<String>,
+    pub request_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginHostCapabilityPreflightPayload {
+    pub allow: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normalized_payload: Option<serde_json::Value>,
+    pub diagnostic_code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_permission: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+}
+
+const PMP_HOST_CAPABILITY_PAYLOAD_MAX_BYTES: usize = 256 * 1024;
+const PMP_HOST_CAPABILITY_ID_PATTERN_MAX_LEN: usize = 128;
+const PMP_HOST_CAPABILITY_METHOD_PATTERN_MAX_LEN: usize = 64;
+const HOST_PERMISSION: &str = "api:host";
+const HOST_CAPABILITY_INVOKE_PERMISSION: &str = "api:host-capability";
+
+fn preflight_allow(
+    normalized_payload: Option<serde_json::Value>,
+) -> PluginHostCapabilityPreflightPayload {
+    PluginHostCapabilityPreflightPayload {
+        allow: true,
+        normalized_payload,
+        diagnostic_code: "allow".to_string(),
+        message: None,
+        required_permission: None,
+        details: None,
+    }
+}
+
+fn preflight_deny(
+    diagnostic_code: &str,
+    message: impl Into<String>,
+    required_permission: Option<&str>,
+    details: Option<serde_json::Value>,
+) -> PluginHostCapabilityPreflightPayload {
+    PluginHostCapabilityPreflightPayload {
+        allow: false,
+        normalized_payload: None,
+        diagnostic_code: diagnostic_code.to_string(),
+        message: Some(message.into()),
+        required_permission: required_permission.map(str::to_string),
+        details,
+    }
+}
+
+fn preflight_invalid_payload(
+    message: impl Into<String>,
+    field: &str,
+) -> PluginHostCapabilityPreflightPayload {
+    preflight_deny(
+        "payload.invalid",
+        message,
+        None,
+        Some(serde_json::json!({ "field": field })),
+    )
+}
+
+fn trim_json_string(value: &serde_json::Value) -> Option<String> {
+    value.as_str().map(str::trim).and_then(|value| {
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    })
+}
+
+fn payload_object(
+    payload: &Option<serde_json::Value>,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    payload.as_ref().and_then(|value| value.as_object())
+}
+
+fn read_string_alias(
+    object: &serde_json::Map<String, serde_json::Value>,
+    aliases: &[&str],
+) -> Option<String> {
+    aliases
+        .iter()
+        .find_map(|alias| object.get(*alias).and_then(trim_json_string))
+}
+
+fn read_non_negative_int(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<i64> {
+    object
+        .get(key)
+        .and_then(|value| value.as_f64())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map(|value| value.floor() as i64)
+}
+
+fn read_finite_number(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<f64> {
+    object
+        .get(key)
+        .and_then(|value| value.as_f64())
+        .filter(|value| value.is_finite())
+}
+
+fn is_pmp_identifier(value: &str, max_len: usize) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= max_len
+        && bytes[0].is_ascii_alphabetic()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'.' || *byte == b'_' || *byte == b'-')
+}
+
+fn is_capability_id(value: &str) -> bool {
+    is_pmp_identifier(value, PMP_HOST_CAPABILITY_ID_PATTERN_MAX_LEN)
+}
+
+fn is_capability_method(value: &str) -> bool {
+    is_pmp_identifier(value, PMP_HOST_CAPABILITY_METHOD_PATTERN_MAX_LEN)
+}
+
+fn is_window_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 48
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn is_durable_text_key(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 128
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_alphanumeric() || *byte == b'.' || *byte == b'_' || *byte == b'-'
+        })
+}
+
+fn is_supported_locale(value: &str) -> bool {
+    matches!(value, "zh-CN" | "en-US")
+}
+
+fn required_object<'a>(
+    payload: &'a Option<serde_json::Value>,
+    message: &str,
+    field: &str,
+) -> Result<&'a serde_json::Map<String, serde_json::Value>, PluginHostCapabilityPreflightPayload> {
+    payload_object(payload).ok_or_else(|| preflight_invalid_payload(message, field))
+}
+
+fn required_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    aliases: &[&str],
+    message: &str,
+    field: &str,
+) -> Result<String, PluginHostCapabilityPreflightPayload> {
+    read_string_alias(object, aliases).ok_or_else(|| preflight_invalid_payload(message, field))
+}
+
+fn normalize_no_payload(
+) -> Result<Option<serde_json::Value>, PluginHostCapabilityPreflightPayload> {
+    Ok(None)
+}
+
+fn normalize_optional_object_payload(
+    payload: &Option<serde_json::Value>,
+    field: &str,
+) -> Result<Option<serde_json::Value>, PluginHostCapabilityPreflightPayload> {
+    match payload {
+        None => Ok(None),
+        Some(value) if value.is_null() => Ok(None),
+        Some(value) => value
+            .as_object()
+            .map(|object| Some(serde_json::Value::Object(object.clone())))
+            .ok_or_else(|| preflight_invalid_payload("payload must be an object", field)),
+    }
+}
+
+fn normalize_record_payload(
+    payload: &Option<serde_json::Value>,
+    key: &str,
+) -> Result<Option<serde_json::Value>, PluginHostCapabilityPreflightPayload> {
+    let object = required_object(payload, "payload must be an object", "payload")?;
+    if let Some(nested) = object.get(key).and_then(|value| value.as_object()) {
+        return Ok(Some(serde_json::Value::Object(nested.clone())));
+    }
+    Ok(Some(serde_json::Value::Object(object.clone())))
+}
+
+fn normalize_navigation_payload(
+    method: &str,
+    payload: &Option<serde_json::Value>,
+) -> Result<Option<serde_json::Value>, PluginHostCapabilityPreflightPayload> {
+    match method {
+        "describe" | "getSnapshot" | "canGoBack" | "goBack" => normalize_no_payload(),
+        "navigateTo" => {
+            let object = required_object(payload, "payload.page is required", "payload.page")?;
+            let page = required_string(
+                object,
+                &["page"],
+                "payload.page is required",
+                "payload.page",
+            )?;
+            let mut next = serde_json::Map::new();
+            next.insert("page".to_string(), serde_json::Value::String(page));
+            if let Some(params) = object.get("params") {
+                if !params.is_null() && !params.is_object() {
+                    return Err(preflight_invalid_payload(
+                        "payload.params must be an object when provided",
+                        "payload.params",
+                    ));
+                }
+                if !params.is_null() {
+                    next.insert("params".to_string(), params.clone());
+                }
+            }
+            Ok(Some(serde_json::Value::Object(next)))
+        }
+        _ => normalize_optional_object_payload(payload, "payload"),
+    }
+}
+
+fn normalize_window_payload(
+    method: &str,
+    payload: &Option<serde_json::Value>,
+) -> Result<Option<serde_json::Value>, PluginHostCapabilityPreflightPayload> {
+    match method {
+        "describe" => normalize_no_payload(),
+        "open" => {
+            let object =
+                required_object(payload, "payload.windowId is required", "payload.windowId")?;
+            let window_id = required_string(
+                object,
+                &["windowId"],
+                "payload.windowId is required",
+                "payload.windowId",
+            )?;
+            if !is_window_id(&window_id) {
+                return Err(preflight_invalid_payload(
+                    "payload.windowId is invalid",
+                    "payload.windowId",
+                ));
+            }
+            let mut next = serde_json::Map::new();
+            next.insert("windowId".to_string(), serde_json::Value::String(window_id));
+            if let Some(options) = object.get("options") {
+                if !options.is_null() && !options.is_object() {
+                    return Err(preflight_invalid_payload(
+                        "payload.options must be an object when provided",
+                        "payload.options",
+                    ));
+                }
+                if !options.is_null() {
+                    next.insert("options".to_string(), options.clone());
+                }
+            }
+            Ok(Some(serde_json::Value::Object(next)))
+        }
+        "close" => {
+            let object =
+                required_object(payload, "payload.windowId is required", "payload.windowId")?;
+            let window_id = required_string(
+                object,
+                &["windowId"],
+                "payload.windowId is required",
+                "payload.windowId",
+            )?;
+            if !is_window_id(&window_id) {
+                return Err(preflight_invalid_payload(
+                    "payload.windowId is invalid",
+                    "payload.windowId",
+                ));
+            }
+            let mut next = serde_json::Map::new();
+            next.insert("windowId".to_string(), serde_json::Value::String(window_id));
+            Ok(Some(serde_json::Value::Object(next)))
+        }
+        "summonSurface" | "dismissSurface" => {
+            let object =
+                required_object(payload, "payload.surfaceId is required", "payload.surfaceId")?;
+            let surface_id = required_string(
+                object,
+                &["surfaceId"],
+                "payload.surfaceId is required",
+                "payload.surfaceId",
+            )?;
+            if !is_window_id(&surface_id) {
+                return Err(preflight_invalid_payload(
+                    "payload.surfaceId is invalid",
+                    "payload.surfaceId",
+                ));
+            }
+            let mut next = serde_json::Map::new();
+            next.insert("surfaceId".to_string(), serde_json::Value::String(surface_id));
+            if let Some(surface_type) = read_string_alias(object, &["surfaceType"]) {
+                if surface_type != "overlay" && surface_type != "desktop-widget" {
+                    return Err(preflight_invalid_payload(
+                        "payload.surfaceType must be \"overlay\" or \"desktop-widget\"",
+                        "payload.surfaceType",
+                    ));
+                }
+                next.insert(
+                    "surfaceType".to_string(),
+                    serde_json::Value::String(surface_type),
+                );
+            }
+            Ok(Some(serde_json::Value::Object(next)))
+        }
+        _ => normalize_optional_object_payload(payload, "payload"),
+    }
+}
+
+fn normalize_item_payload(
+    payload: &Option<serde_json::Value>,
+    include_args: bool,
+) -> Result<Option<serde_json::Value>, PluginHostCapabilityPreflightPayload> {
+    let object = required_object(payload, "payload.itemId is required", "payload.itemId")?;
+    let item_id = required_string(
+        object,
+        &["itemId", "id"],
+        "payload.itemId is required",
+        "payload.itemId",
+    )?;
+    let mut next = serde_json::Map::new();
+    next.insert("itemId".to_string(), serde_json::Value::String(item_id));
+    if include_args {
+        if let Some(args) = object.get("args") {
+            next.insert("args".to_string(), args.clone());
+        }
+    }
+    Ok(Some(serde_json::Value::Object(next)))
+}
+
+fn normalize_storage_durable_text_payload(
+    method: &str,
+    payload: &Option<serde_json::Value>,
+) -> Result<Option<serde_json::Value>, PluginHostCapabilityPreflightPayload> {
+    match method {
+        "describe" => normalize_no_payload(),
+        "read" | "remove" => {
+            let object = required_object(payload, "payload.key is required", "payload.key")?;
+            let key =
+                required_string(object, &["key"], "payload.key is required", "payload.key")?;
+            if !is_durable_text_key(&key) {
+                return Err(preflight_invalid_payload(
+                    "payload.key is invalid",
+                    "payload.key",
+                ));
+            }
+            let mut next = serde_json::Map::new();
+            next.insert("key".to_string(), serde_json::Value::String(key));
+            Ok(Some(serde_json::Value::Object(next)))
+        }
+        "write" => {
+            let object = required_object(payload, "payload.key is required", "payload.key")?;
+            let key =
+                required_string(object, &["key"], "payload.key is required", "payload.key")?;
+            if !is_durable_text_key(&key) {
+                return Err(preflight_invalid_payload(
+                    "payload.key is invalid",
+                    "payload.key",
+                ));
+            }
+            let Some(value) = object.get("value").and_then(|value| value.as_str()) else {
+                return Err(preflight_invalid_payload(
+                    "payload.value must be a string",
+                    "payload.value",
+                ));
+            };
+            let mut next = serde_json::Map::new();
+            next.insert("key".to_string(), serde_json::Value::String(key));
+            next.insert("value".to_string(), serde_json::Value::String(value.to_string()));
+            Ok(Some(serde_json::Value::Object(next)))
+        }
+        _ => normalize_optional_object_payload(payload, "payload"),
+    }
+}
+
+fn normalize_audio_playback_payload(
+    method: &str,
+    payload: &Option<serde_json::Value>,
+) -> Result<Option<serde_json::Value>, PluginHostCapabilityPreflightPayload> {
+    match method {
+        "describe" | "getState" | "getPlayMode" | "getCover" | "play" | "pause" | "stop"
+        | "toggleMute" | "playNext" | "playPrevious" => normalize_no_payload(),
+        "seek" => {
+            let object = required_object(payload, "payload.time is required", "payload.time")?;
+            let Some(time) = read_finite_number(object, "time").filter(|time| *time >= 0.0) else {
+                return Err(preflight_invalid_payload(
+                    "payload.time must be a non-negative number",
+                    "payload.time",
+                ));
+            };
+            Ok(Some(serde_json::json!({ "time": time })))
+        }
+        "setVolume" => {
+            let object =
+                required_object(payload, "payload.volume is required", "payload.volume")?;
+            let Some(volume) = read_finite_number(object, "volume") else {
+                return Err(preflight_invalid_payload(
+                    "payload.volume must be a number",
+                    "payload.volume",
+                ));
+            };
+            Ok(Some(serde_json::json!({ "volume": volume })))
+        }
+        "playTrackAtIndex" => {
+            let object = required_object(payload, "payload.index is required", "payload.index")?;
+            let Some(index) = read_non_negative_int(object, "index") else {
+                return Err(preflight_invalid_payload(
+                    "payload.index must be a non-negative integer",
+                    "payload.index",
+                ));
+            };
+            Ok(Some(serde_json::json!({ "index": index })))
+        }
+        "setPlayMode" => {
+            let object = required_object(payload, "payload.mode is required", "payload.mode")?;
+            let mode =
+                required_string(object, &["mode"], "payload.mode is required", "payload.mode")?;
+            Ok(Some(serde_json::json!({ "mode": mode })))
+        }
+        _ => normalize_optional_object_payload(payload, "payload"),
+    }
+}
+
+fn normalize_audio_analysis_payload(
+    method: &str,
+    request_kind: &str,
+    payload: &Option<serde_json::Value>,
+) -> Result<Option<serde_json::Value>, PluginHostCapabilityPreflightPayload> {
+    match method {
+        "describe" | "getSpectrum" => normalize_no_payload(),
+        "getSpectrumFrame" | "openSpectrumFrameStream" => {
+            let object = payload_object(payload);
+            let tap = object
+                .and_then(|object| read_string_alias(object, &["tap"]))
+                .filter(|value| value == "pre-dsp")
+                .unwrap_or_else(|| "post-dsp".to_string());
+            let interval_ms = object
+                .and_then(|object| read_finite_number(object, "intervalMs"))
+                .map(|value| value.floor().clamp(16.0, 2_000.0) as i64)
+                .unwrap_or(33);
+            let mut next = serde_json::Map::new();
+            next.insert("tap".to_string(), serde_json::Value::String(tap));
+            if request_kind == "open-stream" {
+                next.insert("intervalMs".to_string(), serde_json::json!(interval_ms));
+            }
+            Ok(Some(serde_json::Value::Object(next)))
+        }
+        _ => normalize_optional_object_payload(payload, "payload"),
+    }
+}
+
+fn normalize_i18n_payload(
+    method: &str,
+    payload: &Option<serde_json::Value>,
+) -> Result<Option<serde_json::Value>, PluginHostCapabilityPreflightPayload> {
+    match method {
+        "describe" | "getState" => normalize_no_payload(),
+        "setLocale" | "registerMessages" => {
+            let object = required_object(payload, "payload.locale is required", "payload.locale")?;
+            let locale = required_string(
+                object,
+                &["locale"],
+                "payload.locale is required",
+                "payload.locale",
+            )?;
+            if !is_supported_locale(&locale) {
+                return Err(preflight_invalid_payload(
+                    "payload.locale must be a supported locale",
+                    "payload.locale",
+                ));
+            }
+            if method == "registerMessages" {
+                match object.get("messages").and_then(|value| value.as_object()) {
+                    Some(_) => {}
+                    None => {
+                        return Err(preflight_invalid_payload(
+                            "payload.messages must be an object",
+                            "payload.messages",
+                        ));
+                    }
+                }
+            }
+            normalize_optional_object_payload(payload, "payload")
+        }
+        "clearMessages" => {
+            if let Some(object) = payload_object(payload) {
+                if let Some(locale) = read_string_alias(object, &["locale"]) {
+                    if !is_supported_locale(&locale) {
+                        return Err(preflight_invalid_payload(
+                            "payload.locale must be a supported locale",
+                            "payload.locale",
+                        ));
+                    }
+                }
+            }
+            normalize_optional_object_payload(payload, "payload")
+        }
+        "translate" => {
+            let object = required_object(payload, "payload.key is required", "payload.key")?;
+            let _key = required_string(object, &["key"], "payload.key is required", "payload.key")?;
+            if let Some(locale) = read_string_alias(object, &["locale"]) {
+                if !is_supported_locale(&locale) {
+                    return Err(preflight_invalid_payload(
+                        "payload.locale must be a supported locale",
+                        "payload.locale",
+                    ));
+                }
+            }
+            if let Some(params) = object.get("params") {
+                if !params.is_null() && !params.is_object() {
+                    return Err(preflight_invalid_payload(
+                        "payload.params must be an object",
+                        "payload.params",
+                    ));
+                }
+            }
+            normalize_optional_object_payload(payload, "payload")
+        }
+        _ => normalize_optional_object_payload(payload, "payload"),
+    }
+}
+
+fn normalize_pmp_host_capability_payload(
+    capability_id: &str,
+    method: &str,
+    request_kind: &str,
+    payload: &Option<serde_json::Value>,
+) -> Result<Option<serde_json::Value>, PluginHostCapabilityPreflightPayload> {
+    match capability_id {
+        "host.pmp.navigation" => normalize_navigation_payload(method, payload),
+        "host.pmp.shell.window" => normalize_window_payload(method, payload),
+        "host.pmp.shell.menu" => match method {
+            "describe" => normalize_no_payload(),
+            "listItems" => normalize_optional_object_payload(payload, "payload"),
+            "getItem" => normalize_item_payload(payload, false),
+            "activateItem" => normalize_item_payload(payload, true),
+            _ => normalize_optional_object_payload(payload, "payload"),
+        },
+        "host.pmp.shell.tray" => match method {
+            "describe" | "getState" | "listItems" => normalize_no_payload(),
+            "activateItem" => normalize_item_payload(payload, false),
+            _ => normalize_optional_object_payload(payload, "payload"),
+        },
+        "host.pmp.shell.context-menu" | "host.pmp.shell.status-item" => normalize_no_payload(),
+        "host.pmp.storage.config" => match method {
+            "describe" | "get" | "reset" => normalize_no_payload(),
+            "set" | "patch" => normalize_record_payload(payload, "value"),
+            _ => normalize_optional_object_payload(payload, "payload"),
+        },
+        "host.pmp.storage.sync" => match method {
+            "describe" | "readConfig" | "removeConfig" | "getSyncState" => normalize_no_payload(),
+            "writeConfig" | "patchConfig" => normalize_record_payload(payload, "value"),
+            _ => normalize_optional_object_payload(payload, "payload"),
+        },
+        "host.pmp.storage.durable-text" => {
+            normalize_storage_durable_text_payload(method, payload)
+        }
+        "host.pmp.audio-engine.playback" => normalize_audio_playback_payload(method, payload),
+        "host.pmp.audio-engine.analysis" => {
+            normalize_audio_analysis_payload(method, request_kind, payload)
+        }
+        "host.pmp.i18n" => normalize_i18n_payload(method, payload),
+        "host.pmp.magnets.catalog"
+        | "host.pmp.magnets.layout"
+        | "host.pmp.magnets.renderer"
+        | "host.pmp.music-platform.catalog"
+        | "host.pmp.music-platform.workspace"
+        | "host.pmp.music-platform.search"
+        | "host.pmp.music-platform.prepare"
+        | "host.pmp.connector-auth"
+        | "host.pmp.theme-bindings"
+        | "host.pmp.library-fields"
+        | "host.pmp.keybinding-context"
+        | "host.pmp.audio-engine.input"
+        | "host.pmp.telemetry" => normalize_optional_object_payload(payload, "payload"),
+        _ => normalize_optional_object_payload(payload, "payload"),
+    }
+}
+
+fn pmp_host_capability_permission(capability_id: &str) -> Option<&'static str> {
+    match capability_id {
+        "host.pmp.navigation" => Some("api:navigation"),
+        "host.pmp.shell.window" => Some("api:window"),
+        "host.pmp.shell.menu"
+        | "host.pmp.shell.context-menu"
+        | "host.pmp.shell.tray"
+        | "host.pmp.shell.status-item"
+        | "host.pmp.magnets.renderer"
+        | "host.pmp.theme-bindings"
+        | "host.pmp.library-fields"
+        | "host.pmp.keybinding-context"
+        | "host.pmp.i18n"
+        | "host.pmp.telemetry" => Some("api:host"),
+        "host.pmp.storage.config" | "host.pmp.storage.sync" => Some("storage:local"),
+        "host.pmp.storage.durable-text" => Some("storage:durable-text"),
+        "host.pmp.magnets.catalog" => Some("api:magnets-catalog"),
+        "host.pmp.magnets.layout" => Some("api:magnets-layout"),
+        "host.pmp.audio-engine.playback" => None,
+        "host.pmp.audio-engine.analysis" => Some("api:audio-visual"),
+        "host.pmp.audio-engine.input" => Some("api:audio-input-adapter"),
+        "host.pmp.music-platform.catalog" => Some("api:music-platform-catalog"),
+        "host.pmp.music-platform.workspace" => Some("api:music-platform-workspace"),
+        "host.pmp.music-platform.search" => Some("api:music-platform-search"),
+        "host.pmp.music-platform.prepare" => Some("api:music-platform-prepare"),
+        "host.pmp.connector-auth" => Some("api:connector-auth"),
+        _ => None,
+    }
+}
+
+fn pmp_host_capability_methods(capability_id: &str) -> Option<&'static [&'static str]> {
+    match capability_id {
+        "host.pmp.navigation" => Some(&[
+            "describe",
+            "getSnapshot",
+            "canGoBack",
+            "navigateTo",
+            "goBack",
+        ]),
+        "host.pmp.shell.window" => Some(&[
+            "describe",
+            "open",
+            "close",
+            "summonSurface",
+            "dismissSurface",
+        ]),
+        "host.pmp.shell.menu" => Some(&["describe", "listItems", "getItem", "activateItem"]),
+        "host.pmp.shell.context-menu" => Some(&["describe", "getSchema"]),
+        "host.pmp.shell.tray" => Some(&["describe", "getState", "listItems", "activateItem"]),
+        "host.pmp.shell.status-item" => Some(&["describe", "listSlots"]),
+        "host.pmp.storage.config" => Some(&["describe", "get", "set", "patch", "reset"]),
+        "host.pmp.storage.sync" => Some(&[
+            "describe",
+            "readConfig",
+            "writeConfig",
+            "patchConfig",
+            "removeConfig",
+            "getSyncState",
+        ]),
+        "host.pmp.storage.durable-text" => Some(&["describe", "read", "write", "remove"]),
+        "host.pmp.magnets.catalog" => Some(&["describe", "list", "get", "upsert", "remove"]),
+        "host.pmp.magnets.layout" => Some(&[
+            "describe",
+            "getLayout",
+            "ensureLayout",
+            "setLayout",
+            "setActiveMagnetIds",
+            "setMagnetActive",
+            "updateMagnetAnchors",
+        ]),
+        "host.pmp.magnets.renderer" => Some(&[
+            "describe",
+            "listRenderers",
+            "getRenderer",
+            "listVariants",
+            "getSystemLayoutRules",
+        ]),
+        "host.pmp.audio-engine.playback" => Some(&[
+            "describe",
+            "getState",
+            "getPlayMode",
+            "getCover",
+            "play",
+            "pause",
+            "stop",
+            "seek",
+            "setVolume",
+            "toggleMute",
+            "playNext",
+            "playPrevious",
+            "playTrackAtIndex",
+            "setPlayMode",
+        ]),
+        "host.pmp.audio-engine.analysis" => Some(&["describe", "getSpectrum", "getSpectrumFrame"]),
+        "host.pmp.audio-engine.input" => Some(&[
+            "describe",
+            "health",
+            "listInputs",
+            "listProviders",
+            "stats",
+            "clearProviderQuarantine",
+            "probe",
+            "openSession",
+            "closeSession",
+        ]),
+        "host.pmp.music-platform.catalog" => Some(&["describe", "listConnectors"]),
+        "host.pmp.music-platform.workspace" => Some(&[
+            "describe",
+            "getWorkspaceModel",
+            "listPages",
+            "listCollections",
+            "listCollectionResources",
+            "listRecommendedCollections",
+            "listRecommendedResources",
+            "searchResources",
+            "preparePlayback",
+            "listQualityState",
+            "setQualityPreference",
+            "resolveCoverAssetUrl",
+        ]),
+        "host.pmp.music-platform.search" => Some(&["describe", "searchTracks"]),
+        "host.pmp.music-platform.prepare" => Some(&["describe", "preparePlayback"]),
+        "host.pmp.connector-auth" => Some(&[
+            "describe",
+            "listDefinitions",
+            "listAuthSnapshots",
+            "getAuthSnapshot",
+            "beginQrLogin",
+            "pollQrLogin",
+            "logout",
+            "clearAuthCookies",
+        ]),
+        "host.pmp.theme-bindings" => Some(&[
+            "describe",
+            "listBindingIds",
+            "listSurfaceIds",
+            "resolveBinding",
+            "resolveSurface",
+        ]),
+        "host.pmp.library-fields" => Some(&[
+            "describe",
+            "listFieldCatalog",
+            "listFacetCatalog",
+            "listFacetEntries",
+            "listTextFacetValues",
+        ]),
+        "host.pmp.keybinding-context" => Some(&["describe", "listKeys", "getContext", "getValue"]),
+        "host.pmp.i18n" => Some(&[
+            "describe",
+            "getState",
+            "setLocale",
+            "registerMessages",
+            "clearMessages",
+            "translate",
+        ]),
+        "host.pmp.telemetry" => Some(&["describe", "getStatus", "flush", "log"]),
+        _ => None,
+    }
+}
+
+fn pmp_host_capability_stream_methods(capability_id: &str) -> &'static [&'static str] {
+    match capability_id {
+        "host.pmp.audio-engine.analysis" => &["openSpectrumFrameStream"],
+        _ => &[],
+    }
+}
+
+fn pmp_audio_playback_method_permission(method: &str) -> Option<&'static str> {
+    match method {
+        "getState" | "getPlayMode" => Some("api:audio-state"),
+        "getCover" => Some("api:audio-cover"),
+        "play" | "pause" | "stop" | "seek" | "setVolume" | "toggleMute" | "playNext"
+        | "playPrevious" | "playTrackAtIndex" | "setPlayMode" => Some("api:audio-control"),
+        _ => None,
+    }
+}
+
+fn shell_menu_required_permission(command_id: &str) -> Option<Option<&'static str>> {
+    match command_id {
+        "commandPalette:toggle" | "commandPalette:close" => Some(None),
+        "app:open-keyboard-shortcuts-window"
+        | "app:open-theme-editor-window"
+        | "app:open-debug-editor-window"
+        | "app:open-control-editor-window"
+        | "app:open-creator-editor-window"
+        | "app:open-custom-background-editor-window"
+        | "app:open-statistics-editor-window"
+        | "app:open-library-editor-window"
+        | "app:open-style-editor-window"
+        | "app:open-background-editor-window"
+        | "app:open-style-pixel-editor-window"
+        | "app:open-style-cover-color-editor-window"
+        | "app:open-style-background-effect-editor-window"
+        | "app:open-style-border-effect-editor-window"
+        | "app:open-vst3-plugin-manager" => Some(Some("api:window")),
+        "app:navigate-home"
+        | "app:navigate-settings"
+        | "app:navigate-music-library"
+        | "musicTag.openWorkbench"
+        | "app:navigate-dsp-rack"
+        | "app:navigate-perf-monitor"
+        | "app:navigate-native-debug"
+        | "app:navigate-debug-center"
+        | "app:go-back" => Some(Some("api:navigation")),
+        "audio:previous-track" | "audio:next-track" | "audio:toggle-play-pause" => {
+            Some(Some("api:audio-control"))
+        }
+        _ => None,
+    }
+}
+
+fn pmp_method_permission(
+    capability_id: &str,
+    method: &str,
+    payload: &Option<serde_json::Value>,
+) -> Option<&'static str> {
+    match capability_id {
+        "host.pmp.audio-engine.playback" => pmp_audio_playback_method_permission(method),
+        "host.pmp.shell.tray" if method == "activateItem" => {
+            let object = payload_object(payload)?;
+            let item_id = read_string_alias(object, &["itemId", "id"])?;
+            match item_id.as_str() {
+                "show" | "hide" | "quit" | "toggle-main-window" => Some("api:window"),
+                _ => None,
+            }
+        }
+        "host.pmp.shell.menu" if method == "activateItem" => {
+            let object = payload_object(payload)?;
+            let item_id = read_string_alias(object, &["itemId", "id"])?;
+            shell_menu_required_permission(&item_id).flatten()
+        }
+        _ => None,
+    }
+}
+
+fn run_plugin_host_capability_preflight(
+    request: PluginHostCapabilityPreflightRequest,
+) -> PluginHostCapabilityPreflightPayload {
+    let plugin_id = request.plugin_id.trim();
+    let host_label = request.host_label.trim();
+    let capability_id = request.capability_id.trim();
+    let method = request.method.trim();
+    let request_kind = request.request_kind.as_deref().unwrap_or("invoke");
+
+    if plugin_id.is_empty() || host_label.is_empty() {
+        return preflight_deny(
+            "context.invalid",
+            "pluginId and hostLabel are required",
+            None,
+            None,
+        );
+    }
+    if !is_capability_id(capability_id) {
+        return preflight_deny(
+            "capability.invalid",
+            "Invalid host capability id",
+            None,
+            Some(serde_json::json!({ "capabilityId": capability_id })),
+        );
+    }
+    if !capability_id.starts_with("host.pmp.") {
+        return preflight_deny(
+            "capability.notHostPmp",
+            "Preflight only accepts host.pmp.* capability ids",
+            None,
+            Some(serde_json::json!({ "capabilityId": capability_id })),
+        );
+    }
+    if !is_capability_method(method) {
+        return preflight_deny("method.invalid", "Invalid host capability method", None, None);
+    }
+
+    let permissions: HashSet<String> = request
+        .permissions
+        .iter()
+        .map(|permission| permission.trim().to_string())
+        .filter(|permission| !permission.is_empty())
+        .collect();
+
+    for required_permission in [HOST_PERMISSION, HOST_CAPABILITY_INVOKE_PERMISSION] {
+        if !permissions.contains(required_permission) {
+            return preflight_deny(
+                "permission.hostDenied",
+                format!("Permission denied: {required_permission}"),
+                Some(required_permission),
+                Some(serde_json::json!({ "permission": required_permission })),
+            );
+        }
+    }
+
+    let Some(methods) = pmp_host_capability_methods(capability_id) else {
+        return preflight_deny(
+            "capability.unknown",
+            format!("Unknown host capability: {capability_id}"),
+            None,
+            Some(serde_json::json!({ "capabilityId": capability_id })),
+        );
+    };
+
+    let stream_methods = pmp_host_capability_stream_methods(capability_id);
+    let method_is_invoke = methods.contains(&method);
+    let method_is_stream = stream_methods.contains(&method);
+    if request_kind == "open-stream" {
+        if !method_is_stream {
+            return preflight_deny(
+                "method.unsupported",
+                format!("Unsupported host stream method: {capability_id}.{method}"),
+                None,
+                Some(serde_json::json!({
+                    "capabilityId": capability_id,
+                    "method": method,
+                    "requestKind": request_kind
+                })),
+            );
+        }
+    } else if !method_is_invoke {
+        return preflight_deny(
+            "method.unsupported",
+            format!("Unsupported host capability method: {capability_id}.{method}"),
+            None,
+            Some(serde_json::json!({
+                "capabilityId": capability_id,
+                "method": method,
+                "requestKind": request_kind
+            })),
+        );
+    }
+
+    if let Ok(bytes) = serde_json::to_vec(&request.payload) {
+        if bytes.len() > PMP_HOST_CAPABILITY_PAYLOAD_MAX_BYTES {
+            return preflight_deny(
+                "payload.tooLarge",
+                format!(
+                    "Capability payload too large ({} bytes > {})",
+                    bytes.len(),
+                    PMP_HOST_CAPABILITY_PAYLOAD_MAX_BYTES
+                ),
+                None,
+                Some(serde_json::json!({
+                    "bytes": bytes.len(),
+                    "maxBytes": PMP_HOST_CAPABILITY_PAYLOAD_MAX_BYTES
+                })),
+            );
+        }
+    }
+
+    if let Some(required_permission) = pmp_host_capability_permission(capability_id) {
+        if !permissions.contains(required_permission) {
+            return preflight_deny(
+                "permission.capabilityDenied",
+                format!("Permission denied: {required_permission}"),
+                Some(required_permission),
+                Some(serde_json::json!({
+                    "capabilityId": capability_id,
+                    "method": method,
+                    "permission": required_permission
+                })),
+            );
+        }
+    }
+
+    if let Some(required_permission) = pmp_method_permission(capability_id, method, &request.payload)
+    {
+        if !permissions.contains(required_permission) {
+            return preflight_deny(
+                "permission.methodDenied",
+                format!("Permission denied: {required_permission}"),
+                Some(required_permission),
+                Some(serde_json::json!({
+                    "capabilityId": capability_id,
+                    "method": method,
+                    "permission": required_permission
+                })),
+            );
+        }
+    }
+
+    match normalize_pmp_host_capability_payload(
+        capability_id,
+        method,
+        request_kind,
+        &request.payload,
+    ) {
+        Ok(payload) => preflight_allow(payload),
+        Err(error) => error,
+    }
 }
 
 fn normalize_display_path(path: &Path) -> String {
@@ -1764,6 +2752,13 @@ pub fn plugin_allow_dev_project_asset_scope(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn plugin_host_capability_preflight(
+    request: PluginHostCapabilityPreflightRequest,
+) -> Result<PluginHostCapabilityPreflightPayload, String> {
+    Ok(run_plugin_host_capability_preflight(request))
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub fn plugin_read_platform_pack_dev_source(
     file_path: String,
 ) -> Result<PlatformPackDevSourcePayload, String> {
@@ -2069,6 +3064,116 @@ mod tests {
             fs::create_dir_all(parent).expect("create parent");
         }
         fs::write(path, contents).expect("write file");
+    }
+
+    fn preflight(
+        capability_id: &str,
+        method: &str,
+        payload: Option<serde_json::Value>,
+        permissions: &[&str],
+        request_kind: Option<&str>,
+    ) -> PluginHostCapabilityPreflightPayload {
+        run_plugin_host_capability_preflight(PluginHostCapabilityPreflightRequest {
+            plugin_id: "preflight-test-plugin".to_string(),
+            host_label: "PreflightTest".to_string(),
+            capability_id: capability_id.to_string(),
+            method: method.to_string(),
+            payload,
+            permissions: permissions.iter().map(|value| value.to_string()).collect(),
+            request_kind: request_kind.map(|value| value.to_string()),
+        })
+    }
+
+    #[test]
+    fn preflights_host_pmp_window_payloads_in_rust() {
+        let payload = preflight(
+            "host.pmp.shell.window",
+            "open",
+            Some(serde_json::json!({
+                "windowId": " demo-window ",
+                "options": { "title": "Demo", "width": 920.0 }
+            })),
+            &["api:host", "api:host-capability", "api:window"],
+            None,
+        );
+
+        assert!(payload.allow);
+        assert_eq!(payload.diagnostic_code, "allow");
+        assert_eq!(
+            payload.normalized_payload,
+            Some(serde_json::json!({
+                "windowId": "demo-window",
+                "options": { "title": "Demo", "width": 920.0 }
+            }))
+        );
+    }
+
+    #[test]
+    fn preflight_denies_missing_capability_permission() {
+        let payload = preflight(
+            "host.pmp.navigation",
+            "navigateTo",
+            Some(serde_json::json!({ "page": "music-library" })),
+            &["api:host", "api:host-capability"],
+            None,
+        );
+
+        assert!(!payload.allow);
+        assert_eq!(payload.diagnostic_code, "permission.capabilityDenied");
+        assert_eq!(
+            payload.required_permission.as_deref(),
+            Some("api:navigation")
+        );
+    }
+
+    #[test]
+    fn preflight_denies_invalid_payloads_with_diagnostics() {
+        let payload = preflight(
+            "host.pmp.storage.durable-text",
+            "write",
+            Some(serde_json::json!({ "key": "../secret", "value": "demo" })),
+            &["api:host", "api:host-capability", "storage:durable-text"],
+            None,
+        );
+
+        assert!(!payload.allow);
+        assert_eq!(payload.diagnostic_code, "payload.invalid");
+        assert!(payload
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("payload.key"));
+    }
+
+    #[test]
+    fn preflight_normalizes_audio_analysis_stream_payloads() {
+        let payload = preflight(
+            "host.pmp.audio-engine.analysis",
+            "openSpectrumFrameStream",
+            Some(serde_json::json!({ "tap": "pre-dsp", "intervalMs": 1 })),
+            &["api:host", "api:host-capability", "api:audio-visual"],
+            Some("open-stream"),
+        );
+
+        assert!(payload.allow);
+        assert_eq!(
+            payload.normalized_payload,
+            Some(serde_json::json!({ "tap": "pre-dsp", "intervalMs": 16 }))
+        );
+    }
+
+    #[test]
+    fn preflight_keeps_stream_methods_out_of_plain_invokes() {
+        let payload = preflight(
+            "host.pmp.audio-engine.analysis",
+            "openSpectrumFrameStream",
+            Some(serde_json::json!({ "tap": "post-dsp" })),
+            &["api:host", "api:host-capability", "api:audio-visual"],
+            None,
+        );
+
+        assert!(!payload.allow);
+        assert_eq!(payload.diagnostic_code, "method.unsupported");
     }
 
     #[test]

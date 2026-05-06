@@ -1,4 +1,5 @@
 export {
+  buildNativeLibraryTrackQueryPayload,
   cleanupNativeLibrarySourceTracks,
   clearNativeBilibiliAuthCookies,
   clearNativeLibraryPlaylistItems,
@@ -64,6 +65,7 @@ export {
   listNativeLibrarySources,
   listNativeLibraryTrackFieldCatalog,
   listNativeLibraryUserEntries,
+  parseNativeLibraryTrackPageResult,
   queryNativeLibraryPlaylistTracksPage,
   queryNativeLibraryTracks,
   queryNativeLibraryTracksPage,
@@ -156,6 +158,9 @@ export {
   type NativeLibraryTrackFilterInput,
   type NativeLibraryTrackFieldCatalogRecord,
   type NativeLibraryTrackFilterGroupInput,
+  type NativeLibraryTrackGroupedRow,
+  type NativeLibraryTrackGroupedTrackRow,
+  type NativeLibraryTrackGroupHeaderRow,
   type NativeLibraryTrackGroupByInput,
   type NativeLibraryTrackPageResult,
   type NativeLibraryTrackSortField,

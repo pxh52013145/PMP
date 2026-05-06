@@ -1,0 +1,554 @@
+{
+  "geometryCases": [
+    {
+      "name": "single-control-chrome-join-collapse",
+      "grid": {
+        "originX": 20,
+        "originY": 20,
+        "stepX": 38,
+        "stepY": 38,
+        "cols": 1,
+        "rows": 1
+      },
+      "magnet": {
+        "id": "single-control",
+        "anchorType": "single",
+        "anchors": [
+          {
+            "id": "anchor",
+            "gridX": 0,
+            "gridY": 0,
+            "role": "anchor"
+          }
+        ],
+        "bounds": {
+          "horizontal": {
+            "start": {
+              "source": "span",
+              "edge": "center",
+              "offset": -18
+            },
+            "end": {
+              "source": "span",
+              "edge": "center",
+              "offset": 18
+            }
+          },
+          "vertical": {
+            "start": {
+              "source": "span",
+              "edge": "center",
+              "offset": -18
+            },
+            "end": {
+              "source": "span",
+              "edge": "center",
+              "offset": 18
+            }
+          }
+        },
+        "chrome": {
+          "inset": {
+            "top": 10,
+            "right": 10,
+            "bottom": 10,
+            "left": 10
+          },
+          "outset": {
+            "top": 2,
+            "right": 6,
+            "bottom": 8,
+            "left": 4
+          }
+        }
+      },
+      "viewport": {
+        "width": 320,
+        "height": 220
+      },
+      "joinEdges": {
+        "top": true,
+        "right": true
+      },
+      "expectedLayoutBounds": {
+        "x": 11,
+        "y": 11,
+        "width": 36,
+        "height": 36
+      },
+      "expectedVisualBounds": {
+        "x": 7,
+        "y": 11,
+        "width": 40,
+        "height": 44
+      }
+    },
+    {
+      "name": "reference-and-viewport-bounds",
+      "grid": {
+        "originX": 20,
+        "originY": 20,
+        "stepX": 38,
+        "stepY": 38,
+        "cols": 1,
+        "rows": 1
+      },
+      "magnet": {
+        "id": "follower-panel",
+        "anchorType": "single",
+        "anchors": [],
+        "bounds": {
+          "horizontal": {
+            "start": {
+              "source": "magnet",
+              "edge": "end",
+              "magnetId": "base-panel",
+              "offset": 5
+            },
+            "end": {
+              "source": "magnet",
+              "edge": "end",
+              "magnetId": "base-panel",
+              "offset": 25
+            }
+          },
+          "vertical": {
+            "start": {
+              "source": "viewport",
+              "edge": "start",
+              "offset": 30
+            },
+            "end": {
+              "source": "viewport",
+              "edge": "start",
+              "offset": 60
+            }
+          }
+        }
+      },
+      "magnetsById": {
+        "base-panel": {
+          "id": "base-panel",
+          "anchorType": "single",
+          "anchors": [
+            {
+              "id": "anchor",
+              "gridX": 0,
+              "gridY": 0,
+              "role": "anchor"
+            }
+          ],
+          "bounds": {
+            "horizontal": {
+              "start": {
+                "source": "span",
+                "edge": "center",
+                "offset": -18
+              },
+              "end": {
+                "source": "span",
+                "edge": "center",
+                "offset": 18
+              }
+            },
+            "vertical": {
+              "start": {
+                "source": "span",
+                "edge": "center",
+                "offset": -18
+              },
+              "end": {
+                "source": "span",
+                "edge": "center",
+                "offset": 18
+              }
+            }
+          }
+        },
+        "follower-panel": {
+          "id": "follower-panel",
+          "anchorType": "single",
+          "anchors": [],
+          "bounds": {
+            "horizontal": {
+              "start": {
+                "source": "magnet",
+                "edge": "end",
+                "magnetId": "base-panel",
+                "offset": 5
+              },
+              "end": {
+                "source": "magnet",
+                "edge": "end",
+                "magnetId": "base-panel",
+                "offset": 25
+              }
+            },
+            "vertical": {
+              "start": {
+                "source": "viewport",
+                "edge": "start",
+                "offset": 30
+              },
+              "end": {
+                "source": "viewport",
+                "edge": "start",
+                "offset": 60
+              }
+            }
+          }
+        }
+      },
+      "viewport": {
+        "width": 200,
+        "height": 120
+      },
+      "expectedLayoutBounds": {
+        "x": 52,
+        "y": 30,
+        "width": 20,
+        "height": 30
+      },
+      "expectedVisualBounds": {
+        "x": 52,
+        "y": 30,
+        "width": 20,
+        "height": 30
+      }
+    }
+  ],
+  "adaptiveCases": [
+    {
+      "name": "horizontal-panel-seam-snap",
+      "grid": {
+        "originX": 20,
+        "originY": 20,
+        "stepX": 38,
+        "stepY": 38,
+        "cols": 6,
+        "rows": 6
+      },
+      "magnets": [
+        {
+          "id": "left-panel",
+          "anchorType": "rectangular",
+          "anchors": [
+            {
+              "id": "top-left",
+              "gridX": 0,
+              "gridY": 0,
+              "role": "anchor"
+            },
+            {
+              "id": "top-right",
+              "gridX": 1,
+              "gridY": 0,
+              "role": "boundary"
+            },
+            {
+              "id": "bottom-left",
+              "gridX": 0,
+              "gridY": 1,
+              "role": "boundary"
+            },
+            {
+              "id": "bottom-right",
+              "gridX": 1,
+              "gridY": 1,
+              "role": "boundary"
+            }
+          ],
+          "bounds": {
+            "horizontal": {
+              "start": {
+                "source": "span",
+                "edge": "start",
+                "offset": -9
+              },
+              "end": {
+                "source": "span",
+                "edge": "end",
+                "offset": 9
+              }
+            },
+            "vertical": {
+              "start": {
+                "source": "span",
+                "edge": "start",
+                "offset": -9
+              },
+              "end": {
+                "source": "span",
+                "edge": "end",
+                "offset": 9
+              }
+            }
+          }
+        },
+        {
+          "id": "right-panel",
+          "anchorType": "rectangular",
+          "anchors": [
+            {
+              "id": "top-left",
+              "gridX": 2,
+              "gridY": 0,
+              "role": "anchor"
+            },
+            {
+              "id": "top-right",
+              "gridX": 3,
+              "gridY": 0,
+              "role": "boundary"
+            },
+            {
+              "id": "bottom-left",
+              "gridX": 2,
+              "gridY": 1,
+              "role": "boundary"
+            },
+            {
+              "id": "bottom-right",
+              "gridX": 3,
+              "gridY": 1,
+              "role": "boundary"
+            }
+          ],
+          "bounds": {
+            "horizontal": {
+              "start": {
+                "source": "span",
+                "edge": "start",
+                "offset": -9
+              },
+              "end": {
+                "source": "span",
+                "edge": "end",
+                "offset": 9
+              }
+            },
+            "vertical": {
+              "start": {
+                "source": "span",
+                "edge": "start",
+                "offset": -9
+              },
+              "end": {
+                "source": "span",
+                "edge": "end",
+                "offset": 9
+              }
+            }
+          }
+        }
+      ],
+      "viewport": {
+        "width": 320,
+        "height": 220
+      },
+      "expected": {
+        "mode": "compact",
+        "layoutBoundsByMagnetId": {
+          "left-panel": {
+            "x": 11,
+            "y": 11,
+            "width": 74,
+            "height": 74
+          },
+          "right-panel": {
+            "x": 85,
+            "y": 11,
+            "width": 74,
+            "height": 74
+          }
+        },
+        "joinsByMagnetId": {
+          "left-panel": {
+            "left": false,
+            "right": true,
+            "top": false,
+            "bottom": false
+          },
+          "right-panel": {
+            "left": true,
+            "right": false,
+            "top": false,
+            "bottom": false
+          }
+        },
+        "diagnostics": {
+          "maxAdjustmentPx": 2,
+          "outOfBoundsIds": [],
+          "conflicts": [],
+          "unresolvedConflicts": []
+        }
+      }
+    },
+    {
+      "name": "intentional-gutter-remains",
+      "grid": {
+        "originX": 20,
+        "originY": 20,
+        "stepX": 50,
+        "stepY": 50,
+        "cols": 6,
+        "rows": 6
+      },
+      "magnets": [
+        {
+          "id": "left-panel",
+          "anchorType": "rectangular",
+          "anchors": [
+            {
+              "id": "top-left",
+              "gridX": 0,
+              "gridY": 0,
+              "role": "anchor"
+            },
+            {
+              "id": "top-right",
+              "gridX": 1,
+              "gridY": 0,
+              "role": "boundary"
+            },
+            {
+              "id": "bottom-left",
+              "gridX": 0,
+              "gridY": 1,
+              "role": "boundary"
+            },
+            {
+              "id": "bottom-right",
+              "gridX": 1,
+              "gridY": 1,
+              "role": "boundary"
+            }
+          ],
+          "bounds": {
+            "horizontal": {
+              "start": {
+                "source": "span",
+                "edge": "start",
+                "offset": -9
+              },
+              "end": {
+                "source": "span",
+                "edge": "end",
+                "offset": 9
+              }
+            },
+            "vertical": {
+              "start": {
+                "source": "span",
+                "edge": "start",
+                "offset": -9
+              },
+              "end": {
+                "source": "span",
+                "edge": "end",
+                "offset": 9
+              }
+            }
+          }
+        },
+        {
+          "id": "right-panel",
+          "anchorType": "rectangular",
+          "anchors": [
+            {
+              "id": "top-left",
+              "gridX": 2,
+              "gridY": 0,
+              "role": "anchor"
+            },
+            {
+              "id": "top-right",
+              "gridX": 3,
+              "gridY": 0,
+              "role": "boundary"
+            },
+            {
+              "id": "bottom-left",
+              "gridX": 2,
+              "gridY": 1,
+              "role": "boundary"
+            },
+            {
+              "id": "bottom-right",
+              "gridX": 3,
+              "gridY": 1,
+              "role": "boundary"
+            }
+          ],
+          "bounds": {
+            "horizontal": {
+              "start": {
+                "source": "span",
+                "edge": "start",
+                "offset": -9
+              },
+              "end": {
+                "source": "span",
+                "edge": "end",
+                "offset": 9
+              }
+            },
+            "vertical": {
+              "start": {
+                "source": "span",
+                "edge": "start",
+                "offset": -9
+              },
+              "end": {
+                "source": "span",
+                "edge": "end",
+                "offset": 9
+              }
+            }
+          }
+        }
+      ],
+      "viewport": {
+        "width": 320,
+        "height": 220
+      },
+      "expected": {
+        "mode": "normal",
+        "layoutBoundsByMagnetId": {
+          "left-panel": {
+            "x": 11,
+            "y": 11,
+            "width": 86,
+            "height": 86
+          },
+          "right-panel": {
+            "x": 111,
+            "y": 11,
+            "width": 86,
+            "height": 86
+          }
+        },
+        "joinsByMagnetId": {
+          "left-panel": {
+            "left": false,
+            "right": false,
+            "top": false,
+            "bottom": false
+          },
+          "right-panel": {
+            "left": false,
+            "right": false,
+            "top": false,
+            "bottom": false
+          }
+        },
+        "diagnostics": {
+          "maxAdjustmentPx": 0,
+          "outOfBoundsIds": [],
+          "conflicts": [],
+          "unresolvedConflicts": []
+        }
+      }
+    }
+  ]
+}

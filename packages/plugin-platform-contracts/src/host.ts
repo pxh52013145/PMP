@@ -45,6 +45,31 @@ export type HostCapabilityResult<T = unknown> =
       error: HostCapabilityError;
     };
 
+export type PmpHostCapabilityPreflightRequestKind =
+  | 'invoke'
+  | 'open-session'
+  | 'open-stream'
+  | 'close-session';
+
+export interface PmpHostCapabilityPreflightRequest {
+  pluginId: string;
+  hostLabel: string;
+  capabilityId: string;
+  method: string;
+  payload?: unknown;
+  permissions: string[];
+  requestKind?: PmpHostCapabilityPreflightRequestKind;
+}
+
+export interface PmpHostCapabilityPreflightDecision {
+  allow: boolean;
+  normalizedPayload?: unknown;
+  diagnosticCode: string;
+  message?: string;
+  requiredPermission?: string;
+  details?: Record<string, unknown>;
+}
+
 export interface PmpHostCapabilityPackDescriptor {
   hostId: 'pmp';
   packVersion: string;

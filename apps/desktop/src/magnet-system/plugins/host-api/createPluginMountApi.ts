@@ -29,6 +29,11 @@ import {
   invokePluginHostCapability,
   listPluginHostCapabilities,
 } from './capabilities';
+import {
+  mapPreflightDiagnosticToCapabilityErrorCode,
+  preflightPmpHostCapabilityInRust,
+  shouldThrowPreflightDeny,
+} from './hostCapabilityPreflight';
 import { hasPermission, PLUGIN_PERMISSIONS } from './permissions';
 import type {
   HostAudioService,
@@ -131,6 +136,28 @@ function normalizeHostSessionOpenResult(value: unknown): PluginHostSessionOpenRe
     sessionId,
     providerSessionId,
     metadata,
+  };
+}
+
+function hostCapabilityResultError(
+  code: string,
+  message: string,
+  details?: unknown
+): {
+  ok: false;
+  error: {
+    code: string;
+    message: string;
+    details?: unknown;
+  };
+} {
+  return {
+    ok: false,
+    error: {
+      code,
+      message,
+      details,
+    },
   };
 }
 
@@ -646,17 +673,59 @@ export function createPluginMountApi({
       throw new Error(`Permission denied: ${PLUGIN_PERMISSIONS.hostCapabilityInvoke}`);
     }
 
-    notifyHostCapabilityActivity({
+    let payloadForInvoke = payload;
+    const preflight = await preflightPmpHostCapabilityInRust({
+      pluginId,
+      hostLabel,
       capabilityId: normalizedCapabilityId,
       method: normalizedMethod,
       payload,
+      permissions,
+      requestKind,
+    });
+    if (preflight) {
+      if (!preflight.allow) {
+        if (preflight.requiredPermission) {
+          warnDenied(
+            preflight.requiredPermission,
+            `host.invokeCapability(${normalizedCapabilityId}, ${normalizedMethod})`
+          );
+        }
+
+        const message =
+          asNonEmptyString(preflight.message) ??
+          `Host capability preflight denied: ${normalizedCapabilityId}.${normalizedMethod}`;
+        if (shouldThrowPreflightDeny(preflight.diagnosticCode)) {
+          throw new Error(message);
+        }
+
+        return hostCapabilityResultError(
+          mapPreflightDiagnosticToCapabilityErrorCode(preflight.diagnosticCode),
+          message,
+          {
+            diagnosticCode: preflight.diagnosticCode,
+            requiredPermission: preflight.requiredPermission,
+            ...(asObject(preflight.details) ?? {}),
+          }
+        );
+      }
+
+      if (Object.prototype.hasOwnProperty.call(preflight, 'normalizedPayload')) {
+        payloadForInvoke = preflight.normalizedPayload;
+      }
+    }
+
+    notifyHostCapabilityActivity({
+      capabilityId: normalizedCapabilityId,
+      method: normalizedMethod,
+      payload: payloadForInvoke,
       requestKind,
     });
 
     return await withTimeout(
       invokePluginHostCapability(normalizedCapabilityId, {
         method: normalizedMethod,
-        payload,
+        payload: payloadForInvoke,
         context: buildHostCapabilityContext(),
       }),
       HOST_CAPABILITY_INVOKE_TIMEOUT_MS,
@@ -776,14 +845,43 @@ export function createPluginMountApi({
       throw new Error('Audio spectrum frame stream is not available');
     }
 
-    notifyHostCapabilityActivity({
+    let payloadForStream = payload;
+    const preflight = await preflightPmpHostCapabilityInRust({
+      pluginId,
+      hostLabel,
       capabilityId: normalizedCapabilityId,
       method: normalizedMethod,
       payload,
+      permissions,
+      requestKind: 'open-stream',
+    });
+    if (preflight) {
+      if (!preflight.allow) {
+        if (preflight.requiredPermission) {
+          warnDenied(
+            preflight.requiredPermission,
+            `host.openStream(${normalizedCapabilityId}, ${normalizedMethod})`
+          );
+        }
+        throw new Error(
+          asNonEmptyString(preflight.message) ??
+            `Host stream preflight denied: ${normalizedCapabilityId}.${normalizedMethod}`
+        );
+      }
+
+      if (Object.prototype.hasOwnProperty.call(preflight, 'normalizedPayload')) {
+        payloadForStream = preflight.normalizedPayload;
+      }
+    }
+
+    notifyHostCapabilityActivity({
+      capabilityId: normalizedCapabilityId,
+      method: normalizedMethod,
+      payload: payloadForStream,
       requestKind: 'open-stream',
     });
 
-    const payloadRecord = asObject(payload);
+    const payloadRecord = asObject(payloadForStream);
     const tap = normalizeSpectrumTap(payloadRecord?.tap);
     const intervalMs = normalizeHostStreamIntervalMs(payloadRecord?.intervalMs);
     const streamId = `audio-analysis-stream-${++hostStreamCounter}`;
