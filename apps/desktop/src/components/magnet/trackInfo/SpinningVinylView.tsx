@@ -32,6 +32,10 @@ export const SpinningVinylView: React.FC<TrackInfoVariantProps> = ({
   const secondsPerRotation = (60 / rpm) * goldenRatio * silverRatio;
 
   const effect = dynamicColorConfig?.effect ?? 'tone';
+  const dynamicSpeed =
+    typeof dynamicColorConfig?.dynamicSpeed === 'number' && isFinite(dynamicColorConfig.dynamicSpeed)
+      ? dynamicColorConfig.dynamicSpeed
+      : 6;
   const gradientAngle =
     typeof dynamicColorConfig?.gradientAngle === 'number' && isFinite(dynamicColorConfig.gradientAngle)
       ? dynamicColorConfig.gradientAngle
@@ -59,24 +63,28 @@ export const SpinningVinylView: React.FC<TrackInfoVariantProps> = ({
   useEffect(() => {
     if (!vinylRef.current) return;
 
-    // 只设置外圈旋转
     const effect = dynamicColorConfig?.effect ?? 'tone';
-    const dynamicSpeed =
-      typeof dynamicColorConfig?.dynamicSpeed === 'number' && isFinite(dynamicColorConfig.dynamicSpeed)
-        ? dynamicColorConfig.dynamicSpeed
-        : 6;
+    const animations: string[] = [`spin ${secondsPerRotation}s linear infinite`];
 
-    const animations: string[] = [];
-    if (data.isPlaying) {
-      animations.push(`spin ${secondsPerRotation}s linear infinite`);
-    }
     if (effect === 'dynamic') {
       animations.push(`pmp-vinyl-glow-pulse ${dynamicSpeed}s ease-in-out infinite`);
     }
 
-    vinylRef.current.style.animation = animations.length > 0 ? animations.join(', ') : 'none';
-    vinylRef.current.style.animationPlayState = animations.length > 0 ? 'running' : 'paused';
-  }, [data.isPlaying, dynamicColorConfig?.dynamicSpeed, dynamicColorConfig?.effect, secondsPerRotation]);
+    vinylRef.current.style.animation = animations.join(', ');
+  }, [dynamicColorConfig?.effect, dynamicSpeed, secondsPerRotation]);
+
+  useEffect(() => {
+    if (!vinylRef.current) return;
+
+    const effect = dynamicColorConfig?.effect ?? 'tone';
+    const playStates: string[] = [data.isPlaying ? 'running' : 'paused'];
+
+    if (effect === 'dynamic') {
+      playStates.push('running');
+    }
+
+    vinylRef.current.style.animationPlayState = playStates.join(', ');
+  }, [data.isPlaying, dynamicColorConfig?.effect]);
 
   // 检测文本溢出
   useEffect(() => {
@@ -263,7 +271,7 @@ export const SpinningVinylView: React.FC<TrackInfoVariantProps> = ({
           {data.track?.coverUrl ? (
             <img src={data.track.coverUrl} alt={t('pages.track.cover.alt')} className="track-cover-image" />
           ) : (
-            <div className="track-cover-placeholder">♪</div>
+            <div className="track-cover-placeholder">&#9834;</div>
           )}
         </div>
 

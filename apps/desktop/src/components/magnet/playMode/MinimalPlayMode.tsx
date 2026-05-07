@@ -90,11 +90,13 @@ export const MinimalPlayMode: React.FC<PlayModeVariantProps> = ({ data, logic, s
       title={meta.title}
       aria-label={meta.title}
     >
-      <span className="play-mode-ring" aria-hidden="true" />
-      <span className="play-mode-active-arc" aria-hidden="true" />
-      <svg className="play-mode-indicator" viewBox="0 0 18 12" aria-hidden="true">
-        <path d="M9 11.5C6.7 7.8 3.5 4.6 0.8 2.5A14 14 0 0 1 17.2 2.5C14.5 4.6 11.3 7.8 9 11.5Z" />
-      </svg>
+      <span className="play-mode-ring-track" aria-hidden="true">
+        <span className="play-mode-ring" />
+        <span className="play-mode-active-arc" />
+        <svg className="play-mode-indicator" viewBox="0 0 18 12">
+          <path d="M9 11.5C6.7 7.8 3.5 4.6 0.8 2.5A14 14 0 0 1 17.2 2.5C14.5 4.6 11.3 7.8 9 11.5Z" />
+        </svg>
+      </span>
       <span className="play-mode-pulse" aria-hidden="true" />
       {meta.icon}
       {skinProps.showModeBadge ? <span className="play-mode-badge">{meta.badge}</span> : null}
