@@ -2,13 +2,13 @@ import type { ScopedEventBus } from '../../kernel';
 import { createServiceToken } from '../../kernel';
 import type { AppEvents } from '../../contracts/events';
 import { getTelemetryLogger } from '../telemetry/TelemetryService';
+import { invokeWithTelemetry } from '../telemetry/tauriInvokeTelemetry';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import type { RuntimeCapsuleManagerService } from '../runtime-capsules';
 import { LazyAudioTransportService } from './LazyAudioTransportService';
 import { NativeAudioService } from './NativeAudioService';
 import { NoopAudioService } from './NoopAudioService';
-import type { IAudioService } from './types';
-import type { AudioRobustnessSnapshot } from './types';
+import type { AudioRobustnessSnapshot, IAudioService, PlaybackState } from './types';
 import {
   recordStartupMemoryCheckpoint,
   setStartupMemoryTraceFlag,
@@ -66,13 +66,23 @@ function readTelemetryErrorMessage(error: unknown): string {
   }
 }
 
+function shouldTaskbarShowPauseIcon(playbackState: PlaybackState): boolean {
+  return (
+    playbackState === 'playing' ||
+    playbackState === 'buffering' ||
+    playbackState === 'loading'
+  );
+}
+
 export class DefaultAudioEngineService implements AudioEngineService {
   private readonly telemetry = getTelemetryLogger('audio', 'AudioEngineService');
   private readonly mode: AudioEngineMode;
+  private readonly taskbarMediaControlsEnabled: boolean;
   private engineType: AudioEngineType;
   private isNativeAvailable: boolean;
   private audioService: IAudioService;
   private unlistenTaskbarControls: null | (() => void) = null;
+  private taskbarPlaybackIconShowsPause: boolean | null = null;
 
   private unsubscribeStateChange: null | (() => void) = null;
   private unsubscribeTimeUpdate: null | (() => void) = null;
@@ -89,6 +99,7 @@ export class DefaultAudioEngineService implements AudioEngineService {
     } = {}
   ) {
     this.mode = options.mode ?? 'real';
+    this.taskbarMediaControlsEnabled = options.enableTaskbarMediaControls !== false;
     this.isNativeAvailable = this.mode === 'real' ? isTauriRuntime() : false;
     this.engineType = 'native';
     this.audioService = (() => {
@@ -109,7 +120,7 @@ export class DefaultAudioEngineService implements AudioEngineService {
     })();
 
     this.attachServiceListeners();
-    if (options.enableTaskbarMediaControls !== false) {
+    if (this.taskbarMediaControlsEnabled) {
       this.setupTaskbarMediaControls();
     }
 
@@ -194,6 +205,7 @@ export class DefaultAudioEngineService implements AudioEngineService {
 
     this.unsubscribeStateChange = this.audioService.onStateChange((state) => {
       this.events.emit('audio/stateChanged', state);
+      this.syncTaskbarPlaybackIcon(state.playbackState);
     });
 
     if (isTimeUpdateListenerAvailable(this.audioService)) {
@@ -294,6 +306,36 @@ export class DefaultAudioEngineService implements AudioEngineService {
     }
   }
 
+  private syncTaskbarPlaybackIcon(
+    playbackState: PlaybackState,
+    options: { force?: boolean } = {}
+  ): void {
+    if (!this.taskbarMediaControlsEnabled) return;
+    if (this.mode !== 'real') return;
+    if (!isTauriRuntime()) return;
+
+    const showPause = shouldTaskbarShowPauseIcon(playbackState);
+    if (!options.force && this.taskbarPlaybackIconShowsPause === showPause) {
+      return;
+    }
+    this.taskbarPlaybackIconShowsPause = showPause;
+
+    void invokeWithTelemetry(
+      'taskbar_thumbbar_sync_playback_state',
+      { playbackState },
+      {
+        moduleId: 'windowing',
+        component: 'AudioEngineService',
+        event: 'window.taskbar.thumbbar.playback-icon.sync',
+        successLevel: 'debug',
+        failureLevel: 'warn',
+        slowThresholdMs: 60,
+      }
+    ).catch(() => {
+      this.taskbarPlaybackIconShowsPause = null;
+    });
+  }
+
   private setupTaskbarMediaControls(): void {
     if (this.mode !== 'real') return;
     if (!isTauriRuntime()) return;
@@ -339,8 +381,10 @@ export class DefaultAudioEngineService implements AudioEngineService {
           }
           if (action === 'stop') {
             try {
+              this.syncTaskbarPlaybackIcon('stopped', { force: true });
               service.stop();
             } catch (err) {
+              this.syncTaskbarPlaybackIcon(service.getState().playbackState, { force: true });
               this.telemetry.error('audio.taskbar.stop.failed', {
                 message: readTelemetryErrorMessage(err),
               });
@@ -349,7 +393,12 @@ export class DefaultAudioEngineService implements AudioEngineService {
           }
           if (action === 'playPause') {
             const state = service.getState();
-            if (state.playbackState === 'playing' || state.playbackState === 'buffering') {
+            if (
+              state.playbackState === 'playing' ||
+              state.playbackState === 'buffering' ||
+              state.playbackState === 'loading'
+            ) {
+              this.syncTaskbarPlaybackIcon('paused', { force: true });
               try {
                 // Do not extract the method, otherwise `this` is lost for class-based services.
                 const maybePromise = (service as unknown as { pause?: () => unknown }).pause?.call(
@@ -362,12 +411,14 @@ export class DefaultAudioEngineService implements AudioEngineService {
                   typeof thenable.catch === 'function'
                 ) {
                   void (thenable.catch as (cb: (err: unknown) => void) => unknown)((err: unknown) => {
+                    this.syncTaskbarPlaybackIcon(service.getState().playbackState, { force: true });
                     this.telemetry.error('audio.taskbar.pause.failed', {
                       message: readTelemetryErrorMessage(err),
                     });
                   });
                 }
               } catch (err) {
+                this.syncTaskbarPlaybackIcon(service.getState().playbackState, { force: true });
                 this.telemetry.error('audio.taskbar.pause.failed', {
                   message: readTelemetryErrorMessage(err),
                 });
@@ -377,7 +428,9 @@ export class DefaultAudioEngineService implements AudioEngineService {
 
             if (!state.currentTrack && state.queue.length > 0) {
               const index = state.currentIndex >= 0 ? state.currentIndex : 0;
+              this.syncTaskbarPlaybackIcon('loading', { force: true });
               void service.playTrackAtIndex(index).catch((err) => {
+                this.syncTaskbarPlaybackIcon(service.getState().playbackState, { force: true });
                 this.telemetry.error('audio.taskbar.play-track-index.failed', {
                   message: readTelemetryErrorMessage(err),
                   fields: {
@@ -388,7 +441,11 @@ export class DefaultAudioEngineService implements AudioEngineService {
               return;
             }
 
+            if (state.currentTrack) {
+              this.syncTaskbarPlaybackIcon('loading', { force: true });
+            }
             void service.play().catch((err) => {
+              this.syncTaskbarPlaybackIcon(service.getState().playbackState, { force: true });
               this.telemetry.error('audio.taskbar.play.failed', {
                 message: readTelemetryErrorMessage(err),
               });

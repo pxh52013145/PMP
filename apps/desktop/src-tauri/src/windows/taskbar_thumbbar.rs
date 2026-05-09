@@ -23,7 +23,14 @@ mod windows_impl {
     use crate::windows::EVENT_MOUSE_SIDE_BUTTON;
     use crate::windows::EVENT_TASKBAR_MEDIA_CONTROL;
     use once_cell::sync::{Lazy, OnceCell};
-    use std::{collections::HashMap, mem, sync::Mutex};
+    use std::{
+        collections::HashMap,
+        mem,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Mutex,
+        },
+    };
     use tauri::{AppHandle, Manager};
     use windows::{
         core::w,
@@ -66,10 +73,12 @@ mod windows_impl {
     static TASKBAR_ICONS: OnceCell<TaskbarIcons> = OnceCell::new();
     static TASKBAR_BUTTON_CREATED_MSG: Lazy<u32> =
         Lazy::new(|| unsafe { RegisterWindowMessageW(w!("TaskbarButtonCreated")) });
+    static PLAY_PAUSE_SHOWS_PAUSE: AtomicBool = AtomicBool::new(false);
 
     struct TaskbarIcons {
         previous: isize,
-        play_pause: isize,
+        play: isize,
+        pause: isize,
         next: isize,
     }
 
@@ -78,8 +87,12 @@ mod windows_impl {
             HICON(self.previous)
         }
 
-        fn play_pause(&self) -> HICON {
-            HICON(self.play_pause)
+        fn play(&self) -> HICON {
+            HICON(self.play)
+        }
+
+        fn pause(&self) -> HICON {
+            HICON(self.pause)
         }
 
         fn next(&self) -> HICON {
@@ -125,7 +138,8 @@ mod windows_impl {
     #[derive(Clone, Copy)]
     enum TaskbarIconKind {
         Previous,
-        PlayPause,
+        Play,
+        Pause,
         Next,
     }
 
@@ -154,8 +168,12 @@ mod windows_impl {
                 point_in_rect(x, y, 3.0, 3.25, 4.75, 12.75)
                     || point_in_triangle(x, y, (13.0, 3.25), (13.0, 12.75), (5.0, 8.0))
             }
-            TaskbarIconKind::PlayPause => {
+            TaskbarIconKind::Play => {
                 point_in_triangle(x, y, (5.0, 3.25), (5.0, 12.75), (12.0, 8.0))
+            }
+            TaskbarIconKind::Pause => {
+                point_in_rect(x, y, 4.5, 3.25, 6.75, 12.75)
+                    || point_in_rect(x, y, 9.25, 3.25, 11.5, 12.75)
             }
             TaskbarIconKind::Next => {
                 point_in_rect(x, y, 11.25, 3.25, 13.0, 12.75)
@@ -220,15 +238,36 @@ mod windows_impl {
         TASKBAR_ICONS.get_or_try_init(|| {
             Ok(TaskbarIcons {
                 previous: create_taskbar_icon(TaskbarIconKind::Previous)?.0,
-                play_pause: create_taskbar_icon(TaskbarIconKind::PlayPause)?.0,
+                play: create_taskbar_icon(TaskbarIconKind::Play)?.0,
+                pause: create_taskbar_icon(TaskbarIconKind::Pause)?.0,
                 next: create_taskbar_icon(TaskbarIconKind::Next)?.0,
             })
         })
     }
 
+    fn is_pause_action(playback_state: &str) -> bool {
+        matches!(playback_state.trim(), "playing" | "buffering" | "loading")
+    }
+
+    fn play_pause_button(icons: &TaskbarIcons, show_pause: bool) -> THUMBBUTTON {
+        THUMBBUTTON {
+            dwMask: THB_FLAGS | THB_ICON | THB_TOOLTIP,
+            iId: BUTTON_ID_PLAY_PAUSE,
+            iBitmap: 0,
+            hIcon: if show_pause {
+                icons.pause()
+            } else {
+                icons.play()
+            },
+            szTip: utf16_tip(if show_pause { "Pause" } else { "Play" }),
+            dwFlags: THBF_ENABLED,
+        }
+    }
+
     unsafe fn add_buttons(hwnd: HWND) -> Result<(), String> {
         let taskbar = create_taskbar_list3()?;
         let icons = taskbar_icons()?;
+        let show_pause = PLAY_PAUSE_SHOWS_PAUSE.load(Ordering::Acquire);
 
         let buttons = [
             THUMBBUTTON {
@@ -239,14 +278,7 @@ mod windows_impl {
                 szTip: utf16_tip("Previous"),
                 dwFlags: THBF_ENABLED,
             },
-            THUMBBUTTON {
-                dwMask: THB_FLAGS | THB_ICON | THB_TOOLTIP,
-                iId: BUTTON_ID_PLAY_PAUSE,
-                iBitmap: 0,
-                hIcon: icons.play_pause(),
-                szTip: utf16_tip("Play/Pause"),
-                dwFlags: THBF_ENABLED,
-            },
+            play_pause_button(icons, show_pause),
             THUMBBUTTON {
                 dwMask: THB_FLAGS | THB_ICON | THB_TOOLTIP,
                 iId: BUTTON_ID_NEXT,
@@ -260,6 +292,16 @@ mod windows_impl {
         taskbar
             .ThumbBarAddButtons(hwnd, &buttons)
             .map_err(|e| format!("ITaskbarList3::ThumbBarAddButtons failed: {e:?}"))
+    }
+
+    unsafe fn update_play_pause_button(hwnd: HWND, show_pause: bool) -> Result<(), String> {
+        let taskbar = create_taskbar_list3()?;
+        let icons = taskbar_icons()?;
+        let buttons = [play_pause_button(icons, show_pause)];
+
+        taskbar
+            .ThumbBarUpdateButtons(hwnd, &buttons)
+            .map_err(|e| format!("ITaskbarList3::ThumbBarUpdateButtons failed: {e:?}"))
     }
 
     fn emit_action(action: &'static str) {
@@ -413,9 +455,80 @@ mod windows_impl {
             let _ = add_buttons(hwnd_raw);
         }
     }
+
+    pub fn sync_from_native_audio_state(playback_state: &str) {
+        let show_pause = is_pause_action(playback_state);
+        let previous = PLAY_PAUSE_SHOWS_PAUSE.swap(show_pause, Ordering::AcqRel);
+        if previous == show_pause {
+            return;
+        }
+
+        let Some(app) = APP_HANDLE.get() else {
+            return;
+        };
+        let Some(window) = app.get_window(crate::windows::MAIN_WINDOW_LABEL) else {
+            return;
+        };
+        let Ok(hwnd) = window.hwnd() else {
+            return;
+        };
+
+        unsafe {
+            let _ = update_play_pause_button(HWND(hwnd.0 as isize), show_pause);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{taskbar_icon_shape_contains, TaskbarIconKind};
+
+        #[test]
+        fn play_and_pause_icons_are_distinct() {
+            assert!(taskbar_icon_shape_contains(
+                TaskbarIconKind::Play,
+                10.0,
+                8.0
+            ));
+            assert!(!taskbar_icon_shape_contains(
+                TaskbarIconKind::Play,
+                4.0,
+                8.0
+            ));
+
+            assert!(taskbar_icon_shape_contains(
+                TaskbarIconKind::Pause,
+                5.5,
+                8.0
+            ));
+            assert!(taskbar_icon_shape_contains(
+                TaskbarIconKind::Pause,
+                10.0,
+                8.0
+            ));
+            assert!(!taskbar_icon_shape_contains(
+                TaskbarIconKind::Pause,
+                8.0,
+                8.0
+            ));
+        }
+
+        #[test]
+        fn loading_state_shows_pause_action() {
+            assert!(super::is_pause_action("playing"));
+            assert!(super::is_pause_action("buffering"));
+            assert!(super::is_pause_action("loading"));
+            assert!(!super::is_pause_action("paused"));
+            assert!(!super::is_pause_action("stopped"));
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
 pub fn init_main_window(app: &AppHandle) {
     windows_impl::init_main_window(app);
+}
+
+#[cfg(target_os = "windows")]
+pub fn sync_from_native_audio_state(playback_state: &str) {
+    windows_impl::sync_from_native_audio_state(playback_state);
 }

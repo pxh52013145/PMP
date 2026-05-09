@@ -247,6 +247,19 @@ pub async fn ornaments_drag_main_window(app: tauri::AppHandle) -> Result<(), Str
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn taskbar_thumbbar_sync_playback_state(playback_state: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::taskbar_thumbbar::sync_from_native_audio_state(&playback_state);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = playback_state;
+    }
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn desktop_lyrics_set_visible(
     app: tauri::AppHandle,
     visible: bool,

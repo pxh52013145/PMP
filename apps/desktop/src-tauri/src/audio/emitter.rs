@@ -159,6 +159,9 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
 
                 #[cfg(target_os = "windows")]
                 {
+                    crate::windows::taskbar_thumbbar::sync_from_native_audio_state(
+                        &state_payload.playback_state,
+                    );
                     crate::windows::smtc::sync_from_native_audio_state(
                         &state_payload.playback_state,
                         state_payload.track_path.as_deref(),
