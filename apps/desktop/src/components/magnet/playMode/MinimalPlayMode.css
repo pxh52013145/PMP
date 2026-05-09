@@ -6,7 +6,6 @@
   --play-mode-color: var(--play-mode-red);
   --play-mode-glow-color: rgba(255, 88, 96, 0.3);
   --play-mode-pulse-color: rgba(255, 88, 96, 0.46);
-  --play-mode-arc-start: 225deg;
   width: 100%;
   height: 100%;
   border: none;
@@ -23,7 +22,7 @@
     filter 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275),
     text-shadow 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275),
     color 0.25s ease;
-  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.3));
+  filter: none;
 }
 
 .play-mode-icon {
@@ -37,13 +36,16 @@
   display: block;
   position: relative;
   z-index: 3;
+  transform-origin: center;
+  transition:
+    filter 0.28s ease,
+    transform 0.28s ease;
 }
 
 .minimal-play-mode-btn.mode-sequence {
   --play-mode-color: var(--play-mode-red);
   --play-mode-glow-color: rgba(255, 88, 96, 0.3);
   --play-mode-pulse-color: rgba(255, 88, 96, 0.46);
-  --play-mode-arc-start: 225deg;
   color: var(--play-mode-color);
 }
 
@@ -51,7 +53,6 @@
   --play-mode-color: var(--play-mode-green);
   --play-mode-glow-color: rgba(75, 246, 134, 0.28);
   --play-mode-pulse-color: rgba(75, 246, 134, 0.42);
-  --play-mode-arc-start: -45deg;
   color: var(--play-mode-color);
 }
 
@@ -59,7 +60,6 @@
   --play-mode-color: var(--play-mode-yellow);
   --play-mode-glow-color: rgba(255, 218, 82, 0.28);
   --play-mode-pulse-color: rgba(255, 218, 82, 0.42);
-  --play-mode-arc-start: 135deg;
   color: var(--play-mode-color);
 }
 
@@ -67,13 +67,13 @@
   --play-mode-color: var(--play-mode-purple);
   --play-mode-glow-color: rgba(159, 116, 255, 0.3);
   --play-mode-pulse-color: rgba(159, 116, 255, 0.44);
-  --play-mode-arc-start: 45deg;
   color: var(--play-mode-color);
 }
 
 .play-mode-ring-track {
   position: absolute;
-  inset: 0;
+  inset: -8px;
+  z-index: 1;
   pointer-events: none;
   transform: scale(0.96) rotate(0deg);
   transform-origin: center;
@@ -82,84 +82,66 @@
   will-change: transform;
 }
 
-.play-mode-ring,
-.play-mode-active-arc {
-  position: absolute;
-  inset: -6px;
-  border-radius: 50%;
-  pointer-events: none;
+.play-mode-radar-ring {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+  shape-rendering: geometricPrecision;
+  opacity: 0;
   transition:
     opacity 0.28s ease,
     filter 0.28s ease;
-  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 2.5px));
-  mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 2.5px));
 }
 
-.play-mode-ring {
-  z-index: 0;
-  background: conic-gradient(
-    from -45deg,
-    rgba(75, 246, 134, 0.48) 0deg 90deg,
-    rgba(159, 116, 255, 0.5) 90deg 180deg,
-    rgba(255, 218, 82, 0.52) 180deg 270deg,
-    rgba(255, 88, 96, 0.5) 270deg 360deg
-  );
-  opacity: 0;
-  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.1));
-}
-
-.play-mode-active-arc {
-  z-index: 1;
-  background: conic-gradient(
-    from var(--play-mode-arc-start),
-    var(--play-mode-color) 0deg 90deg,
-    transparent 91deg 360deg
-  );
-  opacity: 0;
-  filter:
-    drop-shadow(0 0 2px var(--play-mode-glow-color))
-    drop-shadow(0 0 5px var(--play-mode-glow-color));
-}
-
-.play-mode-indicator {
-  position: absolute;
-  z-index: 4;
-  width: 9px;
-  height: 6px;
-  color: var(--play-mode-color);
-  fill: currentColor;
-  pointer-events: none;
-  opacity: 0;
-  filter:
-    drop-shadow(0 0 2px var(--play-mode-glow-color))
-    drop-shadow(0 0 5px var(--play-mode-glow-color));
+.play-mode-inner-ring,
+.play-mode-outer-arc {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+  stroke-linecap: round;
   transition:
-    opacity 0.24s ease,
-    filter 0.24s ease;
+    opacity 0.28s ease,
+    stroke 0.28s ease,
+    filter 0.28s ease;
 }
 
-.minimal-play-mode-btn.mode-loop .play-mode-indicator {
-  top: -1px;
-  left: 50%;
-  transform: translateX(-50%);
+.play-mode-inner-ring {
+  stroke: var(--play-mode-color);
+  stroke-width: 1.05;
+  opacity: 0.46;
 }
 
-.minimal-play-mode-btn.mode-single-loop .play-mode-indicator {
-  top: 50%;
-  right: -1px;
-  transform: translateY(-50%) rotate(90deg);
+.play-mode-outer-arc {
+  stroke-width: 1.75;
+  opacity: 0.46;
+  filter: none;
 }
 
-.minimal-play-mode-btn.mode-shuffle .play-mode-indicator {
-  bottom: -1px;
-  left: 50%;
-  transform: translateX(-50%) rotate(180deg);
+.play-mode-outer-arc.arc-loop {
+  stroke: rgba(75, 246, 134, 0.58);
 }
 
-.minimal-play-mode-btn.mode-sequence .play-mode-indicator {
-  top: 50%;
-  left: -1px;
-  transform: translateY(-50%) rotate(270deg);
+.play-mode-outer-arc.arc-single-loop {
+  stroke: rgba(159, 116, 255, 0.58);
+}
+
+.play-mode-outer-arc.arc-shuffle {
+  stroke: rgba(255, 218, 82, 0.58);
+}
+
+.play-mode-outer-arc.arc-sequence {
+  stroke: rgba(255, 88, 96, 0.58);
+}
+
+.minimal-play-mode-btn.mode-loop .play-mode-outer-arc.arc-loop,
+.minimal-play-mode-btn.mode-single-loop .play-mode-outer-arc.arc-single-loop,
+.minimal-play-mode-btn.mode-shuffle .play-mode-outer-arc.arc-shuffle,
+.minimal-play-mode-btn.mode-sequence .play-mode-outer-arc.arc-sequence {
+  stroke: var(--play-mode-color);
+  opacity: 0.98;
+  filter:
+    drop-shadow(0 0 1.5px var(--play-mode-glow-color))
+    drop-shadow(0 0 4px var(--play-mode-glow-color));
 }
 
 .play-mode-pulse {
@@ -179,26 +161,10 @@
   pointer-events: none;
 }
 
-.minimal-play-mode-btn.play-mode-ring-hover .play-mode-ring {
-  opacity: 0;
-}
-
-.minimal-play-mode-btn.play-mode-ring-hover:hover .play-mode-ring,
-.minimal-play-mode-btn.play-mode-ring-always .play-mode-ring {
-  opacity: 0.7;
-}
-
-.minimal-play-mode-btn.play-mode-ring-hover:hover .play-mode-active-arc,
-.minimal-play-mode-btn.play-mode-ring-always .play-mode-active-arc {
-  opacity: 0.9;
-}
-
-.minimal-play-mode-btn.play-mode-ring-hover:hover .play-mode-indicator,
-.minimal-play-mode-btn.play-mode-ring-always .play-mode-indicator {
-  opacity: 0.94;
-  filter:
-    drop-shadow(0 0 2px var(--play-mode-glow-color))
-    drop-shadow(0 0 6px var(--play-mode-glow-color));
+.minimal-play-mode-btn.play-mode-ring-hover:hover .play-mode-radar-ring,
+.minimal-play-mode-btn.play-mode-ring-always .play-mode-radar-ring {
+  opacity: 1;
+  filter: none;
 }
 
 .minimal-play-mode-btn.play-mode-ring-hover:hover .play-mode-ring-track,
@@ -206,9 +172,7 @@
   animation-play-state: running;
 }
 
-.minimal-play-mode-btn.play-mode-ring-off .play-mode-ring,
-.minimal-play-mode-btn.play-mode-ring-off .play-mode-active-arc,
-.minimal-play-mode-btn.play-mode-ring-off .play-mode-indicator {
+.minimal-play-mode-btn.play-mode-ring-off .play-mode-ring-track {
   display: none;
 }
 
@@ -244,18 +208,27 @@
 
 .minimal-play-mode-btn:hover {
   transform: scale(1.18) translateY(-2px);
-  filter:
-    drop-shadow(0 0 3px var(--play-mode-glow-color))
-    drop-shadow(0 0 7px var(--play-mode-glow-color));
+  filter: none;
   text-shadow:
     0 0 10px rgba(255, 255, 255, 0.8),
     0 2px 4px rgba(0, 0, 0, 0.5);
 }
 
+.minimal-play-mode-btn:hover .play-mode-icon {
+  transform: scale(1.12);
+  filter:
+    drop-shadow(0 0 2px var(--play-mode-glow-color))
+    drop-shadow(0 0 5px var(--play-mode-glow-color));
+}
+
 .minimal-play-mode-btn:active {
   transform: scale(0.9) translateY(1px);
   color: var(--play-mode-color);
-  filter: drop-shadow(0 0 15px var(--play-mode-color));
+  filter: none;
+}
+
+.minimal-play-mode-btn:active .play-mode-icon {
+  transform: scale(0.92);
 }
 
 .play-mode-badge {

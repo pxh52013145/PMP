@@ -91,10 +91,12 @@ export const MinimalPlayMode: React.FC<PlayModeVariantProps> = ({ data, logic, s
       aria-label={meta.title}
     >
       <span className="play-mode-ring-track" aria-hidden="true">
-        <span className="play-mode-ring" />
-        <span className="play-mode-active-arc" />
-        <svg className="play-mode-indicator" viewBox="0 0 18 12">
-          <path d="M9 11.5C6.7 7.8 3.5 4.6 0.8 2.5A14 14 0 0 1 17.2 2.5C14.5 4.6 11.3 7.8 9 11.5Z" />
+        <svg className="play-mode-radar-ring" viewBox="0 0 96 96" focusable="false" shapeRendering="geometricPrecision">
+          <circle className="play-mode-inner-ring" cx="48" cy="48" r="32" />
+          <path className="play-mode-outer-arc arc-loop" d="M27.5 14A39 39 0 0 1 68.5 14" />
+          <path className="play-mode-outer-arc arc-single-loop" d="M82 27.5A39 39 0 0 1 82 68.5" />
+          <path className="play-mode-outer-arc arc-shuffle" d="M68.5 82A39 39 0 0 1 27.5 82" />
+          <path className="play-mode-outer-arc arc-sequence" d="M14 68.5A39 39 0 0 1 14 27.5" />
         </svg>
       </span>
       <span className="play-mode-pulse" aria-hidden="true" />
