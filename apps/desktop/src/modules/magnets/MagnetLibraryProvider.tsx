@@ -330,15 +330,13 @@ export function MagnetLibraryProvider({
       { ...baseConfig, gridSize, magnets: patchedMagnets },
       defaultMagnetLibrary
     );
-    const ensuredActive = new Set(applied.activeMagnetIds);
-    for (const id of REQUIRED_MAGNET_IDS) ensuredActive.add(id);
 
     loadedConfigKeyRef.current = magnetConfigStorageKey;
     loadedLayoutKeyRef.current = magnetLayoutStorageKey;
 
     initialRef.current = {
       magnetLibrary: applied.magnetLibrary,
-      activeMagnetIds: ensuredActive,
+      activeMagnetIds: activeFromLayout,
       layout,
     };
   }
@@ -558,8 +556,7 @@ export function MagnetLibraryProvider({
       );
       const baselineActive = new Set(baselineApplied.activeMagnetIds);
       for (const id of REQUIRED_MAGNET_IDS) baselineActive.add(id);
-      const ensuredActive = new Set(applied.activeMagnetIds);
-      for (const id of REQUIRED_MAGNET_IDS) ensuredActive.add(id);
+      const ensuredActive = activeFromLayout;
       const shouldPersistNormalizedConfig =
         JSON.stringify(baselineApplied.magnetLibrary) !== JSON.stringify(applied.magnetLibrary) ||
         JSON.stringify([...baselineActive].sort()) !== JSON.stringify([...ensuredActive].sort());
