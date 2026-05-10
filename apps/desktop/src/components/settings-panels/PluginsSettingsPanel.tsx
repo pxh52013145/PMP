@@ -5,6 +5,9 @@ import { useKernel } from '../../contexts/KernelContext';
 import { GOVERNANCE_SERVICE_TOKEN } from '../../services/governance';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import { useT } from '../../i18n';
+import { listRegisteredMagnetRenderers } from '../../magnet-system/registry';
+import { installPmpsShaderPackFromZipBytes, parsePmpsShaderPackFromZipBytes } from '../../shader-system/pmps';
+import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
 import {
   openBuiltinPluginPageViaHostCapability,
   openBuiltinPluginWindowViaHostCapability,
@@ -27,6 +30,27 @@ import {
   uninstallInstalledExtension,
   type InstalledHostExtensionRecord,
 } from '../../magnet-system/plugins/extensions';
+import { parseExtensionPackFromZipBytes } from '../../magnet-system/plugins/packs/extensionPack';
+import {
+  cleanupExtensionPackMaterializedSource,
+  commitExtensionPackExecutorPreview,
+  dryRunExtensionPackExecutorPreview,
+} from '../../magnet-system/plugins/packs/extensionPackExecutor';
+import type { ExtensionPackMaterializedSource } from '../../magnet-system/plugins/packs/extensionPackExecutor';
+import {
+  parseExperiencePackFromZipBytes,
+  type ExperiencePackExecutorPreview,
+} from '../../magnet-system/plugins/packs/experiencePack';
+import {
+  cleanupExperiencePackExecutorDryRun,
+  commitExperiencePackExecutorPreview,
+  dryRunExperiencePackExecutorPreview,
+} from '../../magnet-system/plugins/packs/experiencePackExecutor';
+import type {
+  InstallPlanEmbeddedResourceSource,
+  InstallPlanExecutorDryRunResult,
+} from '../../magnet-system/plugins/packs/installPlanExecutorTypes';
+import { buildPackageImportPreviewText } from './PackageImportPreview';
 import { INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN } from '../../magnet-system/plugins/installedExtensionRuntimeManager';
 import { activateInstalledExtensionsForHostFile } from '../../magnet-system/plugins/installedExtensionHostFileActivation';
 import { resolveInstalledExtensionRuntime } from '../../magnet-system/plugins/runtime';
@@ -87,6 +111,18 @@ function getInstalledExtensionPrimarySurfaceKind(
     return 'command';
   }
   return 'command';
+}
+
+function collectRegisteredRendererIds(
+  additionalExtensions: InstalledHostExtensionRecord[] = []
+): Set<string> {
+  const rendererIds = new Set(listRegisteredMagnetRenderers().map((renderer) => renderer.id));
+  for (const extension of additionalExtensions) {
+    if (supportsInstalledExtensionMagnetSurface(extension)) {
+      rendererIds.add(extension.manifest.identity.id);
+    }
+  }
+  return rendererIds;
 }
 
 function formatInstalledExtensionAuditEvent(event: InstalledExtensionAuditEvent): string {
@@ -226,9 +262,34 @@ function formatDevSessionRestartSummary(
   });
 }
 
+function formatDiagnosticLines(
+  diagnostics: Array<{ severity: string; code: string; message: string }>
+): string {
+  return diagnostics
+    .map((diagnostic) => `[${diagnostic.severity}] ${diagnostic.code}: ${diagnostic.message}`)
+    .join('\n');
+}
+
+function resolvePromptSpaceModeAsCreateNewSpaces(
+  preview: ExperiencePackExecutorPreview
+): ExperiencePackExecutorPreview {
+  return {
+    ...preview,
+    plan: {
+      ...preview.plan,
+      steps: preview.plan.steps.map((step) =>
+        step.kind === 'apply-space-layout' && step.mode === 'prompt'
+          ? { ...step, mode: 'create-new-spaces' }
+          : step
+      ),
+    },
+  };
+}
+
 export function PluginsSettingsPanel() {
   const kernel = useKernel();
   const t = useT();
+  const { theme, applyTheme } = useTheme();
   const governance = kernel.services.getOptional(GOVERNANCE_SERVICE_TOKEN);
   const navigationService = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
   const installedExtensionRuntimeManager = kernel.services.get(
@@ -505,6 +566,319 @@ export function PluginsSettingsPanel() {
     t,
   ]);
 
+  const handleInstallExtensionPack = useCallback(async () => {
+    if (!isTauri) {
+      setError(t('settings.plugins.v2.install.requireTauri'));
+      return;
+    }
+    if (busy) return;
+
+    setBusy(true);
+    setError(null);
+    let pendingMaterializedSource: ExtensionPackMaterializedSource | null = null;
+
+    try {
+      const [dialog, fs] = await Promise.all([
+        import('@tauri-apps/api/dialog'),
+        import('@tauri-apps/api/fs'),
+      ]);
+      const selected = await dialog.open({
+        multiple: false,
+        filters: [{ name: t('settings.plugins.pmpe.install.filePickerFilter'), extensions: ['pmpe'] }],
+      });
+      if (!selected) return;
+      const filePath = Array.isArray(selected) ? selected[0] : selected;
+      if (typeof filePath !== 'string') {
+        throw new Error(t('settings.plugins.pmpe.install.error.invalidFilePath'));
+      }
+
+      const packBytes = await fs.readBinaryFile(filePath);
+      const parsed = await parseExtensionPackFromZipBytes(new Uint8Array(packBytes));
+      const previewRecord: InstalledHostExtensionRecord = {
+        manifest: parsed.extensionManifest,
+        installedAt: Date.now(),
+        packageDigest: parsed.executorPreview.installSource.packageDigest,
+        enabled: true,
+      };
+      const isUpdate = Boolean(getInstalledExtensionRecord(parsed.extensionManifest.identity.id));
+      const contributesMagnet = supportsInstalledExtensionMagnetSurface(previewRecord);
+      if (
+        contributesMagnet &&
+        !isUpdate &&
+        magnetLibrary.some((magnet) => magnet.id === parsed.extensionManifest.identity.id)
+      ) {
+        throw new Error(
+          t('settings.plugins.v2.install.error.magnetIdExists', {
+            id: parsed.extensionManifest.identity.id,
+          })
+        );
+      }
+
+      const dryRun = await dryRunExtensionPackExecutorPreview(parsed.executorPreview);
+      pendingMaterializedSource = dryRun.materializedSource;
+      if (dryRun.status !== 'ready') {
+        throw new Error(
+          t('settings.plugins.pmpe.install.error.dryRunBlocked', {
+            diagnostics: formatDiagnosticLines(dryRun.diagnostics),
+          })
+        );
+      }
+
+      const capabilities = listInstalledExtensionCapabilityBindings(previewRecord);
+      const confirmText = [
+        t('settings.plugins.pmpe.install.confirm.package', {
+          name: parsed.manifest.metadata.name,
+          id: parsed.manifest.metadata.id,
+          version: parsed.manifest.metadata.version,
+        }),
+        t('settings.plugins.v2.install.confirm.extension', {
+          name: readInstalledExtensionDisplayName(previewRecord),
+        }),
+        t('settings.plugins.v2.install.confirm.idVersion', {
+          id: parsed.extensionManifest.identity.id,
+          version: parsed.extensionManifest.identity.version,
+        }),
+        t('settings.plugins.v2.install.confirm.publisher', {
+          publisher: parsed.extensionManifest.identity.publisher,
+        }),
+        parsed.extensionManifest.identity.description
+          ? t('settings.plugins.v2.install.confirm.description', {
+              description: parsed.extensionManifest.identity.description,
+            })
+          : null,
+        '',
+        t('settings.plugins.v2.install.confirm.hostTargets', {
+          targets: parsed.extensionManifest.hostTargets.map((target) => target.hostId).join(', '),
+        }),
+        t('settings.plugins.v2.install.confirm.runtimes', {
+          runtimes: parsed.extensionManifest.runtimes.map((runtime) => runtime.runtimeId).join(', '),
+        }),
+        t('settings.plugins.pmpe.install.confirm.dryRun', {
+          files: dryRun.materializedSource.fileCount,
+          bytes: dryRun.materializedSource.totalBytes,
+        }),
+        '',
+        t('settings.plugins.v2.install.confirm.capabilitiesTitle'),
+        capabilities.length > 0
+          ? capabilities.map((binding) => `- ${binding.capabilityId}`).join('\n')
+          : t('settings.plugins.v2.install.confirm.capabilitiesNone'),
+        '',
+        isUpdate
+          ? t('settings.plugins.v2.install.confirm.updatePrompt')
+          : t('settings.plugins.v2.install.confirm.prompt'),
+      ]
+        .filter((line): line is string => typeof line === 'string' && line.length > 0)
+        .join('\n');
+
+      const ok = await confirm({
+        title: t('settings.plugins.pmpe.install.confirm.title'),
+        message: confirmText,
+        confirmText: t('common.action.install'),
+        cancelText: t('common.action.cancel'),
+      });
+      if (!ok) return;
+
+      const commit = await commitExtensionPackExecutorPreview(parsed.executorPreview, { dryRun });
+      pendingMaterializedSource = null;
+      if (commit.status !== 'installed' || !commit.installedExtension) {
+        throw new Error(
+          t('settings.plugins.pmpe.install.error.commitBlocked', {
+            diagnostics: formatDiagnosticLines(commit.diagnostics),
+          })
+        );
+      }
+
+      const installed = commit.installedExtension;
+      if (supportsInstalledExtensionMagnetSurface(installed)) {
+        const template = createMagnetTemplateFromInstalledExtension(installed);
+        upsertMagnetCatalogMagnet(template);
+
+        if (!magnetLibrary.some((magnet) => magnet.id === installed.manifest.identity.id)) {
+          setMagnetLibrary((prev) => [...prev, template]);
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      await cleanupExtensionPackMaterializedSource(pendingMaterializedSource);
+      setBusy(false);
+    }
+  }, [busy, confirm, isTauri, magnetLibrary, setMagnetLibrary, t]);
+
+  const handleInstallExperiencePack = useCallback(async () => {
+    if (!isTauri) {
+      setError(t('settings.plugins.v2.install.requireTauri'));
+      return;
+    }
+    if (busy) return;
+
+    setBusy(true);
+    setError(null);
+    let pendingDryRun: InstallPlanExecutorDryRunResult | null = null;
+
+    try {
+      const [dialog, fs] = await Promise.all([
+        import('@tauri-apps/api/dialog'),
+        import('@tauri-apps/api/fs'),
+      ]);
+      const selected = await dialog.open({
+        multiple: false,
+        filters: [{ name: t('settings.plugins.pmpex.install.filePickerFilter'), extensions: ['pmpex'] }],
+      });
+      if (!selected) return;
+      const filePath = Array.isArray(selected) ? selected[0] : selected;
+      if (typeof filePath !== 'string') {
+        throw new Error(t('settings.plugins.pmpex.install.error.invalidFilePath'));
+      }
+
+      const packBytes = await fs.readBinaryFile(filePath);
+      const parsed = await parseExperiencePackFromZipBytes(new Uint8Array(packBytes));
+      let executorPreview = parsed.executorPreview;
+      const previewRecords: InstalledHostExtensionRecord[] = Object.values(
+        executorPreview.extensionPacksByStepId
+      ).map((extensionPack) => ({
+        manifest: extensionPack.extensionManifest,
+        installedAt: Date.now(),
+        packageDigest: extensionPack.executorPreview.installSource.packageDigest,
+        enabled: true,
+      }));
+
+      for (const record of previewRecords) {
+        const pluginId = record.manifest.identity.id;
+        const isUpdate = Boolean(getInstalledExtensionRecord(pluginId));
+        const contributesMagnet = supportsInstalledExtensionMagnetSurface(record);
+        if (
+          contributesMagnet &&
+          !isUpdate &&
+          magnetLibrary.some((magnet) => magnet.id === pluginId)
+        ) {
+          throw new Error(
+            t('settings.plugins.v2.install.error.magnetIdExists', {
+              id: pluginId,
+            })
+          );
+        }
+      }
+
+      const createExecutorContext = () => ({
+        currentTheme: theme,
+        applyTheme,
+        magnetLibrary,
+        registeredRendererIds: collectRegisteredRendererIds(previewRecords),
+        dryRunResource: async (source: InstallPlanEmbeddedResourceSource) => {
+          const parsedResource = await parsePmpsShaderPackFromZipBytes(source.bytes);
+          return {
+            id: parsedResource.manifest.metadata.id,
+            version: parsedResource.manifest.metadata.version,
+          };
+        },
+        commitResource: async (source: InstallPlanEmbeddedResourceSource) =>
+          await installPmpsShaderPackFromZipBytes(source.bytes),
+      });
+
+      let dryRun = await dryRunExperiencePackExecutorPreview(executorPreview, createExecutorContext());
+      pendingDryRun = dryRun;
+
+      if (dryRun.status === 'pending-user-input') {
+        const canResolveAsCreateNewSpaces = parsed.plan.steps.some(
+          (step) => step.kind === 'apply-space-layout' && step.mode === 'prompt'
+        );
+        if (!canResolveAsCreateNewSpaces) {
+          throw new Error(
+            t('settings.plugins.pmpex.install.error.pendingUserInput', {
+              diagnostics: formatDiagnosticLines(dryRun.diagnostics),
+            })
+          );
+        }
+
+        const ok = await confirm({
+          title: t('settings.plugins.pmpex.install.spacePrompt.title'),
+          message: t('settings.plugins.pmpex.install.spacePrompt.message', {
+            diagnostics: formatDiagnosticLines(dryRun.diagnostics),
+          }),
+          confirmText: t('settings.plugins.pmpex.install.spacePrompt.createNew'),
+          cancelText: t('common.action.cancel'),
+        });
+        if (!ok) return;
+
+        await cleanupExperiencePackExecutorDryRun(dryRun);
+        executorPreview = resolvePromptSpaceModeAsCreateNewSpaces(executorPreview);
+        dryRun = await dryRunExperiencePackExecutorPreview(executorPreview, createExecutorContext());
+        pendingDryRun = dryRun;
+      }
+      if (dryRun.status !== 'ready') {
+        throw new Error(
+          t('settings.plugins.pmpex.install.error.dryRunBlocked', {
+            diagnostics: formatDiagnosticLines(dryRun.diagnostics),
+          })
+        );
+      }
+
+      const confirmText = [
+        buildPackageImportPreviewText(parsed.plan, t),
+        '',
+        t('settings.plugins.pmpex.install.confirm.dryRun', {
+          steps: dryRun.stepResults.length,
+          extensions: parsed.executorPreview.summary.extensionCount,
+          resources: parsed.executorPreview.summary.resourceCount,
+        }),
+        '',
+        t('settings.plugins.pmpex.install.confirm.prompt'),
+      ].join('\n');
+
+      const ok = await confirm({
+        title: t('settings.plugins.pmpex.install.confirm.title'),
+        message: confirmText,
+        confirmText: t('common.action.install'),
+        cancelText: t('common.action.cancel'),
+      });
+      if (!ok) return;
+
+      const commit = await commitExperiencePackExecutorPreview(executorPreview, {
+        ...createExecutorContext(),
+        dryRun,
+      });
+      pendingDryRun = null;
+
+      if (commit.status !== 'committed') {
+        throw new Error(
+          t('settings.plugins.pmpex.install.error.commitBlocked', {
+            diagnostics: formatDiagnosticLines(commit.diagnostics),
+          })
+        );
+      }
+
+      for (const installed of commit.installedExtensions) {
+        if (supportsInstalledExtensionMagnetSurface(installed)) {
+          const template = createMagnetTemplateFromInstalledExtension(installed);
+          upsertMagnetCatalogMagnet(template);
+
+          if (!magnetLibrary.some((magnet) => magnet.id === installed.manifest.identity.id)) {
+            setMagnetLibrary((prev) =>
+              prev.some((magnet) => magnet.id === installed.manifest.identity.id)
+                ? prev
+                : [...prev, template]
+            );
+          }
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      await cleanupExperiencePackExecutorDryRun(pendingDryRun);
+      setBusy(false);
+    }
+  }, [
+    applyTheme,
+    busy,
+    confirm,
+    isTauri,
+    magnetLibrary,
+    setMagnetLibrary,
+    t,
+    theme,
+  ]);
+
   const handleUninstallManifestV2 = useCallback(
     async (pluginId: string) => {
       if (busy) return;
@@ -597,6 +971,22 @@ export function PluginsSettingsPanel() {
             disabled={busy}
           >
             {t('settings.plugins.v2.action.install')}
+          </PmpButton>
+          <PmpButton
+            className="settings-action-btn"
+            variant="default"
+            onClick={() => void handleInstallExtensionPack()}
+            disabled={busy}
+          >
+            {t('settings.plugins.pmpe.action.install')}
+          </PmpButton>
+          <PmpButton
+            className="settings-action-btn"
+            variant="default"
+            onClick={() => void handleInstallExperiencePack()}
+            disabled={busy}
+          >
+            {t('settings.plugins.pmpex.action.install')}
           </PmpButton>
         </div>
       </div>

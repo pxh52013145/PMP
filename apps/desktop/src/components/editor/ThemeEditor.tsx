@@ -49,7 +49,10 @@ import {
   type ProfilePackManifestV1,
   type ProfilePackProfileV1,
 } from '../../themes/packs/profilePack';
-import { filterMagnetConfigSnapshotForImport, filterMagnetSpaceLayoutForImport } from '../../themes/packs/profilePackApply';
+import {
+  filterMagnetConfigSnapshotForImportWithReport,
+  filterMagnetSpaceLayoutForImportWithReport,
+} from '../../themes/packs/profilePackApply';
 import { parseVariantPresetFromText, type VariantPresetV1 } from '../../themes/packs/pmpv';
 import { satisfiesSemverRange } from '../../themes/packs/semver';
 import { assignMagnetBindingFragment, materializeThemeBinding } from '../../themes/importAdapters';
@@ -1407,6 +1410,21 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         await applyTheme(parsed);
       }
 
+      const skippedImportMagnetIds = new Set<string>();
+      const skippedImportCustomMagnetIds = new Set<string>();
+      const recordSkippedImportMagnets = (ids: readonly string[]) => {
+        for (const id of ids) {
+          const normalized = id.trim();
+          if (normalized) skippedImportMagnetIds.add(normalized);
+        }
+      };
+      const recordSkippedImportCustomMagnets = (ids: readonly string[]) => {
+        for (const id of ids) {
+          const normalized = id.trim();
+          if (normalized) skippedImportCustomMagnetIds.add(normalized);
+        }
+      };
+
       if (options.applyMagnets) {
         if (!profilePack.profile) {
           setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.profileMissing') });
@@ -1440,7 +1458,12 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
             for (const [spaceId, layoutValue] of Object.entries(nextLayoutsBySpaceId)) {
               if (!spaceIds.has(spaceId)) continue;
               if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
-              const layout = filterMagnetSpaceLayoutForImport(sanitizeMagnetSpaceLayout(layoutValue), allowedMagnetIds);
+              const filtered = filterMagnetSpaceLayoutForImportWithReport(
+                sanitizeMagnetSpaceLayout(layoutValue),
+                allowedMagnetIds
+              );
+              recordSkippedImportMagnets(filtered.report.skippedMagnetIds);
+              const { layout } = filtered;
               patches.push({ kind: 'setSpaceLayout', spaceId, layout });
             }
             await applyMagnetLayoutStorePatches(patches, 'profilePack.replaceAll');
@@ -1448,7 +1471,12 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
             for (const [spaceId, layoutValue] of Object.entries(nextLayoutsBySpaceId)) {
               if (!spaceIds.has(spaceId)) continue;
               if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
-              const layout = filterMagnetSpaceLayoutForImport(sanitizeMagnetSpaceLayout(layoutValue), allowedMagnetIds);
+              const filtered = filterMagnetSpaceLayoutForImportWithReport(
+                sanitizeMagnetSpaceLayout(layoutValue),
+                allowedMagnetIds
+              );
+              recordSkippedImportMagnets(filtered.report.skippedMagnetIds);
+              const { layout } = filtered;
               await broadcastDataUpdate(resolveMagnetLayoutStorageKey(spaceId), layout);
             }
           }
@@ -1456,9 +1484,12 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           for (const [spaceId, configValue] of Object.entries(nextConfigsBySpaceId)) {
             if (!spaceIds.has(spaceId)) continue;
             if (!isPlainObject(configValue)) continue;
+            const filtered = filterMagnetConfigSnapshotForImportWithReport(configValue, allowedMagnetIds);
+            recordSkippedImportMagnets(filtered.report.skippedMagnetIds);
+            recordSkippedImportCustomMagnets(filtered.report.skippedCustomMagnetIds);
             await broadcastDataUpdate(
               resolveMagnetConfigStorageKey(spaceId),
-              filterMagnetConfigSnapshotForImport(configValue, allowedMagnetIds)
+              filtered.value
             );
           }
 
@@ -1488,7 +1519,12 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
           const layoutValue = nextLayoutsBySpaceId[options.sourceSpaceId];
           if (isPlainObject(layoutValue) && layoutValue.version === 1) {
-            const layout = filterMagnetSpaceLayoutForImport(sanitizeMagnetSpaceLayout(layoutValue), allowedMagnetIds);
+            const filtered = filterMagnetSpaceLayoutForImportWithReport(
+              sanitizeMagnetSpaceLayout(layoutValue),
+              allowedMagnetIds
+            );
+            recordSkippedImportMagnets(filtered.report.skippedMagnetIds);
+            const { layout } = filtered;
             if (isTauri) {
               await applyMagnetLayoutStorePatches(
                 [{ kind: 'setSpaceLayout', spaceId: options.targetSpaceId, layout }],
@@ -1501,9 +1537,12 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
           const configValue = nextConfigsBySpaceId[options.sourceSpaceId];
           if (isPlainObject(configValue)) {
+            const filtered = filterMagnetConfigSnapshotForImportWithReport(configValue, allowedMagnetIds);
+            recordSkippedImportMagnets(filtered.report.skippedMagnetIds);
+            recordSkippedImportCustomMagnets(filtered.report.skippedCustomMagnetIds);
             await broadcastDataUpdate(
               resolveMagnetConfigStorageKey(options.targetSpaceId),
-              filterMagnetConfigSnapshotForImport(configValue, allowedMagnetIds)
+              filtered.value
             );
           }
 
@@ -1513,13 +1552,26 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         }
       }
 
-      if (options.applyTheme && options.applyMagnets) {
-        setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.message.appliedAll') });
-      } else if (options.applyTheme) {
-        setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.message.themeApplied') });
-      } else {
-        setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.message.magnetsApplied') });
+      let successMessage = options.applyTheme
+        ? options.applyMagnets
+          ? t('editor.theme-editor.profilePack.message.appliedAll')
+          : t('editor.theme-editor.profilePack.message.themeApplied')
+        : t('editor.theme-editor.profilePack.message.magnetsApplied');
+      if (skippedImportMagnetIds.size > 0) {
+        const ids = [...skippedImportMagnetIds].sort();
+        successMessage += ` ${t('editor.theme-editor.profilePack.message.skippedMagnets', {
+          count: ids.length,
+          ids: ids.join(', '),
+        })}`;
       }
+      if (skippedImportCustomMagnetIds.size > 0) {
+        const ids = [...skippedImportCustomMagnetIds].sort();
+        successMessage += ` ${t('editor.theme-editor.profilePack.message.skippedCustomMagnets', {
+          count: ids.length,
+          ids: ids.join(', '),
+        })}`;
+      }
+      setProfilePackMessage({ kind: 'success', text: successMessage });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setProfilePackMessage({

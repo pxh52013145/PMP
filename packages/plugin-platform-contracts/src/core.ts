@@ -447,6 +447,10 @@ export interface PxpManifestV2 {
   requiresCapabilities?: CapabilityRequirement[];
   optionalCapabilities?: CapabilityRequirement[];
   providesCapabilities?: CapabilityProvision[];
+  /**
+   * Declares plugin/resource/host-pack dependencies for future resolvers and review UI.
+   * The current desktop host records this metadata only; it does not auto-install dependencies.
+   */
   dependencies?: DependencyDescriptor[];
   resourceBundles?: ResourceBundleDescriptor[];
   config?: ConfigContributionDescriptor;

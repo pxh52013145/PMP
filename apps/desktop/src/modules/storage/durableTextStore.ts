@@ -6,6 +6,7 @@ export type DurableTextNamespace =
   | 'pmps-fragment'
   | 'migration-backup'
   | 'profile-pack-backup'
+  | 'install-plan-backup'
   | 'plugin-data';
 
 const IDB_DB_NAME = 'pixel-matrix-player';

@@ -11,6 +11,8 @@
     "./core": "./src/core.ts",
     "./runtime-bridge": "./src/runtime-bridge.ts",
     "./host": "./src/host.ts",
+    "./packageManifests": "./src/packageManifests.ts",
+    "./installPlan": "./src/installPlan.ts",
     "./platformCompat": "./src/platformCompat.ts",
     "./utilsTelemetry": "./src/utilsTelemetry.ts"
   },
