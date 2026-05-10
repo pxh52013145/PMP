@@ -1,6 +1,6 @@
-/**
- * 窗口间通信工具
- * 统一管理主窗口和编辑器窗口之间的数据同步
+﻿/**
+ * 绐楀彛闂撮€氫俊宸ュ叿
+ * 缁熶竴绠＄悊涓荤獥鍙ｅ拰缂栬緫鍣ㄧ獥鍙ｄ箣闂寸殑鏁版嵁鍚屾
  */
 
 import { emit, listen, UnlistenFn } from '@tauri-apps/api/event';
@@ -174,15 +174,15 @@ function broadcastChannelMessage(message: WindowCommMessage): void {
 }
 
 /**
- * localStorage 数据 key 定义
+ * localStorage 鏁版嵁 key 瀹氫箟
  */
 export const STORAGE_KEYS = {
-  // === 配置数据（主要数据源） ===
-  CONFIG: 'pixel-matrix-player-config', // 主配置文件（包含 magnet、grid、styleOverride）
-  LOCALE: 'pixel-matrix-locale', // UI locale（i18n）
-  KEYBINDINGS_USER_V1: 'pixel-matrix-keybindings-user-v1', // 用户自定义快捷键（array, VSCode-like rules）
-  // === 运行时数据（辅助/缓存） ===
-  MAGNET_SPACES: 'pixel-matrix-magnet-spaces-v1', // Magnet spaces（active space + list）
+  // === 閰嶇疆鏁版嵁锛堜富瑕佹暟鎹簮锛?===
+  CONFIG: 'pixel-matrix-player-config', // 涓婚厤缃枃浠讹紙鍖呭惈 magnet銆乬rid銆乻tyleOverride锛?
+  LOCALE: 'pixel-matrix-locale', // UI locale锛坕18n锛?
+  KEYBINDINGS_USER_V1: 'pixel-matrix-keybindings-user-v1', // 鐢ㄦ埛鑷畾涔夊揩鎹烽敭锛坅rray, VSCode-like rules锛?
+  // === 杩愯鏃舵暟鎹紙杈呭姪/缂撳瓨锛?===
+  MAGNET_SPACES: 'pixel-matrix-magnet-spaces-v1', // Magnet spaces锛坅ctive space + list锛?
   MAGNET_SPACE_LAYOUT: 'pixel-matrix-magnet-space-layout-v1', // Per-space magnet layout (active ids + anchors)
   MAGNET_CATALOG: 'pixel-matrix-magnet-catalog-v1', // Global custom magnet catalog (templates only, no per-space layout)
   MAGNET_SPACE_PRESETS: 'pixel-matrix-magnet-space-presets-v1', // Per-space layout presets (web fallback; Tauri uses layout store)
@@ -192,57 +192,54 @@ export const STORAGE_KEYS = {
   MAGNET_CHROME_OVERRIDE_MODE_V1: 'pixel-matrix-magnet-chrome-override-mode-v1', // Global magnet chrome override mode (v1)
   MUSIC_PLATFORM_WORKSPACE_OWNERSHIP_V1:
     'pixel-matrix-music-platform-workspace-ownership-v1', // Music platform workspace ownership migration setting
-  BACKGROUND_SETTINGS: 'pixel-matrix-background-settings', // 背景设置
-  BACKGROUND_HISTORY: 'pixel-matrix-background-history', // 背景历史
-  IS_MAXIMIZED: 'pixel-matrix-is-maximized', // 窗口最大化状态
+  BACKGROUND_SETTINGS: 'pixel-matrix-background-settings', // 鑳屾櫙璁剧疆
+  BACKGROUND_HISTORY: 'pixel-matrix-background-history', // 鑳屾櫙鍘嗗彶
+  IS_MAXIMIZED: 'pixel-matrix-is-maximized', // 绐楀彛鏈€澶у寲鐘舵€?
 
-  // === Pixel 渲染配置 ===
-  PIXEL_SHAPE: 'pixel-matrix-pixel-shape', // Pixel 形状
-  PIXEL_SIZE: 'pixel-matrix-pixel-size', // Pixel 尺寸
-  PIXEL_OPACITY: 'pixel-matrix-pixel-opacity', // Pixel 透明度
+  // === Pixel 娓叉煋閰嶇疆 ===
+  PIXEL_SHAPE: 'pixel-matrix-pixel-shape', // Pixel 褰㈢姸
+  PIXEL_SIZE: 'pixel-matrix-pixel-size', // Pixel 灏哄
+  PIXEL_OPACITY: 'pixel-matrix-pixel-opacity', // Pixel 閫忔槑搴?
 
-  // === 窗口效果配置 ===
-  BACKGROUND_EFFECT: 'pixel-matrix-background-effect', // 背景效果
-  BORDER_EFFECT: 'pixel-matrix-border-effect', // 边框效果
-  BACKGROUND_THEME_COLOR: 'pixel-matrix-background-theme-color', // 背景效果主题颜色
-  BORDER_THEME_COLOR: 'pixel-matrix-border-theme-color', // 边框效果主题颜色
+  // === 绐楀彛鏁堟灉閰嶇疆 ===
+  BACKGROUND_EFFECT: 'pixel-matrix-background-effect', // 鑳屾櫙鏁堟灉
+  BORDER_EFFECT: 'pixel-matrix-border-effect', // 杈规鏁堟灉
+  BACKGROUND_THEME_COLOR: 'pixel-matrix-background-theme-color', // 鑳屾櫙鏁堟灉涓婚棰滆壊
+  BORDER_THEME_COLOR: 'pixel-matrix-border-theme-color', // 杈规鏁堟灉涓婚棰滆壊
 
 
-  // === 编辑器临时数据 ===
-  MAGNET_EDITOR_DATA: 'magnet-editor-data', // 编辑中的 Magnet 数据
-  MAGNET_EDITOR_MODE: 'magnet-editor-mode', // 编辑模式（create/edit）
-  CREATOR_WINDOW_OPEN: 'magnet-creator-window-open', // Creator 窗口是否打开
-  EDITOR_STATE: 'pixel-matrix-editor-state', // 编辑器状态（包括选中信息）
+  // === 缂栬緫鍣ㄤ复鏃舵暟鎹?===
+  EDITOR_STATE: 'pixel-matrix-editor-state', // 缂栬緫鍣ㄧ姸鎬侊紙鍖呮嫭閫変腑淇℃伅锛?
 
   // === Native Audio ===
-  NATIVE_AUDIO_OUTPUT_BACKEND: 'pixel-matrix-native-audio-output-backend', // 输出后端 ID（string | null）
-  NATIVE_AUDIO_VOLUME: 'pixel-matrix-native-audio-volume', // Volume（number, 0.0 - 1.0）
-  NATIVE_AUDIO_MUTED: 'pixel-matrix-native-audio-muted', // Muted（boolean）
-  NATIVE_AUDIO_PLAY_MODE: 'pixel-matrix-native-audio-play-mode', // PlayMode（sequence/loop/single-loop/shuffle）
-  NATIVE_AUDIO_INPUT_ID: 'pixel-matrix-native-audio-input-id', // 输入/解码组件 ID（string | null）
-  NATIVE_AUDIO_GAIN_DB: 'pixel-matrix-native-audio-gain-db', // Gain（number，dB）
-  NATIVE_AUDIO_DSP_CHAIN: 'pixel-matrix-native-audio-dsp-chain', // DSP chain（array）
-  NATIVE_AUDIO_DSP_GRAPH: 'pixel-matrix-native-audio-dsp-graph', // DSP graph（object）
-  NATIVE_AUDIO_VST_ENABLED: 'pixel-matrix-native-audio-vst-enabled', // VST enabled（boolean）
-  DSP_RACK_LOCATE_NODE: 'pixel-matrix-dsp-rack-locate-node-v1', // DSP Rack 定位/高亮节点（object）
-  NAVIGATION_REQUEST: 'pixel-matrix-navigation-request-v1', // 跨窗口导航请求（object）
-  NATIVE_AUDIO_REPLAYGAIN_SETTINGS: 'pixel-matrix-native-audio-replaygain-settings', // ReplayGain settings（object）
+  NATIVE_AUDIO_OUTPUT_BACKEND: 'pixel-matrix-native-audio-output-backend', // 杈撳嚭鍚庣 ID锛坰tring | null锛?
+  NATIVE_AUDIO_VOLUME: 'pixel-matrix-native-audio-volume', // Volume锛坣umber, 0.0 - 1.0锛?
+  NATIVE_AUDIO_MUTED: 'pixel-matrix-native-audio-muted', // Muted锛坆oolean锛?
+  NATIVE_AUDIO_PLAY_MODE: 'pixel-matrix-native-audio-play-mode', // PlayMode锛坰equence/loop/single-loop/shuffle锛?
+  NATIVE_AUDIO_INPUT_ID: 'pixel-matrix-native-audio-input-id', // 杈撳叆/瑙ｇ爜缁勪欢 ID锛坰tring | null锛?
+  NATIVE_AUDIO_GAIN_DB: 'pixel-matrix-native-audio-gain-db', // Gain锛坣umber锛宒B锛?
+  NATIVE_AUDIO_DSP_CHAIN: 'pixel-matrix-native-audio-dsp-chain', // DSP chain锛坅rray锛?
+  NATIVE_AUDIO_DSP_GRAPH: 'pixel-matrix-native-audio-dsp-graph', // DSP graph锛坥bject锛?
+  NATIVE_AUDIO_VST_ENABLED: 'pixel-matrix-native-audio-vst-enabled', // VST enabled锛坆oolean锛?
+  DSP_RACK_LOCATE_NODE: 'pixel-matrix-dsp-rack-locate-node-v1', // DSP Rack 瀹氫綅/楂樹寒鑺傜偣锛坥bject锛?
+  NAVIGATION_REQUEST: 'pixel-matrix-navigation-request-v1', // 璺ㄧ獥鍙ｅ鑸姹傦紙object锛?
+  NATIVE_AUDIO_REPLAYGAIN_SETTINGS: 'pixel-matrix-native-audio-replaygain-settings', // ReplayGain settings锛坥bject锛?
   NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS:
-    'pixel-matrix-native-audio-runtime-control-settings', // Runtime control settings（dynamic fallback / volume debounce）
-  NATIVE_AUDIO_CROSSFADE_SETTINGS: 'pixel-matrix-native-audio-crossfade-settings', // Crossfade settings（object）
-  NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS: 'pixel-matrix-native-audio-streaming-buffer-settings', // Streaming buffer settings（object）
-  NATIVE_AUDIO_ENGINE_POLICY: 'pixel-matrix-native-audio-engine-policy', // Engine policy settings（object）
-  NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS: 'pixel-matrix-native-audio-dynamic-src-settings', // Dynamic SRC auto settings（object）
+    'pixel-matrix-native-audio-runtime-control-settings', // Runtime control settings锛坉ynamic fallback / volume debounce锛?
+  NATIVE_AUDIO_CROSSFADE_SETTINGS: 'pixel-matrix-native-audio-crossfade-settings', // Crossfade settings锛坥bject锛?
+  NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS: 'pixel-matrix-native-audio-streaming-buffer-settings', // Streaming buffer settings锛坥bject锛?
+  NATIVE_AUDIO_ENGINE_POLICY: 'pixel-matrix-native-audio-engine-policy', // Engine policy settings锛坥bject锛?
+  NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS: 'pixel-matrix-native-audio-dynamic-src-settings', // Dynamic SRC auto settings锛坥bject锛?
   NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE:
-    'pixel-matrix-native-audio-dynamic-src-learning-profile', // Dynamic SRC learned stress profile（object）
+    'pixel-matrix-native-audio-dynamic-src-learning-profile', // Dynamic SRC learned stress profile锛坥bject锛?
   NATIVE_AUDIO_TUNING_AUTO_SETTINGS:
-    'pixel-matrix-native-audio-tuning-auto-settings', // Auto tuning controller settings（object）
+    'pixel-matrix-native-audio-tuning-auto-settings', // Auto tuning controller settings锛坥bject锛?
 
   // === VST3 ===
-  VST_SCAN_SETTINGS: 'pixel-matrix-vst3-scan-settings-v1', // VST3 扫描设置（object，含 scan paths）
+  VST_SCAN_SETTINGS: 'pixel-matrix-vst3-scan-settings-v1', // VST3 鎵弿璁剧疆锛坥bject锛屽惈 scan paths锛?
 
   // === Extensions ===
-  EXTENSIONS_V2: 'pixel-matrix-installed-extensions-v2', // 已安装 manifest-v2 扩展
+  EXTENSIONS_V2: 'pixel-matrix-installed-extensions-v2', // 宸插畨瑁?manifest-v2 鎵╁睍
   EXTENSIONS_V2_AUDIT_LOG_V1: 'pixel-matrix-installed-extensions-v2-audit-log-v1', // manifest-v2 governance audit log
   EXTENSIONS_V2_RUNTIME_RESTART_V1: 'pixel-matrix-installed-extensions-v2-runtime-restart-v1', // manifest-v2 runtime restart request
   EXTENSIONS_V2_DEV_SESSIONS_V1: 'pixel-matrix-installed-extensions-v2-dev-sessions-v1', // manifest-v2 development sessions
@@ -250,7 +247,7 @@ export const STORAGE_KEYS = {
     'pixel-matrix-plugin-magnet-creator-draft-v1', // Host-side plugin magnet creator draft
 
   // === Shader Packs (.pmps) ===
-  PMPS_SHADERS: 'pixel-matrix-pmps-shaders', // 已安装 shader pack（manifest + fragmentCode）
+  PMPS_SHADERS: 'pixel-matrix-pmps-shaders', // 宸插畨瑁?shader pack锛坢anifest + fragmentCode锛?
   PMPS_DURABLE_MIGRATION_V1: 'pixel-matrix-pmps-durable-migration-v1', // durable migration state flag (R3)
   PMPS_DURABLE_MIGRATION_V1_REPORT: 'pixel-matrix-pmps-durable-migration-v1-report', // migration report (R3)
   PMPS_MAGNET_SHADER_BINDINGS: 'pixel-matrix-pmps-magnet-shader-bindings', // Magnet -> shader binding
@@ -321,10 +318,10 @@ export const STORAGE_KEYS = {
 } as const;
 
 /**
- * Tauri 事件名称定义
+ * Tauri 浜嬩欢鍚嶇О瀹氫箟
  */
 export const TAURI_EVENTS = {
-  // Magnet 相关
+  // Magnet 鐩稿叧
   MAGNET_LIBRARY_UPDATED: 'magnet-library-updated',
   MAGNET_ACTIVATED: 'magnet-activated',
   MAGNET_DEACTIVATED: 'magnet-deactivated',
@@ -334,44 +331,42 @@ export const TAURI_EVENTS = {
   MAGNET_LIBRARY_FOCUS_REQUESTED: 'magnet-library-focus-requested',
   MAGNET_CHROME_OVERRIDE_MODE_UPDATED: 'magnet-chrome-override-mode-updated',
 
-  // 背景相关
+  // 鑳屾櫙鐩稿叧
   BACKGROUND_UPDATED: 'background-updated',
   MUSIC_LIBRARY_SYNC_STATUS_UPDATED: 'music-library-sync-status-updated',
   MUSIC_LIBRARY_SCHEMA_CHANGED: 'music-library-schema-changed',
   MUSIC_PLATFORM_WORKSPACE_OWNERSHIP_UPDATED:
     'music-platform-workspace-ownership-updated',
 
-  // Pixel 渲染相关
+  // Pixel 娓叉煋鐩稿叧
   PIXEL_SHAPE_UPDATED: 'pixel-shape-updated',
   PIXEL_SIZE_UPDATED: 'pixel-size-updated',
   PIXEL_OPACITY_UPDATED: 'pixel-opacity-updated',
   BACKGROUND_RENDER_POLICY_UPDATED: 'background-render-policy-updated',
   UI_QUALITY_SETTINGS_UPDATED: 'ui-quality-settings-updated',
 
-  // 窗口效果相关
+  // 绐楀彛鏁堟灉鐩稿叧
   BACKGROUND_EFFECT_UPDATED: 'background-effect-updated',
   BORDER_EFFECT_UPDATED: 'border-effect-updated',
   BACKGROUND_THEME_COLOR_UPDATED: 'background-theme-color-updated',
   BORDER_THEME_COLOR_UPDATED: 'border-theme-color-updated',
 
-  // 编辑器相关
+  // 缂栬緫鍣ㄧ浉鍏?
   EDITOR_EXIT: 'editor-exit',
   EDITOR_STYLE_APPLY: 'editor-style-apply',
   EDITOR_LAYOUT_UNDO: 'editor-layout-undo',
   EDITOR_LAYOUT_REDO: 'editor-layout-redo',
-  EDITOR_STATE_UPDATED: 'editor-state-updated', // 编辑器状态更新（选中区域等）
-  EDITOR_WINDOW_HIDDEN: 'editor-window-hidden', // Rust 侧拦截 close 并 hide 后的通知
-  EDITOR_WINDOW_SHOWN: 'editor-window-shown', // Rust 侧 show/unminimize 后的通知
+  EDITOR_STATE_UPDATED: 'editor-state-updated', // 缂栬緫鍣ㄧ姸鎬佹洿鏂帮紙閫変腑鍖哄煙绛夛級
+  EDITOR_WINDOW_HIDDEN: 'editor-window-hidden', // Rust 渚ф嫤鎴?close 骞?hide 鍚庣殑閫氱煡
+  EDITOR_WINDOW_SHOWN: 'editor-window-shown', // Rust 渚?show/unminimize 鍚庣殑閫氱煡
   EDITOR_LOW_PERFORMANCE_MODE_UPDATED: 'editor-low-performance-mode-updated',
   EDITOR_OVERLAY_PIXEL_HINTS_UPDATED: 'editor-overlay-pixel-hints-updated',
   ORNAMENTS_UPDATED: 'ornaments-updated',
   ORNAMENTS_EDIT_SESSION_STARTED: 'ornaments-edit-session-started',
   ORNAMENTS_EDIT_SESSION_ENDED: 'ornaments-edit-session-ended',
   ORNAMENTS_SELECTION_CHANGED: 'ornaments-selection-changed',
-  CREATOR_WINDOW_OPENED: 'creator-window-opened',
-  CREATOR_WINDOW_CLOSED: 'creator-window-closed',
 
-  // 主窗口可见性
+  // 涓荤獥鍙ｅ彲瑙佹€?
   MAIN_WINDOW_HIDDEN: 'main-window-hidden',
   MAIN_WINDOW_SHOWN: 'main-window-shown',
   MAIN_WINDOW_CLOSE_REQUESTED: 'main-window-close-requested',
@@ -443,7 +438,7 @@ export const TAURI_EVENTS = {
 } as const;
 
 /**
- * 发送数据更新（双重机制：localStorage + Tauri 事件）
+ * 鍙戦€佹暟鎹洿鏂帮紙鍙岄噸鏈哄埗锛歭ocalStorage + Tauri 浜嬩欢锛?
  */
 export async function broadcastDataUpdate<T>(
   storageKey: string,
@@ -451,7 +446,7 @@ export async function broadcastDataUpdate<T>(
   tauriEvent?: string
 ): Promise<void> {
   try {
-    // 1. 更新 localStorage
+    // 1. 鏇存柊 localStorage
     const serializedPayload = JSON.stringify(data);
     if (serializedPayload === undefined) {
       telemetry.warn('window-communication.broadcast-data.json-empty', {
@@ -489,7 +484,7 @@ export async function broadcastDataUpdate<T>(
     // Cross-window notification (fast, no backend dependency)
     broadcastChannelMessage({ kind: 'data-update', key: storageKey, timestamp });
 
-    // 2. 发送 Tauri 事件（如果提供）
+    // 2. 鍙戦€?Tauri 浜嬩欢锛堝鏋滄彁渚涳級
     if (tauriEvent && isTauriRuntime()) {
       recordEmit(tauriEvent);
       void emit(tauriEvent, { timestamp, key: storageKey }).catch((error) => {
@@ -517,7 +512,7 @@ export async function broadcastDataUpdate<T>(
 }
 
 /**
- * 发送信号（只触发事件，不存储数据）
+ * 鍙戦€佷俊鍙凤紙鍙Е鍙戜簨浠讹紝涓嶅瓨鍌ㄦ暟鎹級
  */
 export async function broadcastSignal(tauriEvent: string): Promise<void> {
   const timestamp = Date.now();
@@ -548,7 +543,7 @@ export async function broadcastSignal(tauriEvent: string): Promise<void> {
 }
 
 /**
- * 从 localStorage 读取数据
+ * 浠?localStorage 璇诲彇鏁版嵁
  */
 export function readData<T>(storageKey: string): T | null {
   try {
@@ -566,7 +561,7 @@ export function readData<T>(storageKey: string): T | null {
 }
 
 /**
- * 设置 localStorage 事件监听器
+ * 璁剧疆 localStorage 浜嬩欢鐩戝惉鍣?
  */
 export function setupStorageListener(
   keys: string[],
@@ -593,7 +588,7 @@ export function setupStorageListener(
 }
 
 /**
- * 设置 Tauri 事件监听器
+ * 璁剧疆 Tauri 浜嬩欢鐩戝惉鍣?
  */
 export async function setupTauriListener(
   eventName: string,
@@ -623,7 +618,7 @@ export async function setupTauriListener(
 }
 
 /**
- * 设定带 payload 的 Tauri 事件监听器
+ * 璁惧畾甯?payload 鐨?Tauri 浜嬩欢鐩戝惉鍣?
  */
 export async function setupTauriListenerWithPayload<T>(
   eventName: string,
@@ -653,14 +648,14 @@ export async function setupTauriListenerWithPayload<T>(
 }
 
 /**
- * 设置双重监听器（localStorage + Tauri 事件）
+ * 璁剧疆鍙岄噸鐩戝惉鍣紙localStorage + Tauri 浜嬩欢锛?
  */
 export async function setupDualListener(
   storageKeys: string[],
   tauriEvents: string[],
   callback: () => void
 ): Promise<() => void> {
-  // 设置 localStorage 监听
+  // 璁剧疆 localStorage 鐩戝惉
   let scheduled = false;
   const run = () => {
     if (scheduled) return;
@@ -682,7 +677,7 @@ export async function setupDualListener(
     run();
   });
 
-  // 设置 Tauri 事件监听
+  // 璁剧疆 Tauri 浜嬩欢鐩戝惉
   const handleLocalComm = (event: Event) => {
     const detail = (event as CustomEvent<WindowCommMessage>).detail;
     if (!detail) return;
@@ -737,7 +732,7 @@ export async function setupDualListener(
     }
   }
 
-  // 返回统一的清理函数
+  // 杩斿洖缁熶竴鐨勬竻鐞嗗嚱鏁?
   return () => {
     unlistenStorage();
     window.removeEventListener(LOCAL_COMM_EVENT, handleLocalComm as EventListener);
@@ -747,13 +742,13 @@ export async function setupDualListener(
 }
 
 /**
- * 通用的配置重新加载函数类型
+ * 閫氱敤鐨勯厤缃噸鏂板姞杞藉嚱鏁扮被鍨?
  */
 export type ConfigReloadFn = () => void;
 
 /**
- * 创建配置同步 Hook 的工具函数
- * 用于在主窗口和编辑器窗口中复用相同的同步逻辑
+ * 鍒涘缓閰嶇疆鍚屾 Hook 鐨勫伐鍏峰嚱鏁?
+ * 鐢ㄤ簬鍦ㄤ富绐楀彛鍜岀紪杈戝櫒绐楀彛涓鐢ㄧ浉鍚岀殑鍚屾閫昏緫
  */
 export async function setupConfigSync(
   storageKeys: string[],

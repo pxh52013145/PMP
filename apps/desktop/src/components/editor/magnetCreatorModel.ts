@@ -43,6 +43,8 @@ export interface BuildEditorMagnetOptions {
   animation?: Magnet['animation'];
   chromeInset?: MagnetInsetConfig;
   chromeOutset?: MagnetInsetConfig;
+  variant?: string | null;
+  skinProps?: Record<string, unknown> | null;
 }
 
 export function createEmptyInsetDraft(): InsetDraft {
@@ -201,8 +203,10 @@ export function buildEditorMagnet({
   animation,
   chromeInset,
   chromeOutset,
+  variant,
+  skinProps,
 }: BuildEditorMagnetOptions): Magnet {
-  return {
+  const magnet: Magnet = {
     ...(seedMagnet ?? {}),
     id,
     type: seedMagnet?.type ?? fallbackType,
@@ -217,6 +221,41 @@ export function buildEditorMagnet({
     state: 'idle',
     interactions: seedMagnet?.interactions ?? fallbackInteractions,
   };
+
+  if (variant !== undefined) {
+    const normalizedVariant = normalizeMagnetVariant(variant);
+    if (normalizedVariant) {
+      magnet.variant = normalizedVariant;
+    } else {
+      delete magnet.variant;
+    }
+  }
+
+  if (skinProps !== undefined) {
+    if (skinProps && Object.keys(skinProps).length > 0) {
+      magnet.skinProps = skinProps;
+    } else {
+      delete magnet.skinProps;
+    }
+  }
+
+  return magnet;
+}
+
+export function normalizeMagnetVariant(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+export function parseMagnetSkinPropsDraft(value: string): Record<string, unknown> | null {
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('skinProps-must-be-object');
+  }
+
+  const skinProps = parsed as Record<string, unknown>;
+  return Object.keys(skinProps).length > 0 ? skinProps : null;
 }
 
 function toComparableMagnetConfig(magnet: Magnet) {
@@ -224,6 +263,9 @@ function toComparableMagnetConfig(magnet: Magnet) {
     id: magnet.id,
     type: magnet.type,
     name: magnet.name,
+    renderer: magnet.renderer ?? null,
+    variant: magnet.variant ?? null,
+    skinProps: magnet.skinProps ?? null,
     anchorType: magnet.anchorType,
     anchors: magnet.anchors,
     bounds: magnet.bounds,

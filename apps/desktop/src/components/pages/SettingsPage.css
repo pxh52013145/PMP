@@ -2934,3 +2934,296 @@
   color: rgba(255, 255, 255, 0.52);
   word-break: break-word;
 }
+
+.settings-plugin-studio {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-plugin-studio-header {
+  align-items: center;
+}
+
+.settings-plugin-studio-header-actions,
+.settings-plugin-studio-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-plugin-studio-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-plugin-studio-metric {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.settings-plugin-studio-metric span {
+  display: block;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.settings-plugin-studio-metric strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.settings-plugin-studio-shell {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.settings-plugin-studio-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-plugin-studio-nav-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(255, 255, 255, 0.78);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-plugin-studio-nav-item[data-active='true'] {
+  border-color: rgba(var(--settings-accent-rgb), 0.45);
+  background: rgba(var(--settings-accent-rgb), 0.1);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.settings-plugin-studio-nav-item span {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settings-plugin-studio-nav-item small {
+  font-size: 11px;
+  line-height: 1.25;
+  color: rgba(255, 255, 255, 0.52);
+}
+
+.settings-plugin-studio-panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-plugin-studio-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-plugin-studio-panel-head h3 {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 15px;
+}
+
+.settings-plugin-studio-panel-head p {
+  margin: 4px 0 0;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 12px;
+}
+
+.settings-plugin-studio-stack,
+.settings-plugin-studio-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-plugin-studio-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-plugin-studio-two-pane {
+  display: grid;
+  grid-template-columns: minmax(190px, 250px) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.settings-plugin-studio-listbox {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-plugin-studio-listbox-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(255, 255, 255, 0.8);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-plugin-studio-listbox-item[data-active='true'] {
+  border-color: rgba(var(--settings-accent-rgb), 0.45);
+  background: rgba(var(--settings-accent-rgb), 0.09);
+}
+
+.settings-plugin-studio-listbox-item span {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-plugin-studio-listbox-item small {
+  color: rgba(255, 255, 255, 0.52);
+  font-size: 11px;
+}
+
+.settings-plugin-studio-detail,
+.settings-plugin-studio-report,
+.settings-plugin-studio-renderer,
+.settings-plugin-studio-diagnostic {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.settings-plugin-studio-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-plugin-studio-definition-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
+  gap: 6px 12px;
+  font-size: 12px;
+}
+
+.settings-plugin-studio-definition-grid span {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.settings-plugin-studio-definition-grid strong {
+  min-width: 0;
+  color: rgba(255, 255, 255, 0.82);
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.settings-plugin-studio-section-title {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.settings-plugin-studio-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+}
+
+.settings-plugin-studio-code-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-plugin-studio-code,
+.settings-plugin-studio-textarea {
+  width: 100%;
+  min-width: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.28);
+  color: rgba(255, 255, 255, 0.78);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.settings-plugin-studio-textarea {
+  min-height: 150px;
+  resize: vertical;
+  outline: none;
+}
+
+.settings-plugin-studio-note {
+  padding: 10px 12px;
+  border-left: 2px solid rgba(var(--settings-accent-rgb), 0.58);
+  background: rgba(var(--settings-accent-rgb), 0.06);
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-plugin-studio-report-list,
+.settings-plugin-studio-renderer-list,
+.settings-plugin-studio-diagnostic-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-plugin-studio-report,
+.settings-plugin-studio-renderer,
+.settings-plugin-studio-diagnostic {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.settings-plugin-studio-diagnostic[data-severity='error'] {
+  border-color: rgba(255, 69, 58, 0.36);
+}
+
+.settings-plugin-studio-diagnostic[data-severity='warning'],
+.settings-plugin-tag--warning {
+  border-color: rgba(255, 184, 77, 0.42);
+  color: rgba(255, 214, 153, 0.96);
+  background: rgba(255, 184, 77, 0.08);
+}
+
+@media (max-width: 980px) {
+  .settings-plugin-studio-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-plugin-studio-shell,
+  .settings-plugin-studio-two-pane,
+  .settings-plugin-studio-columns,
+  .settings-plugin-studio-code-grid {
+    grid-template-columns: 1fr;
+  }
+}

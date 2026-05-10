@@ -870,7 +870,6 @@ fn shell_menu_required_permission(command_id: &str) -> Option<Option<&'static st
         | "app:open-theme-editor-window"
         | "app:open-debug-editor-window"
         | "app:open-control-editor-window"
-        | "app:open-creator-editor-window"
         | "app:open-custom-background-editor-window"
         | "app:open-statistics-editor-window"
         | "app:open-library-editor-window"

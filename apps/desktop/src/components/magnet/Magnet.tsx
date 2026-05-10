@@ -33,7 +33,10 @@ import {
 } from '../../modules/magnets/runtimeStyle';
 import { useSkinSurfaceModel } from '../../themes/skinSurface';
 import type { ThemeBindingId, ThemeMotionChannelSpec } from '../../themes/types/theme';
-import { useMagnetSkin } from '../../themes/useMagnetSkin';
+import {
+  MagnetSkinInstanceDefaultsProvider,
+  useMagnetSkin,
+} from '../../themes/useMagnetSkin';
 import type { MagnetSceneAnimation } from './magnetSceneRuntime';
 import './Magnet.css';
 
@@ -54,6 +57,10 @@ type MagnetShellStyle = React.CSSProperties & {
   '--pmp-magnet-z': number;
 };
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 function MagnetComponentImpl({
   magnet,
   pixelPositions,
@@ -67,10 +74,22 @@ function MagnetComponentImpl({
   disableMotion = false,
 }: MagnetProps) {
   const lowRenderMode = import.meta.env.VITE_PERF_NEXT_LOW_RENDER === '1';
+  const rendererId = magnet.renderer ?? magnet.id;
+  const magnetSkinDefaults = useMemo(
+    () => ({
+      magnetId: magnet.id,
+      rendererId,
+      ...(typeof magnet.variant === 'string' && magnet.variant.trim().length > 0
+        ? { variant: magnet.variant.trim() }
+        : {}),
+      ...(isPlainObject(magnet.skinProps) ? { props: magnet.skinProps } : {}),
+    }),
+    [magnet.id, magnet.skinProps, magnet.variant, rendererId]
+  );
   const magnetBindingId = `magnet.${magnet.id}` as ThemeBindingId;
   const magnetSkin = useMagnetSkin(magnet.id, {
-    defaultRendererId: magnet.renderer ?? magnet.id,
-    defaultVariant: 'default',
+    defaultRendererId: rendererId,
+    defaultVariant: magnetSkinDefaults.variant ?? 'default',
   });
   const magnetSurface = useSkinSurfaceModel(magnetBindingId);
   const [isHovering, setIsHovering] = useState(false);
@@ -464,7 +483,6 @@ function MagnetComponentImpl({
 
   const renderedContent = useMemo(() => {
     void rendererRevision;
-    const rendererId = magnet.renderer ?? magnet.id;
     const rendererEntry =
       getMagnetRenderer(rendererId) ??
       (rendererId === magnet.id ? null : getMagnetRenderer(magnet.id));
@@ -475,7 +493,7 @@ function MagnetComponentImpl({
     }
 
     return magnet.content;
-  }, [magnet.renderer, magnet.id, magnet.content, rendererRevision]);
+  }, [rendererId, magnet.id, magnet.content, rendererRevision]);
 
   if (!layoutBounds || !shellStyle) return null;
 
@@ -521,24 +539,26 @@ function MagnetComponentImpl({
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      {chromeEnabled ? (
-        <div
-          {...chromeRootProps}
-          data-surface-id={magnetBindingId}
-          data-surface-variant={magnetSurface.variant}
-        >
-          <div className="magnet-base-layer" style={chromeBaseStyle} />
-          <div className="magnet-content-layer" style={rendererStyle}>{renderedContent}</div>
-        </div>
-      ) : (
-        <div
-          {...rendererRootProps}
-          data-surface-id={magnetBindingId}
-          data-surface-variant={magnetSurface.variant}
-        >
-          {renderedContent}
-        </div>
-      )}
+      <MagnetSkinInstanceDefaultsProvider value={magnetSkinDefaults}>
+        {chromeEnabled ? (
+          <div
+            {...chromeRootProps}
+            data-surface-id={magnetBindingId}
+            data-surface-variant={magnetSurface.variant}
+          >
+            <div className="magnet-base-layer" style={chromeBaseStyle} />
+            <div className="magnet-content-layer" style={rendererStyle}>{renderedContent}</div>
+          </div>
+        ) : (
+          <div
+            {...rendererRootProps}
+            data-surface-id={magnetBindingId}
+            data-surface-variant={magnetSurface.variant}
+          >
+            {renderedContent}
+          </div>
+        )}
+      </MagnetSkinInstanceDefaultsProvider>
     </div>
   );
 }

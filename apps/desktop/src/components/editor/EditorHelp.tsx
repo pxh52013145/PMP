@@ -49,13 +49,6 @@ export const EditorHelp = memo(function EditorHelp() {
               </div>
             </div>
 
-            <div className="help-item">
-              <div className="help-icon">➕</div>
-              <div className="help-text">
-                <strong>{t('editor.help.basic.importMagnet.title')}</strong>
-                <p>{t('editor.help.basic.importMagnet.desc')}</p>
-              </div>
-            </div>
           </div>
         </section>
 
@@ -178,7 +171,6 @@ export const EditorHelp = memo(function EditorHelp() {
             <ul>
               <li>{t('editor.help.tips.stats')}</li>
               <li>{t('editor.help.tips.preview')}</li>
-              <li>{t('editor.help.tips.exportTemplate')}</li>
               <li>{t('editor.help.tips.occupancy')}</li>
               <li>{t('editor.help.tips.builtinDelete')}</li>
             </ul>

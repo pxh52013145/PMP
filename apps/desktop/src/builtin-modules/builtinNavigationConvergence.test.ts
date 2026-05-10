@@ -330,9 +330,6 @@ describe('builtin navigation convergence', () => {
     const controlEditorResult = await api.host.invokeCapability('host.pmp.shell.menu', 'activateItem', {
       itemId: 'app:open-control-editor-window',
     });
-    const creatorEditorResult = await api.host.invokeCapability('host.pmp.shell.menu', 'activateItem', {
-      itemId: 'app:open-creator-editor-window',
-    });
     const customBackgroundEditorResult = await api.host.invokeCapability(
       'host.pmp.shell.menu',
       'activateItem',
@@ -467,14 +464,6 @@ describe('builtin navigation convergence', () => {
       ok: true,
       data: {
         itemId: 'app:open-control-editor-window',
-        activated: true,
-        requiredPermission: 'api:window',
-      },
-    });
-    expect(creatorEditorResult).toEqual({
-      ok: true,
-      data: {
-        itemId: 'app:open-creator-editor-window',
         activated: true,
         requiredPermission: 'api:window',
       },
@@ -662,18 +651,6 @@ describe('builtin navigation convergence', () => {
         y: undefined,
       },
       'app:open-control-editor-window'
-    );
-    expect(mocks.openBuiltinWindowViaHostCapabilityMock).toHaveBeenCalledWith(
-      navigation,
-      {
-        windowId: 'editor:creator',
-        title: undefined,
-        width: undefined,
-        height: undefined,
-        x: undefined,
-        y: undefined,
-      },
-      'app:open-creator-editor-window'
     );
     expect(mocks.openBuiltinWindowViaHostCapabilityMock).toHaveBeenCalledWith(
       navigation,

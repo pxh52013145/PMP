@@ -41,7 +41,6 @@ const BUILTIN_EDITOR_WINDOW_CAPABILITY_IDS: Record<EditorWindowType, string> = {
   'style-cover-color': 'editor-style-cover-color',
   'style-background-effect': 'editor-style-background-effect',
   'style-border-effect': 'editor-style-border-effect',
-  creator: 'editor-creator',
   background: 'editor-background',
   'custom-background': 'editor-custom-background',
   theme: 'editor-theme',

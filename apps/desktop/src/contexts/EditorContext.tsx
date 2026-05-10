@@ -4,14 +4,11 @@
 
 import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import { Magnet } from '../types/pixel';
-import { EditorState, PixelOccupancy, MagnetValidationResult } from '../types/editor';
+import { EditorState, PixelOccupancy } from '../types/editor';
 import {
   calculatePixelOccupancy,
-  validateMagnetImport,
-  findFreeArea,
   calculateNewAnchors,
   checkMagnetCollision,
-  getMagnetOccupiedPixels,
 } from '../utils/magnetEditor';
 import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate } from '../utils/windowCommunication';
 
@@ -36,7 +33,6 @@ interface EditorContextType {
   updateDrag: (x: number, y: number) => void;
   endDrag: () => void;
   setHoverPixel: (x: number | null, y: number | null) => void;
-  importMagnet: (data: unknown) => MagnetValidationResult;
   moveMagnet: (magnetId: string, deltaX: number, deltaY: number) => boolean;
   updateOccupancy: (magnets: Magnet[]) => void;
 }
@@ -279,52 +275,6 @@ export function EditorProvider({ children, magnets }: { children: ReactNode; mag
     }));
   }, []);
 
-  // 导入 Magnet
-  const importMagnet = useCallback(
-    (data: unknown): MagnetValidationResult => {
-      const result = validateMagnetImport(data);
-      if (!result.valid || !result.magnet) {
-        return result;
-      }
-
-      // 检查是否与现有 Magnet 冲突
-      const magnet = result.magnet;
-      const occupiedPixels = getMagnetOccupiedPixels(magnet);
-      const hasConflict = occupiedPixels.some((pixel) => {
-        const key = `${pixel.x},${pixel.y}`;
-        const occupancy = occupancyMap.get(key);
-        return occupancy?.isOccupied;
-      });
-
-      if (hasConflict) {
-        // 尝试自动查找空闲区域
-        const size = calculateMagnetSize(magnet);
-        const freeArea = findFreeArea(occupancyMap, size);
-
-        if (!freeArea.found || !freeArea.position) {
-          return {
-            ...result,
-            valid: false,
-            errors: ['无法找到足够的空闲区域来放置 Magnet'],
-          };
-        }
-
-        // 更新锚点到空闲位置
-        const deltaX = freeArea.position.x - magnet.anchors[0].gridX;
-        const deltaY = freeArea.position.y - magnet.anchors[0].gridY;
-        magnet.anchors = calculateNewAnchors(magnet, deltaX, deltaY);
-
-        result.warnings.push(
-          `Magnet 已自动移动到空闲位置 (${freeArea.position.x}, ${freeArea.position.y})`
-        );
-      }
-
-      return result;
-    },
-    [occupancyMap]
-  );
-
-  // 移动 Magnet
   const moveMagnet = useCallback(
     (magnetId: string, deltaX: number, deltaY: number): boolean => {
       const magnet = magnets.find((m) => m.id === magnetId);
@@ -356,7 +306,6 @@ export function EditorProvider({ children, magnets }: { children: ReactNode; mag
     updateDrag,
     endDrag,
     setHoverPixel,
-    importMagnet,
     moveMagnet,
     updateOccupancy,
   };
@@ -370,29 +319,4 @@ export function useEditor(): EditorContextType {
     throw new Error('useEditor must be used within EditorProvider');
   }
   return context;
-}
-
-/**
- * 辅助函数：计算 Magnet 尺寸
- */
-function calculateMagnetSize(magnet: Magnet): { width: number; height: number } {
-  switch (magnet.anchorType) {
-    case 'single':
-      return { width: 1, height: 1 };
-    case 'horizontal': {
-      const width = Math.abs(magnet.anchors[1].gridX - magnet.anchors[0].gridX) + 1;
-      return { width, height: 1 };
-    }
-    case 'vertical': {
-      const height = Math.abs(magnet.anchors[1].gridY - magnet.anchors[0].gridY) + 1;
-      return { width: 1, height };
-    }
-    case 'rectangular': {
-      const width = Math.abs(magnet.anchors[1].gridX - magnet.anchors[0].gridX) + 1;
-      const height = Math.abs(magnet.anchors[2].gridY - magnet.anchors[0].gridY) + 1;
-      return { width, height };
-    }
-    default:
-      return { width: 1, height: 1 };
-  }
 }

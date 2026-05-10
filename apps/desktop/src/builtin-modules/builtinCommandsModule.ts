@@ -151,15 +151,6 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
         });
 
         registerWindowOpenCommand({
-          id: 'app:open-creator-editor-window',
-          titleKey: 'commands.app.open-creator-editor-window.title',
-          descriptionKey: 'commands.app.open-creator-editor-window.description',
-          group: 'editor',
-          order: 7,
-          windowId: 'editor:creator',
-        });
-
-        registerWindowOpenCommand({
           id: 'app:open-custom-background-editor-window',
           titleKey: 'commands.app.open-custom-background-editor-window.title',
           descriptionKey: 'commands.app.open-custom-background-editor-window.description',

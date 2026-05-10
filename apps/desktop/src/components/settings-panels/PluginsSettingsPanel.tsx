@@ -1,20 +1,34 @@
-import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { removeMagnetCatalogMagnet, upsertMagnetCatalogMagnet, useMagnetConfig } from '../../modules/magnets';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { useKernel } from '../../contexts/KernelContext';
 import { GOVERNANCE_SERVICE_TOKEN } from '../../services/governance';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import { useT } from '../../i18n';
-import { listRegisteredMagnetRenderers } from '../../magnet-system/registry';
+import {
+  STORAGE_KEYS,
+  TAURI_EVENTS,
+  broadcastDataUpdate,
+} from '../../utils/windowCommunication';
+import {
+  getMagnetRenderersRevision,
+  listRegisteredMagnetRenderers,
+  subscribeMagnetRenderers,
+} from '../../magnet-system/registry';
+import { listMagnetVariants } from '../../magnet-system/variantRegistry';
+import { REQUIRED_MAGNET_IDS } from '../../constants/magnets';
+import { getMagnetDisplayName } from '../../modules/magnets/display';
 import { installPmpsShaderPackFromZipBytes, parsePmpsShaderPackFromZipBytes } from '../../shader-system/pmps';
 import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
 import {
   openBuiltinPluginPageViaHostCapability,
   openBuiltinPluginWindowViaHostCapability,
   openBuiltinPluginVisualizerViaHostCapability,
+  openBuiltinWindowViaHostCapability,
+  navigateBuiltinViaHostCapability,
 } from '../../builtin-modules/builtinNavigationCapabilityBridge';
 import { useConfirmDialog } from '../core/ConfirmDialog';
-import { PmpButton, PmpCard, PmpCheckbox } from '../primitives';
+import { PmpButton, PmpCard, PmpCheckbox, PmpChoiceButton } from '../primitives';
 import {
   clearInstalledExtensionQuarantine,
   getInstalledExtensionRecord,
@@ -79,10 +93,17 @@ import {
   subscribePluginDevSessions,
   type PluginDevSessionRecord,
 } from '../../magnet-system/plugins/devSessionRegistry';
-
-function readInstalledExtensionDisplayName(record: InstalledHostExtensionRecord): string {
-  return record.manifest.identity.displayName ?? record.manifest.identity.name;
-}
+import {
+  PLUGIN_STUDIO_WORKSPACES,
+  buildPluginStudioDiagnostics,
+  buildPluginStudioMetrics,
+  getPluginStudioDiagnosticAreaLabelKey,
+  getPluginStudioDiagnosticSeverityLabelKey,
+  readInstalledExtensionDisplayName,
+  resolveMagnetRendererId,
+  type PluginStudioDiagnostic,
+  type PluginStudioWorkspaceId,
+} from './pluginStudioModel';
 
 function getInstalledExtensionPrimarySurfaceKind(
   record: InstalledHostExtensionRecord
@@ -286,6 +307,35 @@ function resolvePromptSpaceModeAsCreateNewSpaces(
   };
 }
 
+type PackageImportReport = {
+  id: string;
+  kind: 'manifest-v2' | 'pmpe' | 'pmpex';
+  title: string;
+  status: 'ready' | 'installed' | 'blocked' | 'cancelled';
+  detail: string;
+  diagnostics: Array<{ severity: string; code: string; message: string }>;
+  createdAt: number;
+};
+
+function getPackageReportStatusKey(status: PackageImportReport['status']): string {
+  switch (status) {
+    case 'ready':
+      return 'settings.plugins.studio.package.report.status.ready';
+    case 'installed':
+      return 'settings.plugins.studio.package.report.status.installed';
+    case 'blocked':
+      return 'settings.plugins.studio.package.report.status.blocked';
+    case 'cancelled':
+      return 'settings.plugins.studio.package.report.status.cancelled';
+    default:
+      return 'settings.plugins.studio.package.report.status.blocked';
+  }
+}
+
+function safeJsonStringify(value: unknown): string {
+  return JSON.stringify(value ?? {}, null, 2);
+}
+
 export function PluginsSettingsPanel() {
   const kernel = useKernel();
   const t = useT();
@@ -295,13 +345,23 @@ export function PluginsSettingsPanel() {
   const installedExtensionRuntimeManager = kernel.services.get(
     INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN
   );
-  const { activeMagnetIds, activateMagnet, deactivateMagnet, magnetLibrary, setMagnetLibrary } =
+  const {
+    activeMagnetIds,
+    activateMagnet,
+    deactivateMagnet,
+    magnetLibrary,
+    setMagnetLibrary,
+  } =
     useMagnetConfig();
   const isTauri = isTauriRuntime();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeWorkspace, setActiveWorkspace] =
+    useState<PluginStudioWorkspaceId>('installed');
+  const [selectedMagnetId, setSelectedMagnetId] = useState<string | null>(null);
+  const [packageReports, setPackageReports] = useState<PackageImportReport[]>([]);
   const extensionStoreRevision = useSyncExternalStore(
     subscribeInstalledExtensions,
     getInstalledExtensionsRevision,
@@ -316,6 +376,11 @@ export function PluginsSettingsPanel() {
     subscribePluginDevSessions,
     getPluginDevSessionsRevision,
     getPluginDevSessionsRevision
+  );
+  const rendererRegistryRevision = useSyncExternalStore(
+    subscribeMagnetRenderers,
+    getMagnetRenderersRevision,
+    getMagnetRenderersRevision
   );
 
   const installedExtensionsV2 = useMemo(() => {
@@ -335,6 +400,17 @@ export function PluginsSettingsPanel() {
     () => new Map(pluginDevSessions.map((session) => [session.pluginId, session] as const)),
     [pluginDevSessions]
   );
+  const registeredRenderers = useMemo(() => {
+    void rendererRegistryRevision;
+    return listRegisteredMagnetRenderers();
+  }, [rendererRegistryRevision]);
+  const variantsByRendererId = useMemo(() => {
+    const entries = registeredRenderers.map((renderer) => [
+      renderer.id,
+      listMagnetVariants(renderer.id),
+    ] as const);
+    return new Map(entries);
+  }, [registeredRenderers]);
 
   const runtimeResolutionByExtensionId = useMemo(() => {
     void devSessionRevision;
@@ -359,12 +435,85 @@ export function PluginsSettingsPanel() {
     );
   }, [devSessionRevision, installedExtensionsV2]);
 
+  const selectedMagnet = useMemo(() => {
+    if (selectedMagnetId) {
+      const found = magnetLibrary.find((magnet) => magnet.id === selectedMagnetId);
+      if (found) return found;
+    }
+    return magnetLibrary[0] ?? null;
+  }, [magnetLibrary, selectedMagnetId]);
+
+  useEffect(() => {
+    if (!selectedMagnet && selectedMagnetId !== null) {
+      setSelectedMagnetId(null);
+      return;
+    }
+    if (selectedMagnet && selectedMagnet.id !== selectedMagnetId) {
+      setSelectedMagnetId(selectedMagnet.id);
+    }
+  }, [selectedMagnet, selectedMagnetId]);
+
+  const studioDiagnostics = useMemo(
+    () =>
+      buildPluginStudioDiagnostics({
+        installedExtensions: installedExtensionsV2,
+        runtimeResolutionByExtensionId,
+        devSessions: pluginDevSessions,
+        auditLog: installedExtensionAuditLog,
+        magnetLibrary,
+        activeMagnetIds,
+        registeredRenderers,
+        variantsByRendererId,
+      }),
+    [
+      activeMagnetIds,
+      installedExtensionAuditLog,
+      installedExtensionsV2,
+      magnetLibrary,
+      pluginDevSessions,
+      registeredRenderers,
+      runtimeResolutionByExtensionId,
+      variantsByRendererId,
+    ]
+  );
+
+  const studioMetrics = useMemo(
+    () =>
+      buildPluginStudioMetrics({
+        installedExtensions: installedExtensionsV2,
+        devSessions: pluginDevSessions,
+        magnetLibrary,
+        activeMagnetIds,
+        diagnostics: studioDiagnostics,
+      }),
+    [activeMagnetIds, installedExtensionsV2, magnetLibrary, pluginDevSessions, studioDiagnostics]
+  );
+
+  const selectedMagnetRendererId = selectedMagnet ? resolveMagnetRendererId(selectedMagnet) : null;
+  const selectedMagnetDisplayName = selectedMagnet
+    ? getMagnetDisplayName(selectedMagnet, t)
+    : null;
+  const selectedMagnetVariants = selectedMagnetRendererId
+    ? variantsByRendererId.get(selectedMagnetRendererId) ?? []
+    : [];
+
   const restartInstalledExtensionRuntime = useCallback(
     (pluginId: string, reason: string) => {
       governance?.restartInstalledExtensionRuntime(pluginId, { reason });
     },
     [governance]
   );
+
+  const pushPackageReport = useCallback((report: Omit<PackageImportReport, 'id' | 'createdAt'>) => {
+    setPackageReports((current) => [
+      {
+        ...report,
+        id: `${Date.now()}:${report.kind}:${current.length}`,
+        createdAt: Date.now(),
+      },
+      ...current,
+    ].slice(0, 8));
+  }, []);
 
   const openInstalledExtensionPage = useCallback(
     async (pluginId: string, pageId: string) => {
@@ -540,9 +689,28 @@ export function PluginsSettingsPanel() {
         confirmText: t('common.action.install'),
         cancelText: t('common.action.cancel'),
       });
-      if (!ok) return;
+      if (!ok) {
+        pushPackageReport({
+          kind: 'manifest-v2',
+          title: readInstalledExtensionDisplayName(parsed),
+          status: 'cancelled',
+          detail: t('settings.plugins.studio.package.report.cancelledByUser'),
+          diagnostics: [],
+        });
+        return;
+      }
 
       const installed = await installInstalledExtensionFromFilePath(filePath);
+      pushPackageReport({
+        kind: 'manifest-v2',
+        title: readInstalledExtensionDisplayName(installed),
+        status: 'installed',
+        detail: t('settings.plugins.studio.package.report.manifestInstalled', {
+          id: installed.manifest.identity.id,
+          version: installed.manifest.identity.version,
+        }),
+        diagnostics: [],
+      });
       if (supportsInstalledExtensionMagnetSurface(installed)) {
         const template = createMagnetTemplateFromInstalledExtension(installed);
         upsertMagnetCatalogMagnet(template);
@@ -552,7 +720,15 @@ export function PluginsSettingsPanel() {
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      pushPackageReport({
+        kind: 'manifest-v2',
+        title: t('settings.plugins.studio.package.report.manifestTitle'),
+        status: 'blocked',
+        detail: message,
+        diagnostics: [],
+      });
     } finally {
       setBusy(false);
     }
@@ -562,6 +738,7 @@ export function PluginsSettingsPanel() {
     installedExtensionRuntimeManager,
     isTauri,
     magnetLibrary,
+    pushPackageReport,
     setMagnetLibrary,
     t,
   ]);
@@ -623,6 +800,16 @@ export function PluginsSettingsPanel() {
           })
         );
       }
+      pushPackageReport({
+        kind: 'pmpe',
+        title: parsed.manifest.metadata.name,
+        status: 'ready',
+        detail: t('settings.plugins.pmpe.install.confirm.dryRun', {
+          files: dryRun.materializedSource.fileCount,
+          bytes: dryRun.materializedSource.totalBytes,
+        }),
+        diagnostics: dryRun.diagnostics,
+      });
 
       const capabilities = listInstalledExtensionCapabilityBindings(previewRecord);
       const confirmText = [
@@ -676,7 +863,16 @@ export function PluginsSettingsPanel() {
         confirmText: t('common.action.install'),
         cancelText: t('common.action.cancel'),
       });
-      if (!ok) return;
+      if (!ok) {
+        pushPackageReport({
+          kind: 'pmpe',
+          title: parsed.manifest.metadata.name,
+          status: 'cancelled',
+          detail: t('settings.plugins.studio.package.report.cancelledByUser'),
+          diagnostics: dryRun.diagnostics,
+        });
+        return;
+      }
 
       const commit = await commitExtensionPackExecutorPreview(parsed.executorPreview, { dryRun });
       pendingMaterializedSource = null;
@@ -689,6 +885,16 @@ export function PluginsSettingsPanel() {
       }
 
       const installed = commit.installedExtension;
+      pushPackageReport({
+        kind: 'pmpe',
+        title: parsed.manifest.metadata.name,
+        status: 'installed',
+        detail: t('settings.plugins.studio.package.report.pmpeInstalled', {
+          id: installed.manifest.identity.id,
+          version: installed.manifest.identity.version,
+        }),
+        diagnostics: commit.diagnostics,
+      });
       if (supportsInstalledExtensionMagnetSurface(installed)) {
         const template = createMagnetTemplateFromInstalledExtension(installed);
         upsertMagnetCatalogMagnet(template);
@@ -698,12 +904,20 @@ export function PluginsSettingsPanel() {
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      pushPackageReport({
+        kind: 'pmpe',
+        title: t('settings.plugins.studio.package.report.pmpeTitle'),
+        status: 'blocked',
+        detail: message,
+        diagnostics: [],
+      });
     } finally {
       await cleanupExtensionPackMaterializedSource(pendingMaterializedSource);
       setBusy(false);
     }
-  }, [busy, confirm, isTauri, magnetLibrary, setMagnetLibrary, t]);
+  }, [busy, confirm, isTauri, magnetLibrary, pushPackageReport, setMagnetLibrary, t]);
 
   const handleInstallExperiencePack = useCallback(async () => {
     if (!isTauri) {
@@ -813,6 +1027,17 @@ export function PluginsSettingsPanel() {
           })
         );
       }
+      pushPackageReport({
+        kind: 'pmpex',
+        title: parsed.plan.summary.title,
+        status: 'ready',
+        detail: t('settings.plugins.pmpex.install.confirm.dryRun', {
+          steps: dryRun.stepResults.length,
+          extensions: parsed.executorPreview.summary.extensionCount,
+          resources: parsed.executorPreview.summary.resourceCount,
+        }),
+        diagnostics: dryRun.diagnostics,
+      });
 
       const confirmText = [
         buildPackageImportPreviewText(parsed.plan, t),
@@ -832,7 +1057,16 @@ export function PluginsSettingsPanel() {
         confirmText: t('common.action.install'),
         cancelText: t('common.action.cancel'),
       });
-      if (!ok) return;
+      if (!ok) {
+        pushPackageReport({
+          kind: 'pmpex',
+          title: parsed.plan.summary.title,
+          status: 'cancelled',
+          detail: t('settings.plugins.studio.package.report.cancelledByUser'),
+          diagnostics: dryRun.diagnostics,
+        });
+        return;
+      }
 
       const commit = await commitExperiencePackExecutorPreview(executorPreview, {
         ...createExecutorContext(),
@@ -847,6 +1081,16 @@ export function PluginsSettingsPanel() {
           })
         );
       }
+      pushPackageReport({
+        kind: 'pmpex',
+        title: parsed.plan.summary.title,
+        status: 'installed',
+        detail: t('settings.plugins.studio.package.report.pmpexInstalled', {
+          steps: commit.stepResults.length,
+          extensions: commit.installedExtensions.length,
+        }),
+        diagnostics: commit.diagnostics,
+      });
 
       for (const installed of commit.installedExtensions) {
         if (supportsInstalledExtensionMagnetSurface(installed)) {
@@ -863,7 +1107,15 @@ export function PluginsSettingsPanel() {
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      pushPackageReport({
+        kind: 'pmpex',
+        title: t('settings.plugins.studio.package.report.pmpexTitle'),
+        status: 'blocked',
+        detail: message,
+        diagnostics: [],
+      });
     } finally {
       await cleanupExperiencePackExecutorDryRun(pendingDryRun);
       setBusy(false);
@@ -874,6 +1126,7 @@ export function PluginsSettingsPanel() {
     confirm,
     isTauri,
     magnetLibrary,
+    pushPackageReport,
     setMagnetLibrary,
     t,
     theme,
@@ -954,253 +1207,649 @@ export function PluginsSettingsPanel() {
     [activeMagnetIds, busy, confirm, restartInstalledExtensionRuntime, t]
   );
 
-  return (
-    <PmpCard className="settings-card" surfaceId="primitive.card.settings">
-      {error && <div className="settings-inline-error">{error}</div>}
-      <div className="settings-card-header" style={{ marginTop: 20 }}>
-        <div>
-          <p className="settings-card-label">{t('settings.plugins.v2.label')}</p>
-          <p className="settings-card-desc">{t('settings.plugins.v2.desc')}</p>
-        </div>
+  const handleOpenBuiltinWindow = useCallback(
+    async (windowId: 'editor:library' | 'editor:theme') => {
+      setError(null);
+      try {
+        await openBuiltinWindowViaHostCapability(
+          navigationService,
+          { windowId },
+          `settings.plugins.studio:open-${windowId}`
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [navigationService]
+  );
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+  const handleOpenMagnetLibrary = useCallback(
+    async (magnetId?: string | null) => {
+      try {
+        await handleOpenBuiltinWindow('editor:library');
+        if (!magnetId) return;
+
+        await broadcastDataUpdate(
+          STORAGE_KEYS.MAGNET_LIBRARY_FOCUS_REQUEST_V1,
+          {
+            requestId: `${Date.now()}:${magnetId}`,
+            magnetId,
+            createdAt: Date.now(),
+          },
+          TAURI_EVENTS.MAGNET_LIBRARY_FOCUS_REQUESTED
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [handleOpenBuiltinWindow]
+  );
+
+  const handleOpenDebugCenter = useCallback(async () => {
+    setError(null);
+    try {
+      await navigateBuiltinViaHostCapability(
+        navigationService,
+        'debug',
+        { tab: 'debug-center' },
+        'settings.plugins.studio:open-debug-center'
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [navigationService]);
+
+  const activeWorkspaceDefinition =
+    PLUGIN_STUDIO_WORKSPACES.find((workspace) => workspace.id === activeWorkspace) ??
+    PLUGIN_STUDIO_WORKSPACES[0];
+
+  return (
+    <PmpCard className="settings-card settings-plugin-studio" surfaceId="primitive.card.settings">
+      {error && <div className="settings-inline-error">{error}</div>}
+
+      <div className="settings-card-header settings-plugin-studio-header">
+        <div>
+          <p className="settings-card-label">{t('settings.plugins.studio.title')}</p>
+          <p className="settings-card-desc">{t('settings.plugins.studio.desc')}</p>
+        </div>
+        <div className="settings-plugin-studio-header-actions">
           <PmpButton
+            type="button"
             className="settings-action-btn"
             variant="default"
-            onClick={() => void handleInstallManifestV2()}
-            disabled={busy}
+            onClick={() => void handleOpenMagnetLibrary()}
           >
-            {t('settings.plugins.v2.action.install')}
+            {t('settings.plugins.studio.action.openMagnetLibrary')}
           </PmpButton>
           <PmpButton
+            type="button"
             className="settings-action-btn"
             variant="default"
-            onClick={() => void handleInstallExtensionPack()}
-            disabled={busy}
+            onClick={() => void handleOpenDebugCenter()}
           >
-            {t('settings.plugins.pmpe.action.install')}
+            {t('settings.plugins.studio.action.openDebugCenter')}
           </PmpButton>
           <PmpButton
+            type="button"
             className="settings-action-btn"
             variant="default"
-            onClick={() => void handleInstallExperiencePack()}
-            disabled={busy}
+            onClick={() => void handleOpenBuiltinWindow('editor:theme')}
           >
-            {t('settings.plugins.pmpex.action.install')}
+            {t('settings.plugins.studio.action.openThemeEditor')}
           </PmpButton>
         </div>
       </div>
 
-      <div className="settings-plugin-list">
-        {installedExtensionsV2.length === 0 ? (
-          <div className="settings-card-note">{t('settings.plugins.v2.empty')}</div>
-        ) : (
-          installedExtensionsV2.map((record) => {
-            const identity = record.manifest.identity;
-            const runtimeResolution = runtimeResolutionByExtensionId.get(identity.id) ?? null;
-            const devSession = pluginDevSessionById.get(identity.id) ?? null;
-            const hostContributions = readInstalledExtensionPmpHostContributions(record);
-            const capabilityBindings = listInstalledExtensionCapabilityBindings(record);
-            const deniedCapabilities = record.deniedCapabilities ?? [];
-            const deniedCapabilitySet = new Set(deniedCapabilities);
-            const enabled = record.enabled ?? true;
-            const isActive = activeMagnetIds.has(identity.id);
-            const displayName = readInstalledExtensionDisplayName(record);
-            const panels = hostContributions?.settingsPanels?.length ?? 0;
-            const pages = hostContributions?.pages?.length ?? 0;
-            const windows = hostContributions?.windows?.length ?? 0;
-            const visualizers = hostContributions?.visualizers?.length ?? 0;
-            const magnets = hostContributions?.magnets ? 1 : 0;
-            const { runtimeSourceLabel, runtimeProjectionTitle } =
-              buildRuntimePresentation(t, runtimeResolution);
-            const commands = record.manifest.contributes?.core?.commands?.length ?? 0;
-            const keybindings = record.manifest.contributes?.core?.keybindings?.length ?? 0;
-            const extensionAudit = installedExtensionAuditLog
-              .filter((event) => event.pluginId === identity.id)
-              .slice(-8)
-              .reverse();
-            const primaryPage = pages === 1 ? hostContributions?.pages?.[0] ?? null : null;
-            const primaryWindow = windows === 1 ? hostContributions?.windows?.[0] ?? null : null;
-            const primaryVisualizer =
-              visualizers === 1 ? hostContributions?.visualizers?.[0] ?? null : null;
-            const canAddMagnet = magnets > 0 && !isActive;
+      <div className="settings-plugin-studio-metrics">
+        {studioMetrics.map((metric) => (
+          <div key={metric.id} className="settings-plugin-studio-metric">
+            <span>{t(metric.labelKey)}</span>
+            <strong>{metric.value}</strong>
+          </div>
+        ))}
+      </div>
 
-            return (
-              <div key={identity.id} className="settings-plugin-item">
-                <div className="settings-plugin-meta">
-                  <div className="settings-plugin-title">
-                    {displayName}{' '}
-                    <span className="settings-plugin-subtitle">
-                      ({identity.id}@{identity.version})
-                    </span>
-                  </div>
+      <div className="settings-param-divider settings-param-divider--compact" />
 
-                  {identity.description && (
-                    <div className="settings-plugin-desc">{identity.description}</div>
-                  )}
+      <div className="settings-plugin-studio-shell">
+        <nav
+          className="settings-plugin-studio-nav"
+          aria-label={t('settings.plugins.studio.title')}
+        >
+          {PLUGIN_STUDIO_WORKSPACES.map((workspace) => (
+            <PmpChoiceButton
+              key={workspace.id}
+              type="button"
+              className="settings-plugin-studio-nav-item"
+              variant="settings"
+              active={activeWorkspace === workspace.id}
+              onClick={() => setActiveWorkspace(workspace.id)}
+            >
+              <span>{t(workspace.titleKey)}</span>
+              <small>{t(workspace.descKey)}</small>
+            </PmpChoiceButton>
+          ))}
+        </nav>
 
-                  <div className="settings-plugin-tags">
-                    <span className="settings-plugin-tag">
-                      {enabled ? t('settings.plugins.tag.enabled') : t('settings.plugins.tag.disabled')}
-                    </span>
-                    <span className="settings-plugin-tag">
-                      {t('settings.plugins.v2.tag.publisher', { publisher: identity.publisher })}
-                    </span>
-                    {runtimeResolution?.status === 'resolved' ? (
-                      <>
-                        <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                          {t('settings.plugins.tag.runtimeResolved', {
-                            runtimeId: runtimeResolution.runtime.runtimeId,
-                          })}
-                        </span>
-                        <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                          {t('settings.plugins.tag.launcher', {
-                            launcherId: runtimeResolution.launcher.id,
-                          })}
-                        </span>
-                        {runtimeSourceLabel ? (
+        <section className="settings-plugin-studio-panel">
+          <div className="settings-plugin-studio-panel-head">
+            <div>
+              <p className="settings-content-meta">
+                {t('settings.plugins.studio.kicker').toUpperCase()}
+              </p>
+              <h3>{t(activeWorkspaceDefinition.titleKey)}</h3>
+              <p>{t(activeWorkspaceDefinition.descKey)}</p>
+            </div>
+          </div>
+
+          {activeWorkspace === 'installed' ? (
+            <div className="settings-plugin-list settings-plugin-studio-list">
+              {installedExtensionsV2.length === 0 ? (
+                <div className="settings-card-note">{t('settings.plugins.v2.empty')}</div>
+              ) : (
+                installedExtensionsV2.map((record) => {
+                  const identity = record.manifest.identity;
+                  const runtimeResolution = runtimeResolutionByExtensionId.get(identity.id) ?? null;
+                  const devSession = pluginDevSessionById.get(identity.id) ?? null;
+                  const hostContributions = readInstalledExtensionPmpHostContributions(record);
+                  const capabilityBindings = listInstalledExtensionCapabilityBindings(record);
+                  const deniedCapabilities = record.deniedCapabilities ?? [];
+                  const deniedCapabilitySet = new Set(deniedCapabilities);
+                  const enabled = record.enabled ?? true;
+                  const isActive = activeMagnetIds.has(identity.id);
+                  const displayName = readInstalledExtensionDisplayName(record);
+                  const panels = hostContributions?.settingsPanels?.length ?? 0;
+                  const pages = hostContributions?.pages?.length ?? 0;
+                  const windows = hostContributions?.windows?.length ?? 0;
+                  const visualizers = hostContributions?.visualizers?.length ?? 0;
+                  const magnets = hostContributions?.magnets ? 1 : 0;
+                  const { runtimeSourceLabel, runtimeProjectionTitle } =
+                    buildRuntimePresentation(t, runtimeResolution);
+                  const commands = record.manifest.contributes?.core?.commands?.length ?? 0;
+                  const keybindings = record.manifest.contributes?.core?.keybindings?.length ?? 0;
+                  const extensionAudit = installedExtensionAuditLog
+                    .filter((event) => event.pluginId === identity.id)
+                    .slice(-8)
+                    .reverse();
+                  const primaryPage = pages === 1 ? hostContributions?.pages?.[0] ?? null : null;
+                  const primaryWindow = windows === 1 ? hostContributions?.windows?.[0] ?? null : null;
+                  const primaryVisualizer =
+                    visualizers === 1 ? hostContributions?.visualizers?.[0] ?? null : null;
+                  const canAddMagnet = magnets > 0 && !isActive;
+
+                  return (
+                    <div key={identity.id} className="settings-plugin-item">
+                      <div className="settings-plugin-meta">
+                        <div className="settings-plugin-title">
+                          {displayName}{' '}
+                          <span className="settings-plugin-subtitle">
+                            ({identity.id}@{identity.version})
+                          </span>
+                        </div>
+
+                        {identity.description && (
+                          <div className="settings-plugin-desc">{identity.description}</div>
+                        )}
+
+                        <div className="settings-plugin-tags">
+                          <span className="settings-plugin-tag">
+                            {enabled
+                              ? t('settings.plugins.tag.enabled')
+                              : t('settings.plugins.tag.disabled')}
+                          </span>
+                          <span className="settings-plugin-tag">
+                            {t('settings.plugins.v2.tag.publisher', {
+                              publisher: identity.publisher,
+                            })}
+                          </span>
                           <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                            {runtimeSourceLabel}
+                            {runtimeResolution?.status === 'resolved'
+                              ? t('settings.plugins.tag.runtimeResolved', {
+                                  runtimeId: runtimeResolution.runtime.runtimeId,
+                                })
+                              : runtimeResolution
+                                ? t('settings.plugins.tag.runtimeBlocked')
+                                : t('settings.plugins.tag.runtimeMissing')}
+                          </span>
+                          {runtimeResolution?.status === 'resolved' ? (
+                            <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                              {t('settings.plugins.tag.launcher', {
+                                launcherId: runtimeResolution.launcher.id,
+                              })}
+                            </span>
+                          ) : null}
+                          {runtimeSourceLabel ? (
+                            <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                              {runtimeSourceLabel}
+                            </span>
+                          ) : null}
+                          {commands > 0 && (
+                            <span className="settings-plugin-tag">
+                              {t('settings.plugins.tag.commandsCount', { count: commands })}
+                            </span>
+                          )}
+                          {keybindings > 0 && (
+                            <span className="settings-plugin-tag">
+                              {t('settings.plugins.v2.tag.keybindingsCount', { count: keybindings })}
+                            </span>
+                          )}
+                          {panels > 0 && (
+                            <span className="settings-plugin-tag">
+                              {t('settings.plugins.tag.settingsPanelsCount', { count: panels })}
+                            </span>
+                          )}
+                          {pages > 0 && (
+                            <span className="settings-plugin-tag">
+                              {t('settings.plugins.tag.pagesCount', { count: pages })}
+                            </span>
+                          )}
+                          {windows > 0 && (
+                            <span className="settings-plugin-tag">
+                              {t('settings.plugins.tag.windowsCount', { count: windows })}
+                            </span>
+                          )}
+                          {visualizers > 0 && (
+                            <span className="settings-plugin-tag">
+                              {t('settings.plugins.tag.visualizersCount', { count: visualizers })}
+                            </span>
+                          )}
+                          {magnets > 0 && (
+                            <span className="settings-plugin-tag">
+                              {t('settings.plugins.tag.magnetsCount', { count: magnets })}
+                            </span>
+                          )}
+                          {record.disabledReason === 'quarantine' ? (
+                            <span className="settings-plugin-tag settings-plugin-tag--warning">
+                              {t('settings.plugins.studio.tag.quarantined')}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="settings-plugin-studio-columns">
+                          <div className="settings-plugin-permissions">
+                            <div>{t('settings.plugins.v2.capabilities.label')}</div>
+                            {capabilityBindings.length === 0 ? (
+                              <div className="settings-row-desc">
+                                {t('settings.plugins.v2.capabilities.none')}
+                              </div>
+                            ) : (
+                              <div className="settings-row-desc-list settings-row-meta">
+                                {capabilityBindings.map((binding) => (
+                                  <PmpCheckbox
+                                    key={binding.capabilityId}
+                                    className="settings-checkbox settings-plugin-permission-line"
+                                    variant="settings"
+                                    checked={binding.granted}
+                                    disabled={busy}
+                                    onCheckedChange={(nextGranted) => {
+                                      const nextDenied = new Set(deniedCapabilitySet);
+                                      if (nextGranted) nextDenied.delete(binding.capabilityId);
+                                      else nextDenied.add(binding.capabilityId);
+                                      setInstalledExtensionDeniedCapabilities(
+                                        identity.id,
+                                        Array.from(nextDenied)
+                                      );
+                                      restartInstalledExtensionRuntime(
+                                        identity.id,
+                                        'capabilities-updated'
+                                      );
+                                    }}
+                                  >
+                                    <span>
+                                      {binding.capabilityId}
+                                      {binding.granted
+                                        ? ''
+                                        : ` (${t('settings.plugins.v2.capabilities.denied')})`}
+                                    </span>
+                                  </PmpCheckbox>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="settings-plugin-permissions">
+                            <div>{t('settings.plugins.studio.installed.runtimeAudit')}</div>
+                            <div className="settings-row-desc-list settings-row-meta">
+                              <div title={runtimeProjectionTitle}>
+                                {runtimeProjectionTitle || t('settings.plugins.tag.runtimeMissing')}
+                              </div>
+                              {devSession ? (
+                                <div>
+                                  {t('settings.plugins.devSession.effectiveSource', {
+                                    source: t('settings.plugins.tag.runtimeSourceDev'),
+                                  })}
+                                </div>
+                              ) : null}
+                              {extensionAudit.length > 0 ? (
+                                <div>
+                                  {t('settings.plugins.audit.summary', {
+                                    count: extensionAudit.length,
+                                  })}
+                                </div>
+                              ) : (
+                                <div>{t('settings.plugins.studio.audit.empty')}</div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {record.lastError && (
+                          <div className="settings-plugin-error" title={record.lastError}>
+                            {record.lastError}
+                          </div>
+                        )}
+
+                        {extensionAudit.length > 0 && (
+                          <details className="settings-plugin-details">
+                            <summary className="settings-plugin-details-summary">
+                              {t('settings.plugins.audit.summary', {
+                                count: extensionAudit.length,
+                              })}
+                            </summary>
+                            <div className="settings-plugin-details-content">
+                              {extensionAudit.map((event, idx) => (
+                                <div key={idx}>{formatInstalledExtensionAuditEvent(event)}</div>
+                              ))}
+                            </div>
+                            <div className="settings-plugin-details-actions">
+                              <PmpButton
+                                type="button"
+                                className="settings-action-btn"
+                                variant="default"
+                                onClick={() => clearInstalledExtensionAuditLog(identity.id)}
+                                disabled={busy}
+                              >
+                                {t('common.action.clear')}
+                              </PmpButton>
+                            </div>
+                          </details>
+                        )}
+                      </div>
+
+                      <div className="settings-plugin-actions">
+                        {primaryPage && (
+                          <PmpButton
+                            type="button"
+                            className="settings-action-btn"
+                            variant="default"
+                            disabled={busy}
+                            onClick={() => openInstalledExtensionPage(identity.id, primaryPage.id)}
+                            title={primaryPage.description ?? undefined}
+                          >
+                            {t('common.action.open')} {primaryPage.title}
+                          </PmpButton>
+                        )}
+
+                        {primaryVisualizer && (
+                          <PmpButton
+                            type="button"
+                            className="settings-action-btn"
+                            variant="default"
+                            disabled={busy}
+                            onClick={() =>
+                              openInstalledExtensionVisualizer(identity.id, primaryVisualizer.id)
+                            }
+                            title={primaryVisualizer.description ?? undefined}
+                          >
+                            {t('common.action.open')} {primaryVisualizer.title}
+                          </PmpButton>
+                        )}
+
+                        {primaryWindow && (
+                          <PmpButton
+                            type="button"
+                            className="settings-action-btn"
+                            variant="default"
+                            disabled={busy}
+                            onClick={() =>
+                              void openInstalledExtensionWindow({
+                                pluginId: identity.id,
+                                windowId: primaryWindow.id,
+                                title: `${displayName}: ${primaryWindow.title}`,
+                                width: primaryWindow.width,
+                                height: primaryWindow.height,
+                              })
+                            }
+                            title={primaryWindow.description ?? undefined}
+                          >
+                            {t('common.action.open')} {primaryWindow.title}
+                          </PmpButton>
+                        )}
+
+                        {canAddMagnet && (
+                          <PmpButton
+                            type="button"
+                            className="settings-action-btn"
+                            variant="default"
+                            disabled={busy}
+                            onClick={() => addInstalledExtensionMagnetToCurrentSpace(record)}
+                            title={t('settings.plugins.v2.action.addMagnet.title')}
+                          >
+                            {t('settings.plugins.v2.action.addMagnet')}
+                          </PmpButton>
+                        )}
+
+                        {record.disabledReason === 'quarantine' && (
+                          <PmpButton
+                            type="button"
+                            className="settings-action-btn"
+                            variant="default"
+                            disabled={busy}
+                            onClick={() => clearInstalledExtensionQuarantine(identity.id)}
+                            title={t('settings.plugins.v2.action.clearQuarantine.title')}
+                          >
+                            {t('settings.plugins.v2.action.clearQuarantine')}
+                          </PmpButton>
+                        )}
+
+                        <PmpButton
+                          type="button"
+                          className="settings-action-btn"
+                          variant="default"
+                          disabled={busy || (!enabled && record.disabledReason === 'quarantine')}
+                          onClick={() => void handleToggleManifestV2Enabled(identity.id, !enabled)}
+                          title={
+                            enabled
+                              ? t('settings.plugins.action.disable.title')
+                              : t('settings.plugins.action.enable.title')
+                          }
+                        >
+                          {enabled ? t('common.action.disable') : t('common.action.enable')}
+                        </PmpButton>
+
+                        {record.lastError && (
+                          <PmpButton
+                            type="button"
+                            className="settings-action-btn"
+                            variant="default"
+                            disabled={busy}
+                            onClick={() => clearInstalledExtensionLastError(identity.id)}
+                            title={t('settings.plugins.v2.action.clearError.title')}
+                          >
+                            {t('settings.plugins.v2.action.clearError')}
+                          </PmpButton>
+                        )}
+
+                        <PmpButton
+                          type="button"
+                          className="settings-action-btn"
+                          variant="default"
+                          disabled={busy || record.disabledReason === 'quarantine'}
+                          onClick={() => restartInstalledExtensionRuntime(identity.id, 'manual')}
+                          title={t('settings.plugins.v2.action.restart.title')}
+                        >
+                          {t('common.action.restart')}
+                        </PmpButton>
+
+                        <PmpButton
+                          type="button"
+                          className="settings-danger-btn"
+                          variant="danger"
+                          disabled={busy}
+                          onClick={() => void handleUninstallManifestV2(identity.id)}
+                          title={
+                            isActive
+                              ? t('settings.plugins.action.uninstall.title.magnetActive')
+                              : t('settings.plugins.v2.action.uninstall.title')
+                          }
+                        >
+                          {t('common.action.uninstall')}
+                        </PmpButton>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          ) : null}
+
+          {activeWorkspace === 'package-import' ? (
+            <div className="settings-plugin-studio-stack">
+              <div className="settings-plugin-studio-toolbar">
+                <PmpButton
+                  className="settings-action-btn"
+                  variant="default"
+                  onClick={() => void handleInstallManifestV2()}
+                  disabled={busy}
+                >
+                  {t('settings.plugins.v2.action.install')}
+                </PmpButton>
+                <PmpButton
+                  className="settings-action-btn"
+                  variant="default"
+                  onClick={() => void handleInstallExtensionPack()}
+                  disabled={busy}
+                >
+                  {t('settings.plugins.pmpe.action.install')}
+                </PmpButton>
+                <PmpButton
+                  className="settings-action-btn"
+                  variant="default"
+                  onClick={() => void handleInstallExperiencePack()}
+                  disabled={busy}
+                >
+                  {t('settings.plugins.pmpex.action.install')}
+                </PmpButton>
+              </div>
+
+              <div className="settings-plugin-studio-note">
+                {t('settings.plugins.studio.package.flow')}
+              </div>
+
+              <div className="settings-plugin-studio-section-title">
+                {t('settings.plugins.studio.package.reports')}
+              </div>
+              {packageReports.length === 0 ? (
+                <div className="settings-card-note">
+                  {t('settings.plugins.studio.package.reports.empty')}
+                </div>
+              ) : (
+                <div className="settings-plugin-studio-report-list">
+                  {packageReports.map((report) => (
+                    <div key={report.id} className="settings-plugin-studio-report">
+                      <div>
+                        <strong>{report.title}</strong>
+                        <span className="settings-plugin-subtitle">
+                          {' '}
+                          {report.kind} · {formatSettingsTimestamp(report.createdAt)}
+                        </span>
+                      </div>
+                      <div className="settings-plugin-tags">
+                        <span className="settings-plugin-tag">
+                          {t(getPackageReportStatusKey(report.status))}
+                        </span>
+                        {report.diagnostics.length > 0 ? (
+                          <span className="settings-plugin-tag settings-plugin-tag--warning">
+                            {t('settings.plugins.studio.package.report.diagnosticsCount', {
+                              count: report.diagnostics.length,
+                            })}
                           </span>
                         ) : null}
-                      </>
-                    ) : (
-                      <>
-                        <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
-                          {runtimeResolution
-                            ? t('settings.plugins.tag.runtimeBlocked')
-                            : t('settings.plugins.tag.runtimeMissing')}
-                        </span>
-                      </>
-                    )}
-                    {commands > 0 && (
-                      <span className="settings-plugin-tag">
-                        {t('settings.plugins.tag.commandsCount', { count: commands })}
-                      </span>
-                    )}
-                    {keybindings > 0 && (
-                      <span className="settings-plugin-tag">
-                        {t('settings.plugins.v2.tag.keybindingsCount', { count: keybindings })}
-                      </span>
-                    )}
-                    {panels > 0 && (
-                      <span className="settings-plugin-tag">
-                        {t('settings.plugins.tag.settingsPanelsCount', { count: panels })}
-                      </span>
-                    )}
-                    {pages > 0 && (
-                      <span className="settings-plugin-tag">
-                        {t('settings.plugins.tag.pagesCount', { count: pages })}
-                      </span>
-                    )}
-                    {windows > 0 && (
-                      <span className="settings-plugin-tag">
-                        {t('settings.plugins.tag.windowsCount', { count: windows })}
-                      </span>
-                    )}
-                    {visualizers > 0 && (
-                      <span className="settings-plugin-tag">
-                        {t('settings.plugins.tag.visualizersCount', { count: visualizers })}
-                      </span>
-                    )}
-                    {magnets > 0 && (
-                      <span className="settings-plugin-tag">
-                        {t('settings.plugins.tag.magnetsCount', { count: magnets })}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="settings-plugin-permissions">
-                    <div>{t('settings.plugins.v2.capabilities.label')}</div>
-                    {capabilityBindings.length === 0 ? (
-                      <div className="settings-row-desc">{t('settings.plugins.v2.capabilities.none')}</div>
-                    ) : (
-                      <div className="settings-row-desc-list settings-row-meta">
-                        {capabilityBindings.map((binding) => (
-                          <PmpCheckbox
-                            key={binding.capabilityId}
-                            className="settings-checkbox settings-plugin-permission-line"
-                            variant="settings"
-                            checked={binding.granted}
-                            disabled={busy}
-                            onCheckedChange={(nextGranted) => {
-                              const nextDenied = new Set(deniedCapabilitySet);
-                              if (nextGranted) nextDenied.delete(binding.capabilityId);
-                              else nextDenied.add(binding.capabilityId);
-                              setInstalledExtensionDeniedCapabilities(
-                                identity.id,
-                                Array.from(nextDenied)
-                              );
-                              restartInstalledExtensionRuntime(
-                                identity.id,
-                                'capabilities-updated'
-                              );
-                            }}
-                          >
-                            <span>
-                              {binding.capabilityId}
-                              {binding.granted
-                                ? ''
-                                : ` (${t('settings.plugins.v2.capabilities.denied')})`}
-                            </span>
-                          </PmpCheckbox>
-                        ))}
                       </div>
-                    )}
-                  </div>
+                      <div className="settings-plugin-desc">{report.detail}</div>
+                      {report.diagnostics.length > 0 ? (
+                        <pre className="settings-plugin-studio-code">
+                          {formatDiagnosticLines(report.diagnostics)}
+                        </pre>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : null}
 
-                  {devSession ? (
-                    <div className="settings-plugin-permissions">
-                      <div>{t('settings.plugins.devSession.label')}</div>
-                      <div className="settings-row-desc-list settings-row-meta">
-                        <div>
-                          {t('settings.plugins.devSession.projectRoot', {
-                            path: devSession.projectRoot,
-                          })}
+          {activeWorkspace === 'developer' ? (
+            <div className="settings-plugin-list settings-plugin-studio-list">
+              {installedExtensionsV2.length === 0 && pluginDevSessions.length === 0 ? (
+                <div className="settings-card-note">
+                  {t('settings.plugins.studio.developer.empty')}
+                </div>
+              ) : (
+                installedExtensionsV2.map((record) => {
+                  const identity = record.manifest.identity;
+                  const displayName = readInstalledExtensionDisplayName(record);
+                  const runtimeResolution = runtimeResolutionByExtensionId.get(identity.id) ?? null;
+                  const devSession = pluginDevSessionById.get(identity.id) ?? null;
+                  const hostContributions = readInstalledExtensionPmpHostContributions(record);
+                  const primaryPage =
+                    hostContributions?.pages?.length === 1 ? hostContributions.pages[0] : null;
+                  const primaryWindow =
+                    hostContributions?.windows?.length === 1 ? hostContributions.windows[0] : null;
+                  const primaryVisualizer =
+                    hostContributions?.visualizers?.length === 1
+                      ? hostContributions.visualizers[0]
+                      : null;
+                  const { runtimeProjectionTitle, runtimeSourceLabel } =
+                    buildRuntimePresentation(t, runtimeResolution);
+
+                  return (
+                    <div key={identity.id} className="settings-plugin-item">
+                      <div className="settings-plugin-meta">
+                        <div className="settings-plugin-title">{displayName}</div>
+                        <div className="settings-plugin-tags">
+                          <span className="settings-plugin-tag">{identity.id}</span>
+                          <span className="settings-plugin-tag" title={runtimeProjectionTitle}>
+                            {runtimeResolution?.status === 'resolved'
+                              ? t('settings.plugins.tag.runtimeResolved', {
+                                  runtimeId: runtimeResolution.runtime.runtimeId,
+                                })
+                              : runtimeResolution
+                                ? t('settings.plugins.tag.runtimeBlocked')
+                                : t('settings.plugins.tag.runtimeMissing')}
+                          </span>
+                          {runtimeResolution?.status === 'resolved' ? (
+                            <span className="settings-plugin-tag">
+                              {t('settings.plugins.tag.launcher', {
+                                launcherId: runtimeResolution.launcher.id,
+                              })}
+                            </span>
+                          ) : null}
+                          {runtimeSourceLabel ? (
+                            <span className="settings-plugin-tag">{runtimeSourceLabel}</span>
+                          ) : null}
                         </div>
-                        <div>
-                          {t('settings.plugins.devSession.mode', {
-                            mode:
-                              devSession.mode === 'entry-url'
-                                ? t('settings.plugins.devSession.mode.entryUrl')
-                                : t('settings.plugins.devSession.mode.entryPath'),
-                          })}
+
+                        <div className="settings-plugin-studio-definition-grid">
+                          <span>{t('settings.plugins.studio.developer.devSource')}</span>
+                          <strong>{devSession?.projectRoot ?? '-'}</strong>
+                          <span>{t('settings.plugins.studio.developer.surfaceKind')}</span>
+                          <strong>{getInstalledExtensionPrimarySurfaceKind(record)}</strong>
+                          <span>{t('settings.plugins.studio.developer.effectiveRuntime')}</span>
+                          <strong title={runtimeProjectionTitle}>
+                            {runtimeResolution?.status === 'resolved'
+                              ? runtimeResolution.artifact.path
+                              : runtimeProjectionTitle}
+                          </strong>
+                          <span>{t('settings.plugins.studio.developer.lastRestart')}</span>
+                          <strong>
+                            {devSession
+                              ? formatDevSessionRestartSummary(t, devSession)
+                              : '-'}
+                          </strong>
                         </div>
-                        <div>
-                          {t('settings.plugins.devSession.runtimeKinds', {
-                            kinds: devSession.runtimeKinds.join(', '),
-                          })}
-                        </div>
-                        <div>
-                          {t('settings.plugins.devSession.effectiveSource', {
-                            source:
-                              runtimeSourceLabel ??
-                              (devSession
-                                ? t('settings.plugins.tag.runtimeSourceDev')
-                                : t('settings.plugins.tag.runtimeSourceManifest')),
-                          })}
-                        </div>
-                        {runtimeResolution?.status === 'resolved' ? (
-                          <div
-                            className="settings-row-desc"
-                            title={runtimeResolution.artifact.path}
-                          >
-                            {t('settings.plugins.devSession.effectivePath', {
-                              path: runtimeResolution.artifact.path,
-                            })}
-                          </div>
-                        ) : null}
-                        <div>
-                          {t('settings.plugins.devSession.lastRestart', {
-                            value: formatDevSessionRestartSummary(t, devSession),
-                          })}
-                        </div>
-                        <div>
-                          {t('settings.plugins.devSession.updatedAt', {
-                            value: formatSettingsTimestamp(devSession.updatedAt),
-                          })}
-                        </div>
-                        {devSession.lastError ? (
+
+                        {devSession?.lastError ? (
                           <div className="settings-plugin-error" title={devSession.lastError}>
                             {t('settings.plugins.devSession.lastError', {
                               message: devSession.lastError,
@@ -1208,200 +1857,393 @@ export function PluginsSettingsPanel() {
                           </div>
                         ) : null}
                       </div>
-                    </div>
-                  ) : null}
 
-                  {record.lastError && (
-                    <div className="settings-plugin-error" title={record.lastError}>
-                      {record.lastError}
-                    </div>
-                  )}
-
-                  {extensionAudit.length > 0 && (
-                    <details className="settings-plugin-details">
-                      <summary className="settings-plugin-details-summary">
-                        {t('settings.plugins.audit.summary', { count: extensionAudit.length })}
-                      </summary>
-                      <div className="settings-plugin-details-content">
-                        {extensionAudit.map((event, idx) => (
-                          <div key={idx}>{formatInstalledExtensionAuditEvent(event)}</div>
-                        ))}
-                      </div>
-                      <div className="settings-plugin-details-actions">
+                      <div className="settings-plugin-actions">
                         <PmpButton
                           type="button"
                           className="settings-action-btn"
                           variant="default"
-                          onClick={() => clearInstalledExtensionAuditLog(identity.id)}
-                          disabled={busy}
+                          disabled={busy || record.disabledReason === 'quarantine'}
+                          onClick={() => restartInstalledExtensionRuntime(identity.id, 'manual')}
                         >
-                          {t('common.action.clear')}
+                          {t('common.action.restart')}
                         </PmpButton>
+                        {devSession ? (
+                          <PmpButton
+                            type="button"
+                            className="settings-action-btn"
+                            variant="default"
+                            disabled={busy}
+                            onClick={() => refreshPluginDevSession(identity.id)}
+                          >
+                            {t('settings.plugins.devSession.action.refresh')}
+                          </PmpButton>
+                        ) : null}
+                        {primaryPage ? (
+                          <PmpButton
+                            type="button"
+                            className="settings-action-btn"
+                            variant="default"
+                            disabled={busy}
+                            onClick={() => openInstalledExtensionPage(identity.id, primaryPage.id)}
+                          >
+                            {t('common.action.open')} {primaryPage.title}
+                          </PmpButton>
+                        ) : null}
+                        {primaryVisualizer ? (
+                          <PmpButton
+                            type="button"
+                            className="settings-action-btn"
+                            variant="default"
+                            disabled={busy}
+                            onClick={() =>
+                              openInstalledExtensionVisualizer(identity.id, primaryVisualizer.id)
+                            }
+                          >
+                            {t('common.action.open')} {primaryVisualizer.title}
+                          </PmpButton>
+                        ) : null}
+                        {primaryWindow ? (
+                          <PmpButton
+                            type="button"
+                            className="settings-action-btn"
+                            variant="default"
+                            disabled={busy}
+                            onClick={() =>
+                              void openInstalledExtensionWindow({
+                                pluginId: identity.id,
+                                windowId: primaryWindow.id,
+                                title: `${displayName}: ${primaryWindow.title}`,
+                                width: primaryWindow.width,
+                                height: primaryWindow.height,
+                              })
+                            }
+                          >
+                            {t('common.action.open')} {primaryWindow.title}
+                          </PmpButton>
+                        ) : null}
+                        {record.lastError ? (
+                          <PmpButton
+                            type="button"
+                            className="settings-action-btn"
+                            variant="default"
+                            disabled={busy}
+                            onClick={() => clearInstalledExtensionLastError(identity.id)}
+                          >
+                            {t('settings.plugins.v2.action.clearError')}
+                          </PmpButton>
+                        ) : null}
+                        <PmpButton
+                          type="button"
+                          className="settings-action-btn"
+                          variant="default"
+                          disabled={busy}
+                          onClick={() => clearInstalledExtensionAuditLog(identity.id)}
+                        >
+                          {t('settings.plugins.studio.action.clearAudit')}
+                        </PmpButton>
+                        {devSession ? (
+                          <PmpButton
+                            type="button"
+                            className="settings-danger-btn"
+                            variant="danger"
+                            disabled={busy}
+                            onClick={() => detachPluginDevSession(identity.id)}
+                          >
+                            {t('settings.plugins.devSession.action.detach')}
+                          </PmpButton>
+                        ) : null}
                       </div>
-                    </details>
-                  )}
-                </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          ) : null}
 
-                <div className="settings-plugin-actions">
-                  {primaryPage && (
-                    <PmpButton
-                      type="button"
-                      className="settings-action-btn"
-                      variant="default"
-                      disabled={busy}
-                      onClick={() => openInstalledExtensionPage(identity.id, primaryPage.id)}
-                      title={primaryPage.description ?? undefined}
-                    >
-                      {t('common.action.open')} {primaryPage.title}
-                    </PmpButton>
-                  )}
-
-                  {primaryVisualizer && (
-                    <PmpButton
-                      type="button"
-                      className="settings-action-btn"
-                      variant="default"
-                      disabled={busy}
-                      onClick={() =>
-                        openInstalledExtensionVisualizer(identity.id, primaryVisualizer.id)
-                      }
-                      title={primaryVisualizer.description ?? undefined}
-                    >
-                      {t('common.action.open')} {primaryVisualizer.title}
-                    </PmpButton>
-                  )}
-
-                  {primaryWindow && (
-                    <PmpButton
-                      type="button"
-                      className="settings-action-btn"
-                      variant="default"
-                      disabled={busy}
-                      onClick={() =>
-                        void openInstalledExtensionWindow({
-                          pluginId: identity.id,
-                          windowId: primaryWindow.id,
-                          title: `${displayName}: ${primaryWindow.title}`,
-                          width: primaryWindow.width,
-                          height: primaryWindow.height,
-                        })
-                      }
-                      title={primaryWindow.description ?? undefined}
-                    >
-                      {t('common.action.open')} {primaryWindow.title}
-                    </PmpButton>
-                  )}
-
-                  {canAddMagnet && (
-                    <PmpButton
-                      type="button"
-                      className="settings-action-btn"
-                      variant="default"
-                      disabled={busy}
-                      onClick={() => addInstalledExtensionMagnetToCurrentSpace(record)}
-                      title={t('settings.plugins.v2.action.addMagnet.title')}
-                    >
-                      {t('settings.plugins.v2.action.addMagnet')}
-                    </PmpButton>
-                  )}
-
-                  {record.disabledReason === 'quarantine' && (
-                    <PmpButton
-                      type="button"
-                      className="settings-action-btn"
-                      variant="default"
-                      disabled={busy}
-                      onClick={() => clearInstalledExtensionQuarantine(identity.id)}
-                      title={t('settings.plugins.v2.action.clearQuarantine.title')}
-                    >
-                      {t('settings.plugins.v2.action.clearQuarantine')}
-                    </PmpButton>
-                  )}
-
+          {activeWorkspace === 'magnets' ? (
+            <div className="settings-plugin-studio-two-pane">
+              <div className="settings-plugin-studio-listbox">
+                <div className="settings-plugin-studio-toolbar">
                   <PmpButton
                     type="button"
                     className="settings-action-btn"
                     variant="default"
-                    disabled={busy || (!enabled && record.disabledReason === 'quarantine')}
-                    onClick={() => void handleToggleManifestV2Enabled(identity.id, !enabled)}
-                    title={
-                      enabled
-                        ? t('settings.plugins.action.disable.title')
-                        : t('settings.plugins.action.enable.title')
-                    }
+                    onClick={() => void handleOpenMagnetLibrary()}
                   >
-                    {enabled ? t('common.action.disable') : t('common.action.enable')}
-                  </PmpButton>
-
-                  {record.lastError && (
-                    <PmpButton
-                      type="button"
-                      className="settings-action-btn"
-                      variant="default"
-                      disabled={busy}
-                      onClick={() => clearInstalledExtensionLastError(identity.id)}
-                      title={t('settings.plugins.v2.action.clearError.title')}
-                    >
-                      {t('settings.plugins.v2.action.clearError')}
-                    </PmpButton>
-                  )}
-
-                  <PmpButton
-                    type="button"
-                    className="settings-action-btn"
-                    variant="default"
-                    disabled={busy || record.disabledReason === 'quarantine'}
-                    onClick={() => restartInstalledExtensionRuntime(identity.id, 'manual')}
-                    title={t('settings.plugins.v2.action.restart.title')}
-                  >
-                    {t('common.action.restart')}
-                  </PmpButton>
-
-                  {devSession ? (
-                    <PmpButton
-                      type="button"
-                      className="settings-action-btn"
-                      variant="default"
-                      disabled={busy}
-                      onClick={() => refreshPluginDevSession(identity.id)}
-                      title={t('settings.plugins.devSession.action.refresh.title')}
-                    >
-                      {t('settings.plugins.devSession.action.refresh')}
-                    </PmpButton>
-                  ) : null}
-
-                  {devSession ? (
-                    <PmpButton
-                      type="button"
-                      className="settings-action-btn"
-                      variant="danger"
-                      disabled={busy}
-                      onClick={() => detachPluginDevSession(identity.id)}
-                      title={t('settings.plugins.devSession.action.detach.title')}
-                    >
-                      {t('settings.plugins.devSession.action.detach')}
-                    </PmpButton>
-                  ) : null}
-
-                  <PmpButton
-                    type="button"
-                    className="settings-danger-btn"
-                    variant="danger"
-                    disabled={busy}
-                    onClick={() => void handleUninstallManifestV2(identity.id)}
-                    title={
-                      isActive
-                        ? t('settings.plugins.action.uninstall.title.magnetActive')
-                        : t('settings.plugins.v2.action.uninstall.title')
-                    }
-                  >
-                    {t('common.action.uninstall')}
+                    {t('settings.plugins.studio.action.openMagnetLibrary')}
                   </PmpButton>
                 </div>
+                {magnetLibrary.map((magnet) => {
+                  const rendererId = resolveMagnetRendererId(magnet);
+                  const magnetName = getMagnetDisplayName(magnet, t);
+                  return (
+                    <button
+                      key={magnet.id}
+                      type="button"
+                      className="settings-plugin-studio-listbox-item"
+                      data-active={selectedMagnet?.id === magnet.id ? 'true' : 'false'}
+                      onClick={() => setSelectedMagnetId(magnet.id)}
+                    >
+                      <span>{magnetName}</span>
+                      <small>
+                        {magnet.id} · {rendererId}
+                      </small>
+                    </button>
+                  );
+                })}
               </div>
-            );
-          })
-        )}
+
+              <div className="settings-plugin-studio-detail">
+                {selectedMagnet ? (
+                  <>
+                    <div className="settings-plugin-title">{selectedMagnetDisplayName}</div>
+                    <div className="settings-plugin-tags">
+                      <span className="settings-plugin-tag">{selectedMagnet.id}</span>
+                      <span className="settings-plugin-tag">
+                        {activeMagnetIds.has(selectedMagnet.id)
+                          ? t('settings.plugins.studio.magnets.active')
+                          : t('settings.plugins.studio.magnets.inactive')}
+                      </span>
+                      <span className="settings-plugin-tag">
+                        {t('settings.plugins.studio.magnets.renderer', {
+                          rendererId: selectedMagnetRendererId,
+                        })}
+                      </span>
+                      <span className="settings-plugin-tag">
+                        {t('settings.plugins.studio.magnets.variant', {
+                          variant: selectedMagnet.variant ?? '-',
+                        })}
+                      </span>
+                    </div>
+
+                    <div className="settings-plugin-studio-toolbar">
+                      {activeMagnetIds.has(selectedMagnet.id) ? (
+                        <PmpButton
+                          type="button"
+                          className="settings-action-btn"
+                          variant="default"
+                          disabled={busy || REQUIRED_MAGNET_IDS.has(selectedMagnet.id)}
+                          onClick={() => deactivateMagnet(selectedMagnet.id)}
+                        >
+                          {t('common.action.disable')}
+                        </PmpButton>
+                      ) : (
+                        <PmpButton
+                          type="button"
+                          className="settings-action-btn"
+                          variant="default"
+                          disabled={busy}
+                          onClick={() => activateMagnet(selectedMagnet.id)}
+                        >
+                          {t('common.action.enable')}
+                        </PmpButton>
+                      )}
+                    </div>
+
+                    <div className="settings-card-note">
+                      {t('settings.plugins.studio.magnets.variantManagedInLibrary')}
+                    </div>
+
+                    <div className="settings-plugin-studio-definition-grid">
+                      <span>{t('settings.plugins.studio.magnets.anchorType')}</span>
+                      <strong>{selectedMagnet.anchorType}</strong>
+                      <span>{t('settings.plugins.studio.magnets.footprint')}</span>
+                      <strong>
+                        {selectedMagnet.gridFootprint
+                          ? `${selectedMagnet.gridFootprint.width}x${selectedMagnet.gridFootprint.height}`
+                          : t('settings.plugins.studio.magnets.anchorCount', {
+                              count: selectedMagnet.anchors.length,
+                            })}
+                      </strong>
+                      <span>{t('settings.plugins.studio.appearance.variantCatalog')}</span>
+                      <strong>
+                        {t('settings.plugins.studio.appearance.variantCount', {
+                          count: selectedMagnetVariants.length,
+                        })}
+                      </strong>
+                    </div>
+
+                    <div className="settings-plugin-studio-code-grid">
+                      <div>
+                        <div className="settings-plugin-studio-section-title">
+                          {t('settings.plugins.studio.magnets.anchors')}
+                        </div>
+                        <pre className="settings-plugin-studio-code">
+                          {safeJsonStringify(selectedMagnet.anchors)}
+                        </pre>
+                      </div>
+                      <div>
+                        <div className="settings-plugin-studio-section-title">
+                          {t('settings.plugins.studio.magnets.bounds')}
+                        </div>
+                        <pre className="settings-plugin-studio-code">
+                          {safeJsonStringify(selectedMagnet.bounds)}
+                        </pre>
+                      </div>
+                      <div>
+                        <div className="settings-plugin-studio-section-title">
+                          {t('settings.plugins.studio.magnets.chrome')}
+                        </div>
+                        <pre className="settings-plugin-studio-code">
+                          {safeJsonStringify(selectedMagnet.chrome ?? {})}
+                        </pre>
+                      </div>
+                      <div>
+                        <div className="settings-plugin-studio-section-title">
+                          {t('settings.plugins.studio.appearance.skinProps')}
+                        </div>
+                        <pre className="settings-plugin-studio-code">
+                          {safeJsonStringify(selectedMagnet.skinProps ?? {})}
+                        </pre>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="settings-card-note">{t('settings.plugins.studio.magnets.empty')}</div>
+                )}
+              </div>
+            </div>
+          ) : null}
+
+          {activeWorkspace === 'appearance' ? (
+            <div className="settings-plugin-studio-stack">
+              {selectedMagnet ? (
+                <>
+                  <div className="settings-plugin-studio-definition-grid">
+                    <span>{t('settings.plugins.studio.appearance.selectedMagnet')}</span>
+                    <strong>{selectedMagnet.id}</strong>
+                    <span>{t('settings.plugins.studio.appearance.themeBinding')}</span>
+                    <strong>{selectedMagnet ? `magnet.${selectedMagnet.id}` : '-'}</strong>
+                    <span>{t('settings.plugins.studio.appearance.renderer')}</span>
+                    <strong>{selectedMagnetRendererId ?? '-'}</strong>
+                    <span>{t('settings.plugins.studio.appearance.variant')}</span>
+                    <strong>{selectedMagnet.variant ?? t('settings.plugins.studio.appearance.variantDefault')}</strong>
+                    <span>{t('settings.plugins.studio.appearance.variantCatalog')}</span>
+                    <strong>
+                      {t('settings.plugins.studio.appearance.variantCount', {
+                        count: selectedMagnetVariants.length,
+                      })}
+                    </strong>
+                  </div>
+
+                  <div className="settings-plugin-studio-toolbar">
+                    <PmpButton
+                      type="button"
+                      className="settings-action-btn"
+                      variant="default"
+                      onClick={() => void handleOpenBuiltinWindow('editor:theme')}
+                    >
+                      {t('settings.plugins.studio.appearance.openThemeBinding')}
+                    </PmpButton>
+                  </div>
+
+                  <div>
+                    <div className="settings-plugin-studio-section-title">
+                      {t('settings.plugins.studio.appearance.skinProps')}
+                    </div>
+                    <pre className="settings-plugin-studio-code">
+                      {safeJsonStringify(selectedMagnet.skinProps ?? {})}
+                    </pre>
+                  </div>
+                </>
+              ) : (
+                <div className="settings-card-note">{t('settings.plugins.studio.magnets.empty')}</div>
+              )}
+
+              <div className="settings-plugin-studio-section-title">
+                {t('settings.plugins.studio.appearance.renderers')}
+              </div>
+              <div className="settings-plugin-studio-renderer-list">
+                {registeredRenderers.map((renderer) => {
+                  const variants = variantsByRendererId.get(renderer.id) ?? [];
+                  return (
+                    <div key={renderer.id} className="settings-plugin-studio-renderer">
+                      <div>
+                        <strong>{renderer.id}</strong>
+                        <span className="settings-plugin-subtitle">
+                          {' '}
+                          {renderer.source ?? 'builtin'} · {renderer.group ?? '-'}
+                        </span>
+                      </div>
+                      <div className="settings-plugin-tags">
+                        <span className="settings-plugin-tag">
+                          {t('settings.plugins.studio.appearance.variantCount', {
+                            count: variants.length,
+                          })}
+                        </span>
+                        {variants.map((variant) => (
+                          <span key={variant.id} className="settings-plugin-tag">
+                            {variant.label}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
+          {activeWorkspace === 'diagnostics' ? (
+            <div className="settings-plugin-studio-stack">
+              <div className="settings-plugin-studio-toolbar">
+                <PmpButton
+                  type="button"
+                  className="settings-action-btn"
+                  variant="default"
+                  onClick={() => void handleOpenDebugCenter()}
+                >
+                  {t('settings.plugins.studio.action.openDebugCenter')}
+                </PmpButton>
+              </div>
+
+              <div className="settings-plugin-studio-diagnostic-list">
+                {studioDiagnostics.map((diagnostic: PluginStudioDiagnostic) => (
+                  <div
+                    key={diagnostic.id}
+                    className="settings-plugin-studio-diagnostic"
+                    data-severity={diagnostic.severity}
+                  >
+                    <div>
+                      <strong>{t(diagnostic.titleKey, diagnostic.params)}</strong>
+                      <span className="settings-plugin-subtitle">
+                        {' '}
+                        {t(getPluginStudioDiagnosticAreaLabelKey(diagnostic.area))} ·{' '}
+                        {t(getPluginStudioDiagnosticSeverityLabelKey(diagnostic.severity))}
+                      </span>
+                    </div>
+                    <div className="settings-plugin-desc">
+                      {t(diagnostic.messageKey, diagnostic.params)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {packageReports.length > 0 ? (
+                <>
+                  <div className="settings-plugin-studio-section-title">
+                    {t('settings.plugins.studio.package.reports')}
+                  </div>
+                  <div className="settings-plugin-studio-report-list">
+                    {packageReports.slice(0, 4).map((report) => (
+                      <div key={report.id} className="settings-plugin-studio-report">
+                        <div>
+                          <strong>{report.title}</strong>
+                          <span className="settings-plugin-subtitle">
+                            {' '}
+                            {report.kind} · {t(getPackageReportStatusKey(report.status))}
+                          </span>
+                        </div>
+                        <div className="settings-plugin-desc">{report.detail}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
       </div>
       {confirmDialog}
     </PmpCard>

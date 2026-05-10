@@ -15,7 +15,6 @@ import { StyleBackgroundEffectPopup } from './components/editor/style/StyleBackg
 import { StyleBorderEffectPopup } from './components/editor/style/StyleBorderEffectPopup';
 import { StyleCoverColorPopup } from './components/editor/style/StyleCoverColorPopup';
 import { StylePixelPopup } from './components/editor/style/StylePixelPopup';
-import { MagnetCreator } from './components/editor/MagnetCreator';
 import { BackgroundManager } from './components/editor/BackgroundManager';
 import { CustomBackgroundEditor } from './components/editor/CustomBackgroundEditor';
 import { ThemeEditor } from './components/editor/ThemeEditor';
@@ -50,7 +49,7 @@ import {
   setupTauriListener,
   setupTauriListenerWithPayload,
 } from './utils/windowCommunication';
-import { readJson, readString, removeKey, writeJson } from './modules/storage';
+import { readJson, writeJson } from './modules/storage';
 import { applyWindowPinPolicy, updateWindowPinPreference } from './utils/windowPinRuntime';
 import { readWindowPinState, writeWindowPinState } from './utils/windowPinState';
 import {
@@ -72,7 +71,6 @@ import './index.css';
 import './components/editor/EditorStatistics.css';
 import './components/editor/EditorMagnetLibrary.css';
 import './components/editor/EditorWindowApp.css';
-import './components/editor/MagnetCreator.css';
 import './components/editor/BackgroundManager.css';
 import './components/editor/CustomBackgroundEditor.css';
 import './components/editor/ThemeEditor.css';
@@ -615,8 +613,7 @@ export function EditorWindowApp() {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const effectsReadyRef = useRef(false);
   const isTauri = useMemo(() => isTauriRuntime(), []);
-  const needsMagnetConfigSync =
-    windowType === 'library' || windowType === 'statistics' || windowType === 'creator';
+  const needsMagnetConfigSync = windowType === 'library' || windowType === 'statistics';
 
   useEffect(() => {
     const onVisibilityChange = () => setIsDocumentVisible(!document.hidden);
@@ -756,20 +753,39 @@ export function EditorWindowApp() {
   }, [isTauri]);
 
   useEffect(() => {
+    let disposed = false;
+
+    const syncCurrentWindowVisibility = async () => {
+      if (!isTauri) {
+        if (!disposed) setIsWindowVisible(true);
+        return;
+      }
+
+      try {
+        const { appWindow } = await import('@tauri-apps/api/window');
+        const visible = await appWindow.isVisible();
+        if (!disposed) setIsWindowVisible(visible);
+      } catch {
+        // best-effort: hidden/shown events keep the steady-state path in sync
+      }
+    };
+
     const setup = async () => {
       const unlistenHidden = await setupTauriListenerWithPayload<string>(
         TAURI_EVENTS.EDITOR_WINDOW_HIDDEN,
         (payload) => {
-          if (payload === windowType) setIsWindowVisible(false);
+          if (!disposed && payload === windowType) setIsWindowVisible(false);
         }
       );
 
       const unlistenShown = await setupTauriListenerWithPayload<string>(
         TAURI_EVENTS.EDITOR_WINDOW_SHOWN,
         (payload) => {
-          if (payload === windowType) setIsWindowVisible(true);
+          if (!disposed && payload === windowType) setIsWindowVisible(true);
         }
       );
+
+      await syncCurrentWindowVisibility();
 
       return () => {
         unlistenHidden();
@@ -779,9 +795,10 @@ export function EditorWindowApp() {
 
     const cleanupPromise = setup();
     return () => {
+      disposed = true;
       cleanupPromise.then((cleanup) => cleanup());
     };
-  }, [windowType]);
+  }, [isTauri, windowType]);
 
   // 默认内置 Magnet 库
   const defaultMagnetLibrary = useMemo(() => createDefaultMagnetLibrary(), []);
@@ -800,67 +817,6 @@ export function EditorWindowApp() {
   const [isMaximized, setIsMaximized] = useState(() => {
     return readJson<boolean>(STORAGE_KEYS.IS_MAXIMIZED, false);
   });
-
-  // Creator 编辑模式数据
-  const [creatorMode, setCreatorMode] = useState<'create' | 'edit'>('create');
-  const [editingMagnet, setEditingMagnet] = useState<Magnet | undefined>(undefined);
-
-  const reloadCreatorData = useCallback(() => {
-    try {
-      const mode = readString(STORAGE_KEYS.MAGNET_EDITOR_MODE) as 'create' | 'edit' | null;
-      const data = readJson<Magnet | null>(STORAGE_KEYS.MAGNET_EDITOR_DATA, null);
-
-      if (mode === 'edit' && data) {
-        setCreatorMode('edit');
-        setEditingMagnet(data);
-      } else {
-        setCreatorMode('create');
-        setEditingMagnet(undefined);
-      }
-    } catch (error) {
-      editorWindowTelemetry.error('editor.creator-data.load.failed', {
-        message: getErrorMessage(error),
-      });
-      setCreatorMode('create');
-      setEditingMagnet(undefined);
-    }
-  }, []);
-
-  // Creator window is now cached (hidden, not destroyed), so it must reload its payload when reopened.
-  useEffect(() => {
-    if (windowType !== 'creator') return;
-
-    reloadCreatorData();
-
-    const setup = async () => {
-      const unlistenOpened = await setupTauriListener(TAURI_EVENTS.CREATOR_WINDOW_OPENED, () => {
-        reloadCreatorData();
-      });
-
-      const unlistenHidden = await setupTauriListenerWithPayload<string>(
-        TAURI_EVENTS.EDITOR_WINDOW_HIDDEN,
-        (payload) => {
-          if (payload === 'creator') {
-          void broadcastDataUpdate(
-            STORAGE_KEYS.CREATOR_WINDOW_OPEN,
-            false,
-            TAURI_EVENTS.CREATOR_WINDOW_CLOSED
-          );
-        }
-        }
-      );
-
-      return () => {
-        unlistenOpened();
-        unlistenHidden();
-      };
-    };
-
-    const cleanupPromise = setup();
-    return () => {
-      cleanupPromise.then((cleanup) => cleanup());
-    };
-  }, [windowType, reloadCreatorData]);
 
   // 监听 URL hash 变化（如果需要动态切换）
   useEffect(() => {
@@ -1481,55 +1437,6 @@ export function EditorWindowApp() {
             {windowType === 'style-cover-color' && <StyleCoverColorPopup />}
             {windowType === 'style-background-effect' && <StyleBackgroundEffectPopup />}
             {windowType === 'style-border-effect' && <StyleBorderEffectPopup />}
-            {windowType === 'creator' && (
-              <MagnetCreator
-                mode={creatorMode}
-                editingMagnet={editingMagnet}
-                defaultMagnet={
-                  // 如果是编辑内置 Magnet，传入默认配置
-                  creatorMode === 'edit' && editingMagnet
-                    ? defaultMagnetLibrary.find((m) => m.id === editingMagnet.id)
-                    : undefined
-                }
-                onSave={async (magnet) => {
-                  // 根据模式选择新增或更新
-                  if (creatorMode === 'edit') {
-                    handleMagnetUpdate(magnet);
-                  } else {
-                    handleMagnetAddToLibrary(magnet);
-                  }
-                  // 清除编辑数据
-                  removeKey(STORAGE_KEYS.MAGNET_EDITOR_MODE);
-                  removeKey(STORAGE_KEYS.MAGNET_EDITOR_DATA);
-                  // 清除窗口打开状态
-                  await broadcastDataUpdate(
-                    STORAGE_KEYS.CREATOR_WINDOW_OPEN,
-                    false,
-                    TAURI_EVENTS.CREATOR_WINDOW_CLOSED
-                  );
-                }}
-                onCancel={async () => {
-                  try {
-                    // 清除编辑数据
-                    removeKey(STORAGE_KEYS.MAGNET_EDITOR_MODE);
-                    removeKey(STORAGE_KEYS.MAGNET_EDITOR_DATA);
-                    // 清除窗口打开状态
-                    await broadcastDataUpdate(
-                      STORAGE_KEYS.CREATOR_WINDOW_OPEN,
-                      false,
-                      TAURI_EVENTS.CREATOR_WINDOW_CLOSED
-                    );
-                    // 关闭窗口
-                    const { closeEditorWindow } = await import('./utils/editorWindows');
-                    await closeEditorWindow('creator');
-                  } catch (error) {
-                    editorWindowTelemetry.error('editor.creator.window.close.failed', {
-                      message: getErrorMessage(error),
-                    });
-                  }
-                }}
-              />
-            )}
 
             {windowType === 'background' && (
               <BackgroundManager

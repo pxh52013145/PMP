@@ -200,7 +200,6 @@ const SHELL_MENU_ITEM_PERMISSION_BY_COMMAND_ID: Record<string, string | null> = 
   'app:open-theme-editor-window': 'api:window',
   'app:open-debug-editor-window': 'api:window',
   'app:open-control-editor-window': 'api:window',
-  'app:open-creator-editor-window': 'api:window',
   'app:open-custom-background-editor-window': 'api:window',
   'app:open-statistics-editor-window': 'api:window',
   'app:open-library-editor-window': 'api:window',

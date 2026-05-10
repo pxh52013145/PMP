@@ -649,69 +649,6 @@ export function loadConfig(storageKey: string = CONFIG_KEY): MagnetConfig | null
   }
 }
 
-export function exportConfig(
-  magnetLibrary: Magnet[],
-  activeMagnetIds: Set<string>,
-  gridSize: { columns: number; rows: number },
-  defaultMagnetLibrary?: Magnet[]
-): string {
-  const config: MagnetConfig = {
-    version: CONFIG_VERSION,
-    gridSize,
-    magnets: {},
-    customMagnets: [],
-  };
-
-  magnetLibrary.forEach((magnet) => {
-    const defaultMagnet = BUILTIN_MAGNET_IDS.has(magnet.id)
-      ? defaultMagnetLibrary?.find((candidate) => candidate.id === magnet.id)
-      : undefined;
-    const magnetConfig = createMagnetStateConfig(
-      magnet,
-      activeMagnetIds.has(magnet.id),
-      defaultMagnet
-    );
-
-    config.magnets[magnet.id] = magnetConfig;
-  });
-
-  config.customMagnets = magnetLibrary
-    .filter((m) => !BUILTIN_MAGNET_IDS.has(m.id))
-    .map((magnet) => sanitizeCustomMagnet(magnet).magnet)
-    .filter((magnet): magnet is Magnet => magnet !== null);
-
-  return JSON.stringify(config, null, 2);
-}
-
-export function importConfig(jsonStr: string): MagnetConfig | null {
-  try {
-    const sanitizedResult = parseStoredConfig(jsonStr);
-    let config = sanitizedResult.config;
-
-    if (!config.version || !config.gridSize || !config.magnets) {
-      throw new Error('Invalid config file: missing required fields');
-    }
-
-    if (config.version !== CONFIG_VERSION) {
-      telemetry.warn('config.import.version_mismatch', {
-        message: 'Imported config version mismatch. Updating to current version.',
-        fields: {
-          fromVersion: config.version,
-          targetVersion: CONFIG_VERSION,
-        },
-      });
-      config = { ...config, version: CONFIG_VERSION };
-    }
-
-    return config;
-  } catch (error) {
-    telemetry.error('config.import.failed', {
-      message: readErrorMessage(error),
-    });
-    return null;
-  }
-}
-
 export function clearConfig(): void {
   try {
     removeKey(CONFIG_KEY);

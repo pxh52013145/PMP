@@ -26,7 +26,6 @@ const BUILTIN_EDITOR_WINDOW_OPEN_COMMAND_BY_TYPE: Record<EditorWindowType, strin
   'style-cover-color': 'app:open-style-cover-color-editor-window',
   'style-background-effect': 'app:open-style-background-effect-editor-window',
   'style-border-effect': 'app:open-style-border-effect-editor-window',
-  creator: 'app:open-creator-editor-window',
   background: 'app:open-background-editor-window',
   'custom-background': 'app:open-custom-background-editor-window',
   theme: 'app:open-theme-editor-window',
@@ -589,7 +588,6 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
         registerEditorWindow('style-cover-color', t('windows.editor.style-cover-color.title'));
         registerEditorWindow('style-background-effect', t('windows.editor.style-background-effect.title'));
         registerEditorWindow('style-border-effect', t('windows.editor.style-border-effect.title'));
-        registerEditorWindow('creator', t('windows.editor.creator.title'));
         registerEditorWindow('background', t('windows.editor.background.title'));
         registerEditorWindow('custom-background', t('windows.editor.custom-background.title'));
         registerEditorWindow('theme', t('windows.editor.theme.title'));
