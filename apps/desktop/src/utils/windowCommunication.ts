@@ -209,6 +209,10 @@ export const STORAGE_KEYS = {
 
 
   // === 缂栬緫鍣ㄤ复鏃舵暟鎹?===
+  MAGNET_EDITOR_DATA: 'magnet-editor-data', // Magnet Editor payload
+  MAGNET_EDITOR_MODE: 'magnet-editor-mode', // Magnet Editor mode
+  MAGNET_EDITOR_HISTORY_PREFIX: 'magnet-editor-history', // Per-magnet editor history prefix
+  CREATOR_WINDOW_OPEN: 'magnet-creator-window-open', // Legacy internal Magnet Editor window state
   EDITOR_STATE: 'pixel-matrix-editor-state', // 缂栬緫鍣ㄧ姸鎬侊紙鍖呮嫭閫変腑淇℃伅锛?
 
   // === Native Audio ===
@@ -330,6 +334,8 @@ export const TAURI_EVENTS = {
   MAGNET_PLACEMENT_REQUESTED: 'magnet-placement-requested',
   MAGNET_LIBRARY_FOCUS_REQUESTED: 'magnet-library-focus-requested',
   MAGNET_CHROME_OVERRIDE_MODE_UPDATED: 'magnet-chrome-override-mode-updated',
+  CREATOR_WINDOW_OPENED: 'creator-window-opened',
+  CREATOR_WINDOW_CLOSED: 'creator-window-closed',
 
   // 鑳屾櫙鐩稿叧
   BACKGROUND_UPDATED: 'background-updated',

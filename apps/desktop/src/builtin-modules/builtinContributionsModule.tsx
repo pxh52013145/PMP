@@ -17,7 +17,9 @@ function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-const BUILTIN_EDITOR_WINDOW_OPEN_COMMAND_BY_TYPE: Record<EditorWindowType, string> = {
+type PublicEditorWindowType = Exclude<EditorWindowType, 'creator'>;
+
+const BUILTIN_EDITOR_WINDOW_OPEN_COMMAND_BY_TYPE: Record<PublicEditorWindowType, string> = {
   control: 'app:open-control-editor-window',
   statistics: 'app:open-statistics-editor-window',
   library: 'app:open-library-editor-window',
@@ -144,7 +146,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
         unregisters.set(key, unregister);
       };
 
-      const registerEditorWindow = (type: EditorWindowType, title: string) => {
+      const registerEditorWindow = (type: PublicEditorWindowType, title: string) => {
         register<WindowContribution>({
           kind: 'window',
           id: `editor:${type}`,

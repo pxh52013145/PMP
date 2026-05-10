@@ -15,6 +15,7 @@ import { StyleBackgroundEffectPopup } from './components/editor/style/StyleBackg
 import { StyleBorderEffectPopup } from './components/editor/style/StyleBorderEffectPopup';
 import { StyleCoverColorPopup } from './components/editor/style/StyleCoverColorPopup';
 import { StylePixelPopup } from './components/editor/style/StylePixelPopup';
+import { MagnetCreator } from './components/editor/MagnetCreator';
 import { BackgroundManager } from './components/editor/BackgroundManager';
 import { CustomBackgroundEditor } from './components/editor/CustomBackgroundEditor';
 import { ThemeEditor } from './components/editor/ThemeEditor';
@@ -49,7 +50,7 @@ import {
   setupTauriListener,
   setupTauriListenerWithPayload,
 } from './utils/windowCommunication';
-import { readJson, writeJson } from './modules/storage';
+import { readJson, readString, removeKey, writeJson } from './modules/storage';
 import { applyWindowPinPolicy, updateWindowPinPreference } from './utils/windowPinRuntime';
 import { readWindowPinState, writeWindowPinState } from './utils/windowPinState';
 import {
@@ -71,6 +72,7 @@ import './index.css';
 import './components/editor/EditorStatistics.css';
 import './components/editor/EditorMagnetLibrary.css';
 import './components/editor/EditorWindowApp.css';
+import './components/editor/MagnetCreator.css';
 import './components/editor/BackgroundManager.css';
 import './components/editor/CustomBackgroundEditor.css';
 import './components/editor/ThemeEditor.css';
@@ -613,7 +615,8 @@ export function EditorWindowApp() {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const effectsReadyRef = useRef(false);
   const isTauri = useMemo(() => isTauriRuntime(), []);
-  const needsMagnetConfigSync = windowType === 'library' || windowType === 'statistics';
+  const needsMagnetConfigSync =
+    windowType === 'library' || windowType === 'statistics' || windowType === 'creator';
 
   useEffect(() => {
     const onVisibilityChange = () => setIsDocumentVisible(!document.hidden);
@@ -817,6 +820,61 @@ export function EditorWindowApp() {
   const [isMaximized, setIsMaximized] = useState(() => {
     return readJson<boolean>(STORAGE_KEYS.IS_MAXIMIZED, false);
   });
+  const [creatorMode, setCreatorMode] = useState<'edit'>('edit');
+  const [editingMagnet, setEditingMagnet] = useState<Magnet | undefined>(undefined);
+
+  const reloadCreatorData = useCallback(() => {
+    try {
+      const mode = readString(STORAGE_KEYS.MAGNET_EDITOR_MODE);
+      const data = readJson<Magnet | null>(STORAGE_KEYS.MAGNET_EDITOR_DATA, null);
+
+      setCreatorMode('edit');
+      setEditingMagnet(mode === 'edit' && data ? data : undefined);
+    } catch (error) {
+      editorWindowTelemetry.error('editor.magnet-editor-data.load.failed', {
+        message: getErrorMessage(error),
+      });
+      setCreatorMode('edit');
+      setEditingMagnet(undefined);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (windowType !== 'creator') return;
+
+    reloadCreatorData();
+
+    const setup = async () => {
+      const unlistenOpened = await setupTauriListener(TAURI_EVENTS.CREATOR_WINDOW_OPENED, () => {
+        reloadCreatorData();
+      });
+
+      const unlistenHidden = await setupTauriListenerWithPayload<string>(
+        TAURI_EVENTS.EDITOR_WINDOW_HIDDEN,
+        (payload) => {
+          if (payload === 'creator') {
+            const wasMarkedOpen = readJson<boolean>(STORAGE_KEYS.CREATOR_WINDOW_OPEN, false);
+            if (!wasMarkedOpen) return;
+            void broadcastDataUpdate(
+              STORAGE_KEYS.CREATOR_WINDOW_OPEN,
+              false,
+              TAURI_EVENTS.CREATOR_WINDOW_CLOSED
+            );
+          }
+        }
+      );
+
+      return () => {
+        unlistenOpened();
+        unlistenHidden();
+      };
+    };
+
+    const cleanupPromise = setup();
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, [windowType, reloadCreatorData]);
 
   // 监听 URL hash 变化（如果需要动态切换）
   useEffect(() => {
@@ -1167,62 +1225,6 @@ export function EditorWindowApp() {
     });
   };
 
-  const handleMagnetAddToLibrary = async (magnet: Magnet) => {
-    const context = await resolveEditorMutationSpace('addMagnetToLibrary');
-    if (!context) return;
-
-    const newLibrary = [...magnetLibrary, magnet];
-    setMagnetLibrary(newLibrary);
-
-    upsertMagnetCatalogMagnet(magnet);
-
-    const { activeSpaceId, store } = context;
-    const nextLayout = buildMagnetSpaceLayoutSnapshot(newLibrary, activeMagnetIds);
-
-    if (isTauri) {
-      if (store) {
-        const response = await magnetLayoutStoreApplyPatchWithRetry(
-          {
-            expectedRevision: store.revision,
-            patches: [{ kind: 'setSpaceLayout', spaceId: activeSpaceId, layout: nextLayout }],
-            reason: 'addMagnetToLibrary',
-          },
-          { maxRetries: 2 }
-        );
-        if (!response?.ok) {
-          editorWindowTelemetry.warn('editor.magnet.add.persist.failed', {
-            message: String(response?.error ?? response),
-            fields: {
-              magnetId: magnet.id,
-              spaceId: activeSpaceId,
-            },
-          });
-        }
-      }
-    } else {
-      saveMagnetSpaceLayout(nextLayout, resolveMagnetLayoutStorageKey(activeSpaceId));
-    }
-
-    // 保存配置并广播
-    saveConfig(
-      newLibrary,
-      activeMagnetIds,
-      { columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS },
-      defaultMagnetLibrary,
-      resolveMagnetConfigStorageKey(activeSpaceId),
-      { includeCustomMagnets: false }
-    );
-    if (!isTauri) {
-      await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
-    }
-    editorWindowTelemetry.info('editor.magnet.added', {
-      fields: {
-        magnetId: magnet.id,
-        librarySize: newLibrary.length,
-      },
-    });
-  };
-
   const handleMagnetUpdate = async (magnet: Magnet) => {
     const context = await resolveEditorMutationSpace('updateMagnetInLibrary');
     if (!context) return;
@@ -1423,7 +1425,6 @@ export function EditorWindowApp() {
                 magnetLibrary={magnetLibrary}
                 activeMagnetIds={activeMagnetIds}
                 builtInMagnetIds={builtInMagnetIds}
-                onMagnetAddToLibrary={handleMagnetAddToLibrary}
                 onMagnetUpdate={handleMagnetUpdate}
                 onMagnetActivate={handleMagnetActivate}
                 onMagnetDeactivate={handleMagnetDeactivate}
@@ -1437,6 +1438,51 @@ export function EditorWindowApp() {
             {windowType === 'style-cover-color' && <StyleCoverColorPopup />}
             {windowType === 'style-background-effect' && <StyleBackgroundEffectPopup />}
             {windowType === 'style-border-effect' && <StyleBorderEffectPopup />}
+            {windowType === 'creator' && (
+              <MagnetCreator
+                mode={creatorMode}
+                editingMagnet={editingMagnet}
+                defaultMagnet={
+                  editingMagnet ? defaultMagnetLibrary.find((m) => m.id === editingMagnet.id) : undefined
+                }
+                onSave={async (magnet) => {
+                  try {
+                    await handleMagnetUpdate(magnet);
+                    removeKey(STORAGE_KEYS.MAGNET_EDITOR_MODE);
+                    removeKey(STORAGE_KEYS.MAGNET_EDITOR_DATA);
+                    await broadcastDataUpdate(
+                      STORAGE_KEYS.CREATOR_WINDOW_OPEN,
+                      false,
+                      TAURI_EVENTS.CREATOR_WINDOW_CLOSED
+                    );
+                    const { closeEditorWindow } = await import('./utils/editorWindows');
+                    await closeEditorWindow('creator');
+                  } catch (error) {
+                    editorWindowTelemetry.error('editor.magnet-editor.save.failed', {
+                      message: getErrorMessage(error),
+                    });
+                    throw error;
+                  }
+                }}
+                onCancel={async () => {
+                  try {
+                    removeKey(STORAGE_KEYS.MAGNET_EDITOR_MODE);
+                    removeKey(STORAGE_KEYS.MAGNET_EDITOR_DATA);
+                    await broadcastDataUpdate(
+                      STORAGE_KEYS.CREATOR_WINDOW_OPEN,
+                      false,
+                      TAURI_EVENTS.CREATOR_WINDOW_CLOSED
+                    );
+                    const { closeEditorWindow } = await import('./utils/editorWindows');
+                    await closeEditorWindow('creator');
+                  } catch (error) {
+                    editorWindowTelemetry.error('editor.magnet-editor.window.close.failed', {
+                      message: getErrorMessage(error),
+                    });
+                  }
+                }}
+              />
+            )}
 
             {windowType === 'background' && (
               <BackgroundManager

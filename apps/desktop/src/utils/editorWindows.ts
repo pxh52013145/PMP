@@ -13,6 +13,7 @@ export type EditorWindowType =
   | 'style-cover-color'
   | 'style-background-effect'
   | 'style-border-effect'
+  | 'creator'
   | 'background'
   | 'custom-background'
   | 'theme'
@@ -90,7 +91,7 @@ export async function openEditorWindow(config: EditorWindowConfig): Promise<void
  */
 const WINDOW_HIERARCHY: Record<EditorWindowType, EditorWindowType[]> = {
   control: ['statistics', 'library', 'style', 'background', 'theme', 'debug'], // control 关闭时关闭所有主要窗口
-  library: [],
+  library: ['creator'], // Legacy internal type for the Magnet Editor child window.
   background: ['custom-background'], // background 关闭时关闭 custom-background
   statistics: [],
   style: [
@@ -103,6 +104,7 @@ const WINDOW_HIERARCHY: Record<EditorWindowType, EditorWindowType[]> = {
   'style-cover-color': [],
   'style-background-effect': [],
   'style-border-effect': [],
+  creator: [],
   'custom-background': [],
   theme: ['debug'],
   debug: [],
@@ -405,6 +407,7 @@ export async function calculateWindowPosition(
     'style-cover-color': { width: 560, height: 520 },
     'style-background-effect': { width: 560, height: 560 },
     'style-border-effect': { width: 560, height: 560 },
+    creator: { width: 900, height: 700 },
     background: { width: 480, height: 650 },
     'custom-background': { width: 600, height: 720 },
     theme: { width: 1200, height: 800 },
@@ -436,6 +439,7 @@ export async function calculateWindowPosition(
     'style-cover-color': 3,
     'style-background-effect': 3,
     'style-border-effect': 3,
+    creator: 5,
     background: 6,
     'custom-background': 7,
     theme: 8,

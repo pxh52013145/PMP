@@ -32,7 +32,7 @@ const BUILTIN_WINDOW_PERMISSIONS = new Set<string>([
   'api:window',
 ]);
 
-const BUILTIN_EDITOR_WINDOW_CAPABILITY_IDS: Record<EditorWindowType, string> = {
+const BUILTIN_EDITOR_WINDOW_CAPABILITY_IDS: Partial<Record<EditorWindowType, string>> = {
   control: 'editor-control',
   statistics: 'editor-statistics',
   library: 'editor-library',
