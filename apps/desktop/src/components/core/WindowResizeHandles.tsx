@@ -17,6 +17,7 @@ type ResizeSession = {
 
 const MIN_WIDTH = 526;
 const MIN_HEIGHT = 400;
+const WINDOW_RESIZE_INTERACTION_CLASS = 'window-resize-handles--resizing';
 
 const DIRECTIONS: ResizeDirection[] = ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw'];
 
@@ -84,8 +85,11 @@ async function startFallbackResize(
 
   let frame: number | null = null;
   let pendingEvent: PointerEvent | null = null;
+  let disposed = false;
 
-  const cleanup = () => {
+  const finishCleanup = () => {
+    if (disposed) return;
+    disposed = true;
     if (frame !== null) {
       window.cancelAnimationFrame(frame);
       frame = null;
@@ -96,20 +100,34 @@ async function startFallbackResize(
     window.removeEventListener('pointercancel', cleanup, true);
     window.removeEventListener('blur', cleanup, true);
     document.removeEventListener('visibilitychange', handleVisibilityChange, true);
-    document.body.classList.remove('window-resize-handles--resizing');
+    document.body.classList.remove(WINDOW_RESIZE_INTERACTION_CLASS);
   };
 
-  const flushMove = () => {
+  const cleanup = () => {
+    if (pendingEvent) {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+        frame = null;
+      }
+      void flushMove().finally(finishCleanup);
+      return;
+    }
+    finishCleanup();
+  };
+
+  const flushMove = async () => {
     frame = null;
     if (!pendingEvent) return;
     const next = resolveNextGeometry(session, pendingEvent);
     pendingEvent = null;
-    void appWindow.setPosition(
-      new LogicalPosition(next.x / session.scaleFactor, next.y / session.scaleFactor)
-    );
-    void appWindow.setSize(
-      new LogicalSize(next.width / session.scaleFactor, next.height / session.scaleFactor)
-    );
+    await Promise.all([
+      appWindow.setPosition(
+        new LogicalPosition(next.x / session.scaleFactor, next.y / session.scaleFactor)
+      ),
+      appWindow.setSize(
+        new LogicalSize(next.width / session.scaleFactor, next.height / session.scaleFactor)
+      ),
+    ]);
   };
 
   const handleMove = (moveEvent: PointerEvent) => {
@@ -124,7 +142,7 @@ async function startFallbackResize(
     if (document.hidden) cleanup();
   };
 
-  document.body.classList.add('window-resize-handles--resizing');
+  document.body.classList.add(WINDOW_RESIZE_INTERACTION_CLASS);
   window.addEventListener('pointermove', handleMove, true);
   window.addEventListener('pointerup', cleanup, true);
   window.addEventListener('pointercancel', cleanup, true);
@@ -132,9 +150,14 @@ async function startFallbackResize(
   document.addEventListener('visibilitychange', handleVisibilityChange, true);
 }
 
-export default function WindowResizeHandles() {
+type WindowResizeHandlesProps = {
+  className?: string;
+  forceFallback?: boolean;
+};
+
+export default function WindowResizeHandles({ className, forceFallback = false }: WindowResizeHandlesProps) {
   if (!isTauriRuntime()) return null;
-  if (isWindowsRuntime()) {
+  if (isWindowsRuntime() && !forceFallback) {
     // Windows borderless resizing is handled natively by tao/Tauri hit-testing
     // as long as the main window itself is resizable.
     return null;
@@ -148,7 +171,7 @@ export default function WindowResizeHandles() {
   };
 
   return (
-    <div className="window-resize-handles" aria-hidden="true">
+    <div className={`window-resize-handles${className ? ` ${className}` : ''}`} aria-hidden="true">
       {DIRECTIONS.map((direction) => (
         <div
           key={direction}

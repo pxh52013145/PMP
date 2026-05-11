@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { Suspense, lazy, useEffect, useState, useMemo, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { appWindow, getAll } from '@tauri-apps/api/window';
 import {
@@ -80,11 +80,20 @@ type DesktopLyricsAudioControlRequestPayload = {
   action?: DesktopLyricsAudioControlAction;
 };
 
+type VisualizerOverlayRequest = {
+  visualizerId: string;
+  source?: 'magnet' | 'settings' | 'command' | 'programmatic';
+};
+
 const DESKTOP_LYRICS_AUDIO_CONTROL_COMMANDS: Record<DesktopLyricsAudioControlAction, string> = {
   previous: 'audio:previous-track',
   'toggle-play-pause': 'audio:toggle-play-pause',
   next: 'audio:next-track',
 };
+
+const VisualizerOverlayLazy = lazy(async () => ({
+  default: (await import('./components/visualizer/VisualizerOverlay')).VisualizerOverlay,
+}));
 
 function resolveDesktopLyricsAudioControlCommand(action: unknown): string | null {
   if (typeof action !== 'string') return null;
@@ -175,6 +184,10 @@ function AppContent() {
   const [isEditorAuxWindowFocused, setIsEditorAuxWindowFocused] = useState(false);
   const [isMainWindowMinimized, setIsMainWindowMinimized] = useState(false);
   const [isPageFrozen, setIsPageFrozen] = useState(false);
+  const [visualizerOverlayRequest, setVisualizerOverlayRequest] = useState<VisualizerOverlayRequest | null>(null);
+  const closeVisualizerOverlay = useCallback(() => {
+    setVisualizerOverlayRequest(null);
+  }, []);
   const { service: performanceControlService, settings: performanceSettings } =
     usePerformanceControlSettings();
   const isWindowActive =
@@ -809,9 +822,25 @@ function AppContent() {
     const unsubscribeClose = kernel.events.on('ui/commandPaletteCloseRequested', () => {
       setCommandPaletteOpen(false);
     });
+    const unsubscribeVisualizer = kernel.events.on(
+      'ui/visualizerOverlayOpenRequested',
+      (request) => {
+        setVisualizerOverlayRequest((current) => {
+          if (current?.visualizerId === request.visualizerId) {
+            return current;
+          }
+
+          return {
+            visualizerId: request.visualizerId,
+            source: request.source,
+          };
+        });
+      }
+    );
     return () => {
       unsubscribeToggle();
       unsubscribeClose();
+      unsubscribeVisualizer();
     };
   }, [kernel.events]);
 
@@ -924,6 +953,7 @@ function AppContent() {
   }, [shouldPollEditorAuxFocus]);
 
   const isRenderFocusActive = isMainWindowFocused || isEditorAuxWindowFocused;
+  const showWindowBorder = visualizerOverlayRequest === null;
 
   const renderMode = useAdaptiveRenderMode({
     isWindowVisible: isMainWindowVisible,
@@ -941,8 +971,18 @@ function AppContent() {
     >
       <QualityProvider>
         <div className="app-container">
-          <MatrixWorkbench showEditorOverlay showEditorPanel showWindowBorder />
+          <MatrixWorkbench showEditorOverlay showEditorPanel showWindowBorder={showWindowBorder} />
         </div>
+
+        {visualizerOverlayRequest && (
+          <Suspense fallback={null}>
+            <VisualizerOverlayLazy
+              visualizerId={visualizerOverlayRequest.visualizerId}
+              source={visualizerOverlayRequest.source}
+              onClose={closeVisualizerOverlay}
+            />
+          </Suspense>
+        )}
 
         <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
       </QualityProvider>

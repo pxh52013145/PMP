@@ -52,6 +52,6 @@ export const AUDIO_VISUALIZER_MAGNET: Magnet = {
   state: 'idle',
   interactions: {
     draggable: false,
-    clickable: false,
+    clickable: true,
   },
 };

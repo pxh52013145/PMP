@@ -1,7 +1,12 @@
 ﻿import React from 'react';
 import type { KernelModule } from '../kernel';
 import type { AppEvents } from '../contracts/events';
-import type { PageContribution, SettingsPanelContribution, WindowContribution } from '../contracts/contributions';
+import type {
+  PageContribution,
+  SettingsPanelContribution,
+  VisualizerContribution,
+  WindowContribution,
+} from '../contracts/contributions';
 import { parseNavigationParams } from '../contracts/navigationParams';
 import type { Track } from '../services/audio';
 import { useAudioService } from '../contexts/AudioEngineContext';
@@ -124,7 +129,7 @@ function renderWithLazyBoundary(node: React.ReactNode) {
 export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
   return {
     id: 'builtin-contributions',
-    activate: ({ contributions, services }) => {
+    activate: ({ contributions, services, events }) => {
       const unregisters = new Map<string, () => void>();
 
       const dispatchBuiltinWindowOpenCommand = async (
@@ -336,6 +341,23 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           order: 40,
           group: 'visualizer',
           metadata: { settingsSection: 'visualizers' },
+        });
+
+        register<VisualizerContribution>({
+          kind: 'visualizer',
+          id: 'audio-visualizer',
+          title: t('settings.visualizers.audio.title'),
+          description: t('settings.visualizers.audio.desc'),
+          inputs: ['audio.spectrum', 'audio.analysis'],
+          source: 'builtin',
+          order: 1,
+          group: 'visualizer',
+          open: () => {
+            events.emit('ui/visualizerOverlayOpenRequested', {
+              visualizerId: 'audio-visualizer',
+              source: 'settings',
+            });
+          },
         });
 
         register<PageContribution>({

@@ -23,6 +23,10 @@ export type AppEvents = {
   'keybindings/changed': KeybindingsSnapshot;
   'ui/commandPaletteToggleRequested': null;
   'ui/commandPaletteCloseRequested': null;
+  'ui/visualizerOverlayOpenRequested': {
+    visualizerId: string;
+    source?: 'magnet' | 'settings' | 'command' | 'programmatic';
+  };
   'audio/engineChanged': {
     engineType: 'native';
     isNativeAvailable: boolean;

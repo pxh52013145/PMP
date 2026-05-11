@@ -13,6 +13,7 @@ import WindowResizeHandles from '../../components/core/WindowResizeHandles';
 import MatrixRainEffect from '../../components/effects/MatrixRainEffect';
 import { MagnetLayer } from '../../components/magnet/MagnetLayer';
 import { useEditor } from '../../contexts/EditorContext';
+import { useKernel } from '../../contexts/KernelContext';
 import { PixelAnchor } from '../../types/pixel';
 import { BackgroundSettings } from '../../types/background';
 import { DEFAULT_BACKGROUND_SETTINGS } from '../../constants/defaultBackground';
@@ -78,6 +79,7 @@ export function MatrixWorkbench({
   const disableMagnetLayerForPerf = import.meta.env.VITE_PERF_DISABLE_MAGNET_LAYER === '1';
   const disableBackgroundLayerForPerf = import.meta.env.VITE_PERF_DISABLE_BACKGROUND_LAYER === '1';
   const isTauri = useMemo(() => isTauriRuntime(), []);
+  const kernel = useKernel();
   const { requestMainWindowClose } = useWindowClose();
 
   const [pixelPositions, setPixelPositions] = useState<Map<string, { x: number; y: number }>>(
@@ -596,12 +598,31 @@ export function MatrixWorkbench({
             },
           };
         }
+
+        if (m.id === 'audio-visualizer') {
+          return {
+            ...m,
+            interactions: {
+              ...m.interactions,
+              clickable: true,
+              onClick: () => {
+                if (editorState.isEditing) return;
+                kernel.events.emit('ui/visualizerOverlayOpenRequested', {
+                  visualizerId: 'audio-visualizer',
+                  source: 'magnet',
+                });
+              },
+            },
+          };
+        }
         return m;
       });
     return filtered;
   }, [
     activeMagnetIds,
     disableMagnetLayerForPerf,
+    editorState.isEditing,
+    kernel.events,
     isTauri,
     magnetLibrary,
     requestMainWindowClose,
