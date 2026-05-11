@@ -140,6 +140,10 @@ npm-shrinkwrap.json
 /docs/
 /documents/
 /future/
+/community/plugins/utils/
+/reference/
+/.claude/
+/plugin/
 
 # Manuals (work-in-progress)
 Mannuals/
