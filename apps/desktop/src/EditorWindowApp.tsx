@@ -249,8 +249,6 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         TAURI_EVENTS.EDITOR_WINDOW_HIDDEN,
         (payload) => {
           if (payload === 'control') {
-            // Closing the control window exits edit mode and force-closes children; reset the UI state
-            // so the next time this cached window is shown it won't display stale toggles.
             setStatisticsOpen(false);
             setLibraryOpen(false);
             setStyleOpen(false);
@@ -728,6 +726,7 @@ export function EditorWindowApp() {
         };
 
         await refresh();
+
         pollTimer = window.setInterval(() => {
           if (document.hidden || !document.hasFocus()) {
             void refresh();
@@ -849,6 +848,15 @@ export function EditorWindowApp() {
         reloadCreatorData();
       });
 
+      const unlistenShown = await setupTauriListenerWithPayload<string>(
+        TAURI_EVENTS.EDITOR_WINDOW_SHOWN,
+        (payload) => {
+          if (payload === 'creator') {
+            reloadCreatorData();
+          }
+        }
+      );
+
       const unlistenHidden = await setupTauriListenerWithPayload<string>(
         TAURI_EVENTS.EDITOR_WINDOW_HIDDEN,
         (payload) => {
@@ -866,6 +874,7 @@ export function EditorWindowApp() {
 
       return () => {
         unlistenOpened();
+        unlistenShown();
         unlistenHidden();
       };
     };

@@ -927,13 +927,16 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   );
 
   useEffect(() => {
-    void refreshLocalMagnetSpacesState();
-    if (!isTauri) return;
+    let disposed = false;
 
     const setup = async () => {
+      void refreshLocalMagnetSpacesState();
+      if (!isTauri) return;
+
       const unlisten = await setupTauriListenerWithPayload<{ revision: number; reason: string }>(
         TAURI_EVENTS.MAGNET_LAYOUT_STORE_UPDATED,
         (_payload) => {
+          if (disposed) return;
           void refreshLocalMagnetSpacesState();
         }
       );
@@ -945,7 +948,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
     const cleanupPromise = setup();
     return () => {
-      cleanupPromise.then((cleanup) => cleanup());
+      disposed = true;
+      cleanupPromise.then((cleanup) => cleanup?.());
     };
   }, [isTauri, refreshLocalMagnetSpacesState]);
 
@@ -973,53 +977,67 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     setRendererList(listRegisteredMagnetRenderers());
   }, []);
 
-  const refreshDebugOpen = useCallback(async () => {
-    if (!isTauriRuntime()) return;
-    try {
-      const { WebviewWindow } = await import('@tauri-apps/api/window');
-      const win = WebviewWindow.getByLabel('editor-debug');
-      if (!win) {
-        setDebugOpen(false);
-        return;
-      }
-      const visible = await win.isVisible().catch(() => false);
-      setDebugOpen(visible);
-    } catch {
-      setDebugOpen(false);
-    }
-  }, []);
-
   useEffect(() => {
-    void refreshDebugOpen();
+    let disposed = false;
 
-    if (!isTauriRuntime()) return;
+    const syncDebugOpen = async () => {
+      if (!isTauriRuntime()) return;
+      try {
+        const { WebviewWindow } = await import('@tauri-apps/api/window');
+        if (disposed) return;
+        const win = WebviewWindow.getByLabel('editor-debug');
+        if (!win) {
+          setDebugOpen(false);
+          return;
+        }
+        const visible = await win.isVisible().catch(() => false);
+        if (!disposed) {
+          setDebugOpen(visible);
+        }
+      } catch {
+        if (!disposed) {
+          setDebugOpen(false);
+        }
+      }
+    };
+
+    void syncDebugOpen();
+
+    if (!isTauriRuntime()) {
+      return () => {
+        disposed = true;
+      };
+    }
+
+    let unlistenHidden = () => {};
+    let unlistenShown = () => {};
 
     const setup = async () => {
-      const unlistenHidden = await setupTauriListenerWithPayload<string>(
+      unlistenHidden = await setupTauriListenerWithPayload<string>(
         TAURI_EVENTS.EDITOR_WINDOW_HIDDEN,
         (payload) => {
+          if (disposed) return;
           if (payload === 'debug') setDebugOpen(false);
         }
       );
 
-      const unlistenShown = await setupTauriListenerWithPayload<string>(
+      unlistenShown = await setupTauriListenerWithPayload<string>(
         TAURI_EVENTS.EDITOR_WINDOW_SHOWN,
         (payload) => {
+          if (disposed) return;
           if (payload === 'debug') setDebugOpen(true);
         }
       );
-
-      return () => {
-        unlistenHidden();
-        unlistenShown();
-      };
     };
 
-    const cleanupPromise = setup();
+    void setup();
+
     return () => {
-      cleanupPromise.then((cleanup) => cleanup());
+      disposed = true;
+      unlistenHidden();
+      unlistenShown();
     };
-  }, [refreshDebugOpen]);
+  }, []);
 
   const toggleDebug = useCallback(async () => {
     try {

@@ -66,48 +66,43 @@ export const StyleBar = memo(function StyleBar() {
   }, []);
 
   useEffect(() => {
-    if (!isTauriMemo) return;
-
     let disposed = false;
 
-    const onShown = async () => {
-      const unlistenShown = await setupTauriListenerWithPayload<string>(TAURI_EVENTS.EDITOR_WINDOW_SHOWN, (type) => {
-        if (disposed) return;
-        if (!isStylePopupType(type)) return;
-        setOpenPopups((prev) => new Set([...prev, type]));
-      });
-      return unlistenShown;
+    const setup = async () => {
+      if (!isTauriMemo) return;
+
+      const unlistenShown = await setupTauriListenerWithPayload<string>(
+        TAURI_EVENTS.EDITOR_WINDOW_SHOWN,
+        (type) => {
+          if (disposed) return;
+          if (!isStylePopupType(type)) return;
+          setOpenPopups((prev) => new Set([...prev, type]));
+        }
+      );
+
+      const unlistenHidden = await setupTauriListenerWithPayload<string>(
+        TAURI_EVENTS.EDITOR_WINDOW_HIDDEN,
+        (type) => {
+          if (disposed) return;
+          if (!isStylePopupType(type)) return;
+          setOpenPopups((prev) => {
+            const next = new Set(prev);
+            next.delete(type);
+            return next;
+          });
+        }
+      );
+
+      return () => {
+        unlistenShown();
+        unlistenHidden();
+      };
     };
 
-    const onHidden = async () => {
-      const unlistenHidden = await setupTauriListenerWithPayload<string>(TAURI_EVENTS.EDITOR_WINDOW_HIDDEN, (type) => {
-        if (disposed) return;
-        if (!isStylePopupType(type)) return;
-        setOpenPopups((prev) => {
-          const next = new Set(prev);
-          next.delete(type);
-          return next;
-        });
-      });
-      return unlistenHidden;
-    };
-
-    let unlistenShown: (() => void) | null = null;
-    let unlistenHidden: (() => void) | null = null;
-    void Promise.all([onShown(), onHidden()]).then(([u1, u2]) => {
-      if (disposed) {
-        u1();
-        u2();
-        return;
-      }
-      unlistenShown = u1;
-      unlistenHidden = u2;
-    });
-
+    const cleanupPromise = setup();
     return () => {
       disposed = true;
-      if (unlistenShown) unlistenShown();
-      if (unlistenHidden) unlistenHidden();
+      cleanupPromise.then((cleanup) => cleanup?.());
     };
   }, [isStylePopupType, isTauriMemo]);
 
@@ -208,22 +203,21 @@ export const StyleBar = memo(function StyleBar() {
   }, [ornamentsEditing]);
 
   useEffect(() => {
-    if (!ornamentsEditing || !isTauriMemo) return;
     let disposed = false;
-    let unlisten: (() => void) | null = null;
-    void setupTauriListener(TAURI_EVENTS.EDITOR_EXIT, () => {
-      if (disposed) return;
-      void leaveOrnamentsEditing();
-    }).then((cleanup) => {
-      if (disposed) {
-        cleanup();
-        return;
-      }
-      unlisten = cleanup;
-    });
+
+    const setup = async () => {
+      if (!ornamentsEditing || !isTauriMemo) return;
+      const unlisten = await setupTauriListener(TAURI_EVENTS.EDITOR_EXIT, () => {
+        if (disposed) return;
+        void leaveOrnamentsEditing();
+      });
+      return unlisten;
+    };
+
+    const cleanupPromise = setup();
     return () => {
       disposed = true;
-      if (unlisten) unlisten();
+      cleanupPromise.then((cleanup) => cleanup?.());
     };
   }, [isTauriMemo, leaveOrnamentsEditing, ornamentsEditing]);
 

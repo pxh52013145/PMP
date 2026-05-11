@@ -15,7 +15,6 @@ import {
   STORAGE_KEYS,
   TAURI_EVENTS,
   setupConfigSync,
-  setupTauriListenerWithPayload,
   broadcastDataUpdate,
 } from '../../utils/windowCommunication';
 import { readJson, removeKey, writeJson, writeString } from '../../modules/storage';
@@ -173,7 +172,6 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
     getMagnetRenderersRevision,
     getMagnetRenderersRevision
   );
-  const [creatorWindowOpen, setCreatorWindowOpen] = useState(false); // 榛樿涓?false锛岄伩鍏嶈鍒?
   const [glitchingButton, setGlitchingButton] = useState<{
     magnetId: string;
     action: 'edit' | 'remove';
@@ -187,17 +185,6 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   );
   const opacityCommitInFlightRef = useRef<Set<string>>(new Set());
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
-
-  // 鍒濆鍖栨椂娓呯悊鍙兘娈嬬暀鐨勭獥鍙ｇ姸鎬?
-  useEffect(() => {
-    // 纭繚鍒濆鐘舵€佹纭紙EditorMagnetLibrary 绐楀彛鎵撳紑鏃讹紝creator 涓€瀹氭槸鍏抽棴鐨勶級
-    const storedValue = readJson<boolean>(STORAGE_KEYS.CREATOR_WINDOW_OPEN, false);
-    if (storedValue === true) {
-      // 娓呯悊娈嬬暀鐘舵€?
-      writeJson(STORAGE_KEYS.CREATOR_WINDOW_OPEN, false);
-    }
-    setCreatorWindowOpen(false);
-  }, []);
 
   useEffect(() => {
     const knownIds = new Set(magnetLibrary.map((magnet) => magnet.id));
@@ -268,39 +255,6 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
     });
   }, [categorizedMagnets, deferredSearchQuery, filterMode, rendererRevision, t, viewMode]);
 
-  // 鐩戝惉 creator 绐楀彛鐘舵€?
-  useEffect(() => {
-    const reloadStatus = () => {
-      const isOpen = readJson<boolean>(STORAGE_KEYS.CREATOR_WINDOW_OPEN, false);
-      setCreatorWindowOpen(isOpen);
-    };
-
-    const cleanupPromise = setupConfigSync(
-      [STORAGE_KEYS.CREATOR_WINDOW_OPEN],
-      [TAURI_EVENTS.CREATOR_WINDOW_OPENED, TAURI_EVENTS.CREATOR_WINDOW_CLOSED],
-      reloadStatus
-    );
-    const hiddenCleanupPromise = setupTauriListenerWithPayload<string>(
-      TAURI_EVENTS.EDITOR_WINDOW_HIDDEN,
-      (payload) => {
-        if (payload !== 'creator') return;
-        setCreatorWindowOpen(false);
-        const wasMarkedOpen = readJson<boolean>(STORAGE_KEYS.CREATOR_WINDOW_OPEN, false);
-        if (!wasMarkedOpen) return;
-        void broadcastDataUpdate(
-          STORAGE_KEYS.CREATOR_WINDOW_OPEN,
-          false,
-          TAURI_EVENTS.CREATOR_WINDOW_CLOSED
-        );
-      }
-    );
-
-    return () => {
-      cleanupPromise.then((cleanup) => cleanup());
-      hiddenCleanupPromise.then((cleanup) => cleanup());
-    };
-  }, []);
-
   useEffect(() => {
     if (!highlightedMagnetId) return;
     const timer = window.setTimeout(() => setHighlightedMagnetId(null), 1200);
@@ -320,7 +274,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   useEffect(() => {
     type MagnetLibraryFocusRequestV1 = { requestId: string; magnetId: string; createdAt: number };
 
+    let disposed = false;
     const focus = () => {
+      if (disposed) return;
       const raw = readJson<unknown>(STORAGE_KEYS.MAGNET_LIBRARY_FOCUS_REQUEST_V1, null);
       if (!raw || typeof raw !== 'object') return;
       const record = raw as Partial<MagnetLibraryFocusRequestV1>;
@@ -356,6 +312,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
     );
 
     return () => {
+      disposed = true;
       cleanupPromise.then((cleanup) => cleanup());
     };
   }, [activeMagnetIds, builtInMagnetIds, magnetLibrary]);
@@ -430,12 +387,6 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   // 澶勭悊缂栬緫
   const handleEdit = useCallback(
     async (magnet: Magnet) => {
-      // 濡傛灉 creator 绐楀彛宸叉墦寮€锛岃Е鍙戞晠闅滃姩鐢?
-      if (creatorWindowOpen) {
-        triggerActionGlitch(magnet.id, 'edit');
-        return;
-      }
-
       try {
         // 灏嗚缂栬緫鐨?magnet 瀛樺偍鍒?localStorage锛堜复鏃舵暟鎹紝涓嶉渶瑕佸箍鎾級
         writeJson(STORAGE_KEYS.MAGNET_EDITOR_DATA, magnet);
@@ -448,26 +399,21 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
           TAURI_EVENTS.CREATOR_WINDOW_OPENED
         );
 
-        // 绔嬪嵆鍚屾鏇存柊鏈湴鐘舵€侊紝涓嶇瓑寰呭紓姝ョ洃鍚櫒
-        setCreatorWindowOpen(true);
-
         const position = await calculateWindowPosition('creator');
         await openEditorWindow({ type: 'creator', ...position });
       } catch (error) {
         telemetry.error('editor.creator-window.open.failed', {
           message: getErrorMessage(error),
         });
-        // 鍑洪敊鏃舵竻闄ゆ爣璁?
+        // 错误时清理标记，避免残留的 open 状态锁死编辑入口
         await broadcastDataUpdate(
           STORAGE_KEYS.CREATOR_WINDOW_OPEN,
           false,
           TAURI_EVENTS.CREATOR_WINDOW_CLOSED
         );
-        // 鍚屾鏇存柊鏈湴鐘舵€?
-        setCreatorWindowOpen(false);
       }
     },
-    [creatorWindowOpen, triggerActionGlitch]
+    []
   );
 
   const handleRendererOpacityDraftChange = useCallback((magnetId: string, rawValue: string) => {
@@ -704,13 +650,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                   <div className="magnet-actions">
                     {/* 缂栬緫 */}
                     <button
-                      className={`magnet-action-btn edit ${creatorWindowOpen ? 'disabled' : ''} ${glitchingButton?.magnetId === magnet.id && glitchingButton.action === 'edit' ? 'glitch' : ''}`}
+                      className={`magnet-action-btn edit ${glitchingButton?.magnetId === magnet.id && glitchingButton.action === 'edit' ? 'glitch' : ''}`}
                       onClick={() => handleEdit(magnet)}
-                      title={
-                        creatorWindowOpen
-                          ? t('editor.magnet-library.magnet.tooltip.creatorWindowOpen')
-                          : t('editor.magnet-library.magnet.tooltip.edit')
-                      }
+                      title={t('editor.magnet-library.magnet.tooltip.edit')}
                       data-text="◈"
                     >
                       ◈
