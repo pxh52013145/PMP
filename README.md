@@ -67,6 +67,7 @@ cargo test
 ## 文档入口
 
 - 当前阶段采用源码优先；历史文档已归档：`legacy/`
+- 插件生态本地评审资料：`plugin/README.md`（gitignored）
 - 归档索引：`legacy/README.md`
 
 ## 工程结构

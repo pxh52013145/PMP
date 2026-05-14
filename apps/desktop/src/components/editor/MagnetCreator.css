@@ -17,7 +17,6 @@
   border: 1px solid rgba(0, 255, 255, 0.3);
   padding: 16px;
   z-index: 100;
-  backdrop-filter: blur(10px);
   display: flex;
   flex-direction: column;
   /* 左上和右下剪角 */
@@ -559,7 +558,6 @@
   max-height: 500px;
   background: rgba(20, 20, 25, 0.95);
   border: 2px solid rgba(138, 43, 226, 0.5);
-  backdrop-filter: blur(10px);
   display: flex;
   flex-direction: column;
   z-index: 200;
@@ -743,7 +741,6 @@
   max-height: 80vh; /* 限制最大高度为视口的80% */
   background: rgba(20, 20, 25, 0.98);
   border: 2px solid rgba(52, 199, 89, 0.5);
-  backdrop-filter: blur(10px);
   display: flex;
   flex-direction: column;
   z-index: 300;

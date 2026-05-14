@@ -2,7 +2,7 @@
  * Magnet 编辑器上下文
  */
 
-import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
 import { Magnet } from '../types/pixel';
 import { EditorState, PixelOccupancy } from '../types/editor';
 import {
@@ -79,22 +79,44 @@ export function EditorProvider({ children, magnets }: { children: ReactNode; mag
     });
   }, [occupancyMap]);
 
-  // 同步 editorState 到其他窗口
-  useEffect(() => {
-    // 只同步跨窗口真正需要的字段，避免 hover/拖拽过程产生高频广播导致多窗口卡顿
-    const serializableState = {
-      mode: editorState.mode,
-      isEditing: editorState.isEditing,
-      selectedMagnetId: editorState.selectedMagnetId,
-      selectedPixels: Array.from(editorState.selectedPixels),
-    };
+  // 同步 editorState 到其他窗口 (debounced to avoid broadcast storms during drag)
+  const broadcastTimerRef = useRef<number | null>(null);
+  const lastBroadcastKeyRef = useRef<string>('');
 
-    // 同步到 localStorage 和广播事件
-    void broadcastDataUpdate(
-      STORAGE_KEYS.EDITOR_STATE,
-      serializableState,
-      TAURI_EVENTS.EDITOR_STATE_UPDATED
-    );
+  useEffect(() => {
+    const stablePixelsKey = Array.from(editorState.selectedPixels).sort().join(',');
+    const broadcastKey = `${editorState.mode}|${editorState.isEditing}|${editorState.selectedMagnetId ?? ''}|${stablePixelsKey}`;
+
+    if (broadcastKey === lastBroadcastKeyRef.current) return;
+
+    if (broadcastTimerRef.current !== null) {
+      window.clearTimeout(broadcastTimerRef.current);
+    }
+
+    broadcastTimerRef.current = window.setTimeout(() => {
+      broadcastTimerRef.current = null;
+      lastBroadcastKeyRef.current = broadcastKey;
+
+      const serializableState = {
+        mode: editorState.mode,
+        isEditing: editorState.isEditing,
+        selectedMagnetId: editorState.selectedMagnetId,
+        selectedPixels: Array.from(editorState.selectedPixels),
+      };
+
+      void broadcastDataUpdate(
+        STORAGE_KEYS.EDITOR_STATE,
+        serializableState,
+        TAURI_EVENTS.EDITOR_STATE_UPDATED
+      );
+    }, 150);
+
+    return () => {
+      if (broadcastTimerRef.current !== null) {
+        window.clearTimeout(broadcastTimerRef.current);
+        broadcastTimerRef.current = null;
+      }
+    };
   }, [
     editorState.mode,
     editorState.isEditing,
