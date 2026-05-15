@@ -4,14 +4,14 @@ import { readJson } from '../storage';
 import { broadcastDataUpdate, STORAGE_KEYS } from '../../utils/windowCommunication';
 import { AudioDataBus } from './AudioDataBus';
 import { ComponentRegistry } from './ComponentRegistry';
-import { clamp, createViewportInfo, screenToWorld } from './CoordinateSystem';
+import { clamp, createViewportInfo, resolveComponentBaseSize, screenToWorld } from './CoordinateSystem';
 import {
   containsVisualizerEditRect,
   getVisualizerEditMetrics,
   getVisualizerUniformScale,
   type VisualizerEditHandleKind,
 } from './editorGeometry';
-import { ORBITAL_VISUALIZER_COMPONENT_DEFINITIONS } from './components/orbital';
+import { REFERENCE_COMPONENT_IDS, REFERENCE_VISUALIZER_COMPONENT_DEFINITIONS } from './components/reference';
 import { renderSceneFrame, type ActiveVisualizerComponent } from './RenderPipeline';
 import { resolveVisualizerScene } from './scenes';
 import type {
@@ -34,11 +34,15 @@ const MAX_ZOOM = 6;
 const MIN_SCALE = 0.15;
 const MAX_SCALE = 4;
 const CANVAS_EDGE_PAN_GUARD_PX = 8;
+const PROGRESS_HOVER_TOLERANCE = 40;
+const MIN_VISUALIZER_FPS = 60;
+const FRAME_INTERVAL_EPSILON_MS = 1;
+const REFERENCE_STAGE_SIZE = 840;
 
 type LayoutOverrides = Record<string, VisualizerComponentTransform>;
 
 interface VisualizerLayoutStorageV1 {
-  version: 1;
+  version: 1 | 2;
   scenes: Record<string, LayoutOverrides>;
   views: Record<string, VisualizerCanvasViewState>;
 }
@@ -231,6 +235,15 @@ function sanitizeViewState(value: unknown): VisualizerCanvasViewState {
   };
 }
 
+function createDefaultViewState(viewport: VisualizerViewportInfo): VisualizerCanvasViewState {
+  const fitZoom = Math.min(viewport.width, viewport.height) / REFERENCE_STAGE_SIZE;
+  return {
+    panX: 0,
+    panY: 0,
+    zoom: clamp(fitZoom, MIN_ZOOM, MAX_ZOOM),
+  };
+}
+
 function sanitizeViewStates(value: unknown): Record<string, VisualizerCanvasViewState> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
 
@@ -241,10 +254,15 @@ function sanitizeViewStates(value: unknown): Record<string, VisualizerCanvasView
   return next;
 }
 
-function isLayoutStorageV1(value: unknown): value is VisualizerLayoutStorageV1 {
+function isLayoutStorage(value: unknown): value is VisualizerLayoutStorageV1 {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return record.version === 1 && !!record.scenes && typeof record.scenes === 'object' && !Array.isArray(record.scenes);
+  return (
+    (record.version === 1 || record.version === 2) &&
+    !!record.scenes &&
+    typeof record.scenes === 'object' &&
+    !Array.isArray(record.scenes)
+  );
 }
 
 export class CanvasRuntime {
@@ -285,7 +303,7 @@ export class CanvasRuntime {
     gridSize: EDIT_GRID_SIZE,
   };
 
-  private layoutStore: VisualizerLayoutStorageV1 = { version: 1, scenes: {}, views: {} };
+  private layoutStore: VisualizerLayoutStorageV1 = { version: 2, scenes: {}, views: {} };
 
   private layoutOverrides: LayoutOverrides = {};
 
@@ -293,11 +311,19 @@ export class CanvasRuntime {
 
   private pointerDrag: PointerDragState | null = null;
 
+  private readonly progressHoverInfo = {
+    active: false,
+    angle: 0,
+    distance: 0,
+  };
+
   private quality: VisualizerComponentQuality;
 
   private sceneId: string;
 
   private frameNumber = 0;
+
+  private globalRotation = 0;
 
   private lastFrameAt = 0;
 
@@ -325,7 +351,7 @@ export class CanvasRuntime {
     this.quality = options.quality;
     this.sceneId = options.sceneId;
     this.audioBus = new AudioDataBus(options.audioService);
-    this.registry.registerMany(ORBITAL_VISUALIZER_COMPONENT_DEFINITIONS);
+    this.registry.registerMany(REFERENCE_VISUALIZER_COMPONENT_DEFINITIONS);
     this.attachResizeObserver();
     this.attachInteractionListeners();
     this.resize();
@@ -351,12 +377,13 @@ export class CanvasRuntime {
     const onPointerUp = (event: PointerEvent) => this.handlePointerUp(event);
     const onPointerCancel = (event: PointerEvent) => this.handlePointerUp(event);
     const onPointerLeave = () => {
+      this.progressHoverInfo.active = false;
       if (this.editState.editMode && !this.pointerDrag) {
         this.editState.hoveredComponentId = null;
         this.editState.hoveredHandle = null;
         this.updateCursor(null);
-        this.requestFrame();
       }
+      this.requestFrame();
     };
     const onResize = () => {
       this.scheduleResize();
@@ -455,17 +482,21 @@ export class CanvasRuntime {
 
   private loadLayoutStore(): VisualizerLayoutStorageV1 {
     const raw = readJson<unknown>(STORAGE_KEYS.VISUALIZER_LAYOUT_V1, null);
-    if (isLayoutStorageV1(raw)) {
+    if (isLayoutStorage(raw)) {
       const scenes: Record<string, LayoutOverrides> = {};
       for (const [sceneId, sceneValue] of Object.entries(raw.scenes)) {
         scenes[sceneId] = sanitizeLayoutOverrides(sceneValue, this.viewport);
       }
-      return { version: 1, scenes, views: sanitizeViewStates((raw as { views?: unknown }).views) };
+      return {
+        version: 2,
+        scenes,
+        views: raw.version === 2 ? sanitizeViewStates((raw as { views?: unknown }).views) : {},
+      };
     }
 
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
       return {
-        version: 1,
+        version: 2,
         scenes: {
           [this.sceneId]: sanitizeLayoutOverrides(raw, this.viewport),
         },
@@ -473,7 +504,7 @@ export class CanvasRuntime {
       };
     }
 
-    return { version: 1, scenes: {}, views: {} };
+    return { version: 2, scenes: {}, views: {} };
   }
 
   private cloneCurrentLayout(): LayoutOverrides {
@@ -493,7 +524,7 @@ export class CanvasRuntime {
   }
 
   private applyStoredViewState(sceneId: string): void {
-    const view = this.layoutStore.views[sceneId] ?? sanitizeViewState(null);
+    const view = this.layoutStore.views[sceneId] ?? createDefaultViewState(this.viewport);
     this.setViewTransform(view.panX, view.panY, view.zoom);
   }
 
@@ -552,7 +583,12 @@ export class CanvasRuntime {
         },
       });
       const transform = mergeTransforms(baseTransform, this.layoutOverrides[placement.id]);
-      const config = { ...(placement.config ?? {}) };
+      const config = {
+        ...(placement.config ?? {}),
+        ...(placement.id === REFERENCE_COMPONENT_IDS.progress
+          ? { hoverInfo: this.progressHoverInfo }
+          : {}),
+      };
       const activeComponent: ActiveVisualizerComponent = {
         id: placement.id,
         component: instance,
@@ -602,9 +638,13 @@ export class CanvasRuntime {
       return;
     }
 
-    const fpsLimit = Math.max(1, this.quality.fpsLimit);
+    const fpsLimit = Math.max(MIN_VISUALIZER_FPS, this.quality.fpsLimit);
     const frameInterval = fpsLimit > 0 ? 1000 / fpsLimit : 0;
-    if (frameInterval > 0 && this.lastFrameAt > 0 && timestamp - this.lastFrameAt < frameInterval) {
+    if (
+      frameInterval > 0 &&
+      this.lastFrameAt > 0 &&
+      timestamp - this.lastFrameAt + FRAME_INTERVAL_EPSILON_MS < frameInterval
+    ) {
       this.requestFrame();
       return;
     }
@@ -612,6 +652,7 @@ export class CanvasRuntime {
     const deltaTime = this.lastFrameAt > 0 ? timestamp - this.lastFrameAt : 0;
     this.lastFrameAt = timestamp;
     const snapshot = this.audioBus.sample(timestamp);
+    this.globalRotation += 0.001;
 
     renderSceneFrame({
       ctx: this.context,
@@ -621,7 +662,7 @@ export class CanvasRuntime {
         timestamp,
         deltaTime,
         frameNumber: (this.frameNumber += 1),
-        globalRotation: timestamp / 4000,
+        globalRotation: this.globalRotation,
       },
       scene: resolveVisualizerScene(this.sceneId),
       components: this.sceneComponents,
@@ -631,6 +672,41 @@ export class CanvasRuntime {
     });
 
     this.requestFrame();
+  }
+
+  private updateProgressHover(clientX: number, clientY: number): void {
+    const progressEntry = this.sceneComponentMap.get(REFERENCE_COMPONENT_IDS.progress);
+    if (!progressEntry?.transform.visible) {
+      this.progressHoverInfo.active = false;
+      return;
+    }
+
+    const point = this.getCanvasPoint(clientX, clientY);
+    if (point.x < 0 || point.y < 0 || point.x > this.viewport.width || point.y > this.viewport.height) {
+      this.progressHoverInfo.active = false;
+      return;
+    }
+
+    const world = screenToWorld(point.x, point.y, this.viewport, this.viewState);
+    const scale = getVisualizerUniformScale(progressEntry.transform);
+    const localX = (world.x - progressEntry.transform.position.x) / scale;
+    const localY = (world.y - progressEntry.transform.position.y) / scale;
+    const distance = Math.hypot(localX, localY);
+    const baseSize = resolveComponentBaseSize(progressEntry.component.manifest.geometry);
+    const progressRadius = Math.min(baseSize.width, baseSize.height) * 0.28;
+
+    if (Math.abs(distance - progressRadius) > PROGRESS_HOVER_TOLERANCE) {
+      this.progressHoverInfo.active = false;
+      return;
+    }
+
+    let angle = Math.atan2(localY, localX);
+    if (angle < 0) {
+      angle += Math.PI * 2;
+    }
+    this.progressHoverInfo.active = true;
+    this.progressHoverInfo.angle = angle;
+    this.progressHoverInfo.distance = distance;
   }
 
   private setViewTransform(panX: number, panY: number, zoom: number, persist = false): void {
@@ -945,6 +1021,12 @@ export class CanvasRuntime {
       return;
     }
 
+    if (this.editState.editMode) {
+      this.progressHoverInfo.active = false;
+    } else {
+      this.updateProgressHover(event.clientX, event.clientY);
+    }
+
     const hit = this.editState.editMode ? this.getHitTarget(event.clientX, event.clientY) : null;
     this.editState.hoveredComponentId = hit?.componentId ?? null;
     this.editState.hoveredHandle = hit?.handle ?? null;
@@ -1142,7 +1224,7 @@ export class CanvasRuntime {
   resetCanvasSize(): void {
     if (this.disposed) return;
 
-    this.setViewTransform(this.viewState.panX, this.viewState.panY, DEFAULT_ZOOM, true);
+    this.setViewTransform(this.viewState.panX, this.viewState.panY, createDefaultViewState(this.viewport).zoom, true);
     this.requestFrame();
   }
 
@@ -1153,6 +1235,7 @@ export class CanvasRuntime {
 
     if (!editMode) {
       this.finishPointerDrag(true);
+      this.progressHoverInfo.active = false;
       this.editState.hoveredComponentId = null;
       this.editState.draggingComponentId = null;
       this.editState.resizingComponentId = null;
@@ -1171,7 +1254,8 @@ export class CanvasRuntime {
   resetLayout(): void {
     this.layoutOverrides = {};
     this.layoutStore.scenes[this.sceneId] = {};
-    this.setViewTransform(0, 0, DEFAULT_ZOOM);
+    const defaultView = createDefaultViewState(this.viewport);
+    this.setViewTransform(defaultView.panX, defaultView.panY, defaultView.zoom);
     this.editState.hoveredComponentId = null;
     this.selectComponent(null);
     this.editState.draggingComponentId = null;

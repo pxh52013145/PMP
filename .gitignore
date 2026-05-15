@@ -110,7 +110,7 @@ tmp/
 .githooks/
 
 # Local references (do not commit)
-reference/
+/reference/
 resource/
 !resource/
 resource/*

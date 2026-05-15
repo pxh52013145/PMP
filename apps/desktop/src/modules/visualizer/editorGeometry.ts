@@ -45,6 +45,14 @@ export interface VisualizerEditMetrics {
 }
 
 const EDIT_LABEL_ANGLES: Record<string, number> = {
+  phase: -Math.PI / 4,
+  freq: -Math.PI / 2,
+  chords: Math.PI / 2,
+  progress: 0,
+  particles: Math.PI / 4,
+  morse: (Math.PI * 3) / 4,
+  center: (-Math.PI * 3) / 4,
+  hud: 0,
   '@pmp/orbital/phase-scope': -Math.PI / 4,
   '@pmp/orbital/frequency-ring': -Math.PI / 2,
   '@pmp/orbital/chord-wheel': Math.PI / 2,
@@ -74,7 +82,7 @@ function measureLabelWidth(
   ctx.font = VISUALIZER_EDIT_LABEL_FONT;
   const measured = Math.ceil(ctx.measureText(text).width);
   ctx.restore();
-  return Math.max(88, Math.min(220, measured + 18));
+  return Math.max(88, Math.min(260, measured + 18));
 }
 
 function resolveLabelCenter(

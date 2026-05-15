@@ -42,33 +42,33 @@ export function drawVisualizerGrid(
   const originX = width / 2 + offsetX;
   const originY = height / 2 + offsetY;
   const previousAlpha = ctx.globalAlpha;
+  const minorColor = options.color ?? 'rgba(255, 255, 255, 0.03)';
+  const majorColor = options.majorColor ?? minorColor;
 
   ctx.save();
   ctx.globalAlpha = previousAlpha * opacity;
   ctx.lineWidth = 1;
-  ctx.strokeStyle = options.color ?? 'rgba(74, 222, 128, 0.07)';
+  ctx.strokeStyle = minorColor;
 
   const snappedStartX = ((originX % minorStep) + minorStep) % minorStep;
   const snappedStartY = ((originY % minorStep) + minorStep) % minorStep;
 
   for (let x = snappedStartX; x <= width; x += minorStep) {
     const isMajor = Math.round((x - originX) / minorStep) % majorEvery === 0;
-    ctx.strokeStyle = isMajor
-      ? options.majorColor ?? 'rgba(56, 189, 248, 0.12)'
-      : options.color ?? 'rgba(74, 222, 128, 0.07)';
+    ctx.strokeStyle = isMajor ? majorColor : minorColor;
     drawLine(ctx, x + 0.5, 0, x + 0.5, height);
   }
 
   for (let y = snappedStartY; y <= height; y += minorStep) {
     const isMajor = Math.round((y - originY) / minorStep) % majorEvery === 0;
-    ctx.strokeStyle = isMajor
-      ? options.majorColor ?? 'rgba(251, 191, 36, 0.11)'
-      : options.color ?? 'rgba(74, 222, 128, 0.07)';
+    ctx.strokeStyle = isMajor ? majorColor : minorColor;
     drawLine(ctx, 0, y + 0.5, width, y + 0.5);
   }
 
-  ctx.strokeStyle = options.axisColor ?? 'rgba(255, 255, 255, 0.08)';
-  drawLine(ctx, originX + 0.5, 0, originX + 0.5, height);
-  drawLine(ctx, 0, originY + 0.5, width, originY + 0.5);
+  if (options.axisColor) {
+    ctx.strokeStyle = options.axisColor;
+    drawLine(ctx, originX + 0.5, 0, originX + 0.5, height);
+    drawLine(ctx, 0, originY + 0.5, width, originY + 0.5);
+  }
   ctx.restore();
 }

@@ -32,6 +32,7 @@
 .visualizer-overlay.is-closing .visualizer-overlay__frame {
   transform: translate3d(0, 100%, 0);
   opacity: 0;
+  pointer-events: none;
 }
 
 .visualizer-overlay__sr-title {

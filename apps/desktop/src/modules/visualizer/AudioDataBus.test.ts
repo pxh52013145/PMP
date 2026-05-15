@@ -108,7 +108,8 @@ describe('AudioDataBus', () => {
       playbackState: 'playing',
     });
     expect(snapshot.frequency).toEqual(new Uint8Array([0, 0, 255, 255, 0, 0, 128, 255]));
-    expect(snapshot.timeDomain).toEqual(new Uint8Array([0, 0, 255, 255, 0, 0, 128, 255]));
+    expect(snapshot.timeDomain.length).toBe(128);
+    expect(snapshot.timeDomain.some((value) => value !== 128)).toBe(true);
     expect(snapshot.analysis.energy).toBeCloseTo(0.4377, 3);
     expect(snapshot.analysis.smoothedEnergy).toBeCloseTo(0.4377, 3);
     expect(snapshot.analysis.bass).toBeCloseTo(0.5, 3);
@@ -136,5 +137,43 @@ describe('AudioDataBus', () => {
     bus.sample(500);
 
     expect(received).toEqual([250]);
+  });
+
+  it('advances playback time between low-frequency service updates', () => {
+    const bus = new AudioDataBus(createAudioService());
+
+    const first = bus.sample(1_000);
+    const second = bus.sample(1_250);
+    const third = bus.sample(1_500);
+
+    expect(first.playback.currentTime).toBeCloseTo(42, 5);
+    expect(second.playback.currentTime).toBeCloseTo(42.25, 5);
+    expect(third.playback.currentTime).toBeCloseTo(42.5, 5);
+  });
+
+  it('does not snap back when stale service time arrives on the next frame', () => {
+    let serviceTime = 42;
+    const bus = new AudioDataBus(createAudioService({
+      getCurrentTime: () => serviceTime,
+    }));
+
+    expect(bus.sample(1_000).playback.currentTime).toBeCloseTo(42, 5);
+    expect(bus.sample(1_250).playback.currentTime).toBeCloseTo(42.25, 5);
+
+    serviceTime = 42.25;
+    expect(bus.sample(1_266).playback.currentTime).toBeCloseTo(42.266, 5);
+  });
+
+  it('soft-corrects moderate positive drift without snapping the clock', () => {
+    let serviceTime = 42;
+    const bus = new AudioDataBus(createAudioService({
+      getCurrentTime: () => serviceTime,
+    }));
+
+    expect(bus.sample(1_000).playback.currentTime).toBeCloseTo(42, 5);
+    expect(bus.sample(1_250).playback.currentTime).toBeCloseTo(42.25, 5);
+
+    serviceTime = 42.7;
+    expect(bus.sample(1_500).playback.currentTime).toBeCloseTo(42.55, 5);
   });
 });

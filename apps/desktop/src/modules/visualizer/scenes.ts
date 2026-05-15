@@ -1,6 +1,6 @@
 /* eslint-disable no-restricted-imports */
 import type { VisualizerSceneDescriptor } from './types';
-import { ORBITAL_COMPONENT_IDS } from './components/orbital';
+import { REFERENCE_COMPONENT_IDS } from './components/reference';
 
 export const AUDIO_VISUALIZER_SCENE_ID = 'audio-visualizer';
 
@@ -10,7 +10,7 @@ export const VISUALIZER_SCENES: Record<string, VisualizerSceneDescriptor> = {
     title: 'Audio Visualizer',
     components: [
       {
-        id: ORBITAL_COMPONENT_IDS.phaseScope,
+        id: REFERENCE_COMPONENT_IDS.phase,
         transform: {
           position: { x: 0, y: 0 },
           scale: 1,
@@ -21,7 +21,7 @@ export const VISUALIZER_SCENES: Record<string, VisualizerSceneDescriptor> = {
         },
       },
       {
-        id: ORBITAL_COMPONENT_IDS.frequencyRing,
+        id: REFERENCE_COMPONENT_IDS.freq,
         transform: {
           position: { x: 0, y: 0 },
           scale: 1,
@@ -32,7 +32,7 @@ export const VISUALIZER_SCENES: Record<string, VisualizerSceneDescriptor> = {
         },
       },
       {
-        id: ORBITAL_COMPONENT_IDS.chordWheel,
+        id: REFERENCE_COMPONENT_IDS.chords,
         transform: {
           position: { x: 0, y: 0 },
           scale: 1,
@@ -43,7 +43,7 @@ export const VISUALIZER_SCENES: Record<string, VisualizerSceneDescriptor> = {
         },
       },
       {
-        id: ORBITAL_COMPONENT_IDS.progressOrbit,
+        id: REFERENCE_COMPONENT_IDS.progress,
         transform: {
           position: { x: 0, y: 0 },
           scale: 1,
@@ -54,7 +54,7 @@ export const VISUALIZER_SCENES: Record<string, VisualizerSceneDescriptor> = {
         },
       },
       {
-        id: ORBITAL_COMPONENT_IDS.particleFlow,
+        id: REFERENCE_COMPONENT_IDS.particles,
         transform: {
           position: { x: 0, y: 0 },
           scale: 1,
@@ -65,7 +65,7 @@ export const VISUALIZER_SCENES: Record<string, VisualizerSceneDescriptor> = {
         },
       },
       {
-        id: ORBITAL_COMPONENT_IDS.morseTelemetry,
+        id: REFERENCE_COMPONENT_IDS.morse,
         transform: {
           position: { x: 0, y: 0 },
           scale: 1,
@@ -76,7 +76,7 @@ export const VISUALIZER_SCENES: Record<string, VisualizerSceneDescriptor> = {
         },
       },
       {
-        id: ORBITAL_COMPONENT_IDS.centerConsole,
+        id: REFERENCE_COMPONENT_IDS.center,
         transform: {
           position: { x: 0, y: 0 },
           scale: 1,
@@ -87,9 +87,9 @@ export const VISUALIZER_SCENES: Record<string, VisualizerSceneDescriptor> = {
         },
       },
       {
-        id: ORBITAL_COMPONENT_IDS.trackHeader,
+        id: REFERENCE_COMPONENT_IDS.hud,
         transform: {
-          position: { x: 0, y: -320 },
+          position: { x: -280, y: -200 },
           scale: 1,
           rotation: 0,
           zIndex: 9,

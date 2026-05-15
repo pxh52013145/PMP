@@ -1,6 +1,12 @@
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { drawVisualizerGrid } from './GridSystem';
-import { getTransformOpacity, getTransformRotation, resolveComponentBounds } from './CoordinateSystem';
+import {
+  getTransformOpacity,
+  getTransformRotation,
+  normalizeScale,
+  resolveComponentBaseSize,
+  resolveComponentBounds,
+} from './CoordinateSystem';
 import {
   getVisualizerEditMetrics,
   VISUALIZER_EDIT_LABEL_FONT,
@@ -40,40 +46,10 @@ export interface RenderSceneFrameInput {
 
 function drawBackground(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  viewport: VisualizerViewportInfo,
-  audioSnapshot: VisualizerAudioSnapshot
+  viewport: VisualizerViewportInfo
 ): void {
   ctx.clearRect(0, 0, viewport.width, viewport.height);
-  ctx.fillStyle = 'rgb(5, 5, 5)';
-  ctx.fillRect(0, 0, viewport.width, viewport.height);
-
-  const energy = audioSnapshot.analysis.smoothedEnergy;
-  const tint = Math.max(0.05, Math.min(0.22, 0.06 + energy * 0.16));
-  const gradient = ctx.createRadialGradient(
-    viewport.width / 2,
-    viewport.height * 0.46,
-    0,
-    viewport.width / 2,
-    viewport.height * 0.46,
-    Math.max(viewport.width, viewport.height) * 0.72
-  );
-  gradient.addColorStop(0, `rgba(70, 40, 92, ${tint})`);
-  gradient.addColorStop(0.42, `rgba(10, 20, 28, ${tint * 0.62})`);
-  gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, viewport.width, viewport.height);
-
-  const vignette = ctx.createRadialGradient(
-    viewport.width / 2,
-    viewport.height / 2,
-    Math.min(viewport.width, viewport.height) * 0.18,
-    viewport.width / 2,
-    viewport.height / 2,
-    Math.max(viewport.width, viewport.height) * 0.64
-  );
-  vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
-  vignette.addColorStop(1, 'rgba(0, 0, 0, 0.56)');
-  ctx.fillStyle = vignette;
+  ctx.fillStyle = '#050505';
   ctx.fillRect(0, 0, viewport.width, viewport.height);
 }
 
@@ -91,6 +67,9 @@ function drawComponentInstance(
   if (!transform.visible) return;
 
   const bounds = resolveComponentBounds(transform, component.manifest.geometry, viewport, viewState);
+  const baseSize = resolveComponentBaseSize(component.manifest.geometry);
+  const scale = normalizeScale(transform.scale);
+  const zoom = Math.max(0.05, Number.isFinite(viewState.zoom) ? viewState.zoom : 1);
   const opacity = getTransformOpacity(transform);
   const rotation = getTransformRotation(transform);
 
@@ -100,16 +79,17 @@ function drawComponentInstance(
     ctx.rotate(rotation);
   }
   ctx.globalAlpha *= opacity;
-  ctx.translate(-bounds.width / 2, -bounds.height / 2);
+  ctx.scale(scale.x * zoom, scale.y * zoom);
+  ctx.translate(-baseSize.width / 2, -baseSize.height / 2);
   ctx.beginPath();
-  ctx.rect(0, 0, bounds.width, bounds.height);
+  ctx.rect(0, 0, baseSize.width, baseSize.height);
   ctx.clip();
 
   const renderContext: VisualizerRenderContext = {
     ctx,
     bounds: {
-      width: bounds.width,
-      height: bounds.height,
+      width: baseSize.width,
+      height: baseSize.height,
     },
     viewport,
     transform,
@@ -162,20 +142,22 @@ function drawEditOverlay(
   const originY = viewport.height / 2 + viewState.panY;
 
   ctx.save();
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-  ctx.lineWidth = 1;
-  ctx.setLineDash([10, 10]);
+  ctx.lineWidth = 1 / Math.max(0.1, viewState.zoom);
+  ctx.setLineDash([]);
+  ctx.strokeStyle = 'rgba(239, 68, 68, 0.4)';
   ctx.beginPath();
-  ctx.moveTo(originX + 0.5, 0);
-  ctx.lineTo(originX + 0.5, viewport.height);
   ctx.moveTo(0, originY + 0.5);
   ctx.lineTo(viewport.width, originY + 0.5);
   ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.84)';
+  ctx.strokeStyle = 'rgba(34, 197, 94, 0.4)';
+  ctx.beginPath();
+  ctx.moveTo(originX + 0.5, 0);
+  ctx.lineTo(originX + 0.5, viewport.height);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
   ctx.beginPath();
   ctx.arc(originX, originY, 3, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.stroke();
   ctx.restore();
 
   for (const entry of components) {
@@ -251,8 +233,6 @@ function drawEditOverlay(
       ctx.stroke();
       ctx.restore();
     }
-
-    ctx.restore();
   }
   ctx.restore();
 }
@@ -268,16 +248,15 @@ export function renderSceneFrame({
   viewState,
   editState,
 }: RenderSceneFrameInput): void {
-  drawBackground(ctx, viewport, audioSnapshot);
+  drawBackground(ctx, viewport);
   drawVisualizerGrid(
     ctx,
     viewport,
     {
       minorStep: 40,
       majorEvery: 4,
-      color: editState.editMode ? 'rgba(255, 255, 255, 0.026)' : 'rgba(255, 255, 255, 0.024)',
-      majorColor: editState.editMode ? 'rgba(255, 255, 255, 0.044)' : 'rgba(255, 255, 255, 0.04)',
-      axisColor: editState.editMode ? 'rgba(255, 255, 255, 0.09)' : 'rgba(255, 255, 255, 0.055)',
+      color: 'rgba(255, 255, 255, 0.03)',
+      majorColor: 'rgba(255, 255, 255, 0.03)',
       opacity: 1,
       panX: viewState.panX,
       panY: viewState.panY,

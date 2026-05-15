@@ -18,6 +18,11 @@ export interface VisualizerResolvedBounds {
   radius: number;
 }
 
+export interface VisualizerComponentBaseSize {
+  width: number;
+  height: number;
+}
+
 export function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.max(min, Math.min(max, value));
@@ -49,20 +54,15 @@ function readRectangularSize(size: VisualizerRectangularSize): { width: number; 
   };
 }
 
-function resolveAdaptiveCircularSize(viewport: VisualizerViewportInfo): { width: number; height: number } {
-  const diameter = Math.max(1, Math.min(viewport.width, viewport.height) * 0.98);
-  return { width: diameter, height: diameter };
-}
+export function resolveComponentBaseSize(geometry: VisualizerComponentGeometry): VisualizerComponentBaseSize {
+  if (geometry.type === 'circular') {
+    const size = geometry.defaultSize as Partial<{ radius: number }>;
+    const radius = typeof size.radius === 'number' && Number.isFinite(size.radius) ? Math.max(1, size.radius) : 1;
+    const diameter = radius * 2;
+    return { width: diameter, height: diameter };
+  }
 
-function resolveAdaptiveRectangularSize(
-  size: VisualizerRectangularSize,
-  viewport: VisualizerViewportInfo
-): { width: number; height: number } {
-  const base = readRectangularSize(size);
-  return {
-    width: Math.max(1, Math.min(base.width, viewport.width * 0.98)),
-    height: Math.max(1, Math.min(base.height, viewport.height * 0.98)),
-  };
+  return readRectangularSize(geometry.defaultSize as VisualizerRectangularSize);
 }
 
 export function resolveComponentBounds(
@@ -76,10 +76,7 @@ export function resolveComponentBounds(
   const positionX = viewport.width / 2 + (Number.isFinite(viewState.panX) ? viewState.panX : 0) + transform.position.x * zoom;
   const positionY = viewport.height / 2 + (Number.isFinite(viewState.panY) ? viewState.panY : 0) + transform.position.y * zoom;
 
-  const baseSize =
-    geometry.type === 'circular'
-      ? resolveAdaptiveCircularSize(viewport)
-      : resolveAdaptiveRectangularSize(geometry.defaultSize as VisualizerRectangularSize, viewport);
+  const baseSize = resolveComponentBaseSize(geometry);
 
   const width = Math.max(1, baseSize.width * scale.x * zoom);
   const height = Math.max(1, baseSize.height * scale.y * zoom);

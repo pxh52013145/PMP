@@ -23,6 +23,7 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const closeTimerRef = useRef<number | null>(null);
   const closeRequestedRef = useRef(false);
+  const closeFinishedRef = useRef(false);
   const onCloseRef = useRef(onClose);
   const [revision, setRevision] = useState(0);
   const [editMode, setEditMode] = useState(false);
@@ -32,21 +33,25 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
   const [isEntered, setIsEntered] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
 
-  const beginClose = useCallback(() => {
-    if (closeRequestedRef.current) return;
-    closeRequestedRef.current = true;
-    setIsClosing(true);
-  }, []);
-
   const finishClose = useCallback(() => {
-    if (!closeRequestedRef.current) return;
-    closeRequestedRef.current = false;
+    if (!closeRequestedRef.current || closeFinishedRef.current) return;
+    closeFinishedRef.current = true;
     if (closeTimerRef.current !== null) {
       window.clearTimeout(closeTimerRef.current);
       closeTimerRef.current = null;
     }
     onCloseRef.current();
   }, []);
+
+  const beginClose = useCallback(() => {
+    if (closeRequestedRef.current || closeFinishedRef.current) return;
+    closeRequestedRef.current = true;
+    setIsClosing(true);
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      finishClose();
+    }, 320);
+  }, [finishClose]);
 
   useEffect(() => {
     return kernel.contributions.subscribe(() => setRevision((value) => value + 1));
@@ -109,20 +114,13 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
   }, []);
 
   useEffect(() => {
-    if (!isClosing) return;
-
-    closeTimerRef.current = window.setTimeout(() => {
-      closeTimerRef.current = null;
-      finishClose();
-    }, 240);
-
     return () => {
       if (closeTimerRef.current !== null) {
         window.clearTimeout(closeTimerRef.current);
         closeTimerRef.current = null;
       }
     };
-  }, [finishClose, isClosing]);
+  }, []);
 
   const handleFrameTransitionEnd = useCallback(
     (event: React.TransitionEvent<HTMLDivElement>) => {
