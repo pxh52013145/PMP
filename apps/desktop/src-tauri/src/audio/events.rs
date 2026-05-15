@@ -124,6 +124,8 @@ pub struct NativeAudioSpectrumFramePayload<'a> {
     pub tap_id: Option<&'a str>,
     pub sample_rate: u32,
     pub bins: &'a [u8],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_domain: Option<&'a [u8]>,
 }
 
 #[derive(Serialize, Clone, Debug)]

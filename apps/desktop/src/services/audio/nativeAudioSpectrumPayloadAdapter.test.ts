@@ -31,6 +31,7 @@ describe('nativeAudioSpectrumPayloadAdapter', () => {
 
     const applied = applyNativeAudioSpectrumPayload(state, {
       bins: [0, 64.4, 256, -1],
+      timeDomain: [0, 127.5, 255, Number.NaN],
       frameId: 7,
       timestampMs: 1_234,
       tapId: 'post-dsp',
@@ -49,6 +50,12 @@ describe('nativeAudioSpectrumPayloadAdapter', () => {
       64,
       255,
       0,
+    ]);
+    expect(Array.from(state.spectrumFrames['post-dsp']?.timeDomain ?? [])).toEqual([
+      0,
+      128,
+      255,
+      128,
     ]);
     expect(state.spectrumData).toBe(state.spectrumFrames['post-dsp']?.bins);
   });

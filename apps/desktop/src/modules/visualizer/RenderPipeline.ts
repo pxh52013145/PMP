@@ -8,8 +8,10 @@ import {
   resolveComponentBounds,
 } from './CoordinateSystem';
 import {
-  getVisualizerEditMetrics,
+  getVisualizerEditFocusShape,
+  getVisualizerEditMetricsById,
   VISUALIZER_EDIT_LABEL_FONT,
+  type VisualizerEditFocusShape,
 } from './editorGeometry';
 import type {
   VisualizerCanvasEditState,
@@ -24,6 +26,12 @@ import type {
 } from './types';
 
 const telemetry = getTelemetryLogger('visualizer', 'RenderPipeline');
+
+const EDIT_GLOW_COLORS = {
+  hover: 'rgba(255, 255, 255, 0.42)',
+  selected: 'rgba(96, 165, 250, 0.98)',
+  active: 'rgba(34, 197, 94, 0.98)',
+} as const;
 
 export interface ActiveVisualizerComponent {
   id: string;
@@ -118,6 +126,108 @@ function drawComponentInstance(
   ctx.restore();
 }
 
+function strokeRoundedRectPath(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  shape: Extract<VisualizerEditFocusShape, { type: 'rect' }>
+): void {
+  ctx.save();
+  ctx.translate(shape.centerX, shape.centerY);
+  if (shape.rotation !== 0) {
+    ctx.rotate(shape.rotation);
+  }
+  ctx.beginPath();
+  ctx.roundRect(-shape.width / 2, -shape.height / 2, shape.width, shape.height, shape.radius);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function strokeEditFocusShape(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  shape: VisualizerEditFocusShape
+): void {
+  if (shape.type === 'annulus') {
+    ctx.beginPath();
+    ctx.arc(shape.centerX, shape.centerY, shape.outerRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(shape.centerX, shape.centerY, shape.innerRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    return;
+  }
+
+  if (shape.type === 'circle') {
+    ctx.beginPath();
+    ctx.arc(shape.centerX, shape.centerY, shape.radius, 0, Math.PI * 2);
+    ctx.stroke();
+    return;
+  }
+
+  if (shape.type === 'diamond') {
+    ctx.save();
+    ctx.translate(shape.centerX, shape.centerY);
+    if (shape.rotation !== 0) {
+      ctx.rotate(shape.rotation);
+    }
+    ctx.beginPath();
+    ctx.moveTo(0, -shape.radius);
+    ctx.lineTo(shape.radius, 0);
+    ctx.lineTo(0, shape.radius);
+    ctx.lineTo(-shape.radius, 0);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  strokeRoundedRectPath(ctx, shape);
+}
+
+function drawEditFocusGlow(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  shape: VisualizerEditFocusShape,
+  accent: string,
+  intensity: number
+): void {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.strokeStyle = accent;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  const pulse = Math.max(0.35, Math.min(1, intensity));
+  for (const layer of [
+    { blur: 18, width: 6, alpha: 0.16 * pulse },
+    { blur: 8, width: 3, alpha: 0.28 * pulse },
+    { blur: 0, width: 1.25, alpha: 0.86 * pulse },
+  ]) {
+    ctx.save();
+    ctx.globalAlpha = layer.alpha;
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = layer.blur;
+    ctx.lineWidth = layer.width;
+    strokeEditFocusShape(ctx, shape);
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+function drawEditFocusScan(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  shape: VisualizerEditFocusShape,
+  accent: string
+): void {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.strokeStyle = accent;
+  ctx.globalAlpha = 0.45;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 12]);
+  ctx.lineDashOffset = -6;
+  strokeEditFocusShape(ctx, shape);
+  ctx.restore();
+}
+
 function drawEditOverlay(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   viewport: VisualizerViewportInfo,
@@ -125,7 +235,8 @@ function drawEditOverlay(
   viewState: VisualizerCanvasViewState,
   editState: VisualizerCanvasEditState
 ): void {
-  const metricsById = new Map<string, ReturnType<typeof getVisualizerEditMetrics>>();
+  const metricsById = getVisualizerEditMetricsById(components, viewport, viewState, ctx);
+  const focusShapeById = new Map<string, VisualizerEditFocusShape>();
 
   ctx.save();
   ctx.globalCompositeOperation = 'source-over';
@@ -135,7 +246,7 @@ function drawEditOverlay(
 
   for (const entry of components) {
     if (!entry.transform.visible) continue;
-    metricsById.set(entry.id, getVisualizerEditMetrics(entry, viewport, viewState, ctx));
+    focusShapeById.set(entry.id, getVisualizerEditFocusShape(entry, viewport, viewState));
   }
 
   const originX = viewport.width / 2 + viewState.panX;
@@ -163,44 +274,23 @@ function drawEditOverlay(
   for (const entry of components) {
     if (!entry.transform.visible) continue;
     const metrics = metricsById.get(entry.id);
-    if (!metrics) continue;
-    const { bounds, label, scaleHandle } = metrics;
+    const focusShape = focusShapeById.get(entry.id);
+    if (!metrics || !focusShape) continue;
+    const { label, scaleHandle } = metrics;
     const isHovered = editState.hoveredComponentId === entry.id;
     const isSelected = editState.selectedComponentId === entry.id;
     const isDragging = editState.draggingComponentId === entry.id;
     const isResizing = editState.resizingComponentId === entry.id;
     const active = isHovered || isSelected || isDragging || isResizing;
-    const accent = isDragging || isResizing ? 'rgba(34, 197, 94, 0.96)' : isSelected ? 'rgba(96, 165, 250, 0.96)' : 'rgba(255, 255, 255, 0.5)';
+    const accent = isDragging || isResizing
+      ? EDIT_GLOW_COLORS.active
+      : isSelected
+        ? EDIT_GLOW_COLORS.selected
+        : EDIT_GLOW_COLORS.hover;
 
     if (active) {
-      ctx.save();
-      ctx.strokeStyle = accent;
-      ctx.fillStyle = 'rgba(10, 12, 16, 0.26)';
-      ctx.setLineDash(isDragging || isResizing ? [8, 4] : [6, 4]);
-      ctx.lineWidth = 1.8;
-
-      if (entry.component.manifest.geometry.type === 'rectangular') {
-        const radius = Math.min(10, Math.max(4, Math.min(bounds.width, bounds.height) * 0.08));
-        ctx.beginPath();
-        ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
-        ctx.fill();
-        ctx.stroke();
-      } else {
-        const radius = bounds.radius;
-        ctx.beginPath();
-        ctx.arc(bounds.centerX, bounds.centerY, radius, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      ctx.setLineDash([]);
-
-      ctx.strokeStyle = isDragging || isResizing ? 'rgba(34, 197, 94, 0.28)' : 'rgba(255, 255, 255, 0.18)';
-      ctx.setLineDash([2, 6]);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(bounds.centerX, bounds.centerY);
-      ctx.lineTo(label.centerX, label.centerY);
-      ctx.stroke();
-      ctx.restore();
+      drawEditFocusGlow(ctx, focusShape, accent, isDragging || isResizing ? 1 : isSelected ? 0.86 : 0.58);
+      drawEditFocusScan(ctx, focusShape, accent);
     }
 
     ctx.font = VISUALIZER_EDIT_LABEL_FONT;

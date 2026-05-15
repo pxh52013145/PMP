@@ -7,7 +7,7 @@ import { ComponentRegistry } from './ComponentRegistry';
 import { clamp, createViewportInfo, resolveComponentBaseSize, screenToWorld } from './CoordinateSystem';
 import {
   containsVisualizerEditRect,
-  getVisualizerEditMetrics,
+  getVisualizerEditMetricsById,
   getVisualizerUniformScale,
   type VisualizerEditHandleKind,
 } from './editorGeometry';
@@ -742,7 +742,7 @@ export class CanvasRuntime {
       return;
     }
 
-    this.canvas.style.cursor = target?.componentId ? 'grab' : 'grab';
+    this.canvas.style.cursor = target?.componentId ? 'grab' : 'default';
   }
 
   private getCanvasPoint(clientX: number, clientY: number): { x: number; y: number } {
@@ -788,6 +788,8 @@ export class CanvasRuntime {
       return right.transform.zIndex - left.transform.zIndex;
     });
 
+    const metricsById = getVisualizerEditMetricsById(candidates, this.viewport, this.viewState, this.context);
+
     for (const entry of candidates) {
       if (!entry.transform.visible) continue;
       const isHandleVisible =
@@ -797,7 +799,8 @@ export class CanvasRuntime {
         entry.id === this.editState.resizingComponentId;
       if (!isHandleVisible) continue;
 
-      const metrics = getVisualizerEditMetrics(entry, this.viewport, this.viewState, this.context);
+      const metrics = metricsById.get(entry.id);
+      if (!metrics) continue;
       if (containsVisualizerEditRect(metrics.scaleHandle, point.x, point.y)) {
         return {
           type: 'scale-handle',
@@ -809,7 +812,8 @@ export class CanvasRuntime {
 
     for (const entry of candidates) {
       if (!entry.transform.visible) continue;
-      const metrics = getVisualizerEditMetrics(entry, this.viewport, this.viewState, this.context);
+      const metrics = metricsById.get(entry.id);
+      if (!metrics) continue;
       if (containsVisualizerEditRect(metrics.label, point.x, point.y)) {
         return {
           type: 'label',
@@ -1105,7 +1109,7 @@ export class CanvasRuntime {
 
     const point = this.getCanvasPoint(event.clientX, event.clientY);
     const hit = this.editState.editMode ? this.getHitTarget(event.clientX, event.clientY) : null;
-    const hitId = hit?.componentId ?? null;
+    const hitId = hit?.componentId ?? (this.editState.editMode ? this.editState.selectedComponentId : null);
     const zoomFactor = event.deltaY < 0 ? 1.05 : 0.95;
 
     if (hitId) {

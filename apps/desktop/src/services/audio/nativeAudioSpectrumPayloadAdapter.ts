@@ -50,6 +50,13 @@ function copySpectrumBinsToTarget(
   }
 }
 
+function copyByteValuesToTarget(values: number[], target: Uint8Array): void {
+  for (let index = 0; index < values.length; index += 1) {
+    const value = typeof values[index] === 'number' && Number.isFinite(values[index]) ? values[index] : 128;
+    target[index] = Math.max(0, Math.min(255, Math.round(value)));
+  }
+}
+
 export function applyNativeAudioSpectrumPayload(
   state: NativeAudioSpectrumPayloadState,
   payload: NativeAudioSpectrumPayload | null | undefined,
@@ -84,6 +91,14 @@ export function applyNativeAudioSpectrumPayload(
   const existingBins = state.spectrumFrames[tap]?.bins;
   const target = ensureSpectrumBuffer(existingBins, bins.length);
   copySpectrumBinsToTarget(bins, target, isByteEncodedBins);
+  const timeDomainPayload = Array.isArray(payload.timeDomain) ? payload.timeDomain : null;
+  const existingTimeDomain = state.spectrumFrames[tap]?.timeDomain;
+  const timeDomain = timeDomainPayload
+    ? ensureSpectrumBuffer(existingTimeDomain, timeDomainPayload.length)
+    : undefined;
+  if (timeDomainPayload && timeDomain) {
+    copyByteValuesToTarget(timeDomainPayload, timeDomain);
+  }
 
   state.spectrumFrames[tap] = {
     frameId,
@@ -91,6 +106,7 @@ export function applyNativeAudioSpectrumPayload(
     tap,
     sampleRate,
     bins: target,
+    ...(timeDomain ? { timeDomain } : {}),
   };
 
   // Default frequency data drives most visualizers: prefer post-dsp when available.

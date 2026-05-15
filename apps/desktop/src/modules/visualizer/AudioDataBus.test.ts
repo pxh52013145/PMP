@@ -139,6 +139,25 @@ describe('AudioDataBus', () => {
     expect(received).toEqual([250]);
   });
 
+  it('prefers time-domain samples from the native spectrum frame', () => {
+    const nativeTimeDomain = new Uint8Array([0, 64, 128, 192, 255]);
+    const bus = new AudioDataBus(createAudioService({
+      getSpectrumFrame: () => ({
+        frameId: 8,
+        timestampMs: 1_200,
+        tap: 'post-dsp',
+        sampleRate: 48_000,
+        bins: new Uint8Array([0, 255, 0, 255]),
+        timeDomain: nativeTimeDomain,
+      }),
+    }));
+
+    const snapshot = bus.sample(1_200);
+
+    expect(snapshot.timeDomain).toEqual(nativeTimeDomain);
+    expect(snapshot.timeDomain).not.toBe(nativeTimeDomain);
+  });
+
   it('advances playback time between low-frequency service updates', () => {
     const bus = new AudioDataBus(createAudioService());
 

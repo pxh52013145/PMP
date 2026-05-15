@@ -11,6 +11,7 @@ pub(crate) struct SpectrumComputer {
     input: [Complex<f32>; SPECTRUM_WINDOW_SIZE],
     mags: [f32; SPECTRUM_BINS],
     bins_u8: [u8; SPECTRUM_BINS],
+    time_domain_u8: [u8; SPECTRUM_WINDOW_SIZE],
 }
 
 impl SpectrumComputer {
@@ -26,21 +27,25 @@ impl SpectrumComputer {
             input: [Complex::new(0.0, 0.0); SPECTRUM_WINDOW_SIZE],
             mags: [0.0f32; SPECTRUM_BINS],
             bins_u8: [0u8; SPECTRUM_BINS],
+            time_domain_u8: [128u8; SPECTRUM_WINDOW_SIZE],
         }
     }
 
-    pub fn compute_bins_from_window(
+    pub fn compute_frame_from_window(
         &mut self,
         fft: &Arc<dyn rustfft::Fft<f32>>,
         sample_rate: u32,
         window: &[f32],
-    ) -> Option<&[u8]> {
+    ) -> Option<(&[u8], &[u8])> {
         if sample_rate == 0 {
             return None;
         }
 
         for frame in 0..SPECTRUM_WINDOW_SIZE {
             let mono = window.get(frame).copied().unwrap_or(0.0);
+            self.time_domain_u8[frame] = ((mono.clamp(-1.0, 1.0) + 1.0) * 127.5)
+                .round()
+                .clamp(0.0, 255.0) as u8;
             self.input[frame].re = mono * self.hann[frame];
             self.input[frame].im = 0.0;
         }
@@ -78,7 +83,7 @@ impl SpectrumComputer {
             self.bins_u8[index] = ((*mag) * 255.0).round().clamp(0.0, 255.0) as u8;
         }
 
-        Some(&self.bins_u8)
+        Some((&self.bins_u8, &self.time_domain_u8))
     }
 }
 
@@ -118,12 +123,12 @@ impl DualSpectrumComputer {
         use_pre: bool,
     ) -> Option<NativeAudioSpectrumFramePayload<'a>> {
         let snapshot = snapshot?;
-        let bins = if use_pre {
+        let (bins, time_domain) = if use_pre {
             self.pre
-                .compute_bins_from_window(fft, snapshot.sample_rate, &snapshot.window)?
+                .compute_frame_from_window(fft, snapshot.sample_rate, &snapshot.window)?
         } else {
             self.post
-                .compute_bins_from_window(fft, snapshot.sample_rate, &snapshot.window)?
+                .compute_frame_from_window(fft, snapshot.sample_rate, &snapshot.window)?
         };
 
         Some(NativeAudioSpectrumFramePayload {
@@ -136,6 +141,7 @@ impl DualSpectrumComputer {
             }),
             sample_rate: snapshot.sample_rate,
             bins,
+            time_domain: Some(time_domain),
         })
     }
 }

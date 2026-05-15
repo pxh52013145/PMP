@@ -129,6 +129,7 @@ export type NativeAudioSrcPolicy = {
 
 export type NativeAudioSpectrumPayload = {
   bins: number[];
+  timeDomain?: number[];
   frameId?: number;
   timestampMs?: number;
   tap?: 'pre-dsp' | 'post-dsp';

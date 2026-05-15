@@ -385,6 +385,7 @@ export interface AudioSpectrumFrame {
   tap: AudioSpectrumTap;
   sampleRate: number;
   bins: Uint8Array;
+  timeDomain?: Uint8Array;
 }
 
 /**

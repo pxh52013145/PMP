@@ -295,6 +295,10 @@ export class AudioDataBus implements VisualizerAudioAdapter {
       const bass = frequency.length > 0 ? computeAverage(frequency, 0, Math.max(4, Math.floor(frequency.length * 0.14))) : 0;
       const mid = frequency.length > 0 ? computeAverage(frequency, Math.floor(frequency.length * 0.14), Math.floor(frequency.length * 0.52)) : 0;
       const treble = frequency.length > 0 ? computeAverage(frequency, Math.floor(frequency.length * 0.52), frequency.length) : 0;
+      const timeDomain =
+        spectrumFrame?.timeDomain && spectrumFrame.timeDomain.length > 0
+          ? new Uint8Array(spectrumFrame.timeDomain)
+          : synthesizeTimeDomain(frequency, timestamp, energy, bass, mid);
       const peak = computePeak(frequency);
       const centroid = computeSpectralCentroid(frequency);
       const previousEnergy = this.lastSnapshot?.analysis.smoothedEnergy ?? 0;
@@ -307,7 +311,7 @@ export class AudioDataBus implements VisualizerAudioAdapter {
 
       const snapshot: VisualizerAudioSnapshot = {
         frequency,
-        timeDomain: synthesizeTimeDomain(frequency, timestamp, energy, bass, mid),
+        timeDomain,
         spectrumFrame,
         analysis: {
           energy,
