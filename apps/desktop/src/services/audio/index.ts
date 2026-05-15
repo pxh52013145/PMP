@@ -22,6 +22,21 @@ export { NativeAudioService } from './NativeAudioService';
 export type { AudioEngineService, AudioEngineSnapshot, AudioEngineType } from './AudioEngineService';
 export { AUDIO_ENGINE_SERVICE_TOKEN, DefaultAudioEngineService } from './AudioEngineService';
 export {
+  AUDIO_ANALYSIS_DEFAULT_SEGMENT_COUNT,
+  AUDIO_ANALYSIS_SERVICE_TOKEN,
+  AUDIO_ANALYSIS_VERSION,
+  DefaultAudioAnalysisService,
+  type AudioAnalysisCacheRecord,
+  type AudioAnalysisService,
+  resolveAudioAnalysisTrackIdentity,
+} from './audioAnalysisService';
+export type {
+  AudioAnalysisRequestOptions,
+  AudioAnalysisTrackIdentity,
+  AudioPeakRmsAnalysis,
+  AudioPeakRmsSegment,
+} from '../../contracts/audioAnalysis';
+export {
   CLOUD_PLAYBACK_QUEUE_AUDIT_MAX_ENTRIES,
   CLOUD_PLAYBACK_QUEUE_SERVICE_TOKEN,
   DefaultCloudPlaybackQueueService,
@@ -40,5 +55,6 @@ export {
   type CloudPlaybackFallbackQueuedEvent,
   type CloudPlaybackFallbackRequest,
 } from './cloudPlaybackFallbackAdapter';
+export { createAudioAnalysisModule } from './audioAnalysisModule';
 export { createAudioModule } from './audioModule';
 export { createCloudPlaybackQueueModule } from './cloudPlaybackQueueModule';

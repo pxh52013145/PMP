@@ -1,10 +1,23 @@
-use crate::{audio::decoder_sidecar, native_audio};
+use crate::{audio::analysis, audio::decoder_sidecar, native_audio};
 
 #[tauri::command]
 pub async fn native_audio_load(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || native_audio::load(&app, path))
         .await
         .map_err(|e| format!("Native audio load task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_analyze_peak_rms(
+    path: String,
+    segment_count: Option<usize>,
+) -> Result<analysis::NativeAudioPeakRmsAnalysisPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        analysis::analyze_peak_rms(path, segment_count)
+            .map_err(|error| format!("{}: {}", error.code, error.message))
+    })
+    .await
+    .map_err(|e| format!("Native audio peak/RMS analysis task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]

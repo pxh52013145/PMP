@@ -160,6 +160,7 @@ pub const MUSIC_TAG_COMMAND_NAMES: &[&str] = &[
 
 pub const AUDIO_COMMAND_NAMES: &[&str] = &[
     "native_audio_load",
+    "native_audio_analyze_peak_rms",
     "native_audio_load_source",
     "native_audio_load_and_play",
     "native_audio_load_and_play_source",
@@ -478,6 +479,7 @@ macro_rules! pmp_generate_handler {
             crate::commands::music_tag::music_tag_apply_db_patch,
             crate::commands::music_tag::music_tag_search_candidates,
             crate::commands::audio::native_audio_load,
+            crate::commands::audio::native_audio_analyze_peak_rms,
             crate::commands::audio::native_audio_load_source,
             crate::commands::audio::native_audio_load_and_play,
             crate::commands::audio::native_audio_load_and_play_source,

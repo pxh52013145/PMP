@@ -1,3 +1,4 @@
+pub(crate) mod analysis;
 pub(crate) mod atomic_f32;
 pub(crate) mod buffer;
 pub(crate) mod buffer_policy;

@@ -19,8 +19,8 @@ use symphonia::core::{
 };
 
 use super::{
-    AudioInput, AudioInputDecodeMode, AudioInputError, AudioInputKind, AudioInputMeta,
-    AudioInputOpenResult, AudioInputSrcPolicy, SYMPHONIA_INPUT_ID,
+    pick_symphonia_audio_track, AudioInput, AudioInputDecodeMode, AudioInputError, AudioInputKind,
+    AudioInputMeta, AudioInputOpenResult, AudioInputSrcPolicy, SYMPHONIA_INPUT_ID,
 };
 
 use crate::audio::buffer::AudioRingBuffer;
@@ -185,28 +185,6 @@ fn streaming_reservoir_rate_scale(sample_rate: f64) -> f64 {
     }
 }
 
-fn track_is_audio_like(track: &Track) -> bool {
-    track.codec_params.sample_rate.is_some()
-        || track.codec_params.channels.is_some()
-        || track.codec_params.bits_per_sample.is_some()
-        || track.codec_params.bits_per_coded_sample.is_some()
-}
-
-fn pick_audio_track<'a>(format: &'a dyn FormatReader) -> Option<&'a Track> {
-    let tracks = format.tracks();
-    let default = format.default_track();
-    if let Some(track) = default {
-        if track_is_audio_like(track) {
-            return Some(track);
-        }
-    }
-    tracks
-        .iter()
-        .find(|t| track_is_audio_like(t))
-        .or(default)
-        .or_else(|| tracks.first())
-}
-
 fn full_track_buffer_budget_samples() -> usize {
     // Default budget is intentionally conservative: full-track decoding can easily allocate
     // hundreds of MB for longer tracks (f32 interleaved PCM). Streaming is the preferred
@@ -248,7 +226,7 @@ fn estimate_full_track_required_samples(
         )
         .ok()?;
     let format = probed.format;
-    let track = pick_audio_track(format.as_ref())?;
+    let track = pick_symphonia_audio_track(format.as_ref())?;
 
     let channels = track.codec_params.channels.map(|value| value.count())?;
     let source_rate = track.codec_params.sample_rate?;
@@ -346,7 +324,7 @@ fn start_symphonia_stream_from_input(
                 .format(&hint, mss, &format_options, &MetadataOptions::default())
                 .map_err(|e| format!("Failed to probe format: {e}"))?;
             let format = probed.format;
-            let track = pick_audio_track(format.as_ref())
+            let track = pick_symphonia_audio_track(format.as_ref())
                 .ok_or_else(|| "No audio track found".to_string())?
                 .clone();
             Ok((format, track))
@@ -1078,7 +1056,7 @@ fn decode_track_to_buffer(
             )
         })?;
     let mut format = probed.format;
-    let track = pick_audio_track(format.as_ref()).ok_or_else(|| {
+    let track = pick_symphonia_audio_track(format.as_ref()).ok_or_else(|| {
         AudioInputError::new("AUDIO_INPUT_SYMPHONIA_NO_TRACK", "No audio track found")
     })?;
     let mut decoder = symphonia::default::get_codecs()
