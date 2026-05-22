@@ -20,6 +20,15 @@ const listeners = new Set<HostExtensionRuntimeRestartListener>();
 let revision = 0;
 let syncDisposer: (() => void) | null = null;
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    syncDisposer?.();
+    listeners.clear();
+    revision = 0;
+    syncDisposer = null;
+  });
+}
+
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

@@ -88,6 +88,15 @@ const listeners = new Set<PluginMagnetCreatorListener>();
 let revision = 0;
 let syncDisposer: (() => void) | null = null;
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    syncDisposer?.();
+    listeners.clear();
+    revision = 0;
+    syncDisposer = null;
+  });
+}
+
 function emitRevision(): void {
   revision += 1;
   listeners.forEach((listener) => listener());

@@ -31,6 +31,22 @@ let flushTimeout: number | null = null;
 let idleHandle: number | null = null;
 const telemetry = getTelemetryLogger('storage', 'localStorage');
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    if (pendingWrites.size > 0) {
+      flushPendingWrites();
+    }
+    if (flushTimeout !== null) {
+      window.clearTimeout(flushTimeout);
+      flushTimeout = null;
+    }
+    if (idleHandle !== null && typeof cancelIdleCallback === 'function') {
+      cancelIdleCallback(idleHandle);
+      idleHandle = null;
+    }
+  });
+}
+
 function flushPendingWrites(): void {
   flushTimeout = null;
   if (idleHandle !== null && typeof cancelIdleCallback === 'function') {

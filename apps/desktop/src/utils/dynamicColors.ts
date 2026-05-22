@@ -20,6 +20,13 @@ const CACHE_MAX_ENTRIES = 64;
 const colorsCache = new Map<string, DynamicColors>();
 const inflightCache = new Map<string, Promise<DynamicColors>>();
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    colorsCache.clear();
+    inflightCache.clear();
+  });
+}
+
 const HAS_CANVAS_2D = typeof CanvasRenderingContext2D !== 'undefined';
 
 function pruneCache(): void {

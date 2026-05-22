@@ -45,6 +45,16 @@ export const TELEMETRY_SERVICE_TOKEN = createServiceToken<TelemetryService>('ser
 
 let globalTelemetryService: TelemetryService | null = null;
 const globalLoggerCache = new Map<string, TelemetryLogger>();
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    if (globalTelemetryService) {
+      globalTelemetryService.destroy();
+      globalTelemetryService = null;
+    }
+    globalLoggerCache.clear();
+  });
+}
 const NOOP_SPAN: TelemetrySpan = {
   end() {
     // no-op

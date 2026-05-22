@@ -16,6 +16,12 @@ type VariantMap = Map<string, MagnetVariantDefinition>;
 
 const variantsByRenderer = new Map<string, VariantMap>();
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    variantsByRenderer.clear();
+  });
+}
+
 export function registerMagnetVariant(
   rendererId: string,
   variant: MagnetVariantDefinition,

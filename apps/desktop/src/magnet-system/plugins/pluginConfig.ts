@@ -26,6 +26,16 @@ function readErrorMessage(error: unknown): string {
 const listenersByPluginId = new Map<string, Set<(config: ExtensionConfig) => void>>();
 const syncDisposersByPluginId = new Map<string, () => void>();
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    for (const disposer of syncDisposersByPluginId.values()) {
+      disposer();
+    }
+    syncDisposersByPluginId.clear();
+    listenersByPluginId.clear();
+  });
+}
+
 function notify(pluginId: string, config: ExtensionConfig): void {
   const listeners = listenersByPluginId.get(pluginId);
   if (!listeners || listeners.size === 0) return;

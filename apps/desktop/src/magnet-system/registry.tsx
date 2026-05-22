@@ -25,6 +25,14 @@ const rendererListeners = new Set<RendererListener>();
 let rendererRevision = 0;
 const telemetry = getTelemetryLogger('magnets', 'registry');
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    rendererRegistry.clear();
+    rendererListeners.clear();
+    rendererRevision = 0;
+  });
+}
+
 function notifyRendererRegistryChanged(): void {
   rendererRevision += 1;
   for (const listener of Array.from(rendererListeners)) {

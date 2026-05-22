@@ -562,6 +562,12 @@ type SharedVisibilityObserverEntry = {
 
 const sharedVisibilityObservers = new Map<string, SharedVisibilityObserverEntry>();
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    clearSharedVisibilityObservers();
+  });
+}
+
 function clearSharedVisibilityObservers(): void {
   for (const entry of sharedVisibilityObservers.values()) {
     entry.observer.disconnect();

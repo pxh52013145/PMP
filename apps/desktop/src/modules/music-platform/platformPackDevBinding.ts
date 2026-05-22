@@ -58,6 +58,15 @@ const listeners = new Set<PlatformPackDevBindingListener>();
 let revision = 0;
 let syncDisposer: (() => void) | null = null;
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    syncDisposer?.();
+    listeners.clear();
+    revision = 0;
+    syncDisposer = null;
+  });
+}
+
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }

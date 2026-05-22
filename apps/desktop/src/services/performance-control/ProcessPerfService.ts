@@ -67,6 +67,15 @@ const DEFAULT_PROCESS_PERF_SERVICE_SNAPSHOT: ProcessPerfServiceSnapshot = {
 
 let globalProcessPerfService: ProcessPerfService | null = null;
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    if (globalProcessPerfService) {
+      globalProcessPerfService.destroy();
+      globalProcessPerfService = null;
+    }
+  });
+}
+
 function cloneProcessPerfPolicy(policy: ProcessPerfPolicySnapshot): ProcessPerfPolicySnapshot {
   return {
     samplingMs: policy.samplingMs,

@@ -28,6 +28,18 @@ const scheduledTrimTimers = new Map<
 let lastTrimEvent: ProcessWorkingSetTrimEvent | null = null;
 const telemetry = getTelemetryLogger('memory-governance', 'processWorkingSetTrim');
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    for (const timers of scheduledTrimTimers.values()) {
+      for (const timer of timers) {
+        clearTimeout(timer);
+      }
+    }
+    scheduledTrimTimers.clear();
+    lastTrimEvent = null;
+  });
+}
+
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

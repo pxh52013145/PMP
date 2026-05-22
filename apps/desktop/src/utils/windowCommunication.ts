@@ -142,6 +142,16 @@ type WindowCommMessage =
 
 let broadcastChannel: BroadcastChannel | null = null;
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    if (broadcastChannel) {
+      broadcastChannel.close();
+      broadcastChannel = null;
+    }
+    debugEnabledCache = null;
+  });
+}
+
 function getBroadcastChannel(): BroadcastChannel | null {
   if (typeof window === 'undefined') return null;
   if (typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent)) return null;

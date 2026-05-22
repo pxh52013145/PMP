@@ -38,6 +38,16 @@ const KernelContext = createContext<DesktopKernel | undefined>(undefined);
 
 let cachedRuntime: KernelRuntime | null = null;
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    if (cachedRuntime) {
+      cachedRuntime.markDisposed();
+      cachedRuntime.loader.deactivateAll();
+      cachedRuntime = null;
+    }
+  });
+}
+
 function forwardKernelLog(
   component: string,
   level: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal',

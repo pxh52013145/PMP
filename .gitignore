@@ -68,6 +68,10 @@ packages/*
 scripts/
 !scripts/
 scripts/*
+!scripts/dev-tauri.mjs
+!scripts/ensure-port-free.mjs
+!scripts/require-env.mjs
+!scripts/run-vite.mjs
 !scripts/audio-score-gate.mjs
 !scripts/package-platform-pack.mjs
 !scripts/platform-pack-dev-fixture.mjs

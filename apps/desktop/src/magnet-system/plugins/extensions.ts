@@ -75,6 +75,15 @@ let extensionStoreRevision = 0;
 const extensionStoreListeners = new Set<PluginStoreListener>();
 let extensionStoreSyncDisposer: null | (() => void) = null;
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    extensionStoreSyncDisposer?.();
+    extensionStoreListeners.clear();
+    extensionStoreRevision = 0;
+    extensionStoreSyncDisposer = null;
+  });
+}
+
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

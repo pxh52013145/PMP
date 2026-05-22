@@ -232,6 +232,15 @@ const nativeCatalogFieldDefinitions = new Map<string, MusicLibraryResolvedFieldC
 const runtimeDiscoveredFieldDefinitions = new Map<string, MusicLibraryResolvedFieldCapability>();
 const fieldCapabilityListeners = new Set<() => void>();
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    persistedFieldDefinitions.clear();
+    nativeCatalogFieldDefinitions.clear();
+    runtimeDiscoveredFieldDefinitions.clear();
+    fieldCapabilityListeners.clear();
+  });
+}
+
 function getCustomFieldCapabilityMap(
   source: MusicLibraryCustomFieldCapabilitySource
 ): Map<string, MusicLibraryResolvedFieldCapability> {

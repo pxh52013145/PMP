@@ -70,6 +70,14 @@ let revision = 0;
 const listeners = new Set<PluginDevSessionListener>();
 let syncDisposer: null | (() => void) = null;
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    syncDisposer?.();
+    listeners.clear();
+    revision = 0;
+  });
+}
+
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

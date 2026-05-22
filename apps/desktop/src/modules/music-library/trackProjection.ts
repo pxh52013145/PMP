@@ -26,6 +26,12 @@ const DYNAMIC_TRACK_FIELD_EXCLUDED_KEYS = new Set<string>([
 
 const trackTextInternPool = new Map<string, string>();
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    trackTextInternPool.clear();
+  });
+}
+
 function trimTrackText(value: unknown, maxChars: number = MUSIC_LIBRARY_TRACK_TEXT_MAX_CHARS): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();

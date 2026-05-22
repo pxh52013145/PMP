@@ -201,6 +201,15 @@ const auditListeners = new Set<InstalledExtensionAuditListener>();
 let auditRevision = 0;
 let auditSyncDisposer: (() => void) | null = null;
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    auditSyncDisposer?.();
+    auditListeners.clear();
+    auditRevision = 0;
+    auditSyncDisposer = null;
+  });
+}
+
 function notifyAuditListeners(): void {
   auditRevision += 1;
   for (const listener of Array.from(auditListeners)) {

@@ -22,6 +22,23 @@ let bridgeForwardingDepth = 0;
 let attachedService: TelemetryService | null = null;
 let pendingEntries: ConsoleTelemetryEntry[] = [];
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    if (bridgeInstalled && typeof console !== 'undefined') {
+      for (const method of CONSOLE_METHODS) {
+        const original = originalConsole[method];
+        if (original) {
+          console[method] = original;
+        }
+      }
+    }
+    bridgeInstalled = false;
+    bridgeForwardingDepth = 0;
+    attachedService = null;
+    pendingEntries = [];
+  });
+}
+
 const originalConsole: Partial<Record<ConsoleMethodName, (...args: unknown[]) => void>> = {};
 
 function normalizeModuleToken(token: string): string | null {

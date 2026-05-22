@@ -61,6 +61,13 @@ const DEFAULT_MUSIC_LIBRARY_COLLECTION_FACET_DESCRIPTORS: Record<
 const runtimeCollectionFacetDescriptors = new Map<string, MusicLibraryCollectionFacetDescriptor>();
 const facetCollectionDescriptorListeners = new Set<() => void>();
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    runtimeCollectionFacetDescriptors.clear();
+    facetCollectionDescriptorListeners.clear();
+  });
+}
+
 function notifyFacetCollectionDescriptorListeners(): void {
   facetCollectionDescriptorListeners.forEach((listener) => {
     listener();

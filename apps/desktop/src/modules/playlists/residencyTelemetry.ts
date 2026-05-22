@@ -52,6 +52,15 @@ const telemetryState: PlaylistsOverlayResidencyMutable = {
 
 const listeners = new Set<(snapshot: PlaylistsOverlayResidencySnapshot) => void>();
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    listeners.clear();
+    telemetryState.samples = [];
+    telemetryState.seq = 0;
+    telemetryState.version = 0;
+  });
+}
+
 function emitSnapshot(): void {
   const snapshot = getPlaylistsOverlayResidencySnapshot();
   for (const listener of listeners) {

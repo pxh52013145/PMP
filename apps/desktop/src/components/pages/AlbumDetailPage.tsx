@@ -18,6 +18,12 @@ const ALBUM_TRACK_TEXT_INTERN_POOL_MAX = 2048;
 
 const albumTrackTextInternPool = new Map<string, string>();
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    albumTrackTextInternPool.clear();
+  });
+}
+
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

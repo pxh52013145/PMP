@@ -18,6 +18,12 @@ let currentLocale: Locale = FALLBACK_LOCALE;
 type LocaleListener = () => void;
 const localeListeners = new Set<LocaleListener>();
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    localeListeners.clear();
+  });
+}
+
 export function getLocale(): Locale {
   return currentLocale;
 }

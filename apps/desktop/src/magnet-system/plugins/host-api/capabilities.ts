@@ -114,6 +114,14 @@ type MusicPlatformApi = typeof import('../../../modules/music-platform');
 
 let musicPlatformApiPromise: Promise<MusicPlatformApi> | null = null;
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    entries.clear();
+    initialized = false;
+    musicPlatformApiPromise = null;
+  });
+}
+
 function loadMusicPlatformApi(): Promise<MusicPlatformApi> {
   musicPlatformApiPromise ??= import('../../../modules/music-platform');
   return musicPlatformApiPromise;
@@ -387,6 +395,18 @@ let voiceTrainingRuntimeDefaultProviderId: string | null = null;
 const pluginI18nMessageStores = new Map<string, Map<Locale, Messages>>();
 const telemetryLevelSet = new Set<TelemetryLevel>(TELEMETRY_LEVELS);
 const telemetryKindSet = new Set<TelemetryKind>(TELEMETRY_KINDS);
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    audioInputAdapterSessions.clear();
+    audioInputAdapterProviders.clear();
+    audioInputAdapterProviderRuntimeState.clear();
+    aiAdapterProviders.clear();
+    desktopPetRuntimeProviders.clear();
+    voiceTrainingRuntimeProviders.clear();
+    pluginI18nMessageStores.clear();
+  });
+}
 
 function resultOk<T>(data: T): PluginHostCapabilityResult<T> {
   return {
