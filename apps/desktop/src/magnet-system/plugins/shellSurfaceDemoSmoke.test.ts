@@ -190,7 +190,7 @@ async function flushAsyncWork(): Promise<void> {
 async function installShellSurfaceFixture(): Promise<void> {
   const manifestPath = path.resolve(
     process.cwd(),
-    '../../community/plugins/shell-surface-demo/manifest.v2.json'
+    '../../fixtures/community-plugins/shell-surface-demo/manifest.v2.json'
   );
   const extensionsModule = await import('./extensions');
   await extensionsModule.installInstalledExtensionFromFilePath(manifestPath);

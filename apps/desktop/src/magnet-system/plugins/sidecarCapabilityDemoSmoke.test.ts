@@ -443,7 +443,7 @@ async function loadResolvedSidecarRuntime(): Promise<{
 }> {
   const manifestPath = path.resolve(
     process.cwd(),
-    '../../community/plugins/sidecar-capability-demo/manifest.v2.json'
+    '../../fixtures/community-plugins/sidecar-capability-demo/manifest.v2.json'
   );
   const extensionsModule = await import('./extensions');
   const runtimeModule = await import('./runtime');

@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "2.0",
+  "kind": "extension",
+  "identity": {
+    "id": "sidecar-capability-demo",
+    "publisher": "pixel-matrix.dev",
+    "version": "0.1.0",
+    "name": "sidecar-capability-demo",
+    "displayName": "Sidecar Capability Demo"
+  },
+  "hostTargets": [
+    {
+      "hostId": "pmp",
+      "required": true
+    }
+  ],
+  "runtimes": [
+    {
+      "runtimeId": "sidecar.main",
+      "kind": "sidecar",
+      "entry": "bin/sidecar-capability-demo.js",
+      "priority": 10,
+      "sandbox": "native",
+      "bridge": "pxp.runtime.bridge.v1",
+      "dataPlane": {
+        "kinds": ["pipe"]
+      }
+    }
+  ],
+  "activationEvents": ["onCommand:sidecar-capability-demo.smoke"],
+  "requiresCapabilities": [
+    {
+      "capabilityId": "core.capability-registry"
+    }
+  ],
+  "optionalCapabilities": [
+    {
+      "capabilityId": "host.pmp.audio-engine.analysis"
+    }
+  ],
+  "contributes": {
+    "core": {
+      "commands": [
+        {
+          "kind": "command",
+          "id": "sidecar-capability-demo.smoke",
+          "title": "Run Sidecar Capability Demo"
+        }
+      ]
+    }
+  }
+}

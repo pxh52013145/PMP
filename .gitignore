@@ -65,15 +65,28 @@ packages/
 packages/*
 !packages/plugin-platform-contracts/
 !packages/plugin-platform-contracts/**
+packages/plugin-platform-contracts/node_modules/
 scripts/
 !scripts/
 scripts/*
+!scripts/dev-tauri.mjs
+!scripts/ensure-port-free.mjs
+!scripts/run-vite.mjs
+!scripts/require-env.mjs
 !scripts/audio-score-gate.mjs
 !scripts/package-platform-pack.mjs
 !scripts/platform-pack-dev-fixture.mjs
 !scripts/telemetry-inspect.mjs
+!scripts/perf-snapshot.ps1
 !scripts/perf-memory-phase0-suite.ps1
 !scripts/prepare-music-platform-packs.mjs
+!scripts/plugin-smoke-lib.mjs
+!scripts/runtime-foundation-smoke.mjs
+!scripts/view-surface-smoke.mjs
+!scripts/sidecar-smoke.mjs
+!scripts/shell-surface-smoke.mjs
+!scripts/plugin-platform-smoke.mjs
+!scripts/magnet-doctor.mjs
 snapshots/
 
 # Local scratch

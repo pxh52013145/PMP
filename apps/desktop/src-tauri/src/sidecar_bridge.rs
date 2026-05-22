@@ -1095,7 +1095,7 @@ setInterval(() => {}, 1000);
         }
 
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../community/plugins/sidecar-echo-demo/sidecar/echo-runtime.js")
+            .join("../../../fixtures/community-plugins/sidecar-echo-demo/sidecar/echo-runtime.js")
             .canonicalize()
             .expect("sidecar fixture path");
 

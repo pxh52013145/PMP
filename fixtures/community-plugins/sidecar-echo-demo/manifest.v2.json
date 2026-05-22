@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "2.0",
+  "kind": "extension",
+  "identity": {
+    "id": "sidecar-echo-demo",
+    "publisher": "pixel-matrix.dev",
+    "version": "0.1.0",
+    "name": "sidecar-echo-demo",
+    "displayName": "Sidecar Echo Demo"
+  },
+  "hostTargets": [
+    {
+      "hostId": "pmp",
+      "required": true
+    }
+  ],
+  "runtimes": [
+    {
+      "runtimeId": "sidecar.echo",
+      "kind": "sidecar",
+      "entry": "sidecar/echo-runtime.js",
+      "priority": 10,
+      "sandbox": "native",
+      "bridge": "pxp.runtime.bridge.v1",
+      "dataPlane": {
+        "kinds": ["pipe"]
+      }
+    }
+  ],
+  "activationEvents": ["onCommand:sidecar-echo-demo.run"],
+  "requiresCapabilities": [
+    {
+      "capabilityId": "core.capability-registry"
+    }
+  ],
+  "contributes": {
+    "core": {
+      "commands": [
+        {
+          "kind": "command",
+          "id": "sidecar-echo-demo.run",
+          "title": "Run Sidecar Echo Demo"
+        }
+      ]
+    }
+  }
+}

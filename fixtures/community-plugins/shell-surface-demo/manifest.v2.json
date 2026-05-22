@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "2.0",
+  "kind": "extension",
+  "identity": {
+    "id": "shell-surface-demo",
+    "publisher": "pixel-matrix.dev",
+    "version": "0.1.0",
+    "name": "shell-surface-demo",
+    "displayName": "Shell Surface Demo"
+  },
+  "hostTargets": [
+    {
+      "hostId": "pmp",
+      "required": true
+    }
+  ],
+  "runtimes": [
+    {
+      "runtimeId": "webview.main",
+      "kind": "webview",
+      "entry": "index.html",
+      "priority": 10
+    }
+  ],
+  "contributes": {
+    "host": {
+      "pmp": {
+        "shellSurfaces": [
+          {
+            "id": "demo-overlay",
+            "kind": "shell-surface",
+            "title": "Demo Overlay",
+            "surfaceType": "overlay",
+            "width": 480,
+            "height": 320,
+            "pointerPolicy": "capture-input",
+            "focusable": true,
+            "alwaysOnTop": true,
+            "dismissOnEscape": true
+          },
+          {
+            "id": "demo-widget",
+            "kind": "shell-surface",
+            "title": "Demo Widget",
+            "surfaceType": "desktop-widget",
+            "width": 320,
+            "height": 240,
+            "pointerPolicy": "capture-input",
+            "focusable": true,
+            "alwaysOnTop": false,
+            "dismissOnEscape": false
+          }
+        ]
+      }
+    }
+  }
+}
