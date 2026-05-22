@@ -3,6 +3,7 @@ export {
   getDebugConfig,
   getDebugEnvSnapshot,
   getDefaultDebugConfig,
+  reloadApp,
   restartApp,
   getRecentGitCommits,
   setDebugConfig,

@@ -153,21 +153,6 @@ export async function getDebugEnvSnapshot(): Promise<DebugEnvSnapshot> {
   return snapshot;
 }
 
-function shouldUseSoftRestartInCurrentRuntime(): boolean {
-  if (typeof window === 'undefined') return false;
-  if (import.meta.env.DEV) return true;
-
-  try {
-    const currentUrl = new URL(window.location.href);
-    return (
-      currentUrl.protocol === 'http:' &&
-      (currentUrl.hostname === 'localhost' || currentUrl.hostname === '127.0.0.1')
-    );
-  } catch {
-    return false;
-  }
-}
-
 function softReloadCurrentWindow(): void {
   if (typeof window === 'undefined') return;
   window.setTimeout(() => {
@@ -175,12 +160,13 @@ function softReloadCurrentWindow(): void {
   }, 0);
 }
 
+export async function reloadApp(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  softReloadCurrentWindow();
+}
+
 export async function restartApp(): Promise<void> {
   if (!isTauriRuntime()) return;
-  if (shouldUseSoftRestartInCurrentRuntime()) {
-    softReloadCurrentWindow();
-    return;
-  }
   await invokeWithTelemetry('app_restart', undefined, {
     moduleId: 'debug',
     component: 'debugConfig',

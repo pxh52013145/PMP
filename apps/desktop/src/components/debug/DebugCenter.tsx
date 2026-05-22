@@ -25,6 +25,7 @@ import {
   exportTelemetryBundle,
   queryTelemetryCurrentSession,
   readCurrentTelemetrySession,
+  reloadApp,
   restartApp,
   setDebugConfig,
   type DebugConfig,
@@ -756,6 +757,7 @@ export function DebugCenter({
     );
   const [busy, setBusy] = useState(false);
   const [pendingRestart, setPendingRestart] = useState(false);
+  const [restartInProgress, setRestartInProgress] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [internalActiveWorkspace, setInternalActiveWorkspace] =
@@ -1886,9 +1888,15 @@ export function DebugCenter({
     }
   }, [commands]);
 
+  const requestReload = useCallback(() => {
+    if (!isTauri || restartInProgress) return;
+    void reloadApp();
+  }, [isTauri, restartInProgress]);
+
   const requestRestart = useCallback(
     async (mode: 'normal' | 'debug-center') => {
-      if (!isTauri) return;
+      if (!isTauri || restartInProgress) return;
+      setRestartInProgress(true);
 
       const next: DebugConfig =
         mode === 'debug-center'
@@ -1899,6 +1907,7 @@ export function DebugCenter({
         await setDebugConfig(next);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
+        setRestartInProgress(false);
         return;
       }
 
@@ -1906,20 +1915,34 @@ export function DebugCenter({
         await restartApp();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
+        setRestartInProgress(false);
       }
     },
-    [config, isTauri]
+    [config, isTauri, restartInProgress]
   );
 
   const headerActions = (
     <div className="debug-center-actions">
-      <SettingsActionButton type="button" onClick={() => setConfirmRestart(true)} disabled={!isTauri}>
-        {t('debug.center.actions.restart')}
+      <SettingsActionButton
+        type="button"
+        onClick={requestReload}
+        disabled={!isTauri || restartInProgress}
+      >
+        {t('common.action.refresh')}
+      </SettingsActionButton>
+      <SettingsActionButton
+        type="button"
+        onClick={() => setConfirmRestart(true)}
+        disabled={!isTauri || restartInProgress}
+      >
+        {restartInProgress
+          ? t('debug.center.actions.restarting')
+          : t('debug.center.actions.restart')}
       </SettingsActionButton>
       <SettingsActionButton
         type="button"
         onClick={() => setConfirmRestartIntoDebug(true)}
-        disabled={!isTauri}
+        disabled={!isTauri || restartInProgress}
       >
         {t('debug.center.actions.restartAndOpen')}
       </SettingsActionButton>
