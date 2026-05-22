@@ -3,6 +3,10 @@ export {
   AudioDataBus,
 } from './AudioDataBus';
 export { CanvasRuntime } from './CanvasRuntime';
+export {
+  readStoredVisualizerWorkspaceViewMode,
+  VisualizerWorkspaceRuntime,
+} from './workspace/VisualizerWorkspaceRuntime';
 export { ComponentRegistry } from './ComponentRegistry';
 export { createViewportInfo, resolveComponentBounds } from './CoordinateSystem';
 export { drawVisualizerGrid } from './GridSystem';
@@ -68,4 +72,6 @@ export type {
   VisualizerSceneDescriptor,
   VisualizerTrackSnapshot,
   VisualizerViewportInfo,
+  VisualizerWorkspaceHostContext,
+  VisualizerWorkspaceViewMode,
 } from './types';

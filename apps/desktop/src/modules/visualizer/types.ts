@@ -161,6 +161,15 @@ export interface VisualizerViewportInfo {
   devicePixelRatio: number;
 }
 
+export type VisualizerWorkspaceViewMode = 'perspective' | 'top' | 'front' | 'side';
+
+export interface VisualizerWorkspaceHostContext {
+  viewMode: VisualizerWorkspaceViewMode;
+  camera: unknown;
+  renderer: unknown;
+  componentHostRoot: HTMLElement | null;
+}
+
 export interface VisualizerCanvasViewState {
   panX: number;
   panY: number;
@@ -232,6 +241,7 @@ export interface VisualizerComponentContext {
   config: Readonly<Record<string, unknown>>;
   quality: VisualizerComponentQuality;
   qualityLevel: number;
+  workspace?: VisualizerWorkspaceHostContext;
   requestRedraw(): void;
 }
 
@@ -249,6 +259,7 @@ export interface VisualizerRenderContext {
   qualityLevel: number;
   viewState: Readonly<VisualizerCanvasViewState>;
   editState: Readonly<VisualizerCanvasEditState>;
+  workspace?: VisualizerWorkspaceHostContext;
 }
 
 export interface VisualizerFrameInfo {
@@ -294,7 +305,9 @@ export interface VisualizerSceneDescriptor {
 export interface VisualizerRuntimeOptions {
   audioService: IAudioService;
   canvas: HTMLCanvasElement;
+  componentHostRoot?: HTMLElement | null;
   sceneId: string;
   quality: VisualizerComponentQuality;
+  viewMode?: VisualizerWorkspaceViewMode;
   onClose?: () => void;
 }

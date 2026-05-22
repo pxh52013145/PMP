@@ -2,8 +2,8 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { QualityEffectiveConfig } from '../../contracts/quality';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { useQuality } from '../../contexts/QualityContext';
-import { CanvasRuntime } from '../../modules/visualizer';
-import type { VisualizerComponentQuality } from '../../modules/visualizer';
+import { VisualizerWorkspaceRuntime } from '../../modules/visualizer';
+import type { VisualizerComponentQuality, VisualizerWorkspaceViewMode } from '../../modules/visualizer';
 
 type VisualizerCanvasProps = {
   visualizerId: string;
@@ -12,6 +12,7 @@ type VisualizerCanvasProps = {
   resetLayoutRevision?: number;
   centerCanvasRevision?: number;
   resetCanvasSizeRevision?: number;
+  viewMode?: VisualizerWorkspaceViewMode;
 };
 
 const QUALITY_LEVEL_ORDER: QualityEffectiveConfig['level'][] = ['potato', 'low', 'balanced', 'high', 'ultra'];
@@ -32,23 +33,29 @@ export function VisualizerCanvas({
   resetLayoutRevision = 0,
   centerCanvasRevision = 0,
   resetCanvasSizeRevision = 0,
+  viewMode = 'perspective',
 }: VisualizerCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const runtimeRef = useRef<CanvasRuntime | null>(null);
+  const componentHostRootRef = useRef<HTMLDivElement | null>(null);
+  const runtimeRef = useRef<VisualizerWorkspaceRuntime | null>(null);
   const audioService = useAudioService();
   const quality = useQuality();
   const initialVisualizerIdRef = useRef(visualizerId);
   const initialQualityRef = useRef(quality.effective);
+  const initialViewModeRef = useRef(viewMode);
 
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
+    const componentHostRoot = componentHostRootRef.current;
     if (!canvas) return;
 
-    const runtime = new CanvasRuntime({
+    const runtime = new VisualizerWorkspaceRuntime({
       audioService,
       canvas,
+      componentHostRoot,
       sceneId: initialVisualizerIdRef.current,
       quality: toVisualizerQuality(initialQualityRef.current),
+      viewMode: initialViewModeRef.current,
     });
     runtimeRef.current = runtime;
     runtime.start();
@@ -74,6 +81,10 @@ export function VisualizerCanvas({
   }, [editMode]);
 
   useEffect(() => {
+    runtimeRef.current?.setViewMode(viewMode);
+  }, [viewMode]);
+
+  useEffect(() => {
     if (resetLayoutRevision <= 0) return;
     runtimeRef.current?.resetLayout();
   }, [resetLayoutRevision]);
@@ -88,5 +99,19 @@ export function VisualizerCanvas({
     runtimeRef.current?.resetCanvasSize();
   }, [resetCanvasSizeRevision]);
 
-  return <canvas ref={canvasRef} className={className} data-visualizer-id={visualizerId} />;
+  return (
+    <div className={`visualizer-canvas ${className ?? ''}`} data-visualizer-id={visualizerId}>
+      <canvas
+        ref={canvasRef}
+        className="visualizer-canvas__webgl"
+        data-visualizer-canvas="workspace"
+      />
+      <div
+        ref={componentHostRootRef}
+        className="visualizer-canvas__component-host-root"
+        data-visualizer-surface-root="component-host-root"
+        aria-hidden="true"
+      />
+    </div>
+  );
 }

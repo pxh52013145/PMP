@@ -23,6 +23,7 @@ import type {
   VisualizerRenderContext,
   VisualizerSceneDescriptor,
   VisualizerViewportInfo,
+  VisualizerWorkspaceHostContext,
 } from './types';
 
 const telemetry = getTelemetryLogger('visualizer', 'RenderPipeline');
@@ -50,6 +51,7 @@ export interface RenderSceneFrameInput {
   quality: VisualizerComponentQuality;
   viewState: VisualizerCanvasViewState;
   editState: VisualizerCanvasEditState;
+  workspace?: VisualizerWorkspaceHostContext;
 }
 
 function drawBackground(
@@ -69,7 +71,8 @@ function drawComponentInstance(
   componentEntry: ActiveVisualizerComponent,
   quality: VisualizerComponentQuality,
   viewState: VisualizerCanvasViewState,
-  editState: VisualizerCanvasEditState
+  editState: VisualizerCanvasEditState,
+  workspace?: VisualizerWorkspaceHostContext
 ): void {
   const { component, transform, config } = componentEntry;
   if (!transform.visible) return;
@@ -110,6 +113,7 @@ function drawComponentInstance(
       ...viewState,
       ...editState,
     },
+    workspace,
   };
 
   try {
@@ -337,6 +341,7 @@ export function renderSceneFrame({
   quality,
   viewState,
   editState,
+  workspace,
 }: RenderSceneFrameInput): void {
   drawBackground(ctx, viewport);
   drawVisualizerGrid(
@@ -383,7 +388,7 @@ export function renderSceneFrame({
   });
 
   for (const entry of sortedComponents) {
-    drawComponentInstance(ctx, viewport, audioSnapshot, frame, entry, quality, viewState, editState);
+    drawComponentInstance(ctx, viewport, audioSnapshot, frame, entry, quality, viewState, editState, workspace);
   }
 
   if (editState.editMode) {

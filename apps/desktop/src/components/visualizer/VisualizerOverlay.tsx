@@ -1,9 +1,11 @@
 import { appWindow } from '@tauri-apps/api/window';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, Crosshair, Edit3, RotateCcw, Scan } from 'lucide-react';
+import { Axis3d, Check, ChevronDown, Crosshair, Edit3, Grid2x2, PanelRight, PanelTop, RotateCcw, Scan } from 'lucide-react';
 import { useKernel } from '../../contexts/KernelContext';
 import type { VisualizerContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n/react';
+import { readStoredVisualizerWorkspaceViewMode } from '../../modules/visualizer';
+import type { VisualizerWorkspaceViewMode } from '../../modules/visualizer';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import WindowResizeHandles from '../core/WindowResizeHandles';
@@ -15,6 +17,46 @@ type VisualizerOverlayProps = {
   source?: 'magnet' | 'settings' | 'command' | 'programmatic';
   onClose: () => void;
 };
+
+const VIEW_MODE_BUTTONS: Array<{
+  mode: VisualizerWorkspaceViewMode;
+  titleKey: string;
+  ariaKey: string;
+}> = [
+  {
+    mode: 'perspective',
+    titleKey: 'visualizer.overlay.viewMode.perspective.title',
+    ariaKey: 'visualizer.overlay.viewMode.perspective.aria',
+  },
+  {
+    mode: 'top',
+    titleKey: 'visualizer.overlay.viewMode.top.title',
+    ariaKey: 'visualizer.overlay.viewMode.top.aria',
+  },
+  {
+    mode: 'front',
+    titleKey: 'visualizer.overlay.viewMode.front.title',
+    ariaKey: 'visualizer.overlay.viewMode.front.aria',
+  },
+  {
+    mode: 'side',
+    titleKey: 'visualizer.overlay.viewMode.side.title',
+    ariaKey: 'visualizer.overlay.viewMode.side.aria',
+  },
+];
+
+function renderViewModeIcon(mode: VisualizerWorkspaceViewMode) {
+  if (mode === 'top') {
+    return <Grid2x2 size={17} strokeWidth={2.05} aria-hidden="true" />;
+  }
+  if (mode === 'front') {
+    return <PanelTop size={17} strokeWidth={2.05} aria-hidden="true" />;
+  }
+  if (mode === 'side') {
+    return <PanelRight size={17} strokeWidth={2.05} aria-hidden="true" />;
+  }
+  return <Axis3d size={18} strokeWidth={2.05} aria-hidden="true" />;
+}
 
 export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerOverlayProps) {
   const kernel = useKernel();
@@ -30,6 +72,9 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
   const [layoutResetRevision, setLayoutResetRevision] = useState(0);
   const [centerCanvasRevision, setCenterCanvasRevision] = useState(0);
   const [resetCanvasSizeRevision, setResetCanvasSizeRevision] = useState(0);
+  const [viewMode, setViewMode] = useState<VisualizerWorkspaceViewMode>(() =>
+    readStoredVisualizerWorkspaceViewMode(visualizerId)
+  );
   const [isEntered, setIsEntered] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
 
@@ -103,6 +148,10 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
 
   useEffect(() => {
     overlayRef.current?.focus();
+  }, [visualizerId]);
+
+  useEffect(() => {
+    setViewMode(readStoredVisualizerWorkspaceViewMode(visualizerId));
   }, [visualizerId]);
 
   useEffect(() => {
@@ -193,24 +242,50 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
           aria-label={t('visualizer.overlay.viewportControls')}
         >
           <div className="visualizer-overlay__viewport-tools">
-            <button
-              type="button"
-              className="visualizer-overlay__tool"
-              onClick={() => setCenterCanvasRevision((value) => value + 1)}
-              title={t('visualizer.overlay.action.centerCanvas')}
-              aria-label={t('visualizer.overlay.action.centerCanvas')}
+            <div
+              className="visualizer-overlay__viewport-group"
+              role="group"
+              aria-label={t('visualizer.overlay.viewMode.group')}
             >
-              <Crosshair size={18} strokeWidth={2.1} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className="visualizer-overlay__tool"
-              onClick={() => setResetCanvasSizeRevision((value) => value + 1)}
-              title={t('visualizer.overlay.action.resetCanvasSize')}
-              aria-label={t('visualizer.overlay.action.resetCanvasSize')}
+              {VIEW_MODE_BUTTONS.map((button) => (
+                <button
+                  key={button.mode}
+                  type="button"
+                  className={`visualizer-overlay__tool ${viewMode === button.mode ? 'is-active' : ''}`}
+                  onClick={() => setViewMode(button.mode)}
+                  title={t(button.titleKey)}
+                  aria-label={t(button.ariaKey)}
+                  aria-pressed={viewMode === button.mode}
+                  data-view-mode={button.mode}
+                >
+                  {renderViewModeIcon(button.mode)}
+                </button>
+              ))}
+            </div>
+            <div
+              className="visualizer-overlay__viewport-group"
+              role="group"
+              aria-label={t('visualizer.overlay.canvasActions')}
             >
-              <Scan size={17} strokeWidth={2.1} aria-hidden="true" />
-            </button>
+              <button
+                type="button"
+                className="visualizer-overlay__tool"
+                onClick={() => setCenterCanvasRevision((value) => value + 1)}
+                title={t('visualizer.overlay.action.centerCanvas')}
+                aria-label={t('visualizer.overlay.action.centerCanvas')}
+              >
+                <Crosshair size={18} strokeWidth={2.1} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="visualizer-overlay__tool"
+                onClick={() => setResetCanvasSizeRevision((value) => value + 1)}
+                title={t('visualizer.overlay.action.resetCanvasSize')}
+                aria-label={t('visualizer.overlay.action.resetCanvasSize')}
+              >
+                <Scan size={17} strokeWidth={2.1} aria-hidden="true" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -242,6 +317,7 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
           visualizerId={visualizerId}
           className="visualizer-overlay__canvas"
           editMode={editMode}
+          viewMode={viewMode}
           resetLayoutRevision={layoutResetRevision}
           centerCanvasRevision={centerCanvasRevision}
           resetCanvasSizeRevision={resetCanvasSizeRevision}
