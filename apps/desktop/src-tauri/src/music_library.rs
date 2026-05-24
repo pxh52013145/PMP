@@ -21,12 +21,14 @@ use dsf::DsfFile;
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use symphonia::core::{
-    formats::{FormatOptions, FormatReader, Track},
+    formats::FormatOptions,
     io::{MediaSourceStream, MediaSourceStreamOptions},
     meta::{Limit, MetadataOptions, StandardVisualKey},
     probe::Hint,
 };
 use url::Url;
+
+use crate::audio::symphonia_metadata;
 
 pub const EVENT_MUSIC_LIBRARY_SCAN_PROGRESS: &str = "music-library-scan-progress";
 
@@ -916,64 +918,29 @@ fn extract_quick_metadata(
         ));
     }
 
-    fn track_is_audio_like(track: &Track) -> bool {
-        track.codec_params.sample_rate.is_some()
-            || track.codec_params.channels.is_some()
-            || track.codec_params.bits_per_sample.is_some()
-            || track.codec_params.bits_per_coded_sample.is_some()
-    }
-
-    fn pick_audio_track<'a>(format: &'a dyn FormatReader) -> Option<&'a Track> {
-        let tracks = format.tracks();
-        let default = format.default_track();
-        if let Some(track) = default {
-            if track_is_audio_like(track) {
-                return Some(track);
-            }
-        }
-        tracks
-            .iter()
-            .find(|t| track_is_audio_like(t))
-            .or(default)
-            .or_else(|| tracks.first())
-    }
-
-    let file = fs::File::open(path).map_err(|e| format!("Failed to open file: {e}"))?;
-    let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
-
-    let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
-    }
-
     let format_options = FormatOptions {
         prebuild_seek_index: false,
         seek_index_fill_rate: 5,
         enable_gapless: false,
     };
 
-    let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &format_options, &MetadataOptions::default())
-        .map_err(|e| format!("Failed to probe format: {e}"))?;
+    let probed =
+        symphonia_metadata::probe_local_format(path, &format_options, &MetadataOptions::default())?;
 
     let symphonia::core::probe::ProbeResult {
         mut format,
         metadata: mut probed_metadata,
         ..
     } = probed;
-    let track =
-        pick_audio_track(format.as_ref()).ok_or_else(|| "No audio track found".to_string())?;
+    let track = symphonia_metadata::pick_audio_track(format.as_ref())
+        .ok_or_else(|| "No audio track found".to_string())?
+        .clone();
 
     let sample_rate = track.codec_params.sample_rate;
     let bit_depth = track
         .codec_params
         .bits_per_sample
         .or(track.codec_params.bits_per_coded_sample);
-
-    let duration = track
-        .codec_params
-        .n_frames
-        .and_then(|frames| sample_rate.map(|sr| frames as f64 / sr as f64));
 
     let mut title: Option<String> = None;
     let mut artist: Option<String> = None;
@@ -1007,6 +974,8 @@ fn extract_quick_metadata(
 
     let mut format_metadata = format.metadata();
     for_each_metadata_revision(&mut format_metadata, |rev| apply_tags(rev));
+
+    let duration = symphonia_metadata::duration_from_track_or_estimate(format.as_mut(), &track);
 
     Ok((
         duration,
@@ -2500,6 +2469,7 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
     use std::path::Path;
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
     use symphonia::core::meta::{MetadataBuilder, MetadataLog, StandardVisualKey, Visual};
 
@@ -2582,6 +2552,59 @@ mod tests {
         assert_eq!(bit_depth, Some(1));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn extract_quick_metadata_estimates_duration_for_aac_and_m4a() {
+        if Command::new("ffmpeg").arg("-version").output().is_err() {
+            return;
+        }
+
+        let tmp_dir = std::env::temp_dir();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time ok")
+            .as_nanos();
+        let aac_path = tmp_dir.join(format!("pmp_test_ml_{nonce}.aac"));
+        let m4a_path = tmp_dir.join(format!("pmp_test_ml_{nonce}.m4a"));
+
+        let generate = |path: &Path| {
+            let status = Command::new("ffmpeg")
+                .args([
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:duration=1.5",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "96k",
+                ])
+                .arg(path)
+                .status()
+                .expect("run ffmpeg");
+            assert!(
+                status.success(),
+                "ffmpeg should generate fixture at {path:?}"
+            );
+        };
+
+        generate(&aac_path);
+        generate(&m4a_path);
+
+        let (aac_duration, aac_sample_rate, ..) =
+            extract_quick_metadata(&aac_path).expect("extract aac metadata");
+        assert!(aac_duration.unwrap_or(0.0) > 0.0);
+        assert!(aac_sample_rate.is_some());
+
+        let (m4a_duration, m4a_sample_rate, ..) =
+            extract_quick_metadata(&m4a_path).expect("extract m4a metadata");
+        assert!(m4a_duration.unwrap_or(0.0) > 0.0);
+        assert!(m4a_sample_rate.is_some());
+
+        let _ = std::fs::remove_file(&aac_path);
+        let _ = std::fs::remove_file(&m4a_path);
     }
 
     fn write_fake_mp3_payload(path: &Path, payload: &[u8], id3_tag_len: usize) {

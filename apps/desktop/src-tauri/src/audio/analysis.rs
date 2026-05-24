@@ -10,10 +10,9 @@ use symphonia::core::{
     formats::FormatOptions,
     io::{MediaSourceStream, MediaSourceStreamOptions},
     meta::MetadataOptions,
-    probe::Hint,
 };
 
-use super::input::{pick_symphonia_audio_track, AudioInputError};
+use super::{input::AudioInputError, symphonia_metadata};
 
 const DEFAULT_SEGMENT_COUNT: usize = 1440;
 const MIN_SEGMENT_COUNT: usize = 64;
@@ -141,10 +140,7 @@ fn open_format(
         )
     })?;
     let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
-    let mut hint = Hint::new();
-    if let Some(extension) = path.extension().and_then(|value| value.to_str()) {
-        hint.with_extension(extension);
-    }
+    let hint = symphonia_metadata::build_hint_from_path(path);
     let format_options = FormatOptions {
         prebuild_seek_index: false,
         seek_index_fill_rate: 0,
@@ -168,7 +164,7 @@ pub fn analyze_peak_rms(
     let started_at = Instant::now();
     let segment_count = normalize_segment_count(segment_count);
     let mut format = open_format(path.as_ref())?;
-    let track = pick_symphonia_audio_track(format.as_ref())
+    let track = symphonia_metadata::pick_audio_track(format.as_ref())
         .ok_or_else(|| AudioInputError::new("AUDIO_ANALYSIS_NO_TRACK", "No audio track found"))?
         .clone();
     let track_id = track.id;

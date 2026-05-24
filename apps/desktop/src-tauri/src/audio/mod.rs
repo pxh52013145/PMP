@@ -29,6 +29,7 @@ pub(crate) mod source;
 pub(crate) mod spectrum;
 pub(crate) mod stability;
 pub(crate) mod stability_controller;
+pub(crate) mod symphonia_metadata;
 pub(crate) mod threading;
 
 pub(crate) fn shutdown() {

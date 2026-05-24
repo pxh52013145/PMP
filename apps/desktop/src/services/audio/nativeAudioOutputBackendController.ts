@@ -133,15 +133,17 @@ export class NativeAudioOutputBackendController {
     });
   }
 
-  canTryAutoSwitch(input: { nowMs: number; pinned: boolean }): boolean {
+  canTryAutoSwitch(input: { nowMs: number; pinned: boolean; force?: boolean }): boolean {
     if (this.switchInFlight) return false;
     if (!this.isSharedOutputBackend(this.outputBackendId)) return false;
-    if (input.pinned) return false;
-    if (
-      this.lastSwitchAtMs !== null &&
-      input.nowMs - this.lastSwitchAtMs < this.options.config.switchCooldownMs
-    ) {
-      return false;
+    if (!input.force) {
+      if (input.pinned) return false;
+      if (
+        this.lastSwitchAtMs !== null &&
+        input.nowMs - this.lastSwitchAtMs < this.options.config.switchCooldownMs
+      ) {
+        return false;
+      }
     }
     return true;
   }

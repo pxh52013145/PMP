@@ -8,6 +8,7 @@ import type { RuntimeCapsuleManagerService } from '../runtime-capsules';
 import { LazyAudioTransportService } from './LazyAudioTransportService';
 import { NativeAudioService } from './NativeAudioService';
 import { NoopAudioService } from './NoopAudioService';
+import { isRecoverableNativeOutputError } from './nativeAudioOutputErrorClassification';
 import type { AudioRobustnessSnapshot, IAudioService, PlaybackState } from './types';
 import {
   recordStartupMemoryCheckpoint,
@@ -225,6 +226,10 @@ export class DefaultAudioEngineService implements AudioEngineService {
         const maybeCoded = error as Error & { code?: string };
         const code = maybeCoded?.code;
         const messageText = error?.message ?? String(error);
+        const recoverableOutputError = isRecoverableNativeOutputError({
+          code,
+          message: messageText,
+        });
 
         this.events.emit('audio/error', {
           message: messageText,
@@ -282,8 +287,14 @@ export class DefaultAudioEngineService implements AudioEngineService {
           message: readTelemetryErrorMessage(error),
           fields: {
             code: code ?? null,
+            recoverable: recoverableOutputError,
           },
         });
+
+        if (recoverableOutputError) {
+          return;
+        }
+
         void import('@tauri-apps/api/dialog')
           .then(({ message }) =>
             message(`Native audio error: ${messageText}`, {

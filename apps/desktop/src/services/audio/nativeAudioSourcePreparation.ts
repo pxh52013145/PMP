@@ -151,18 +151,23 @@ export class NativeAudioSourcePreparation {
       return null;
     }
 
+    const command = options?.play ? 'native_audio_load_and_play_source' : 'native_audio_load_source';
+
     try {
       if (options?.play) {
-        return await this.options.invokeCommand<string>('native_audio_load_and_play_source', {
+        return await this.options.invokeCommand<string>(command, {
           source: payload,
           replayGainDb: options.replayGainDb,
         });
       }
 
-      return await this.options.invokeCommand<string>('native_audio_load_source', {
+      return await this.options.invokeCommand<string>(command, {
         source: payload,
       });
-    } catch {
+    } catch (error) {
+      const loadError = new Error(readErrorMessage(error)) as Error & { code?: string };
+      loadError.code = 'NATIVE_AUDIO_LOAD_SOURCE_FAILED';
+      this.options.emitError(loadError);
       return null;
     }
   }
@@ -184,6 +189,10 @@ function isProbablyAbsolutePath(value: string): boolean {
   if (value.startsWith('\\\\')) return true;
   if (value.startsWith('/')) return true;
   return false;
+}
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export { isProbablyAbsolutePath as isProbablyNativeAudioPath };

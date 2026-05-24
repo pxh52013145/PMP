@@ -42,6 +42,15 @@ describe('NativeAudioOutputBackendController', () => {
     expect(controller.canTryAutoSwitch({ nowMs: 47_000, pinned: false })).toBe(true);
   });
 
+  it('allows forced auto switching to bypass pinning and cooldown', () => {
+    const controller = createController();
+    controller.replaceOutputBackends(['wasapi-shared-raw', 'wasapi']);
+    controller.setCurrentOutputBackendId('wasapi-shared-raw');
+    controller.markAutoSwitch('output-error', 1_000);
+
+    expect(controller.canTryAutoSwitch({ nowMs: 2_000, pinned: true, force: true })).toBe(true);
+  });
+
   it('coalesces in-flight switch attempts and records completed auto switches', () => {
     const controller = createController();
     controller.setCurrentOutputBackendId('wasapi');

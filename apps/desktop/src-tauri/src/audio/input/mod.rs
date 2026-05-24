@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use crate::audio::output::BoxedSource;
 use crate::audio::policy::{NativeAudioHqSrcPhaseMode, NativeAudioSrcBackend, NativeAudioSrcMode};
-use ::symphonia::core::formats::{FormatReader, Track as SymphoniaTrack};
 
 mod remote_stream;
 mod rodio;
@@ -90,30 +89,6 @@ pub(crate) fn resolve_audio_input_target_sample_rate(
             sanitize_target_sample_rate(src_policy.src_target_sample_rate).or(output_sample_rate)
         }
     }
-}
-
-pub(crate) fn symphonia_track_is_audio_like(track: &SymphoniaTrack) -> bool {
-    track.codec_params.sample_rate.is_some()
-        || track.codec_params.channels.is_some()
-        || track.codec_params.bits_per_sample.is_some()
-        || track.codec_params.bits_per_coded_sample.is_some()
-}
-
-pub(crate) fn pick_symphonia_audio_track<'a>(
-    format: &'a dyn FormatReader,
-) -> Option<&'a SymphoniaTrack> {
-    let tracks = format.tracks();
-    let default = format.default_track();
-    if let Some(track) = default {
-        if symphonia_track_is_audio_like(track) {
-            return Some(track);
-        }
-    }
-    tracks
-        .iter()
-        .find(|track| symphonia_track_is_audio_like(track))
-        .or(default)
-        .or_else(|| tracks.first())
 }
 
 #[derive(Clone, Debug)]

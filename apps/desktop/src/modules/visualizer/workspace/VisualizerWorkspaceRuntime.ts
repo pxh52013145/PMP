@@ -43,6 +43,9 @@ const PROGRESS_HOVER_TOLERANCE = 40;
 
 type LayoutOverrides = Record<string, VisualizerComponentTransform>;
 type WorkspaceCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
+type TransformControlsCompat = TransformControls & {
+  getHelper?: () => THREE.Object3D;
+};
 
 interface PersistedVector3 {
   x: number;
@@ -135,6 +138,15 @@ function cloneTransform(
     opacity: clamp(opacity, 0, 1),
     visible: transform.visible ?? true,
   };
+}
+
+function resolveTransformControlsHelper(transformControls: TransformControls): THREE.Object3D {
+  const compat = transformControls as TransformControlsCompat;
+  if (typeof compat.getHelper === 'function') {
+    return compat.getHelper();
+  }
+
+  return transformControls as unknown as THREE.Object3D;
 }
 
 function mergeTransforms(
@@ -569,7 +581,7 @@ export class VisualizerWorkspaceRuntime {
     this.transformControls.setMode('translate');
     this.transformControls.setSpace('world');
     this.transformControls.setSize(0.75);
-    this.transformControlsHelper = this.transformControls.getHelper();
+    this.transformControlsHelper = resolveTransformControlsHelper(this.transformControls);
     this.transformControlsHelper.visible = false;
     this.scene.add(this.transformControlsHelper);
 

@@ -14,13 +14,12 @@ use symphonia::core::{
     formats::{FormatReader, SeekMode, SeekTo, Track},
     io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
     meta::MetadataOptions,
-    probe::Hint,
     units::Time,
 };
 
 use super::{
-    pick_symphonia_audio_track, AudioInput, AudioInputDecodeMode, AudioInputError, AudioInputKind,
-    AudioInputMeta, AudioInputOpenResult, AudioInputSrcPolicy, SYMPHONIA_INPUT_ID,
+    AudioInput, AudioInputDecodeMode, AudioInputError, AudioInputKind, AudioInputMeta,
+    AudioInputOpenResult, AudioInputSrcPolicy, SYMPHONIA_INPUT_ID,
 };
 
 use crate::audio::buffer::AudioRingBuffer;
@@ -28,6 +27,7 @@ use crate::audio::buffer_policy;
 use crate::audio::control_plane::command_channel;
 use crate::audio::diagnostics;
 use crate::audio::realtime_memory_guard::{new_guarded_ring_buffer, AudioRealtimeMemoryRole};
+use crate::audio::symphonia_metadata;
 
 use super::streaming::{
     drain_decoder_commands, spawn_render_transfer_worker, try_lock_render_queue_hot_path,
@@ -211,22 +211,14 @@ fn estimate_full_track_required_samples(
     output_sample_rate: Option<u32>,
     src_policy: AudioInputSrcPolicy,
 ) -> Option<usize> {
-    let file = File::open(path).ok()?;
-    let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
-    let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|value| value.to_str()) {
-        hint.with_extension(ext);
-    }
-    let probed = symphonia::default::get_probe()
-        .format(
-            &hint,
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
-        )
-        .ok()?;
+    let probed = symphonia_metadata::probe_local_format(
+        path,
+        &FormatOptions::default(),
+        &MetadataOptions::default(),
+    )
+    .ok()?;
     let format = probed.format;
-    let track = pick_symphonia_audio_track(format.as_ref())?;
+    let track = symphonia_metadata::pick_audio_track(format.as_ref())?;
 
     let channels = track.codec_params.channels.map(|value| value.count())?;
     let source_rate = track.codec_params.sample_rate?;
@@ -300,6 +292,10 @@ fn start_symphonia_stream_from_input(
     let render_queue_clone = render_queue.clone();
     let error = Arc::new(Mutex::new(None::<String>));
     let error_clone = error.clone();
+    let duration_hint_path = match &input {
+        SymphoniaStreamInput::Path(path) => Some(path.clone()),
+        SymphoniaStreamInput::MediaSource(_) => None,
+    };
 
     std::thread::Builder::new()
         .name("pmpm-symphonia-decoder".into())
@@ -311,10 +307,7 @@ fn start_symphonia_stream_from_input(
 
         let init = (|| -> Result<(Box<dyn FormatReader>, Track), String> {
             let (mss, extension) = input.into_media_source_stream()?;
-            let mut hint = Hint::new();
-            if let Some(ext) = extension.as_deref() {
-                hint.with_extension(ext);
-            }
+            let hint = symphonia_metadata::build_hint_from_extension(extension.as_deref());
             let format_options = FormatOptions {
                 prebuild_seek_index: false,
                 seek_index_fill_rate: 5,
@@ -324,7 +317,7 @@ fn start_symphonia_stream_from_input(
                 .format(&hint, mss, &format_options, &MetadataOptions::default())
                 .map_err(|e| format!("Failed to probe format: {e}"))?;
             let format = probed.format;
-            let track = pick_symphonia_audio_track(format.as_ref())
+            let track = symphonia_metadata::pick_audio_track(format.as_ref())
                 .ok_or_else(|| "No audio track found".to_string())?
                 .clone();
             Ok((format, track))
@@ -372,6 +365,13 @@ fn start_symphonia_stream_from_input(
         let mut channels_usize: usize = 0;
         let mut effective_sample_rate: u32 = 0;
         let mut meta_delivered = false;
+        let duration_hint = if track.codec_params.n_frames.unwrap_or(0) > 0 {
+            None
+        } else {
+            duration_hint_path
+                .as_ref()
+                .and_then(|path| symphonia_metadata::probe_local_duration(path))
+        };
 
         if let (Some(pre_channels), Some(input_sample_rate)) = (
             track
@@ -421,6 +421,8 @@ fn start_symphonia_stream_from_input(
                 .codec_params
                 .n_frames
                 .map(|frames| frames as f64 / input_sample_rate as f64)
+                .filter(|duration| *duration > 0.0)
+                .or(duration_hint)
                 .unwrap_or(0.0);
             let _ = meta_tx.send(Ok(AudioInputMeta {
                 channels: channels_usize as u16,
@@ -641,6 +643,8 @@ fn start_symphonia_stream_from_input(
                                 .codec_params
                                 .n_frames
                                 .map(|frames| frames as f64 / input_sample_rate as f64)
+                                .filter(|duration| *duration > 0.0)
+                                .or(duration_hint)
                                 .unwrap_or(0.0);
                             let _ = meta_tx.send(Ok(AudioInputMeta {
                                 channels: channels_usize as u16,
@@ -1038,10 +1042,7 @@ fn decode_track_to_buffer(
         )
     })?;
     let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
-    let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
-    }
+    let hint = symphonia_metadata::build_hint_from_path(path);
     let probed = symphonia::default::get_probe()
         .format(
             &hint,
@@ -1056,7 +1057,7 @@ fn decode_track_to_buffer(
             )
         })?;
     let mut format = probed.format;
-    let track = pick_symphonia_audio_track(format.as_ref()).ok_or_else(|| {
+    let track = symphonia_metadata::pick_audio_track(format.as_ref()).ok_or_else(|| {
         AudioInputError::new("AUDIO_INPUT_SYMPHONIA_NO_TRACK", "No audio track found")
     })?;
     let mut decoder = symphonia::default::get_codecs()
@@ -1427,6 +1428,7 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
     use std::io::Write;
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn write_wav_i16_stereo_lcg(path: &Path, sample_rate: u32, frames: usize) {
@@ -1513,6 +1515,70 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn streaming_open_reports_duration_for_aac_and_m4a() {
+        if Command::new("ffmpeg").arg("-version").output().is_err() {
+            return;
+        }
+
+        let tmp_dir = std::env::temp_dir();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time ok")
+            .as_nanos();
+        let aac_path = tmp_dir.join(format!("pmp_symphonia_aac_{nonce}.aac"));
+        let m4a_path = tmp_dir.join(format!("pmp_symphonia_m4a_{nonce}.m4a"));
+
+        let generate = |path: &Path| {
+            let status = Command::new("ffmpeg")
+                .args([
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:duration=1.5",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "96k",
+                ])
+                .arg(path)
+                .status()
+                .expect("run ffmpeg");
+            assert!(
+                status.success(),
+                "ffmpeg should generate fixture at {path:?}"
+            );
+        };
+
+        generate(&aac_path);
+        generate(&m4a_path);
+
+        let input = SymphoniaInput::default();
+        for path in [&aac_path, &m4a_path] {
+            let opened = input
+                .open(
+                    path,
+                    Some(48_000),
+                    AudioInputDecodeMode::Streaming,
+                    AudioInputSrcPolicy::default(),
+                )
+                .expect("streaming open should succeed");
+
+            assert!(
+                opened.meta.duration > 0.0,
+                "duration should be reported for {path:?}"
+            );
+            match opened.kind {
+                AudioInputKind::Streaming(streaming) => streaming.shutdown_tx.shutdown(),
+                _ => panic!("expected streaming playback"),
+            }
+        }
+
+        let _ = std::fs::remove_file(&aac_path);
+        let _ = std::fs::remove_file(&m4a_path);
     }
 
     #[test]

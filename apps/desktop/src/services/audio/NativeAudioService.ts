@@ -48,6 +48,7 @@ import {
 import {
   pruneUnderrunSpikeTimestamps,
 } from './audioOutputFailoverController';
+import { isRecoverableNativeOutputError } from './nativeAudioOutputErrorClassification';
 import { NativeAudioOutputBackendController } from './nativeAudioOutputBackendController';
 import {
   SeekCommandCoalescer,
@@ -2125,15 +2126,16 @@ export class NativeAudioService implements IAudioService {
       return;
     }
 
-    void this.tryAutoSwitchOutputBackend(reason);
+    void this.tryAutoSwitchOutputBackend(reason, options?.force ?? false);
   }
 
-  private async tryAutoSwitchOutputBackend(reason: string): Promise<void> {
+  private async tryAutoSwitchOutputBackend(reason: string, force = false): Promise<void> {
     const nowMs = Date.now();
     if (
       !this.outputBackendController.canTryAutoSwitch({
         nowMs,
         pinned: this.hasPinnedOutputBackendChoice(),
+        force,
       })
     ) {
       return;
@@ -2838,11 +2840,16 @@ export class NativeAudioService implements IAudioService {
 
     const coded = error as Error & { code?: string };
     const code = typeof coded.code === 'string' ? coded.code : '';
-    if (code === 'NATIVE_AUDIO_OUTPUT_ERROR' || code === 'NATIVE_AUDIO_REBUILD_SINK_FAILED') {
+    const messageText = error?.message ?? String(error);
+    const recoverableOutputError = isRecoverableNativeOutputError({
+      code,
+      message: messageText,
+    });
+    if (recoverableOutputError) {
       const effective = this.getEffectiveDynamicSrcTiming();
-      this.maybeAutoSwitchOutputBackend(`output-error:${code}`);
+      this.maybeAutoSwitchOutputBackend(`output-error:${code || 'wrapped'}`, { force: true });
       this.withDynamicSrcHold(
-        `output-error:${code}`,
+        `output-error:${code || 'wrapped'}`,
         effective.outputErrorHoldMs
       );
       this.evaluateDynamicSrcAutoDegradation({

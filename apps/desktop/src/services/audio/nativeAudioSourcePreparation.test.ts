@@ -10,13 +10,16 @@ const TRACK: Track = {
   duration: 10,
 };
 
-function createPreparation(options?: { runtime?: boolean }) {
+function createPreparation(options?: { runtime?: boolean; invokeError?: unknown }) {
   const invokeCommand = vi.fn();
   const invokeCommandImpl = async <T = void>(
     cmd: string,
     payload?: Record<string, unknown>
   ): Promise<T> => {
     invokeCommand(cmd, payload);
+    if (options?.invokeError) {
+      throw options.invokeError;
+    }
     return 'C:\\music\\materialized.flac' as T;
   };
   const emitError = vi.fn();
@@ -118,6 +121,26 @@ describe('NativeAudioSourcePreparation', () => {
       }),
       replayGainDb: -2,
     });
+  });
+
+  it('emits native load failures without throwing', async () => {
+    const { preparation, emitError } = createPreparation({
+      invokeError: new Error('[AUDIO_INPUT_OPEN_FAILED] all inputs failed'),
+    });
+    const source: PreparedAudioSource = {
+      kind: 'local-file',
+      track: TRACK,
+      path: 'C:\\music\\broken.m4a',
+    };
+
+    await expect(preparation.loadSource(source, { play: true })).resolves.toBeNull();
+
+    expect(emitError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'NATIVE_AUDIO_LOAD_SOURCE_FAILED',
+        message: '[AUDIO_INPUT_OPEN_FAILED] all inputs failed',
+      })
+    );
   });
 
   it('reports unsupported deferred sources without throwing', async () => {
