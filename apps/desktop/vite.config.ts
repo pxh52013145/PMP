@@ -44,6 +44,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         editor: resolve(__dirname, 'editor.html'),
+        desktopLyrics: resolve(__dirname, 'desktop-lyrics.html'),
       },
     },
   },

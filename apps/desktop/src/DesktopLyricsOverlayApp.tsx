@@ -1,28 +1,12 @@
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/tauri';
-import { appWindow, currentMonitor } from '@tauri-apps/api/window';
-import {
-  AArrowDown,
-  AArrowUp,
-  Droplet,
-  DropletOff,
-  FastForward,
-  MousePointer2,
-  Pause,
-  Play,
-  Rewind,
-  RotateCcw,
-  SkipBack,
-  SkipForward,
-  X,
-} from 'lucide-react';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useT } from './i18n';
-import { useDesktopLyricsFontConfig } from './modules/desktopLyricsFonts';
-import { writeJson } from './modules/storage';
-import { getTelemetryLogger } from './services/telemetry/TelemetryService';
-import { invokeWithTelemetry } from './services/telemetry/tauriInvokeTelemetry';
-import { STORAGE_KEYS } from './utils/windowCommunication';
+import {
+  DESKTOP_LYRICS_OVERLAY_STORAGE_KEYS,
+  useDesktopLyricsOverlayFontFamily,
+  useDesktopLyricsOverlayT,
+  writeDesktopLyricsOverlayJson,
+} from './desktopLyricsOverlayRuntime';
 import './DesktopLyricsOverlayApp.css';
 
 const OVERLAY_SYNC_EVENT = 'desktop-lyrics-overlay-sync';
@@ -42,6 +26,9 @@ const MIN_REGION_WIDTH = 320;
 const MIN_REGION_HEIGHT = 72;
 const MAX_REGION_WIDTH = 8192;
 const MAX_REGION_HEIGHT = 2160;
+const LYRICS_RENDER_RADIUS = 4;
+
+const DesktopLyricsOverlayControls = React.lazy(() => import('./DesktopLyricsOverlayControls'));
 
 type OverlayHandleEdge = 'left' | 'right' | 'top' | 'bottom';
 type AudioControlAction = 'previous' | 'toggle-play-pause' | 'next';
@@ -71,6 +58,13 @@ interface OverlayLayoutPayload {
   offsetY: number;
   width: number;
   height: number;
+}
+
+interface DesktopLyricsLayoutSnapshot {
+  offsetX: number;
+  offsetY: number;
+  regionWidth: number;
+  regionHeight: number;
 }
 
 interface DesktopLyricsOverlayTextPayload {
@@ -123,12 +117,6 @@ const DEFAULT_OVERLAY_STATE: DesktopLyricsOverlaySyncPayload = {
   lyricOffsetMs: 0,
   text: null,
 };
-
-const telemetry = getTelemetryLogger('windowing', 'DesktopLyricsOverlayApp');
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function normalizeOptionalText(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -220,6 +208,7 @@ function toLayoutPayload(rect: OverlayWindowRect): OverlayLayoutPayload {
 }
 
 async function readOverlayWindowRect(): Promise<OverlayWindowRect> {
+  const { appWindow } = await import('@tauri-apps/api/window');
   const [scaleFactor, position, size] = await Promise.all([
     appWindow.scaleFactor(),
     appWindow.outerPosition(),
@@ -238,6 +227,7 @@ async function readOverlayWindowRect(): Promise<OverlayWindowRect> {
 
 async function readRegionLimits(): Promise<{ maxWidth: number; maxHeight: number }> {
   try {
+    const { currentMonitor } = await import('@tauri-apps/api/window');
     const monitor = await currentMonitor();
     if (!monitor) {
       return { maxWidth: MAX_REGION_WIDTH, maxHeight: MAX_REGION_HEIGHT };
@@ -324,7 +314,7 @@ function isUnlockWindowRoute(): boolean {
 }
 
 function DesktopLyricsUnlockDot() {
-  const t = useT();
+  const t = useDesktopLyricsOverlayT();
   const [isUnlocking, setIsUnlocking] = useState(false);
   const title = t('magnet.desktopLyricsButton.contextMenu.clickThrough.disable');
 
@@ -343,17 +333,13 @@ function DesktopLyricsUnlockDot() {
     setIsUnlocking(true);
 
     try {
-      await invokeWithTelemetry('desktop_lyrics_set_click_through', { enabled: false }, {
-        moduleId: 'windowing',
-        component: 'DesktopLyricsUnlockDot',
-        event: 'desktop-lyrics.unlock.click-through.disable',
-      });
-      writeJson(STORAGE_KEYS.DESKTOP_LYRICS_CLICK_THROUGH, false, { mode: 'sync' });
-    } catch (error) {
+      await invoke('desktop_lyrics_set_click_through', { enabled: false });
+      writeDesktopLyricsOverlayJson(
+        DESKTOP_LYRICS_OVERLAY_STORAGE_KEYS.DESKTOP_LYRICS_CLICK_THROUGH,
+        false
+      );
+    } catch {
       setIsUnlocking(false);
-      telemetry.error('desktop-lyrics.unlock.click-through.disable.failed', {
-        message: getErrorMessage(error),
-      });
     }
   }, [isUnlocking]);
 
@@ -375,12 +361,13 @@ export function DesktopLyricsOverlayApp() {
 }
 
 function DesktopLyricsOverlayPanel() {
-  const t = useT();
-  const { fontFamily: desktopLyricsFontFamily } = useDesktopLyricsFontConfig();
+  const t = useDesktopLyricsOverlayT();
+  const desktopLyricsFontFamily = useDesktopLyricsOverlayFontFamily();
   const [state, setState] = useState<DesktopLyricsOverlaySyncPayload>(DEFAULT_OVERLAY_STATE);
   const [isHovered, setIsHovered] = useState(false);
   const [isMoving, setIsMoving] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
+  const [shouldRenderControls, setShouldRenderControls] = useState(false);
   const [playbackState, setPlaybackState] = useState('idle');
   const panelRef = useRef<HTMLDivElement | null>(null);
   const lineStackRef = useRef<HTMLDivElement | null>(null);
@@ -605,22 +592,14 @@ function DesktopLyricsOverlayPanel() {
       );
 
       try {
-        const snapshot = await invokeWithTelemetry<DesktopLyricsOverlaySyncPayload>(
-          'desktop_lyrics_overlay_get_snapshot',
-          undefined,
-          {
-            moduleId: 'windowing',
-            component: 'DesktopLyricsOverlayApp',
-            event: 'desktop-lyrics.overlay.snapshot.read',
-          }
+        const snapshot = await invoke<DesktopLyricsOverlaySyncPayload>(
+          'desktop_lyrics_overlay_get_snapshot'
         );
         if (!disposed) {
           setState((previous) => normalizeState(snapshot, previous));
         }
-      } catch (error) {
-        telemetry.warn('desktop-lyrics.overlay.snapshot.read.failed', {
-          message: getErrorMessage(error),
-        });
+      } catch {
+        // Snapshot is best-effort; the sync listener will hydrate the overlay shortly after.
       }
     };
 
@@ -651,11 +630,7 @@ function DesktopLyricsOverlayPanel() {
       }
     };
 
-    void bind().catch((error) => {
-      telemetry.warn('desktop-lyrics.overlay.audio-state.listen.failed', {
-        message: getErrorMessage(error),
-      });
-    });
+    void bind().catch(() => {});
 
     return () => {
       disposed = true;
@@ -666,11 +641,8 @@ function DesktopLyricsOverlayPanel() {
   const sendAudioControlRequest = useCallback(async (action: AudioControlAction) => {
     try {
       await emit(DESKTOP_LYRICS_AUDIO_CONTROL_REQUEST_EVENT, { action });
-    } catch (error) {
-      telemetry.error('desktop-lyrics.overlay.audio-control.request.failed', {
-        message: getErrorMessage(error),
-        fields: { action },
-      });
+    } catch {
+      // best-effort control event
     }
   }, []);
 
@@ -678,17 +650,9 @@ function DesktopLyricsOverlayPanel() {
     const next = !state.clickThrough;
     setState((previous) => ({ ...previous, clickThrough: next }));
     try {
-      await invokeWithTelemetry('desktop_lyrics_set_click_through', { enabled: next }, {
-        moduleId: 'windowing',
-        component: 'DesktopLyricsOverlayApp',
-        event: 'desktop-lyrics.overlay.click-through.set',
-      });
-    } catch (error) {
+      await invoke('desktop_lyrics_set_click_through', { enabled: next });
+    } catch {
       setState((previous) => ({ ...previous, clickThrough: state.clickThrough }));
-      telemetry.error('desktop-lyrics.overlay.click-through.set.failed', {
-        message: getErrorMessage(error),
-        fields: { enabled: next },
-      });
     }
   }, [state.clickThrough]);
 
@@ -697,16 +661,9 @@ function DesktopLyricsOverlayPanel() {
     setState((previous) => ({ ...previous, fontSize: next }));
     applyLivePanelMetrics(liveLayoutRef.current.width, liveLayoutRef.current.height, next);
     try {
-      await invokeWithTelemetry('desktop_lyrics_set_font_size', { fontSize: next }, {
-        moduleId: 'windowing',
-        component: 'DesktopLyricsOverlayApp',
-        event: 'desktop-lyrics.overlay.font-size.set',
-      });
-    } catch (error) {
-      telemetry.error('desktop-lyrics.overlay.font-size.set.failed', {
-        message: getErrorMessage(error),
-        fields: { fontSize: next },
-      });
+      await invoke('desktop_lyrics_set_font_size', { fontSize: next });
+    } catch {
+      // Runtime state will be refreshed by the backend sync event if this fails.
     }
   }, [applyLivePanelMetrics, state.fontSize]);
 
@@ -717,16 +674,9 @@ function DesktopLyricsOverlayPanel() {
       );
       setState((previous) => ({ ...previous, opacityPercent: next }));
       try {
-        await invokeWithTelemetry('desktop_lyrics_set_opacity_percent', { opacityPercent: next }, {
-          moduleId: 'windowing',
-          component: 'DesktopLyricsOverlayApp',
-          event: 'desktop-lyrics.overlay.opacity.set',
-        });
-      } catch (error) {
-        telemetry.error('desktop-lyrics.overlay.opacity.set.failed', {
-          message: getErrorMessage(error),
-          fields: { opacityPercent: next },
-        });
+        await invoke('desktop_lyrics_set_opacity_percent', { opacityPercent: next });
+      } catch {
+        // Runtime state will be refreshed by the backend sync event if this fails.
       }
     },
     [state.opacityPercent]
@@ -740,19 +690,14 @@ function DesktopLyricsOverlayPanel() {
       stateRef.current = { ...stateRef.current, lyricOffsetMs: next };
       setState((current) => ({ ...current, lyricOffsetMs: next }));
       try {
-        await invokeWithTelemetry('desktop_lyrics_set_lyric_offset_ms', { offsetMs: next }, {
-          moduleId: 'windowing',
-          component: 'DesktopLyricsOverlayApp',
-          event: 'desktop-lyrics.overlay.lyric-offset.set',
-        });
-        writeJson(STORAGE_KEYS.DESKTOP_LYRICS_LYRIC_OFFSET_MS, next, { mode: 'sync' });
-      } catch (error) {
+        await invoke('desktop_lyrics_set_lyric_offset_ms', { offsetMs: next });
+        writeDesktopLyricsOverlayJson(
+          DESKTOP_LYRICS_OVERLAY_STORAGE_KEYS.DESKTOP_LYRICS_LYRIC_OFFSET_MS,
+          next
+        );
+      } catch {
         stateRef.current = { ...stateRef.current, lyricOffsetMs: previous };
         setState((current) => ({ ...current, lyricOffsetMs: previous }));
-        telemetry.error('desktop-lyrics.overlay.lyric-offset.set.failed', {
-          message: getErrorMessage(error),
-          fields: { offsetMs: next },
-        });
       }
     },
     []
@@ -767,27 +712,54 @@ function DesktopLyricsOverlayPanel() {
 
   const closeOverlay = useCallback(async () => {
     try {
-      await invokeWithTelemetry('desktop_lyrics_set_visible', { visible: false }, {
-        moduleId: 'windowing',
-        component: 'DesktopLyricsOverlayApp',
-        event: 'desktop-lyrics.overlay.visible.set',
-      });
-      writeJson(STORAGE_KEYS.DESKTOP_LYRICS_ENABLED, false, { mode: 'sync' });
-    } catch (error) {
-      telemetry.error('desktop-lyrics.overlay.visible.set.failed', {
-        message: getErrorMessage(error),
-        fields: { visible: false },
-      });
+      await invoke('desktop_lyrics_set_visible', { visible: false });
+      writeDesktopLyricsOverlayJson(
+        DESKTOP_LYRICS_OVERLAY_STORAGE_KEYS.DESKTOP_LYRICS_ENABLED,
+        false
+      );
+    } catch {
+      // best-effort close request
     }
   }, []);
 
-  const startLayoutGesture = useCallback(
-    (event: React.PointerEvent<HTMLElement>, edge: OverlayHandleEdge | null) => {
-      if (event.button !== 0 || state.clickThrough) return;
+  const commitCurrentWindowLayout = useCallback(
+    (delayMs: number) => {
+      window.setTimeout(() => {
+        void (async () => {
+          try {
+            const layout = await invoke<DesktopLyricsLayoutSnapshot>(
+              'desktop_lyrics_commit_current_layout'
+            );
+
+            const nextWidth = clampRegionWidth(layout.regionWidth);
+            const nextHeight = clampRegionHeight(layout.regionHeight);
+            const currentFontSize = stateRef.current.fontSize;
+            applyLivePanelMetrics(nextWidth, nextHeight, currentFontSize);
+            stateRef.current = {
+              ...stateRef.current,
+              regionWidth: nextWidth,
+              regionHeight: nextHeight,
+            };
+            setState((previous) => ({
+              ...previous,
+              regionWidth: nextWidth,
+              regionHeight: nextHeight,
+            }));
+          } catch {
+            // Layout commit is best-effort; backend state remains authoritative.
+          }
+        })();
+      }, delayMs);
+    },
+    [applyLivePanelMetrics]
+  );
+
+  const startMoveGesture = useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      if (event.button !== 0 || stateRef.current.clickThrough) return;
 
       const target = event.target as HTMLElement;
       if (
-        !edge &&
         (target.closest('button') ||
           target.closest('.desktop-lyrics-overlay__toolbar') ||
           target.closest('.desktop-lyrics-overlay__resize-handle'))
@@ -796,11 +768,47 @@ function DesktopLyricsOverlayPanel() {
       }
 
       event.preventDefault();
+      setIsHovered(true);
+      gestureActiveRef.current = true;
+      setIsMoving(true);
+      void import('@tauri-apps/api/window')
+        .then(({ appWindow }) => appWindow.startDragging())
+        .catch(() => {});
+      commitCurrentWindowLayout(120);
+      commitCurrentWindowLayout(600);
+      commitCurrentWindowLayout(1400);
+      commitCurrentWindowLayout(3000);
+
+      let finished = false;
+      const finishMove = () => {
+        if (finished) return;
+        finished = true;
+        gestureActiveRef.current = false;
+        setIsMoving(false);
+        commitCurrentWindowLayout(0);
+        window.clearTimeout(fallbackFinishTimer);
+        window.removeEventListener('mouseup', finishMove);
+        window.removeEventListener('blur', finishMove);
+      };
+      const fallbackFinishTimer = window.setTimeout(finishMove, 4200);
+
+      window.addEventListener('mouseup', finishMove, { once: true });
+      window.addEventListener('blur', finishMove, { once: true });
+    },
+    [commitCurrentWindowLayout]
+  );
+
+  const startResizeGesture = useCallback(
+    (event: React.PointerEvent<HTMLElement>, edge: OverlayHandleEdge) => {
+      if (event.button !== 0 || stateRef.current.clickThrough) return;
+
+      event.preventDefault();
       event.stopPropagation();
 
       resizeCleanupRef.current?.();
       setIsHovered(true);
       gestureActiveRef.current = true;
+      setIsResizing(true);
 
       const pointerTarget = event.currentTarget;
       const pointerId = event.pointerId;
@@ -809,26 +817,20 @@ function DesktopLyricsOverlayPanel() {
       } catch {
         // Pointer capture is best-effort; window-level listeners keep the gesture alive.
       }
+
       const startScreenX = event.screenX;
       const startScreenY = event.screenY;
-
-      if (edge) {
-        setIsResizing(true);
-      } else {
-        setIsMoving(true);
-      }
-
+      const previousState = stateRef.current;
       let disposed = false;
       let frame = 0;
       let startRect: OverlayWindowRect | null = null;
       let nextRect: OverlayWindowRect | null = null;
-      let startFontSize = liveLayoutRef.current.fontSize || state.fontSize;
+      let startFontSize = liveLayoutRef.current.fontSize || previousState.fontSize;
       let nextFontSize = startFontSize;
       let limits = { maxWidth: MAX_REGION_WIDTH, maxHeight: MAX_REGION_HEIGHT };
       let previewInFlight = false;
       let queuedPreview: OverlayLayoutPayload | null = null;
       let previewIdleResolve: (() => void) | null = null;
-      let previewErrorLogged = false;
 
       const resolvePreviewIdle = () => {
         if (!previewInFlight && !queuedPreview && previewIdleResolve) {
@@ -843,13 +845,7 @@ function DesktopLyricsOverlayPanel() {
         queuedPreview = null;
         previewInFlight = true;
         void invoke('desktop_lyrics_preview_layout', payload)
-          .catch((error) => {
-            if (previewErrorLogged) return;
-            previewErrorLogged = true;
-            telemetry.warn('desktop-lyrics.overlay.layout.preview.failed', {
-              message: getErrorMessage(error),
-            });
-          })
+          .catch(() => {})
           .finally(() => {
             previewInFlight = false;
             if (queuedPreview) {
@@ -889,13 +885,6 @@ function DesktopLyricsOverlayPanel() {
         const deltaY = moveEvent.screenY - startScreenY;
         const next = { ...startRect };
         let fontSize = startFontSize;
-
-        if (!edge) {
-          next.x = Math.round(startRect.x + deltaX);
-          next.y = Math.round(startRect.y + deltaY);
-          scheduleLayout(next, fontSize);
-          return;
-        }
 
         if (edge === 'right') {
           next.width = clampRegionWidth(startRect.width + deltaX, limits.maxWidth);
@@ -940,7 +929,6 @@ function DesktopLyricsOverlayPanel() {
         }
         resizeCleanupRef.current = null;
         gestureActiveRef.current = false;
-        setIsMoving(false);
         setIsResizing(false);
 
         const finalRect = nextRect ?? startRect;
@@ -951,6 +939,12 @@ function DesktopLyricsOverlayPanel() {
           Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, nextFontSize))
         );
 
+        stateRef.current = {
+          ...stateRef.current,
+          fontSize: finalFontSize,
+          regionWidth: finalLayout.width,
+          regionHeight: finalLayout.height,
+        };
         setState((previous) => ({
           ...previous,
           fontSize: finalFontSize,
@@ -962,31 +956,17 @@ function DesktopLyricsOverlayPanel() {
         void (async () => {
           await waitForPreviewIdle();
 
-          if (finalFontSize !== state.fontSize) {
-            await invokeWithTelemetry('desktop_lyrics_set_font_size', { fontSize: finalFontSize }, {
-              moduleId: 'windowing',
-              component: 'DesktopLyricsOverlayApp',
-              event: 'desktop-lyrics.overlay.font-size.set',
-            }).catch((error) => {
-              telemetry.error('desktop-lyrics.overlay.font-size.set.failed', {
-                message: getErrorMessage(error),
-                fields: { fontSize: finalFontSize },
-              });
-            });
+          if (finalFontSize !== previousState.fontSize) {
+            await invoke('desktop_lyrics_set_font_size', { fontSize: finalFontSize }).catch(
+              () => {}
+            );
+            writeDesktopLyricsOverlayJson(
+              DESKTOP_LYRICS_OVERLAY_STORAGE_KEYS.DESKTOP_LYRICS_FONT_SIZE,
+              finalFontSize
+            );
           }
 
-          await invokeWithTelemetry('desktop_lyrics_set_layout', finalLayout, {
-            moduleId: 'windowing',
-            component: 'DesktopLyricsOverlayApp',
-            event: edge
-              ? 'desktop-lyrics.overlay.layout.resize'
-              : 'desktop-lyrics.overlay.layout.move',
-          }).catch((error) => {
-            telemetry.error('desktop-lyrics.overlay.layout.set.failed', {
-              message: getErrorMessage(error),
-              fields: finalLayout,
-            });
-          });
+          await invoke('desktop_lyrics_set_layout', finalLayout).catch(() => {});
         })();
       };
 
@@ -1005,32 +985,29 @@ function DesktopLyricsOverlayPanel() {
             height: clampRegionHeight(rect.height, limits.maxHeight),
           };
           nextRect = startRect;
-          startFontSize = liveLayoutRef.current.fontSize || state.fontSize;
+          startFontSize = liveLayoutRef.current.fontSize || previousState.fontSize;
           nextFontSize = startFontSize;
           applyLivePanelMetrics(startRect.width, startRect.height, startFontSize);
         })
-        .catch((error) => {
-          telemetry.warn('desktop-lyrics.overlay.layout.read.failed', {
-            message: getErrorMessage(error),
-          });
+        .catch(() => {
           cleanup();
         });
     },
-    [applyLivePanelMetrics, state.clickThrough, state.fontSize]
+    [applyLivePanelMetrics]
   );
 
-  const handlePanelPointerDown = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      startLayoutGesture(event, null);
+  const handlePanelMouseDown = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      startMoveGesture(event);
     },
-    [startLayoutGesture]
+    [startMoveGesture]
   );
 
   const handleHandlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLElement>, edge: OverlayHandleEdge) => {
-      startLayoutGesture(event, edge);
+      startResizeGesture(event, edge);
     },
-    [startLayoutGesture]
+    [startResizeGesture]
   );
 
   const rootStyle = useMemo<React.CSSProperties>(
@@ -1048,33 +1025,31 @@ function DesktopLyricsOverlayPanel() {
     typeof state.text?.activeIndex === 'number'
       ? Math.min(lyricLines.length - 1, Math.max(0, state.text.activeIndex))
       : 0;
+  const visibleLineStart = Math.max(0, activeIndex - LYRICS_RENDER_RADIUS);
+  const visibleLyricLines = lyricLines.slice(
+    visibleLineStart,
+    Math.min(lyricLines.length, activeIndex + LYRICS_RENDER_RADIUS + 1)
+  );
+  const visibleActiveIndex = activeIndex - visibleLineStart;
   const lineStackStyle = useMemo<React.CSSProperties>(
     () => {
       const rowStep = state.fontSize * 2.45;
       return {
         ['--desktop-lyrics-row-step' as string]: `${rowStep}px`,
-        ['--desktop-lyrics-stack-offset' as string]: `${-activeIndex * rowStep}px`,
-        ['--desktop-lyrics-secondary-top' as string]: `${(activeIndex + 0.72) * rowStep}px`,
+        ['--desktop-lyrics-stack-offset' as string]: `${-visibleActiveIndex * rowStep}px`,
+        ['--desktop-lyrics-secondary-top' as string]: `${(visibleActiveIndex + 0.72) * rowStep}px`,
       };
     },
-    [activeIndex, state.fontSize]
+    [state.fontSize, visibleActiveIndex]
   );
   const showChrome = (isHovered || isMoving || isResizing) && !state.clickThrough;
   const isPlaying = playbackState === 'playing' || playbackState === 'buffering';
-  const previousTrackTitle = t('commands.audio.previous-track.title');
-  const playPauseTitle = t('commands.audio.toggle-play-pause.title');
-  const nextTrackTitle = t('commands.audio.next-track.title');
-  const clickThroughTitle = state.clickThrough
-    ? t('magnet.desktopLyricsButton.contextMenu.clickThrough.disable')
-    : t('magnet.desktopLyricsButton.contextMenu.clickThrough.enable');
-  const smallerFontTitle = t('magnet.desktopLyricsButton.contextMenu.fontSize.small');
-  const largerFontTitle = t('magnet.desktopLyricsButton.contextMenu.fontSize.large');
-  const lowerOpacityTitle = t('magnet.desktopLyricsButton.contextMenu.opacity.p60');
-  const higherOpacityTitle = t('magnet.desktopLyricsButton.contextMenu.opacity.p100');
-  const slowerLyricTitle = t('magnet.desktopLyricsButton.contextMenu.lyricOffset.slower');
-  const resetLyricOffsetTitle = t('magnet.desktopLyricsButton.contextMenu.lyricOffset.reset');
-  const fasterLyricTitle = t('magnet.desktopLyricsButton.contextMenu.lyricOffset.faster');
-  const closeTitle = t('magnet.desktopLyricsButton.title.disable');
+
+  useEffect(() => {
+    if (showChrome) {
+      setShouldRenderControls(true);
+    }
+  }, [showChrome]);
 
   return (
     <div
@@ -1086,117 +1061,29 @@ function DesktopLyricsOverlayPanel() {
       <div
         ref={panelRef}
         className="desktop-lyrics-overlay__panel"
-        onPointerDown={handlePanelPointerDown}
+        onMouseDown={handlePanelMouseDown}
       >
         <div className="desktop-lyrics-overlay__background" aria-hidden="true" />
 
-        <div
-          className="desktop-lyrics-overlay__audio-controls"
-          onMouseDown={(event) => event.stopPropagation()}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          <button
-            type="button"
-            title={previousTrackTitle}
-            aria-label={previousTrackTitle}
-            onClick={() => void sendAudioControlRequest('previous')}
-          >
-            <SkipBack size={14} />
-          </button>
-          <button
-            type="button"
-            className={isPlaying ? 'is-active' : ''}
-            title={playPauseTitle}
-            aria-label={playPauseTitle}
-            onClick={() => void sendAudioControlRequest('toggle-play-pause')}
-          >
-            {isPlaying ? <Pause size={14} /> : <Play size={14} />}
-          </button>
-          <button
-            type="button"
-            title={nextTrackTitle}
-            aria-label={nextTrackTitle}
-            onClick={() => void sendAudioControlRequest('next')}
-          >
-            <SkipForward size={14} />
-          </button>
-        </div>
-
-        <div
-          className="desktop-lyrics-overlay__toolbar"
-          onMouseDown={(event) => event.stopPropagation()}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          <button
-            type="button"
-            className={state.clickThrough ? 'is-active' : ''}
-            title={clickThroughTitle}
-            aria-label={clickThroughTitle}
-            onClick={() => void toggleClickThrough()}
-          >
-            <MousePointer2 size={14} />
-          </button>
-          <button
-            type="button"
-            title={smallerFontTitle}
-            aria-label={smallerFontTitle}
-            onClick={() => void adjustFontSize(-FONT_STEP)}
-          >
-            <AArrowDown size={15} />
-          </button>
-          <button
-            type="button"
-            title={largerFontTitle}
-            aria-label={largerFontTitle}
-            onClick={() => void adjustFontSize(FONT_STEP)}
-          >
-            <AArrowUp size={15} />
-          </button>
-          <button
-            type="button"
-            title={lowerOpacityTitle}
-            aria-label={lowerOpacityTitle}
-            onClick={() => void adjustOpacity(-OPACITY_STEP)}
-          >
-            <DropletOff size={14} />
-          </button>
-          <button
-            type="button"
-            title={higherOpacityTitle}
-            aria-label={higherOpacityTitle}
-            onClick={() => void adjustOpacity(OPACITY_STEP)}
-          >
-            <Droplet size={14} />
-          </button>
-          <button
-            type="button"
-            title={slowerLyricTitle}
-            aria-label={slowerLyricTitle}
-            onClick={() => void adjustLyricOffset(-LYRIC_OFFSET_STEP_MS)}
-          >
-            <Rewind size={14} />
-          </button>
-          <button
-            type="button"
-            className={state.lyricOffsetMs === 0 ? '' : 'is-active'}
-            title={resetLyricOffsetTitle}
-            aria-label={resetLyricOffsetTitle}
-            onClick={() => void setLyricOffset(0)}
-          >
-            <RotateCcw size={14} />
-          </button>
-          <button
-            type="button"
-            title={fasterLyricTitle}
-            aria-label={fasterLyricTitle}
-            onClick={() => void adjustLyricOffset(LYRIC_OFFSET_STEP_MS)}
-          >
-            <FastForward size={14} />
-          </button>
-          <button type="button" title={closeTitle} aria-label={closeTitle} onClick={() => void closeOverlay()}>
-            <X size={14} />
-          </button>
-        </div>
+        {shouldRenderControls ? (
+          <React.Suspense fallback={null}>
+            <DesktopLyricsOverlayControls
+              isPlaying={isPlaying}
+              clickThrough={state.clickThrough}
+              lyricOffsetMs={state.lyricOffsetMs}
+              onAudioControl={sendAudioControlRequest}
+              onToggleClickThrough={toggleClickThrough}
+              onDecreaseFontSize={() => void adjustFontSize(-FONT_STEP)}
+              onIncreaseFontSize={() => void adjustFontSize(FONT_STEP)}
+              onDecreaseOpacity={() => void adjustOpacity(-OPACITY_STEP)}
+              onIncreaseOpacity={() => void adjustOpacity(OPACITY_STEP)}
+              onSlowLyrics={() => void adjustLyricOffset(-LYRIC_OFFSET_STEP_MS)}
+              onResetLyricOffset={() => void setLyricOffset(0)}
+              onFastLyrics={() => void adjustLyricOffset(LYRIC_OFFSET_STEP_MS)}
+              onClose={closeOverlay}
+            />
+          </React.Suspense>
+        ) : null}
 
         {(['left', 'right', 'top', 'bottom'] as const).map((edge) => (
           <div
@@ -1211,26 +1098,27 @@ function DesktopLyricsOverlayPanel() {
 
         <div className="desktop-lyrics-overlay__content" aria-live="polite">
           <div ref={lineStackRef} className="desktop-lyrics-overlay__line-stack" style={lineStackStyle}>
-            {lyricLines.map((line, index) => {
-              const distance = Math.min(6, Math.abs(index - activeIndex));
+            {visibleLyricLines.map((line, index) => {
+              const absoluteIndex = visibleLineStart + index;
+              const distance = Math.min(6, Math.abs(absoluteIndex - activeIndex));
               const lineClassName = [
                 'desktop-lyrics-overlay__lyric-line',
-                index < activeIndex ? 'is-past' : '',
-                index === activeIndex ? 'is-active' : '',
-                index > activeIndex ? 'is-future' : '',
+                absoluteIndex < activeIndex ? 'is-past' : '',
+                absoluteIndex === activeIndex ? 'is-active' : '',
+                absoluteIndex > activeIndex ? 'is-future' : '',
               ]
                 .filter(Boolean)
                 .join(' ');
 
               return (
                 <p
-                  key={`${index}-${line}`}
+                  key={`${absoluteIndex}-${line}`}
                   className={lineClassName}
                   style={{
                     ['--desktop-lyrics-line-opacity' as string]: Math.max(0.16, 1 - distance * 0.11),
                   }}
                 >
-                  {index === activeIndex ? (
+                  {absoluteIndex === activeIndex ? (
                     <span className="desktop-lyrics-overlay__lyric-current">
                       <span className="desktop-lyrics-overlay__lyric-base">{line}</span>
                       <span className="desktop-lyrics-overlay__lyric-fill" aria-hidden="true">

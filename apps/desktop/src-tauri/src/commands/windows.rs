@@ -377,6 +377,13 @@ pub async fn desktop_lyrics_preview_layout(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_commit_current_layout(
+    app: tauri::AppHandle,
+) -> Result<windows::desktop_lyrics::DesktopLyricsLayoutSnapshot, String> {
+    windows::desktop_lyrics::commit_current_layout(&app)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn desktop_lyrics_set_lyric_offset_ms(offset_ms: i32) -> Result<(), String> {
     windows::desktop_lyrics::set_lyric_offset_ms(offset_ms)
 }

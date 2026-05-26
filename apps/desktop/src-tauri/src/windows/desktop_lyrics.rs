@@ -252,6 +252,15 @@ pub struct DesktopLyricsOverlaySnapshot {
     pub text: Option<DesktopLyricsOverlaySnapshotText>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopLyricsLayoutSnapshot {
+    pub offset_x: i32,
+    pub offset_y: i32,
+    pub region_width: i32,
+    pub region_height: i32,
+}
+
 pub(super) const DESKTOP_LYRICS_OVERLAY_WINDOW_LABEL: &str = "desktop-lyrics-overlay";
 pub(super) const DESKTOP_LYRICS_UNLOCK_WINDOW_LABEL: &str = "desktop-lyrics-unlock";
 pub(super) const DESKTOP_LYRICS_OVERLAY_SYNC_EVENT: &str = "desktop-lyrics-overlay-sync";
@@ -683,6 +692,55 @@ pub fn preview_layout(
         );
         Ok(())
     }
+}
+
+fn commit_layout_snapshot(
+    snapshot: DesktopLyricsLayoutSnapshot,
+) -> Result<DesktopLyricsLayoutSnapshot, String> {
+    set_layout(
+        snapshot.offset_x,
+        snapshot.offset_y,
+        snapshot.region_width,
+        snapshot.region_height,
+    )?;
+
+    Ok(snapshot)
+}
+
+pub fn commit_current_layout(app: &AppHandle) -> Result<DesktopLyricsLayoutSnapshot, String> {
+    register_app_handle(app);
+
+    let snapshot = {
+        #[cfg(target_os = "windows")]
+        {
+            let (offset_x, offset_y, region_width, region_height) =
+                backend::read_current_layout(app)?
+                    .ok_or_else(|| "Desktop lyrics overlay layout unavailable".to_string())?;
+
+            DesktopLyricsLayoutSnapshot {
+                offset_x: normalize_overlay_position_offset(offset_x),
+                offset_y: normalize_overlay_position_offset(offset_y),
+                region_width: normalize_explicit_overlay_region_width(region_width),
+                region_height: normalize_explicit_overlay_region_height(region_height),
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let state = DESKTOP_LYRICS_STATE
+                .lock()
+                .map_err(|_| "Desktop lyrics state lock poisoned".to_string())?;
+
+            DesktopLyricsLayoutSnapshot {
+                offset_x: state.position_offset_x,
+                offset_y: state.position_offset_y,
+                region_width: state.region_width,
+                region_height: state.region_height,
+            }
+        }
+    };
+
+    commit_layout_snapshot(snapshot)
 }
 
 pub fn set_lyric_offset_ms(offset_ms: i32) -> Result<(), String> {

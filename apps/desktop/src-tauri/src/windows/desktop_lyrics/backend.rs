@@ -19,6 +19,10 @@ const DEFAULT_OVERLAY_WIDTH: i32 = 960;
 #[cfg(target_os = "windows")]
 const DEFAULT_OVERLAY_HEIGHT: i32 = 188;
 #[cfg(target_os = "windows")]
+const DESKTOP_LYRICS_OVERLAY_ROUTE: &str = "/desktop-lyrics.html#/desktop-lyrics-overlay";
+#[cfg(target_os = "windows")]
+const DESKTOP_LYRICS_UNLOCK_ROUTE: &str = "/desktop-lyrics.html#/desktop-lyrics-overlay/unlock";
+#[cfg(target_os = "windows")]
 const UNLOCK_DOT_SIZE: i32 = 24;
 #[cfg(target_os = "windows")]
 const UNLOCK_DOT_MARGIN: i32 = 8;
@@ -236,7 +240,7 @@ fn ensure_overlay_window(app: &tauri::AppHandle) -> Result<(Window, bool), Strin
     let window = WindowBuilder::new(
         app,
         super::DESKTOP_LYRICS_OVERLAY_WINDOW_LABEL,
-        WindowUrl::App("/#/desktop-lyrics-overlay".into()),
+        WindowUrl::App(DESKTOP_LYRICS_OVERLAY_ROUTE.into()),
     )
     .title("Desktop Lyrics")
     .inner_size(DEFAULT_OVERLAY_WIDTH as f64, DEFAULT_OVERLAY_HEIGHT as f64)
@@ -267,7 +271,7 @@ fn ensure_unlock_window(app: &tauri::AppHandle) -> Result<Window, String> {
     WindowBuilder::new(
         app,
         super::DESKTOP_LYRICS_UNLOCK_WINDOW_LABEL,
-        WindowUrl::App("/#/desktop-lyrics-overlay/unlock".into()),
+        WindowUrl::App(DESKTOP_LYRICS_UNLOCK_ROUTE.into()),
     )
     .title("Desktop Lyrics Unlock")
     .inner_size(UNLOCK_DOT_SIZE as f64, UNLOCK_DOT_SIZE as f64)
@@ -433,6 +437,17 @@ pub(super) fn preview_layout(
 
     apply_window_geometry(&window, offset_x, offset_y, width, height);
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn read_current_layout(
+    app: &tauri::AppHandle,
+) -> Result<Option<(i32, i32, i32, i32)>, String> {
+    let window = app
+        .get_window(super::DESKTOP_LYRICS_OVERLAY_WINDOW_LABEL)
+        .ok_or_else(|| "Desktop lyrics overlay window not found".to_string())?;
+
+    Ok(read_layout_from_window(&window))
 }
 
 #[cfg(target_os = "windows")]
