@@ -28,6 +28,8 @@ const DATABASE_VERSION = 1;
 const STORE_NAME = 'peak-rms-v1';
 const MAX_CACHE_ENTRIES = 10_000;
 const MAX_QUEUE_LENGTH = 24;
+const ANALYSIS_MISS_COOLDOWN_MS = 30 * 60 * 1000;
+const MAX_ANALYSIS_MISS_RECORDS = 256;
 
 export interface AudioAnalysisCacheRecord {
   key: string;
@@ -70,6 +72,18 @@ interface QueueItem {
   reason: string;
   requestedAt: number;
   resolve: (analysis: AudioPeakRmsAnalysis | null) => void;
+}
+
+export interface AudioAnalysisFailureInfo {
+  message: string;
+  code: string | null;
+  expectedMiss: boolean;
+  reason: string;
+}
+
+interface AudioAnalysisMissRecord {
+  reason: string;
+  untilMs: number;
 }
 
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
@@ -146,6 +160,45 @@ function sanitizeSegmentCount(value: number | undefined): number {
     ? Math.round(value)
     : AUDIO_ANALYSIS_DEFAULT_SEGMENT_COUNT;
   return Math.max(64, Math.min(4096, next));
+}
+
+function readFailureMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function extractFailureCode(message: string): string | null {
+  return message.match(/\bAUDIO_ANALYSIS_[A-Z0-9_]+\b/)?.[0] ?? null;
+}
+
+export function classifyAudioAnalysisFailure(error: unknown): AudioAnalysisFailureInfo {
+  const message = readFailureMessage(error);
+  const lower = message.toLowerCase();
+  const code = extractFailureCode(message);
+
+  if (code === 'AUDIO_ANALYSIS_NO_SAMPLES') {
+    return { message, code, expectedMiss: true, reason: 'no-samples' };
+  }
+
+  if (code === 'AUDIO_ANALYSIS_PROBE_FAILED') {
+    return { message, code, expectedMiss: true, reason: 'probe-failed' };
+  }
+
+  if (
+    lower.includes('end of stream') ||
+    lower.includes('unexpected eof') ||
+    lower.includes('unexpected end of file') ||
+    lower.includes('failed to probe audio file for analysis')
+  ) {
+    return { message, code, expectedMiss: true, reason: 'probe-unavailable' };
+  }
+
+  return { message, code, expectedMiss: false, reason: 'unexpected' };
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -229,6 +282,7 @@ export class DefaultAudioAnalysisService implements AudioAnalysisService {
   private readonly inflight = new Map<string, Promise<AudioPeakRmsAnalysis | null>>();
   private readonly queued = new Map<string, QueueItem>();
   private dbPromise: Promise<IDBDatabase> | null = null;
+  private readonly analysisMisses = new Map<string, AudioAnalysisMissRecord>();
   private disposed = false;
   private running = false;
 
@@ -250,6 +304,7 @@ export class DefaultAudioAnalysisService implements AudioAnalysisService {
     if (!identity || !isTauriRuntime()) return null;
     const cached = await this.readRecord(identity.key);
     if (cached) return cached.analysis;
+    if (this.isAnalysisMissCoolingDown(identity.key)) return null;
     const priority = options.priority ?? 'background';
     return this.enqueue({
       key: identity.key,
@@ -267,6 +322,7 @@ export class DefaultAudioAnalysisService implements AudioAnalysisService {
     }
     this.queued.clear();
     this.inflight.clear();
+    this.analysisMisses.clear();
     void this.dbPromise?.then((db) => db.close()).catch(() => undefined);
     this.dbPromise = null;
   }
@@ -406,11 +462,28 @@ export class DefaultAudioAnalysisService implements AudioAnalysisService {
 
     void this.runAnalysis(next)
       .catch((error) => {
+        const failure = classifyAudioAnalysisFailure(error);
+        if (failure.expectedMiss) {
+          this.rememberAnalysisMiss(next.key, failure.reason);
+          this.telemetry.debug('audio.analysis.request.missed', {
+            message: failure.message,
+            fields: {
+              reason: next.reason,
+              priority: next.priority,
+              failureReason: failure.reason,
+              failureCode: failure.code,
+              cooldownMs: ANALYSIS_MISS_COOLDOWN_MS,
+            },
+          });
+          return null;
+        }
+
         this.telemetry.warn('audio.analysis.request.failed', {
-          message: error instanceof Error ? error.message : String(error),
+          message: failure.message,
           fields: {
             reason: next.reason,
             priority: next.priority,
+            failureCode: failure.code,
           },
         });
         return null;
@@ -448,9 +521,11 @@ export class DefaultAudioAnalysisService implements AudioAnalysisService {
         component: 'AudioAnalysisService',
         event: 'audio.analysis.peak-rms.invoke',
         slowThresholdMs: 500,
+        failureLevel: 'debug',
       }
     );
     const analysis = normalizeNativeAnalysis(payload);
+    this.analysisMisses.delete(item.key);
     const now = Date.now();
     const record: AudioAnalysisCacheRecord = {
       key: item.key,
@@ -479,6 +554,29 @@ export class DefaultAudioAnalysisService implements AudioAnalysisService {
       },
     });
     return analysis;
+  }
+
+  private isAnalysisMissCoolingDown(key: string): boolean {
+    const miss = this.analysisMisses.get(key);
+    if (!miss) return false;
+    if (miss.untilMs <= Date.now()) {
+      this.analysisMisses.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  private rememberAnalysisMiss(key: string, reason: string): void {
+    this.analysisMisses.set(key, {
+      reason,
+      untilMs: Date.now() + ANALYSIS_MISS_COOLDOWN_MS,
+    });
+
+    while (this.analysisMisses.size > MAX_ANALYSIS_MISS_RECORDS) {
+      const first = this.analysisMisses.keys().next().value as string | undefined;
+      if (!first) break;
+      this.analysisMisses.delete(first);
+    }
   }
 }
 

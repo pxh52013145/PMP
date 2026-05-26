@@ -108,7 +108,12 @@ export class DefaultAudioEngineService implements AudioEngineService {
       if (!this.isNativeAvailable) return new NoopAudioService();
       return new LazyAudioTransportService({
         runtimeCapsuleManager: options.runtimeCapsuleManager,
-        createTransport: () => new NativeAudioService(),
+        createTransport: () =>
+          new NativeAudioService({
+            requestMemoryGovernance: (request) => {
+              this.events.emit('memory-governance/requested', request);
+            },
+          }),
         onTransportCreated: () => {
           setStartupMemoryTraceFlag('nativeAudioConstructed');
           recordStartupMemoryCheckpoint('audio.native.constructed');

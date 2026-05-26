@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ContributionRegistry, EventBus, ServiceRegistry } from '../../kernel';
 import type { AppEvents } from '../../contracts/events';
 import { AUDIO_ANALYSIS_SERVICE_TOKEN } from './audioAnalysisService';
-import { collectAudioAnalysisPreheatTargets, createAudioAnalysisModule } from './audioAnalysisModule';
+import {
+  collectAudioAnalysisPreheatTargets,
+  createAudioAnalysisModule,
+  shouldSkipAudioAnalysisPreheat,
+} from './audioAnalysisModule';
 import type { AudioState, Track } from './types';
 
 const { requestPeakRmsMock, tauriRuntimeMock } = vi.hoisted(() => ({
@@ -121,6 +125,27 @@ describe('createAudioAnalysisModule', () => {
     expect(services.getOptional(AUDIO_ANALYSIS_SERVICE_TOKEN)).not.toBeNull();
     events.emit('audio/stateChanged', createAudioState(createTrack()));
 
+    expect(requestPeakRmsMock).not.toHaveBeenCalled();
+    dispose?.();
+  });
+
+  it('skips automatic preheat for high-sample-rate tracks', () => {
+    tauriRuntimeMock.mockReturnValue(true);
+    const services = new ServiceRegistry();
+    const events = new EventBus<AppEvents>().withSource('test');
+    const contributions = new ContributionRegistry();
+    const module = createAudioAnalysisModule();
+    const highRateTrack = createTrack({ sampleRate: 192_000 });
+
+    const dispose = module.activate({
+      services,
+      events,
+      contributions,
+    });
+
+    events.emit('audio/stateChanged', createAudioState(highRateTrack));
+
+    expect(shouldSkipAudioAnalysisPreheat(highRateTrack)).toBe(true);
     expect(requestPeakRmsMock).not.toHaveBeenCalled();
     dispose?.();
   });

@@ -730,10 +730,55 @@ export async function searchPlatformTracks(
 export async function preparePlatformPlayback(
   options: PreparePlatformPlaybackOptions
 ): Promise<PreparePlatformPlaybackResult | null> {
+  const sourceLocator = options.sourceLocator.trim();
+  if (!sourceLocator) {
+    return {
+      connectorId: options.connectorId ?? 'connector.platform.archived',
+      prepared: null,
+    };
+  }
+
+  const connectorId = (options.connectorId ?? inferConnectorIdFromSourceLocator(sourceLocator)).trim();
+  try {
+    const nativeLibraryDb = await import('../music-library/nativeLibraryDb');
+    if (connectorId === 'connector.platform.netease' || sourceLocator.toLowerCase().startsWith('netease://')) {
+      const prepared = await nativeLibraryDb.prepareNativeNeteaseCachedPlayback(
+        sourceLocator,
+        options.qualityHint,
+        options.instanceId
+      );
+      return {
+        connectorId: 'connector.platform.netease',
+        prepared: prepared ? { ...prepared } : null,
+      };
+    }
+
+    if (connectorId === 'connector.platform.bilibili' || sourceLocator.toLowerCase().startsWith('bilibili://')) {
+      const prepared = await nativeLibraryDb.prepareNativeBilibiliCachedPlayback(
+        sourceLocator,
+        options.qualityHint,
+        options.instanceId
+      );
+      return {
+        connectorId: 'connector.platform.bilibili',
+        prepared: prepared ? { ...prepared } : null,
+      };
+    }
+  } catch {
+    // Keep archived facade fallback-compatible when native platform bindings are unavailable.
+  }
+
   return {
-    connectorId: options.connectorId ?? 'connector.platform.archived',
+    connectorId: connectorId || 'connector.platform.archived',
     prepared: null,
   };
+}
+
+function inferConnectorIdFromSourceLocator(sourceLocator: string): PlatformConnectorId {
+  const normalized = sourceLocator.trim().toLowerCase();
+  if (normalized.startsWith('netease://')) return 'connector.platform.netease';
+  if (normalized.startsWith('bilibili://')) return 'connector.platform.bilibili';
+  return 'connector.platform.archived';
 }
 
 export function getPlatformWorkspacePageModel(_input?: unknown): PlatformWorkspacePageModel {

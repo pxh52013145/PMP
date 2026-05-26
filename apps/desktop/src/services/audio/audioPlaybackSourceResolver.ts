@@ -19,31 +19,19 @@ function isProbablyAbsolutePath(value: string): boolean {
   return false;
 }
 
-function buildCacheFileTrack(
-  track: Track,
-  options: {
-    cachePath: string;
-    sourceLocator: string;
-    durationSeconds?: number;
-  }
-): Track {
-  return {
-    ...track,
-    filePath: options.cachePath,
-    path: options.cachePath,
-    originalPath: options.sourceLocator,
-    duration:
-      typeof track.duration === 'number' && Number.isFinite(track.duration)
-        ? track.duration
-        : options.durationSeconds,
-    comment:
-      typeof track.comment === 'string' && track.comment.trim().length > 0
-        ? track.comment
-        : options.sourceLocator,
-  };
-}
-
 export type AudioPlaybackPreparationHint = 'platform-cache-materializing';
+
+interface PlatformPreparedPlaybackLike {
+  sourceLocator?: unknown;
+  cachePath?: unknown;
+  streamUrl?: unknown;
+  durationSeconds?: number;
+  mimeType?: unknown;
+  headers?: Record<string, string>;
+  expiresAtMs?: number;
+  seekable?: boolean;
+  rangeRequests?: boolean;
+}
 
 export type NativeAudioSourcePayload =
   | {
@@ -103,6 +91,8 @@ export type PreparedAudioSource =
         | 'missing-source-locator'
         | 'missing-cache-path'
         | 'cache-path-not-absolute'
+        | 'missing-stream-url'
+        | 'cache-only-playback-disabled'
         | 'platform-prepare-failed';
       connectorId?: string;
       sourceLocator?: string;
@@ -172,11 +162,123 @@ export interface PlatformPlaybackProvider {
   ): Promise<PreparedAudioSource>;
 }
 
+function buildRemoteStreamSource(
+  track: Track,
+  identity: PlatformPlaybackIdentity,
+  prepared: PlatformPreparedPlaybackLike,
+  streamUrl: string
+): PreparedAudioSource {
+  const sourceLocator = normalizeString(identity.sourceLocator);
+  const remoteTrack = {
+    ...track,
+    filePath: undefined,
+    path: sourceLocator || normalizeString(track.path),
+    originalPath: sourceLocator,
+    duration:
+      typeof track.duration === 'number' && Number.isFinite(track.duration)
+        ? track.duration
+        : prepared.durationSeconds,
+    comment:
+      typeof track.comment === 'string' && track.comment.trim().length > 0
+        ? track.comment
+        : sourceLocator,
+    sourceLocator,
+    streamUrl,
+    connectorId: identity.connectorId,
+    cachePath: undefined,
+    cache_path: undefined,
+  } as Track;
+
+  return {
+    kind: 'remote-stream',
+    track: remoteTrack,
+    streamUrl,
+    connectorId: identity.connectorId,
+    sourceLocator,
+    mimeType: normalizeString(prepared.mimeType) || undefined,
+    headers: prepared.headers,
+    expiresAtMs: prepared.expiresAtMs,
+    seekable: prepared.seekable,
+    rangeRequests: prepared.rangeRequests,
+    durationSeconds: prepared.durationSeconds,
+  };
+}
+
+function readInlinePlatformPreparedPlayback(
+  track: Track,
+  identity: PlatformPlaybackIdentity
+): PlatformPreparedPlaybackLike | null {
+  const record = track as unknown as Record<string, unknown>;
+  const cachePath = normalizeString(record.cachePath ?? record.cache_path);
+  const streamUrl = normalizeString(record.streamUrl ?? record.stream_url);
+  if (!cachePath && !streamUrl) return null;
+
+  const durationSeconds =
+    typeof record.durationSeconds === 'number' && Number.isFinite(record.durationSeconds)
+      ? record.durationSeconds
+      : track.duration;
+
+  return {
+    sourceLocator: identity.sourceLocator,
+    cachePath,
+    streamUrl,
+    durationSeconds,
+    mimeType: record.mimeType ?? record.mime_type ?? track.mimeType,
+    headers:
+      record.headers && typeof record.headers === 'object' && !Array.isArray(record.headers)
+        ? record.headers as Record<string, string>
+        : undefined,
+    expiresAtMs:
+      typeof record.expiresAtMs === 'number' && Number.isFinite(record.expiresAtMs)
+        ? record.expiresAtMs
+        : undefined,
+    seekable: typeof record.seekable === 'boolean' ? record.seekable : undefined,
+    rangeRequests:
+      typeof record.rangeRequests === 'boolean'
+        ? record.rangeRequests
+        : typeof record.range_requests === 'boolean'
+          ? record.range_requests
+          : undefined,
+  };
+}
+
+export async function resolvePreparedPlatformPlaybackSource(
+  track: Track,
+  identity: PlatformPlaybackIdentity,
+  prepared: PlatformPreparedPlaybackLike | null | undefined
+): Promise<PreparedAudioSource> {
+  const sourceLocator = normalizeString(identity.sourceLocator);
+  const cachePath = normalizeString(prepared?.cachePath);
+  const streamUrl = normalizeString(prepared?.streamUrl);
+
+  if (streamUrl) {
+    return buildRemoteStreamSource(track, identity, prepared ?? {}, streamUrl);
+  }
+
+  if (cachePath && isProbablyAbsolutePath(cachePath)) {
+    return {
+      kind: 'deferred',
+      track,
+      reason: 'cache-only-playback-disabled',
+      connectorId: identity.connectorId,
+      sourceLocator,
+    };
+  }
+
+  return {
+    kind: 'deferred',
+    track,
+    reason: !cachePath ? 'missing-stream-url' : 'cache-path-not-absolute',
+    connectorId: identity.connectorId,
+    sourceLocator,
+  };
+}
+
 export class PlatformPlaybackFacadeProvider implements PlatformPlaybackProvider {
   async prepare(
     track: Track,
     identity: PlatformPlaybackIdentity,
-    context: AudioPlaybackSourceResolverContext = {}
+    _context: AudioPlaybackSourceResolverContext = {}
   ): Promise<PreparedAudioSource> {
     const sourceLocator = normalizeString(identity.sourceLocator);
     if (!sourceLocator) {
@@ -188,73 +290,27 @@ export class PlatformPlaybackFacadeProvider implements PlatformPlaybackProvider 
       };
     }
 
-    context.recordStabilityHint?.('platform-cache-materializing', {
-      event: 'audio.stability.hint.platform-cache-materializing',
-    });
-
     try {
       const { preparePlatformPlayback } = await import('../../modules/music-platform/platformFacade');
+      const inlinePrepared = readInlinePlatformPreparedPlayback(track, identity);
       const preparedResult = await preparePlatformPlayback({
         connectorId: identity.connectorId,
         sourceLocator,
       });
-      const prepared = preparedResult?.prepared;
-      const cachePath = normalizeString(prepared?.cachePath);
-      const streamUrl = normalizeString(prepared?.streamUrl);
-
-      if (cachePath && isProbablyAbsolutePath(cachePath)) {
-        return {
-          kind: 'cache-file',
-          track: buildCacheFileTrack(track, {
-            cachePath,
-            sourceLocator,
-            durationSeconds: prepared?.durationSeconds,
-          }),
-          path: cachePath,
-          connectorId: identity.connectorId,
-          sourceLocator,
-        };
-      }
-
-      if (streamUrl) {
-        return {
-          kind: 'remote-stream',
-          track: {
-            ...track,
-            path:
-              typeof track.path === 'string' && track.path.trim().length > 0
-                ? track.path
-                : sourceLocator,
-            originalPath: sourceLocator,
-            duration:
-              typeof track.duration === 'number' && Number.isFinite(track.duration)
-                ? track.duration
-                : prepared?.durationSeconds,
-            comment:
-              typeof track.comment === 'string' && track.comment.trim().length > 0
-                ? track.comment
-                : sourceLocator,
-          },
-          streamUrl,
-          connectorId: identity.connectorId,
-          sourceLocator,
-          mimeType: normalizeString(prepared?.mimeType) || undefined,
-          headers: prepared?.headers,
-          expiresAtMs: prepared?.expiresAtMs,
-          seekable: prepared?.seekable,
-          rangeRequests: prepared?.rangeRequests,
-          durationSeconds: prepared?.durationSeconds,
-        };
-      }
-
-      return {
-        kind: 'deferred',
+      return resolvePreparedPlatformPlaybackSource(
         track,
-        reason: !cachePath ? 'missing-cache-path' : 'cache-path-not-absolute',
-        connectorId: identity.connectorId,
-        sourceLocator,
-      };
+        identity,
+        preparedResult?.prepared ?? inlinePrepared
+      );
     } catch {
+      const inlinePrepared = readInlinePlatformPreparedPlayback(track, identity);
+      if (inlinePrepared) {
+        return resolvePreparedPlatformPlaybackSource(
+          track,
+          identity,
+          inlinePrepared
+        );
+      }
       return {
         kind: 'deferred',
         track,

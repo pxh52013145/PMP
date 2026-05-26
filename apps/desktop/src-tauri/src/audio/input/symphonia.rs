@@ -1,4 +1,5 @@
-use std::fs::File;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -92,6 +93,65 @@ fn remote_stream_init_timeout() -> Duration {
         .unwrap_or(DEFAULT_TIMEOUT_MS)
         .clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
     Duration::from_millis(timeout_ms)
+}
+
+fn compact_path_tail(path: &Path) -> String {
+    let mut parts = path
+        .components()
+        .rev()
+        .take(4)
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    parts.reverse();
+    if parts.is_empty() {
+        return String::from("<empty>");
+    }
+    parts.join("\\")
+}
+
+fn read_file_head_hex(path: &Path, max_bytes: usize) -> String {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) => return format!("unreadable:{err}"),
+    };
+    let mut buffer = vec![0u8; max_bytes.max(1)];
+    match file.read(&mut buffer) {
+        Ok(read) => {
+            if read == 0 {
+                return String::from("<empty>");
+            }
+            buffer
+                .iter()
+                .take(read)
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .join("")
+        }
+        Err(err) => format!("unreadable:{err}"),
+    }
+}
+
+fn describe_local_probe_context(path: &Path) -> String {
+    let metadata = fs::metadata(path);
+    let len = metadata.as_ref().map(|value| value.len()).ok();
+    let is_file = metadata
+        .as_ref()
+        .map(|value| value.is_file())
+        .unwrap_or(false);
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("<none>");
+    format!(
+        "pathTail=\"{}\", exists={}, isFile={}, len={}, ext=\"{}\", headHex={}",
+        compact_path_tail(path),
+        path.exists(),
+        is_file,
+        len.map(|value| value.to_string())
+            .unwrap_or_else(|| String::from("<unknown>")),
+        extension,
+        read_file_head_hex(path, 16)
+    )
 }
 
 pub(crate) struct SymphoniaStreamingMediaSource {
@@ -315,7 +375,13 @@ fn start_symphonia_stream_from_input(
             };
             let probed = symphonia::default::get_probe()
                 .format(&hint, mss, &format_options, &MetadataOptions::default())
-                .map_err(|e| format!("Failed to probe format: {e}"))?;
+                .map_err(|e| {
+                    let context = duration_hint_path
+                        .as_ref()
+                        .map(|path| format!(" ({})", describe_local_probe_context(path)))
+                        .unwrap_or_default();
+                    format!("Failed to probe format: {e}{context}")
+                })?;
             let format = probed.format;
             let track = symphonia_metadata::pick_audio_track(format.as_ref())
                 .ok_or_else(|| "No audio track found".to_string())?
@@ -1053,7 +1119,10 @@ fn decode_track_to_buffer(
         .map_err(|e| {
             AudioInputError::new(
                 "AUDIO_INPUT_SYMPHONIA_PROBE_FAILED",
-                format!("Failed to probe format: {e}"),
+                format!(
+                    "Failed to probe format: {e} ({})",
+                    describe_local_probe_context(path)
+                ),
             )
         })?;
     let mut format = probed.format;
@@ -1272,6 +1341,17 @@ impl AudioInput for SymphoniaInput {
         decode_mode: AudioInputDecodeMode,
         src_policy: AudioInputSrcPolicy,
     ) -> Result<AudioInputOpenResult, AudioInputError> {
+        if fs::metadata(path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(1)
+            == 0
+        {
+            return Err(AudioInputError::new(
+                "AUDIO_INPUT_FILE_EMPTY",
+                "Audio file is empty; refusing to probe it as a playable local file",
+            ));
+        }
+
         let budget_samples = full_track_buffer_budget_samples();
         let default_streaming_capacity =
             AudioRingBuffer::recommended_capacity_samples(output_sample_rate, 2);

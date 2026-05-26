@@ -14,6 +14,7 @@ import type { AudioAnalysisPriority } from '../../contracts/audioAnalysis';
 const NEXT_TRACK_PREHEAT_COUNT = 1;
 const PREHEAT_DEDUPE_WINDOW_MS = 60_000;
 const RECENT_PREHEAT_LIMIT = 64;
+const HIGH_SAMPLE_RATE_PREHEAT_THRESHOLD = 176_400;
 
 interface RecentPreheatIntent {
   priority: AudioAnalysisPriority;
@@ -45,6 +46,14 @@ export function collectAudioAnalysisPreheatTargets(state: AudioState): Array<{
     });
   }
   return targets;
+}
+
+export function shouldSkipAudioAnalysisPreheat(track: Track): boolean {
+  return (
+    typeof track.sampleRate === 'number' &&
+    Number.isFinite(track.sampleRate) &&
+    track.sampleRate >= HIGH_SAMPLE_RATE_PREHEAT_THRESHOLD
+  );
 }
 
 export function createAudioAnalysisModule(options: {
@@ -81,6 +90,7 @@ export function createAudioAnalysisModule(options: {
         if (!enablePreheat) return;
         if (!isTauriRuntime()) return;
         for (const target of collectAudioAnalysisPreheatTargets(state)) {
+          if (shouldSkipAudioAnalysisPreheat(target.track)) continue;
           const identity = resolveAudioAnalysisTrackIdentity(
             target.track,
             AUDIO_ANALYSIS_DEFAULT_SEGMENT_COUNT

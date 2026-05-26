@@ -64,6 +64,10 @@ export class NativeAudioQueueMirror {
     return this.dirty;
   }
 
+  invalidate(reason: string, fields?: Record<string, unknown>): void {
+    this.markDirty(reason, fields);
+  }
+
   reset(): void {
     this.mirroredQueueRef = null;
     this.mirroredIndex = -1;

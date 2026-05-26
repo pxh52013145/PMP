@@ -258,7 +258,7 @@ export interface NativeLyricWriteBackResult {
 export interface NativeBilibiliPlaybackPrepared {
   sourceLocator: string;
   streamUrl: string;
-  cachePath: string;
+  cachePath?: string;
   mimeType?: string;
   durationSeconds?: number;
   contentKind: string;
@@ -342,7 +342,7 @@ export interface NativeNeteaseSongPage {
 export interface NativeNeteasePlaybackPrepared {
   sourceLocator: string;
   streamUrl: string;
-  cachePath: string;
+  cachePath?: string;
   mimeType?: string;
   durationSeconds?: number;
   songId: string;
@@ -1748,14 +1748,7 @@ function ensureBilibiliPlaybackPrepared(value: unknown): NativeBilibiliPlaybackP
   const selectedQualityLabel = asTrimmedString(
     readRecordField(value, 'selectedQualityLabel', 'selected_quality_label')
   );
-  if (
-    !sourceLocator ||
-    !streamUrl ||
-    !cachePath ||
-    !contentKind ||
-    !selectedQualityKey ||
-    !selectedQualityLabel
-  ) {
+  if (!sourceLocator || !streamUrl || !contentKind || !selectedQualityKey || !selectedQualityLabel) {
     return null;
   }
 
@@ -1764,7 +1757,7 @@ function ensureBilibiliPlaybackPrepared(value: unknown): NativeBilibiliPlaybackP
   return {
     sourceLocator,
     streamUrl,
-    cachePath,
+    cachePath: cachePath || undefined,
     mimeType: asOptionalString(readRecordField(value, 'mimeType', 'mime_type')),
     durationSeconds:
       durationSeconds === undefined ? undefined : Math.max(0, Math.floor(durationSeconds)),
@@ -1995,14 +1988,14 @@ function ensureNeteasePlaybackPrepared(
   const streamUrl = asTrimmedString(readRecordField(value, 'streamUrl', 'stream_url'));
   const cachePath = asTrimmedString(readRecordField(value, 'cachePath', 'cache_path'));
   const songId = asTrimmedString(readRecordField(value, 'songId', 'song_id'));
-  if (!sourceLocator || !streamUrl || !cachePath || !songId) return null;
+  if (!sourceLocator || !streamUrl || !songId) return null;
 
   const durationSeconds = asNumber(readRecordField(value, 'durationSeconds', 'duration_seconds'));
 
   return {
     sourceLocator,
     streamUrl,
-    cachePath,
+    cachePath: cachePath || undefined,
     mimeType: asOptionalString(readRecordField(value, 'mimeType', 'mime_type')),
     durationSeconds:
       durationSeconds === undefined ? undefined : Math.max(0, Math.floor(durationSeconds)),

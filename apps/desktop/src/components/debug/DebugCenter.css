@@ -235,6 +235,16 @@
   white-space: pre-wrap;
   overflow: auto;
   overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+.debug-center-code-block *,
+.debug-center-telemetry-log,
+.debug-center-telemetry-log * {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .debug-center-code-block--compact {

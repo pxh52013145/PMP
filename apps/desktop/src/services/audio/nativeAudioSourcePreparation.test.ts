@@ -161,7 +161,7 @@ describe('NativeAudioSourcePreparation', () => {
     expect(onUnsupportedSource).toHaveBeenCalledWith(source, TRACK);
   });
 
-  it('applies materialized paths back to remote stream tracks', () => {
+  it('does not rewrite tracks to materialized cache paths', () => {
     const { preparation } = createPreparation();
     const source: PreparedAudioSource = {
       kind: 'remote-stream',
@@ -171,13 +171,8 @@ describe('NativeAudioSourcePreparation', () => {
       sourceLocator: 'cloud://track-a',
     };
 
-    expect(
-      preparation.applyMaterializedPath(source, TRACK, 'C:\\cache\\track-a.flac')
-    ).toMatchObject({
-      filePath: 'C:\\cache\\track-a.flac',
-      path: 'C:\\cache\\track-a.flac',
-      originalPath: 'cloud://track-a',
-      comment: 'cloud://track-a',
-    });
+    expect(preparation.applyMaterializedPath(source, TRACK, 'C:\\cache\\track-a.flac')).toBe(
+      TRACK
+    );
   });
 });

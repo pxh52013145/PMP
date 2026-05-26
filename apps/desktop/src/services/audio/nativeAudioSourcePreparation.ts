@@ -100,32 +100,9 @@ export class NativeAudioSourcePreparation {
     track: Track,
     materializedPath: string | null | undefined
   ): Track {
-    if (!materializedPath || !isProbablyAbsolutePath(materializedPath)) {
-      return track;
-    }
-
-    switch (source.kind) {
-      case 'remote-stream':
-        return {
-          ...track,
-          filePath: materializedPath,
-          path: materializedPath,
-          originalPath: source.sourceLocator,
-          comment:
-            typeof track.comment === 'string' && track.comment.trim().length > 0
-              ? track.comment
-              : source.sourceLocator,
-        };
-      case 'cache-file':
-      case 'local-file':
-        return {
-          ...track,
-          filePath: materializedPath,
-          path: materializedPath,
-        };
-      default:
-        return track;
-    }
+    void source;
+    void materializedPath;
+    return track;
   }
 
   async loadSource(

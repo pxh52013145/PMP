@@ -103,6 +103,61 @@ function sanitizeCoverUrl(track: Track): string | undefined {
   return undefined;
 }
 
+const PLAYBACK_SOURCE_STRING_FIELDS = [
+  'sourceLocator',
+  'source_locator',
+  'streamUrl',
+  'stream_url',
+  'cachePath',
+  'cache_path',
+  'connectorId',
+  'connector_id',
+  'sourceConnectorId',
+  'source_connector_id',
+  'sourceId',
+  'source_id',
+  'mimeType',
+  'mime_type',
+] as const;
+
+const PLAYBACK_SOURCE_NUMBER_FIELDS = ['expiresAtMs', 'expires_at_ms', 'durationSeconds'] as const;
+const PLAYBACK_SOURCE_BOOLEAN_FIELDS = ['seekable', 'rangeRequests', 'range_requests'] as const;
+
+function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const normalized: Record<string, string> = {};
+  for (const [key, entryValue] of Object.entries(value)) {
+    const normalizedKey = normalizeOptionalString(key);
+    const normalizedValue = normalizeOptionalString(entryValue);
+    if (!normalizedKey || !normalizedValue) continue;
+    normalized[normalizedKey] = normalizedValue;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function copyPlaybackSourceFields(track: Track, compacted: Track): void {
+  const source = track as unknown as Record<string, unknown>;
+  const target = compacted as unknown as Record<string, unknown>;
+
+  for (const key of PLAYBACK_SOURCE_STRING_FIELDS) {
+    const value = normalizeOptionalString(source[key]);
+    if (value) target[key] = value;
+  }
+
+  for (const key of PLAYBACK_SOURCE_NUMBER_FIELDS) {
+    const value = normalizeOptionalNumber(source[key]);
+    if (value !== undefined) target[key] = value;
+  }
+
+  for (const key of PLAYBACK_SOURCE_BOOLEAN_FIELDS) {
+    const value = normalizeOptionalBoolean(source[key]);
+    if (value !== undefined) target[key] = value;
+  }
+
+  const headers = normalizeStringRecord(source.headers);
+  if (headers) target.headers = headers;
+}
+
 type ProjectedTrackCore = {
   id: string;
   title: string;
@@ -182,6 +237,7 @@ export function compactTrackForState(track: Track): Track {
     mimeType: normalizeOptionalString(track.mimeType),
   };
 
+  copyPlaybackSourceFields(track, compacted);
   attachProjectedFileHandle(track, normalizedPath, compacted);
   return compacted;
 }
@@ -207,6 +263,7 @@ export function compactTrackForPlaylistState(track: Track): Track {
     comment: projectedComment,
   };
 
+  copyPlaybackSourceFields(track, compacted);
   attachProjectedFileHandle(track, normalizedPath, compacted);
   return compacted;
 }
@@ -230,6 +287,7 @@ export function compactTrackForQueueState(track: Track): Track {
     comment: projectedComment,
   };
 
+  copyPlaybackSourceFields(track, compacted);
   attachProjectedFileHandle(track, normalizedPath, compacted);
   return compacted;
 }

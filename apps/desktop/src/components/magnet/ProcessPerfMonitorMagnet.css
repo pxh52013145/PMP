@@ -1,14 +1,14 @@
 .process-perf-monitor {
   width: 100%;
   height: 100%;
-  padding: 8px;
+  padding: 7px 8px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   color: rgba(255, 255, 255, 0.92);
   font-size: 11px;
-  line-height: 1.15;
+  line-height: 1.12;
   font-variant-numeric: tabular-nums;
   contain: content;
   cursor: pointer;
@@ -23,20 +23,22 @@
 
 .process-perf-monitor__header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
 }
 
 .process-perf-monitor__title {
   font-size: 11px;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   opacity: 0.92;
 }
 
 .process-perf-monitor__badge {
   font-size: 10px;
   opacity: 0.65;
+  white-space: nowrap;
 }
 
 .process-perf-monitor__error {
@@ -45,28 +47,38 @@
 }
 
 .process-perf-monitor__stats {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  gap: 5px;
+  min-width: 0;
 }
 
 .process-perf-monitor__row {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: minmax(44px, auto) minmax(0, 1fr);
+  column-gap: 7px;
   align-items: baseline;
+  min-width: 0;
 }
 
 .process-perf-monitor__label {
   opacity: 0.72;
-  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.process-perf-monitor__value {
+  min-width: 0;
+  justify-self: end;
+  text-align: right;
+}
+
+.process-perf-monitor__row--memory {
+  align-items: start;
 }
 
 .process-perf-monitor__memory-value {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 3px 6px;
+  display: grid;
+  justify-items: end;
+  gap: 2px;
   min-width: 0;
   text-align: right;
 }
@@ -74,10 +86,23 @@
 .process-perf-monitor__memory-primary {
   color: rgba(255, 255, 255, 0.94);
   font-weight: 700;
+  white-space: nowrap;
+}
+
+.process-perf-monitor__memory-detail {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px 6px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 10px;
+  line-height: 1.05;
 }
 
 .process-perf-monitor__footer {
   margin-top: auto;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 10px;
   opacity: 0.68;
   white-space: nowrap;

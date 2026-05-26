@@ -1,5 +1,6 @@
 import {
   memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -142,8 +143,8 @@ const ProcessPerfMonitorDefaultRenderer = memo(function ProcessPerfMonitorDefaul
   }, [isVisible, renderMode, service]);
 
   const systemLine = useMemo(() => {
-    if (!snapshot) return '-';
-    if (snapshot.systemMemoryLoadPercent === null) return '-';
+    if (!snapshot) return null;
+    if (snapshot.systemMemoryLoadPercent === null) return null;
     return t('magnet.processPerf.line.system', {
       load: snapshot.systemMemoryLoadPercent,
       total: toMb(snapshot.systemMemoryTotalBytes),
@@ -151,8 +152,8 @@ const ProcessPerfMonitorDefaultRenderer = memo(function ProcessPerfMonitorDefaul
     });
   }, [snapshot, t]);
 
-  const renderMemoryValue = useMemo(() => {
-    return (
+  const renderMemoryValue = useCallback(
+    (
       privateWorkingSetBytes: number | null | undefined,
       workingSetBytes: number | null | undefined,
       privateBytes: number | null | undefined
@@ -161,13 +162,16 @@ const ProcessPerfMonitorDefaultRenderer = memo(function ProcessPerfMonitorDefaul
         <span className="process-perf-monitor__memory-primary">
           {t('magnet.processPerf.token.memory')} {toMb(privateWorkingSetBytes)}
         </span>
-        <span>WS {toMb(workingSetBytes)}</span>
-        <span>
-          {t('magnet.processPerf.token.commit')} {toMb(privateBytes)}
+        <span className="process-perf-monitor__memory-detail">
+          <span>WS {toMb(workingSetBytes)}</span>
+          <span>
+            {t('magnet.processPerf.token.commit')} {toMb(privateBytes)}
+          </span>
         </span>
       </span>
-    );
-  }, [t]);
+    ),
+    [t]
+  );
 
   const statRows = useMemo(() => {
     const rows: StatRow[] = [
@@ -256,14 +260,17 @@ const ProcessPerfMonitorDefaultRenderer = memo(function ProcessPerfMonitorDefaul
 
       <div className="process-perf-monitor__stats">
         {statRows.map((row) => (
-          <div key={row.key} className="process-perf-monitor__row">
+          <div
+            key={row.key}
+            className={`process-perf-monitor__row process-perf-monitor__row--${row.group}`}
+          >
             <span className="process-perf-monitor__label">{row.label}</span>
-            <span>{row.value}</span>
+            <span className="process-perf-monitor__value">{row.value}</span>
           </div>
         ))}
       </div>
 
-      {skinProps.showSystemSummary ? (
+      {skinProps.showSystemSummary && systemLine ? (
         <div className="process-perf-monitor__footer">
           {systemLine}
         </div>

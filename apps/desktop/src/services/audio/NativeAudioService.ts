@@ -88,11 +88,11 @@ import {
 } from './audioPlaybackPreferences';
 import { readString, removeKey } from '../../modules/storage';
 import {
-  cancelScheduledProcessWorkingSetTrim,
   getLastProcessWorkingSetTrimEvent,
   scheduleProcessWorkingSetTrim,
   type ProcessWorkingSetTrimEvent,
 } from '../../utils/processWorkingSetTrim';
+import type { MemoryGovernanceRequest } from '../../contracts/memoryGovernance';
 import { NativeAudioRobustnessController } from './nativeAudioRobustnessController';
 import {
   buildNativeAudioRobustnessSnapshotFromHost,
@@ -129,6 +129,10 @@ import {
   compactTrackForQueueState,
   compactTrackForState,
 } from './trackStateProjection';
+import {
+  decideTrackSwitchMemoryGovernance,
+  type TrackSwitchMemoryGovernanceDecision,
+} from './nativeAudioMemoryGovernance';
 import type { CoverSizeHint } from './MusicLibraryService';
 import {
   parseLegacyRuntimeControlFromReplayGain,
@@ -164,19 +168,60 @@ function readTelemetryErrorMessage(error: unknown): string {
   }
 }
 
+function normalizeTelemetryTrackPath(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function describeTelemetryPathKind(path: string | null): string | null {
+  if (!path) return null;
+  if (/^https?:\/\//i.test(path)) return 'remote-url';
+  if (/^file:\/\//i.test(path)) return 'file-url';
+  if (/^[a-zA-Z]:[\\/]/.test(path)) return 'windows-drive';
+  if (path.startsWith('\\\\')) return 'unc';
+  if (path.startsWith('/')) return 'absolute';
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(path)) return 'locator-url';
+  return 'relative-or-id';
+}
+
+function buildTelemetryPathTail(path: string | null): string | null {
+  if (!path) return null;
+  if (/^https?:\/\//i.test(path)) return '[remote-url]';
+  const normalized = path.replace(/^file:\/\/(localhost)?/i, '').replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  if (!parts.length) return null;
+  return parts.slice(-4).join('/');
+}
+
 function buildTrackTelemetryFields(track: Track | null | undefined): Record<string, unknown> {
   if (!track) {
     return {
       trackId: null,
       trackTitle: null,
       trackPathPresent: false,
+      trackPathKind: null,
+      trackPathTail: null,
+      trackPathLength: 0,
     };
   }
+
+  const filePath = normalizeTelemetryTrackPath(track.filePath);
+  const path = normalizeTelemetryTrackPath(track.path);
+  const originalPath = normalizeTelemetryTrackPath(track.originalPath);
+  const selectedPath = filePath ?? path ?? originalPath;
 
   return {
     trackId: typeof track.id === 'string' ? track.id : null,
     trackTitle: typeof track.title === 'string' ? track.title : null,
-    trackPathPresent: Boolean(track.filePath || track.path),
+    trackPathPresent: Boolean(selectedPath),
+    trackFilePathPresent: Boolean(filePath),
+    trackPathFieldPresent: Boolean(path),
+    trackOriginalPathPresent: Boolean(originalPath),
+    trackPathSelectedField: filePath ? 'filePath' : path ? 'path' : originalPath ? 'originalPath' : null,
+    trackPathKind: describeTelemetryPathKind(selectedPath),
+    trackPathTail: buildTelemetryPathTail(selectedPath),
+    trackPathLength: selectedPath?.length ?? 0,
   };
 }
 
@@ -188,11 +233,16 @@ function buildTrackTelemetryFields(track: Track | null | undefined): Record<stri
  * implemented step-by-step; for now we optimistically update state to keep the
  * UI responsive.
  */
+export type NativeAudioServiceOptions = {
+  requestMemoryGovernance?: (request: MemoryGovernanceRequest) => void;
+};
+
 export class NativeAudioService implements IAudioService {
   private static readonly LEGACY_OUTPUT_DEVICE_STORAGE_KEY =
     'pixel-matrix-native-audio-output-device';
 
   private readonly telemetry = getTelemetryLogger('audio', 'NativeAudioService');
+  private readonly requestMemoryGovernance?: (request: MemoryGovernanceRequest) => void;
   private readonly sourcePreparation = new NativeAudioSourcePreparation({
     isRuntime: isTauriRuntime,
     invokeCommand: (command, payload) => this.invokeCommand(command, payload),
@@ -348,7 +398,8 @@ export class NativeAudioService implements IAudioService {
   private protectionWindowReason: string | null = null;
   private protectionWindowUntilMs = 0;
   private protectionWindowTimer: ReturnType<typeof setTimeout> | null = null;
-  private trackSwitchWorkingSetTrimRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private trackSwitchMemoryGovernanceRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly trackSwitchMemoryGovernanceTimers = new Set<ReturnType<typeof setTimeout>>();
   private renderQueuePageLockProtectionUntilMs = 0;
   private readonly outputBackendController = new NativeAudioOutputBackendController({
     config: {
@@ -553,10 +604,6 @@ export class NativeAudioService implements IAudioService {
   private static readonly AUTO_BACKEND_SWITCH_COOLDOWN_MS = 45_000;
   private static readonly PROTECTION_WINDOW_DEFAULT_MS = 20_000;
   private static readonly PROTECTION_WINDOW_MAX_MS = 120_000;
-  private static readonly TRACK_SWITCH_TRIM_MIN_BUFFERED_AHEAD_SECONDS = 3;
-  private static readonly TRACK_SWITCH_TRIM_MIN_OUTPUT_BUFFERED_AHEAD_SECONDS = 1;
-  private static readonly TRACK_SWITCH_TRIM_RETRY_MS = 2_500;
-  private static readonly TRACK_SWITCH_TRIM_MAX_DEFER_MS = 45_000;
   private static readonly RENDER_QUEUE_PAGE_LOCK_PROTECTION_MS = 18_000;
   private static readonly RENDER_QUEUE_PAGE_LOCK_PROTECTION_DEBOUNCE_MS = 12_000;
   private static readonly ROBUSTNESS_BUFFER_WINDOW_SIZE = 48;
@@ -1108,7 +1155,8 @@ export class NativeAudioService implements IAudioService {
     void this.lastWorkingSetTrimEvent;
   }
 
-  constructor() {
+  constructor(options: NativeAudioServiceOptions = {}) {
+    this.requestMemoryGovernance = options.requestMemoryGovernance;
     this.retainTypeScriptBaselineState();
     const playbackPreferences = readPersistedAudioPlaybackPreferences();
     this.state = {
@@ -2718,66 +2766,92 @@ export class NativeAudioService implements IAudioService {
     this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
   }
 
-  private scheduleTrackSwitchWorkingSetTrim(reason: string): void {
-    this.scheduleTrackSwitchWorkingSetTrimAttempt(reason, Date.now());
+  private scheduleTrackSwitchMemoryGovernance(reason: string): void {
+    this.scheduleTrackSwitchMemoryGovernanceAttempt(reason, Date.now());
   }
 
-  private scheduleTrackSwitchWorkingSetTrimAttempt(reason: string, requestedAtMs: number): void {
-    this.clearTrackSwitchWorkingSetTrimRetryTimer();
+  private scheduleTrackSwitchMemoryGovernanceAttempt(reason: string, requestedAtMs: number): void {
+    this.clearTrackSwitchMemoryGovernanceRetryTimer();
 
-    const playbackState = this.state.playbackState;
-    const bufferedAhead =
-      typeof this.state.bufferedAhead === 'number' && Number.isFinite(this.state.bufferedAhead)
-        ? Math.max(0, this.state.bufferedAhead)
-        : 0;
-    const outputBufferedAhead =
-      typeof this.state.outputBufferedAhead === 'number' && Number.isFinite(this.state.outputBufferedAhead)
-        ? Math.max(0, this.state.outputBufferedAhead)
-        : 0;
-    const fragilePlaybackWindow =
-      playbackState === 'loading' ||
-      playbackState === 'buffering' ||
-      (playbackState === 'playing' &&
-        (bufferedAhead < NativeAudioService.TRACK_SWITCH_TRIM_MIN_BUFFERED_AHEAD_SECONDS ||
-          outputBufferedAhead <
-            NativeAudioService.TRACK_SWITCH_TRIM_MIN_OUTPUT_BUFFERED_AHEAD_SECONDS));
+    const decision = decideTrackSwitchMemoryGovernance({
+      playbackState: this.state.playbackState,
+      bufferedAhead: this.state.bufferedAhead,
+      outputBufferedAhead: this.state.outputBufferedAhead,
+      elapsedMs: Date.now() - requestedAtMs,
+    });
 
-    if (fragilePlaybackWindow) {
-      const elapsedMs = Date.now() - requestedAtMs;
-      if (elapsedMs >= NativeAudioService.TRACK_SWITCH_TRIM_MAX_DEFER_MS) {
-        this.telemetry.warn('audio.working-set-trim.deferred-timeout', {
-          fields: {
-            reason,
-            playbackState,
-            bufferedAhead,
-            outputBufferedAhead,
-          },
-        });
-        return;
-      }
-
-      this.trackSwitchWorkingSetTrimRetryTimer = setTimeout(() => {
-        this.trackSwitchWorkingSetTrimRetryTimer = null;
-        this.scheduleTrackSwitchWorkingSetTrimAttempt(reason, requestedAtMs);
-      }, NativeAudioService.TRACK_SWITCH_TRIM_RETRY_MS);
+    if (decision.kind === 'defer') {
+      this.trackSwitchMemoryGovernanceRetryTimer = setTimeout(() => {
+        this.trackSwitchMemoryGovernanceRetryTimer = null;
+        this.scheduleTrackSwitchMemoryGovernanceAttempt(reason, requestedAtMs);
+      }, decision.retryMs);
       return;
     }
 
-    scheduleProcessWorkingSetTrim('tree', {
-      delaysMs: [1000, 3200],
-      reason,
+    if (decision.kind === 'timeout') {
+      this.telemetry.warn('audio.memory-governance.deferred-timeout', {
+        fields: {
+          reason,
+          playbackState: decision.playbackState,
+          bufferedAhead: decision.bufferedAhead,
+          outputBufferedAhead: decision.outputBufferedAhead,
+        },
+      });
+      return;
+    }
+
+    this.scheduleTrackSwitchMemoryGovernanceRequests(reason, decision);
+  }
+
+  private scheduleTrackSwitchMemoryGovernanceRequests(
+    source: string,
+    decision: Extract<TrackSwitchMemoryGovernanceDecision, { kind: 'request' }>
+  ): void {
+    this.clearTrackSwitchMemoryGovernanceTimers();
+    if (!this.requestMemoryGovernance) return;
+
+    const delaysMs = [...decision.request.delaysMs];
+    this.telemetry.debug('audio.memory-governance.track-switch.scheduled', {
+      fields: {
+        source,
+        delaysMs,
+        minIntervalMs: decision.request.minIntervalMs,
+        playbackState: decision.playbackState,
+        bufferedAhead: decision.bufferedAhead,
+        outputBufferedAhead: decision.outputBufferedAhead,
+      },
     });
+
+    for (const delayMs of delaysMs) {
+      const timer = setTimeout(() => {
+        this.trackSwitchMemoryGovernanceTimers.delete(timer);
+        this.requestMemoryGovernance?.({
+          reason: decision.request.reason,
+          source,
+          delaysMs: [0],
+          minIntervalMs: decision.request.minIntervalMs,
+        });
+      }, delayMs);
+      this.trackSwitchMemoryGovernanceTimers.add(timer);
+    }
   }
 
-  private clearTrackSwitchWorkingSetTrimRetryTimer(): void {
-    if (this.trackSwitchWorkingSetTrimRetryTimer === null) return;
-    clearTimeout(this.trackSwitchWorkingSetTrimRetryTimer);
-    this.trackSwitchWorkingSetTrimRetryTimer = null;
+  private clearTrackSwitchMemoryGovernanceRetryTimer(): void {
+    if (this.trackSwitchMemoryGovernanceRetryTimer === null) return;
+    clearTimeout(this.trackSwitchMemoryGovernanceRetryTimer);
+    this.trackSwitchMemoryGovernanceRetryTimer = null;
   }
 
-  private cancelPlaybackWorkingSetTrim(): void {
-    this.clearTrackSwitchWorkingSetTrimRetryTimer();
-    cancelScheduledProcessWorkingSetTrim('tree');
+  private clearTrackSwitchMemoryGovernanceTimers(): void {
+    for (const timer of this.trackSwitchMemoryGovernanceTimers) {
+      clearTimeout(timer);
+    }
+    this.trackSwitchMemoryGovernanceTimers.clear();
+  }
+
+  private cancelPlaybackMemoryGovernance(): void {
+    this.clearTrackSwitchMemoryGovernanceRetryTimer();
+    this.clearTrackSwitchMemoryGovernanceTimers();
   }
 
   private buildQueuePaths(queue: Track[]): string[] {
@@ -2786,6 +2860,20 @@ export class NativeAudioService implements IAudioService {
 
   private async replaceQueueItemPathInNative(index: number, path: string): Promise<boolean> {
     return this.queueMirror.replaceItemPath(index, path);
+  }
+
+  private async ensureQueueItemPathInNative(
+    queue: Track[],
+    index: number,
+    path: string
+  ): Promise<boolean> {
+    const queueTrackPath = index >= 0 && index < queue.length ? this.getTrackPath(queue[index]) : null;
+    if (
+      this.normalizeTrackPathForCompare(queueTrackPath) === this.normalizeTrackPathForCompare(path)
+    ) {
+      return true;
+    }
+    return this.replaceQueueItemPathInNative(index, path);
   }
 
   private canUseQueueIndexTransport(queue: Track[], index: number): boolean {
@@ -3126,7 +3214,7 @@ export class NativeAudioService implements IAudioService {
 
   // Track loading and native transport handoff.
   private async loadTrackInternal(track: Track): Promise<boolean> {
-    this.cancelPlaybackWorkingSetTrim();
+    this.cancelPlaybackMemoryGovernance();
     this.clearPendingSeek();
     if (!track) return false;
 
@@ -3148,8 +3236,6 @@ export class NativeAudioService implements IAudioService {
       !!transportPath &&
       this.isProbablyAbsolutePath(transportPath) &&
       this.canUseQueueIndexTransport(queue, index);
-    const previousTrackPath =
-      index >= 0 && index < previousQueue.length ? this.getTrackPath(previousQueue[index]) : null;
 
     let usedQueueIndexLoad = false;
     let loaded = false;
@@ -3158,15 +3244,30 @@ export class NativeAudioService implements IAudioService {
       await this.applyRuntimeControlSettingsToBackend();
       await this.applyReplayGainForTrack(resolvedTrack);
       if (canUseQueueIndexLoad) {
-        const pathPatched =
-          this.normalizeTrackPathForCompare(previousTrackPath) ===
-            this.normalizeTrackPathForCompare(transportPath) ||
-          (await this.replaceQueueItemPathInNative(index, transportPath));
+        const pathPatched = await this.ensureQueueItemPathInNative(queue, index, transportPath);
         if (pathPatched) {
-          await this.invokeCommand('native_audio_load_queue_index', { index });
-          this.queueMirror.markMutationSynced(queue, index);
-          usedQueueIndexLoad = true;
-          loaded = true;
+          try {
+            await this.invokeCommand('native_audio_load_queue_index', { index });
+            this.queueMirror.markMutationSynced(queue, index);
+            usedQueueIndexLoad = true;
+            loaded = true;
+          } catch (error) {
+            this.queueMirror.invalidate('queue-index-load-command-failed', {
+              index,
+              command: 'native_audio_load_queue_index',
+            });
+            this.telemetry.warn('audio.queue-index.transport.fallback', {
+              message: readTelemetryErrorMessage(error),
+              fields: {
+                phase: 'load',
+                fallback: 'direct-source-load',
+                index,
+                ...buildTrackTelemetryFields(resolvedTrack),
+              },
+            });
+            materializedPath = await this.invokePreparedSourceLoadCommand(preparedSource);
+            loaded = typeof materializedPath === 'string' && materializedPath.trim().length > 0;
+          }
         } else {
           materializedPath = await this.invokePreparedSourceLoadCommand(preparedSource);
           loaded = typeof materializedPath === 'string' && materializedPath.trim().length > 0;
@@ -3223,7 +3324,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   private async loadAndPlayTrackInternal(track: Track): Promise<boolean> {
-    this.cancelPlaybackWorkingSetTrim();
+    this.cancelPlaybackMemoryGovernance();
     this.clearPendingSeek();
     if (!track) return false;
 
@@ -3291,7 +3392,7 @@ export class NativeAudioService implements IAudioService {
     }
 
     this.markTrackPlayedBestEffort(playedTrack);
-    this.scheduleTrackSwitchWorkingSetTrim('native-audio-track-switch');
+    this.scheduleTrackSwitchMemoryGovernance('native-audio-track-switch');
 
     return true;
   }
@@ -3305,7 +3406,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   async play(): Promise<void> {
-    this.cancelPlaybackWorkingSetTrim();
+    this.cancelPlaybackMemoryGovernance();
     try {
       if (!this.state.currentTrack) {
         const queue = this.state.queue;
@@ -3691,7 +3792,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   private async playTrackAtIndexOnce(index: number): Promise<void> {
-    this.cancelPlaybackWorkingSetTrim();
+    this.cancelPlaybackMemoryGovernance();
     if (index < 0 || index >= this.state.queue.length) return;
 
     const wasPlaying = this.state.playbackState === 'playing';
@@ -3745,14 +3846,34 @@ export class NativeAudioService implements IAudioService {
 
         await this.applyReplayGainForTrack(track);
         if (canUseQueueIndexTransport) {
-          const pathPatched =
-            track === originalTrack ||
-            (await this.replaceQueueItemPathInNative(index, trackPath));
+          const pathPatched = await this.ensureQueueItemPathInNative(playbackQueue, index, trackPath);
           if (pathPatched) {
-            await this.invokeCommand('native_audio_crossfade_to_queue_index', {
-              index,
-              durationMs: crossfade.durationMs,
-            });
+            try {
+              await this.invokeCommand('native_audio_crossfade_to_queue_index', {
+                index,
+                durationMs: crossfade.durationMs,
+              });
+            } catch (error) {
+              this.queueMirror.invalidate('queue-index-crossfade-command-failed', {
+                index,
+                command: 'native_audio_crossfade_to_queue_index',
+              });
+              this.telemetry.warn('audio.queue-index.transport.fallback', {
+                message: readTelemetryErrorMessage(error),
+                fields: {
+                  phase: 'crossfade',
+                  fallback: 'direct-crossfade',
+                  requestedIndex: index,
+                  previousIndex,
+                  queueLength: this.state.queue.length,
+                  ...buildTrackTelemetryFields(track),
+                },
+              });
+              await this.invokeCommand('native_audio_crossfade_to', {
+                path: trackPath,
+                durationMs: crossfade.durationMs,
+              });
+            }
           } else {
             await this.invokeCommand('native_audio_crossfade_to', {
               path: trackPath,
@@ -3766,7 +3887,7 @@ export class NativeAudioService implements IAudioService {
           });
         }
         this.markTrackPlayedBestEffort(track);
-        this.scheduleTrackSwitchWorkingSetTrim('native-audio-crossfade-switch');
+        this.scheduleTrackSwitchMemoryGovernance('native-audio-crossfade-switch');
         const fields = {
           requestedIndex: index,
           previousIndex,
@@ -3804,19 +3925,36 @@ export class NativeAudioService implements IAudioService {
         try {
           this.applyTrackLoadingState(stateTrack, playbackQueue, index);
           await this.applyRuntimeControlSettingsToBackend();
-          const pathPatched =
-            track === originalTrack ||
-            (await this.replaceQueueItemPathInNative(index, trackPath));
+          const pathPatched = await this.ensureQueueItemPathInNative(playbackQueue, index, trackPath);
           if (!pathPatched) {
             loaded = await this.loadAndPlayTrackInternal(track);
           } else {
-            await this.invokeCommand('native_audio_load_and_play_queue_index', {
-              index,
-              replayGainDb,
-            });
-            this.markTrackPlayedBestEffort(track);
-            this.scheduleTrackSwitchWorkingSetTrim('native-audio-track-switch');
-            loaded = true;
+            try {
+              await this.invokeCommand('native_audio_load_and_play_queue_index', {
+                index,
+                replayGainDb,
+              });
+              this.markTrackPlayedBestEffort(track);
+              this.scheduleTrackSwitchMemoryGovernance('native-audio-track-switch');
+              loaded = true;
+            } catch (error) {
+              this.queueMirror.invalidate('queue-index-load-and-play-command-failed', {
+                index,
+                command: 'native_audio_load_and_play_queue_index',
+              });
+              this.telemetry.warn('audio.queue-index.transport.fallback', {
+                message: readTelemetryErrorMessage(error),
+                fields: {
+                  phase: 'load-and-play',
+                  fallback: 'direct-source-load-and-play',
+                  requestedIndex: index,
+                  previousIndex,
+                  queueLength: this.state.queue.length,
+                  ...buildTrackTelemetryFields(track),
+                },
+              });
+              loaded = await this.loadAndPlayTrackInternal(track);
+            }
           }
         } catch {
           loaded = false;
@@ -4170,7 +4308,7 @@ export class NativeAudioService implements IAudioService {
   // Lifecycle teardown.
   destroy(): void {
     this.disposed = true;
-    this.cancelPlaybackWorkingSetTrim();
+    this.cancelPlaybackMemoryGovernance();
     this.queueMirror.reset();
     this.diagnosticTimelineIgnoreBeforeMs = 0;
 

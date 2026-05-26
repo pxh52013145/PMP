@@ -4,6 +4,7 @@ import {
   AUDIO_ANALYSIS_VERSION,
   DefaultAudioAnalysisService,
   audioAnalysisPriorityRank,
+  classifyAudioAnalysisFailure,
   resolveAudioAnalysisTrackIdentity,
 } from './audioAnalysisService';
 import type { Track } from './types';
@@ -79,5 +80,29 @@ describe('DefaultAudioAnalysisService', () => {
     });
 
     expect(sorted.map((item) => item.key)).toEqual(['current', 'next', 'background']);
+  });
+
+  it('classifies analysis probe misses as expected non-playback failures', () => {
+    expect(
+      classifyAudioAnalysisFailure(
+        'AUDIO_ANALYSIS_PROBE_FAILED: Failed to probe audio file for analysis: end of stream'
+      )
+    ).toMatchObject({
+      code: 'AUDIO_ANALYSIS_PROBE_FAILED',
+      expectedMiss: true,
+      reason: 'probe-failed',
+    });
+
+    expect(classifyAudioAnalysisFailure(new Error('AUDIO_ANALYSIS_NO_SAMPLES'))).toMatchObject({
+      code: 'AUDIO_ANALYSIS_NO_SAMPLES',
+      expectedMiss: true,
+      reason: 'no-samples',
+    });
+
+    expect(classifyAudioAnalysisFailure(new Error('backend unavailable'))).toMatchObject({
+      code: null,
+      expectedMiss: false,
+      reason: 'unexpected',
+    });
   });
 });
