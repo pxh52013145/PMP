@@ -14,6 +14,35 @@ pub fn app_request_exit(app: tauri::AppHandle) {
 
 #[tauri::command]
 pub fn app_restart(app: tauri::AppHandle) {
+    if let Some(exit_code) = app_runtime::read_dev_restart_exit_code() {
+        let signal_written = match app_runtime::write_dev_restart_signal() {
+            Ok(written) => written,
+            Err(error) => {
+                crate::backend_telemetry::warn(
+                    &app,
+                    "app",
+                    "app.restart.dev-supervisor.signal.failed",
+                    crate::backend_telemetry::BackendTelemetryOptions::new()
+                        .component("commands::app")
+                        .message(error),
+                );
+                false
+            }
+        };
+
+        crate::backend_telemetry::info(
+            &app,
+            "app",
+            "app.restart.dev-supervisor.requested",
+            crate::backend_telemetry::BackendTelemetryOptions::new()
+                .component("commands::app")
+                .field("exitCode", json!(exit_code))
+                .field("signalWritten", json!(signal_written)),
+        );
+        app_runtime::request_app_exit_with_code(&app, exit_code);
+        return;
+    }
+
     tauri::api::process::restart(&app.env());
 }
 

@@ -1,7 +1,11 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { spawnSync } from 'node:child_process';
+
+const DEV_RESTART_EXIT_CODE = 86;
+const DEV_RESTART_SIGNAL_PATH = path.join(os.tmpdir(), `pmp-tauri-dev-restart-${process.pid}.signal`);
 
 function exists(p) {
   try {
@@ -43,6 +47,20 @@ function isWindowsPidRunning(pid) {
 function sleepWindowsMs(ms) {
   if (!Number.isFinite(ms) || ms <= 0) return;
   run('powershell.exe', ['-NoProfile', '-Command', `Start-Sleep -Milliseconds ${Math.floor(ms)}`]);
+}
+
+function removeFileIfExists(p) {
+  try {
+    fs.rmSync(p, { force: true });
+  } catch {
+    // ignore
+  }
+}
+
+function consumeDevRestartSignal() {
+  if (!exists(DEV_RESTART_SIGNAL_PATH)) return false;
+  removeFileIfExists(DEV_RESTART_SIGNAL_PATH);
+  return true;
 }
 
 function killWindows(pid, options = {}) {
@@ -254,6 +272,8 @@ function normalizeExitCode(code) {
 function spawnTauriDev(command, commandArgs) {
   const env = {
     ...process.env,
+    PMP_TAURI_DEV_RESTART_EXIT_CODE: String(DEV_RESTART_EXIT_CODE),
+    PMP_TAURI_DEV_RESTART_SIGNAL: DEV_RESTART_SIGNAL_PATH,
     RUST_BACKTRACE: process.env.RUST_BACKTRACE || '1',
   };
   return spawn(command, commandArgs, {
@@ -264,9 +284,10 @@ function spawnTauriDev(command, commandArgs) {
 }
 
 ensureNoStaleTauriApp();
+removeFileIfExists(DEV_RESTART_SIGNAL_PATH);
 
 const command = resolveTauriCommand();
-let child = spawnTauriDev(command, args);
+let child = null;
 
 let shuttingDown = false;
 function shutdown(reason) {
@@ -292,25 +313,41 @@ function shutdown(reason) {
   process.exit(0);
 }
 
+function startTauriDev() {
+  child = spawnTauriDev(command, args);
+
+  child.on('error', (err) => {
+    // eslint-disable-next-line no-console
+    console.error(`[dev] Failed to spawn tauri (${command}): ${err?.message ?? String(err)}`);
+    process.exit(1);
+  });
+
+  child.on('exit', (code) => {
+    const normalized = normalizeExitCode(code);
+    const restartSignal = consumeDevRestartSignal();
+
+    if (!shuttingDown && (normalized === DEV_RESTART_EXIT_CODE || restartSignal)) {
+      // eslint-disable-next-line no-console
+      console.warn('[dev] Restart requested by app; restarting tauri dev...');
+      ensureNoStaleTauriApp();
+      startTauriDev();
+      return;
+    }
+
+    if (normalized !== null && normalized >= 0x80000000) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[dev] tauri dev exited with Windows crash code 0x${normalized
+          .toString(16)
+          .toUpperCase()} (no fallback enabled).`,
+      );
+    }
+
+    process.exit(code ?? 1);
+  });
+}
+
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-child.on('error', (err) => {
-  // eslint-disable-next-line no-console
-  console.error(`[dev] Failed to spawn tauri (${command}): ${err?.message ?? String(err)}`);
-  process.exit(1);
-});
-
-child.on('exit', (code) => {
-  const normalized = normalizeExitCode(code);
-  if (normalized !== null && normalized >= 0x80000000) {
-    // eslint-disable-next-line no-console
-    console.error(
-      `[dev] tauri dev exited with Windows crash code 0x${normalized
-        .toString(16)
-        .toUpperCase()} (no fallback enabled).`,
-    );
-  }
-
-  process.exit(code ?? 1);
-});
+startTauriDev();

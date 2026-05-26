@@ -16,6 +16,8 @@ const HOST_FILE_OPEN_SOURCE_STARTUP: &str = "cli-startup";
 const HOST_FILE_OPEN_SOURCE_OS_REOPEN: &str = "os-reopen";
 const HOST_FILE_OPEN_ACTION_STARTUP: &str = "startup-opened";
 const HOST_FILE_OPEN_ACTION_OS_REOPEN: &str = "reopened";
+const DEV_RESTART_EXIT_CODE_ENV: &str = "PMP_TAURI_DEV_RESTART_EXIT_CODE";
+const DEV_RESTART_SIGNAL_ENV: &str = "PMP_TAURI_DEV_RESTART_SIGNAL";
 
 pub struct ExitFlag(pub Arc<AtomicBool>);
 
@@ -245,10 +247,42 @@ pub fn forward_live_host_file_open_to_running_instance_if_any() -> bool {
     }
 }
 
+pub fn read_dev_restart_exit_code() -> Option<i32> {
+    let raw = std::env::var(DEV_RESTART_EXIT_CODE_ENV).ok()?;
+    let code = raw.trim().parse::<i32>().ok()?;
+    if (1..=254).contains(&code) {
+        Some(code)
+    } else {
+        None
+    }
+}
+
+pub fn write_dev_restart_signal() -> Result<bool, String> {
+    let raw = match std::env::var(DEV_RESTART_SIGNAL_ENV) {
+        Ok(value) => value,
+        Err(_) => return Ok(false),
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(false);
+    }
+
+    let path = PathBuf::from(trimmed);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    std::fs::write(&path, b"restart").map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
 pub fn request_app_exit(app: &tauri::AppHandle) {
+    request_app_exit_with_code(app, 0);
+}
+
+pub fn request_app_exit_with_code(app: &tauri::AppHandle, exit_code: i32) {
     static EXIT_REQUESTED: OnceCell<()> = OnceCell::new();
     if EXIT_REQUESTED.set(()).is_err() {
-        app.exit(0);
+        app.exit(exit_code);
         return;
     }
 
@@ -256,7 +290,9 @@ pub fn request_app_exit(app: &tauri::AppHandle) {
         app,
         "app",
         "app.exit.requested",
-        crate::backend_telemetry::BackendTelemetryOptions::new().component("app_runtime"),
+        crate::backend_telemetry::BackendTelemetryOptions::new()
+            .component("app_runtime")
+            .field("exitCode", serde_json::json!(exit_code)),
     );
     let exit_flag = app.state::<ExitFlag>().0.clone();
     exit_flag.store(true, Ordering::SeqCst);
@@ -274,7 +310,7 @@ pub fn request_app_exit(app: &tauri::AppHandle) {
                     .component("app_runtime")
                     .message("Exit watchdog forced process exit after timeout."),
             );
-            std::process::exit(0);
+            std::process::exit(exit_code);
         }
     });
 
@@ -303,7 +339,7 @@ pub fn request_app_exit(app: &tauri::AppHandle) {
         backend.close_stream();
     }
 
-    app.exit(0);
+    app.exit(exit_code);
 }
 
 #[cfg(target_os = "windows")]
