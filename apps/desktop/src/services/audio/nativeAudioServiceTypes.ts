@@ -17,6 +17,7 @@ export type NativeAudioStatePayload = {
   trackPath?: string | null;
   currentTime?: number;
   duration?: number;
+  playbackRate?: number;
   bufferedTime?: number;
   bufferedAhead?: number;
   decodeBufferedAhead?: number;

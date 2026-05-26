@@ -1116,6 +1116,7 @@ export class NativeAudioService implements IAudioService {
       playbackState: 'idle',
       currentTime: 0,
       duration: 0,
+      playbackRate: 1,
       bufferedTime: 0,
       bufferedAhead: 0,
       decodeBufferedAhead: 0,
@@ -2625,7 +2626,8 @@ export class NativeAudioService implements IAudioService {
       }
 
       const predicted =
-        this.fallbackClockBaseTimeSec + (now - this.fallbackClockStartedAtMs) / 1000;
+        this.fallbackClockBaseTimeSec +
+        ((now - this.fallbackClockStartedAtMs) / 1000) * (this.state.playbackRate || 1);
       const clamped =
         this.state.duration > 0 ? Math.min(predicted, this.state.duration) : predicted;
 

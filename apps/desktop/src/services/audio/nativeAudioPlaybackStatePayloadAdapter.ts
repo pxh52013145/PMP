@@ -8,6 +8,7 @@ type NativeAudioPlaybackStateFields = Pick<
   | 'muted'
   | 'currentTime'
   | 'duration'
+  | 'playbackRate'
   | 'bufferedTime'
   | 'bufferedAhead'
   | 'decodeBufferedAhead'
@@ -75,6 +76,12 @@ export function resolveNativeAudioPlaybackStatePayload(input: {
   const duration = resolvePayloadDuration(payload, state);
   if (typeof duration !== 'undefined') {
     update.duration = duration;
+  }
+
+  if (typeof payload.playbackRate !== 'undefined') {
+    update.playbackRate = isFiniteNumber(payload.playbackRate)
+      ? Math.max(0.25, Math.min(4, payload.playbackRate))
+      : 1;
   }
 
   if (typeof payload.bufferedTime !== 'undefined') {

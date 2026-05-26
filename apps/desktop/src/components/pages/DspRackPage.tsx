@@ -1,6 +1,7 @@
 import React from 'react';
 import { useAudioEngine } from '../../contexts/AudioEngineContext';
 import { useKernel } from '../../contexts/KernelContext';
+import { useT } from '../../i18n';
 import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import {
@@ -35,8 +36,17 @@ type DspNodeBase = {
 type GainNode = DspNodeBase & { type: 'gain'; db: number };
 type EqNode = DspNodeBase & { type: 'eq'; bands: EqBand[] };
 type LimiterNode = DspNodeBase & { type: 'limiter'; thresholdDb: number };
+type PitchShiftNode = DspNodeBase & { type: 'pitch-shift'; semitones: number };
+type TempoNode = DspNodeBase & { type: 'tempo'; rate: number; preservePitch: boolean };
 type VstNode = DspNodeBase & { type: 'vst'; pluginId: string; params?: VstParamValue[] };
-type DspNode = GainNode | EqNode | LimiterNode | VstNode | (DspNodeBase & Record<string, unknown>);
+type DspNode =
+  | GainNode
+  | EqNode
+  | LimiterNode
+  | PitchShiftNode
+  | TempoNode
+  | VstNode
+  | (DspNodeBase & Record<string, unknown>);
 
 type DspGraphConfig = { nodes: DspNode[] };
 
@@ -197,7 +207,14 @@ function uniqueNodeId(type: string) {
   return `${type}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
+function formatSigned(value: number, digits = 1) {
+  const normalized = isFinite(value) ? value : 0;
+  const sign = normalized > 0 ? '+' : '';
+  return `${sign}${normalized.toFixed(digits)}`;
+}
+
 export const DspRackPage: React.FC = () => {
+  const t = useT();
   const kernel = useKernel();
   const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const { isNativeAvailable } = useAudioEngine();
@@ -414,7 +431,7 @@ export const DspRackPage: React.FC = () => {
   );
 
   const addNode = React.useCallback(
-    (type: 'gain' | 'eq' | 'limiter') => {
+    (type: 'gain' | 'eq' | 'limiter' | 'pitch-shift' | 'tempo') => {
       if (!graph) return;
       const id = uniqueNodeId(type);
       let node: DspNode;
@@ -427,6 +444,12 @@ export const DspRackPage: React.FC = () => {
           break;
         case 'limiter':
           node = { id, enabled: true, type: 'limiter', thresholdDb: -6 };
+          break;
+        case 'pitch-shift':
+          node = { id, enabled: true, type: 'pitch-shift', semitones: 0 };
+          break;
+        case 'tempo':
+          node = { id, enabled: true, type: 'tempo', rate: 1, preservePitch: true };
           break;
       }
       void applyGraph({ nodes: [...graph.nodes, node] });
@@ -480,6 +503,12 @@ export const DspRackPage: React.FC = () => {
           </button>
           <button type="button" onClick={() => addNode('limiter')} disabled={!graph || busy}>
             + Limiter
+          </button>
+          <button type="button" onClick={() => addNode('pitch-shift')} disabled={!graph || busy}>
+            {t('pages.dsp-rack.actions.addPitchShift')}
+          </button>
+          <button type="button" onClick={() => addNode('tempo')} disabled={!graph || busy}>
+            {t('pages.dsp-rack.actions.addTempo')}
           </button>
           <button type="button" onClick={() => void handleOpenVstManager()} disabled={busy}>
             VST3 插件管理器
@@ -688,6 +717,69 @@ export const DspRackPage: React.FC = () => {
                       {(readNumberField(node, 'thresholdDb') ?? -6).toFixed(1)} dB
                     </span>
                   </div>
+                </div>
+              )}
+
+              {node.type === 'pitch-shift' && (
+                <div className="dsp-node-body">
+                  <div className="dsp-param-row">
+                    <span className="dsp-param-label">{t('pages.dsp-rack.pitchShift.semitones')}</span>
+                    <input
+                      className="dsp-param-range"
+                      type="range"
+                      min={-12}
+                      max={12}
+                      step={0.1}
+                      value={readNumberField(node, 'semitones') ?? 0}
+                      onChange={(e) =>
+                        updateNode(node.id, (n) => ({
+                          ...n,
+                          semitones: clamp(Number(e.target.value), -24, 24),
+                        }))
+                      }
+                    />
+                    <span className="dsp-param-value">
+                      {formatSigned(readNumberField(node, 'semitones') ?? 0)} st
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {node.type === 'tempo' && (
+                <div className="dsp-node-body">
+                  <div className="dsp-param-row">
+                    <span className="dsp-param-label">{t('pages.dsp-rack.tempo.rate')}</span>
+                    <input
+                      className="dsp-param-range"
+                      type="range"
+                      min={0.5}
+                      max={2}
+                      step={0.01}
+                      value={readNumberField(node, 'rate') ?? 1}
+                      onChange={(e) =>
+                        updateNode(node.id, (n) => ({
+                          ...n,
+                          rate: clamp(Number(e.target.value), 0.25, 4),
+                        }))
+                      }
+                    />
+                    <span className="dsp-param-value">
+                      {(readNumberField(node, 'rate') ?? 1).toFixed(2)}x
+                    </span>
+                  </div>
+                  <label className="dsp-param-check">
+                    <input
+                      type="checkbox"
+                      checked={readBooleanField(node, 'preservePitch') ?? true}
+                      onChange={(e) =>
+                        updateNode(node.id, (n) => ({
+                          ...n,
+                          preservePitch: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span>{t('pages.dsp-rack.tempo.preservePitch')}</span>
+                  </label>
                 </div>
               )}
 

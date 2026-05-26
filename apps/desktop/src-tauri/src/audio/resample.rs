@@ -221,7 +221,7 @@ fn resample_interleaved_f32_rubato(
 }
 
 #[inline]
-fn lerp_scalar(a: f32, b: f32, t: f32) -> f32 {
+pub(crate) fn lerp_scalar(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 

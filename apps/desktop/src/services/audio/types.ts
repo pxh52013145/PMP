@@ -96,6 +96,7 @@ export interface AudioState {
   playbackState: PlaybackState;
   currentTime: number;
   duration: number;
+  playbackRate?: number;
   bufferedTime: number;
   bufferedAhead: number;
   decodeBufferedAhead?: number;

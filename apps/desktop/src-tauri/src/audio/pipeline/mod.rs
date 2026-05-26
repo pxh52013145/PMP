@@ -11,6 +11,7 @@ use std::{
 use crate::audio::atomic_f32::{load_atomic_f32, store_atomic_f32};
 use crate::audio::bulk_source::BulkSource;
 use crate::audio::output::BoxedSource;
+use crate::audio::resample::lerp_scalar;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -42,6 +43,14 @@ pub enum DspNodeConfig {
         #[serde(rename = "thresholdDb")]
         threshold_db: f32,
     },
+    PitchShift {
+        semitones: f32,
+    },
+    Tempo {
+        rate: f32,
+        #[serde(rename = "preservePitch")]
+        preserve_pitch: bool,
+    },
     Vst {
         id: String,
         #[serde(rename = "pluginId")]
@@ -59,6 +68,52 @@ pub enum DspNodeConfig {
         #[serde(rename = "bypassOnOverrun")]
         bypass_on_overrun: bool,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TimePitchConfig {
+    speed_rate: f32,
+    pitch_semitones: f32,
+}
+
+impl Default for TimePitchConfig {
+    fn default() -> Self {
+        Self {
+            speed_rate: 1.0,
+            pitch_semitones: 0.0,
+        }
+    }
+}
+
+impl TimePitchConfig {
+    fn sanitized(speed_rate: f32, pitch_semitones: f32) -> Self {
+        let speed_rate = if speed_rate.is_finite() {
+            speed_rate.clamp(0.25, 4.0)
+        } else {
+            1.0
+        };
+        let pitch_semitones = if pitch_semitones.is_finite() {
+            pitch_semitones.clamp(-36.0, 36.0)
+        } else {
+            0.0
+        };
+        Self {
+            speed_rate,
+            pitch_semitones,
+        }
+    }
+
+    fn has_speed(self) -> bool {
+        (self.speed_rate - 1.0).abs() > 1e-4
+    }
+
+    fn has_pitch(self) -> bool {
+        self.pitch_semitones.abs() > 1e-3
+    }
+
+    fn is_active(self) -> bool {
+        self.has_speed() || self.has_pitch()
+    }
 }
 
 fn gain_db_to_linear(db: f32) -> f32 {
@@ -84,6 +139,7 @@ static DSP_REFILL_BUDGET_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
 struct DspSlowConfig {
     eq_bands: Vec<EqBandConfig>,
     limiter_threshold_db: Option<f32>,
+    time_pitch: TimePitchConfig,
     vst_nodes: Vec<crate::vst_dsp::VstNodeKey>,
 }
 
@@ -92,6 +148,7 @@ struct DspRuntimeConfig {
     gain_linear: f32,
     eq_bands: Vec<EqBandConfig>,
     limiter_threshold_db: Option<f32>,
+    time_pitch: TimePitchConfig,
     vst_nodes: Vec<crate::vst_dsp::VstNodeKey>,
 }
 
@@ -101,6 +158,7 @@ impl Default for DspRuntimeConfig {
             gain_linear: 1.0,
             eq_bands: Vec::new(),
             limiter_threshold_db: None,
+            time_pitch: TimePitchConfig::default(),
             vst_nodes: Vec::new(),
         }
     }
@@ -114,6 +172,7 @@ pub(crate) struct DspRuntime {
     gain_db_bits: AtomicU32,
     replay_gain_db_bits: AtomicU32,
     gain_linear_bits: AtomicU32,
+    playback_rate_bits: AtomicU32,
     dynamic_gain_enabled: AtomicBool,
     dynamic_gain_db_bits: AtomicU32,
     reset_serial: AtomicU64,
@@ -130,6 +189,7 @@ impl DspRuntime {
             gain_db_bits: AtomicU32::new(0.0f32.to_bits()),
             replay_gain_db_bits: AtomicU32::new(0.0f32.to_bits()),
             gain_linear_bits: AtomicU32::new(1.0f32.to_bits()),
+            playback_rate_bits: AtomicU32::new(1.0f32.to_bits()),
             dynamic_gain_enabled: AtomicBool::new(false),
             dynamic_gain_db_bits: AtomicU32::new(0.0f32.to_bits()),
             reset_serial: AtomicU64::new(1),
@@ -219,6 +279,15 @@ impl DspRuntime {
         }
     }
 
+    pub(crate) fn playback_rate(&self) -> f32 {
+        let value = load_atomic_f32(&self.playback_rate_bits);
+        if value.is_finite() {
+            value.clamp(0.25, 4.0)
+        } else {
+            1.0
+        }
+    }
+
     fn update_dynamic_gain_db(&self, dynamic_gain_db: f32) {
         let normalized = if dynamic_gain_db.is_finite() {
             dynamic_gain_db.clamp(-30.0, 18.0)
@@ -270,6 +339,7 @@ impl DspRuntime {
             gain_linear,
             eq_bands: slow.eq_bands.clone(),
             limiter_threshold_db: slow.limiter_threshold_db,
+            time_pitch: slow.time_pitch,
             vst_nodes: slow.vst_nodes.clone(),
         }
     }
@@ -278,6 +348,8 @@ impl DspRuntime {
         let mut gain_db = 0.0f32;
         let mut eq_bands: Vec<EqBandConfig> = Vec::new();
         let mut limiter_threshold_db: Option<f32> = None;
+        let mut speed_rate = 1.0f32;
+        let mut pitch_semitones = 0.0f32;
 
         for node in chain {
             match node {
@@ -308,6 +380,23 @@ impl DspRuntime {
                         limiter_threshold_db = None;
                     }
                 }
+                DspNodeConfig::PitchShift { semitones } => {
+                    if semitones.is_finite() {
+                        pitch_semitones += semitones.clamp(-24.0, 24.0);
+                    }
+                }
+                DspNodeConfig::Tempo {
+                    rate,
+                    preserve_pitch,
+                } => {
+                    if rate.is_finite() {
+                        let rate = rate.clamp(0.25, 4.0);
+                        speed_rate = (speed_rate * rate).clamp(0.25, 4.0);
+                        if *preserve_pitch {
+                            pitch_semitones += -12.0 * rate.log2();
+                        }
+                    }
+                }
                 DspNodeConfig::Vst { .. } => {}
                 DspNodeConfig::NeuralEffect { .. } => {}
             }
@@ -325,15 +414,22 @@ impl DspRuntime {
         let total_gain_db = (gain_db + replay_gain_db).clamp(-60.0, 12.0);
         store_atomic_f32(&self.gain_linear_bits, gain_db_to_linear(total_gain_db));
 
+        let time_pitch = TimePitchConfig::sanitized(speed_rate, pitch_semitones);
+        store_atomic_f32(&self.playback_rate_bits, time_pitch.speed_rate);
+
         let mut guard = match self.slow_config.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
         let current = guard.as_ref();
-        if current.eq_bands != eq_bands || current.limiter_threshold_db != limiter_threshold_db {
+        if current.eq_bands != eq_bands
+            || current.limiter_threshold_db != limiter_threshold_db
+            || current.time_pitch != time_pitch
+        {
             *guard = Arc::new(DspSlowConfig {
                 eq_bands,
                 limiter_threshold_db,
+                time_pitch,
                 vst_nodes: current.vst_nodes.clone(),
             });
             self.bump_slow_version();
@@ -370,6 +466,7 @@ impl DspRuntime {
         *guard = Arc::new(DspSlowConfig {
             eq_bands: current.eq_bands.clone(),
             limiter_threshold_db: current.limiter_threshold_db,
+            time_pitch: current.time_pitch,
             vst_nodes: nodes,
         });
         self.bump_slow_version();
@@ -1155,9 +1252,342 @@ fn mul_in_place_with_simd(samples: &mut [f32], gain: f32, simd_level: SimdLevel)
 }
 
 #[derive(Clone, Debug)]
+struct LinearRateProcessor {
+    rate: f64,
+    src_pos: f64,
+    carry: Vec<f32>,
+    has_carry: bool,
+}
+
+impl LinearRateProcessor {
+    fn new(rate: f32, channels: usize) -> Self {
+        Self {
+            rate: sanitize_tempo_rate(rate) as f64,
+            src_pos: 0.0,
+            carry: vec![0.0; channels.max(1)],
+            has_carry: false,
+        }
+    }
+
+    fn set_rate(&mut self, rate: f32, channels: usize) {
+        let rate = sanitize_tempo_rate(rate) as f64;
+        if (self.rate - rate).abs() > 1e-6 {
+            self.src_pos = 0.0;
+            self.has_carry = false;
+        }
+        self.rate = rate;
+        if self.carry.len() < channels {
+            self.carry.resize(channels, 0.0);
+        }
+    }
+
+    fn reset(&mut self) {
+        self.src_pos = 0.0;
+        self.has_carry = false;
+    }
+
+    fn process_interleaved_into(&mut self, input: &[f32], channels: usize, output: &mut Vec<f32>) {
+        output.clear();
+        let channels = channels.max(1);
+        let frames_in = input.len() / channels;
+        if frames_in == 0 {
+            return;
+        }
+        if self.carry.len() < channels {
+            self.carry.resize(channels, 0.0);
+        }
+
+        let had_carry = self.has_carry;
+        let max_frame = if had_carry {
+            frames_in
+        } else {
+            frames_in.saturating_sub(1)
+        };
+        if max_frame == 0 {
+            let base = (frames_in - 1) * channels;
+            self.carry[..channels].copy_from_slice(&input[base..base + channels]);
+            self.has_carry = true;
+            return;
+        }
+
+        let estimated_frames = ((frames_in as f64) / self.rate).ceil().max(1.0) as usize;
+        let estimated_samples = estimated_frames.saturating_mul(channels);
+        if output.capacity() < estimated_samples {
+            crate::audio::memory_pool::reserve_f32_capacity(
+                output,
+                estimated_samples,
+                "dsp.tempo.output_growth",
+            );
+        }
+
+        while self.src_pos < max_frame as f64 {
+            let i0 = self.src_pos.floor() as usize;
+            let i1 = (i0 + 1).min(max_frame);
+            let frac = (self.src_pos - i0 as f64) as f32;
+
+            for ch in 0..channels {
+                let a = self.sample_at(input, channels, had_carry, ch, i0);
+                let b = self.sample_at(input, channels, had_carry, ch, i1);
+                output.push(lerp_scalar(a, b, frac));
+            }
+            self.src_pos += self.rate;
+        }
+
+        let consumed_span = frames_in as f64 - if had_carry { 0.0 } else { 1.0 };
+        self.src_pos -= consumed_span;
+        if self.src_pos < 0.0 {
+            self.src_pos = 0.0;
+        }
+
+        let base = (frames_in - 1) * channels;
+        self.carry[..channels].copy_from_slice(&input[base..base + channels]);
+        self.has_carry = true;
+    }
+
+    fn sample_at(
+        &self,
+        input: &[f32],
+        channels: usize,
+        had_carry: bool,
+        channel: usize,
+        frame: usize,
+    ) -> f32 {
+        if had_carry {
+            if frame == 0 {
+                self.carry[channel]
+            } else {
+                input[(frame - 1) * channels + channel]
+            }
+        } else {
+            input[frame * channels + channel]
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct DelayLinePitchShifter {
+    semitones: f32,
+    ratio: f32,
+    channels: usize,
+    max_delay_frames: usize,
+    phase: f32,
+    write_frame: usize,
+    buffers: Vec<Vec<f32>>,
+}
+
+impl DelayLinePitchShifter {
+    fn new(semitones: f32, sample_rate: u32, channels: usize) -> Self {
+        let mut out = Self {
+            semitones: 0.0,
+            ratio: 1.0,
+            channels: channels.max(1),
+            max_delay_frames: 1,
+            phase: 0.0,
+            write_frame: 0,
+            buffers: Vec::new(),
+        };
+        out.configure(semitones, sample_rate, channels);
+        out
+    }
+
+    fn configure(&mut self, semitones: f32, sample_rate: u32, channels: usize) {
+        let semitones = if semitones.is_finite() {
+            semitones.clamp(-36.0, 36.0)
+        } else {
+            0.0
+        };
+        let channels = channels.max(1);
+        let max_delay_frames = ((sample_rate.max(1) as f32) * 0.05)
+            .round()
+            .clamp(256.0, 4096.0) as usize;
+        let ratio = 2.0f32.powf(semitones / 12.0).clamp(0.125, 8.0);
+
+        let topology_changed =
+            self.channels != channels || self.max_delay_frames != max_delay_frames;
+        let pitch_changed = (self.semitones - semitones).abs() > 1e-3;
+
+        self.semitones = semitones;
+        self.ratio = ratio;
+        self.channels = channels;
+        self.max_delay_frames = max_delay_frames;
+
+        if topology_changed {
+            let len = self.buffer_len();
+            self.buffers = (0..channels).map(|_| vec![0.0; len]).collect();
+            self.write_frame = 0;
+            self.phase = 0.0;
+        } else if pitch_changed {
+            self.phase = 0.0;
+        }
+    }
+
+    fn reset(&mut self) {
+        self.phase = 0.0;
+        self.write_frame = 0;
+        for channel in &mut self.buffers {
+            channel.fill(0.0);
+        }
+    }
+
+    fn latency_frames(&self) -> usize {
+        if self.is_active() {
+            self.max_delay_frames
+        } else {
+            0
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        self.semitones.abs() > 1e-3 && (self.ratio - 1.0).abs() > 1e-4
+    }
+
+    fn buffer_len(&self) -> usize {
+        self.max_delay_frames.saturating_add(8).max(16)
+    }
+
+    fn process_interleaved_in_place(&mut self, samples: &mut [f32]) {
+        if !self.is_active() {
+            return;
+        }
+        let channels = self.channels.max(1);
+        let frames = samples.len() / channels;
+        if frames == 0 {
+            return;
+        }
+        let len = self.buffer_len();
+        if self.buffers.len() != channels || self.buffers.iter().any(|channel| channel.len() != len)
+        {
+            self.buffers = (0..channels).map(|_| vec![0.0; len]).collect();
+            self.write_frame %= len;
+        }
+
+        let phase_step =
+            ((self.ratio - 1.0).abs() / self.max_delay_frames.max(1) as f32).clamp(1.0e-6, 0.25);
+
+        for frame in 0..frames {
+            let write_idx = self.write_frame % len;
+            let base = frame * channels;
+            for ch in 0..channels {
+                self.buffers[ch][write_idx] = samples[base + ch];
+            }
+
+            let phase_a = self.phase;
+            let phase_b = (self.phase + 0.5) % 1.0;
+            let weight_a = pitch_window_weight(phase_a);
+            let weight_b = pitch_window_weight(phase_b);
+            let norm = (weight_a + weight_b).max(1.0e-6);
+
+            for ch in 0..channels {
+                let a = self.read_tap(ch, phase_a);
+                let b = self.read_tap(ch, phase_b);
+                samples[base + ch] = (a * weight_a + b * weight_b) / norm;
+            }
+
+            self.phase += phase_step;
+            if self.phase >= 1.0 {
+                self.phase -= 1.0;
+            }
+            self.write_frame = (self.write_frame + 1) % len;
+        }
+    }
+
+    fn read_tap(&self, channel: usize, phase: f32) -> f32 {
+        let len = self.buffer_len();
+        let delay = if self.ratio >= 1.0 {
+            self.max_delay_frames as f32 * (1.0 - phase)
+        } else {
+            self.max_delay_frames as f32 * phase
+        } + 2.0;
+        let write_idx = self.write_frame % len;
+        let mut read_pos = write_idx as f32 - delay;
+        while read_pos < 0.0 {
+            read_pos += len as f32;
+        }
+        while read_pos >= len as f32 {
+            read_pos -= len as f32;
+        }
+        let i0 = read_pos.floor() as usize % len;
+        let i1 = (i0 + 1) % len;
+        let frac = read_pos - i0 as f32;
+        lerp_scalar(self.buffers[channel][i0], self.buffers[channel][i1], frac)
+    }
+}
+
+fn pitch_window_weight(phase: f32) -> f32 {
+    let phase = phase.clamp(0.0, 1.0);
+    let s = (std::f32::consts::PI * phase).sin();
+    s * s
+}
+
+fn sanitize_tempo_rate(rate: f32) -> f32 {
+    if rate.is_finite() {
+        rate.clamp(0.25, 4.0)
+    } else {
+        1.0
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TimePitchProcessor {
+    config: TimePitchConfig,
+    sample_rate: u32,
+    rate: LinearRateProcessor,
+    pitch: DelayLinePitchShifter,
+    scratch: Vec<f32>,
+}
+
+impl TimePitchProcessor {
+    fn new(config: TimePitchConfig, sample_rate: u32, channels: usize) -> Self {
+        let channels = channels.max(1);
+        let config = TimePitchConfig::sanitized(config.speed_rate, config.pitch_semitones);
+        Self {
+            config,
+            sample_rate: sample_rate.max(1),
+            rate: LinearRateProcessor::new(config.speed_rate, channels),
+            pitch: DelayLinePitchShifter::new(config.pitch_semitones, sample_rate, channels),
+            scratch: Vec::new(),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.rate.reset();
+        self.pitch.reset();
+    }
+
+    fn latency_frames(&self) -> usize {
+        self.pitch.latency_frames()
+    }
+
+    fn has_time_pitch(&self) -> bool {
+        self.config.is_active()
+    }
+
+    fn has_variable_length(&self) -> bool {
+        self.config.has_speed()
+    }
+
+    fn process_interleaved(&mut self, samples: &mut Vec<f32>, channels: usize) {
+        let channels = channels.max(1);
+        if self.config.has_speed() {
+            self.rate.set_rate(self.config.speed_rate, channels);
+            self.rate
+                .process_interleaved_into(samples, channels, &mut self.scratch);
+            std::mem::swap(samples, &mut self.scratch);
+        }
+
+        if self.config.has_pitch() && !samples.is_empty() {
+            self.pitch
+                .configure(self.config.pitch_semitones, self.sample_rate, channels);
+            self.pitch.process_interleaved_in_place(samples);
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 struct DspChainProcessor {
     gain_linear: f32,
     eq: EqProcessor,
+    time_pitch: TimePitchProcessor,
     dynamic_gain: DynamicGainProcessor,
     limiter: Option<LimiterProcessor>,
     simd_level: SimdLevel,
@@ -1170,6 +1600,7 @@ impl Default for DspChainProcessor {
         Self {
             gain_linear: 1.0,
             eq: EqProcessor::default(),
+            time_pitch: TimePitchProcessor::new(TimePitchConfig::default(), 48_000, 1),
             dynamic_gain: DynamicGainProcessor::new(48_000),
             limiter: None,
             simd_level: detect_simd_level(),
@@ -1182,6 +1613,7 @@ impl Default for DspChainProcessor {
 impl DspChainProcessor {
     fn from_runtime_config(config: &DspRuntimeConfig, sample_rate: u32, channels: usize) -> Self {
         let eq = EqProcessor::from_config(&config.eq_bands, sample_rate, channels);
+        let time_pitch = TimePitchProcessor::new(config.time_pitch, sample_rate, channels);
         let simd_level = detect_simd_level();
         let limiter = config
             .limiter_threshold_db
@@ -1189,6 +1621,7 @@ impl DspChainProcessor {
         Self {
             gain_linear: config.gain_linear,
             eq,
+            time_pitch,
             dynamic_gain: DynamicGainProcessor::new(sample_rate),
             limiter,
             simd_level,
@@ -1199,10 +1632,31 @@ impl DspChainProcessor {
 
     fn reset(&mut self) {
         self.eq.reset();
+        self.time_pitch.reset();
         self.dynamic_gain.reset();
         if let Some(limiter) = &mut self.limiter {
             limiter.reset();
         }
+    }
+
+    fn has_time_pitch(&self) -> bool {
+        self.time_pitch.has_time_pitch()
+    }
+
+    fn has_variable_length(&self) -> bool {
+        self.time_pitch.has_variable_length()
+    }
+
+    fn latency_frames(&self) -> usize {
+        self.time_pitch.latency_frames()
+    }
+
+    fn process_interleaved(&mut self, samples: &mut Vec<f32>) -> f32 {
+        let channels = self.channels.max(1);
+        if self.time_pitch.has_time_pitch() {
+            self.time_pitch.process_interleaved(samples, channels);
+        }
+        self.process_interleaved_in_place(samples)
     }
 
     fn process_interleaved_in_place(&mut self, samples: &mut [f32]) -> f32 {
@@ -1300,6 +1754,7 @@ impl DspChainProcessor {
 struct PreparedDspUpdate {
     version: u64,
     processor: DspChainProcessor,
+    requires_fade_transition: bool,
     vst_keys: Vec<crate::vst_dsp::VstNodeKey>,
     vst_nodes: Option<Vec<crate::vst_dsp::VstDspNode>>,
 }
@@ -1354,6 +1809,7 @@ where
             DspChainProcessor::from_runtime_config(&snapshot, sample_rate, channels as usize);
         let vst_keys = snapshot.vst_nodes.clone();
         let builder_last_vst_keys = vst_keys.clone();
+        let builder_last_time_pitch = snapshot.time_pitch;
         let vst_nodes = vst_keys
             .iter()
             .cloned()
@@ -1374,6 +1830,7 @@ where
             let channels_usize = channels_thread.max(1) as usize;
             let mut last_seen_version = builder_last_seen_version;
             let mut last_vst_keys = builder_last_vst_keys;
+            let mut last_time_pitch = builder_last_time_pitch;
 
             loop {
                 if pending_stop_thread.load(Ordering::Acquire) {
@@ -1395,6 +1852,7 @@ where
                     gain_linear: 1.0,
                     eq_bands: slow.eq_bands.clone(),
                     limiter_threshold_db: slow.limiter_threshold_db,
+                    time_pitch: slow.time_pitch,
                     vst_nodes: Vec::new(),
                 };
                 let processor = DspChainProcessor::from_runtime_config(
@@ -1404,6 +1862,8 @@ where
                 );
 
                 let vst_keys = slow.vst_nodes.clone();
+                let time_pitch_changed = slow.time_pitch != last_time_pitch;
+                last_time_pitch = slow.time_pitch;
                 let vst_nodes = if vst_keys != last_vst_keys {
                     last_vst_keys = vst_keys.clone();
                     Some(
@@ -1418,6 +1878,7 @@ where
                 } else {
                     None
                 };
+                let requires_fade_transition = time_pitch_changed || vst_nodes.is_some();
 
                 let mut guard = match pending_update_thread.lock() {
                     Ok(guard) => guard,
@@ -1426,6 +1887,7 @@ where
                 *guard = Some(PreparedDspUpdate {
                     version,
                     processor,
+                    requires_fade_transition,
                     vst_keys,
                     vst_nodes,
                 });
@@ -1550,14 +2012,20 @@ where
             return false;
         }
 
-        if let Some(vst_nodes) = update.vst_nodes {
+        if update.requires_fade_transition
+            || self.processor.has_time_pitch()
+            || update.processor.has_time_pitch()
+            || update.processor.has_variable_length()
+        {
             self.processor = update.processor;
             self.processor.gain_linear = gain_linear;
             self.processor
                 .dynamic_gain
                 .set_enabled(self.dsp.dynamic_gain_enabled());
             self.vst_keys = update.vst_keys;
-            self.vst_nodes = vst_nodes;
+            if let Some(vst_nodes) = update.vst_nodes {
+                self.vst_nodes = vst_nodes;
+            }
             self.processor_version = update.version;
             self.begin_fade_in();
             return false;
@@ -1636,6 +2104,7 @@ where
 
     fn pipeline_total_latency_frames(&self) -> usize {
         self.nn_total_latency_frames()
+            .saturating_add(self.processor.latency_frames())
     }
 
     fn refill_local(&mut self) -> bool {
@@ -1654,7 +2123,7 @@ where
         let processor_already_applied = self.maybe_apply_update_on_refill();
         self.ensure_processor_uptodate();
         if !processor_already_applied {
-            let dynamic_gain_db = self.processor.process_interleaved_in_place(&mut self.local);
+            let dynamic_gain_db = self.processor.process_interleaved(&mut self.local);
             self.dsp.update_dynamic_gain_db(dynamic_gain_db);
         }
         self.pre_tap
@@ -2509,6 +2978,7 @@ mod tests {
             gain_linear: gain_db_to_linear(gain_db),
             eq_bands: Vec::new(),
             limiter_threshold_db: None,
+            time_pitch: TimePitchConfig::default(),
             vst_nodes: Vec::new(),
         };
 
@@ -2524,12 +2994,55 @@ mod tests {
     }
 
     #[test]
+    fn dsp_runtime_applies_tempo_and_pitch_nodes() {
+        let runtime = DspRuntime::new();
+        runtime.apply_chain(&[
+            DspNodeConfig::Tempo {
+                rate: 1.5,
+                preserve_pitch: true,
+            },
+            DspNodeConfig::PitchShift { semitones: 2.0 },
+        ]);
+
+        assert!((runtime.playback_rate() - 1.5).abs() < 1e-6);
+        let slow = runtime.slow_config();
+        assert!((slow.time_pitch.speed_rate - 1.5).abs() < 1e-6);
+        let expected_pitch = 2.0 - 12.0 * 1.5f32.log2();
+        assert!((slow.time_pitch.pitch_semitones - expected_pitch).abs() < 1e-5);
+    }
+
+    #[test]
+    fn tempo_processor_changes_output_length() {
+        let config = DspRuntimeConfig {
+            gain_linear: 1.0,
+            eq_bands: Vec::new(),
+            limiter_threshold_db: None,
+            time_pitch: TimePitchConfig::sanitized(2.0, 0.0),
+            vst_nodes: Vec::new(),
+        };
+
+        let mut processor = DspChainProcessor::from_runtime_config(&config, 48_000, 2);
+        let original_frames = 1024usize;
+        let mut samples = vec![0.0f32; original_frames * 2];
+        for frame in 0..original_frames {
+            samples[frame * 2] = frame as f32 / original_frames as f32;
+            samples[frame * 2 + 1] = samples[frame * 2];
+        }
+
+        processor.process_interleaved(&mut samples);
+        assert!(samples.len() < original_frames * 2);
+        assert_eq!(samples.len() % 2, 0);
+        assert!(samples.iter().all(|sample| sample.is_finite()));
+    }
+
+    #[test]
     fn dsp_chain_limiter_clamps_peaks() {
         let threshold_db = -6.0;
         let config = DspRuntimeConfig {
             gain_linear: 1.0,
             eq_bands: Vec::new(),
             limiter_threshold_db: Some(threshold_db),
+            time_pitch: TimePitchConfig::default(),
             vst_nodes: Vec::new(),
         };
 
@@ -2548,6 +3061,7 @@ mod tests {
             gain_linear: 1.0,
             eq_bands: Vec::new(),
             limiter_threshold_db: None,
+            time_pitch: TimePitchConfig::default(),
             vst_nodes: Vec::new(),
         };
 
@@ -2567,6 +3081,7 @@ mod tests {
             gain_linear: 1.0,
             eq_bands: Vec::new(),
             limiter_threshold_db: None,
+            time_pitch: TimePitchConfig::default(),
             vst_nodes: Vec::new(),
         };
 

@@ -214,6 +214,7 @@ pub(super) fn build_state_payload_with_options_impl(
         replay_gain_db: engine.replay_gain_db,
         dynamic_gain_enabled: engine.dsp_runtime.dynamic_gain_enabled(),
         dynamic_gain_db: engine.dsp_runtime.dynamic_gain_db(),
+        playback_rate: engine.dsp_runtime.playback_rate(),
         muted: engine.muted,
         track_path: if include_track_path {
             engine

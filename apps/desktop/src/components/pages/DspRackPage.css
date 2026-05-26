@@ -195,6 +195,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+.dsp-param-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
 .dsp-param-range {
   width: 100%;
 }
