@@ -15,6 +15,7 @@ pub struct NativeAudioStatePayload {
     pub replay_gain_db: f32,
     pub dynamic_gain_enabled: bool,
     pub dynamic_gain_db: f32,
+    pub playback_rate: f32,
     pub muted: bool,
     pub track_path: Option<String>,
     pub current_time: f64,

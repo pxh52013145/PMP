@@ -2979,7 +2979,8 @@ impl NativeAudioEngine {
             return;
         };
         let elapsed = started_at.elapsed().as_secs_f64();
-        let mut next = self.base_position + elapsed;
+        let playback_rate = self.dsp_runtime.playback_rate().max(0.0) as f64;
+        let mut next = self.base_position + elapsed * playback_rate;
         if self.duration > 0.0 {
             next = next.min(self.duration);
         }
@@ -3392,8 +3393,14 @@ impl NativeAudioEngine {
     }
 
     pub(crate) fn set_dsp_chain(&mut self, chain: Vec<DspNodeConfig>) {
+        let clock_was_running = self.playback_started_at.is_some();
+        self.update_position_from_clock();
+        self.base_position = self.current_position;
         self.dsp_chain = chain;
         self.gain_db = self.dsp_runtime.apply_chain(&self.dsp_chain);
+        if clock_was_running {
+            self.playback_started_at = Some(Instant::now());
+        }
     }
 
     pub(crate) fn set_preferred_input_id(

@@ -446,7 +446,10 @@ mod legacy_native_audio_dsp_pipeline {
                             limiter_threshold_db = None;
                         }
                     }
+                    DspNodeConfig::PitchShift { .. } => {}
+                    DspNodeConfig::Tempo { .. } => {}
                     DspNodeConfig::Vst { .. } => {}
+                    DspNodeConfig::NeuralEffect { .. } => {}
                 }
             }
 

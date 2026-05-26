@@ -248,7 +248,7 @@ export function createMediaSessionModule(options: { enabled?: boolean } = {}): K
         const duration = lastState.duration ?? 0;
         if (!Number.isFinite(duration) || duration <= 0) return;
         const position = Math.max(0, Math.min(lastTime, duration));
-        const playbackRate = lastState.playbackState === 'playing' ? 1 : 0;
+        const playbackRate = lastState.playbackState === 'playing' ? (lastState.playbackRate ?? 1) : 0;
 
         const now = Date.now();
         const minIntervalMs = 600;

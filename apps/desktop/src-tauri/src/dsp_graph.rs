@@ -32,6 +32,18 @@ pub enum DspGraphNode {
         #[serde(rename = "thresholdDb")]
         threshold_db: f32,
     },
+    PitchShift {
+        id: String,
+        enabled: bool,
+        semitones: f32,
+    },
+    Tempo {
+        id: String,
+        enabled: bool,
+        rate: f32,
+        #[serde(rename = "preservePitch")]
+        preserve_pitch: bool,
+    },
     Vst {
         id: String,
         enabled: bool,
@@ -125,6 +137,24 @@ fn to_native_dsp_chain(graph: &DspGraphConfig) -> Vec<DspNodeConfig> {
             } if *enabled => {
                 chain.push(DspNodeConfig::Limiter {
                     threshold_db: *threshold_db,
+                });
+            }
+            DspGraphNode::PitchShift {
+                enabled, semitones, ..
+            } if *enabled => {
+                chain.push(DspNodeConfig::PitchShift {
+                    semitones: *semitones,
+                });
+            }
+            DspGraphNode::Tempo {
+                enabled,
+                rate,
+                preserve_pitch,
+                ..
+            } if *enabled => {
+                chain.push(DspNodeConfig::Tempo {
+                    rate: *rate,
+                    preserve_pitch: *preserve_pitch,
                 });
             }
             DspGraphNode::Vst {
@@ -275,11 +305,22 @@ mod tests {
                     plugin_id: "VST3-TestPlugin-123".into(),
                     params: None,
                 },
+                DspGraphNode::PitchShift {
+                    id: "pitch1".into(),
+                    enabled: true,
+                    semitones: 2.0,
+                },
+                DspGraphNode::Tempo {
+                    id: "tempo1".into(),
+                    enabled: true,
+                    rate: 1.25,
+                    preserve_pitch: true,
+                },
             ],
         };
 
         let chain = to_native_dsp_chain(&graph);
-        assert_eq!(chain.len(), 2);
+        assert_eq!(chain.len(), 4);
         match chain[0] {
             DspNodeConfig::Gain { db } => assert!((db + 6.0).abs() < 1e-6),
             _ => panic!("expected gain node"),
@@ -290,6 +331,22 @@ mod tests {
                 assert_eq!(plugin_id, "VST3-TestPlugin-123");
             }
             _ => panic!("expected vst node"),
+        }
+        match chain[2] {
+            DspNodeConfig::PitchShift { semitones } => {
+                assert!((semitones - 2.0).abs() < 1e-6)
+            }
+            _ => panic!("expected pitch node"),
+        }
+        match chain[3] {
+            DspNodeConfig::Tempo {
+                rate,
+                preserve_pitch,
+            } => {
+                assert!((rate - 1.25).abs() < 1e-6);
+                assert!(preserve_pitch);
+            }
+            _ => panic!("expected tempo node"),
         }
     }
 }
