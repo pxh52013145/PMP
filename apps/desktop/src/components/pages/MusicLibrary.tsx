@@ -36,6 +36,7 @@ import {
 } from '../../themes/surfaceMotion';
 
 import { useAudioService } from '../../contexts/AudioEngineContext';
+import { useKernel } from '../../contexts/KernelContext';
 import {
   getProcessPerfTotalsSnapshot,
   type ProcessPerfTotalsSnapshot,
@@ -67,10 +68,6 @@ import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { useLocale, useT } from '../../i18n';
 
 import { isTauriRuntime } from '../../utils/tauriRuntime';
-import {
-  cancelScheduledProcessWorkingSetTrim,
-  scheduleProcessWorkingSetTrim,
-} from '../../utils/processWorkingSetTrim';
 
 import {
 
@@ -539,8 +536,10 @@ type MusicLibraryRuntimeDiagnosticSnapshot = {
   };
   process: {
     timestampMs: number | null;
+    webview2PrivateWorkingSetBytes: number | null;
     webview2PrivateBytes: number | null;
     webview2WorkingSetBytes: number | null;
+    treePrivateWorkingSetBytes: number | null;
     treePrivateBytes: number | null;
     treeWorkingSetBytes: number | null;
     webview2CpuPercent: number | null;
@@ -1165,6 +1164,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 }) => {
 
   const audioService = useAudioService();
+  const kernel = useKernel();
   const telemetry = useMemo(() => getTelemetryLogger('music-library', 'MusicLibraryPage'), []);
 
   const t = useT();
@@ -2186,19 +2186,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       closeDatabase: true,
       resetSchemaCache: true,
     });
-    scheduleProcessWorkingSetTrim('webview2', {
-      delaysMs: [0, 500, 1800, 4200],
-      reason: 'music-library-hidden',
+    kernel.events.emit('memory-governance/requested', {
+      reason: 'runtime-release',
+      source: 'music-library-hidden',
+      delaysMs: [900, 4_200],
+      minIntervalMs: 2_500,
     });
-    const playbackState = audioService.getState().playbackState;
-    if (playbackState === 'idle' || playbackState === 'stopped' || playbackState === 'error') {
-      scheduleProcessWorkingSetTrim('tree', {
-        delaysMs: [0, 900, 2600],
-        reason: 'music-library-hidden-idle',
-      });
-    }
   }, [
-    audioService,
+    kernel.events,
     releaseLocalLibraryViewState,
     releaseMusicLibraryRuntimeResources,
     releaseStableLibraryViewState,
@@ -3520,12 +3515,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   }, [librarySourceMode, loadLibraryPathHealth, showPathsManager]);
 
 
-
-  useEffect(() => {
-    if (isOpen) {
-      cancelScheduledProcessWorkingSetTrim('webview2');
-    }
-  }, [isOpen]);
 
   useEffect(() => {
 
@@ -6309,9 +6298,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
           timestampMs: musicLibraryProcessPerf?.timestampMs ?? null,
 
+          webview2PrivateWorkingSetBytes:
+            musicLibraryProcessPerf?.totals.webview2PrivateWorkingSetBytes ?? null,
+
           webview2PrivateBytes,
 
           webview2WorkingSetBytes: musicLibraryProcessPerf?.totals.webview2WorkingSetBytes ?? null,
+
+          treePrivateWorkingSetBytes: musicLibraryProcessPerf?.totals.privateWorkingSetBytes ?? null,
 
           treePrivateBytes: musicLibraryProcessPerf?.totals.privateBytes ?? null,
 
@@ -6476,6 +6470,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         coverDecodedEstimateTotalBytes: snapshot.coverCache.coverDecodedEstimateTotalBytes,
 
         trackedRuntimeBytes: snapshot.attribution.trackedRuntimeBytes,
+
+        webview2PrivateWorkingSetBytes: snapshot.process.webview2PrivateWorkingSetBytes,
 
         webview2PrivateBytes: snapshot.process.webview2PrivateBytes,
 

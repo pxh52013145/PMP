@@ -23,8 +23,10 @@ export type PlaylistsOverlayResidencySample = {
   selectedCoverUrlKind: PlaylistCoverUrlKind;
   selectedCoverDecodedBytes: number;
   pageApproxJsonBytes: number;
+  webview2PrivateWorkingSetBytes: number | null;
   webview2PrivateBytes: number | null;
   webview2WorkingSetBytes: number | null;
+  treePrivateWorkingSetBytes: number | null;
   treePrivateBytes: number | null;
   treeWorkingSetBytes: number | null;
   webview2CpuPercent: number | null;

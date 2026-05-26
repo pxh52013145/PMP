@@ -106,8 +106,10 @@ type MusicLibraryRuntimeMemorySnapshot = {
   };
   process: {
     timestampMs: number | null;
+    webview2PrivateWorkingSetBytes: number | null;
     webview2PrivateBytes: number | null;
     webview2WorkingSetBytes: number | null;
+    treePrivateWorkingSetBytes: number | null;
     treePrivateBytes: number | null;
     treeWorkingSetBytes: number | null;
     webview2CpuPercent: number | null;
@@ -128,8 +130,10 @@ type MemoryBaselineSample = {
   coverDecodedEstimateEntries: number;
   coverUrlCacheEntries: number;
   albumCoverUrlCacheEntries: number;
+  webview2PrivateWorkingSetBytes?: number;
   webview2WorkingSetBytes?: number;
   webview2PrivateBytes?: number;
+  treePrivateWorkingSetBytes?: number;
   treeWorkingSetBytes?: number;
   treePrivateBytes?: number;
 };
@@ -145,8 +149,10 @@ type MemoryBaselineScenarioComparison = {
   deltaCoverBlobUrlTotalBytes: number;
   deltaCoverDecodedEstimateTotalBytes: number;
   deltaJsHeapUsedBytes?: number;
+  deltaWebview2PrivateWorkingSetBytes?: number;
   deltaWebview2WorkingSetBytes?: number;
   deltaWebview2PrivateBytes?: number;
+  deltaTreePrivateWorkingSetBytes?: number;
   deltaTreeWorkingSetBytes?: number;
   deltaTreePrivateBytes?: number;
 };
@@ -485,11 +491,19 @@ function computeScenarioComparisons(
       deltaCoverDecodedEstimateTotalBytes:
         end.coverDecodedEstimateTotalBytes - start.coverDecodedEstimateTotalBytes,
       deltaJsHeapUsedBytes: diffOptionalNumber(end.jsHeapUsedBytes, start.jsHeapUsedBytes),
+      deltaWebview2PrivateWorkingSetBytes: diffOptionalNumber(
+        end.webview2PrivateWorkingSetBytes,
+        start.webview2PrivateWorkingSetBytes
+      ),
       deltaWebview2WorkingSetBytes: diffOptionalNumber(
         end.webview2WorkingSetBytes,
         start.webview2WorkingSetBytes
       ),
       deltaWebview2PrivateBytes: diffOptionalNumber(end.webview2PrivateBytes, start.webview2PrivateBytes),
+      deltaTreePrivateWorkingSetBytes: diffOptionalNumber(
+        end.treePrivateWorkingSetBytes,
+        start.treePrivateWorkingSetBytes
+      ),
       deltaTreeWorkingSetBytes: diffOptionalNumber(end.treeWorkingSetBytes, start.treeWorkingSetBytes),
       deltaTreePrivateBytes: diffOptionalNumber(end.treePrivateBytes, start.treePrivateBytes),
     });
@@ -629,8 +643,10 @@ function buildMemoryBaselineCsv(payload: MemoryBaselineExportPayload): string {
     'cover_decoded_entries',
     'cover_url_entries',
     'album_cover_entries',
+    'webview2_private_working_set_bytes',
     'webview2_working_set_bytes',
     'webview2_private_bytes',
+    'tree_private_working_set_bytes',
     'tree_working_set_bytes',
     'tree_private_bytes',
   ];
@@ -649,8 +665,10 @@ function buildMemoryBaselineCsv(payload: MemoryBaselineExportPayload): string {
     sample.coverDecodedEstimateEntries,
     sample.coverUrlCacheEntries,
     sample.albumCoverUrlCacheEntries,
+    sample.webview2PrivateWorkingSetBytes,
     sample.webview2WorkingSetBytes,
     sample.webview2PrivateBytes,
+    sample.treePrivateWorkingSetBytes,
     sample.treeWorkingSetBytes,
     sample.treePrivateBytes,
   ]);
@@ -666,8 +684,10 @@ function buildMemoryBaselineCsv(payload: MemoryBaselineExportPayload): string {
     'delta_cover_blob_total_bytes',
     'delta_cover_decoded_total_bytes',
     'delta_js_heap_used_bytes',
+    'delta_webview2_private_working_set_bytes',
     'delta_webview2_working_set_bytes',
     'delta_webview2_private_bytes',
+    'delta_tree_private_working_set_bytes',
     'delta_tree_working_set_bytes',
     'delta_tree_private_bytes',
   ];
@@ -683,8 +703,10 @@ function buildMemoryBaselineCsv(payload: MemoryBaselineExportPayload): string {
     item.deltaCoverBlobUrlTotalBytes,
     item.deltaCoverDecodedEstimateTotalBytes,
     item.deltaJsHeapUsedBytes,
+    item.deltaWebview2PrivateWorkingSetBytes,
     item.deltaWebview2WorkingSetBytes,
     item.deltaWebview2PrivateBytes,
+    item.deltaTreePrivateWorkingSetBytes,
     item.deltaTreeWorkingSetBytes,
     item.deltaTreePrivateBytes,
   ]);
@@ -1106,8 +1128,10 @@ export function DebugCenter({
       coverDecodedEstimateEntries: coverStats.coverDecodedEstimateEntries,
       coverUrlCacheEntries: coverStats.coverUrlCacheEntries,
       albumCoverUrlCacheEntries: coverStats.albumCoverUrlCacheEntries,
+      webview2PrivateWorkingSetBytes: processTotals?.totals.webview2PrivateWorkingSetBytes,
       webview2WorkingSetBytes: processTotals?.totals.webview2WorkingSetBytes,
       webview2PrivateBytes: processTotals?.totals.webview2PrivateBytes,
+      treePrivateWorkingSetBytes: processTotals?.totals.privateWorkingSetBytes,
       treeWorkingSetBytes: processTotals?.totals.workingSetBytes,
       treePrivateBytes: processTotals?.totals.privateBytes,
     };

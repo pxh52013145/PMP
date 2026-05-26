@@ -27,7 +27,7 @@ function formatCpuPercent(value: number | null | undefined): string {
 }
 
 function computeRowKey(row: ProcessPerfRow): string {
-  return `${row.pid}:${row.privateBytes ?? '-'}:${row.workingSetBytes ?? '-'}:${row.cpuPercent ?? '-'}`;
+  return `${row.pid}:${row.privateWorkingSetBytes ?? '-'}:${row.privateBytes ?? '-'}:${row.workingSetBytes ?? '-'}:${row.cpuPercent ?? '-'}`;
 }
 
 type PerfMetricCardProps = {
@@ -146,7 +146,11 @@ export function PerfMonitorPage() {
 
   const sortedProcesses = useMemo(() => {
     if (!snapshot) return [];
-    return [...snapshot.processes].sort((a, b) => (b.privateBytes ?? 0) - (a.privateBytes ?? 0));
+    return [...snapshot.processes].sort(
+      (a, b) =>
+        (b.privateWorkingSetBytes ?? b.workingSetBytes ?? 0) -
+        (a.privateWorkingSetBytes ?? a.workingSetBytes ?? 0)
+    );
   }, [snapshot]);
 
   if (!isTauri) {
@@ -197,23 +201,23 @@ export function PerfMonitorPage() {
         <div className="perf-monitor-metric-grid">
           <PerfMetricCard
             tone="accent"
-            label={t('pages.perf-monitor.metric.webview2Private')}
-            value={formatBytesMb(snapshot.totals.webview2PrivateBytes)}
+            label={t('pages.perf-monitor.metric.treeMemory')}
+            value={formatBytesMb(snapshot.totals.privateWorkingSetBytes)}
+            detail={t('pages.perf-monitor.metric.cpuValue', {
+              value: formatCpuPercent(snapshot.totals.cpuPercent),
+            })}
+          />
+          <PerfMetricCard
+            tone="accent"
+            label={t('pages.perf-monitor.metric.webview2Memory')}
+            value={formatBytesMb(snapshot.totals.webview2PrivateWorkingSetBytes)}
             detail={t('pages.perf-monitor.metric.cpuValue', {
               value: formatCpuPercent(snapshot.totals.webview2CpuPercent),
             })}
           />
           <PerfMetricCard
-            label={t('pages.perf-monitor.metric.webview2Ws')}
-            value={formatBytesMb(snapshot.totals.webview2WorkingSetBytes)}
-          />
-          <PerfMetricCard
-            tone="accent"
             label={t('pages.perf-monitor.metric.treePrivate')}
             value={formatBytesMb(snapshot.totals.privateBytes)}
-            detail={t('pages.perf-monitor.metric.cpuValue', {
-              value: formatCpuPercent(snapshot.totals.cpuPercent),
-            })}
           />
           <PerfMetricCard
             label={t('pages.perf-monitor.metric.treeWs')}
@@ -278,6 +282,7 @@ export function PerfMonitorPage() {
             ) : null}
             <p className="settings-card-desc">
               {t('pages.perf-monitor.totals.webview2', {
+                memory: formatBytesMb(snapshot.totals.webview2PrivateWorkingSetBytes),
                 ws: formatBytesMb(snapshot.totals.webview2WorkingSetBytes),
                 private: formatBytesMb(snapshot.totals.webview2PrivateBytes),
                 cpu: formatCpuPercent(snapshot.totals.webview2CpuPercent),
@@ -285,6 +290,7 @@ export function PerfMonitorPage() {
             </p>
             <p className="settings-card-desc">
               {t('pages.perf-monitor.totals.tree', {
+                memory: formatBytesMb(snapshot.totals.privateWorkingSetBytes),
                 ws: formatBytesMb(snapshot.totals.workingSetBytes),
                 private: formatBytesMb(snapshot.totals.privateBytes),
                 cpu: formatCpuPercent(snapshot.totals.cpuPercent),
@@ -310,6 +316,7 @@ export function PerfMonitorPage() {
               <span role="columnheader">{t('pages.perf-monitor.process.name')}</span>
               <span role="columnheader">{t('pages.perf-monitor.process.kind')}</span>
               <span role="columnheader">{t('pages.perf-monitor.process.cpu')}</span>
+              <span role="columnheader">{t('pages.perf-monitor.process.memory')}</span>
               <span role="columnheader">{t('pages.perf-monitor.process.private')}</span>
               <span role="columnheader">{t('pages.perf-monitor.process.ws')}</span>
             </div>
@@ -335,6 +342,7 @@ export function PerfMonitorPage() {
                   </div>
                   <span className="perf-monitor-process-kind" role="cell">{kindLabel}</span>
                   <span className="perf-monitor-process-value" role="cell">{formatCpuPercent(process.cpuPercent)}</span>
+                  <span className="perf-monitor-process-value" role="cell">{formatBytesMb(process.privateWorkingSetBytes)}</span>
                   <span className="perf-monitor-process-value" role="cell">{formatBytesMb(process.privateBytes)}</span>
                   <span className="perf-monitor-process-value" role="cell">{formatBytesMb(process.workingSetBytes)}</span>
                 </div>

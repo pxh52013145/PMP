@@ -1,4 +1,12 @@
-import { memo, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from 'react';
 import { useKernel } from '../../contexts/KernelContext';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
@@ -19,7 +27,11 @@ type DisplaySnapshot = {
   systemMemoryTotalBytes: number | null;
   systemMemoryAvailableBytes: number | null;
   totals: {
+    privateWorkingSetBytes: number;
+    workingSetBytes: number;
     privateBytes: number;
+    webview2PrivateWorkingSetBytes: number;
+    webview2WorkingSetBytes: number;
     webview2PrivateBytes: number;
     cpuPercent: number | null;
     webview2CpuPercent: number | null;
@@ -42,12 +54,23 @@ function buildSnapshotHash(snapshot: DisplaySnapshot): string {
     snapshot.systemMemoryLoadPercent ?? '-',
     snapshot.systemMemoryTotalBytes ?? '-',
     snapshot.systemMemoryAvailableBytes ?? '-',
+    t.privateWorkingSetBytes ?? '-',
+    t.workingSetBytes ?? '-',
     t.privateBytes ?? '-',
+    t.webview2PrivateWorkingSetBytes ?? '-',
+    t.webview2WorkingSetBytes ?? '-',
     t.webview2PrivateBytes ?? '-',
     t.cpuPercent ?? '-',
     t.webview2CpuPercent ?? '-',
   ].join('|');
 }
+
+type StatRow = {
+  key: string;
+  label: string;
+  value: ReactNode;
+  group: 'memory' | 'cpu';
+};
 
 type ProcessPerfMonitorRendererProps = {
   skinProps?: Record<string, unknown>;
@@ -80,7 +103,16 @@ const ProcessPerfMonitorDefaultRenderer = memo(function ProcessPerfMonitorDefaul
       systemMemoryTotalBytes: webview2.systemMemoryTotalBytes ?? null,
       systemMemoryAvailableBytes: webview2.systemMemoryAvailableBytes ?? null,
       totals: {
+        privateWorkingSetBytes:
+          webview2.treePrivateWorkingSetBytes ??
+          webview2.treeWorkingSetBytes ??
+          webview2.webview2PrivateWorkingSetBytes ??
+          webview2.webview2WorkingSetBytes,
+        workingSetBytes: webview2.treeWorkingSetBytes ?? webview2.webview2WorkingSetBytes,
         privateBytes: webview2.treePrivateBytes ?? webview2.webview2PrivateBytes,
+        webview2PrivateWorkingSetBytes:
+          webview2.webview2PrivateWorkingSetBytes ?? webview2.webview2WorkingSetBytes,
+        webview2WorkingSetBytes: webview2.webview2WorkingSetBytes,
         webview2PrivateBytes: webview2.webview2PrivateBytes,
         cpuPercent: webview2.treeCpuPercent ?? webview2.webview2CpuPercent,
         webview2CpuPercent: webview2.webview2CpuPercent,
@@ -119,18 +151,44 @@ const ProcessPerfMonitorDefaultRenderer = memo(function ProcessPerfMonitorDefaul
     });
   }, [snapshot, t]);
 
+  const renderMemoryValue = useMemo(() => {
+    return (
+      privateWorkingSetBytes: number | null | undefined,
+      workingSetBytes: number | null | undefined,
+      privateBytes: number | null | undefined
+    ) => (
+      <span className="process-perf-monitor__memory-value">
+        <span className="process-perf-monitor__memory-primary">
+          {t('magnet.processPerf.token.memory')} {toMb(privateWorkingSetBytes)}
+        </span>
+        <span>WS {toMb(workingSetBytes)}</span>
+        <span>
+          {t('magnet.processPerf.token.commit')} {toMb(privateBytes)}
+        </span>
+      </span>
+    );
+  }, [t]);
+
   const statRows = useMemo(() => {
-    const rows = [
+    const rows: StatRow[] = [
       {
-        key: 'webview2-private',
-        label: t('magnet.processPerf.row.webview2Private'),
-        value: toMb(snapshot?.totals.webview2PrivateBytes ?? null),
+        key: 'webview2-memory',
+        label: t('magnet.processPerf.row.webview2Memory'),
+        value: renderMemoryValue(
+          snapshot?.totals.webview2PrivateWorkingSetBytes ?? null,
+          snapshot?.totals.webview2WorkingSetBytes ?? null,
+          snapshot?.totals.webview2PrivateBytes ?? null
+        ),
         group: 'memory' as const,
       },
       {
-        key: 'tree-private',
-        label: t('magnet.processPerf.row.treePrivate'),
-        value: toMb(snapshot?.totals.privateBytes ?? null),
+        key: 'tree-memory',
+        label: t('magnet.processPerf.row.treeMemory'),
+        value: renderMemoryValue(
+          snapshot?.totals.privateWorkingSetBytes ?? null,
+          snapshot?.totals.workingSetBytes ?? null,
+          snapshot?.totals.privateBytes ?? null
+        ),
         group: 'memory' as const,
       },
       {
@@ -154,7 +212,7 @@ const ProcessPerfMonitorDefaultRenderer = memo(function ProcessPerfMonitorDefaul
       return rows.filter((row) => row.group === 'cpu');
     }
     return rows;
-  }, [skinProps.metricSet, snapshot, t]);
+  }, [renderMemoryValue, skinProps.metricSet, snapshot, t]);
 
   const openPerfMonitor = useMemo(() => {
     return () => {

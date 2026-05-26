@@ -97,6 +97,8 @@ export function attachPerformanceObservabilityBridge(
           to: snapshot.pressure,
           tier: snapshot.governance.tier,
           qualityLevel: snapshot.quality.level,
+          webview2PrivateWorkingSetBytes:
+            snapshot.webview2?.webview2PrivateWorkingSetBytes ?? null,
           webview2PrivateBytes: snapshot.webview2?.webview2PrivateBytes ?? null,
           webview2CpuPercent: snapshot.webview2?.webview2CpuPercent ?? null,
         });
@@ -151,6 +153,8 @@ export function attachPerformanceObservabilityBridge(
         reason: result.reason,
         tier: result.plan.tier,
         executed: result.executed,
+        webview2PrivateWorkingSetBytes:
+          result.snapshot.webview2?.webview2PrivateWorkingSetBytes ?? null,
         webview2PrivateBytes: result.snapshot.webview2?.webview2PrivateBytes ?? null,
         webview2CpuPercent: result.snapshot.webview2?.webview2CpuPercent ?? null,
       });
@@ -196,8 +200,12 @@ export function attachPerformanceObservabilityBridge(
           fields: {
             samplingMs: snapshot.policy.samplingMs,
             detailLevel: snapshot.detailLevel,
+            webview2PrivateWorkingSetBytes:
+              snapshot.totalsSnapshot?.totals.webview2PrivateWorkingSetBytes ?? null,
             webview2PrivateBytes: snapshot.totalsSnapshot?.totals.webview2PrivateBytes ?? null,
             webview2CpuPercent: snapshot.totalsSnapshot?.totals.webview2CpuPercent ?? null,
+            treePrivateWorkingSetBytes:
+              snapshot.totalsSnapshot?.totals.privateWorkingSetBytes ?? null,
             treePrivateBytes: snapshot.totalsSnapshot?.totals.privateBytes ?? null,
             systemMemoryLoadPercent:
               snapshot.totalsSnapshot?.systemMemory?.memoryLoadPercent ?? null,

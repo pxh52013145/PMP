@@ -62,6 +62,7 @@ import { readWindowPinState, writeWindowPinState } from './utils/windowPinState'
 import { MatrixWorkbench } from './workbenches/matrix/MatrixWorkbench';
 import { getTelemetryLogger } from './services/telemetry/TelemetryService';
 import { invokeWithTelemetry } from './services/telemetry/tauriInvokeTelemetry';
+import type { MemoryGovernanceRequest } from './contracts/memoryGovernance';
 import {
   recordStartupMemoryCheckpoint,
   setStartupMemoryTraceFlag,
@@ -1003,6 +1004,12 @@ function App() {
     (handler: () => void) => lifecycle.registerFlushHandler(() => handler()),
     [lifecycle]
   );
+  const requestMemoryGovernance = useCallback(
+    (request: MemoryGovernanceRequest) => {
+      kernel.events.emit('memory-governance/requested', request);
+    },
+    [kernel.events]
+  );
 
   // 从 localStorage 加载保存的配置以获取正确的 magnet 位置
   // 注意：magnetsForContext 仅用于 EditorProvider 的初始化
@@ -1023,6 +1030,7 @@ function App() {
               registerFlushHandler={registerFlushHandler}
               spaceRuntimeGovernance={spaceRuntimeGovernance}
               runtimeCapsuleManager={runtimeCapsuleManager}
+              onMemoryGovernanceRequest={requestMemoryGovernance}
             >
               <WindowCloseProvider>
                 <AppContent />

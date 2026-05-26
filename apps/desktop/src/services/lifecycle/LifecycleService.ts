@@ -5,6 +5,11 @@ export type LifecycleFlushReason =
   | 'beforeunload'
   | 'pagehide'
   | 'visibility-hidden'
+  | 'tauri-main-window-hidden'
+  | 'tauri-editor-window-hidden'
+  | 'tauri-plugin-window-hidden'
+  | 'tauri-plugin-shell-surface-hidden'
+  | 'tauri-vst-manager-window-hidden'
   | 'tauri-window-hidden'
   | 'kernel-deactivate';
 

@@ -111,7 +111,7 @@
 .perf-monitor-process-head,
 .perf-monitor-process-row {
   display: grid;
-  grid-template-columns: minmax(150px, 1.4fr) minmax(86px, 0.62fr) minmax(70px, 0.42fr) minmax(104px, 0.62fr) minmax(104px, 0.62fr);
+  grid-template-columns: minmax(150px, 1.4fr) minmax(86px, 0.62fr) minmax(70px, 0.42fr) minmax(104px, 0.62fr) minmax(104px, 0.62fr) minmax(104px, 0.62fr);
   gap: 10px;
   align-items: center;
   min-width: 0;

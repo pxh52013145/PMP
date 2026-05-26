@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { Playlist, Track } from '../../services/audio';
 import { useAudioService } from '../../contexts/AudioEngineContext';
+import { useKernel } from '../../contexts/KernelContext';
 import { useT } from '../../i18n';
 import type { CoverSizeHint } from '../../services/audio/MusicLibraryService';
 import {
@@ -18,7 +19,6 @@ import {
   type PlaylistCoverUrlKind,
 } from '../../modules/playlists/residencyTelemetry';
 import { musicLibraryService } from '../../services/audio/MusicLibraryService';
-import { scheduleProcessWorkingSetTrim } from '../../utils/processWorkingSetTrim';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { captureTelemetryScenarioSnapshot } from '../../services/telemetry/scenarioSnapshots';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -280,6 +280,7 @@ function buildPlaylistTrackPageQueryKey(options: {
 export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const t = useT();
   const audioService = useAudioService();
+  const kernel = useKernel();
   const telemetry = useMemo(() => getTelemetryLogger('playlists', 'Playlists'), []);
 
   const [playlists, setPlaylists] = useState<Playlist[]>(() =>
@@ -1619,8 +1620,11 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                   selectedCoverUrlKind: metrics.selectedCoverUrlKind,
                   selectedCoverDecodedBytes: metrics.selectedCoverDecodedBytes,
                   pageApproxJsonBytes: metrics.pageApproxJsonBytes,
+                  webview2PrivateWorkingSetBytes:
+                    totals?.webview2PrivateWorkingSetBytes ?? null,
                   webview2PrivateBytes: totals?.webview2PrivateBytes ?? null,
                   webview2WorkingSetBytes: totals?.webview2WorkingSetBytes ?? null,
+                  treePrivateWorkingSetBytes: totals?.privateWorkingSetBytes ?? null,
                   treePrivateBytes: totals?.privateBytes ?? null,
                   treeWorkingSetBytes: totals?.workingSetBytes ?? null,
                   webview2CpuPercent: totals?.webview2CpuPercent ?? null,
@@ -1713,11 +1717,13 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     if (isOpen) return;
 
     releasePlaylistOverlayRuntimeResources({ resetState: true });
-    scheduleProcessWorkingSetTrim('webview2', {
-      delaysMs: [0, 700, 2200],
-      reason: 'playlists-overlay-hidden',
+    kernel.events.emit('memory-governance/requested', {
+      reason: 'runtime-release',
+      source: 'playlists-overlay-hidden',
+      delaysMs: [900, 3_500],
+      minIntervalMs: 2_500,
     });
-  }, [isOpen, releasePlaylistOverlayRuntimeResources]);
+  }, [isOpen, kernel.events, releasePlaylistOverlayRuntimeResources]);
 
   useEffect(() => {
     return () => {

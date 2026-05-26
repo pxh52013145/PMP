@@ -14,9 +14,15 @@ export type MemoryGovernanceTier = 0 | 1 | 2 | 3;
 export type MemoryGovernanceReason =
   | 'interval'
   | 'playback-active'
+  | 'runtime-release'
+  | 'space-switch'
+  | 'editor-window-hidden'
+  | 'plugin-window-hidden'
+  | 'vst-manager-window-hidden'
   | 'visibility-hidden'
   | 'pagehide'
   | 'beforeunload'
+  | 'tauri-main-window-hidden'
   | 'tauri-window-hidden'
   | 'manual';
 
@@ -39,9 +45,11 @@ export type MemoryGovernanceWebview2Snapshot = {
   processSampleAtMs: number;
   sampleIntervalMs: number | null;
   cpuCount: number;
+  webview2PrivateWorkingSetBytes?: number;
   webview2WorkingSetBytes: number;
   webview2PrivateBytes: number;
   webview2CpuPercent: number | null;
+  treePrivateWorkingSetBytes?: number;
   treeWorkingSetBytes: number;
   treePrivateBytes: number;
   treeCpuPercent: number | null;
@@ -128,6 +136,13 @@ export type MemoryGovernanceRunResult = {
   executed: MemoryGovernanceAction[];
 };
 
+export type MemoryGovernanceRequest = {
+  reason: MemoryGovernanceReason;
+  source: string;
+  delaysMs?: readonly number[];
+  minIntervalMs?: number;
+};
+
 export const DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED = true;
 
 export const MEMORY_GOVERNANCE_AUDIT_MAX_ENTRIES = 50;
@@ -157,9 +172,17 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
 
   const heap = snapshot.jsHeapUsedBytes ?? 0;
   const navBytes = snapshot.navigationHistoryBytes;
+  const webview2TaskMemory =
+    snapshot.webview2?.webview2PrivateWorkingSetBytes ??
+    snapshot.webview2?.webview2WorkingSetBytes ??
+    0;
   const webview2Private = snapshot.webview2?.webview2PrivateBytes ?? 0;
   const webview2WorkingSet = snapshot.webview2?.webview2WorkingSetBytes ?? 0;
   const webview2Cpu = snapshot.webview2?.webview2CpuPercent ?? 0;
+  const treeTaskMemory =
+    snapshot.webview2?.treePrivateWorkingSetBytes ??
+    snapshot.webview2?.treeWorkingSetBytes ??
+    0;
   const treePrivate = snapshot.webview2?.treePrivateBytes ?? 0;
   const reclaimableSpaceCount = snapshot.spaceRuntime?.reclaimableSpaceIds.length ?? 0;
   const hibernatedSpaceCount = snapshot.spaceRuntime?.hibernatedSpaceIds?.length ?? 0;
@@ -177,9 +200,11 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
     navBytes >= 1_600_000 ||
     coverBlobRatio >= 0.98 ||
     coverDecodedEstimateBytes >= 180_000_000 ||
-    webview2Private >= 700_000_000 ||
+    webview2TaskMemory >= 700_000_000 ||
+    webview2Private >= 1_050_000_000 ||
     webview2WorkingSet >= 950_000_000 ||
-    treePrivate >= 1_200_000_000
+    treeTaskMemory >= 1_050_000_000 ||
+    treePrivate >= 1_500_000_000
   ) {
     tier = 3;
   } else if (
@@ -187,9 +212,11 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
     navBytes >= 800_000 ||
     coverBlobRatio >= 0.92 ||
     coverDecodedEstimateBytes >= 96_000_000 ||
-    webview2Private >= 500_000_000 ||
+    webview2TaskMemory >= 500_000_000 ||
+    webview2Private >= 850_000_000 ||
     webview2WorkingSet >= 700_000_000 ||
-    treePrivate >= 900_000_000 ||
+    treeTaskMemory >= 800_000_000 ||
+    treePrivate >= 1_200_000_000 ||
     webview2Cpu >= 50
   ) {
     tier = 2;
@@ -198,9 +225,11 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
     navBytes >= 400_000 ||
     coverBlobRatio >= 0.85 ||
     coverDecodedEstimateBytes >= 48_000_000 ||
-    webview2Private >= 350_000_000 ||
+    webview2TaskMemory >= 350_000_000 ||
+    webview2Private >= 650_000_000 ||
     webview2WorkingSet >= 500_000_000 ||
-    treePrivate >= 650_000_000 ||
+    treeTaskMemory >= 600_000_000 ||
+    treePrivate >= 900_000_000 ||
     webview2Cpu >= 30
   ) {
     tier = 1;
@@ -255,17 +284,17 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
 
   if (
     snapshot.isTauri &&
-    (tier >= 1 ||
-      coverDecodedEstimateBytes >= 32_000_000 ||
-      webview2Private >= 320_000_000 ||
-      webview2WorkingSet >= 420_000_000)
+    (tier >= 2 ||
+      coverDecodedEstimateBytes >= 96_000_000 ||
+      webview2TaskMemory >= 520_000_000 ||
+      webview2WorkingSet >= 700_000_000)
   ) {
     actions.push('trim-webview2-working-set');
   }
 
   if (
     snapshot.isTauri &&
-    (tier >= 2 || treePrivate >= 850_000_000 || webview2Private >= 560_000_000)
+    (tier >= 3 || treeTaskMemory >= 1_000_000_000 || webview2TaskMemory >= 700_000_000)
   ) {
     actions.push('trim-tree-working-set');
   }

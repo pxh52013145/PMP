@@ -25,9 +25,11 @@ export function parsePerformanceRuntimeProfile(
 
 export type PerformanceControlWebview2Snapshot = {
   sampledAtMs: number;
+  webview2PrivateWorkingSetBytes?: number;
   webview2PrivateBytes: number;
   webview2WorkingSetBytes: number;
   webview2CpuPercent: number | null;
+  treePrivateWorkingSetBytes?: number;
   treePrivateBytes?: number;
   treeWorkingSetBytes?: number;
   treeCpuPercent?: number | null;
@@ -264,15 +266,17 @@ export const DEFAULT_PERFORMANCE_CONTROL_SNAPSHOT: PerformanceControlSnapshot = 
 
 export function resolvePerformancePressureLevel(input: {
   memoryTier: number;
+  webview2PrivateWorkingSetBytes?: number | null;
   webview2PrivateBytes: number;
   webview2CpuPercent: number | null;
 }): PerformancePressureLevel {
   const webview2Cpu = input.webview2CpuPercent ?? 0;
+  const webview2Memory = input.webview2PrivateWorkingSetBytes ?? input.webview2PrivateBytes;
 
-  if (input.memoryTier >= 2 || input.webview2PrivateBytes >= 850 * 1024 * 1024 || webview2Cpu >= 55) {
+  if (input.memoryTier >= 2 || webview2Memory >= 850 * 1024 * 1024 || webview2Cpu >= 55) {
     return 'high';
   }
-  if (input.memoryTier >= 1 || input.webview2PrivateBytes >= 650 * 1024 * 1024 || webview2Cpu >= 35) {
+  if (input.memoryTier >= 1 || webview2Memory >= 650 * 1024 * 1024 || webview2Cpu >= 35) {
     return 'watch';
   }
   return 'normal';

@@ -201,8 +201,10 @@ function renderPerfSnapshot(perfTotals: ProcessPerfTotalsSnapshot | null | undef
 
   return [
     `- captured_at: ${formatTimestamp(perfTotals.timestampMs)}`,
+    `- webview2_memory_mb: ${formatBytesToMb(perfTotals.totals.webview2PrivateWorkingSetBytes)}`,
     `- webview2_private_mb: ${formatBytesToMb(perfTotals.totals.webview2PrivateBytes)}`,
     `- webview2_working_set_mb: ${formatBytesToMb(perfTotals.totals.webview2WorkingSetBytes)}`,
+    `- tree_memory_mb: ${formatBytesToMb(perfTotals.totals.privateWorkingSetBytes)}`,
     `- tree_private_mb: ${formatBytesToMb(perfTotals.totals.privateBytes)}`,
     `- tree_working_set_mb: ${formatBytesToMb(perfTotals.totals.workingSetBytes)}`,
     `- webview2_cpu_percent: ${

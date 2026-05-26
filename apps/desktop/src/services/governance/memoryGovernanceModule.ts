@@ -7,6 +7,7 @@ import {
   DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED,
   MEMORY_GOVERNANCE_INTERVAL_MS,
   MEMORY_GOVERNANCE_PLAYBACK_INTERVAL_MS,
+  type MemoryGovernanceRequest,
   type MemoryGovernanceReason,
 } from '../../contracts/memoryGovernance';
 import {
@@ -42,8 +43,11 @@ import {
   type RuntimeCapsuleManagerService,
 } from '../runtime-capsules';
 import { onStartupIdle } from '../../modules/startup/startupReady';
+import type { LifecycleFlushReason } from '../lifecycle/LifecycleService';
 
 const MEMORY_GOVERNANCE_STARTUP_FIRST_RUN_DELAY_MS = 15_000;
+const MEMORY_GOVERNANCE_REQUEST_DEFAULT_DELAYS_MS = [900] as const;
+const MEMORY_GOVERNANCE_REQUEST_DEFAULT_MIN_INTERVAL_MS = 2_500;
 
 function readEnabledSetting(): boolean {
   try {
@@ -63,6 +67,32 @@ function readEnabledSetting(): boolean {
     return readJson<boolean>(STORAGE_KEYS.MEMORY_GOVERNANCE_AUTO_ENABLED, fallbackEnabled);
   } catch {
     return DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED;
+  }
+}
+
+function normalizeRequestDelays(delaysMs?: readonly number[]): number[] {
+  const source =
+    Array.isArray(delaysMs) && delaysMs.length > 0
+      ? delaysMs
+      : MEMORY_GOVERNANCE_REQUEST_DEFAULT_DELAYS_MS;
+  return [...new Set(source)]
+    .map((value) => (Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0))
+    .sort((left, right) => left - right);
+}
+
+function resolveAuxWindowHiddenReason(
+  reason: LifecycleFlushReason
+): MemoryGovernanceReason | null {
+  switch (reason) {
+    case 'tauri-editor-window-hidden':
+      return 'editor-window-hidden';
+    case 'tauri-plugin-window-hidden':
+    case 'tauri-plugin-shell-surface-hidden':
+      return 'plugin-window-hidden';
+    case 'tauri-vst-manager-window-hidden':
+      return 'vst-manager-window-hidden';
+    default:
+      return null;
   }
 }
 
@@ -112,6 +142,8 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
       let timer: number | null = null;
       let playbackTimer: number | null = null;
       let cleanupStartupFirstRun: (() => void) | null = null;
+      let lastRequestedRunAtMs = 0;
+      const requestTimers = new Set<number>();
 
       const cancelStartupFirstRun = () => {
         cleanupStartupFirstRun?.();
@@ -122,6 +154,62 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
         if (playbackTimer === null) return;
         window.clearInterval(playbackTimer);
         playbackTimer = null;
+      };
+
+      const clearRequestTimers = () => {
+        for (const requestTimer of requestTimers) {
+          window.clearTimeout(requestTimer);
+        }
+        requestTimers.clear();
+      };
+
+      const runRequestedGovernance = (request: MemoryGovernanceRequest) => {
+        if (!enabled) return;
+
+        const minIntervalMs =
+          typeof request.minIntervalMs === 'number' && Number.isFinite(request.minIntervalMs)
+            ? Math.max(0, Math.floor(request.minIntervalMs))
+            : MEMORY_GOVERNANCE_REQUEST_DEFAULT_MIN_INTERVAL_MS;
+        const now = Date.now();
+        const elapsedMs = now - lastRequestedRunAtMs;
+        if (lastRequestedRunAtMs > 0 && elapsedMs < minIntervalMs) {
+          const retryTimer = window.setTimeout(() => {
+            requestTimers.delete(retryTimer);
+            runRequestedGovernance(request);
+          }, minIntervalMs - elapsedMs);
+          requestTimers.add(retryTimer);
+          return;
+        }
+
+        lastRequestedRunAtMs = now;
+        telemetry.debug('memory-governance.request.run', {
+          fields: {
+            reason: request.reason,
+            source: request.source,
+          },
+        });
+        void service.runOnce(request.reason);
+      };
+
+      const scheduleRequestedGovernance = (request: MemoryGovernanceRequest) => {
+        if (!enabled) return;
+
+        const delaysMs = normalizeRequestDelays(request.delaysMs);
+        telemetry.debug('memory-governance.request.scheduled', {
+          fields: {
+            reason: request.reason,
+            source: request.source,
+            delaysMs,
+          },
+        });
+
+        for (const delayMs of delaysMs) {
+          const requestTimer = window.setTimeout(() => {
+            requestTimers.delete(requestTimer);
+            runRequestedGovernance(request);
+          }, delayMs);
+          requestTimers.add(requestTimer);
+        }
       };
 
       const startPlaybackWatch = () => {
@@ -194,6 +282,7 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
           cancelStartupFirstRun();
           stop();
           stopPlaybackWatch();
+          clearRequestTimers();
         }
       };
 
@@ -213,15 +302,36 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
           return;
         }
 
+        const auxWindowHiddenReason = resolveAuxWindowHiddenReason(reason);
+        if (auxWindowHiddenReason) {
+          scheduleRequestedGovernance({
+            reason: auxWindowHiddenReason,
+            source: reason,
+            delaysMs: [1_200],
+            minIntervalMs: 2_500,
+          });
+          return;
+        }
+
         if (!enabled) return;
         if (
           reason === 'beforeunload' ||
           reason === 'pagehide' ||
+          reason === 'tauri-main-window-hidden' ||
           reason === 'tauri-window-hidden'
         ) {
-          void service.runOnce(reason);
+          void service.runOnce(
+            reason === 'tauri-main-window-hidden' ? 'tauri-main-window-hidden' : reason
+          );
         }
       });
+
+      const unsubscribeMemoryGovernanceRequests = events.on(
+        'memory-governance/requested',
+        (request) => {
+          scheduleRequestedGovernance(request);
+        }
+      );
 
       const onStorageChange = (event: Event) => {
         const detail = (event as CustomEvent<PmpStorageChangeDetail>).detail;
@@ -232,6 +342,7 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
 
       return () => {
         cancelStartupFirstRun();
+        clearRequestTimers();
         stop();
         stopPlaybackWatch();
         try {
@@ -240,6 +351,7 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
           // ignore
         }
         detachPerformanceObservability();
+        unsubscribeMemoryGovernanceRequests();
         window.removeEventListener(PMP_STORAGE_CHANGE_EVENT, onStorageChange as EventListener);
         unregister();
       };

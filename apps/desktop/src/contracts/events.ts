@@ -7,7 +7,7 @@ import type {
   CloudPlaybackQueueAuditSnapshot,
 } from '../services/audio';
 import type { KeybindingsSnapshot } from '../services/keybindings/types';
-import type { MemoryGovernanceRunResult } from './memoryGovernance';
+import type { MemoryGovernanceRequest, MemoryGovernanceRunResult } from './memoryGovernance';
 import type { PerformanceControlSnapshot } from './performanceControl';
 import type { QualitySnapshot } from './quality';
 
@@ -19,6 +19,7 @@ export type AppEvents = {
   };
   'quality/changed': QualitySnapshot;
   'performance-control/changed': PerformanceControlSnapshot;
+  'memory-governance/requested': MemoryGovernanceRequest;
   'memory-governance/ran': MemoryGovernanceRunResult;
   'keybindings/changed': KeybindingsSnapshot;
   'ui/commandPaletteToggleRequested': null;

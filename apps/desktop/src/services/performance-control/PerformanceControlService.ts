@@ -312,9 +312,11 @@ export class DefaultPerformanceControlService implements PerformanceControlServi
     if (totals) {
       webview2 = {
         sampledAtMs: totals.timestampMs,
+        webview2PrivateWorkingSetBytes: totals.totals.webview2PrivateWorkingSetBytes,
         webview2PrivateBytes: totals.totals.webview2PrivateBytes,
         webview2WorkingSetBytes: totals.totals.webview2WorkingSetBytes,
         webview2CpuPercent: totals.totals.webview2CpuPercent,
+        treePrivateWorkingSetBytes: totals.totals.privateWorkingSetBytes,
         treePrivateBytes: totals.totals.privateBytes,
         treeWorkingSetBytes: totals.totals.workingSetBytes,
         treeCpuPercent: totals.totals.cpuPercent,
@@ -332,6 +334,7 @@ export class DefaultPerformanceControlService implements PerformanceControlServi
       webview2,
       pressure: resolvePerformancePressureLevel({
         memoryTier: previous.governance.tier,
+        webview2PrivateWorkingSetBytes: webview2?.webview2PrivateWorkingSetBytes ?? null,
         webview2PrivateBytes: webview2?.webview2PrivateBytes ?? 0,
         webview2CpuPercent: webview2?.webview2CpuPercent ?? 0,
       }),
@@ -373,9 +376,12 @@ export class DefaultPerformanceControlService implements PerformanceControlServi
       webview2: result.snapshot.webview2
         ? {
             sampledAtMs: result.snapshot.webview2.processSampleAtMs,
+            webview2PrivateWorkingSetBytes:
+              result.snapshot.webview2.webview2PrivateWorkingSetBytes,
             webview2PrivateBytes: result.snapshot.webview2.webview2PrivateBytes,
             webview2WorkingSetBytes: result.snapshot.webview2.webview2WorkingSetBytes,
             webview2CpuPercent: result.snapshot.webview2.webview2CpuPercent,
+            treePrivateWorkingSetBytes: result.snapshot.webview2.treePrivateWorkingSetBytes,
             treePrivateBytes: result.snapshot.webview2.treePrivateBytes,
             treeWorkingSetBytes: result.snapshot.webview2.treeWorkingSetBytes,
             treeCpuPercent: result.snapshot.webview2.treeCpuPercent,
@@ -387,6 +393,8 @@ export class DefaultPerformanceControlService implements PerformanceControlServi
       ...this.snapshot,
       pressure: resolvePerformancePressureLevel({
         memoryTier: this.snapshot.governance.tier,
+        webview2PrivateWorkingSetBytes:
+          this.snapshot.webview2?.webview2PrivateWorkingSetBytes ?? null,
         webview2PrivateBytes: this.snapshot.webview2?.webview2PrivateBytes ?? 0,
         webview2CpuPercent: this.snapshot.webview2?.webview2CpuPercent ?? 0,
       }),

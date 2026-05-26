@@ -46,8 +46,12 @@ export function captureTelemetryScenarioSnapshot(
       ).catch(() => null);
       if (perfTotals) {
         nextFields.processPerfCapturedAtMs = perfTotals.timestampMs;
+        nextFields.webview2PrivateWorkingSetBytes =
+          perfTotals.totals.webview2PrivateWorkingSetBytes ?? null;
         nextFields.webview2PrivateBytes = perfTotals.totals.webview2PrivateBytes ?? null;
         nextFields.webview2WorkingSetBytes = perfTotals.totals.webview2WorkingSetBytes ?? null;
+        nextFields.treePrivateWorkingSetBytes =
+          perfTotals.totals.privateWorkingSetBytes ?? null;
         nextFields.treePrivateBytes = perfTotals.totals.privateBytes ?? null;
         nextFields.treeWorkingSetBytes = perfTotals.totals.workingSetBytes ?? null;
       }

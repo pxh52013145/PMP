@@ -54,10 +54,26 @@
   display: flex;
   justify-content: space-between;
   gap: 8px;
+  align-items: baseline;
 }
 
 .process-perf-monitor__label {
   opacity: 0.72;
+  flex: 0 0 auto;
+}
+
+.process-perf-monitor__memory-value {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 3px 6px;
+  min-width: 0;
+  text-align: right;
+}
+
+.process-perf-monitor__memory-primary {
+  color: rgba(255, 255, 255, 0.94);
+  font-weight: 700;
 }
 
 .process-perf-monitor__footer {

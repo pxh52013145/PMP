@@ -48,11 +48,15 @@ export function createLifecycleModule(): KernelModule<AppEvents> {
         void import('@tauri-apps/api/event')
           .then(({ listen }) =>
             Promise.all([
-              listen(TAURI_EVENTS.MAIN_WINDOW_HIDDEN, () => flush('tauri-window-hidden')),
-              listen(TAURI_EVENTS.EDITOR_WINDOW_HIDDEN, () => flush('tauri-window-hidden')),
-              listen(TAURI_EVENTS.PLUGIN_WINDOW_HIDDEN, () => flush('tauri-window-hidden')),
-              listen(TAURI_EVENTS.PLUGIN_SHELL_SURFACE_HIDDEN, () => flush('tauri-window-hidden')),
-              listen(TAURI_EVENTS.VST_MANAGER_WINDOW_HIDDEN, () => flush('tauri-window-hidden')),
+              listen(TAURI_EVENTS.MAIN_WINDOW_HIDDEN, () => flush('tauri-main-window-hidden')),
+              listen(TAURI_EVENTS.EDITOR_WINDOW_HIDDEN, () => flush('tauri-editor-window-hidden')),
+              listen(TAURI_EVENTS.PLUGIN_WINDOW_HIDDEN, () => flush('tauri-plugin-window-hidden')),
+              listen(TAURI_EVENTS.PLUGIN_SHELL_SURFACE_HIDDEN, () =>
+                flush('tauri-plugin-shell-surface-hidden')
+              ),
+              listen(TAURI_EVENTS.VST_MANAGER_WINDOW_HIDDEN, () =>
+                flush('tauri-vst-manager-window-hidden')
+              ),
             ])
           )
           .then(([mainHidden, editorHidden, pluginHidden, pluginShellSurfaceHidden, vstManagerHidden]) => {

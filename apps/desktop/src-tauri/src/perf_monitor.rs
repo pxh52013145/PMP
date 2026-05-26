@@ -39,6 +39,7 @@ pub struct ProcessPerfRow {
     pub name: String,
     pub kind: ProcessPerfKind,
     pub cpu_percent: Option<f64>,
+    pub private_working_set_bytes: Option<u64>,
     pub working_set_bytes: Option<u64>,
     pub private_bytes: Option<u64>,
 }
@@ -46,15 +47,19 @@ pub struct ProcessPerfRow {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessPerfTotals {
+    pub private_working_set_bytes: u64,
     pub working_set_bytes: u64,
     pub private_bytes: u64,
     pub cpu_percent: Option<f64>,
+    pub app_private_working_set_bytes: u64,
     pub app_working_set_bytes: u64,
     pub app_private_bytes: u64,
     pub app_cpu_percent: Option<f64>,
+    pub webview2_private_working_set_bytes: u64,
     pub webview2_working_set_bytes: u64,
     pub webview2_private_bytes: u64,
     pub webview2_cpu_percent: Option<f64>,
+    pub other_private_working_set_bytes: u64,
     pub other_working_set_bytes: u64,
     pub other_private_bytes: u64,
     pub other_cpu_percent: Option<f64>,
@@ -251,6 +256,7 @@ fn snapshot_windows(
                 name: entry.exe_name.clone(),
                 kind,
                 cpu_percent,
+                private_working_set_bytes: metrics.private_working_set_bytes,
                 working_set_bytes: metrics.working_set_bytes,
                 private_bytes: metrics.private_bytes,
             });
@@ -258,6 +264,7 @@ fn snapshot_windows(
 
         totals_builder.add_metrics(
             kind,
+            metrics.private_working_set_bytes,
             metrics.working_set_bytes,
             metrics.private_bytes,
             cpu_percent,
@@ -266,9 +273,11 @@ fn snapshot_windows(
 
     if include_processes {
         rows.sort_by_key(|row| {
+            let private_working_set_bytes = row.private_working_set_bytes.unwrap_or(0);
             let private_bytes = row.private_bytes.unwrap_or(0);
             let working_set_bytes = row.working_set_bytes.unwrap_or(0);
             (
+                Reverse(private_working_set_bytes),
                 Reverse(private_bytes),
                 Reverse(working_set_bytes),
                 row.name.clone(),
@@ -327,18 +336,22 @@ fn classify_process(pid: u32, exe_name: &str, root_pid: u32) -> ProcessPerfKind 
 #[cfg(target_os = "windows")]
 #[derive(Debug, Default)]
 struct TotalsBuilder {
+    private_working_set_bytes: u64,
     working_set_bytes: u64,
     private_bytes: u64,
     cpu_percent_sum: f64,
     cpu_percent_count: u32,
+    app_private_working_set_bytes: u64,
     app_working_set_bytes: u64,
     app_private_bytes: u64,
     app_cpu_percent_sum: f64,
     app_cpu_percent_count: u32,
+    webview2_private_working_set_bytes: u64,
     webview2_working_set_bytes: u64,
     webview2_private_bytes: u64,
     webview2_cpu_percent_sum: f64,
     webview2_cpu_percent_count: u32,
+    other_private_working_set_bytes: u64,
     other_working_set_bytes: u64,
     other_private_bytes: u64,
     other_cpu_percent_sum: f64,
@@ -350,10 +363,33 @@ impl TotalsBuilder {
     fn add_metrics(
         &mut self,
         kind: ProcessPerfKind,
+        private_working_set_bytes: Option<u64>,
         working_set_bytes: Option<u64>,
         private_bytes: Option<u64>,
         cpu_percent: Option<f64>,
     ) {
+        if let Some(private_ws) = private_working_set_bytes {
+            self.private_working_set_bytes =
+                self.private_working_set_bytes.saturating_add(private_ws);
+            match kind {
+                ProcessPerfKind::App => {
+                    self.app_private_working_set_bytes = self
+                        .app_private_working_set_bytes
+                        .saturating_add(private_ws);
+                }
+                ProcessPerfKind::WebView2 => {
+                    self.webview2_private_working_set_bytes = self
+                        .webview2_private_working_set_bytes
+                        .saturating_add(private_ws);
+                }
+                ProcessPerfKind::Child => {
+                    self.other_private_working_set_bytes = self
+                        .other_private_working_set_bytes
+                        .saturating_add(private_ws);
+                }
+            }
+        }
+
         if let Some(ws) = working_set_bytes {
             self.working_set_bytes = self.working_set_bytes.saturating_add(ws);
             match kind {
@@ -408,16 +444,20 @@ impl TotalsBuilder {
 
     fn finish(self) -> ProcessPerfTotals {
         ProcessPerfTotals {
+            private_working_set_bytes: self.private_working_set_bytes,
             working_set_bytes: self.working_set_bytes,
             private_bytes: self.private_bytes,
             cpu_percent: (self.cpu_percent_count > 0).then_some(self.cpu_percent_sum),
+            app_private_working_set_bytes: self.app_private_working_set_bytes,
             app_working_set_bytes: self.app_working_set_bytes,
             app_private_bytes: self.app_private_bytes,
             app_cpu_percent: (self.app_cpu_percent_count > 0).then_some(self.app_cpu_percent_sum),
+            webview2_private_working_set_bytes: self.webview2_private_working_set_bytes,
             webview2_working_set_bytes: self.webview2_working_set_bytes,
             webview2_private_bytes: self.webview2_private_bytes,
             webview2_cpu_percent: (self.webview2_cpu_percent_count > 0)
                 .then_some(self.webview2_cpu_percent_sum),
+            other_private_working_set_bytes: self.other_private_working_set_bytes,
             other_working_set_bytes: self.other_working_set_bytes,
             other_private_bytes: self.other_private_bytes,
             other_cpu_percent: (self.other_cpu_percent_count > 0)
@@ -430,6 +470,7 @@ impl TotalsBuilder {
 #[derive(Debug, Default)]
 struct ProcessMetrics {
     cpu_times_100ns: Option<CpuTimes100ns>,
+    private_working_set_bytes: Option<u64>,
     working_set_bytes: Option<u64>,
     private_bytes: Option<u64>,
 }
@@ -439,6 +480,7 @@ fn read_process_metrics(pid: u32) -> ProcessMetrics {
     use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
     use windows_sys::Win32::System::ProcessStatus::{
         GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+        PROCESS_MEMORY_COUNTERS_EX2,
     };
     use windows_sys::Win32::System::Threading::{
         GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
@@ -462,16 +504,29 @@ fn read_process_metrics(pid: u32) -> ProcessMetrics {
 
         let mut metrics = ProcessMetrics::default();
 
-        let mut mem: PROCESS_MEMORY_COUNTERS_EX = std::mem::zeroed();
-        mem.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
-        let mem_ok = GetProcessMemoryInfo(
+        let mut mem2: PROCESS_MEMORY_COUNTERS_EX2 = std::mem::zeroed();
+        mem2.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX2>() as u32;
+        let mem2_ok = GetProcessMemoryInfo(
             handle.0,
-            &mut mem as *mut _ as *mut PROCESS_MEMORY_COUNTERS,
-            mem.cb,
+            &mut mem2 as *mut _ as *mut PROCESS_MEMORY_COUNTERS,
+            mem2.cb,
         );
-        if mem_ok != 0 {
-            metrics.working_set_bytes = Some(mem.WorkingSetSize as u64);
-            metrics.private_bytes = Some(mem.PrivateUsage as u64);
+        if mem2_ok != 0 {
+            metrics.private_working_set_bytes = Some(mem2.PrivateWorkingSetSize as u64);
+            metrics.working_set_bytes = Some(mem2.WorkingSetSize as u64);
+            metrics.private_bytes = Some(mem2.PrivateUsage as u64);
+        } else {
+            let mut mem: PROCESS_MEMORY_COUNTERS_EX = std::mem::zeroed();
+            mem.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+            let mem_ok = GetProcessMemoryInfo(
+                handle.0,
+                &mut mem as *mut _ as *mut PROCESS_MEMORY_COUNTERS,
+                mem.cb,
+            );
+            if mem_ok != 0 {
+                metrics.working_set_bytes = Some(mem.WorkingSetSize as u64);
+                metrics.private_bytes = Some(mem.PrivateUsage as u64);
+            }
         }
 
         let mut creation: FILETIME = std::mem::zeroed();

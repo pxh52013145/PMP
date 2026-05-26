@@ -18,20 +18,25 @@ export type ProcessPerfRow = {
   name: string;
   kind: ProcessPerfKind;
   cpuPercent: number | null;
+  privateWorkingSetBytes: number | null;
   workingSetBytes: number | null;
   privateBytes: number | null;
 };
 
 export type ProcessPerfTotals = {
+  privateWorkingSetBytes: number;
   workingSetBytes: number;
   privateBytes: number;
   cpuPercent: number | null;
+  appPrivateWorkingSetBytes: number;
   appWorkingSetBytes: number;
   appPrivateBytes: number;
   appCpuPercent: number | null;
+  webview2PrivateWorkingSetBytes: number;
   webview2WorkingSetBytes: number;
   webview2PrivateBytes: number;
   webview2CpuPercent: number | null;
+  otherPrivateWorkingSetBytes: number;
   otherWorkingSetBytes: number;
   otherPrivateBytes: number;
   otherCpuPercent: number | null;
@@ -81,15 +86,19 @@ export class ProcessPerfRequestError extends Error {
 }
 
 const EMPTY_TOTALS: ProcessPerfTotals = {
+  privateWorkingSetBytes: 0,
   workingSetBytes: 0,
   privateBytes: 0,
   cpuPercent: null,
+  appPrivateWorkingSetBytes: 0,
   appWorkingSetBytes: 0,
   appPrivateBytes: 0,
   appCpuPercent: null,
+  webview2PrivateWorkingSetBytes: 0,
   webview2WorkingSetBytes: 0,
   webview2PrivateBytes: 0,
   webview2CpuPercent: null,
+  otherPrivateWorkingSetBytes: 0,
   otherWorkingSetBytes: 0,
   otherPrivateBytes: 0,
   otherCpuPercent: null,
@@ -162,17 +171,31 @@ function ensureSystemMemory(value: unknown): SystemMemorySnapshot | null {
 
 function ensureTotals(value: unknown): ProcessPerfTotals {
   if (!isRecord(value)) return EMPTY_TOTALS;
+  const workingSetBytes = readNumber(value.workingSetBytes, 0);
+  const appWorkingSetBytes = readNumber(value.appWorkingSetBytes, 0);
+  const webview2WorkingSetBytes = readNumber(value.webview2WorkingSetBytes, 0);
+  const otherWorkingSetBytes = readNumber(value.otherWorkingSetBytes, 0);
   return {
-    workingSetBytes: readNumber(value.workingSetBytes, 0),
+    privateWorkingSetBytes: readNumber(value.privateWorkingSetBytes, workingSetBytes),
+    workingSetBytes,
     privateBytes: readNumber(value.privateBytes, 0),
     cpuPercent: readOptionalNumber(value.cpuPercent),
-    appWorkingSetBytes: readNumber(value.appWorkingSetBytes, 0),
+    appPrivateWorkingSetBytes: readNumber(value.appPrivateWorkingSetBytes, appWorkingSetBytes),
+    appWorkingSetBytes,
     appPrivateBytes: readNumber(value.appPrivateBytes, 0),
     appCpuPercent: readOptionalNumber(value.appCpuPercent),
-    webview2WorkingSetBytes: readNumber(value.webview2WorkingSetBytes, 0),
+    webview2PrivateWorkingSetBytes: readNumber(
+      value.webview2PrivateWorkingSetBytes,
+      webview2WorkingSetBytes
+    ),
+    webview2WorkingSetBytes,
     webview2PrivateBytes: readNumber(value.webview2PrivateBytes, 0),
     webview2CpuPercent: readOptionalNumber(value.webview2CpuPercent),
-    otherWorkingSetBytes: readNumber(value.otherWorkingSetBytes, 0),
+    otherPrivateWorkingSetBytes: readNumber(
+      value.otherPrivateWorkingSetBytes,
+      otherWorkingSetBytes
+    ),
+    otherWorkingSetBytes,
     otherPrivateBytes: readNumber(value.otherPrivateBytes, 0),
     otherCpuPercent: readOptionalNumber(value.otherCpuPercent),
   };
@@ -186,6 +209,9 @@ function ensureRow(value: unknown): ProcessPerfRow | null {
     name: readString(value.name, '-'),
     kind: readKind(value.kind),
     cpuPercent: readOptionalNumber(value.cpuPercent),
+    privateWorkingSetBytes: readOptionalNumber(
+      value.privateWorkingSetBytes ?? value.workingSetBytes
+    ),
     workingSetBytes: readOptionalNumber(value.workingSetBytes),
     privateBytes: readOptionalNumber(value.privateBytes),
   };

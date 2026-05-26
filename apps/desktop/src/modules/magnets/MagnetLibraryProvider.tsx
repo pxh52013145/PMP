@@ -52,6 +52,7 @@ import { readJson, usePersistentSetting } from '../storage';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { createDefaultMagnetSpacesState, sanitizeMagnetSpacesState } from './spaces';
 import { createInitialMagnetSpaceTemplateLayout } from './spaceTemplates';
+import type { MemoryGovernanceRequest } from '../../contracts/memoryGovernance';
 import { parsePerformanceRuntimeProfile } from '../../contracts/performanceControl';
 import type { SpaceRuntimeGovernanceService } from '../../services/governance';
 import type { RuntimeCapsuleManagerService } from '../../services/runtime-capsules';
@@ -70,6 +71,7 @@ export interface MagnetLibraryProviderProps {
   registerFlushHandler?: (handler: () => void) => () => void;
   spaceRuntimeGovernance?: SpaceRuntimeGovernanceService | null;
   runtimeCapsuleManager?: RuntimeCapsuleManagerService | null;
+  onMemoryGovernanceRequest?: (request: MemoryGovernanceRequest) => void;
 }
 
 export interface MagnetConfigContextValue {
@@ -200,6 +202,7 @@ export function MagnetLibraryProvider({
   registerFlushHandler,
   spaceRuntimeGovernance = null,
   runtimeCapsuleManager = null,
+  onMemoryGovernanceRequest,
 }: MagnetLibraryProviderProps) {
   const runtimeDefaultActiveMagnetIds = useMemo(
     () => resolveRuntimeDefaultActiveMagnetIds(defaultActiveMagnetIds),
@@ -722,11 +725,18 @@ export function MagnetLibraryProvider({
           activeMagnetCount: snapshot.activeMagnetIds.size,
         },
       });
+      onMemoryGovernanceRequest?.({
+        reason: 'space-switch',
+        source: 'magnet-space-switch',
+        delaysMs: [1_500, 12_000],
+        minIntervalMs: 3_000,
+      });
     },
     [
       activeSpaceId,
       applyLoadedSpaceSnapshot,
       loadSpaceSnapshot,
+      onMemoryGovernanceRequest,
       persistLoadedMagnetState,
       spaceRuntimeGovernance,
     ]

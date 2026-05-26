@@ -89,4 +89,76 @@ describe('decideMemoryGovernancePlan', () => {
     expect(pressurePlan.tier).toBe(2);
     expect(pressurePlan.actions).toContain('teardown-idle-runtime-capsules');
   });
+
+  it('does not trim WebView2 working set for a moderate working-set-only sample', () => {
+    const plan = decideMemoryGovernancePlan({
+      ...BASE_SNAPSHOT,
+      isTauri: true,
+      webview2: {
+        processSampleAtMs: 1_000,
+        sampleIntervalMs: 1_000,
+        cpuCount: 8,
+        webview2PrivateWorkingSetBytes: 260_000_000,
+        webview2WorkingSetBytes: 520_000_000,
+        webview2PrivateBytes: 260_000_000,
+        webview2CpuPercent: 0,
+        treePrivateWorkingSetBytes: 400_000_000,
+        treeWorkingSetBytes: 650_000_000,
+        treePrivateBytes: 400_000_000,
+        treeCpuPercent: 0,
+      },
+    });
+
+    expect(plan.tier).toBe(1);
+    expect(plan.actions).not.toContain('trim-webview2-working-set');
+    expect(plan.actions).not.toContain('trim-tree-working-set');
+  });
+
+  it('does not trim for high committed bytes when task-manager memory is moderate', () => {
+    const plan = decideMemoryGovernancePlan({
+      ...BASE_SNAPSHOT,
+      isTauri: true,
+      webview2: {
+        processSampleAtMs: 1_000,
+        sampleIntervalMs: 1_000,
+        cpuCount: 8,
+        webview2PrivateWorkingSetBytes: 300_000_000,
+        webview2WorkingSetBytes: 520_000_000,
+        webview2PrivateBytes: 540_000_000,
+        webview2CpuPercent: 0,
+        treePrivateWorkingSetBytes: 450_000_000,
+        treeWorkingSetBytes: 650_000_000,
+        treePrivateBytes: 700_000_000,
+        treeCpuPercent: 0,
+      },
+    });
+
+    expect(plan.tier).toBe(1);
+    expect(plan.actions).not.toContain('trim-webview2-working-set');
+    expect(plan.actions).not.toContain('trim-tree-working-set');
+  });
+
+  it('trims working set only once WebView2 pressure is material', () => {
+    const plan = decideMemoryGovernancePlan({
+      ...BASE_SNAPSHOT,
+      isTauri: true,
+      webview2: {
+        processSampleAtMs: 1_000,
+        sampleIntervalMs: 1_000,
+        cpuCount: 8,
+        webview2PrivateWorkingSetBytes: 540_000_000,
+        webview2WorkingSetBytes: 760_000_000,
+        webview2PrivateBytes: 540_000_000,
+        webview2CpuPercent: 0,
+        treePrivateWorkingSetBytes: 700_000_000,
+        treeWorkingSetBytes: 900_000_000,
+        treePrivateBytes: 700_000_000,
+        treeCpuPercent: 0,
+      },
+    });
+
+    expect(plan.tier).toBe(2);
+    expect(plan.actions).toContain('trim-webview2-working-set');
+    expect(plan.actions).not.toContain('trim-tree-working-set');
+  });
 });
