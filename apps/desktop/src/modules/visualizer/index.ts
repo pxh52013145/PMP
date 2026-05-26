@@ -7,6 +7,16 @@ export {
   readStoredVisualizerWorkspaceViewMode,
   VisualizerWorkspaceRuntime,
 } from './workspace/VisualizerWorkspaceRuntime';
+export {
+  createDefaultVisualizerWorkbenchState,
+  createDefaultVisualizerWorkbenchStore,
+  DEFAULT_VISUALIZER_NATIVE_DOCK_SURFACE_IDS,
+  DEFAULT_VISUALIZER_WORKBENCH_SURFACES,
+  openDefaultVisualizerNativeDockSurfaces,
+  resolveDefaultVisualizerNativeDockSurfaceContents,
+  resolveDefaultVisualizerNativeDockSurfaceConfigs,
+  VISUALIZER_WORKBENCH_SURFACE_IDS,
+} from './workbench';
 export { ComponentRegistry } from './ComponentRegistry';
 export { createViewportInfo, resolveComponentBounds } from './CoordinateSystem';
 export { drawVisualizerGrid } from './GridSystem';
@@ -75,3 +85,10 @@ export type {
   VisualizerWorkspaceHostContext,
   VisualizerWorkspaceViewMode,
 } from './types';
+export type {
+  CreateDefaultVisualizerWorkbenchStateOptions,
+  CreateDefaultVisualizerWorkbenchStoreOptions,
+  ResolveDefaultVisualizerNativeDockSurfaceContentOptions,
+  VisualizerWorkbenchSurfaceId,
+  WorkbenchNativeSurfaceContentUpdate,
+} from './workbench';

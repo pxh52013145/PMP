@@ -212,6 +212,54 @@ pub async fn set_editor_memory_first_enabled(
     windows::editor::set_editor_windows_memory_first_enabled(&app, enabled)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub async fn open_workbench_native_surface(
+    app: tauri::AppHandle,
+    surface_id: String,
+    region: String,
+    width: f64,
+    height: f64,
+    title: Option<String>,
+) -> Result<(), String> {
+    let region =
+        windows::workbench_native_surface::WorkbenchNativeSurfaceRegion::from_str(region.as_str())
+            .ok_or_else(|| format!("Unknown workbench native surface region: {}", region))?;
+
+    windows::workbench_native_surface::open_surface(
+        &app,
+        windows::workbench_native_surface::WorkbenchNativeSurfaceConfig {
+            surface_id,
+            region,
+            title,
+            width,
+            height,
+        },
+    )
+}
+
+#[tauri::command]
+pub async fn sync_workbench_native_surfaces_geometry(app: tauri::AppHandle) -> Result<(), String> {
+    windows::workbench_native_surface::sync_geometry(&app)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn update_workbench_native_surface_content(
+    surface_id: String,
+    content: serde_json::Value,
+) -> Result<(), String> {
+    windows::workbench_native_surface::update_surface_content(surface_id, content)
+}
+
+#[tauri::command]
+pub async fn close_workbench_native_surface(surface_id: String) -> Result<(), String> {
+    windows::workbench_native_surface::close_surface(surface_id)
+}
+
+#[tauri::command]
+pub async fn close_all_workbench_native_surfaces() -> Result<(), String> {
+    windows::workbench_native_surface::close_all_surfaces()
+}
+
 #[tauri::command]
 pub async fn ornaments_editor_overlay_open(app: tauri::AppHandle) -> Result<(), String> {
     windows::ornaments_editor_overlay::open(&app)

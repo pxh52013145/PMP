@@ -4,8 +4,15 @@ import { Axis3d, Check, ChevronDown, Crosshair, Edit3, Grid2x2, PanelRight, Pane
 import { useKernel } from '../../contexts/KernelContext';
 import type { VisualizerContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n/react';
-import { readStoredVisualizerWorkspaceViewMode } from '../../modules/visualizer';
+import {
+  createDefaultVisualizerWorkbenchState,
+  readStoredVisualizerWorkspaceViewMode,
+  resolveDefaultVisualizerNativeDockSurfaceContents,
+  VISUALIZER_WORKBENCH_SURFACE_IDS,
+} from '../../modules/visualizer';
 import type { VisualizerWorkspaceViewMode } from '../../modules/visualizer';
+import { createWorkbenchNativeSurfaceManager } from '../../modules/workbench';
+import { AUDIO_ENGINE_SERVICE_TOKEN } from '../../services/audio';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import WindowResizeHandles from '../core/WindowResizeHandles';
@@ -63,6 +70,7 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
   const t = useT();
   const telemetry = useMemo(() => getTelemetryLogger('visualizer', 'VisualizerOverlay'), []);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  const nativeSurfaceManagerRef = useRef<ReturnType<typeof createWorkbenchNativeSurfaceManager> | null>(null);
   const closeTimerRef = useRef<number | null>(null);
   const closeRequestedRef = useRef(false);
   const closeFinishedRef = useRef(false);
@@ -161,6 +169,158 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
 
     return () => window.cancelAnimationFrame(rafId);
   }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return undefined;
+
+    const manager = createWorkbenchNativeSurfaceManager();
+    nativeSurfaceManagerRef.current = manager;
+    let disposed = false;
+    let unlistenMove: (() => void) | null = null;
+    let unlistenResize: (() => void) | null = null;
+    let unlistenAudioState: (() => void) | null = null;
+    let unlistenAudioTime: (() => void) | null = null;
+    let contentSyncTimer: number | null = null;
+    let lastContentSyncAt = 0;
+    const audioService = kernel.services.getOptional(AUDIO_ENGINE_SERVICE_TOKEN)?.getSnapshot().audioService ?? null;
+
+    const syncNativeSurfaces = () => {
+      void manager.syncGeometry().catch(() => undefined);
+    };
+
+    const syncNativeSurfaceContent = () => {
+      if (disposed) return;
+
+      const audioState = audioService?.getState();
+      const currentTrack = audioState?.currentTrack ?? null;
+      const durationSeconds = audioState?.duration ?? audioService?.getDuration() ?? 0;
+      const currentSeconds = audioState?.currentTime ?? audioService?.getCurrentTime() ?? 0;
+      const trackLabel = currentTrack
+        ? [currentTrack.title, currentTrack.artist].filter(Boolean).join(' - ')
+        : null;
+      const snapshot = createDefaultVisualizerWorkbenchState({
+        sceneId: visualizerId,
+      });
+      const updates = resolveDefaultVisualizerNativeDockSurfaceContents(snapshot, {
+        titleForKey: t,
+        durationMs: durationSeconds * 1_000,
+        playheadMs: currentSeconds * 1_000,
+        trackLabel,
+      });
+
+      lastContentSyncAt = window.performance.now();
+      void Promise.all(updates.map((update) => manager.updateContent(update.surfaceId, update.content))).catch(
+        (error) => {
+          telemetry.warn('visualizer.native-dock.content-sync.failed', {
+            message: error instanceof Error ? error.message : String(error),
+            fields: {
+              visualizerId,
+            },
+          });
+        }
+      );
+    };
+
+    const scheduleNativeSurfaceContentSync = (immediate = false) => {
+      if (disposed) return;
+      if (contentSyncTimer !== null) {
+        window.clearTimeout(contentSyncTimer);
+        contentSyncTimer = null;
+      }
+      if (immediate) {
+        syncNativeSurfaceContent();
+        return;
+      }
+
+      const elapsedMs = window.performance.now() - lastContentSyncAt;
+      const delayMs = Math.max(0, 125 - elapsedMs);
+      contentSyncTimer = window.setTimeout(() => {
+        contentSyncTimer = null;
+        syncNativeSurfaceContent();
+      }, delayMs);
+    };
+
+    const attachGeometryListeners = async () => {
+      try {
+        const [moveCleanup, resizeCleanup] = await Promise.all([
+          appWindow.onMoved(syncNativeSurfaces),
+          appWindow.onResized(syncNativeSurfaces),
+        ]);
+
+        if (disposed) {
+          moveCleanup();
+          resizeCleanup();
+          return;
+        }
+
+        unlistenMove = moveCleanup;
+        unlistenResize = resizeCleanup;
+      } catch (error) {
+        telemetry.warn('visualizer.native-dock.geometry-listeners.failed', {
+          message: error instanceof Error ? error.message : String(error),
+          fields: {
+            visualizerId,
+          },
+        });
+      }
+    };
+
+    const bootstrapNativeSurfaces = async () => {
+      const snapshot = createDefaultVisualizerWorkbenchState({
+        sceneId: visualizerId,
+      });
+
+      await manager.openSurfaces(snapshot, {
+        surfaceIds: [
+          VISUALIZER_WORKBENCH_SURFACE_IDS.timeline,
+          VISUALIZER_WORKBENCH_SURFACE_IDS.outliner,
+        ],
+      });
+
+      if (disposed) {
+        await manager.closeAll();
+        return;
+      }
+
+      if (!disposed) {
+        syncNativeSurfaces();
+        scheduleNativeSurfaceContentSync(true);
+      }
+    };
+
+    void bootstrapNativeSurfaces().catch((error) => {
+      telemetry.warn('visualizer.native-dock.bootstrap.failed', {
+        message: error instanceof Error ? error.message : String(error),
+        fields: {
+          visualizerId,
+        },
+      });
+    });
+
+    if (audioService) {
+      unlistenAudioState = audioService.onStateChange(() => scheduleNativeSurfaceContentSync(true));
+      unlistenAudioTime = audioService.onTimeUpdate(() => scheduleNativeSurfaceContentSync());
+    }
+
+    void attachGeometryListeners();
+    window.addEventListener('resize', syncNativeSurfaces);
+    return () => {
+      disposed = true;
+      if (contentSyncTimer !== null) {
+        window.clearTimeout(contentSyncTimer);
+        contentSyncTimer = null;
+      }
+      window.removeEventListener('resize', syncNativeSurfaces);
+      unlistenMove?.();
+      unlistenResize?.();
+      unlistenAudioState?.();
+      unlistenAudioTime?.();
+      void manager.closeAll().catch(() => undefined);
+      if (nativeSurfaceManagerRef.current === manager) {
+        nativeSurfaceManagerRef.current = null;
+      }
+    };
+  }, [kernel.services, t, telemetry, visualizerId]);
 
   useEffect(() => {
     return () => {

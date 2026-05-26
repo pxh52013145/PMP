@@ -211,9 +211,9 @@ fn is_pmp_identifier(value: &str, max_len: usize) -> bool {
     !bytes.is_empty()
         && bytes.len() <= max_len
         && bytes[0].is_ascii_alphabetic()
-        && bytes
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'.' || *byte == b'_' || *byte == b'-')
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_alphanumeric() || *byte == b'.' || *byte == b'_' || *byte == b'-'
+        })
 }
 
 fn is_capability_id(value: &str) -> bool {
@@ -263,8 +263,8 @@ fn required_string(
     read_string_alias(object, aliases).ok_or_else(|| preflight_invalid_payload(message, field))
 }
 
-fn normalize_no_payload(
-) -> Result<Option<serde_json::Value>, PluginHostCapabilityPreflightPayload> {
+fn normalize_no_payload() -> Result<Option<serde_json::Value>, PluginHostCapabilityPreflightPayload>
+{
     Ok(None)
 }
 
@@ -382,8 +382,11 @@ fn normalize_window_payload(
             Ok(Some(serde_json::Value::Object(next)))
         }
         "summonSurface" | "dismissSurface" => {
-            let object =
-                required_object(payload, "payload.surfaceId is required", "payload.surfaceId")?;
+            let object = required_object(
+                payload,
+                "payload.surfaceId is required",
+                "payload.surfaceId",
+            )?;
             let surface_id = required_string(
                 object,
                 &["surfaceId"],
@@ -397,7 +400,10 @@ fn normalize_window_payload(
                 ));
             }
             let mut next = serde_json::Map::new();
-            next.insert("surfaceId".to_string(), serde_json::Value::String(surface_id));
+            next.insert(
+                "surfaceId".to_string(),
+                serde_json::Value::String(surface_id),
+            );
             if let Some(surface_type) = read_string_alias(object, &["surfaceType"]) {
                 if surface_type != "overlay" && surface_type != "desktop-widget" {
                     return Err(preflight_invalid_payload(
@@ -445,8 +451,7 @@ fn normalize_storage_durable_text_payload(
         "describe" => normalize_no_payload(),
         "read" | "remove" => {
             let object = required_object(payload, "payload.key is required", "payload.key")?;
-            let key =
-                required_string(object, &["key"], "payload.key is required", "payload.key")?;
+            let key = required_string(object, &["key"], "payload.key is required", "payload.key")?;
             if !is_durable_text_key(&key) {
                 return Err(preflight_invalid_payload(
                     "payload.key is invalid",
@@ -459,8 +464,7 @@ fn normalize_storage_durable_text_payload(
         }
         "write" => {
             let object = required_object(payload, "payload.key is required", "payload.key")?;
-            let key =
-                required_string(object, &["key"], "payload.key is required", "payload.key")?;
+            let key = required_string(object, &["key"], "payload.key is required", "payload.key")?;
             if !is_durable_text_key(&key) {
                 return Err(preflight_invalid_payload(
                     "payload.key is invalid",
@@ -475,7 +479,10 @@ fn normalize_storage_durable_text_payload(
             };
             let mut next = serde_json::Map::new();
             next.insert("key".to_string(), serde_json::Value::String(key));
-            next.insert("value".to_string(), serde_json::Value::String(value.to_string()));
+            next.insert(
+                "value".to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
             Ok(Some(serde_json::Value::Object(next)))
         }
         _ => normalize_optional_object_payload(payload, "payload"),
@@ -500,8 +507,7 @@ fn normalize_audio_playback_payload(
             Ok(Some(serde_json::json!({ "time": time })))
         }
         "setVolume" => {
-            let object =
-                required_object(payload, "payload.volume is required", "payload.volume")?;
+            let object = required_object(payload, "payload.volume is required", "payload.volume")?;
             let Some(volume) = read_finite_number(object, "volume") else {
                 return Err(preflight_invalid_payload(
                     "payload.volume must be a number",
@@ -522,8 +528,12 @@ fn normalize_audio_playback_payload(
         }
         "setPlayMode" => {
             let object = required_object(payload, "payload.mode is required", "payload.mode")?;
-            let mode =
-                required_string(object, &["mode"], "payload.mode is required", "payload.mode")?;
+            let mode = required_string(
+                object,
+                &["mode"],
+                "payload.mode is required",
+                "payload.mode",
+            )?;
             Ok(Some(serde_json::json!({ "mode": mode })))
         }
         _ => normalize_optional_object_payload(payload, "payload"),
@@ -661,9 +671,7 @@ fn normalize_pmp_host_capability_payload(
             "writeConfig" | "patchConfig" => normalize_record_payload(payload, "value"),
             _ => normalize_optional_object_payload(payload, "payload"),
         },
-        "host.pmp.storage.durable-text" => {
-            normalize_storage_durable_text_payload(method, payload)
-        }
+        "host.pmp.storage.durable-text" => normalize_storage_durable_text_payload(method, payload),
         "host.pmp.audio-engine.playback" => normalize_audio_playback_payload(method, payload),
         "host.pmp.audio-engine.analysis" => {
             normalize_audio_analysis_payload(method, request_kind, payload)
@@ -954,7 +962,12 @@ fn run_plugin_host_capability_preflight(
         );
     }
     if !is_capability_method(method) {
-        return preflight_deny("method.invalid", "Invalid host capability method", None, None);
+        return preflight_deny(
+            "method.invalid",
+            "Invalid host capability method",
+            None,
+            None,
+        );
     }
 
     let permissions: HashSet<String> = request
@@ -1046,7 +1059,8 @@ fn run_plugin_host_capability_preflight(
         }
     }
 
-    if let Some(required_permission) = pmp_method_permission(capability_id, method, &request.payload)
+    if let Some(required_permission) =
+        pmp_method_permission(capability_id, method, &request.payload)
     {
         if !permissions.contains(required_permission) {
             return preflight_deny(

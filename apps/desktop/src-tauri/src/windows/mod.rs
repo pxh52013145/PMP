@@ -4,6 +4,7 @@ pub mod ornaments_editor_overlay;
 pub mod plugin;
 pub mod plugin_shell_surface;
 pub mod vst_manager;
+pub mod workbench_native_surface;
 
 #[cfg(target_os = "windows")]
 pub mod taskbar_thumbbar;

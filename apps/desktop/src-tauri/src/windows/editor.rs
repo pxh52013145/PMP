@@ -331,7 +331,6 @@ fn apply_always_on_top_preference(window: &tauri::Window, always_on_top: Option<
     }
 }
 
-
 fn request_force_close(app: &AppHandle, window_type: EditorWindowType) {
     let Some(window) = app.get_window(label(window_type)) else {
         return;
@@ -367,11 +366,9 @@ fn take_force_close(window_type: EditorWindowType) -> bool {
     set.remove(&window_type)
 }
 
-
 fn destroy_window(app: &AppHandle, window_type: EditorWindowType) {
     request_force_close(app, window_type);
 }
-
 
 pub fn set_editor_windows_memory_first_enabled(
     _app: &AppHandle,
@@ -389,7 +386,6 @@ pub fn open_editor_window(
     exit_flag: Arc<AtomicBool>,
     blur_enabled: Arc<AtomicBool>,
 ) -> Result<(), String> {
-
     let geometry = if window_type == EditorWindowType::Style {
         compute_style_bar_geometry(app).unwrap_or(geometry)
     } else {

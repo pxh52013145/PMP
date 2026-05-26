@@ -8,6 +8,12 @@ import { broadcastDataUpdate, STORAGE_KEYS } from '../../../utils/windowCommunic
 import { AudioDataBus } from '../AudioDataBus';
 import { ComponentRegistry } from '../ComponentRegistry';
 import { clamp, createViewportInfo, resolveComponentBaseSize, screenToWorld } from '../CoordinateSystem';
+import {
+  containsVisualizerEditRect,
+  getVisualizerEditMetricsById,
+  getVisualizerUniformScale,
+  type VisualizerEditHandleKind,
+} from '../editorGeometry';
 import { REFERENCE_COMPONENT_IDS, REFERENCE_VISUALIZER_COMPONENT_DEFINITIONS } from '../components/reference';
 import { renderSceneFrame, type ActiveVisualizerComponent } from '../RenderPipeline';
 import { resolveVisualizerScene } from '../scenes';
@@ -32,6 +38,8 @@ const EDIT_GRID_SIZE = 40;
 const DEFAULT_ZOOM = 1;
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 6;
+const MIN_SCALE = 0.15;
+const MAX_SCALE = 4;
 const MIN_VISUALIZER_FPS = 60;
 const FRAME_INTERVAL_EPSILON_MS = 1;
 const REFERENCE_STAGE_SIZE = 840;
@@ -46,6 +54,27 @@ type WorkspaceCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 type TransformControlsCompat = TransformControls & {
   getHelper?: () => THREE.Object3D;
 };
+type DragMode = 'component' | 'resize';
+
+interface VisualizerEditHitTarget {
+  type: 'label' | 'scale-handle';
+  componentId: string;
+  handle?: VisualizerEditHandleKind;
+}
+
+interface PointerDragState {
+  mode: DragMode;
+  pointerId: number;
+  startWorldX: number;
+  startWorldY: number;
+  componentId: string;
+  initialTransform: VisualizerComponentTransform;
+  initialScale?: number;
+  initialResizeDistance?: number;
+  resizeCenterX?: number;
+  resizeCenterY?: number;
+  handle?: VisualizerEditHandleKind;
+}
 
 interface PersistedVector3 {
   x: number;
@@ -166,6 +195,28 @@ function mergeTransforms(
     zIndex: override.zIndex ?? base.zIndex,
     opacity: override.opacity ?? base.opacity,
     visible: override.visible ?? base.visible,
+  };
+}
+
+function withUniformScale(
+  transform: VisualizerComponentTransform,
+  scale: number
+): VisualizerComponentTransform {
+  const nextScale = clamp(scale, MIN_SCALE, MAX_SCALE);
+  if (typeof transform.scale === 'number') {
+    return {
+      ...transform,
+      scale: nextScale,
+    };
+  }
+
+  return {
+    ...transform,
+    scale: {
+      x: nextScale,
+      y: nextScale,
+      ...(typeof transform.scale.z === 'number' ? { z: transform.scale.z } : {}),
+    },
   };
 }
 
@@ -511,6 +562,8 @@ export class VisualizerWorkspaceRuntime {
 
   private resizePending = false;
 
+  private pointerDrag: PointerDragState | null = null;
+
   private disposed = false;
 
   private readonly cleanupTasks: Array<() => void> = [];
@@ -649,23 +702,61 @@ export class VisualizerWorkspaceRuntime {
   private attachInteractionListeners(): void {
     if (typeof window === 'undefined') return;
 
-    const onPointerMove = (event: PointerEvent) => this.handlePointerMove(event);
+    const onPointerDown = (event: PointerEvent) => this.handlePointerDown(event);
+    const onCanvasPointerMove = (event: PointerEvent) => {
+      if (!this.pointerDrag) {
+        this.handlePointerMove(event);
+      }
+    };
+    const onWindowPointerMove = (event: PointerEvent) => {
+      if (this.pointerDrag) {
+        this.handlePointerMove(event);
+      }
+    };
+    const onPointerUp = (event: PointerEvent) => this.handlePointerUp(event);
+    const onPointerCancel = (event: PointerEvent) => this.handlePointerUp(event);
     const onPointerLeave = () => {
       this.progressHoverInfo.active = false;
+      if (this.editState.editMode && !this.pointerDrag) {
+        this.editState.hoveredComponentId = null;
+        this.editState.hoveredHandle = null;
+        this.updateCursor(null);
+      }
       this.requestFrame();
     };
     const onResize = () => {
       this.scheduleResize();
     };
+    const onWheel = (event: WheelEvent) => this.handleWheel(event);
+    const onKeyDown = (event: KeyboardEvent) => this.handleKeyDown(event);
+    const onBlur = () => {
+      if (this.pointerDrag) {
+        this.finishPointerDrag(true);
+      }
+    };
 
-    this.canvas.addEventListener('pointermove', onPointerMove);
+    this.canvas.addEventListener('pointerdown', onPointerDown, { capture: true });
+    this.canvas.addEventListener('pointermove', onCanvasPointerMove);
     this.canvas.addEventListener('pointerleave', onPointerLeave);
+    this.canvas.addEventListener('wheel', onWheel, { passive: false });
+    window.addEventListener('pointermove', onWindowPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('blur', onBlur);
     window.addEventListener('resize', onResize);
     window.visualViewport?.addEventListener('resize', onResize);
 
     this.cleanupTasks.push(
-      () => this.canvas.removeEventListener('pointermove', onPointerMove),
+      () => this.canvas.removeEventListener('pointerdown', onPointerDown, true),
+      () => this.canvas.removeEventListener('pointermove', onCanvasPointerMove),
       () => this.canvas.removeEventListener('pointerleave', onPointerLeave),
+      () => this.canvas.removeEventListener('wheel', onWheel),
+      () => window.removeEventListener('pointermove', onWindowPointerMove),
+      () => window.removeEventListener('pointerup', onPointerUp),
+      () => window.removeEventListener('pointercancel', onPointerCancel),
+      () => window.removeEventListener('keydown', onKeyDown, true),
+      () => window.removeEventListener('blur', onBlur),
       () => window.removeEventListener('resize', onResize),
       () => window.visualViewport?.removeEventListener('resize', onResize)
     );
@@ -993,6 +1084,41 @@ export class VisualizerWorkspaceRuntime {
     this.editState.zoom = nextZoom;
   }
 
+  private getSurfacePoint(
+    clientX: number,
+    clientY: number,
+    allowPlaneFallback = false
+  ): { x: number; y: number } | null {
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+
+    this.pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -(((clientY - rect.top) / rect.height) * 2 - 1);
+    this.raycaster.setFromCamera(this.pointer, this.activeCamera);
+
+    const [hit] = this.raycaster.intersectObject(this.surfaceMesh, false);
+    if (hit?.uv) {
+      return {
+        x: hit.uv.x * this.viewport.width,
+        y: (1 - hit.uv.y) * this.viewport.height,
+      };
+    }
+
+    if (!allowPlaneFallback) return null;
+
+    const normal = new THREE.Vector3(0, 0, 1).transformDirection(this.surfaceMesh.matrixWorld).normalize();
+    const origin = new THREE.Vector3().setFromMatrixPosition(this.surfaceMesh.matrixWorld);
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin);
+    const worldPoint = new THREE.Vector3();
+    if (!this.raycaster.ray.intersectPlane(plane, worldPoint)) return null;
+
+    const localPoint = this.surfaceMesh.worldToLocal(worldPoint.clone());
+    return {
+      x: (localPoint.x + 0.5) * this.viewport.width,
+      y: (0.5 - localPoint.y) * this.viewport.height,
+    };
+  }
+
   private updateProgressHover(surfaceX: number, surfaceY: number): void {
     const progressEntry = this.sceneComponentMap.get(REFERENCE_COMPONENT_IDS.progress);
     if (!progressEntry?.transform.visible) {
@@ -1031,26 +1157,358 @@ export class VisualizerWorkspaceRuntime {
     this.progressHoverInfo.distance = distance;
   }
 
-  private handlePointerMove(event: PointerEvent): void {
-    if (this.disposed || this.editState.editMode) {
-      this.progressHoverInfo.active = false;
+  private getHitTarget(clientX: number, clientY: number): VisualizerEditHitTarget | null {
+    if (!this.editState.editMode) return null;
+
+    const surfacePoint = this.getSurfacePoint(clientX, clientY, true);
+    if (!surfacePoint) return null;
+
+    const candidates = [...this.sceneComponents].sort((left, right) => {
+      const leftActive =
+        left.id === this.editState.selectedComponentId ||
+        left.id === this.editState.hoveredComponentId ||
+        left.id === this.editState.draggingComponentId ||
+        left.id === this.editState.resizingComponentId;
+      const rightActive =
+        right.id === this.editState.selectedComponentId ||
+        right.id === this.editState.hoveredComponentId ||
+        right.id === this.editState.draggingComponentId ||
+        right.id === this.editState.resizingComponentId;
+      if (leftActive !== rightActive) return rightActive ? 1 : -1;
+      return right.transform.zIndex - left.transform.zIndex;
+    });
+
+    const metricsById = getVisualizerEditMetricsById(candidates, this.viewport, this.viewState, this.surfaceContext);
+
+    for (const entry of candidates) {
+      if (!entry.transform.visible) continue;
+      const isHandleVisible =
+        entry.id === this.editState.selectedComponentId ||
+        entry.id === this.editState.hoveredComponentId ||
+        entry.id === this.editState.draggingComponentId ||
+        entry.id === this.editState.resizingComponentId;
+      if (!isHandleVisible) continue;
+
+      const metrics = metricsById.get(entry.id);
+      if (!metrics) continue;
+      if (containsVisualizerEditRect(metrics.scaleHandle, surfacePoint.x, surfacePoint.y)) {
+        return {
+          type: 'scale-handle',
+          componentId: entry.id,
+          handle: 'scale',
+        };
+      }
+    }
+
+    for (const entry of candidates) {
+      if (!entry.transform.visible) continue;
+      const metrics = metricsById.get(entry.id);
+      if (metrics && containsVisualizerEditRect(metrics.label, surfacePoint.x, surfacePoint.y)) {
+        return {
+          type: 'label',
+          componentId: entry.id,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  private selectComponent(componentId: string | null): void {
+    if (this.editState.selectedComponentId === componentId) return;
+
+    const previousId = this.editState.selectedComponentId;
+    if (previousId) {
+      this.sceneComponentMap.get(previousId)?.component.onFocusChange?.(false);
+    }
+
+    this.editState.selectedComponentId = componentId;
+
+    if (componentId) {
+      this.sceneComponentMap.get(componentId)?.component.onFocusChange?.(true);
+    }
+  }
+
+  private getCurrentHoverTarget(): VisualizerEditHitTarget | null {
+    if (!this.editState.hoveredComponentId) return null;
+    return {
+      type: this.editState.hoveredHandle === 'scale' ? 'scale-handle' : 'label',
+      componentId: this.editState.hoveredComponentId,
+      handle: this.editState.hoveredHandle ?? undefined,
+    };
+  }
+
+  private updateCursor(target: VisualizerEditHitTarget | null, dragging = false): void {
+    if (dragging) {
+      this.canvas.style.cursor = 'grabbing';
       return;
     }
 
-    const rect = this.canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointer.y = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
-    this.raycaster.setFromCamera(this.pointer, this.activeCamera);
-    const [hit] = this.raycaster.intersectObject(this.surfaceMesh, false);
-    if (!hit?.uv) {
+    if (!this.editState.editMode) {
+      this.canvas.style.cursor = 'grab';
+      return;
+    }
+
+    if (target?.type === 'scale-handle' || this.pointerDrag?.mode === 'resize') {
+      this.canvas.style.cursor = 'nwse-resize';
+      return;
+    }
+
+    this.canvas.style.cursor = target?.componentId ? 'grab' : 'default';
+  }
+
+  private clearCanvasInteractionCursor(): void {
+    this.canvas.style.removeProperty('cursor');
+  }
+
+  private updateComponentTransform(
+    componentId: string,
+    updater: (current: VisualizerComponentTransform) => VisualizerComponentTransform
+  ): void {
+    const entry = this.sceneComponentMap.get(componentId);
+    if (!entry) return;
+
+    const nextTransform = updater(entry.transform);
+    entry.transform = nextTransform;
+    this.layoutOverrides[componentId] = nextTransform;
+    entry.component.onTransformChange?.(nextTransform);
+    this.scheduleLayoutPersist();
+    this.requestFrame();
+  }
+
+  private finishPointerDrag(forcePersist = false): void {
+    if (!this.pointerDrag) return;
+
+    if (forcePersist) {
+      this.flushLayoutPersist();
+    } else {
+      this.scheduleLayoutPersist();
+    }
+
+    this.editState.draggingComponentId = null;
+    this.editState.resizingComponentId = null;
+    this.editState.activeHandle = null;
+    this.pointerDrag = null;
+    this.orbitControls.enabled = true;
+    this.updateCursor(this.getCurrentHoverTarget(), false);
+  }
+
+  private handlePointerDown(event: PointerEvent): void {
+    if (this.disposed || event.button !== 0) return;
+
+    const hit = this.getHitTarget(event.clientX, event.clientY);
+    const surfacePoint = this.getSurfacePoint(event.clientX, event.clientY, true);
+    if (!surfacePoint) return;
+
+    const world = screenToWorld(surfacePoint.x, surfacePoint.y, this.viewport, this.viewState);
+
+    if (this.editState.editMode && hit?.type === 'scale-handle') {
+      const entry = this.sceneComponentMap.get(hit.componentId);
+      if (!entry) return;
+
+      const initialTransform = cloneTransform(entry.transform, this.viewport, false);
+      this.selectComponent(hit.componentId);
+      this.pointerDrag = {
+        mode: 'resize',
+        pointerId: event.pointerId,
+        startWorldX: world.x,
+        startWorldY: world.y,
+        componentId: hit.componentId,
+        initialTransform,
+        initialScale: getVisualizerUniformScale(initialTransform),
+        initialResizeDistance: Math.max(
+          1,
+          Math.hypot(world.x - initialTransform.position.x, world.y - initialTransform.position.y)
+        ),
+        resizeCenterX: initialTransform.position.x,
+        resizeCenterY: initialTransform.position.y,
+        handle: hit.handle,
+      };
+      this.editState.resizingComponentId = hit.componentId;
+      this.editState.hoveredComponentId = hit.componentId;
+      this.editState.hoveredHandle = hit.handle ?? null;
+      this.editState.activeHandle = hit.handle ?? null;
+      this.orbitControls.enabled = false;
+      this.updateCursor(hit, true);
+      this.canvas.setPointerCapture?.(event.pointerId);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.requestFrame();
+      return;
+    }
+
+    if (this.editState.editMode && hit?.type) {
+      const entry = this.sceneComponentMap.get(hit.componentId);
+      if (!entry) return;
+
+      this.selectComponent(hit.componentId);
+      this.pointerDrag = {
+        mode: 'component',
+        pointerId: event.pointerId,
+        startWorldX: world.x,
+        startWorldY: world.y,
+        componentId: hit.componentId,
+        initialTransform: cloneTransform(entry.transform, this.viewport, false),
+      };
+      this.editState.draggingComponentId = hit.componentId;
+      this.editState.hoveredComponentId = hit.componentId;
+      this.editState.hoveredHandle = null;
+      this.editState.activeHandle = null;
+      this.orbitControls.enabled = false;
+      this.updateCursor(hit, true);
+      this.canvas.setPointerCapture?.(event.pointerId);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.requestFrame();
+      return;
+    }
+
+    if (this.editState.editMode) {
+      this.selectComponent(null);
+      this.editState.hoveredComponentId = null;
+      this.editState.hoveredHandle = null;
+      this.editState.activeHandle = null;
+      this.clearCanvasInteractionCursor();
+      this.requestFrame();
+      return;
+    }
+  }
+
+  private handlePointerMove(event: PointerEvent): void {
+    if (this.disposed) return;
+
+    if (this.pointerDrag && this.pointerDrag.pointerId === event.pointerId) {
+      const surfacePoint = this.getSurfacePoint(event.clientX, event.clientY, true);
+      if (!surfacePoint) return;
+
+      const world = screenToWorld(surfacePoint.x, surfacePoint.y, this.viewport, this.viewState);
+
+      if (this.pointerDrag.mode === 'component') {
+        const deltaX = world.x - this.pointerDrag.startWorldX;
+        const deltaY = world.y - this.pointerDrag.startWorldY;
+        const snapToGrid = this.editState.snapToGrid && !event.altKey;
+        const gridSize = Math.max(4, this.editState.gridSize);
+
+        this.updateComponentTransform(this.pointerDrag.componentId, (current) => {
+          const initial = this.pointerDrag?.initialTransform ?? current;
+          const nextX = initial.position.x + deltaX;
+          const nextY = initial.position.y + deltaY;
+          const snappedX = snapToGrid ? Math.round(nextX / gridSize) * gridSize : nextX;
+          const snappedY = snapToGrid ? Math.round(nextY / gridSize) * gridSize : nextY;
+          return {
+            ...current,
+            position: {
+              x: snappedX,
+              y: snappedY,
+              z: initial.position.z,
+            },
+          };
+        });
+      } else if (this.pointerDrag.mode === 'resize') {
+        const centerX = this.pointerDrag.resizeCenterX ?? this.pointerDrag.initialTransform.position.x;
+        const centerY = this.pointerDrag.resizeCenterY ?? this.pointerDrag.initialTransform.position.y;
+        const initialDistance = Math.max(1, this.pointerDrag.initialResizeDistance ?? 1);
+        const initialScale = this.pointerDrag.initialScale ?? getVisualizerUniformScale(this.pointerDrag.initialTransform);
+        const distance = Math.max(1, Math.hypot(world.x - centerX, world.y - centerY));
+        const rawScale = initialScale * (distance / initialDistance);
+        const nextScale = event.shiftKey ? Math.round(rawScale / 0.05) * 0.05 : rawScale;
+
+        this.updateComponentTransform(this.pointerDrag.componentId, (current) =>
+          withUniformScale(current, nextScale)
+        );
+      }
+
+      this.requestFrame();
+      return;
+    }
+
+    if (this.editState.editMode) {
+      this.progressHoverInfo.active = false;
+      const hit = this.getHitTarget(event.clientX, event.clientY);
+      this.editState.hoveredComponentId = hit?.componentId ?? null;
+      this.editState.hoveredHandle = hit?.handle ?? null;
+      this.updateCursor(hit, false);
+      this.requestFrame();
+      return;
+    }
+
+    const surfacePoint = this.getSurfacePoint(event.clientX, event.clientY, false);
+    if (!surfacePoint) {
       this.progressHoverInfo.active = false;
       this.requestFrame();
       return;
     }
 
-    this.updateProgressHover(hit.uv.x * this.viewport.width, (1 - hit.uv.y) * this.viewport.height);
+    this.updateProgressHover(surfacePoint.x, surfacePoint.y);
     this.requestFrame();
+  }
+
+  private handlePointerUp(event: PointerEvent): void {
+    if (this.disposed) return;
+    if (!this.pointerDrag || this.pointerDrag.pointerId !== event.pointerId) return;
+
+    this.finishPointerDrag(true);
+    this.canvas.releasePointerCapture?.(event.pointerId);
+    const hit = this.getHitTarget(event.clientX, event.clientY);
+    this.editState.hoveredComponentId = hit?.componentId ?? null;
+    this.editState.hoveredHandle = hit?.handle ?? null;
+    this.updateCursor(hit, false);
+    this.requestFrame();
+  }
+
+  private handleWheel(event: WheelEvent): void {
+    if (this.disposed) return;
+
+    const hit = this.editState.editMode ? this.getHitTarget(event.clientX, event.clientY) : null;
+    const targetId = hit?.componentId ?? null;
+    const zoomFactor = event.deltaY < 0 ? 1.05 : 0.95;
+
+    if (this.editState.editMode && targetId) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.selectComponent(targetId);
+      this.editState.hoveredComponentId = targetId;
+      this.editState.hoveredHandle = hit?.handle ?? null;
+      this.updateComponentTransform(targetId, (current) =>
+        withUniformScale(current, getVisualizerUniformScale(current) * zoomFactor)
+      );
+      this.updateCursor(hit, false);
+      return;
+    }
+
+    if (!this.editState.editMode) {
+      const surfacePoint = this.getSurfacePoint(event.clientX, event.clientY, false);
+      if (surfacePoint) {
+        this.updateProgressHover(surfacePoint.x, surfacePoint.y);
+      }
+    }
+  }
+
+  private handleKeyDown(event: KeyboardEvent): void {
+    if (this.disposed || !this.editState.editMode) return;
+    if (event.defaultPrevented) return;
+
+    const targetId = this.editState.selectedComponentId ?? this.editState.hoveredComponentId;
+    if (!targetId) return;
+
+    if (event.key === '[' || event.key === '-') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.updateComponentTransform(targetId, (current) => ({
+        ...current,
+        zIndex: current.zIndex - 1,
+      }));
+      return;
+    }
+
+    if (event.key === ']' || event.key === '=' || event.key === '+') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.updateComponentTransform(targetId, (current) => ({
+        ...current,
+        zIndex: current.zIndex + 1,
+      }));
+    }
   }
 
   private updateCameraProjection(): void {
@@ -1102,10 +1560,9 @@ export class VisualizerWorkspaceRuntime {
     this.orbitControls.enableZoom = true;
     this.orbitControls.update();
     this.transformControls.camera = this.activeCamera;
-    this.transformControlsHelper.visible = this.editState.editMode;
-    if (this.editState.editMode) {
-      this.transformControls.attach(this.surfaceGroup);
-    }
+    this.transformControls.enabled = false;
+    this.transformControls.detach();
+    this.transformControlsHelper.visible = false;
     this.configureComponentHostRoot();
   }
 
@@ -1162,11 +1619,13 @@ export class VisualizerWorkspaceRuntime {
     this.layoutOverrides = this.layoutStore.scenes[this.sceneId] ?? {};
     this.applyStoredViewState(sceneId);
     this.applyStoredViewMode(this.layoutStore.viewModes?.[sceneId] ?? this.viewMode);
+    this.selectComponent(null);
     this.editState.hoveredComponentId = null;
     this.editState.draggingComponentId = null;
     this.editState.resizingComponentId = null;
     this.editState.hoveredHandle = null;
     this.editState.activeHandle = null;
+    this.pointerDrag = null;
     this.activateScene(sceneId);
     this.requestFrame();
   }
@@ -1235,12 +1694,25 @@ export class VisualizerWorkspaceRuntime {
     this.progressHoverInfo.active = false;
 
     if (editMode) {
-      this.transformControls.attach(this.surfaceGroup);
-      this.transformControlsHelper.visible = true;
-    } else {
+      this.orbitControls.enabled = true;
       this.transformControls.detach();
+      this.transformControls.enabled = false;
+      this.transformControlsHelper.visible = false;
+      this.updateCursor(this.getCurrentHoverTarget(), false);
+    } else {
+      this.finishPointerDrag(true);
+      this.orbitControls.enabled = true;
+      this.editState.hoveredComponentId = null;
+      this.editState.draggingComponentId = null;
+      this.editState.resizingComponentId = null;
+      this.editState.hoveredHandle = null;
+      this.editState.activeHandle = null;
+      this.selectComponent(null);
+      this.transformControls.detach();
+      this.transformControls.enabled = false;
       this.transformControlsHelper.visible = false;
       this.flushLayoutPersist();
+      this.clearCanvasInteractionCursor();
     }
 
     this.requestFrame();
@@ -1262,6 +1734,8 @@ export class VisualizerWorkspaceRuntime {
     this.editState.resizingComponentId = null;
     this.editState.hoveredHandle = null;
     this.editState.activeHandle = null;
+    this.selectComponent(null);
+    this.pointerDrag = null;
 
     for (const entry of this.sceneComponents) {
       const defaultTransform = cloneTransform(
