@@ -9,6 +9,7 @@ type VisualizerCanvasProps = {
   visualizerId: string;
   className?: string;
   editMode?: boolean;
+  componentVisibilityOverrides?: Readonly<Record<string, boolean>>;
   resetLayoutRevision?: number;
   centerCanvasRevision?: number;
   resetCanvasSizeRevision?: number;
@@ -30,6 +31,7 @@ export function VisualizerCanvas({
   visualizerId,
   className,
   editMode = false,
+  componentVisibilityOverrides,
   resetLayoutRevision = 0,
   centerCanvasRevision = 0,
   resetCanvasSizeRevision = 0,
@@ -79,6 +81,10 @@ export function VisualizerCanvas({
   useEffect(() => {
     runtimeRef.current?.setEditMode(editMode);
   }, [editMode]);
+
+  useEffect(() => {
+    runtimeRef.current?.setComponentVisibilityOverrides(componentVisibilityOverrides);
+  }, [componentVisibilityOverrides]);
 
   useEffect(() => {
     runtimeRef.current?.setViewMode(viewMode);

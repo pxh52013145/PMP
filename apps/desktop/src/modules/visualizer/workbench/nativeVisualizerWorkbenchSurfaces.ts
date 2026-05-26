@@ -41,6 +41,7 @@ export interface ResolveDefaultVisualizerNativeDockSurfaceContentOptions {
   durationMs?: number | null;
   playheadMs?: number | null;
   trackLabel?: string | null;
+  componentVisibility?: Readonly<Record<string, boolean>>;
 }
 
 export interface WorkbenchNativeSurfaceContentUpdate {
@@ -114,6 +115,20 @@ export function resolveDefaultVisualizerNativeDockSurfaceContents(
     'Outliner',
     options.titleForKey
   );
+  const componentItems = scene.components
+    .slice()
+    .sort((a, b) => (a.transform?.zIndex ?? 0) - (b.transform?.zIndex ?? 0) || a.id.localeCompare(b.id))
+    .map((component) => {
+      return {
+        id: component.id,
+        label: resolveComponentLabel(component.id),
+        kind: 'component' as const,
+        depth: 1,
+        visible: options.componentVisibility?.[component.id] ?? component.transform?.visible ?? true,
+        selected: selectedIds.has(component.id),
+      };
+    });
+  const sceneVisible = componentItems.length === 0 || componentItems.some((item) => item.visible);
 
   return [
     {
@@ -143,22 +158,10 @@ export function resolveDefaultVisualizerNativeDockSurfaceContents(
             label: scene.title ?? scene.id,
             kind: 'scene',
             depth: 0,
-            visible: true,
+            visible: sceneVisible,
             selected: selectedIds.has(scene.id),
           },
-          ...scene.components
-            .slice()
-            .sort((a, b) => (a.transform?.zIndex ?? 0) - (b.transform?.zIndex ?? 0) || a.id.localeCompare(b.id))
-            .map((component) => {
-              return {
-                id: component.id,
-                label: resolveComponentLabel(component.id),
-                kind: 'component' as const,
-                depth: 1,
-                visible: component.transform?.visible ?? true,
-                selected: selectedIds.has(component.id),
-              };
-            }),
+          ...componentItems,
         ],
       },
     },

@@ -1718,6 +1718,22 @@ export class VisualizerWorkspaceRuntime {
     this.requestFrame();
   }
 
+  setComponentVisibilityOverrides(
+    overrides: Readonly<Record<string, boolean>> | null | undefined
+  ): void {
+    if (this.disposed || !overrides) return;
+
+    for (const [componentId, visible] of Object.entries(overrides)) {
+      if (typeof visible !== 'boolean') continue;
+      const entry = this.sceneComponentMap.get(componentId);
+      if (!entry || entry.transform.visible === visible) continue;
+      this.updateComponentTransform(componentId, (current) => ({
+        ...current,
+        visible,
+      }));
+    }
+  }
+
   resetLayout(): void {
     this.layoutOverrides = {};
     this.layoutStore.scenes[this.sceneId] = {};

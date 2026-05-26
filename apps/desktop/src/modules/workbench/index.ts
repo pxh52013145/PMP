@@ -2,6 +2,7 @@ export {
   createWorkbenchNativeSurfaceManager,
   resolveWorkbenchNativeSurfaceOpenConfigs,
 } from './nativeSurfaceManager';
+export { WORKBENCH_NATIVE_SURFACE_EVENT } from '../../contracts/workbench';
 export {
   cloneSurface,
   cloneWorkbenchState,
@@ -29,6 +30,7 @@ export type {
   WorkbenchNativeOutlinerItem,
   WorkbenchNativeOutlinerItemKind,
   WorkbenchNativeOutlinerSurfaceContent,
+  WorkbenchNativeSurfaceEvent,
   WorkbenchNativeSurfaceContent,
   WorkbenchNativeTimelineMarker,
   WorkbenchNativeTimelineSurfaceContent,

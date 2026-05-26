@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultVisualizerWorkbenchState } from './defaultVisualizerWorkbench';
+import {
+  createDefaultVisualizerWorkbenchState,
+  createDefaultVisualizerWorkbenchStore,
+} from './defaultVisualizerWorkbench';
 import {
   resolveDefaultVisualizerNativeDockSurfaceContents,
   resolveDefaultVisualizerNativeDockSurfaceConfigs,
@@ -49,5 +52,50 @@ describe('nativeVisualizerWorkbenchSurfaces', () => {
       VISUALIZER_WORKBENCH_SURFACE_IDS.outliner,
       VISUALIZER_WORKBENCH_SURFACE_IDS.timeline,
     ]);
+  });
+
+  it('projects workbench selection into native outliner content', () => {
+    const store = createDefaultVisualizerWorkbenchStore({
+      sceneId: 'audio-visualizer',
+      now: () => 42,
+    });
+    store.dispatch({
+      type: 'selection.set',
+      scope: 'component',
+      ids: ['freq'],
+      primaryId: 'freq',
+    });
+
+    const outliner = resolveDefaultVisualizerNativeDockSurfaceContents(store.getSnapshot()).find(
+      (update) => update.surfaceId === VISUALIZER_WORKBENCH_SURFACE_IDS.outliner
+    )?.content;
+
+    expect(outliner?.kind).toBe('outliner');
+    if (outliner?.kind !== 'outliner') return;
+    expect(outliner.selectedIds).toEqual(['freq']);
+    expect(outliner.items.find((item) => item.id === 'freq')).toMatchObject({
+      label: 'Freq',
+      selected: true,
+    });
+  });
+
+  it('projects component visibility overrides into native outliner content', () => {
+    const snapshot = createDefaultVisualizerWorkbenchState({
+      sceneId: 'audio-visualizer',
+    });
+    const outliner = resolveDefaultVisualizerNativeDockSurfaceContents(snapshot, {
+      componentVisibility: {
+        freq: false,
+      },
+    }).find((update) => update.surfaceId === VISUALIZER_WORKBENCH_SURFACE_IDS.outliner)?.content;
+
+    expect(outliner?.kind).toBe('outliner');
+    if (outliner?.kind !== 'outliner') return;
+    expect(outliner.items.find((item) => item.id === 'audio-visualizer')).toMatchObject({
+      visible: true,
+    });
+    expect(outliner.items.find((item) => item.id === 'freq')).toMatchObject({
+      visible: false,
+    });
   });
 });

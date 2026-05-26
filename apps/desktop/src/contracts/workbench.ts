@@ -125,6 +125,37 @@ export type WorkbenchNativeSurfaceContent =
   | WorkbenchNativeTimelineSurfaceContent
   | WorkbenchNativeOutlinerSurfaceContent;
 
+export const WORKBENCH_NATIVE_SURFACE_EVENT = 'workbench-native-surface-event';
+
+export type WorkbenchNativeSurfaceEvent =
+  | {
+      kind: 'timeline.seek';
+      surfaceId: string;
+      playheadMs: number;
+    }
+  | {
+      kind: 'timeline.clip.set';
+      surfaceId: string;
+      range: WorkbenchTimeRange;
+      isFinal: boolean;
+    }
+  | {
+      kind: 'timeline.loop.set';
+      surfaceId: string;
+      range: WorkbenchTimeRange;
+      isFinal: boolean;
+    }
+  | {
+      kind: 'outliner.select';
+      surfaceId: string;
+      itemId: string;
+    }
+  | {
+      kind: 'outliner.visibility.toggle';
+      surfaceId: string;
+      itemId: string;
+    };
+
 export interface WorkbenchSelectionState {
   scope: WorkbenchSelectionScope;
   ids: string[];

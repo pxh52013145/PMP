@@ -59,9 +59,9 @@ export const DEFAULT_VISUALIZER_WORKBENCH_SURFACES: readonly WorkbenchSurfaceSpe
     pointerPolicy: 'capture-input',
     carrierHint: 'native',
     titleKey: 'visualizer.workbench.surface.timeline',
-    height: 208,
-    minHeight: 144,
-    maxHeight: 360,
+    height: 104,
+    minHeight: 84,
+    maxHeight: 160,
   },
   {
     id: VISUALIZER_WORKBENCH_SURFACE_IDS.outliner,
@@ -186,4 +186,3 @@ export function createDefaultVisualizerWorkbenchStore(
     now,
   });
 }
-

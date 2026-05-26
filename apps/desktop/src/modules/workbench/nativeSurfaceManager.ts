@@ -1,9 +1,11 @@
 import type {
+  WorkbenchNativeSurfaceEvent,
   WorkbenchNativeSurfaceContent,
   WorkbenchStateSnapshot,
   WorkbenchSurfaceRegion,
   WorkbenchSurfaceSpec,
 } from '../../contracts/workbench';
+import { WORKBENCH_NATIVE_SURFACE_EVENT } from '../../contracts/workbench';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
@@ -26,6 +28,7 @@ export interface WorkbenchNativeSurfaceManager {
     options?: ResolveWorkbenchNativeSurfaceConfigOptions
   ): Promise<WorkbenchNativeSurfaceOpenConfig[]>;
   updateContent(surfaceId: string, content: WorkbenchNativeSurfaceContent): Promise<void>;
+  listenEvents(listener: (event: WorkbenchNativeSurfaceEvent) => void): Promise<() => void>;
   syncGeometry(): Promise<void>;
   closeSurface(surfaceId: string): Promise<void>;
   closeAll(): Promise<void>;
@@ -59,7 +62,7 @@ function resolveSurfaceSize(surface: WorkbenchSurfaceSpec): { width: number; hei
   if (surface.region === 'bottom') {
     return {
       width: Math.max(1, Math.floor(surface.width ?? surface.minWidth ?? 1)),
-      height: Math.max(44, Math.floor(surface.height ?? surface.minHeight ?? 208)),
+      height: Math.max(44, Math.floor(surface.height ?? surface.minHeight ?? 104)),
     };
   }
   if (surface.region === 'right') {
@@ -157,6 +160,13 @@ export function createWorkbenchNativeSurfaceManager(): WorkbenchNativeSurfaceMan
           slowThresholdMs: 60,
         }
       );
+    },
+    listenEvents: async (listener: (event: WorkbenchNativeSurfaceEvent) => void) => {
+      if (!isTauriRuntime()) return () => undefined;
+      const { listen } = await import('@tauri-apps/api/event');
+      return listen<WorkbenchNativeSurfaceEvent>(WORKBENCH_NATIVE_SURFACE_EVENT, (event) => {
+        listener(event.payload);
+      });
     },
     syncGeometry: async () => {
       if (!isTauriRuntime()) return;
