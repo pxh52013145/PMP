@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   BadgeCheck,
+  ChevronDown,
+  ChevronRight,
   Database,
   FileAudio,
   ListChecks,
@@ -19,6 +21,7 @@ import { useAudioService } from '../../../contexts/AudioEngineContext';
 import { useT } from '../../../i18n';
 import { readLocalMusicTags } from '../../../modules/music-tag/nativeMusicTag';
 import type { Track } from '../../../services/audio';
+import { useCoverUrlForTrack } from '../shared/useCoverUrlForTrack';
 import './MusicTagWorkbenchMagnet.css';
 
 type LocalTagReadState = 'idle' | 'loading' | 'ready' | 'error';
@@ -161,6 +164,9 @@ export function MusicTagWorkbenchMagnet() {
   const [localTagState, setLocalTagState] = useState<LocalTagReadState>('idle');
   const [localTagResult, setLocalTagResult] = useState<MusicTagReadLocalResult | null>(null);
   const [localTagError, setLocalTagError] = useState<string | null>(null);
+  const [metadataCollapsed, setMetadataCollapsed] = useState(false);
+  const [queueCollapsed, setQueueCollapsed] = useState(false);
+  const coverUrl = useCoverUrlForTrack(track, { coverSizeHint: 'small' });
 
   useEffect(() => {
     setTrack(audioService.getState().currentTrack);
@@ -250,6 +256,36 @@ export function MusicTagWorkbenchMagnet() {
         key: 'year',
         label: t('pages.musicTagWorkbench.fields.year'),
         value: formatFieldValue(track?.year, empty),
+      },
+      {
+        key: 'trackNumber',
+        label: t('pages.musicTagWorkbench.fields.trackNumber'),
+        value: formatFieldValue(track?.trackNumber, empty),
+      },
+      {
+        key: 'discNumber',
+        label: t('pages.musicTagWorkbench.fields.discNumber'),
+        value: formatFieldValue(track?.discNumber, empty),
+      },
+      {
+        key: 'composer',
+        label: t('pages.musicTagWorkbench.fields.composer'),
+        value: formatFieldValue(track?.composer, empty),
+      },
+      {
+        key: 'format',
+        label: t('pages.musicTagWorkbench.fields.format'),
+        value: formatFieldValue(track?.format || track?.codecName, empty),
+      },
+      {
+        key: 'bitrate',
+        label: t('pages.musicTagWorkbench.fields.bitrate'),
+        value: track?.bitrate ? `${Math.round(track.bitrate / 1000)} kbps` : empty,
+      },
+      {
+        key: 'sampleRate',
+        label: t('pages.musicTagWorkbench.fields.sampleRate'),
+        value: track?.sampleRate ? `${(track.sampleRate / 1000).toFixed(1)} kHz` : empty,
       },
       {
         key: 'file',
@@ -379,7 +415,15 @@ export function MusicTagWorkbenchMagnet() {
       </div>
 
       <div className="music-tag-workbench-magnet__trackBand" aria-label={t('pages.musicTagWorkbench.currentTrack')}>
-        <Music2 size={24} aria-hidden="true" />
+        {coverUrl ? (
+          <img
+            className="music-tag-workbench-magnet__coverArt"
+            src={coverUrl}
+            alt={t('pages.musicTagWorkbench.fields.title')}
+          />
+        ) : (
+          <Music2 size={24} aria-hidden="true" />
+        )}
         <div className="music-tag-workbench-magnet__trackText">
           <span className="music-tag-workbench-magnet__trackTitle" title={trackTitle}>
             {trackTitle}
@@ -413,9 +457,17 @@ export function MusicTagWorkbenchMagnet() {
       </div>
 
       <div className="music-tag-workbench-magnet__body">
-        <section className="music-tag-workbench-magnet__panel" aria-label={t('pages.musicTagWorkbench.metadataPanel')}>
+        <section className={`music-tag-workbench-magnet__panel ${metadataCollapsed ? 'is-collapsed' : ''}`} aria-label={t('pages.musicTagWorkbench.metadataPanel')}>
           <div className="music-tag-workbench-magnet__panelHeader">
-            <h2>{t('pages.musicTagWorkbench.metadataPanel')}</h2>
+            <button
+              type="button"
+              className="music-tag-workbench-magnet__collapseToggle"
+              onClick={() => setMetadataCollapsed((v) => !v)}
+              aria-expanded={!metadataCollapsed}
+            >
+              {metadataCollapsed ? <ChevronRight size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+              <h2>{t('pages.musicTagWorkbench.metadataPanel')}</h2>
+            </button>
             <button
               type="button"
               disabled={!hasLocalFile || localTagState === 'loading'}
@@ -438,68 +490,82 @@ export function MusicTagWorkbenchMagnet() {
               </span>
             </button>
           </div>
-          <div className={`music-tag-workbench-magnet__readNotice is-${localTagState}`}>
-            {localTagState === 'error' ? (
-              <AlertCircle size={14} aria-hidden="true" />
-            ) : (
-              <FileAudio size={14} aria-hidden="true" />
-            )}
-            <span title={localTagError ?? undefined}>{localReadStatusText}</span>
-            {localTagResult?.format ? <strong>{localTagResult.format}</strong> : null}
-          </div>
-          {localTagState === 'ready' && localTagResult ? (
-            <div className="music-tag-workbench-magnet__comparisonTable">
-              <div className="music-tag-workbench-magnet__comparisonHead">
-                <span>{t('pages.musicTagWorkbench.compare.field')}</span>
-                <span>{t('pages.musicTagWorkbench.compare.library')}</span>
-                <span>{t('pages.musicTagWorkbench.compare.file')}</span>
-                <span>{t('pages.musicTagWorkbench.compare.status')}</span>
+          {!metadataCollapsed && (
+            <>
+              <div className={`music-tag-workbench-magnet__readNotice is-${localTagState}`}>
+                {localTagState === 'error' ? (
+                  <AlertCircle size={14} aria-hidden="true" />
+                ) : (
+                  <FileAudio size={14} aria-hidden="true" />
+                )}
+                <span title={localTagError ?? undefined}>{localReadStatusText}</span>
+                {localTagResult?.format ? <strong>{localTagResult.format}</strong> : null}
               </div>
-              {comparisonRows.map((row) => (
-                <div key={row.key} className={`music-tag-workbench-magnet__comparisonRow is-${row.state}`}>
-                  <span>{row.label}</span>
-                  <strong title={row.dbValue}>{row.dbValue}</strong>
-                  <strong title={row.fileValue}>{row.fileValue}</strong>
-                  <em>{row.stateLabel}</em>
+              {localTagState === 'ready' && localTagResult ? (
+                <div className="music-tag-workbench-magnet__comparisonTable">
+                  <div className="music-tag-workbench-magnet__comparisonHead">
+                    <span>{t('pages.musicTagWorkbench.compare.field')}</span>
+                    <span>{t('pages.musicTagWorkbench.compare.library')}</span>
+                    <span>{t('pages.musicTagWorkbench.compare.file')}</span>
+                    <span>{t('pages.musicTagWorkbench.compare.status')}</span>
+                  </div>
+                  {comparisonRows.map((row) => (
+                    <div key={row.key} className={`music-tag-workbench-magnet__comparisonRow is-${row.state}`}>
+                      <span>{row.label}</span>
+                      <strong title={row.dbValue}>{row.dbValue}</strong>
+                      <strong title={row.fileValue}>{row.fileValue}</strong>
+                      <em>{row.stateLabel}</em>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="music-tag-workbench-magnet__fieldTable">
-              {metadataRows.map((row) => (
-                <div key={row.key} className="music-tag-workbench-magnet__fieldRow">
-                  <span>{row.label}</span>
-                  <strong title={row.value}>{row.value}</strong>
+              ) : (
+                <div className="music-tag-workbench-magnet__fieldTable">
+                  {metadataRows.map((row) => (
+                    <div key={row.key} className="music-tag-workbench-magnet__fieldRow">
+                      <span>{row.label}</span>
+                      <strong title={row.value}>{row.value}</strong>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </section>
 
-        <section className="music-tag-workbench-magnet__panel" aria-label={t('pages.musicTagWorkbench.queuePanel')}>
+        <section className={`music-tag-workbench-magnet__panel ${queueCollapsed ? 'is-collapsed' : ''}`} aria-label={t('pages.musicTagWorkbench.queuePanel')}>
           <div className="music-tag-workbench-magnet__panelHeader">
-            <h2>{t('pages.musicTagWorkbench.queuePanel')}</h2>
+            <button
+              type="button"
+              className="music-tag-workbench-magnet__collapseToggle"
+              onClick={() => setQueueCollapsed((v) => !v)}
+              aria-expanded={!queueCollapsed}
+            >
+              {queueCollapsed ? <ChevronRight size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+              <h2>{t('pages.musicTagWorkbench.queuePanel')}</h2>
+            </button>
             <button type="button" disabled title={t('pages.musicTagWorkbench.action.searchCandidates')}>
               <Search size={14} aria-hidden="true" />
               <span>{t('pages.musicTagWorkbench.action.searchCandidates')}</span>
             </button>
           </div>
-          <div className="music-tag-workbench-magnet__queue">
-            <div className="music-tag-workbench-magnet__queueItem">
-              <ListChecks size={16} aria-hidden="true" />
-              <span>{t('pages.musicTagWorkbench.queue.localDiff')}</span>
-              <strong>{localDiffStateText}</strong>
+          {!queueCollapsed && (
+            <div className="music-tag-workbench-magnet__queue">
+              <div className="music-tag-workbench-magnet__queueItem">
+                <ListChecks size={16} aria-hidden="true" />
+                <span>{t('pages.musicTagWorkbench.queue.localDiff')}</span>
+                <strong>{localDiffStateText}</strong>
+              </div>
+              <div className="music-tag-workbench-magnet__queueItem">
+                <TextQuote size={16} aria-hidden="true" />
+                <span>{t('pages.musicTagWorkbench.stage.lyrics')}</span>
+                <strong>
+                  {hasLyrics
+                    ? t('pages.musicTagWorkbench.stageState.ready')
+                    : t('pages.musicTagWorkbench.stageState.pending')}
+                </strong>
+              </div>
             </div>
-            <div className="music-tag-workbench-magnet__queueItem">
-              <TextQuote size={16} aria-hidden="true" />
-              <span>{t('pages.musicTagWorkbench.stage.lyrics')}</span>
-              <strong>
-                {hasLyrics
-                  ? t('pages.musicTagWorkbench.stageState.ready')
-                  : t('pages.musicTagWorkbench.stageState.pending')}
-              </strong>
-            </div>
-          </div>
+          )}
         </section>
       </div>
     </section>

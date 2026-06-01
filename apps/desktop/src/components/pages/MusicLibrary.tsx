@@ -37,6 +37,7 @@ import {
 
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { useKernel } from '../../contexts/KernelContext';
+import { useNavigation } from '../../contexts/NavigationContext';
 import {
   getProcessPerfTotalsSnapshot,
   type ProcessPerfTotalsSnapshot,
@@ -1165,6 +1166,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   const audioService = useAudioService();
   const kernel = useKernel();
+  const navigation = useNavigation();
   const telemetry = useMemo(() => getTelemetryLogger('music-library', 'MusicLibraryPage'), []);
 
   const t = useT();
@@ -7477,6 +7479,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       },
 
+      editTagsLabel: t('common.action.editTags'),
+
+      onEditTags: () => {
+        navigation.navigateTo('music-tag-workbench', { trackIds: [track.id] });
+      },
+
     });
 
 
@@ -7496,6 +7504,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     handleAddSingleTrack,
     handleApplyQuickBaseFilter,
     handlePlaySingleTrack,
+    navigation,
     onPlayNow,
     resolvePlayableTracksForCurrentView,
     shouldUseNativeBaseWindowedQuery,

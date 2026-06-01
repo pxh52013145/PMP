@@ -394,6 +394,41 @@
   font-size: 12px;
 }
 
+.music-tag-workbench-page__chromaprintRow {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.music-tag-workbench-page__chromaprintRow input {
+  flex: 1;
+}
+
+.music-tag-workbench-page__chromaprintGenerate {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  background: rgba(99, 102, 241, 0.18);
+  color: rgba(248, 250, 252, 0.88);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.music-tag-workbench-page__chromaprintGenerate:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.32);
+}
+
+.music-tag-workbench-page__chromaprintGenerate:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .music-tag-workbench-page__warningList {
   min-width: 0;
   display: flex;
@@ -826,4 +861,339 @@
     width: 100%;
     justify-content: center;
   }
+}
+
+.music-tag-workbench-page__inlineEdit {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid rgba(99, 179, 237, 0.5);
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.8);
+  color: rgba(241, 245, 249, 0.94);
+  font-size: 0.82rem;
+  outline: none;
+}
+
+.music-tag-workbench-page__inlineEdit:focus {
+  border-color: rgba(99, 179, 237, 0.8);
+  box-shadow: 0 0 0 2px rgba(99, 179, 237, 0.15);
+}
+
+.music-tag-workbench-page__editableField {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.music-tag-workbench-page__editableField svg {
+  opacity: 0;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+
+.music-tag-workbench-page__editableField:hover svg {
+  opacity: 0.6;
+}
+
+.music-tag-workbench-page__fieldSelection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.music-tag-workbench-page__fieldSelectionHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.music-tag-workbench-page__fieldSelectionHead strong {
+  font-size: 0.78rem;
+  font-weight: 500;
+  opacity: 0.8;
+  margin-right: auto;
+}
+
+.music-tag-workbench-page__fieldSelectionHead button {
+  font-size: 0.72rem;
+  padding: 2px 6px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(241, 245, 249, 0.7);
+  cursor: pointer;
+}
+
+.music-tag-workbench-page__fieldSelectionHead button:hover {
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.music-tag-workbench-page__fieldSelectionGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.music-tag-workbench-page__fieldSelectionGrid label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.76rem;
+  opacity: 0.85;
+  cursor: pointer;
+}
+
+.music-tag-workbench-page__coverArtPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.music-tag-workbench-page__coverArtPanel .music-tag-workbench-page__subhead button {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.76rem;
+  padding: 3px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(241, 245, 249, 0.8);
+  cursor: pointer;
+}
+
+.music-tag-workbench-page__coverArtPanel .music-tag-workbench-page__subhead button:hover {
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.music-tag-workbench-page__coverArtPanel .music-tag-workbench-page__subhead button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.music-tag-workbench-page__coverArtGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 8px;
+}
+
+.music-tag-workbench-page__coverArtItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.4);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.music-tag-workbench-page__coverArtItem:hover {
+  border-color: rgba(148, 163, 184, 0.3);
+}
+
+.music-tag-workbench-page__coverArtItem.is-selected {
+  border-color: rgba(99, 179, 237, 0.7);
+}
+
+.music-tag-workbench-page__coverArtItem img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.music-tag-workbench-page__coverArtItem span {
+  font-size: 0.68rem;
+  opacity: 0.7;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.music-tag-workbench-page__lyricsPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.music-tag-workbench-page__lyricsPanel .music-tag-workbench-page__subhead button {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.76rem;
+  padding: 3px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(241, 245, 249, 0.8);
+  cursor: pointer;
+}
+
+.music-tag-workbench-page__lyricsPanel .music-tag-workbench-page__subhead button:hover {
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.music-tag-workbench-page__lyricsPanel .music-tag-workbench-page__subhead button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.music-tag-workbench-page__lyricsColumns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.music-tag-workbench-page__lyricsColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.music-tag-workbench-page__lyricsColumnHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: rgba(241, 245, 249, 0.7);
+}
+
+.music-tag-workbench-page__lyricsSource {
+  font-weight: 400;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(99, 102, 241, 0.18);
+  color: rgba(165, 180, 252, 0.9);
+  font-size: 0.68rem;
+}
+
+.music-tag-workbench-page__lyricsText {
+  margin: 0;
+  padding: 6px 8px;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.7rem;
+  line-height: 1.5;
+  color: rgba(248, 250, 252, 0.82);
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+}
+
+.music-tag-workbench-page__lyricsEmpty {
+  font-size: 0.72rem;
+  color: rgba(148, 163, 184, 0.6);
+  font-style: italic;
+  padding: 6px 0;
+}
+
+.music-tag-workbench-page__lyricsMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.68rem;
+  color: rgba(148, 163, 184, 0.8);
+}
+
+.music-tag-workbench-page__lyricsMeta span {
+  padding: 1px 5px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+
+.music-tag-workbench-page__lyricsToggle {
+  align-self: flex-start;
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(165, 180, 252, 0.85);
+  cursor: pointer;
+}
+
+.music-tag-workbench-page__lyricsToggle:hover {
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.music-tag-workbench-page__lyricsPriority {
+  font-size: 0.68rem;
+  color: rgba(148, 163, 184, 0.6);
+  padding: 4px 0;
+}
+
+.music-tag-workbench-page__batchActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.music-tag-workbench-page__batchActions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 6px;
+  background: rgba(99, 102, 241, 0.15);
+  color: rgba(248, 250, 252, 0.88);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.music-tag-workbench-page__batchActions button:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.28);
+}
+
+.music-tag-workbench-page__batchActions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.music-tag-workbench-page__batchActions button.is-cancel {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+.music-tag-workbench-page__batchActions button.is-cancel:hover {
+  background: rgba(239, 68, 68, 0.28);
+}
+
+.music-tag-workbench-page__batchProgress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.7rem;
+  color: rgba(148, 163, 184, 0.8);
+}
+
+.music-tag-workbench-page__batchProgress .is-error {
+  color: rgba(239, 68, 68, 0.9);
+}
+
+.music-tag-workbench-page__batchProgress .is-status {
+  font-weight: 600;
+  color: rgba(165, 180, 252, 0.9);
 }

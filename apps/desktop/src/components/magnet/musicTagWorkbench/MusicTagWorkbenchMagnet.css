@@ -74,6 +74,15 @@
   color: rgba(143, 176, 255, 0.96);
 }
 
+.music-tag-workbench-magnet__coverArt {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: rgba(0, 0, 0, 0.2);
+}
+
 .music-tag-workbench-magnet__trackText {
   min-width: 0;
   flex: 1 1 auto;
@@ -187,6 +196,11 @@
   overflow: hidden;
 }
 
+.music-tag-workbench-magnet__panel.is-collapsed {
+  flex: 0 0 auto;
+  min-height: auto;
+}
+
 .music-tag-workbench-magnet__panelHeader {
   flex: 0 0 auto;
   justify-content: space-between;
@@ -234,6 +248,38 @@
   white-space: nowrap;
 }
 
+.music-tag-workbench-magnet__collapseToggle {
+  all: unset;
+  display: flex !important;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  cursor: pointer;
+  border: none !important;
+  background: none !important;
+  padding: 0 !important;
+  height: auto !important;
+}
+
+.music-tag-workbench-magnet__collapseToggle svg {
+  flex: 0 0 auto;
+  color: rgba(203, 213, 225, 0.7);
+  transition: transform 0.15s ease;
+}
+
+.music-tag-workbench-magnet__collapseToggle h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: rgba(248, 250, 252, 0.94);
+  font-size: 14px;
+  font-weight: 740;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .music-tag-workbench-magnet__fieldTable,
 .music-tag-workbench-magnet__comparisonTable,
 .music-tag-workbench-magnet__queue {
@@ -241,7 +287,9 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
 }
 
 .music-tag-workbench-magnet__readNotice {

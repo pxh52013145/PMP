@@ -161,6 +161,13 @@ pub const MUSIC_TAG_COMMAND_NAMES: &[&str] = &[
     "music_tag_preview_db_patch",
     "music_tag_apply_db_patch",
     "music_tag_search_candidates",
+    "music_tag_write_file_tags",
+    "music_tag_search_cover_art",
+    "music_tag_download_cover_art",
+    "music_tag_generate_chromaprint",
+    "music_tag_batch_start",
+    "music_tag_batch_cancel",
+    "music_tag_batch_state",
 ];
 
 pub const AUDIO_COMMAND_NAMES: &[&str] = &[
@@ -488,6 +495,13 @@ macro_rules! pmp_generate_handler {
             crate::commands::music_tag::music_tag_preview_db_patch,
             crate::commands::music_tag::music_tag_apply_db_patch,
             crate::commands::music_tag::music_tag_search_candidates,
+            crate::commands::music_tag::music_tag_write_file_tags,
+            crate::commands::music_tag::music_tag_search_cover_art,
+            crate::commands::music_tag::music_tag_download_cover_art,
+            crate::commands::music_tag::music_tag_generate_chromaprint,
+            crate::commands::music_tag::music_tag_batch_start,
+            crate::commands::music_tag::music_tag_batch_cancel,
+            crate::commands::music_tag::music_tag_batch_state,
             crate::commands::audio::native_audio_load,
             crate::commands::audio::native_audio_analyze_peak_rms,
             crate::commands::audio::native_audio_load_source,

@@ -1,6 +1,7 @@
 import type {
   AlbumPageParams,
   ArtistPageParams,
+  MusicTagWorkbenchParams,
   PluginPageParams,
   PluginVisualizerParams,
   TrackPageParams,
@@ -38,7 +39,7 @@ export type NavigationParamsMap = {
   'perf-monitor': undefined;
   'keyboard-shortcuts': undefined;
   'music-library': undefined;
-  'music-tag-workbench': undefined;
+  'music-tag-workbench': MusicTagWorkbenchParams | undefined;
   playlists: undefined;
   'play-queue': undefined;
   'native-debug': undefined;

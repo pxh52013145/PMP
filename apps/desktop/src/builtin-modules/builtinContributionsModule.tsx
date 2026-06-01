@@ -375,7 +375,12 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'page',
           id: 'music-tag-workbench',
           title: t('pages.musicTagWorkbench.title'),
-          render: () => renderWithLazyBoundary(<MusicTagWorkbenchPageLazy />),
+          render: (page) => {
+            const params = parseNavigationParams('music-tag-workbench', page.params);
+            return renderWithLazyBoundary(
+              <MusicTagWorkbenchPageLazy trackIds={params?.trackIds} />
+            );
+          },
           source: 'builtin',
           order: 35,
           group: 'core',

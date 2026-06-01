@@ -18,6 +18,7 @@ export type PluginVisualizerParams = {
   sourceKind?: PluginSurfaceSourceKind;
 };
 export type DebugPageParams = { tab?: 'debug-center' | 'observability' | 'perf-monitor' | 'native-debug' };
+export type MusicTagWorkbenchParams = { trackIds?: string[] };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -100,6 +101,17 @@ export function parseNavigationParams<K extends NavigationPageType>(
         ? params.sourceKind
         : undefined;
       return { pluginId, visualizerId, sourceKind } as NavigationParamsFor<K>;
+    }
+    case 'music-tag-workbench': {
+      if (params === undefined || params === null) return undefined;
+      if (!isRecord(params)) return undefined;
+      const trackIds = Array.isArray(params.trackIds)
+        ? params.trackIds.filter(
+            (id): id is string => typeof id === 'string' && id.trim().length > 0
+          )
+        : undefined;
+      if (!trackIds || trackIds.length === 0) return undefined;
+      return { trackIds } as NavigationParamsFor<K>;
     }
     default:
       return undefined;

@@ -33,7 +33,7 @@ export interface MusicTagCanonicalMetadata {
 }
 
 export type MusicTagMetadataFieldKey = keyof MusicTagCanonicalMetadata;
-export type MusicTagCandidateProvider = 'local-tags' | 'musicbrainz' | 'acoustid' | 'lyrics' | string;
+export type MusicTagCandidateProvider = 'local-tags' | 'musicbrainz' | 'acoustid' | 'lyrics' | 'manual' | string;
 export type MusicTagCandidateConfidence = 'exact' | 'high' | 'medium' | 'low' | string;
 export type MusicTagDbLockMode = 'merge' | 'replace' | string;
 
@@ -143,4 +143,109 @@ export interface MusicTagCandidateSearchResult {
   searchedProviders: string[];
   warnings: string[];
   fetchedAtMs: number;
+}
+
+export interface MusicTagWriteFileRequest {
+  filePath: string;
+  metadata: MusicTagCanonicalMetadata;
+  expectedMtimeMs: number;
+  writeCover?: boolean;
+  coverDataBase64?: string;
+  coverMimeType?: string;
+}
+
+export interface MusicTagWriteFileResult {
+  filePath: string;
+  format: string;
+  fieldsWritten: number;
+  mtimeBeforeMs: number;
+  mtimeAfterMs: number;
+  verified: boolean;
+  warnings: string[];
+}
+
+export interface CoverArtSearchRequest {
+  mbidRelease: string;
+  trackId?: string;
+}
+
+export interface CoverArtCandidate {
+  url: string;
+  thumbnailUrl?: string | null;
+  coverType: string;
+  approved: boolean;
+}
+
+export interface CoverArtSearchResult {
+  candidates: CoverArtCandidate[];
+  releaseMbid: string;
+  warnings: string[];
+}
+
+export interface CoverArtDownloadRequest {
+  url: string;
+  trackId: string;
+  releaseMbid?: string;
+}
+
+export interface CoverArtDownloadResult {
+  cacheKey: string;
+  fileSize: number;
+  mimeType: string;
+  width?: number | null;
+  height?: number | null;
+}
+
+export interface ChromaprintRequest {
+  filePath: string;
+  maxDurationSeconds?: number;
+}
+
+export interface ChromaprintResult {
+  filePath: string;
+  fingerprint: string;
+  durationSeconds: number;
+  sampleRate: number;
+  channels: number;
+}
+
+export type MusicTagBatchMode = 'apply-db' | 'write-file' | 'apply-and-write';
+
+export interface MusicTagBatchItem {
+  trackId: string;
+  filePath: string;
+  sourceMetadata: MusicTagCanonicalMetadata;
+  lockedFields: string[];
+  tagSource?: string;
+  tagConfidence?: number;
+  expectedMtimeMs?: number;
+}
+
+export interface MusicTagBatchRequest {
+  mode: MusicTagBatchMode;
+  items: MusicTagBatchItem[];
+}
+
+export interface MusicTagBatchProgressPayload {
+  runId: string;
+  mode: MusicTagBatchMode;
+  total: number;
+  current: number;
+  currentTrackId?: string;
+  status: string;
+  appliedCount: number;
+  skippedCount: number;
+  errorCount: number;
+  lastError?: string;
+}
+
+export interface MusicTagBatchState {
+  running: boolean;
+  runId?: string;
+  mode?: MusicTagBatchMode;
+  total: number;
+  current: number;
+  appliedCount: number;
+  skippedCount: number;
+  errorCount: number;
 }

@@ -35,6 +35,7 @@ libc = "0.2"
 rodio = "0.17"
 symphonia = { version = "0.5", features = ["all"] }
 lofty = "0.22"
+rusty-chromaprint = "0.2"
 dsf = "0.2.2"
 rustfft = { version = "6.4.1", default-features = false }
 rubato = { version = "0.16", default-features = false }
