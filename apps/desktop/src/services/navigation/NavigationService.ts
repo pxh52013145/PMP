@@ -19,6 +19,9 @@ export interface NavigationService {
 
 export const NAVIGATION_SERVICE_TOKEN = createServiceToken<NavigationService>('service.navigation');
 
+const NAVIGATION_MEMORY_GOVERNANCE_DELAYS_MS = [1_200, 6_000] as const;
+const NAVIGATION_MEMORY_GOVERNANCE_MIN_INTERVAL_MS = 2_500;
+
 export class InMemoryNavigationService implements NavigationService {
   private static readonly MAX_HISTORY_LENGTH = 50;
 
@@ -73,6 +76,7 @@ export class InMemoryNavigationService implements NavigationService {
         },
       });
       this.emitChanged();
+      this.requestNavigationMemoryGovernance('replace-current', currentPage, nextPage);
       return;
     }
 
@@ -95,6 +99,7 @@ export class InMemoryNavigationService implements NavigationService {
       },
     });
     this.emitChanged();
+    this.requestNavigationMemoryGovernance('navigate', currentPage, nextPage);
   }
 
   goBack(): void {
@@ -111,10 +116,24 @@ export class InMemoryNavigationService implements NavigationService {
       },
     });
     this.emitChanged();
+    this.requestNavigationMemoryGovernance('back', previousPage, nextPage);
   }
 
   private emitChanged(): void {
     const snapshot = this.getSnapshot();
     this.events.emit('navigation/changed', snapshot);
+  }
+
+  private requestNavigationMemoryGovernance(
+    transition: 'navigate' | 'replace-current' | 'back',
+    fromPage: NavigationPageData,
+    toPage: NavigationPageData
+  ): void {
+    this.events.emit('memory-governance/requested', {
+      reason: 'runtime-release',
+      source: `navigation:${transition}:${fromPage.type}->${toPage.type}`,
+      delaysMs: NAVIGATION_MEMORY_GOVERNANCE_DELAYS_MS,
+      minIntervalMs: NAVIGATION_MEMORY_GOVERNANCE_MIN_INTERVAL_MS,
+    });
   }
 }

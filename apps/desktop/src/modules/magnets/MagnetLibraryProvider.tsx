@@ -63,6 +63,95 @@ function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function arePixelAnchorsEqual(
+  left: readonly PixelAnchor[] | undefined,
+  right: readonly PixelAnchor[] | undefined
+): boolean {
+  const leftAnchors = left ?? [];
+  const rightAnchors = right ?? [];
+  if (leftAnchors.length !== rightAnchors.length) return false;
+
+  for (let index = 0; index < leftAnchors.length; index += 1) {
+    const leftAnchor = leftAnchors[index];
+    const rightAnchor = rightAnchors[index];
+    if (
+      leftAnchor.id !== rightAnchor.id ||
+      leftAnchor.gridX !== rightAnchor.gridX ||
+      leftAnchor.gridY !== rightAnchor.gridY ||
+      leftAnchor.role !== rightAnchor.role
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function areSmallConfigValuesEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  try {
+    return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+  } catch {
+    return false;
+  }
+}
+
+function collectBaselineActiveMagnetIds(
+  magnets: readonly Magnet[],
+  states: Record<string, MagnetStateConfig>
+): Set<string> {
+  const activeIds = new Set<string>();
+  for (const magnet of magnets) {
+    const saved = states[magnet.id];
+    const isActive = saved ? saved.isActive : DEFAULT_ACTIVE_MAGNET_IDS.has(magnet.id);
+    if (isActive) activeIds.add(magnet.id);
+  }
+  for (const id of REQUIRED_MAGNET_IDS) activeIds.add(id);
+  return activeIds;
+}
+
+function areStringSetsEqual(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  if (left.size !== right.size) return false;
+  for (const value of left) {
+    if (!right.has(value)) return false;
+  }
+  return true;
+}
+
+function haveMagnetStateConfigPatchesChanged(
+  magnets: readonly Magnet[],
+  currentStates: Record<string, MagnetStateConfig>,
+  patchedStates: Record<string, MagnetStateConfig>
+): boolean {
+  for (const magnet of magnets) {
+    const current = currentStates[magnet.id];
+    const patched = patchedStates[magnet.id];
+    if (!patched) continue;
+
+    const currentAnchors = current?.anchors ?? magnet.anchors;
+    const currentActive = current ? current.isActive : DEFAULT_ACTIVE_MAGNET_IDS.has(magnet.id);
+    const currentBounds = current?.bounds ?? magnet.bounds;
+    const currentChrome = current?.chrome ?? magnet.chrome;
+
+    if (currentActive !== patched.isActive) return true;
+    if (!arePixelAnchorsEqual(currentAnchors, patched.anchors)) return true;
+    if (!areSmallConfigValuesEqual(currentBounds, patched.bounds)) return true;
+    if (!areSmallConfigValuesEqual(currentChrome, patched.chrome)) return true;
+  }
+  return false;
+}
+
+function hasAppliedLayoutDivergedFromPatchedStates(
+  appliedMagnets: readonly Magnet[],
+  patchedStates: Record<string, MagnetStateConfig>
+): boolean {
+  for (const magnet of appliedMagnets) {
+    const patched = patchedStates[magnet.id];
+    if (!patched) continue;
+    if (!arePixelAnchorsEqual(magnet.anchors, patched.anchors)) return true;
+  }
+  return false;
+}
+
 export interface MagnetLibraryProviderProps {
   children: ReactNode;
   gridSize: { columns: number; rows: number };
@@ -549,28 +638,23 @@ export function MagnetLibraryProvider({
         activeMagnetIds: activeFromLayout,
       });
 
-      const baselineApplied = applyMagnetConfig(
-        { ...baseConfig, gridSize, magnets: baseConfig.magnets },
-        defaultMagnetLibrary
-      );
       const applied = applyMagnetConfig(
         { ...baseConfig, gridSize, magnets: patchedMagnets },
         defaultMagnetLibrary
       );
-      const baselineActive = new Set(baselineApplied.activeMagnetIds);
-      for (const id of REQUIRED_MAGNET_IDS) baselineActive.add(id);
-      const ensuredActive = activeFromLayout;
+      const baselineActive = collectBaselineActiveMagnetIds(baseLibrary, baseConfig.magnets);
       const shouldPersistNormalizedConfig =
-        JSON.stringify(baselineApplied.magnetLibrary) !== JSON.stringify(applied.magnetLibrary) ||
-        JSON.stringify([...baselineActive].sort()) !== JSON.stringify([...ensuredActive].sort());
+        haveMagnetStateConfigPatchesChanged(baseLibrary, baseConfig.magnets, patchedMagnets) ||
+        !areStringSetsEqual(baselineActive, activeFromLayout) ||
+        hasAppliedLayoutDivergedFromPatchedStates(applied.magnetLibrary, patchedMagnets);
       if (shouldPersistNormalizedConfig) {
-        saveMagnetConfig(applied.magnetLibrary, ensuredActive, gridSize, defaultMagnetLibrary, configKey);
+        saveMagnetConfig(applied.magnetLibrary, activeFromLayout, gridSize, defaultMagnetLibrary, configKey);
       }
 
       return {
         activeSpaceId: args.activeSpaceId,
         magnetLibrary: applied.magnetLibrary,
-        activeMagnetIds: ensuredActive,
+        activeMagnetIds: activeFromLayout,
         layout: normalizedLayout,
         configKey,
         layoutKey: resolveMagnetLayoutStorageKey(args.activeSpaceId),

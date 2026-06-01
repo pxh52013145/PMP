@@ -35,6 +35,39 @@ const windowPositionCache = new Map<
 const CACHE_DURATION = 5000; // 5 秒缓存
 const telemetry = getTelemetryLogger('windowing', 'editorWindows');
 
+async function destroyHiddenEditorWindowsBeforeOpen(windowType: EditorWindowType): Promise<void> {
+  if (!isTauriRuntime()) return;
+
+  try {
+    const destroyedHiddenEditorWindowCount = await invokeWithTelemetry<number>(
+      'governance_destroy_hidden_editor_windows',
+      undefined,
+      {
+        moduleId: 'windowing',
+        component: 'editorWindows',
+        event: 'window.editor.hidden-stale.destroy-before-open',
+        successLevel: 'debug',
+      }
+    );
+
+    if (destroyedHiddenEditorWindowCount > 0) {
+      telemetry.info('window.editor.hidden-stale.destroyed-before-open', {
+        fields: {
+          windowType,
+          destroyedHiddenEditorWindowCount,
+        },
+      });
+    }
+  } catch (error) {
+    telemetry.warn('window.editor.hidden-stale.destroy-before-open.failed', {
+      message: error instanceof Error ? error.message : String(error),
+      fields: {
+        windowType,
+      },
+    });
+  }
+}
+
 /**
  * 打开编辑器窗口
  */
@@ -45,6 +78,7 @@ export async function openEditorWindow(config: EditorWindowConfig): Promise<void
   try {
     const alwaysOnTop = getEffectiveWindowPinPolicy().editorWindowsPinned;
     const memoryFirst = readEditorLowPerformanceMode();
+    await destroyHiddenEditorWindowsBeforeOpen(config.type);
     telemetry.info('window.editor.open.requested', {
       fields: {
         windowType: config.type,

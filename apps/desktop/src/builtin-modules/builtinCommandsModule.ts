@@ -83,6 +83,14 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
               },
               options.id
             );
+            if (options.windowId.startsWith('editor:')) {
+              events.emit('memory-governance/requested', {
+                reason: 'runtime-release',
+                source: `editor-window-open:${options.windowId}`,
+                delaysMs: [4_000, 16_000],
+                minIntervalMs: 5_000,
+              });
+            }
           },
         });
       };
