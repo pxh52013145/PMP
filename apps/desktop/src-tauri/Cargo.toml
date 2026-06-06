@@ -33,7 +33,7 @@ libc = "0.2"
 
 # 音频处理
 rodio = "0.17"
-symphonia = { version = "0.5", features = ["all"] }
+symphonia = { version = "0.5.5", features = ["all"] }
 lofty = "0.22"
 rusty-chromaprint = "0.2"
 dsf = "0.2.2"
