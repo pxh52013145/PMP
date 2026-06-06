@@ -395,6 +395,27 @@ function DesktopLyricsOverlayPanel() {
   });
   const gestureActiveRef = useRef(false);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const chromeHideTimerRef = useRef<number | null>(null);
+
+  const clearChromeHideTimer = useCallback(() => {
+    if (chromeHideTimerRef.current === null) return;
+    window.clearTimeout(chromeHideTimerRef.current);
+    chromeHideTimerRef.current = null;
+  }, []);
+
+  const revealChrome = useCallback(() => {
+    clearChromeHideTimer();
+    setIsHovered(true);
+  }, [clearChromeHideTimer]);
+
+  const concealChrome = useCallback(() => {
+    clearChromeHideTimer();
+    chromeHideTimerRef.current = window.setTimeout(() => {
+      chromeHideTimerRef.current = null;
+      if (gestureActiveRef.current) return;
+      setIsHovered(false);
+    }, 260);
+  }, [clearChromeHideTimer]);
 
   const applyLivePanelMetrics = useCallback((width: number, height: number, fontSize: number) => {
     const nextWidth = clampRegionWidth(width);
@@ -529,6 +550,7 @@ function DesktopLyricsOverlayPanel() {
     );
 
     return () => {
+      clearChromeHideTimer();
       stopActiveProgressAnimation();
       resizeCleanupRef.current?.();
       document.documentElement.classList.remove('desktop-lyrics-overlay-page');
@@ -536,6 +558,7 @@ function DesktopLyricsOverlayPanel() {
     };
   }, [
     applyLivePanelMetrics,
+    clearChromeHideTimer,
     state.fontSize,
     state.regionHeight,
     state.regionWidth,
@@ -799,7 +822,7 @@ function DesktopLyricsOverlayPanel() {
       event.stopPropagation();
 
       resizeCleanupRef.current?.();
-      setIsHovered(true);
+      revealChrome();
       gestureActiveRef.current = true;
 
       const pointerTarget = event.currentTarget;
@@ -1016,7 +1039,7 @@ function DesktopLyricsOverlayPanel() {
           cleanup();
         });
     },
-    [applyLivePanelMetrics, state.clickThrough, state.fontSize]
+    [applyLivePanelMetrics, revealChrome, state.clickThrough, state.fontSize]
   );
 
   const handlePanelPointerDown = useCallback(
@@ -1080,8 +1103,6 @@ function DesktopLyricsOverlayPanel() {
     <div
       className={`desktop-lyrics-overlay${showChrome ? ' is-interactive' : ''}${isMoving ? ' is-moving' : ''}${isResizing ? ' is-resizing' : ''}${state.clickThrough ? ' is-click-through' : ''}`}
       style={rootStyle}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
     >
       <div
         ref={panelRef}
@@ -1092,6 +1113,8 @@ function DesktopLyricsOverlayPanel() {
 
         <div
           className="desktop-lyrics-overlay__audio-controls"
+          onPointerEnter={revealChrome}
+          onPointerLeave={concealChrome}
           onMouseDown={(event) => event.stopPropagation()}
           onPointerDown={(event) => event.stopPropagation()}
         >
@@ -1124,6 +1147,8 @@ function DesktopLyricsOverlayPanel() {
 
         <div
           className="desktop-lyrics-overlay__toolbar"
+          onPointerEnter={revealChrome}
+          onPointerLeave={concealChrome}
           onMouseDown={(event) => event.stopPropagation()}
           onPointerDown={(event) => event.stopPropagation()}
         >
@@ -1202,6 +1227,8 @@ function DesktopLyricsOverlayPanel() {
           <div
             key={edge}
             className={`desktop-lyrics-overlay__resize-handle desktop-lyrics-overlay__resize-handle--${edge}`}
+            onPointerEnter={revealChrome}
+            onPointerLeave={concealChrome}
             onMouseDown={(event) => event.stopPropagation()}
             onPointerDown={(event) => handleHandlePointerDown(event, edge)}
           >
@@ -1231,19 +1258,39 @@ function DesktopLyricsOverlayPanel() {
                   }}
                 >
                   {index === activeIndex ? (
-                    <span className="desktop-lyrics-overlay__lyric-current">
+                    <span
+                      className="desktop-lyrics-overlay__lyric-current desktop-lyrics-overlay__lyric-hotspot"
+                      onPointerEnter={revealChrome}
+                      onPointerLeave={concealChrome}
+                    >
                       <span className="desktop-lyrics-overlay__lyric-base">{line}</span>
                       <span className="desktop-lyrics-overlay__lyric-fill" aria-hidden="true">
                         {line}
                       </span>
                     </span>
                   ) : (
-                    <span>{line}</span>
+                    <span
+                      className="desktop-lyrics-overlay__lyric-hotspot"
+                      onPointerEnter={revealChrome}
+                      onPointerLeave={concealChrome}
+                    >
+                      {line}
+                    </span>
                   )}
                 </p>
               );
             })}
-            {secondaryText ? <p className="desktop-lyrics-overlay__secondary">{secondaryText}</p> : null}
+            {secondaryText ? (
+              <p className="desktop-lyrics-overlay__secondary">
+                <span
+                  className="desktop-lyrics-overlay__lyric-hotspot"
+                  onPointerEnter={revealChrome}
+                  onPointerLeave={concealChrome}
+                >
+                  {secondaryText}
+                </span>
+              </p>
+            ) : null}
           </div>
         </div>
       </div>

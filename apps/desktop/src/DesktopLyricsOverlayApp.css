@@ -360,6 +360,10 @@ body.desktop-lyrics-unlock-page #root {
   max-width: min(100%, 1120px);
 }
 
+.desktop-lyrics-overlay__lyric-hotspot {
+  pointer-events: auto;
+}
+
 .desktop-lyrics-overlay__lyric-base,
 .desktop-lyrics-overlay__lyric-fill {
   display: block;
