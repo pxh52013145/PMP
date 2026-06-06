@@ -10,6 +10,7 @@
         try {
           const hash = window.location.hash || '';
           const transparentStartupOverlay =
+            hash.startsWith('#/desktop-lyrics-overlay') ||
             hash.startsWith('#/ornaments-editor-overlay') ||
             hash.startsWith('#/ornaments-render-overlay');
 

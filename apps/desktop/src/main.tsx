@@ -175,11 +175,16 @@ async function resolveRootAppByHash(hash: string): Promise<RootAppResolveResult>
 }
 
 function usesSharedStartupOverlay(kind: RootAppResolveResult['kind']): boolean {
-  return kind !== 'ornaments-editor-overlay' && kind !== 'ornaments-render-overlay';
+  return (
+    kind !== 'desktop-lyrics-overlay' &&
+    kind !== 'ornaments-editor-overlay' &&
+    kind !== 'ornaments-render-overlay'
+  );
 }
 
 function hashUsesSharedStartupOverlay(hash: string): boolean {
   return (
+    !hash.startsWith('#/desktop-lyrics-overlay') &&
     !hash.startsWith('#/ornaments-editor-overlay') && !hash.startsWith('#/ornaments-render-overlay')
   );
 }
