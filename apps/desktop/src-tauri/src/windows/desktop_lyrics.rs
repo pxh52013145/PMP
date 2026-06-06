@@ -27,8 +27,17 @@ struct OverlayText {
     secondary: Option<String>,
     lines: Vec<String>,
     active_index: Option<usize>,
+    active_line_key: Option<usize>,
     active_progress_percent: u8,
     active_progress_remaining_ms: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OverlayHotspot {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -58,6 +67,8 @@ impl OverlayPositionPreset {
 enum OverlayCommand {
     SetVisible(bool),
     SetClickThrough(bool),
+    SetInteractionActive(bool),
+    SetHoverHotspot(Option<OverlayHotspot>),
     SetFontSize(u32),
     SetOpacityPercent(u8),
     SetPositionPreset(OverlayPositionPreset),
@@ -68,6 +79,7 @@ enum OverlayCommand {
     SetText(Option<OverlayText>),
     SetActiveProgress {
         active_index: Option<usize>,
+        active_line_key: Option<usize>,
         active_progress_percent: u8,
         active_progress_remaining_ms: u32,
     },
@@ -200,6 +212,7 @@ const DEFAULT_OVERLAY_REGION_HEIGHT: i32 = 0;
 const MIN_LYRIC_OFFSET_MS: i32 = -5000;
 const MAX_LYRIC_OFFSET_MS: i32 = 5000;
 const DEFAULT_LYRIC_OFFSET_MS: i32 = 0;
+const OVERLAY_CONTEXT_LINE_RADIUS: usize = 3;
 const DESKTOP_LYRICS_STATE_DIR_NAME: &str = "desktop-lyrics";
 const DESKTOP_LYRICS_STATE_FILE_NAME: &str = "desktop-lyrics-state-v1.json";
 
@@ -235,6 +248,7 @@ pub struct DesktopLyricsOverlaySnapshotText {
     pub secondary: Option<String>,
     pub lines: Vec<String>,
     pub active_index: Option<usize>,
+    pub active_line_key: Option<usize>,
     pub active_progress_percent: u8,
     pub active_progress_remaining_ms: u32,
 }
@@ -256,6 +270,8 @@ pub(super) const DESKTOP_LYRICS_OVERLAY_WINDOW_LABEL: &str = "desktop-lyrics-ove
 pub(super) const DESKTOP_LYRICS_UNLOCK_WINDOW_LABEL: &str = "desktop-lyrics-unlock";
 pub(super) const DESKTOP_LYRICS_OVERLAY_SYNC_EVENT: &str = "desktop-lyrics-overlay-sync";
 pub(super) const DESKTOP_LYRICS_OVERLAY_PROGRESS_EVENT: &str = "desktop-lyrics-overlay-progress";
+pub(super) const DESKTOP_LYRICS_OVERLAY_INTERACTION_EVENT: &str =
+    "desktop-lyrics-overlay-interaction";
 
 mod backend;
 
@@ -396,6 +412,7 @@ fn snapshot_text_from_overlay_text(value: &OverlayText) -> DesktopLyricsOverlayS
         secondary: value.secondary.clone(),
         lines: value.lines.clone(),
         active_index: value.active_index,
+        active_line_key: value.active_line_key,
         active_progress_percent: value.active_progress_percent,
         active_progress_remaining_ms: value.active_progress_remaining_ms,
     }
@@ -479,6 +496,7 @@ pub fn debug_set_text(
             secondary: normalized_secondary,
             lines: vec![normalized_primary],
             active_index: Some(0),
+            active_line_key: Some(0),
             active_progress_percent: 0,
             active_progress_remaining_ms: 0,
         })
@@ -521,6 +539,37 @@ pub fn set_click_through(enabled: bool) -> Result<(), String> {
     }
     emit_controls_changed_from_state(&state);
     send_overlay_command_with_recover(OverlayCommand::SetClickThrough(enabled), Some(&state));
+    Ok(())
+}
+
+pub fn set_interaction_active(active: bool) -> Result<(), String> {
+    let state = DESKTOP_LYRICS_STATE
+        .lock()
+        .map_err(|_| "Desktop lyrics state lock poisoned".to_string())?;
+    send_overlay_command_with_recover(OverlayCommand::SetInteractionActive(active), Some(&state));
+    Ok(())
+}
+
+pub fn set_hover_hotspot(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<(), String> {
+    let state = DESKTOP_LYRICS_STATE
+        .lock()
+        .map_err(|_| "Desktop lyrics state lock poisoned".to_string())?;
+    let hotspot = if width > 0 && height > 0 {
+        Some(OverlayHotspot {
+            x: x.max(0),
+            y: y.max(0),
+            width: width.max(1),
+            height: height.max(1),
+        })
+    } else {
+        None
+    };
+    send_overlay_command_with_recover(OverlayCommand::SetHoverHotspot(hotspot), Some(&state));
     Ok(())
 }
 
@@ -1332,8 +1381,9 @@ fn refresh_overlay_locked(state: &mut DesktopLyricsState) {
     let next_rendered_text = OverlayText {
         primary: primary.to_string(),
         secondary,
-        lines: overlay_line_texts(lines),
-        active_index: Some(active_index),
+        lines: overlay_line_texts(lines, active_index),
+        active_index: Some(active_index.min(OVERLAY_CONTEXT_LINE_RADIUS)),
+        active_line_key: Some(active_index),
         active_progress_percent: active_line_progress_percent(
             lines,
             active_index,
@@ -1367,6 +1417,7 @@ fn refresh_overlay_locked(state: &mut DesktopLyricsState) {
         send_overlay_command_with_recover(
             OverlayCommand::SetActiveProgress {
                 active_index: next_rendered_text.active_index,
+                active_line_key: next_rendered_text.active_line_key,
                 active_progress_percent: next_rendered_text.active_progress_percent,
                 active_progress_remaining_ms: next_rendered_text.active_progress_remaining_ms,
             },
@@ -1387,6 +1438,7 @@ fn overlay_text_matches_except_progress(left: &OverlayText, right: &OverlayText)
         && left.secondary == right.secondary
         && left.lines == right.lines
         && left.active_index == right.active_index
+        && left.active_line_key == right.active_line_key
 }
 
 fn render_track_fallback_text_locked(state: &mut DesktopLyricsState) {
@@ -1404,6 +1456,7 @@ fn render_track_fallback_text_locked(state: &mut DesktopLyricsState) {
         secondary: None,
         lines: vec![primary.to_string()],
         active_index: Some(0),
+        active_line_key: Some(0),
         active_progress_percent: 0,
         active_progress_remaining_ms: 0,
     };
@@ -1420,8 +1473,13 @@ fn render_track_fallback_text_locked(state: &mut DesktopLyricsState) {
     send_overlay_command_with_recover(OverlayCommand::SetText(Some(fallback_text)), Some(state));
 }
 
-fn overlay_line_texts(lines: &[DesktopLyricLine]) -> Vec<String> {
-    lines
+fn overlay_line_texts(lines: &[DesktopLyricLine], active_index: usize) -> Vec<String> {
+    let start = active_index.saturating_sub(OVERLAY_CONTEXT_LINE_RADIUS);
+    let end = lines
+        .len()
+        .min(active_index.saturating_add(OVERLAY_CONTEXT_LINE_RADIUS + 1));
+
+    lines[start..end]
         .iter()
         .map(|line| line.text.trim())
         .filter(|value| !value.is_empty())
@@ -1481,24 +1539,25 @@ fn resolve_active_line_index(lines: &[DesktopLyricLine], current_ms: u64) -> Opt
         return None;
     }
 
-    for index in 0..lines.len() {
-        let line = &lines[index];
-        let next_start = lines.get(index + 1).map(|item| item.start_ms);
-        let end_ms = line
-            .end_ms
-            .or(next_start)
-            .unwrap_or_else(|| line.start_ms.saturating_add(4000));
+    match lines.binary_search_by_key(&current_ms, |line| line.start_ms) {
+        Ok(index) => Some(index),
+        Err(0) => Some(0),
+        Err(insert_index) => {
+            let index = insert_index.saturating_sub(1);
+            let line = &lines[index];
+            let next_start = lines.get(index + 1).map(|item| item.start_ms);
+            let end_ms = line
+                .end_ms
+                .or(next_start)
+                .unwrap_or_else(|| line.start_ms.saturating_add(4000));
 
-        if current_ms >= line.start_ms && current_ms < end_ms {
-            return Some(index);
-        }
-
-        if current_ms < line.start_ms {
-            return Some(index.saturating_sub(1));
+            if current_ms < end_ms {
+                Some(index)
+            } else {
+                Some(index.min(lines.len() - 1))
+            }
         }
     }
-
-    Some(lines.len() - 1)
 }
 
 #[cfg(test)]
@@ -1525,6 +1584,7 @@ mod tests {
             secondary: secondary.map(str::to_string),
             lines: vec![primary.to_string()],
             active_index: Some(0),
+            active_line_key: Some(0),
             active_progress_percent: 0,
             active_progress_remaining_ms: 0,
         }
@@ -1605,19 +1665,23 @@ mod tests {
     }
 
     #[test]
-    fn refresh_overlay_includes_full_line_context_and_progress() {
+    fn refresh_overlay_includes_visible_line_context_and_progress() {
         let mut state = DesktopLyricsState::default();
         state.visible = true;
         state.latest_playback_state = "playing".to_string();
         state.latest_track_key = Some("track-a".to_string());
-        state.latest_current_ms = 1_250;
+        state.latest_current_ms = 4_250;
         state.track_lines.insert(
             "track-a".to_string(),
-            vec![
-                line(0, Some(1_000), "previous"),
-                line(1_000, Some(2_000), "current"),
-                line(2_000, Some(3_000), "next"),
-            ],
+            (0..9)
+                .map(|index| {
+                    line(
+                        index * 1_000,
+                        Some((index + 1) * 1_000),
+                        format!("line-{index}").as_str(),
+                    )
+                })
+                .collect(),
         );
 
         refresh_overlay_locked(&mut state);
@@ -1625,14 +1689,19 @@ mod tests {
         assert_eq!(
             state.last_rendered_text,
             Some(OverlayText {
-                primary: "current".to_string(),
+                primary: "line-4".to_string(),
                 secondary: None,
                 lines: vec![
-                    "previous".to_string(),
-                    "current".to_string(),
-                    "next".to_string(),
+                    "line-1".to_string(),
+                    "line-2".to_string(),
+                    "line-3".to_string(),
+                    "line-4".to_string(),
+                    "line-5".to_string(),
+                    "line-6".to_string(),
+                    "line-7".to_string(),
                 ],
-                active_index: Some(1),
+                active_index: Some(3),
+                active_line_key: Some(4),
                 active_progress_percent: 25,
                 active_progress_remaining_ms: 750,
             })

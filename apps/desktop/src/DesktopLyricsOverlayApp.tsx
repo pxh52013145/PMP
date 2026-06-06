@@ -27,6 +27,7 @@ import './DesktopLyricsOverlayApp.css';
 
 const OVERLAY_SYNC_EVENT = 'desktop-lyrics-overlay-sync';
 const OVERLAY_PROGRESS_EVENT = 'desktop-lyrics-overlay-progress';
+const OVERLAY_INTERACTION_EVENT = 'desktop-lyrics-overlay-interaction';
 const NATIVE_AUDIO_STATE_EVENT = 'native_audio_state';
 const DESKTOP_LYRICS_AUDIO_CONTROL_REQUEST_EVENT = 'desktop-lyrics-audio-control-requested';
 const MIN_FONT_SIZE = 16;
@@ -42,6 +43,8 @@ const MIN_REGION_WIDTH = 320;
 const MIN_REGION_HEIGHT = 72;
 const MAX_REGION_WIDTH = 8192;
 const MAX_REGION_HEIGHT = 2160;
+const LYRIC_RENDER_RADIUS = 3;
+const LYRIC_HOTSPOT_PADDING = 18;
 
 type OverlayHandleEdge = 'left' | 'right' | 'top' | 'bottom';
 type AudioControlAction = 'previous' | 'toggle-play-pause' | 'next';
@@ -78,6 +81,7 @@ interface DesktopLyricsOverlayTextPayload {
   secondary?: string | null;
   lines?: string[] | null;
   activeIndex?: number | null;
+  activeLineKey?: number | null;
   activeProgressPercent?: number | null;
   activeProgressRemainingMs?: number | null;
 }
@@ -95,8 +99,13 @@ interface DesktopLyricsOverlaySyncPayload {
 
 interface DesktopLyricsOverlayProgressPayload {
   activeIndex?: number | null;
+  activeLineKey?: number | null;
   activeProgressPercent?: number | null;
   activeProgressRemainingMs?: number | null;
+}
+
+interface DesktopLyricsOverlayInteractionPayload {
+  active?: boolean | null;
 }
 
 interface NativeAudioStatePayload {
@@ -109,7 +118,6 @@ interface NativeAudioStatePayload {
 interface ActiveProgressAnimation {
   activeIndex: number;
   durationMs: number;
-  startedAtMs: number;
   lastProgressPercent: number;
 }
 
@@ -125,6 +133,13 @@ const DEFAULT_OVERLAY_STATE: DesktopLyricsOverlaySyncPayload = {
 };
 
 const telemetry = getTelemetryLogger('windowing', 'DesktopLyricsOverlayApp');
+
+type OverlayHotspotRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -299,6 +314,10 @@ function normalizeState(
             secondary: normalizeOptionalText(text.secondary),
             lines,
             activeIndex: normalizeActiveIndex(text.activeIndex, lines, primary),
+            activeLineKey:
+              typeof text.activeLineKey === 'number' && Number.isFinite(text.activeLineKey)
+                ? Math.max(0, Math.round(text.activeLineKey))
+                : null,
             activeProgressPercent: normalizeProgressPercent(text.activeProgressPercent),
             activeProgressRemainingMs: normalizeProgressRemainingMs(
               text.activeProgressRemainingMs
@@ -317,6 +336,51 @@ function normalizeState(
     lyricOffsetMs: nextLyricOffset,
     text: normalizedText,
   };
+}
+
+function areTextPayloadsEqual(
+  left: DesktopLyricsOverlayTextPayload | null | undefined,
+  right: DesktopLyricsOverlayTextPayload | null | undefined
+): boolean {
+  if (!left || !right) return !left && !right;
+  if (
+    left.primary !== right.primary ||
+    left.secondary !== right.secondary ||
+    left.activeIndex !== right.activeIndex ||
+    left.activeLineKey !== right.activeLineKey ||
+    left.activeProgressPercent !== right.activeProgressPercent ||
+    left.activeProgressRemainingMs !== right.activeProgressRemainingMs
+  ) {
+    return false;
+  }
+
+  const leftLines = left.lines ?? [];
+  const rightLines = right.lines ?? [];
+  return leftLines.length === rightLines.length && leftLines.every((line, index) => line === rightLines[index]);
+}
+
+function areOverlayStatesEqual(
+  left: DesktopLyricsOverlaySyncPayload,
+  right: DesktopLyricsOverlaySyncPayload
+): boolean {
+  return (
+    left.visible === right.visible &&
+    left.clickThrough === right.clickThrough &&
+    left.fontSize === right.fontSize &&
+    left.opacityPercent === right.opacityPercent &&
+    left.regionWidth === right.regionWidth &&
+    left.regionHeight === right.regionHeight &&
+    left.lyricOffsetMs === right.lyricOffsetMs &&
+    areTextPayloadsEqual(left.text, right.text)
+  );
+}
+
+function mergeOverlayState(
+  payload: Partial<DesktopLyricsOverlaySyncPayload> | null | undefined,
+  fallback: DesktopLyricsOverlaySyncPayload
+): DesktopLyricsOverlaySyncPayload {
+  const next = normalizeState(payload, fallback);
+  return areOverlayStatesEqual(fallback, next) ? fallback : next;
 }
 
 function isUnlockWindowRoute(): boolean {
@@ -385,9 +449,12 @@ function DesktopLyricsOverlayPanel() {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const lineStackRef = useRef<HTMLDivElement | null>(null);
   const stateRef = useRef<DesktopLyricsOverlaySyncPayload>(DEFAULT_OVERLAY_STATE);
-  const progressFrameRef = useRef<number | null>(null);
   const progressAnimationRef = useRef<ActiveProgressAnimation | null>(null);
   const activeLineKeyRef = useRef<string | null>(null);
+  const progressAnimationTokenRef = useRef(0);
+  const interactionActiveRef = useRef(false);
+  const lastHotspotRef = useRef<OverlayHotspotRect | null>(null);
+  const hotspotElementsRef = useRef(new Map<string, HTMLElement>());
   const liveLayoutRef = useRef({
     width: 0,
     height: 0,
@@ -407,6 +474,117 @@ function DesktopLyricsOverlayPanel() {
     clearChromeHideTimer();
     setIsHovered(true);
   }, [clearChromeHideTimer]);
+
+  const setOverlayInteractionActive = useCallback((active: boolean) => {
+    if (interactionActiveRef.current === active) return;
+    interactionActiveRef.current = active;
+    void invoke('desktop_lyrics_set_interaction_active', { active }).catch((error) => {
+      telemetry.warn('desktop-lyrics.overlay.interaction.set.failed', {
+        message: getErrorMessage(error),
+        fields: { active },
+      });
+    });
+  }, []);
+
+  const sendHoverHotspot = useCallback((next: OverlayHotspotRect | null) => {
+    const previous = lastHotspotRef.current;
+    if (
+      (!previous && !next) ||
+      (previous &&
+        next &&
+        previous.x === next.x &&
+        previous.y === next.y &&
+        previous.width === next.width &&
+        previous.height === next.height)
+    ) {
+      return;
+    }
+
+    lastHotspotRef.current = next;
+    const payload = next ?? { x: 0, y: 0, width: 0, height: 0 };
+    void invoke('desktop_lyrics_set_hover_hotspot', payload).catch((error) => {
+      telemetry.warn(
+        next
+          ? 'desktop-lyrics.overlay.hotspot.set.failed'
+          : 'desktop-lyrics.overlay.hotspot.clear.failed',
+        {
+          message: getErrorMessage(error),
+        }
+      );
+    });
+  }, []);
+
+  const setHotspotElementRef = useCallback((key: string, element: HTMLElement | null) => {
+    const elements = hotspotElementsRef.current;
+    if (element) {
+      elements.set(key, element);
+    } else {
+      elements.delete(key);
+    }
+  }, []);
+
+  const syncHoverHotspot = useCallback(() => {
+    const panel = panelRef.current;
+    if (!panel || stateRef.current.clickThrough) {
+      sendHoverHotspot(null);
+      return;
+    }
+
+    const panelRect = panel.getBoundingClientRect();
+    if (panelRect.width <= 0 || panelRect.height <= 0) {
+      sendHoverHotspot(null);
+      return;
+    }
+
+    let left = Number.POSITIVE_INFINITY;
+    let top = Number.POSITIVE_INFINITY;
+    let right = Number.NEGATIVE_INFINITY;
+    let bottom = Number.NEGATIVE_INFINITY;
+    let hasVisibleHotspot = false;
+
+    hotspotElementsRef.current.forEach((element) => {
+      const rect = element.getBoundingClientRect();
+      if (
+        rect.width <= 0 ||
+        rect.height <= 0 ||
+        rect.right <= panelRect.left ||
+        rect.left >= panelRect.right ||
+        rect.bottom <= panelRect.top ||
+        rect.top >= panelRect.bottom
+      ) {
+        return;
+      }
+
+      hasVisibleHotspot = true;
+      left = Math.min(left, rect.left);
+      top = Math.min(top, rect.top);
+      right = Math.max(right, rect.right);
+      bottom = Math.max(bottom, rect.bottom);
+    });
+
+    if (!hasVisibleHotspot) {
+      sendHoverHotspot(null);
+      return;
+    }
+
+    const paddedLeft = Math.max(0, Math.floor(left - panelRect.left - LYRIC_HOTSPOT_PADDING));
+    const paddedTop = Math.max(0, Math.floor(top - panelRect.top - LYRIC_HOTSPOT_PADDING));
+    const paddedRight = Math.min(
+      panelRect.width,
+      Math.ceil(right - panelRect.left + LYRIC_HOTSPOT_PADDING)
+    );
+    const paddedBottom = Math.min(
+      panelRect.height,
+      Math.ceil(bottom - panelRect.top + LYRIC_HOTSPOT_PADDING)
+    );
+
+    sendHoverHotspot({
+      x: Math.round(paddedLeft),
+      y: Math.round(paddedTop),
+      width: Math.max(0, Math.round(paddedRight - paddedLeft)),
+      height: Math.max(0, Math.round(paddedBottom - paddedTop)),
+    });
+  }, [sendHoverHotspot]);
 
   const hideChrome = useCallback(() => {
     clearChromeHideTimer();
@@ -440,10 +618,14 @@ function DesktopLyricsOverlayPanel() {
     panel.style.setProperty('--desktop-lyrics-font-size', `${nextFontSize}px`);
   }, []);
 
-  const setRenderedActiveProgress = useCallback((progressPercent: number) => {
+  const setRenderedActiveProgress = useCallback((progressPercent: number, transitionMs = 0) => {
     const lineStack = lineStackRef.current;
     if (!lineStack) return;
 
+    lineStack.style.setProperty(
+      '--desktop-lyrics-active-progress-transition-ms',
+      `${Math.max(0, Math.round(transitionMs))}ms`
+    );
     lineStack.style.setProperty(
       '--desktop-lyrics-active-progress',
       `${normalizeProgressPercent(progressPercent)}%`
@@ -451,30 +633,10 @@ function DesktopLyricsOverlayPanel() {
   }, []);
 
   const stopActiveProgressAnimation = useCallback(() => {
-    if (progressFrameRef.current !== null) {
-      window.cancelAnimationFrame(progressFrameRef.current);
-      progressFrameRef.current = null;
-    }
+    progressAnimationTokenRef.current += 1;
+    lineStackRef.current?.style.setProperty('--desktop-lyrics-active-progress-transition-ms', '0ms');
     progressAnimationRef.current = null;
   }, []);
-
-  const stepActiveProgressAnimation = useCallback(() => {
-    const animation = progressAnimationRef.current;
-    if (!animation) return;
-
-    const elapsedMs = performance.now() - animation.startedAtMs;
-    const nextProgress = Math.min(100, Math.max(0, (elapsedMs / animation.durationMs) * 100));
-    animation.lastProgressPercent = nextProgress;
-    setRenderedActiveProgress(nextProgress);
-
-    if (nextProgress >= 100) {
-      progressAnimationRef.current = null;
-      progressFrameRef.current = null;
-      return;
-    }
-
-    progressFrameRef.current = window.requestAnimationFrame(stepActiveProgressAnimation);
-  }, [setRenderedActiveProgress]);
 
   const applyActiveProgress = useCallback((
     progressPercent: unknown,
@@ -492,6 +654,7 @@ function DesktopLyricsOverlayPanel() {
       existing.activeIndex === activeIndex &&
       Math.abs(existing.lastProgressPercent - progress) <= 8
     ) {
+      existing.lastProgressPercent = progress;
       return;
     }
 
@@ -509,11 +672,18 @@ function DesktopLyricsOverlayPanel() {
     progressAnimationRef.current = {
       activeIndex,
       durationMs,
-      startedAtMs: performance.now() - elapsedMs,
       lastProgressPercent: progress,
     };
-    progressFrameRef.current = window.requestAnimationFrame(stepActiveProgressAnimation);
-  }, [setRenderedActiveProgress, stepActiveProgressAnimation, stopActiveProgressAnimation]);
+    const token = progressAnimationTokenRef.current;
+    window.requestAnimationFrame(() => {
+      if (progressAnimationTokenRef.current !== token) return;
+      const animation = progressAnimationRef.current;
+      if (!animation || animation.activeIndex !== activeIndex || animation.durationMs !== durationMs) {
+        return;
+      }
+      setRenderedActiveProgress(100, Math.max(0, durationMs - elapsedMs));
+    });
+  }, [setRenderedActiveProgress, stopActiveProgressAnimation]);
 
   const activeText = state.text;
 
@@ -527,7 +697,7 @@ function DesktopLyricsOverlayPanel() {
         ? Math.max(0, Math.round(activeText.activeIndex))
         : 0;
     const activeLineKey = activeText
-      ? `${activeIndex}:${activeText.primary}:${activeText.lines?.length ?? 0}`
+      ? `${activeText.activeLineKey ?? activeIndex}:${activeText.primary}:${activeText.lines?.join('\n') ?? ''}`
       : 'placeholder';
 
     if (activeLineKeyRef.current === activeLineKey) {
@@ -587,10 +757,11 @@ function DesktopLyricsOverlayPanel() {
     let disposed = false;
     let unlistenSync: UnlistenFn | null = null;
     let unlistenProgress: UnlistenFn | null = null;
+    let unlistenInteraction: UnlistenFn | null = null;
 
     const bind = async () => {
       unlistenSync = await listen<DesktopLyricsOverlaySyncPayload>(OVERLAY_SYNC_EVENT, (event) => {
-        setState((previous) => normalizeState(event.payload, previous));
+        setState((previous) => mergeOverlayState(event.payload, previous));
       });
 
       unlistenProgress = await listen<DesktopLyricsOverlayProgressPayload>(
@@ -608,12 +779,27 @@ function DesktopLyricsOverlayPanel() {
             typeof event.payload?.activeIndex === 'number' && Number.isFinite(event.payload.activeIndex)
               ? Math.round(event.payload.activeIndex)
               : null;
+          const payloadActiveLineKey =
+            typeof event.payload?.activeLineKey === 'number' && Number.isFinite(event.payload.activeLineKey)
+              ? Math.round(event.payload.activeLineKey)
+              : null;
           const currentActiveIndex =
             typeof currentText.activeIndex === 'number' && Number.isFinite(currentText.activeIndex)
               ? Math.round(currentText.activeIndex)
               : 0;
+          const currentActiveLineKey =
+            typeof currentText.activeLineKey === 'number' && Number.isFinite(currentText.activeLineKey)
+              ? Math.round(currentText.activeLineKey)
+              : null;
 
           if (payloadActiveIndex !== null && payloadActiveIndex !== currentActiveIndex) {
+            return;
+          }
+          if (
+            payloadActiveLineKey !== null &&
+            currentActiveLineKey !== null &&
+            payloadActiveLineKey !== currentActiveLineKey
+          ) {
             return;
           }
 
@@ -632,6 +818,17 @@ function DesktopLyricsOverlayPanel() {
         }
       );
 
+      unlistenInteraction = await listen<DesktopLyricsOverlayInteractionPayload>(
+        OVERLAY_INTERACTION_EVENT,
+        (event) => {
+          if (event.payload?.active === true) {
+            revealChrome();
+          } else if (event.payload?.active === false) {
+            setIsHovered(false);
+          }
+        }
+      );
+
       try {
         const snapshot = await invokeWithTelemetry<DesktopLyricsOverlaySyncPayload>(
           'desktop_lyrics_overlay_get_snapshot',
@@ -643,7 +840,7 @@ function DesktopLyricsOverlayPanel() {
           }
         );
         if (!disposed) {
-          setState((previous) => normalizeState(snapshot, previous));
+          setState((previous) => mergeOverlayState(snapshot, previous));
         }
       } catch (error) {
         telemetry.warn('desktop-lyrics.overlay.snapshot.read.failed', {
@@ -662,8 +859,11 @@ function DesktopLyricsOverlayPanel() {
       if (unlistenProgress) {
         unlistenProgress();
       }
+      if (unlistenInteraction) {
+        unlistenInteraction();
+      }
     };
-  }, [applyActiveProgress]);
+  }, [applyActiveProgress, revealChrome]);
 
   useEffect(() => {
     let disposed = false;
@@ -1071,21 +1271,41 @@ function DesktopLyricsOverlayPanel() {
 
   const primaryText = state.text?.primary?.trim() || t('pages.track.lyrics.placeholder');
   const secondaryText = state.text?.secondary?.trim();
-  const lyricLines = state.text?.lines?.length ? state.text.lines : [primaryText];
+  const lyricLines = useMemo(
+    () => (state.text?.lines?.length ? state.text.lines : [primaryText]),
+    [primaryText, state.text?.lines]
+  );
   const activeIndex =
     typeof state.text?.activeIndex === 'number'
       ? Math.min(lyricLines.length - 1, Math.max(0, state.text.activeIndex))
       : 0;
+  const visibleLyricLines = useMemo(
+    () => {
+      const start = Math.max(0, activeIndex - LYRIC_RENDER_RADIUS);
+      const end = Math.min(lyricLines.length, activeIndex + LYRIC_RENDER_RADIUS + 1);
+      return lyricLines.slice(start, end).map((line, offset) => ({
+        line,
+        index: start + offset,
+      }));
+    },
+    [activeIndex, lyricLines]
+  );
+  const visibleLyricStartIndex = visibleLyricLines[0]?.index ?? activeIndex;
+  const visibleLyricKey = useMemo(
+    () => visibleLyricLines.map(({ index, line }) => `${index}:${line}`).join('\n'),
+    [visibleLyricLines]
+  );
   const lineStackStyle = useMemo<React.CSSProperties>(
     () => {
       const rowStep = state.fontSize * 2.45;
+      const activeVisibleIndex = activeIndex - visibleLyricStartIndex;
       return {
         ['--desktop-lyrics-row-step' as string]: `${rowStep}px`,
-        ['--desktop-lyrics-stack-offset' as string]: `${-activeIndex * rowStep}px`,
-        ['--desktop-lyrics-secondary-top' as string]: `${(activeIndex + 0.72) * rowStep}px`,
+        ['--desktop-lyrics-stack-offset' as string]: `${-activeVisibleIndex * rowStep}px`,
+        ['--desktop-lyrics-secondary-top' as string]: `${(activeVisibleIndex + 0.72) * rowStep}px`,
       };
     },
-    [activeIndex, state.fontSize]
+    [activeIndex, state.fontSize, visibleLyricStartIndex]
   );
   const showChrome = (isHovered || isMoving || isResizing) && !state.clickThrough;
   const isPlaying = playbackState === 'playing' || playbackState === 'buffering';
@@ -1103,6 +1323,37 @@ function DesktopLyricsOverlayPanel() {
   const resetLyricOffsetTitle = t('magnet.desktopLyricsButton.contextMenu.lyricOffset.reset');
   const fasterLyricTitle = t('magnet.desktopLyricsButton.contextMenu.lyricOffset.faster');
   const closeTitle = t('magnet.desktopLyricsButton.title.disable');
+
+  useEffect(() => {
+    setOverlayInteractionActive(showChrome);
+  }, [setOverlayInteractionActive, showChrome]);
+
+  useEffect(() => {
+    if (!state.clickThrough) return;
+    clearChromeHideTimer();
+    interactionActiveRef.current = false;
+    setIsHovered(false);
+  }, [clearChromeHideTimer, state.clickThrough]);
+
+  useLayoutEffect(() => {
+    let frame = window.requestAnimationFrame(() => {
+      frame = window.requestAnimationFrame(syncHoverHotspot);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [
+    activeIndex,
+    desktopLyricsFontFamily,
+    secondaryText,
+    state.clickThrough,
+    state.fontSize,
+    state.regionHeight,
+    state.regionWidth,
+    syncHoverHotspot,
+    visibleLyricKey,
+  ]);
 
   return (
     <div
@@ -1239,7 +1490,7 @@ function DesktopLyricsOverlayPanel() {
 
         <div className="desktop-lyrics-overlay__content" aria-live="polite">
           <div ref={lineStackRef} className="desktop-lyrics-overlay__line-stack" style={lineStackStyle}>
-            {lyricLines.map((line, index) => {
+            {visibleLyricLines.map(({ line, index }) => {
               const distance = Math.min(6, Math.abs(index - activeIndex));
               const lineClassName = [
                 'desktop-lyrics-overlay__lyric-line',
@@ -1261,6 +1512,7 @@ function DesktopLyricsOverlayPanel() {
                   {index === activeIndex ? (
                     <span
                       className="desktop-lyrics-overlay__lyric-current desktop-lyrics-overlay__lyric-hotspot"
+                      ref={(element) => setHotspotElementRef(`line:${index}`, element)}
                       onPointerEnter={revealChrome}
                     >
                       <span className="desktop-lyrics-overlay__lyric-base">{line}</span>
@@ -1271,6 +1523,7 @@ function DesktopLyricsOverlayPanel() {
                   ) : (
                     <span
                       className="desktop-lyrics-overlay__lyric-hotspot"
+                      ref={(element) => setHotspotElementRef(`line:${index}`, element)}
                       onPointerEnter={revealChrome}
                     >
                       {line}
@@ -1283,6 +1536,7 @@ function DesktopLyricsOverlayPanel() {
               <p className="desktop-lyrics-overlay__secondary">
                 <span
                   className="desktop-lyrics-overlay__lyric-hotspot"
+                  ref={(element) => setHotspotElementRef('secondary', element)}
                   onPointerEnter={revealChrome}
                 >
                   {secondaryText}

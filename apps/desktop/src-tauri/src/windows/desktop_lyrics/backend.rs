@@ -4,7 +4,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use super::{
-    DesktopLyricsOverlaySnapshot, DesktopLyricsOverlaySnapshotText, OverlayCommand,
+    DesktopLyricsOverlaySnapshot, DesktopLyricsOverlaySnapshotText, OverlayCommand, OverlayHotspot,
     OverlayPositionPreset, OverlayText,
 };
 
@@ -22,12 +22,16 @@ const DEFAULT_OVERLAY_HEIGHT: i32 = 188;
 const UNLOCK_DOT_SIZE: i32 = 24;
 #[cfg(target_os = "windows")]
 const UNLOCK_DOT_MARGIN: i32 = 8;
+#[cfg(target_os = "windows")]
+const HOVER_POLL_INTERVAL_MS: u64 = 40;
 
 #[cfg(target_os = "windows")]
 #[derive(Debug, Clone)]
 struct OverlayRuntimeState {
     visible: bool,
     click_through: bool,
+    interaction_active: bool,
+    hover_hotspot: Option<OverlayHotspot>,
     font_size: u32,
     opacity_percent: u8,
     position_preset: OverlayPositionPreset,
@@ -47,6 +51,8 @@ impl Default for OverlayRuntimeState {
         Self {
             visible: false,
             click_through: false,
+            interaction_active: false,
+            hover_hotspot: None,
             font_size: 26,
             opacity_percent: 92,
             position_preset: OverlayPositionPreset::BottomCenter,
@@ -81,6 +87,7 @@ impl OverlayRuntimeState {
                     secondary: text.secondary.clone(),
                     lines: text.lines.clone(),
                     active_index: text.active_index,
+                    active_line_key: text.active_line_key,
                     active_progress_percent: text.active_progress_percent,
                     active_progress_remaining_ms: text.active_progress_remaining_ms,
                 }),
@@ -93,6 +100,7 @@ impl OverlayRuntimeState {
 struct CommandEffects {
     shutdown: bool,
     visible_changed: bool,
+    cursor_events_changed: bool,
     controls_changed: bool,
     layout_changed: bool,
     text_changed: bool,
@@ -104,8 +112,16 @@ struct CommandEffects {
 #[serde(rename_all = "camelCase")]
 struct OverlayProgressPayload {
     active_index: Option<usize>,
+    active_line_key: Option<usize>,
     active_progress_percent: u8,
     active_progress_remaining_ms: u32,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OverlayInteractionPayload {
+    active: bool,
 }
 
 #[cfg(target_os = "windows")]
@@ -118,6 +134,10 @@ fn apply_command(state: &mut OverlayRuntimeState, command: OverlayCommand) -> Co
                 state.visible = visible;
                 effects.visible_changed = true;
             }
+            if !visible && state.interaction_active {
+                state.interaction_active = false;
+                effects.cursor_events_changed = true;
+            }
             effects.controls_changed = true;
             effects.layout_changed = visible;
             effects.text_changed = true;
@@ -125,7 +145,22 @@ fn apply_command(state: &mut OverlayRuntimeState, command: OverlayCommand) -> Co
         OverlayCommand::SetClickThrough(enabled) => {
             if state.click_through != enabled {
                 state.click_through = enabled;
+                if enabled {
+                    state.interaction_active = false;
+                }
+                effects.cursor_events_changed = true;
                 effects.controls_changed = true;
+            }
+        }
+        OverlayCommand::SetInteractionActive(active) => {
+            if state.interaction_active != active {
+                state.interaction_active = active;
+                effects.cursor_events_changed = true;
+            }
+        }
+        OverlayCommand::SetHoverHotspot(hotspot) => {
+            if state.hover_hotspot != hotspot {
+                state.hover_hotspot = hotspot;
             }
         }
         OverlayCommand::SetFontSize(font_size) => {
@@ -202,11 +237,13 @@ fn apply_command(state: &mut OverlayRuntimeState, command: OverlayCommand) -> Co
         }
         OverlayCommand::SetActiveProgress {
             active_index,
+            active_line_key,
             active_progress_percent,
             active_progress_remaining_ms,
         } => {
             if let Some(text) = state.text.as_mut() {
                 if text.active_index == active_index
+                    && text.active_line_key == active_line_key
                     && (text.active_progress_percent != active_progress_percent
                         || text.active_progress_remaining_ms != active_progress_remaining_ms)
                 {
@@ -229,7 +266,6 @@ fn apply_command(state: &mut OverlayRuntimeState, command: OverlayCommand) -> Co
 #[cfg(target_os = "windows")]
 fn ensure_overlay_window(app: &tauri::AppHandle) -> Result<(Window, bool), String> {
     if let Some(existing) = app.get_window(super::DESKTOP_LYRICS_OVERLAY_WINDOW_LABEL) {
-        let _ = existing.set_resizable(false);
         return Ok((existing, false));
     }
 
@@ -260,7 +296,6 @@ fn ensure_overlay_window(app: &tauri::AppHandle) -> Result<(Window, bool), Strin
 #[cfg(target_os = "windows")]
 fn ensure_unlock_window(app: &tauri::AppHandle) -> Result<Window, String> {
     if let Some(existing) = app.get_window(super::DESKTOP_LYRICS_UNLOCK_WINDOW_LABEL) {
-        let _ = existing.set_resizable(false);
         return Ok(existing);
     }
 
@@ -439,7 +474,7 @@ pub(super) fn preview_layout(
 fn apply_window_controls(window: &Window, state: &OverlayRuntimeState) {
     let _ = window.set_always_on_top(true);
     let _ = window.set_resizable(false);
-    let _ = window.set_ignore_cursor_events(state.click_through);
+    let _ = window.set_ignore_cursor_events(should_ignore_cursor_events(state));
 }
 
 #[cfg(target_os = "windows")]
@@ -467,10 +502,84 @@ fn emit_overlay_progress(window: &Window, state: &OverlayRuntimeState) {
         super::DESKTOP_LYRICS_OVERLAY_PROGRESS_EVENT,
         OverlayProgressPayload {
             active_index: text.active_index,
+            active_line_key: text.active_line_key,
             active_progress_percent: text.active_progress_percent,
             active_progress_remaining_ms: text.active_progress_remaining_ms,
         },
     );
+}
+
+#[cfg(target_os = "windows")]
+fn emit_overlay_interaction(window: &Window, active: bool) {
+    let _ = window.emit(
+        super::DESKTOP_LYRICS_OVERLAY_INTERACTION_EVENT,
+        OverlayInteractionPayload { active },
+    );
+}
+
+#[cfg(target_os = "windows")]
+fn should_ignore_cursor_events(state: &OverlayRuntimeState) -> bool {
+    state.click_through || !state.interaction_active
+}
+
+#[cfg(target_os = "windows")]
+fn read_cursor_position() -> Option<(i32, i32)> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+    let mut point = POINT { x: 0, y: 0 };
+    let ok = unsafe { GetCursorPos(&mut point) };
+    if ok == 0 {
+        return None;
+    }
+
+    Some((point.x, point.y))
+}
+
+#[cfg(target_os = "windows")]
+fn cursor_inside_hover_hotspot(window: &Window, state: &OverlayRuntimeState) -> bool {
+    let Some(hotspot) = state.hover_hotspot else {
+        return false;
+    };
+    let Some((cursor_x, cursor_y)) = read_cursor_position() else {
+        return false;
+    };
+    let Ok(position) = window.outer_position() else {
+        return false;
+    };
+    let Ok(scale) = window.scale_factor() else {
+        return false;
+    };
+
+    let left = position.x.saturating_add((hotspot.x as f64 * scale).round() as i32);
+    let top = position.y.saturating_add((hotspot.y as f64 * scale).round() as i32);
+    let width = (hotspot.width as f64 * scale).round().max(1.0) as i32;
+    let height = (hotspot.height as f64 * scale).round().max(1.0) as i32;
+    let right = left.saturating_add(width);
+    let bottom = top.saturating_add(height);
+
+    cursor_x >= left && cursor_x <= right && cursor_y >= top && cursor_y <= bottom
+}
+
+#[cfg(target_os = "windows")]
+fn update_interaction_from_cursor(window: &Window, state: &mut OverlayRuntimeState) -> bool {
+    if state.click_through || !state.visible || state.interaction_active {
+        return false;
+    }
+    if !cursor_inside_hover_hotspot(window, state) {
+        return false;
+    }
+
+    state.interaction_active = true;
+    true
+}
+
+#[cfg(target_os = "windows")]
+fn should_poll_hover_hotspot(state: &OverlayRuntimeState) -> bool {
+    state.visible
+        && !state.click_through
+        && !state.interaction_active
+        && state.hover_hotspot.is_some()
 }
 
 #[cfg(target_os = "windows")]
@@ -527,13 +636,26 @@ pub fn run(rx: Receiver<OverlayCommand>) {
     let mut state = OverlayRuntimeState::default();
 
     loop {
-        let command = match rx.recv_timeout(Duration::from_millis(250)) {
-            Ok(command) => command,
-            Err(RecvTimeoutError::Timeout) => continue,
+        let mut effects = CommandEffects::default();
+        let mut command_received = false;
+        let timeout = if should_poll_hover_hotspot(&state) {
+            Duration::from_millis(HOVER_POLL_INTERVAL_MS)
+        } else {
+            Duration::from_millis(250)
+        };
+
+        match rx.recv_timeout(timeout) {
+            Ok(command) => {
+                command_received = true;
+                effects = apply_command(&mut state, command);
+            }
+            Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         };
 
-        let effects = apply_command(&mut state, command);
+        if !command_received && !should_poll_hover_hotspot(&state) {
+            continue;
+        }
 
         if let Some(app) = super::current_app_handle() {
             if effects.shutdown || !state.visible {
@@ -542,12 +664,25 @@ pub fn run(rx: Receiver<OverlayCommand>) {
             } else {
                 match ensure_overlay_window(&app) {
                     Ok((window, created)) => {
+                        let interaction_changed = if should_poll_hover_hotspot(&state) {
+                            update_interaction_from_cursor(&window, &mut state)
+                        } else {
+                            false
+                        };
+                        if interaction_changed {
+                            effects.cursor_events_changed = true;
+                        }
+
                         if created || effects.layout_changed {
                             apply_window_layout(&window, &state);
                         }
 
-                        if created || effects.controls_changed {
+                        if created || effects.controls_changed || effects.cursor_events_changed {
                             apply_window_controls(&window, &state);
+                        }
+
+                        if interaction_changed {
+                            emit_overlay_interaction(&window, state.interaction_active);
                         }
 
                         if created
@@ -588,12 +723,14 @@ pub fn run(rx: Receiver<OverlayCommand>) {
             }
         }
 
-        crate::windows::desktop_lyrics::apply_sidecar_controls_changed(
-            state.visible,
-            state.click_through,
-            state.font_size,
-            state.opacity_percent,
-        );
+        if command_received && (effects.visible_changed || effects.controls_changed) {
+            crate::windows::desktop_lyrics::apply_sidecar_controls_changed(
+                state.visible,
+                state.click_through,
+                state.font_size,
+                state.opacity_percent,
+            );
+        }
 
         if effects.shutdown {
             break;
@@ -618,5 +755,25 @@ pub fn run(rx: Receiver<OverlayCommand>) {
         if matches!(command, OverlayCommand::Shutdown) {
             break;
         }
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::{should_ignore_cursor_events, OverlayRuntimeState};
+
+    #[test]
+    fn cursor_events_follow_interaction_state() {
+        let mut state = OverlayRuntimeState::default();
+
+        state.click_through = false;
+        state.interaction_active = false;
+        assert!(should_ignore_cursor_events(&state));
+
+        state.interaction_active = true;
+        assert!(!should_ignore_cursor_events(&state));
+
+        state.click_through = true;
+        assert!(should_ignore_cursor_events(&state));
     }
 }

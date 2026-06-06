@@ -328,6 +328,21 @@ pub async fn desktop_lyrics_set_click_through(enabled: bool) -> Result<(), Strin
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_set_interaction_active(active: bool) -> Result<(), String> {
+    windows::desktop_lyrics::set_interaction_active(active)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_set_hover_hotspot(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<(), String> {
+    windows::desktop_lyrics::set_hover_hotspot(x, y, width, height)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn desktop_lyrics_set_font_size(font_size: u32) -> Result<(), String> {
     windows::desktop_lyrics::set_font_size(font_size)
 }

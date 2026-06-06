@@ -380,6 +380,7 @@ body.desktop-lyrics-unlock-page #root {
   clip-path: inset(0 calc(100% - var(--desktop-lyrics-active-progress, 0%)) 0 0);
   color: #fbfdff;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.58);
+  transition: clip-path var(--desktop-lyrics-active-progress-transition-ms, 0ms) linear;
   will-change: clip-path;
 }
 
