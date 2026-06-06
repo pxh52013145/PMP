@@ -1,4 +1,5 @@
 import React from 'react';
+import { ArrowDown, ArrowUp, Power, Trash2 } from 'lucide-react';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { useKernel } from '../../contexts/KernelContext';
 import { useT } from '../../i18n';
@@ -79,6 +80,8 @@ type DspGraphSummary = {
   vstActiveCount: number;
   vstProblemCount: number;
 };
+
+type TranslateFn = (key: string, params?: Record<string, unknown>) => string;
 
 type VstSessionStatus = {
   nodeId: string;
@@ -398,6 +401,37 @@ function formatSigned(value: number, digits = 1) {
   const normalized = isFinite(value) ? value : 0;
   const sign = normalized > 0 ? '+' : '';
   return `${sign}${normalized.toFixed(digits)}`;
+}
+
+function formatNodeTypeLabel(type: string, t: TranslateFn) {
+  switch (type) {
+    case 'gain':
+      return t('pages.dsp-rack.node.type.gain');
+    case 'eq':
+      return t('pages.dsp-rack.node.type.eq');
+    case 'limiter':
+      return t('pages.dsp-rack.node.type.limiter');
+    case 'pitch-shift':
+      return t('pages.dsp-rack.node.type.pitchShift');
+    case 'tempo':
+      return t('pages.dsp-rack.node.type.tempo');
+    case 'vst':
+      return t('pages.dsp-rack.node.type.vst');
+    default:
+      return type;
+  }
+}
+
+function formatEqBandKind(kind: EqBandKind, t: TranslateFn) {
+  switch (kind) {
+    case 'low-shelf':
+      return t('pages.dsp-rack.eq.kind.lowShelf');
+    case 'high-shelf':
+      return t('pages.dsp-rack.eq.kind.highShelf');
+    case 'peaking':
+    default:
+      return t('pages.dsp-rack.eq.kind.peaking');
+  }
 }
 
 function isDspRackTab(value: unknown): value is DspRackTab {
@@ -769,6 +803,14 @@ export const DspRackPage: React.FC = () => {
   const renderNodeCard = React.useCallback(
     (node: DspNode) => {
       const index = nodes.findIndex((candidate) => candidate.id === node.id);
+      const nodeTypeLabel = formatNodeTypeLabel(node.type, t);
+      const nodeOrderLabel = t('pages.dsp-rack.node.order', { index: index >= 0 ? index + 1 : '-' });
+      const nodeIdTitle = t('pages.dsp-rack.node.idTitle', { id: node.id });
+      const enabledLabel = t('pages.dsp-rack.node.status.enabled');
+      const bypassedLabel = t('pages.dsp-rack.node.status.bypassed');
+      const moveUpLabel = t('pages.dsp-rack.node.moveUp');
+      const moveDownLabel = t('pages.dsp-rack.node.moveDown');
+      const removeLabel = t('pages.dsp-rack.node.remove');
       const status = node.type === 'vst' ? vstStatuses[node.id] : undefined;
       const pluginId = node.type === 'vst' ? (readStringField(node, 'pluginId') ?? '').trim() : '';
       const statusKind: 'ok' | 'warn' | 'bad' = (() => {
@@ -803,7 +845,15 @@ export const DspRackPage: React.FC = () => {
         >
           <div className="dsp-node-header">
             <div className="dsp-node-title">
-              <span className="dsp-node-type">{node.type}</span>
+              <span className="dsp-node-title-row">
+                <span className="dsp-node-type">{nodeTypeLabel}</span>
+                <span className={`dsp-node-status-pill${node.enabled ? ' is-on' : ''}`}>
+                  {node.enabled ? enabledLabel : bypassedLabel}
+                </span>
+              </span>
+              <span className="dsp-node-order" title={nodeIdTitle}>
+                {nodeOrderLabel}
+              </span>
               <span className="dsp-node-id">
                 #{index >= 0 ? index + 1 : '-'} · {node.id}
               </span>
@@ -838,9 +888,13 @@ export const DspRackPage: React.FC = () => {
             </div>
 
             <div className="dsp-node-controls">
-              <label className="dsp-node-toggle">
+              <label
+                className={`dsp-node-toggle${node.enabled ? ' is-on' : ''}`}
+                title={node.enabled ? enabledLabel : bypassedLabel}
+              >
                 <input
                   type="checkbox"
+                  aria-label={t('pages.dsp-rack.node.enabled')}
                   checked={!!node.enabled}
                   onChange={(e) =>
                     updateNode(node.id, (n) => ({
@@ -849,12 +903,18 @@ export const DspRackPage: React.FC = () => {
                     }))
                   }
                 />
-                {t('pages.dsp-rack.node.enabled')}
+                <span className="dsp-node-toggle-track" aria-hidden="true">
+                  <span className="dsp-node-toggle-thumb">
+                    <Power size={10} />
+                  </span>
+                </span>
+                <span className="dsp-node-toggle-text">{node.enabled ? enabledLabel : bypassedLabel}</span>
               </label>
 
               {node.type === 'vst' && (
                 <button
                   type="button"
+                  className="dsp-node-action-button"
                   title={
                     node.enabled
                       ? t('pages.dsp-rack.vst.nativeUi.openTitle')
@@ -879,6 +939,7 @@ export const DspRackPage: React.FC = () => {
               {node.type === 'vst' && (
                 <button
                   type="button"
+                  className="dsp-node-action-button"
                   onClick={() =>
                     void invokeDspRack(
                       'native_audio_vst_close_native_editor',
@@ -892,18 +953,35 @@ export const DspRackPage: React.FC = () => {
                 </button>
               )}
 
-              <button type="button" onClick={() => moveNode(node.id, -1)} disabled={index <= 0 || busy}>
-                {t('pages.dsp-rack.node.moveUp')}
+              <button
+                type="button"
+                className="dsp-node-icon-button"
+                title={moveUpLabel}
+                aria-label={moveUpLabel}
+                onClick={() => moveNode(node.id, -1)}
+                disabled={index <= 0 || busy}
+              >
+                <ArrowUp size={15} />
               </button>
               <button
                 type="button"
+                className="dsp-node-icon-button"
+                title={moveDownLabel}
+                aria-label={moveDownLabel}
                 onClick={() => moveNode(node.id, 1)}
                 disabled={index === -1 || index === nodes.length - 1 || busy}
               >
-                {t('pages.dsp-rack.node.moveDown')}
+                <ArrowDown size={15} />
               </button>
-              <button type="button" onClick={() => removeNode(node.id)} disabled={busy}>
-                {t('pages.dsp-rack.node.remove')}
+              <button
+                type="button"
+                className="dsp-node-icon-button dsp-node-icon-button--danger"
+                title={removeLabel}
+                aria-label={removeLabel}
+                onClick={() => removeNode(node.id)}
+                disabled={busy}
+              >
+                <Trash2 size={15} />
               </button>
             </div>
           </div>
@@ -1022,7 +1100,10 @@ export const DspRackPage: React.FC = () => {
               {ensureEqBands(asRecord(node)?.bands).map((band, bandIndex) => (
                 <div key={`${band.kind}-${band.frequencyHz}-${bandIndex}`} className="dsp-param-row">
                   <span className="dsp-param-label">
-                    {band.kind} {Math.round(band.frequencyHz)}Hz
+                    {t('pages.dsp-rack.eq.bandLabel', {
+                      kind: formatEqBandKind(band.kind, t),
+                      frequencyHz: Math.round(band.frequencyHz),
+                    })}
                   </span>
                   <input
                     className="dsp-param-range"
@@ -1049,8 +1130,11 @@ export const DspRackPage: React.FC = () => {
 
           {node.type === 'vst' && (
             <div className="dsp-node-body">
-              <div className="dsp-rack-note">
-                PluginId: <span style={{ opacity: 0.9 }}>{readStringField(node, 'pluginId') ?? '(none)'}</span>
+              <div className="dsp-node-plugin">
+                <span>{t('pages.dsp-rack.vst.pluginId')}</span>
+                <strong title={readStringField(node, 'pluginId') ?? undefined}>
+                  {readStringField(node, 'pluginId') ?? '(none)'}
+                </strong>
               </div>
               <VstNodeParamsPanel
                 nodeId={node.id}
