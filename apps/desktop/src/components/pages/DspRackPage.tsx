@@ -2,6 +2,7 @@ import React from 'react';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { useKernel } from '../../contexts/KernelContext';
 import { useT } from '../../i18n';
+import { readString, writeString } from '../../modules/storage';
 import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import type { AudioSpectrumFrame } from '../../services/audio/types';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
@@ -93,6 +94,7 @@ type VstSessionStatus = {
 
 const EVENT_VST_SESSION_STATUSES = 'vst-session-statuses';
 const EMPTY_DSP_NODES: DspNode[] = [];
+const DSP_RACK_TABS: readonly DspRackTab[] = ['overview', 'tone', 'transform', 'vst', 'chain'];
 
 const telemetry = getTelemetryLogger('vst', 'DspRackPage');
 
@@ -398,6 +400,19 @@ function formatSigned(value: number, digits = 1) {
   return `${sign}${normalized.toFixed(digits)}`;
 }
 
+function isDspRackTab(value: unknown): value is DspRackTab {
+  return typeof value === 'string' && DSP_RACK_TABS.includes(value as DspRackTab);
+}
+
+function readPersistedDspRackTab(): DspRackTab {
+  const stored = readString(STORAGE_KEYS.DSP_RACK_ACTIVE_TAB);
+  return isDspRackTab(stored) ? stored : 'overview';
+}
+
+function persistDspRackTab(tab: DspRackTab): void {
+  writeString(STORAGE_KEYS.DSP_RACK_ACTIVE_TAB, tab);
+}
+
 export const DspRackPage: React.FC = () => {
   const t = useT();
   const kernel = useKernel();
@@ -410,10 +425,15 @@ export const DspRackPage: React.FC = () => {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [highlightNodeId, setHighlightNodeId] = React.useState<string | null>(null);
-  const [activeTab, setActiveTab] = React.useState<DspRackTab>('overview');
+  const [activeTab, setActiveTabState] = React.useState<DspRackTab>(() => readPersistedDspRackTab());
   const [spectrumSnapshot, setSpectrumSnapshot] = React.useState<SpectrumSnapshot>({ pre: null, post: null });
   const lastLocateRequestIdRef = React.useRef<string | null>(null);
   const clearHighlightTimerRef = React.useRef<number | null>(null);
+
+  const setActiveTab = React.useCallback((tab: DspRackTab) => {
+    setActiveTabState(tab);
+    persistDspRackTab(tab);
+  }, []);
 
   const refresh = React.useCallback(async () => {
     if (!isTauri) return;
@@ -548,7 +568,7 @@ export const DspRackPage: React.FC = () => {
         clearHighlightTimerRef.current = null;
       }
     };
-  }, [graph, isTauri]);
+  }, [graph, isTauri, setActiveTab]);
 
   React.useEffect(() => {
     if (!isTauri || !isNativeAvailable || !audioService.getSpectrumFrame) {

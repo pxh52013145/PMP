@@ -226,6 +226,7 @@ export const STORAGE_KEYS = {
   NATIVE_AUDIO_DSP_CHAIN: 'pixel-matrix-native-audio-dsp-chain', // DSP chain锛坅rray锛?
   NATIVE_AUDIO_DSP_GRAPH: 'pixel-matrix-native-audio-dsp-graph', // DSP graph锛坥bject锛?
   NATIVE_AUDIO_VST_ENABLED: 'pixel-matrix-native-audio-vst-enabled', // VST enabled锛坆oolean锛?
+  DSP_RACK_ACTIVE_TAB: 'pixel-matrix-dsp-rack-active-tab-v1', // DSP Rack active tab锛坰tring锛?
   DSP_RACK_LOCATE_NODE: 'pixel-matrix-dsp-rack-locate-node-v1', // DSP Rack 瀹氫綅/楂樹寒鑺傜偣锛坥bject锛?
   NAVIGATION_REQUEST: 'pixel-matrix-navigation-request-v1', // 璺ㄧ獥鍙ｅ鑸姹傦紙object锛?
   NATIVE_AUDIO_REPLAYGAIN_SETTINGS: 'pixel-matrix-native-audio-replaygain-settings', // ReplayGain settings锛坥bject锛?
