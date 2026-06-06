@@ -1,8 +1,9 @@
 import React from 'react';
-import { useAudioEngine } from '../../contexts/AudioEngineContext';
+import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { useKernel } from '../../contexts/KernelContext';
 import { useT } from '../../i18n';
 import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
+import type { AudioSpectrumFrame } from '../../services/audio/types';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import {
   invokeWithTelemetry,
@@ -50,6 +51,34 @@ type DspNode =
 
 type DspGraphConfig = { nodes: DspNode[] };
 
+type DspRackTab = 'overview' | 'tone' | 'transform' | 'vst' | 'chain';
+type DspNodeCategory = 'tone' | 'transform' | 'vst' | 'other';
+
+type SpectrumSnapshot = {
+  pre: AudioSpectrumFrame | null;
+  post: AudioSpectrumFrame | null;
+};
+
+type SpectrumMetrics = {
+  rmsDb: number | null;
+  peakDb: number | null;
+  low: number | null;
+  mid: number | null;
+  high: number | null;
+  frameId: number | null;
+};
+
+type DspGraphSummary = {
+  enabledCount: number;
+  bypassedCount: number;
+  totalGainDb: number;
+  tempoRate: number;
+  pitchSemitones: number;
+  vstEnabledCount: number;
+  vstActiveCount: number;
+  vstProblemCount: number;
+};
+
 type VstSessionStatus = {
   nodeId: string;
   pluginId: string;
@@ -63,6 +92,7 @@ type VstSessionStatus = {
 };
 
 const EVENT_VST_SESSION_STATUSES = 'vst-session-statuses';
+const EMPTY_DSP_NODES: DspNode[] = [];
 
 const telemetry = getTelemetryLogger('vst', 'DspRackPage');
 
@@ -158,6 +188,161 @@ function computeTotalGainDb(nodes: DspNode[]) {
   return clamp(sum, -60, 12);
 }
 
+function computeTempoRate(nodes: DspNode[]) {
+  let rate = 1;
+  for (const node of nodes) {
+    if (!node.enabled || node.type !== 'tempo') continue;
+    rate *= clamp(readNumberField(node, 'rate') ?? 1, 0.25, 4);
+  }
+  return clamp(rate, 0.25, 4);
+}
+
+function computePitchSemitones(nodes: DspNode[]) {
+  let semitones = 0;
+  for (const node of nodes) {
+    if (!node.enabled) continue;
+    if (node.type === 'pitch-shift') {
+      semitones += clamp(readNumberField(node, 'semitones') ?? 0, -24, 24);
+    }
+    if (node.type === 'tempo' && !(readBooleanField(node, 'preservePitch') ?? true)) {
+      const rate = clamp(readNumberField(node, 'rate') ?? 1, 0.25, 4);
+      semitones += 12 * Math.log2(rate);
+    }
+  }
+  return clamp(semitones, -48, 48);
+}
+
+function getNodeCategory(node: DspNode): DspNodeCategory {
+  if (node.type === 'gain' || node.type === 'eq' || node.type === 'limiter') return 'tone';
+  if (node.type === 'pitch-shift' || node.type === 'tempo') return 'transform';
+  if (node.type === 'vst') return 'vst';
+  return 'other';
+}
+
+function getFilteredNodes(nodes: DspNode[], tab: DspRackTab) {
+  if (tab === 'chain') return nodes;
+  if (tab === 'overview') return [];
+  return nodes.filter((node) => getNodeCategory(node) === tab);
+}
+
+function countNodes(nodes: DspNode[], category: DspNodeCategory) {
+  return nodes.filter((node) => getNodeCategory(node) === category).length;
+}
+
+function hasOtherNodes(nodes: DspNode[]) {
+  return nodes.some((node) => getNodeCategory(node) === 'other');
+}
+
+function computeVstProblemCount(nodes: DspNode[], statuses: Record<string, VstSessionStatus>) {
+  let count = 0;
+  for (const node of nodes) {
+    if (!node.enabled || node.type !== 'vst') continue;
+    const pluginId = (readStringField(node, 'pluginId') ?? '').trim();
+    const status = statuses[node.id];
+    if (!pluginId || !status || status.pluginError || !status.peerReady) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function computeGraphSummary(nodes: DspNode[], statuses: Record<string, VstSessionStatus>): DspGraphSummary {
+  const enabledNodes = nodes.filter((node) => node.enabled);
+  const vstEnabledNodes = enabledNodes.filter((node) => node.type === 'vst');
+  return {
+    enabledCount: enabledNodes.length,
+    bypassedCount: nodes.length - enabledNodes.length,
+    totalGainDb: computeTotalGainDb(nodes),
+    tempoRate: computeTempoRate(nodes),
+    pitchSemitones: computePitchSemitones(nodes),
+    vstEnabledCount: vstEnabledNodes.length,
+    vstActiveCount: vstEnabledNodes.filter((node) => statuses[node.id]?.processingActive).length,
+    vstProblemCount: computeVstProblemCount(nodes, statuses),
+  };
+}
+
+function toLinearAudioSample(value: number) {
+  return (value - 128) / 128;
+}
+
+function toDbFromUnit(value: number) {
+  return 20 * Math.log10(Math.max(value, 0.000_001));
+}
+
+function averageRange(values: readonly number[], start: number, end: number) {
+  if (values.length === 0) return null;
+  const from = clamp(Math.floor(start), 0, values.length);
+  const to = clamp(Math.floor(end), from + 1, values.length);
+  let sum = 0;
+  for (let index = from; index < to; index += 1) {
+    sum += values[index] ?? 0;
+  }
+  return sum / Math.max(1, to - from);
+}
+
+function computeSpectrumMetrics(frame: AudioSpectrumFrame | null): SpectrumMetrics {
+  if (!frame) {
+    return {
+      rmsDb: null,
+      peakDb: null,
+      low: null,
+      mid: null,
+      high: null,
+      frameId: null,
+    };
+  }
+
+  const timeDomain = frame.timeDomain ? Array.from(frame.timeDomain) : [];
+  let rmsDb: number | null = null;
+  let peakDb: number | null = null;
+
+  if (timeDomain.length > 0) {
+    let sumSquares = 0;
+    let peak = 0;
+    for (const value of timeDomain) {
+      const sample = toLinearAudioSample(value);
+      sumSquares += sample * sample;
+      peak = Math.max(peak, Math.abs(sample));
+    }
+    rmsDb = toDbFromUnit(Math.sqrt(sumSquares / timeDomain.length));
+    peakDb = toDbFromUnit(peak);
+  }
+
+  const bins = Array.from(frame.bins ?? []);
+  const low = averageRange(bins, 0, bins.length * 0.18);
+  const mid = averageRange(bins, bins.length * 0.18, bins.length * 0.62);
+  const high = averageRange(bins, bins.length * 0.62, bins.length);
+
+  return {
+    rmsDb,
+    peakDb,
+    low,
+    mid,
+    high,
+    frameId: frame.frameId,
+  };
+}
+
+function formatDbValue(value: number | null, digits = 1) {
+  if (value === null || !isFinite(value)) return '--';
+  return `${formatSigned(value, digits)} dB`;
+}
+
+function formatDeltaValue(value: number | null, digits = 1) {
+  if (value === null || !isFinite(value)) return '--';
+  return formatSigned(value, digits);
+}
+
+function normalizeBarValue(value: number | null, max = 255) {
+  if (value === null || !isFinite(value)) return 0;
+  return clamp((value / max) * 100, 0, 100);
+}
+
+function metricDelta(pre: number | null, post: number | null) {
+  if (pre === null || post === null) return null;
+  return post - pre;
+}
+
 function ensureNumber(value: unknown, fallback: number) {
   return typeof value === 'number' && isFinite(value) ? value : fallback;
 }
@@ -218,12 +403,15 @@ export const DspRackPage: React.FC = () => {
   const kernel = useKernel();
   const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const { isNativeAvailable } = useAudioEngine();
+  const audioService = useAudioService();
   const isTauri = React.useMemo(() => isTauriRuntime(), []);
   const [graph, setGraph] = React.useState<DspGraphConfig | null>(null);
   const [vstStatuses, setVstStatuses] = React.useState<Record<string, VstSessionStatus>>({});
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [highlightNodeId, setHighlightNodeId] = React.useState<string | null>(null);
+  const [activeTab, setActiveTab] = React.useState<DspRackTab>('overview');
+  const [spectrumSnapshot, setSpectrumSnapshot] = React.useState<SpectrumSnapshot>({ pre: null, post: null });
   const lastLocateRequestIdRef = React.useRef<string | null>(null);
   const clearHighlightTimerRef = React.useRef<number | null>(null);
 
@@ -305,7 +493,7 @@ export const DspRackPage: React.FC = () => {
       cleanup = fn;
     });
     return () => cleanup?.();
-  }, [isTauri, refresh]);
+  }, [isTauri]);
 
   React.useEffect(() => {
     if (!isTauri) return;
@@ -317,6 +505,12 @@ export const DspRackPage: React.FC = () => {
       if (!requestId || !nodeId) return;
       if (lastLocateRequestIdRef.current === requestId) return;
       lastLocateRequestIdRef.current = requestId;
+
+      const locatedNode = graph?.nodes.find((node) => node.id === nodeId);
+      if (locatedNode) {
+        const category = getNodeCategory(locatedNode);
+        setActiveTab(category === 'other' ? 'chain' : category);
+      }
 
       if (clearHighlightTimerRef.current !== null) {
         window.clearTimeout(clearHighlightTimerRef.current);
@@ -354,7 +548,25 @@ export const DspRackPage: React.FC = () => {
         clearHighlightTimerRef.current = null;
       }
     };
-  }, [isTauri]);
+  }, [graph, isTauri]);
+
+  React.useEffect(() => {
+    if (!isTauri || !isNativeAvailable || !audioService.getSpectrumFrame) {
+      setSpectrumSnapshot({ pre: null, post: null });
+      return;
+    }
+
+    const readSpectrum = () => {
+      setSpectrumSnapshot({
+        pre: audioService.getSpectrumFrame?.('pre-dsp') ?? null,
+        post: audioService.getSpectrumFrame?.('post-dsp') ?? null,
+      });
+    };
+
+    readSpectrum();
+    const timer = window.setInterval(readSpectrum, 250);
+    return () => window.clearInterval(timer);
+  }, [audioService, isNativeAvailable, isTauri]);
 
   const handleOpenVstManager = React.useCallback(async () => {
     try {
@@ -382,8 +594,8 @@ export const DspRackPage: React.FC = () => {
         await broadcastDataUpdate(
           STORAGE_KEYS.NATIVE_AUDIO_GAIN_DB,
           gainDb,
-        TAURI_EVENTS.NATIVE_AUDIO_GAIN_DB_UPDATED
-      );
+          TAURI_EVENTS.NATIVE_AUDIO_GAIN_DB_UPDATED
+        );
         await invokeDspRack('native_audio_set_dsp_graph', { graph: next }, 'vst.graph.apply');
       } catch (err) {
         telemetry.error('vst.graph.apply.failed', {
@@ -457,11 +669,397 @@ export const DspRackPage: React.FC = () => {
     [applyGraph, graph]
   );
 
+  const nodes = graph?.nodes ?? EMPTY_DSP_NODES;
+  const visibleNodes = React.useMemo(() => getFilteredNodes(nodes, activeTab), [activeTab, nodes]);
+  const graphSummary = React.useMemo(() => computeGraphSummary(nodes, vstStatuses), [nodes, vstStatuses]);
+  const preMetrics = React.useMemo(() => computeSpectrumMetrics(spectrumSnapshot.pre), [spectrumSnapshot.pre]);
+  const postMetrics = React.useMemo(() => computeSpectrumMetrics(spectrumSnapshot.post), [spectrumSnapshot.post]);
+  const hasSpectrumFrames = preMetrics.frameId !== null || postMetrics.frameId !== null;
+  const spectrumRows = React.useMemo(
+    () => [
+      {
+        key: 'rms',
+        label: t('pages.dsp-rack.overview.spectrum.rms'),
+        pre: preMetrics.rmsDb,
+        post: postMetrics.rmsDb,
+        delta: metricDelta(preMetrics.rmsDb, postMetrics.rmsDb),
+        mode: 'db' as const,
+        preBar: normalizeBarValue(preMetrics.rmsDb === null ? null : preMetrics.rmsDb + 60, 60),
+        postBar: normalizeBarValue(postMetrics.rmsDb === null ? null : postMetrics.rmsDb + 60, 60),
+      },
+      {
+        key: 'peak',
+        label: t('pages.dsp-rack.overview.spectrum.peak'),
+        pre: preMetrics.peakDb,
+        post: postMetrics.peakDb,
+        delta: metricDelta(preMetrics.peakDb, postMetrics.peakDb),
+        mode: 'db' as const,
+        preBar: normalizeBarValue(preMetrics.peakDb === null ? null : preMetrics.peakDb + 60, 60),
+        postBar: normalizeBarValue(postMetrics.peakDb === null ? null : postMetrics.peakDb + 60, 60),
+      },
+      {
+        key: 'low',
+        label: t('pages.dsp-rack.overview.spectrum.low'),
+        pre: preMetrics.low,
+        post: postMetrics.low,
+        delta: metricDelta(preMetrics.low, postMetrics.low),
+        mode: 'bin' as const,
+        preBar: normalizeBarValue(preMetrics.low),
+        postBar: normalizeBarValue(postMetrics.low),
+      },
+      {
+        key: 'mid',
+        label: t('pages.dsp-rack.overview.spectrum.mid'),
+        pre: preMetrics.mid,
+        post: postMetrics.mid,
+        delta: metricDelta(preMetrics.mid, postMetrics.mid),
+        mode: 'bin' as const,
+        preBar: normalizeBarValue(preMetrics.mid),
+        postBar: normalizeBarValue(postMetrics.mid),
+      },
+      {
+        key: 'high',
+        label: t('pages.dsp-rack.overview.spectrum.high'),
+        pre: preMetrics.high,
+        post: postMetrics.high,
+        delta: metricDelta(preMetrics.high, postMetrics.high),
+        mode: 'bin' as const,
+        preBar: normalizeBarValue(preMetrics.high),
+        postBar: normalizeBarValue(postMetrics.high),
+      },
+    ],
+    [postMetrics, preMetrics, t]
+  );
+  const tabs = React.useMemo(
+    () =>
+      [
+        { id: 'overview' as const, label: t('pages.dsp-rack.tabs.overview'), count: nodes.length },
+        { id: 'tone' as const, label: t('pages.dsp-rack.tabs.tone'), count: countNodes(nodes, 'tone') },
+        {
+          id: 'transform' as const,
+          label: t('pages.dsp-rack.tabs.transform'),
+          count: countNodes(nodes, 'transform'),
+        },
+        { id: 'vst' as const, label: t('pages.dsp-rack.tabs.vst'), count: countNodes(nodes, 'vst') },
+        { id: 'chain' as const, label: t('pages.dsp-rack.tabs.chain'), count: nodes.length },
+      ],
+    [nodes, t]
+  );
+
+  const renderNodeCard = React.useCallback(
+    (node: DspNode) => {
+      const index = nodes.findIndex((candidate) => candidate.id === node.id);
+      const status = node.type === 'vst' ? vstStatuses[node.id] : undefined;
+      const pluginId = node.type === 'vst' ? (readStringField(node, 'pluginId') ?? '').trim() : '';
+      const statusKind: 'ok' | 'warn' | 'bad' = (() => {
+        if (node.type !== 'vst') return 'bad';
+        if (!node.enabled || !pluginId || !status || status.pluginError || !status.peerReady) return 'bad';
+        if (status.processingActive) return 'ok';
+        return 'warn';
+      })();
+      const statusTitle = (() => {
+        if (node.type !== 'vst') return '';
+        if (!node.enabled) return t('pages.dsp-rack.vst.status.disabled');
+        if (!pluginId) return t('pages.dsp-rack.vst.status.missingPlugin');
+        if (!status) return t('pages.dsp-rack.vst.status.noSession');
+        if (status.pluginError) return t('pages.dsp-rack.vst.status.error');
+        if (!status.peerReady) return t('pages.dsp-rack.vst.status.shmNotReady');
+        if (status.processingActive) {
+          return t('pages.dsp-rack.vst.status.active', {
+            heartbeatIn: status.heartbeatIn ?? '-',
+            heartbeatOut: status.heartbeatOut ?? '-',
+          });
+        }
+        if (status.pluginLoaded) return t('pages.dsp-rack.vst.status.loaded');
+        return t('pages.dsp-rack.vst.status.loading');
+      })();
+      const nativeEditorOpen = !!status?.nativeEditorOpen;
+
+      return (
+        <div
+          key={node.id}
+          id={`dsp-node-${node.id}`}
+          className={`dsp-node-card${node.id === highlightNodeId ? ' dsp-node-card--highlight' : ''}`}
+        >
+          <div className="dsp-node-header">
+            <div className="dsp-node-title">
+              <span className="dsp-node-type">{node.type}</span>
+              <span className="dsp-node-id">
+                #{index >= 0 ? index + 1 : '-'} · {node.id}
+              </span>
+              {node.type === 'vst' && (
+                <div className="vst-node-indicators">
+                  <span
+                    className={`vst-indicator ${
+                      statusKind === 'ok'
+                        ? 'vst-indicator--ok'
+                        : statusKind === 'warn'
+                          ? 'vst-indicator--warn'
+                          : 'vst-indicator--bad'
+                    }`}
+                    title={statusTitle}
+                  >
+                    <span className="vst-indicator-dot" />
+                    {t('pages.dsp-rack.vst.indicator.status')}
+                  </span>
+                  <span
+                    className={`vst-indicator ${nativeEditorOpen ? 'vst-indicator--ok' : 'vst-indicator--bad'}`}
+                    title={
+                      nativeEditorOpen
+                        ? t('pages.dsp-rack.vst.nativeUi.openState')
+                        : t('pages.dsp-rack.vst.nativeUi.closedState')
+                    }
+                  >
+                    <span className="vst-indicator-dot" />
+                    UI
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="dsp-node-controls">
+              <label className="dsp-node-toggle">
+                <input
+                  type="checkbox"
+                  checked={!!node.enabled}
+                  onChange={(e) =>
+                    updateNode(node.id, (n) => ({
+                      ...n,
+                      enabled: e.target.checked,
+                    }))
+                  }
+                />
+                {t('pages.dsp-rack.node.enabled')}
+              </label>
+
+              {node.type === 'vst' && (
+                <button
+                  type="button"
+                  title={
+                    node.enabled
+                      ? t('pages.dsp-rack.vst.nativeUi.openTitle')
+                      : t('pages.dsp-rack.vst.nativeUi.enableFirst')
+                  }
+                  onClick={() =>
+                    void invokeDspRack(
+                      'native_audio_vst_open_native_editor',
+                      {
+                        nodeId: node.id,
+                        title: `VST3 (${readStringField(node, 'pluginId') ?? 'vst'})`,
+                      },
+                      'vst.editor.open'
+                    ).catch((err) => setError(err instanceof Error ? err.message : String(err)))
+                  }
+                  disabled={busy || !node.enabled || !pluginId}
+                >
+                  Native UI
+                </button>
+              )}
+
+              {node.type === 'vst' && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void invokeDspRack(
+                      'native_audio_vst_close_native_editor',
+                      { nodeId: node.id },
+                      'vst.editor.close'
+                    ).catch((err) => setError(err instanceof Error ? err.message : String(err)))
+                  }
+                  disabled={busy || !(vstStatuses[node.id]?.nativeEditorOpen ?? false)}
+                >
+                  {t('pages.dsp-rack.vst.nativeUi.close')}
+                </button>
+              )}
+
+              <button type="button" onClick={() => moveNode(node.id, -1)} disabled={index <= 0 || busy}>
+                {t('pages.dsp-rack.node.moveUp')}
+              </button>
+              <button
+                type="button"
+                onClick={() => moveNode(node.id, 1)}
+                disabled={index === -1 || index === nodes.length - 1 || busy}
+              >
+                {t('pages.dsp-rack.node.moveDown')}
+              </button>
+              <button type="button" onClick={() => removeNode(node.id)} disabled={busy}>
+                {t('pages.dsp-rack.node.remove')}
+              </button>
+            </div>
+          </div>
+
+          {node.type === 'gain' && (
+            <div className="dsp-node-body">
+              <div className="dsp-param-row">
+                <span className="dsp-param-label">{t('pages.dsp-rack.gain.db')}</span>
+                <input
+                  className="dsp-param-range"
+                  type="range"
+                  min={-60}
+                  max={12}
+                  step={0.1}
+                  value={readNumberField(node, 'db') ?? 0}
+                  onChange={(e) =>
+                    updateNode(node.id, (n) => ({
+                      ...n,
+                      db: clamp(Number(e.target.value), -60, 12),
+                    }))
+                  }
+                />
+                <span className="dsp-param-value">{(readNumberField(node, 'db') ?? 0).toFixed(1)} dB</span>
+              </div>
+            </div>
+          )}
+
+          {node.type === 'limiter' && (
+            <div className="dsp-node-body">
+              <div className="dsp-param-row">
+                <span className="dsp-param-label">{t('pages.dsp-rack.limiter.thresholdDb')}</span>
+                <input
+                  className="dsp-param-range"
+                  type="range"
+                  min={-30}
+                  max={0}
+                  step={0.1}
+                  value={readNumberField(node, 'thresholdDb') ?? -6}
+                  onChange={(e) =>
+                    updateNode(node.id, (n) => ({
+                      ...n,
+                      thresholdDb: clamp(Number(e.target.value), -30, 0),
+                    }))
+                  }
+                />
+                <span className="dsp-param-value">
+                  {(readNumberField(node, 'thresholdDb') ?? -6).toFixed(1)} dB
+                </span>
+              </div>
+            </div>
+          )}
+
+          {node.type === 'pitch-shift' && (
+            <div className="dsp-node-body">
+              <div className="dsp-param-row">
+                <span className="dsp-param-label">{t('pages.dsp-rack.pitchShift.semitones')}</span>
+                <input
+                  className="dsp-param-range"
+                  type="range"
+                  min={-12}
+                  max={12}
+                  step={0.1}
+                  value={readNumberField(node, 'semitones') ?? 0}
+                  onChange={(e) =>
+                    updateNode(node.id, (n) => ({
+                      ...n,
+                      semitones: clamp(Number(e.target.value), -24, 24),
+                    }))
+                  }
+                />
+                <span className="dsp-param-value">
+                  {formatSigned(readNumberField(node, 'semitones') ?? 0)} st
+                </span>
+              </div>
+            </div>
+          )}
+
+          {node.type === 'tempo' && (
+            <div className="dsp-node-body">
+              <div className="dsp-param-row">
+                <span className="dsp-param-label">{t('pages.dsp-rack.tempo.rate')}</span>
+                <input
+                  className="dsp-param-range"
+                  type="range"
+                  min={0.5}
+                  max={2}
+                  step={0.01}
+                  value={readNumberField(node, 'rate') ?? 1}
+                  onChange={(e) =>
+                    updateNode(node.id, (n) => ({
+                      ...n,
+                      rate: clamp(Number(e.target.value), 0.25, 4),
+                    }))
+                  }
+                />
+                <span className="dsp-param-value">{(readNumberField(node, 'rate') ?? 1).toFixed(2)}x</span>
+              </div>
+              <label className="dsp-param-check">
+                <input
+                  type="checkbox"
+                  checked={readBooleanField(node, 'preservePitch') ?? true}
+                  onChange={(e) =>
+                    updateNode(node.id, (n) => ({
+                      ...n,
+                      preservePitch: e.target.checked,
+                    }))
+                  }
+                />
+                <span>{t('pages.dsp-rack.tempo.preservePitch')}</span>
+              </label>
+            </div>
+          )}
+
+          {node.type === 'eq' && (
+            <div className="dsp-node-body">
+              {ensureEqBands(asRecord(node)?.bands).map((band, bandIndex) => (
+                <div key={`${band.kind}-${band.frequencyHz}-${bandIndex}`} className="dsp-param-row">
+                  <span className="dsp-param-label">
+                    {band.kind} {Math.round(band.frequencyHz)}Hz
+                  </span>
+                  <input
+                    className="dsp-param-range"
+                    type="range"
+                    min={-12}
+                    max={12}
+                    step={0.1}
+                    value={band.gainDb}
+                    onChange={(e) => {
+                      const gainDb = clamp(Number(e.target.value), -24, 24);
+                      updateNode(node.id, (n) => {
+                        const nextBands = ensureEqBands(asRecord(n)?.bands);
+                        if (bandIndex >= nextBands.length) return n;
+                        nextBands[bandIndex] = { ...nextBands[bandIndex], gainDb };
+                        return { ...n, bands: nextBands };
+                      });
+                    }}
+                  />
+                  <span className="dsp-param-value">{band.gainDb.toFixed(1)} dB</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {node.type === 'vst' && (
+            <div className="dsp-node-body">
+              <div className="dsp-rack-note">
+                PluginId: <span style={{ opacity: 0.9 }}>{readStringField(node, 'pluginId') ?? '(none)'}</span>
+              </div>
+              <VstNodeParamsPanel
+                nodeId={node.id}
+                pluginId={readStringField(node, 'pluginId') ?? ''}
+                params={ensureVstParamValues(asRecord(node)?.params)}
+              />
+              <div className="dsp-rack-note">{t('pages.dsp-rack.note.vstAddHint')}</div>
+            </div>
+          )}
+        </div>
+      );
+    },
+    [
+      busy,
+      highlightNodeId,
+      moveNode,
+      nodes,
+      removeNode,
+      t,
+      updateNode,
+      vstStatuses,
+    ]
+  );
+
   if (!isTauri) {
     return (
       <div className="dsp-rack-page">
-        <h2 className="dsp-rack-title">DSP Rack</h2>
-        <p className="dsp-rack-note">DSP Rack / VST3 插件管理器需要在 Tauri 桌面运行（`pnpm dev:tauri`）。</p>
+        <h2 className="dsp-rack-title">{t('pages.dsp-rack.title')}</h2>
+        <p className="dsp-rack-note">{t('pages.dsp-rack.note.requiresTauri')}</p>
       </div>
     );
   }
@@ -471,14 +1069,14 @@ export const DspRackPage: React.FC = () => {
       <div className="dsp-rack-page">
         <div className="dsp-rack-header">
           <div>
-            <h2 className="dsp-rack-title">DSP Rack</h2>
-            <p className="dsp-rack-note">Native Audio 不可用，暂时无法使用 DSP Rack。</p>
-            <p className="dsp-rack-note">添加 VST：打开「VST3 插件管理器」→ 扫描 → 选中插件 → 添加到 DSP Rack。</p>
+            <h2 className="dsp-rack-title">{t('pages.dsp-rack.title')}</h2>
+            <p className="dsp-rack-note">{t('pages.dsp-rack.note.nativeUnavailable')}</p>
+            <p className="dsp-rack-note">{t('pages.dsp-rack.note.vstAddHint')}</p>
           </div>
 
           <div className="dsp-rack-actions">
             <button type="button" onClick={() => void handleOpenVstManager()}>
-              VST3 插件管理器
+              {t('pages.dsp-rack.actions.openVstManager')}
             </button>
           </div>
         </div>
@@ -490,28 +1088,13 @@ export const DspRackPage: React.FC = () => {
     <div className="dsp-rack-page">
       <div className="dsp-rack-header">
         <div>
-          <h2 className="dsp-rack-title">DSP Rack</h2>
-          <p className="dsp-rack-note">管理 Native Audio 的 DSP Graph（含 VST Bridge MVP）。</p>
+          <h2 className="dsp-rack-title">{t('pages.dsp-rack.title')}</h2>
+          <p className="dsp-rack-note">{t('pages.dsp-rack.subtitle')}</p>
         </div>
 
         <div className="dsp-rack-actions">
-          <button type="button" onClick={() => addNode('gain')} disabled={!graph || busy}>
-            + Gain
-          </button>
-          <button type="button" onClick={() => addNode('eq')} disabled={!graph || busy}>
-            + EQ
-          </button>
-          <button type="button" onClick={() => addNode('limiter')} disabled={!graph || busy}>
-            + Limiter
-          </button>
-          <button type="button" onClick={() => addNode('pitch-shift')} disabled={!graph || busy}>
-            {t('pages.dsp-rack.actions.addPitchShift')}
-          </button>
-          <button type="button" onClick={() => addNode('tempo')} disabled={!graph || busy}>
-            {t('pages.dsp-rack.actions.addTempo')}
-          </button>
           <button type="button" onClick={() => void handleOpenVstManager()} disabled={busy}>
-            VST3 插件管理器
+            {t('pages.dsp-rack.actions.openVstManager')}
           </button>
           <button
             type="button"
@@ -524,313 +1107,171 @@ export const DspRackPage: React.FC = () => {
             }
             disabled={busy}
           >
-            找回插件窗口
+            {t('pages.dsp-rack.actions.bringVstEditors')}
           </button>
           <button type="button" onClick={() => void refresh()} disabled={busy}>
-            刷新
+            {t('pages.dsp-rack.actions.refresh')}
           </button>
         </div>
       </div>
 
       {error && <div className="dsp-rack-error">{error}</div>}
 
-      {!graph && <div className="dsp-rack-loading">Loading...</div>}
+      {!graph && <div className="dsp-rack-loading">{t('pages.dsp-rack.loading')}</div>}
 
       {graph && (
-        <div className="dsp-rack-list">
-          {graph.nodes.length === 0 && <div className="dsp-rack-empty">当前 DSP Graph 为空。</div>}
+        <>
+          <div className="dsp-rack-tabs" role="tablist" aria-label={t('pages.dsp-rack.tabs.ariaLabel')}>
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                className={`dsp-rack-tab${activeTab === tab.id ? ' dsp-rack-tab--active' : ''}`}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                <span>{tab.label}</span>
+                <span className="dsp-rack-tab-count">{tab.count}</span>
+              </button>
+            ))}
+          </div>
 
-          {graph.nodes.map((node, index) => (
-            <div
-              key={node.id}
-              id={`dsp-node-${node.id}`}
-              className={`dsp-node-card${node.id === highlightNodeId ? ' dsp-node-card--highlight' : ''}`}
-            >
-              <div className="dsp-node-header">
-                <div className="dsp-node-title">
-                  <span className="dsp-node-type">{node.type}</span>
-                  <span className="dsp-node-id">{node.id}</span>
-                  {node.type === 'vst' &&
-                    (() => {
-                      const pluginId = (readStringField(node, 'pluginId') ?? '').trim();
-                      const status = vstStatuses[node.id];
-                      const statusKind: 'ok' | 'warn' | 'bad' = (() => {
-                        if (!node.enabled) return 'bad';
-                        if (!pluginId) return 'bad';
-                        if (!status) return 'bad';
-                        if (status.pluginError) return 'bad';
-                        if (!status.peerReady) return 'bad';
-                        if (status.processingActive) return 'ok';
-                        return 'warn';
-                      })();
-                      const statusTitle = (() => {
-                        if (!node.enabled) return 'Node disabled';
-                        if (!pluginId) return 'Missing plugin';
-                        if (!status) return 'Session not spawned';
-                        if (status.pluginError) return 'Sidecar reported error';
-                        if (!status.peerReady) return 'Shared memory not ready';
-                        if (status.processingActive) {
-                          return `Active (hbIn=${status.heartbeatIn ?? '-'} hbOut=${status.heartbeatOut ?? '-'})`;
-                        }
-                        if (status.pluginLoaded) return 'Plugin loaded';
-                        return 'Plugin loading';
-                      })();
+          {activeTab === 'overview' && (
+            <div className="dsp-overview">
+              <section className="dsp-overview-section" aria-labelledby="dsp-overview-summary-title">
+                <div className="dsp-section-heading">
+                  <h3 id="dsp-overview-summary-title">{t('pages.dsp-rack.overview.summary.title')}</h3>
+                  <p>{t('pages.dsp-rack.overview.summary.note')}</p>
+                </div>
+                <div className="dsp-metric-grid">
+                  <div className="dsp-metric">
+                    <span className="dsp-metric-label">{t('pages.dsp-rack.overview.metric.nodes')}</span>
+                    <strong>{graphSummary.enabledCount}</strong>
+                    <span>{t('pages.dsp-rack.overview.metric.bypassed', { count: graphSummary.bypassedCount })}</span>
+                  </div>
+                  <div className="dsp-metric">
+                    <span className="dsp-metric-label">{t('pages.dsp-rack.overview.metric.gain')}</span>
+                    <strong>{formatDbValue(graphSummary.totalGainDb)}</strong>
+                    <span>{t('pages.dsp-rack.overview.metric.gainHint')}</span>
+                  </div>
+                  <div className="dsp-metric">
+                    <span className="dsp-metric-label">{t('pages.dsp-rack.overview.metric.pitch')}</span>
+                    <strong>{formatSigned(graphSummary.pitchSemitones)} st</strong>
+                    <span>{t('pages.dsp-rack.overview.metric.tempo', { rate: graphSummary.tempoRate.toFixed(2) })}</span>
+                  </div>
+                  <div className="dsp-metric">
+                    <span className="dsp-metric-label">{t('pages.dsp-rack.overview.metric.vst')}</span>
+                    <strong>
+                      {graphSummary.vstActiveCount}/{graphSummary.vstEnabledCount}
+                    </strong>
+                    <span>{t('pages.dsp-rack.overview.metric.vstProblems', { count: graphSummary.vstProblemCount })}</span>
+                  </div>
+                </div>
+              </section>
 
-                      const nativeEditorOpen = !!status?.nativeEditorOpen;
-
-                      return (
-                        <div className="vst-node-indicators">
-                          <span
-                            className={`vst-indicator ${
-                              statusKind === 'ok'
-                                ? 'vst-indicator--ok'
-                                : statusKind === 'warn'
-                                  ? 'vst-indicator--warn'
-                                  : 'vst-indicator--bad'
-                            }`}
-                            title={statusTitle}
-                          >
-                            <span className="vst-indicator-dot" />
-                            STATUS
-                          </span>
-                          <span
-                            className={`vst-indicator ${nativeEditorOpen ? 'vst-indicator--ok' : 'vst-indicator--bad'}`}
-                            title={nativeEditorOpen ? 'Native editor window is open' : 'Native editor window is closed'}
-                          >
-                            <span className="vst-indicator-dot" />
-                            UI
-                          </span>
+              <section className="dsp-overview-section" aria-labelledby="dsp-overview-spectrum-title">
+                <div className="dsp-section-heading">
+                  <h3 id="dsp-overview-spectrum-title">{t('pages.dsp-rack.overview.spectrum.title')}</h3>
+                  <p>{t('pages.dsp-rack.overview.spectrum.note')}</p>
+                </div>
+                {!hasSpectrumFrames && (
+                  <div className="dsp-rack-empty">{t('pages.dsp-rack.overview.spectrum.empty')}</div>
+                )}
+                {hasSpectrumFrames && (
+                  <div className="dsp-spectrum-grid">
+                    {spectrumRows.map((metric) => (
+                      <div key={metric.key} className="dsp-spectrum-row">
+                        <div className="dsp-spectrum-label">{metric.label}</div>
+                        <div className="dsp-spectrum-bars" aria-hidden="true">
+                          <span className="dsp-spectrum-bar dsp-spectrum-bar--pre" style={{ width: `${metric.preBar}%` }} />
+                          <span className="dsp-spectrum-bar dsp-spectrum-bar--post" style={{ width: `${metric.postBar}%` }} />
                         </div>
-                      );
-                    })()}
-                </div>
-
-                <div className="dsp-node-controls">
-                  <label className="dsp-node-toggle">
-                    <input
-                      type="checkbox"
-                      checked={!!node.enabled}
-                      onChange={(e) =>
-                        updateNode(node.id, (n) => ({
-                          ...n,
-                          enabled: e.target.checked,
-                        }))
-                      }
-                    />
-                    启用
-                  </label>
-
-                  {node.type === 'vst' && (
-                    <button
-                      type="button"
-                      title={node.enabled ? '打开插件原生界面' : '请先勾选“启用”该节点，再打开 Native UI'}
-                      onClick={() =>
-                        void invokeDspRack(
-                          'native_audio_vst_open_native_editor',
-                          {
-                            nodeId: node.id,
-                            title: `VST3 (${readStringField(node, 'pluginId') ?? 'vst'})`,
-                          },
-                          'vst.editor.open'
-                        ).catch((err) => setError(err instanceof Error ? err.message : String(err)))
-                      }
-                      disabled={busy || !node.enabled || !(readStringField(node, 'pluginId') ?? '').trim()}
-                    >
-                      Native UI
-                    </button>
-                  )}
-
-                  {node.type === 'vst' && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void invokeDspRack(
-                          'native_audio_vst_close_native_editor',
-                          { nodeId: node.id },
-                          'vst.editor.close'
-                        ).catch((err) => setError(err instanceof Error ? err.message : String(err)))
-                      }
-                      disabled={busy || !(vstStatuses[node.id]?.nativeEditorOpen ?? false)}
-                    >
-                      关闭 UI
-                    </button>
-                  )}
-
-                  <button type="button" onClick={() => moveNode(node.id, -1)} disabled={index === 0 || busy}>
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => moveNode(node.id, 1)}
-                    disabled={index === graph.nodes.length - 1 || busy}
-                  >
-                    ↓
-                  </button>
-                  <button type="button" onClick={() => removeNode(node.id)} disabled={busy}>
-                    删除
-                  </button>
-                </div>
-              </div>
-
-              {node.type === 'gain' && (
-                <div className="dsp-node-body">
-                  <div className="dsp-param-row">
-                    <span className="dsp-param-label">Gain (dB)</span>
-                    <input
-                      className="dsp-param-range"
-                      type="range"
-                      min={-60}
-                      max={12}
-                      step={0.1}
-                      value={readNumberField(node, 'db') ?? 0}
-                      onChange={(e) =>
-                        updateNode(node.id, (n) => ({
-                          ...n,
-                          db: clamp(Number(e.target.value), -60, 12),
-                        }))
-                      }
-                    />
-                    <span className="dsp-param-value">{(readNumberField(node, 'db') ?? 0).toFixed(1)} dB</span>
+                        <div className="dsp-spectrum-values">
+                          <span>
+                            {t('pages.dsp-rack.overview.spectrum.pre')}{' '}
+                            {metric.mode === 'db'
+                              ? formatDbValue(metric.pre)
+                              : metric.pre === null
+                                ? '--'
+                                : metric.pre.toFixed(0)}
+                          </span>
+                          <span>
+                            {t('pages.dsp-rack.overview.spectrum.post')}{' '}
+                            {metric.mode === 'db'
+                              ? formatDbValue(metric.post)
+                              : metric.post === null
+                                ? '--'
+                                : metric.post.toFixed(0)}
+                          </span>
+                          <strong>
+                            {t('pages.dsp-rack.overview.spectrum.delta')}{' '}
+                            {metric.mode === 'db'
+                              ? formatDbValue(metric.delta)
+                              : formatDeltaValue(metric.delta, 0)}
+                          </strong>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                </div>
-              )}
-
-              {node.type === 'limiter' && (
-                <div className="dsp-node-body">
-                  <div className="dsp-param-row">
-                    <span className="dsp-param-label">Threshold (dB)</span>
-                    <input
-                      className="dsp-param-range"
-                      type="range"
-                      min={-30}
-                      max={0}
-                      step={0.1}
-                      value={readNumberField(node, 'thresholdDb') ?? -6}
-                      onChange={(e) =>
-                        updateNode(node.id, (n) => ({
-                          ...n,
-                          thresholdDb: clamp(Number(e.target.value), -30, 0),
-                        }))
-                      }
-                    />
-                    <span className="dsp-param-value">
-                      {(readNumberField(node, 'thresholdDb') ?? -6).toFixed(1)} dB
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {node.type === 'pitch-shift' && (
-                <div className="dsp-node-body">
-                  <div className="dsp-param-row">
-                    <span className="dsp-param-label">{t('pages.dsp-rack.pitchShift.semitones')}</span>
-                    <input
-                      className="dsp-param-range"
-                      type="range"
-                      min={-12}
-                      max={12}
-                      step={0.1}
-                      value={readNumberField(node, 'semitones') ?? 0}
-                      onChange={(e) =>
-                        updateNode(node.id, (n) => ({
-                          ...n,
-                          semitones: clamp(Number(e.target.value), -24, 24),
-                        }))
-                      }
-                    />
-                    <span className="dsp-param-value">
-                      {formatSigned(readNumberField(node, 'semitones') ?? 0)} st
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {node.type === 'tempo' && (
-                <div className="dsp-node-body">
-                  <div className="dsp-param-row">
-                    <span className="dsp-param-label">{t('pages.dsp-rack.tempo.rate')}</span>
-                    <input
-                      className="dsp-param-range"
-                      type="range"
-                      min={0.5}
-                      max={2}
-                      step={0.01}
-                      value={readNumberField(node, 'rate') ?? 1}
-                      onChange={(e) =>
-                        updateNode(node.id, (n) => ({
-                          ...n,
-                          rate: clamp(Number(e.target.value), 0.25, 4),
-                        }))
-                      }
-                    />
-                    <span className="dsp-param-value">
-                      {(readNumberField(node, 'rate') ?? 1).toFixed(2)}x
-                    </span>
-                  </div>
-                  <label className="dsp-param-check">
-                    <input
-                      type="checkbox"
-                      checked={readBooleanField(node, 'preservePitch') ?? true}
-                      onChange={(e) =>
-                        updateNode(node.id, (n) => ({
-                          ...n,
-                          preservePitch: e.target.checked,
-                        }))
-                      }
-                    />
-                    <span>{t('pages.dsp-rack.tempo.preservePitch')}</span>
-                  </label>
-                </div>
-              )}
-
-              {node.type === 'eq' && (
-                <div className="dsp-node-body">
-                  {ensureEqBands(asRecord(node)?.bands).map((band, bandIndex) => (
-                    <div key={`${band.kind}-${band.frequencyHz}-${bandIndex}`} className="dsp-param-row">
-                      <span className="dsp-param-label">
-                        {band.kind} {Math.round(band.frequencyHz)}Hz
-                      </span>
-                      <input
-                        className="dsp-param-range"
-                        type="range"
-                        min={-12}
-                        max={12}
-                        step={0.1}
-                        value={band.gainDb}
-                        onChange={(e) => {
-                          const gainDb = clamp(Number(e.target.value), -24, 24);
-                          updateNode(node.id, (n) => {
-                            const nextBands = ensureEqBands(asRecord(n)?.bands);
-                            if (bandIndex >= nextBands.length) return n;
-                            nextBands[bandIndex] = { ...nextBands[bandIndex], gainDb };
-                            return { ...n, bands: nextBands };
-                          });
-                        }}
-                      />
-                      <span className="dsp-param-value">{band.gainDb.toFixed(1)} dB</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {node.type === 'vst' && (
-                <div className="dsp-node-body">
-                  <div className="dsp-rack-note">
-                    PluginId: <span style={{ opacity: 0.9 }}>{readStringField(node, 'pluginId') ?? '(none)'}</span>
-                  </div>
-                  <VstNodeParamsPanel
-                    nodeId={node.id}
-                    pluginId={readStringField(node, 'pluginId') ?? ''}
-                    params={ensureVstParamValues(asRecord(node)?.params)}
-                  />
-                  <div className="dsp-rack-note">
-                    提示：请在「VST3 插件管理器」中选中插件并点击“添加到 DSP Rack”添加（当前不支持拖拽）。
-                  </div>
-                </div>
-              )}
+                )}
+              </section>
             </div>
-          ))}
-        </div>
+          )}
+
+          {activeTab !== 'overview' && (
+            <div className="dsp-rack-workspace">
+              {activeTab === 'tone' && (
+                <div className="dsp-rack-add-strip">
+                  <button type="button" onClick={() => addNode('gain')} disabled={!graph || busy}>
+                    {t('pages.dsp-rack.actions.addGain')}
+                  </button>
+                  <button type="button" onClick={() => addNode('eq')} disabled={!graph || busy}>
+                    {t('pages.dsp-rack.actions.addEq')}
+                  </button>
+                  <button type="button" onClick={() => addNode('limiter')} disabled={!graph || busy}>
+                    {t('pages.dsp-rack.actions.addLimiter')}
+                  </button>
+                </div>
+              )}
+
+              {activeTab === 'transform' && (
+                <div className="dsp-rack-add-strip">
+                  <button type="button" onClick={() => addNode('pitch-shift')} disabled={!graph || busy}>
+                    {t('pages.dsp-rack.actions.addPitchShift')}
+                  </button>
+                  <button type="button" onClick={() => addNode('tempo')} disabled={!graph || busy}>
+                    {t('pages.dsp-rack.actions.addTempo')}
+                  </button>
+                </div>
+              )}
+
+              {activeTab === 'vst' && (
+                <div className="dsp-rack-add-strip">
+                  <button type="button" onClick={() => void handleOpenVstManager()} disabled={busy}>
+                    {t('pages.dsp-rack.actions.openVstManager')}
+                  </button>
+                  <span className="dsp-rack-add-hint">{t('pages.dsp-rack.note.vstAddHint')}</span>
+                </div>
+              )}
+
+              {activeTab === 'chain' && hasOtherNodes(nodes) && (
+                <div className="dsp-rack-chain-note">{t('pages.dsp-rack.chain.unknownNodes')}</div>
+              )}
+
+              <div className="dsp-rack-list">
+                {visibleNodes.length === 0 && (
+                  <div className="dsp-rack-empty">
+                    {activeTab === 'chain'
+                      ? t('pages.dsp-rack.empty.graph')
+                      : t('pages.dsp-rack.empty.category')}
+                  </div>
+                )}
+                {visibleNodes.map((node) => renderNodeCard(node))}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
