@@ -2825,7 +2825,7 @@
   "pages.dsp-rack.loading": "Loading...",
   "pages.dsp-rack.tabs.ariaLabel": "DSP Rack sections",
   "pages.dsp-rack.tabs.overview": "Overview",
-  "pages.dsp-rack.tabs.tone": "Tone",
+  "pages.dsp-rack.tabs.tone": "Basic",
   "pages.dsp-rack.tabs.transform": "Utility",
   "pages.dsp-rack.tabs.vst": "VST",
   "pages.dsp-rack.tabs.chain": "Chain",

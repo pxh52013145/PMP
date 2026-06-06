@@ -2610,7 +2610,7 @@
   "pages.dsp-rack.loading": "加载中...",
   "pages.dsp-rack.tabs.ariaLabel": "DSP Rack 分区",
   "pages.dsp-rack.tabs.overview": "总览",
-  "pages.dsp-rack.tabs.tone": "音色",
+  "pages.dsp-rack.tabs.tone": "基础处理",
   "pages.dsp-rack.tabs.transform": "功能",
   "pages.dsp-rack.tabs.vst": "VST",
   "pages.dsp-rack.tabs.chain": "链路",
