@@ -3,6 +3,15 @@
   color: #fff;
 }
 
+.navigation-content[data-page='dsp-rack'] {
+  scrollbar-width: none;
+}
+
+.navigation-content[data-page='dsp-rack']::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 .dsp-rack-header {
   display: flex;
   align-items: flex-start;

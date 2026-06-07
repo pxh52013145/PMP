@@ -126,7 +126,7 @@ export const StandardNavigationPage: React.FC<NavigationPageVariantProps> = ({
 
   return (
     <div className="navigation-page">
-      <div className="navigation-content">
+      <div className="navigation-content" data-page={currentPage.type}>
         {content ?? (
           <Placeholder
             icon="?"
