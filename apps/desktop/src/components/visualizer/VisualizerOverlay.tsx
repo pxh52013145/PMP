@@ -1,17 +1,20 @@
 import { appWindow } from '@tauri-apps/api/window';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Axis3d, Check, ChevronDown, Crosshair, Grid2x2, ListTree, PanelBottom, PanelRight, PanelTop, Pencil, RotateCcw, Scan } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { Check, ChevronDown, Crosshair, Eye, EyeOff, Home, ListTree, PanelBottom, Pencil, RotateCcw, Scan } from 'lucide-react';
 import { useKernel } from '../../contexts/KernelContext';
 import type { VisualizerContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n/react';
 import {
   createDefaultVisualizerWorkbenchStore,
-  readStoredVisualizerWorkspaceViewMode,
   resolveDefaultVisualizerNativeDockSurfaceContents,
   resolveVisualizerScene,
   VISUALIZER_WORKBENCH_SURFACE_IDS,
 } from '../../modules/visualizer';
-import type { VisualizerWorkspaceViewMode } from '../../modules/visualizer';
+import type {
+  VisualizerCameraOrbitPreset,
+  VisualizerViewGizmoAxisState,
+  VisualizerViewGizmoState,
+} from '../../modules/visualizer';
 import { createWorkbenchNativeSurfaceManager } from '../../modules/workbench';
 import type { WorkbenchNativeSurfaceEvent } from '../../modules/workbench';
 import { AUDIO_ENGINE_SERVICE_TOKEN } from '../../services/audio';
@@ -27,32 +30,52 @@ type VisualizerOverlayProps = {
   onClose: () => void;
 };
 
-const VIEW_MODE_BUTTONS: Array<{
-  mode: VisualizerWorkspaceViewMode;
-  titleKey: string;
-  ariaKey: string;
-}> = [
-  {
-    mode: 'perspective',
-    titleKey: 'visualizer.overlay.viewMode.perspective.title',
-    ariaKey: 'visualizer.overlay.viewMode.perspective.aria',
-  },
-  {
-    mode: 'top',
-    titleKey: 'visualizer.overlay.viewMode.top.title',
-    ariaKey: 'visualizer.overlay.viewMode.top.aria',
-  },
-  {
-    mode: 'front',
-    titleKey: 'visualizer.overlay.viewMode.front.title',
-    ariaKey: 'visualizer.overlay.viewMode.front.aria',
-  },
-  {
-    mode: 'side',
-    titleKey: 'visualizer.overlay.viewMode.side.title',
-    ariaKey: 'visualizer.overlay.viewMode.side.aria',
-  },
-];
+type CameraOrbitAxisPreset = Exclude<VisualizerCameraOrbitPreset, 'home'>;
+
+type ViewGizmoAxisStyle = CSSProperties & {
+  '--gizmo-x': string;
+  '--gizmo-y': string;
+  '--gizmo-length': string;
+  '--gizmo-angle': string;
+  '--gizmo-scale': string;
+  '--gizmo-opacity': string;
+  '--gizmo-z': number;
+};
+
+const CAMERA_ORBIT_TITLE_KEYS: Record<CameraOrbitAxisPreset, string> = {
+  'x-positive': 'visualizer.overlay.cameraOrbit.xPositive',
+  'x-negative': 'visualizer.overlay.cameraOrbit.xNegative',
+  'y-positive': 'visualizer.overlay.cameraOrbit.yPositive',
+  'y-negative': 'visualizer.overlay.cameraOrbit.yNegative',
+  'z-positive': 'visualizer.overlay.cameraOrbit.zPositive',
+  'z-negative': 'visualizer.overlay.cameraOrbit.zNegative',
+};
+
+const DEFAULT_VIEW_GIZMO_STATE: VisualizerViewGizmoState = {
+  axes: [
+    { id: 'x-negative', axis: 'x', direction: -1, label: '-X', x: 10, y: 42, depth: -0.5, visible: false },
+    { id: 'y-negative', axis: 'y', direction: -1, label: '-Y', x: 46, y: 52, depth: -0.5, visible: false },
+    { id: 'z-negative', axis: 'z', direction: -1, label: '-Z', x: 34, y: 66, depth: -0.5, visible: false },
+    { id: 'x-positive', axis: 'x', direction: 1, label: 'X', x: 58, y: 26, depth: 0.5, visible: true },
+    { id: 'y-positive', axis: 'y', direction: 1, label: 'Y', x: 22, y: 18, depth: 0.5, visible: true },
+    { id: 'z-positive', axis: 'z', direction: 1, label: 'Z', x: 34, y: 2, depth: 0.5, visible: true },
+  ],
+};
+
+function toViewGizmoAxisStyle(axis: VisualizerViewGizmoAxisState): ViewGizmoAxisStyle {
+  const dx = axis.x - 34;
+  const dy = axis.y - 34;
+  const frontness = Math.max(0, Math.min(1, (axis.depth + 1) / 2));
+  return {
+    '--gizmo-x': `${axis.x}px`,
+    '--gizmo-y': `${axis.y}px`,
+    '--gizmo-length': `${Math.hypot(dx, dy)}px`,
+    '--gizmo-angle': `${Math.atan2(dy, dx)}rad`,
+    '--gizmo-scale': `${0.72 + frontness * 0.42}`,
+    '--gizmo-opacity': `${0.38 + frontness * 0.56}`,
+    '--gizmo-z': Math.round(10 + frontness * 40),
+  };
+}
 
 type NativeDockSurfaceKey = 'timeline' | 'outliner';
 
@@ -62,19 +85,6 @@ const DEFAULT_NATIVE_DOCK_VISIBILITY: NativeDockSurfaceVisibility = {
   timeline: false,
   outliner: false,
 };
-
-function renderViewModeIcon(mode: VisualizerWorkspaceViewMode) {
-  if (mode === 'top') {
-    return <Grid2x2 size={17} strokeWidth={2.05} aria-hidden="true" />;
-  }
-  if (mode === 'front') {
-    return <PanelTop size={17} strokeWidth={2.05} aria-hidden="true" />;
-  }
-  if (mode === 'side') {
-    return <PanelRight size={17} strokeWidth={2.05} aria-hidden="true" />;
-  }
-  return <Axis3d size={18} strokeWidth={2.05} aria-hidden="true" />;
-}
 
 export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerOverlayProps) {
   const kernel = useKernel();
@@ -99,9 +109,10 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
   const [layoutResetRevision, setLayoutResetRevision] = useState(0);
   const [centerCanvasRevision, setCenterCanvasRevision] = useState(0);
   const [resetCanvasSizeRevision, setResetCanvasSizeRevision] = useState(0);
-  const [viewMode, setViewMode] = useState<VisualizerWorkspaceViewMode>(() =>
-    readStoredVisualizerWorkspaceViewMode(visualizerId)
-  );
+  const [cameraOrbitPreset, setCameraOrbitPreset] = useState<VisualizerCameraOrbitPreset>('home');
+  const [cameraOrbitRevision, setCameraOrbitRevision] = useState(0);
+  const [viewGizmoVisible, setViewGizmoVisible] = useState(true);
+  const [viewGizmoState, setViewGizmoState] = useState<VisualizerViewGizmoState>(DEFAULT_VIEW_GIZMO_STATE);
   const [isEntered, setIsEntered] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
 
@@ -178,11 +189,12 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
   }, [visualizerId]);
 
   useEffect(() => {
-    setViewMode(readStoredVisualizerWorkspaceViewMode(visualizerId));
     componentVisibilityRef.current = {};
     setComponentVisibilityOverrides({});
     nativeDockVisibilityRef.current = { ...DEFAULT_NATIVE_DOCK_VISIBILITY };
     setNativeDockVisibility({ ...DEFAULT_NATIVE_DOCK_VISIBILITY });
+    setCameraOrbitPreset('home');
+    setCameraOrbitRevision((value) => value + 1);
   }, [visualizerId]);
 
   useEffect(() => {
@@ -531,6 +543,24 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
     syncNativeSurfaceContentRef.current?.();
   }, []);
 
+  const handleCameraOrbit = useCallback((preset: VisualizerCameraOrbitPreset) => {
+    setCameraOrbitPreset(preset);
+    setCameraOrbitRevision((value) => value + 1);
+  }, []);
+
+  const handleViewGizmoChange = useCallback((state: VisualizerViewGizmoState) => {
+    setViewGizmoState(state);
+  }, []);
+
+  const sortedViewGizmoAxes = useMemo(
+    () => [...viewGizmoState.axes].sort((left, right) => left.depth - right.depth),
+    [viewGizmoState.axes]
+  );
+
+  const viewGizmoToggleTitle = t(
+    viewGizmoVisible ? 'visualizer.overlay.cameraOrbit.hide' : 'visualizer.overlay.cameraOrbit.show'
+  );
+
   const handleNativeDockToggle = useCallback((surface: NativeDockSurfaceKey) => {
     const surfaceId =
       surface === 'timeline'
@@ -610,7 +640,7 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
         </div>
 
         <div
-          className="visualizer-overlay__viewport-rail"
+          className={`visualizer-overlay__viewport-rail ${viewGizmoVisible ? 'is-gizmo-visible' : 'is-gizmo-hidden'}`}
           role="toolbar"
           aria-label={t('visualizer.overlay.viewportControls')}
         >
@@ -618,22 +648,27 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
             <div
               className="visualizer-overlay__viewport-group"
               role="group"
-              aria-label={t('visualizer.overlay.viewMode.group')}
+              aria-label={t('visualizer.overlay.cameraOrbit.group')}
             >
-              {VIEW_MODE_BUTTONS.map((button) => (
-                <button
-                  key={button.mode}
-                  type="button"
-                  className={`visualizer-overlay__tool ${viewMode === button.mode ? 'is-active' : ''}`}
-                  onClick={() => setViewMode(button.mode)}
-                  title={t(button.titleKey)}
-                  aria-label={t(button.ariaKey)}
-                  aria-pressed={viewMode === button.mode}
-                  data-view-mode={button.mode}
-                >
-                  {renderViewModeIcon(button.mode)}
-                </button>
-              ))}
+              <button
+                type="button"
+                className={`visualizer-overlay__tool visualizer-overlay__viewport-tool ${viewGizmoVisible ? 'is-active' : ''}`}
+                onClick={() => setViewGizmoVisible((value) => !value)}
+                title={viewGizmoToggleTitle}
+                aria-label={viewGizmoToggleTitle}
+                aria-pressed={viewGizmoVisible}
+              >
+                {viewGizmoVisible ? <Eye size={18} strokeWidth={2.05} aria-hidden="true" /> : <EyeOff size={18} strokeWidth={2.05} aria-hidden="true" />}
+              </button>
+              <button
+                type="button"
+                className="visualizer-overlay__tool visualizer-overlay__viewport-tool"
+                onClick={() => handleCameraOrbit('home')}
+                title={t('visualizer.overlay.cameraOrbit.home')}
+                aria-label={t('visualizer.overlay.cameraOrbit.home')}
+              >
+                <Home size={18} strokeWidth={2.05} aria-hidden="true" />
+              </button>
             </div>
             <div
               className="visualizer-overlay__viewport-group"
@@ -642,7 +677,7 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
             >
               <button
                 type="button"
-                className="visualizer-overlay__tool"
+                className="visualizer-overlay__tool visualizer-overlay__viewport-tool"
                 onClick={() => setCenterCanvasRevision((value) => value + 1)}
                 title={t('visualizer.overlay.action.centerCanvas')}
                 aria-label={t('visualizer.overlay.action.centerCanvas')}
@@ -651,7 +686,7 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
               </button>
               <button
                 type="button"
-                className="visualizer-overlay__tool"
+                className="visualizer-overlay__tool visualizer-overlay__viewport-tool"
                 onClick={() => setResetCanvasSizeRevision((value) => value + 1)}
                 title={t('visualizer.overlay.action.resetCanvasSize')}
                 aria-label={t('visualizer.overlay.action.resetCanvasSize')}
@@ -695,11 +730,60 @@ export function VisualizerOverlay({ visualizerId, source, onClose }: VisualizerO
           className="visualizer-overlay__canvas"
           editMode={editMode}
           componentVisibilityOverrides={componentVisibilityOverrides}
-          viewMode={viewMode}
           resetLayoutRevision={layoutResetRevision}
           centerCanvasRevision={centerCanvasRevision}
           resetCanvasSizeRevision={resetCanvasSizeRevision}
+          cameraOrbitPreset={cameraOrbitPreset}
+          cameraOrbitRevision={cameraOrbitRevision}
+          onViewGizmoChange={handleViewGizmoChange}
         />
+        {viewGizmoVisible && (
+          <div
+            className="visualizer-overlay__view-gizmo"
+            role="toolbar"
+            aria-label={t('visualizer.overlay.cameraOrbit.group')}
+          >
+            <div className="visualizer-overlay__view-gizmo-orb">
+              <span className="visualizer-overlay__view-gizmo-ring" />
+              {sortedViewGizmoAxes.map((axis) => (
+                <span
+                  key={`${axis.id}-spoke`}
+                  className={`visualizer-overlay__view-gizmo-spoke is-${axis.axis}`}
+                  data-axis={axis.axis}
+                  data-direction={axis.direction}
+                  data-visible={axis.visible ? 'true' : 'false'}
+                  style={toViewGizmoAxisStyle(axis)}
+                  aria-hidden="true"
+                />
+              ))}
+              <button
+                type="button"
+                className="visualizer-overlay__view-gizmo-button is-home"
+                onClick={() => handleCameraOrbit('home')}
+                title={t('visualizer.overlay.cameraOrbit.home')}
+                aria-label={t('visualizer.overlay.cameraOrbit.home')}
+              >
+                <Home size={15} strokeWidth={2.2} aria-hidden="true" />
+              </button>
+              {sortedViewGizmoAxes.map((axis) => (
+                <button
+                  key={axis.id}
+                  type="button"
+                  className={`visualizer-overlay__view-gizmo-button is-${axis.axis}`}
+                  onClick={() => handleCameraOrbit(axis.id)}
+                  title={t(CAMERA_ORBIT_TITLE_KEYS[axis.id])}
+                  aria-label={t(CAMERA_ORBIT_TITLE_KEYS[axis.id])}
+                  data-axis={axis.axis}
+                  data-direction={axis.direction}
+                  data-visible={axis.visible ? 'true' : 'false'}
+                  style={toViewGizmoAxisStyle(axis)}
+                >
+                  <span aria-hidden="true">{axis.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <WindowResizeHandles />
       </div>
     </div>

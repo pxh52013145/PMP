@@ -17,6 +17,8 @@ static EMITTER_STOP: AtomicBool = AtomicBool::new(false);
 static SPECTRUM_ENABLED: AtomicBool = AtomicBool::new(false);
 const IDLE_STATE_HEARTBEAT_TICKS: u64 = 5;
 const COLD_IDLE_SLEEP_MS: u64 = 4_000;
+const SPECTRUM_ACTIVE_SLEEP_MS: u64 = 125;
+const PLAYBACK_ACTIVE_SLEEP_MS: u64 = 400;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StateEmitSignature {
@@ -120,9 +122,9 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
             };
 
             sleep_ms = if spectrum_enabled {
-                250
+                SPECTRUM_ACTIVE_SLEEP_MS
             } else if active_playback {
-                400
+                PLAYBACK_ACTIVE_SLEEP_MS
             } else if cold_idle {
                 COLD_IDLE_SLEEP_MS
             } else {

@@ -3,7 +3,12 @@ import type { QualityEffectiveConfig } from '../../contracts/quality';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { useQuality } from '../../contexts/QualityContext';
 import { VisualizerWorkspaceRuntime } from '../../modules/visualizer';
-import type { VisualizerComponentQuality, VisualizerWorkspaceViewMode } from '../../modules/visualizer';
+import type {
+  VisualizerCameraOrbitPreset,
+  VisualizerComponentQuality,
+  VisualizerViewGizmoState,
+  VisualizerWorkspaceViewMode,
+} from '../../modules/visualizer';
 
 type VisualizerCanvasProps = {
   visualizerId: string;
@@ -14,6 +19,9 @@ type VisualizerCanvasProps = {
   centerCanvasRevision?: number;
   resetCanvasSizeRevision?: number;
   viewMode?: VisualizerWorkspaceViewMode;
+  cameraOrbitPreset?: VisualizerCameraOrbitPreset;
+  cameraOrbitRevision?: number;
+  onViewGizmoChange?: (state: VisualizerViewGizmoState) => void;
 };
 
 const QUALITY_LEVEL_ORDER: QualityEffectiveConfig['level'][] = ['potato', 'low', 'balanced', 'high', 'ultra'];
@@ -35,7 +43,10 @@ export function VisualizerCanvas({
   resetLayoutRevision = 0,
   centerCanvasRevision = 0,
   resetCanvasSizeRevision = 0,
-  viewMode = 'perspective',
+  viewMode = 'top',
+  cameraOrbitPreset = 'home',
+  cameraOrbitRevision = 0,
+  onViewGizmoChange,
 }: VisualizerCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const componentHostRootRef = useRef<HTMLDivElement | null>(null);
@@ -58,6 +69,7 @@ export function VisualizerCanvas({
       sceneId: initialVisualizerIdRef.current,
       quality: toVisualizerQuality(initialQualityRef.current),
       viewMode: initialViewModeRef.current,
+      onViewGizmoChange,
     });
     runtimeRef.current = runtime;
     runtime.start();
@@ -68,7 +80,7 @@ export function VisualizerCanvas({
         runtimeRef.current = null;
       }
     };
-  }, [audioService]);
+  }, [audioService, onViewGizmoChange]);
 
   useEffect(() => {
     runtimeRef.current?.setScene(visualizerId);
@@ -89,6 +101,11 @@ export function VisualizerCanvas({
   useEffect(() => {
     runtimeRef.current?.setViewMode(viewMode);
   }, [viewMode]);
+
+  useEffect(() => {
+    if (cameraOrbitRevision <= 0) return;
+    runtimeRef.current?.setCameraOrbitPreset(cameraOrbitPreset);
+  }, [cameraOrbitPreset, cameraOrbitRevision]);
 
   useEffect(() => {
     if (resetLayoutRevision <= 0) return;

@@ -163,6 +163,30 @@ export interface VisualizerViewportInfo {
 
 export type VisualizerWorkspaceViewMode = 'perspective' | 'top' | 'front' | 'side';
 
+export type VisualizerCameraOrbitPreset =
+  | 'home'
+  | 'x-positive'
+  | 'x-negative'
+  | 'y-positive'
+  | 'y-negative'
+  | 'z-positive'
+  | 'z-negative';
+
+export interface VisualizerViewGizmoAxisState {
+  id: Exclude<VisualizerCameraOrbitPreset, 'home'>;
+  axis: 'x' | 'y' | 'z';
+  direction: 1 | -1;
+  label: string;
+  x: number;
+  y: number;
+  depth: number;
+  visible: boolean;
+}
+
+export interface VisualizerViewGizmoState {
+  axes: VisualizerViewGizmoAxisState[];
+}
+
 export interface VisualizerWorkspaceHostContext {
   viewMode: VisualizerWorkspaceViewMode;
   camera: unknown;
@@ -176,10 +200,24 @@ export interface VisualizerCanvasViewState {
   zoom: number;
 }
 
+export interface VisualizerScreenSpaceSelectionBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface VisualizerCanvasSelectionChange {
+  sceneId: string;
+  ids: string[];
+  primaryId: string | null;
+}
+
 export interface VisualizerCanvasEditState extends VisualizerCanvasViewState {
   editMode: boolean;
   hoveredComponentId: string | null;
   selectedComponentId: string | null;
+  selectedComponentIds: string[];
   draggingComponentId: string | null;
   resizingComponentId: string | null;
   hoveredHandle: 'scale' | null;
@@ -309,5 +347,8 @@ export interface VisualizerRuntimeOptions {
   sceneId: string;
   quality: VisualizerComponentQuality;
   viewMode?: VisualizerWorkspaceViewMode;
+  onSelectionChange?: (selection: VisualizerCanvasSelectionChange) => void;
+  onSelectionBoxChange?: (box: VisualizerScreenSpaceSelectionBox | null) => void;
+  onViewGizmoChange?: (state: VisualizerViewGizmoState) => void;
   onClose?: () => void;
 }

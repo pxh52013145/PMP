@@ -7,7 +7,14 @@ import { readJson } from '../../storage';
 import { broadcastDataUpdate, STORAGE_KEYS } from '../../../utils/windowCommunication';
 import { AudioDataBus } from '../AudioDataBus';
 import { ComponentRegistry } from '../ComponentRegistry';
-import { clamp, createViewportInfo, resolveComponentBaseSize, screenToWorld } from '../CoordinateSystem';
+import {
+  clamp,
+  createViewportInfo,
+  getTransformRotation,
+  normalizeScale,
+  resolveComponentBaseSize,
+  screenToWorld,
+} from '../CoordinateSystem';
 import {
   containsVisualizerEditRect,
   getVisualizerEditMetricsById,
@@ -19,6 +26,7 @@ import { renderSceneFrame, type ActiveVisualizerComponent } from '../RenderPipel
 import { resolveVisualizerScene } from '../scenes';
 import type {
   VisualizerCanvasEditState,
+  VisualizerCameraOrbitPreset,
   VisualizerCanvasViewState,
   VisualizerComponentPosition,
   VisualizerComponentQuality,
@@ -26,14 +34,15 @@ import type {
   VisualizerComponentScale,
   VisualizerComponentTransform,
   VisualizerRuntimeOptions,
+  VisualizerViewGizmoState,
   VisualizerViewportInfo,
   VisualizerWorkspaceViewMode,
 } from '../types';
 
 const telemetry = getTelemetryLogger('visualizer', 'VisualizerWorkspaceRuntime');
 
-const DEFAULT_VIEW_MODE: VisualizerWorkspaceViewMode = 'perspective';
-const VIEW_MODES: readonly VisualizerWorkspaceViewMode[] = ['perspective', 'top', 'front', 'side'];
+const DEFAULT_VIEW_MODE: VisualizerWorkspaceViewMode = 'top';
+const VIEW_MODES: readonly VisualizerWorkspaceViewMode[] = ['top', 'perspective'];
 const EDIT_GRID_SIZE = 40;
 const DEFAULT_ZOOM = 1;
 const MIN_ZOOM = 0.1;
@@ -48,6 +57,17 @@ const CAMERA_FAR = 10000;
 const CAMERA_DISTANCE_FACTOR = 1.25;
 const SURFACE_ROOT_ID = '__visualizer_surface_root__';
 const PROGRESS_HOVER_TOLERANCE = 40;
+const SURFACE_STAGE_PADDING = 240;
+const SURFACE_STAGE_MAX_SIZE = 3200;
+const SURFACE_TEXTURE_MAX_SIDE = 8192;
+const WORLD_GRID_SIZE = 24000;
+const WORLD_GRID_MINOR_DIVISIONS = 600;
+const WORLD_GRID_MAJOR_DIVISIONS = 150;
+const WORLD_GRID_Y = -0.02;
+const PERSPECTIVE_MIN_POLAR_ANGLE = Math.PI * 0.035;
+const PERSPECTIVE_MAX_POLAR_ANGLE = Math.PI * 0.965;
+const VIEW_GIZMO_RADIUS = 34;
+const VIEW_GIZMO_DEPTH_EPSILON = 0.0001;
 
 type LayoutOverrides = Record<string, VisualizerComponentTransform>;
 type WorkspaceCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
@@ -57,14 +77,26 @@ type TransformControlsCompat = TransformControls & {
 type DragMode = 'component' | 'resize';
 
 interface VisualizerEditHitTarget {
-  type: 'label' | 'scale-handle';
+  type: 'body' | 'label' | 'scale-handle';
   componentId: string;
   handle?: VisualizerEditHandleKind;
 }
 
-interface PointerDragState {
-  mode: DragMode;
+interface PointerDragBaseState {
   pointerId: number;
+  mode: DragMode;
+}
+
+interface ComponentPointerDragState extends PointerDragBaseState {
+  mode: 'component';
+  startWorldX: number;
+  startWorldY: number;
+  componentId: string;
+  initialTransform: VisualizerComponentTransform;
+}
+
+interface ResizePointerDragState extends PointerDragBaseState {
+  mode: 'resize';
   startWorldX: number;
   startWorldY: number;
   componentId: string;
@@ -76,11 +108,78 @@ interface PointerDragState {
   handle?: VisualizerEditHandleKind;
 }
 
+type PointerDragState = ComponentPointerDragState | ResizePointerDragState;
+
+interface VisualizerSurfaceFrame {
+  centerX: number;
+  centerY: number;
+  width: number;
+  height: number;
+  viewport: VisualizerViewportInfo;
+  viewState: VisualizerCanvasViewState;
+}
+
+interface VisualizerSceneBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  centerX: number;
+  centerY: number;
+  width: number;
+  height: number;
+}
+
 interface PersistedVector3 {
   x: number;
   y: number;
   z: number;
 }
+
+const VIEW_GIZMO_AXIS_SPECS = [
+  {
+    id: 'x-positive',
+    axis: 'x',
+    direction: 1,
+    label: 'X',
+    vector: new THREE.Vector3(1, 0, 0),
+  },
+  {
+    id: 'x-negative',
+    axis: 'x',
+    direction: -1,
+    label: '-X',
+    vector: new THREE.Vector3(-1, 0, 0),
+  },
+  {
+    id: 'y-positive',
+    axis: 'y',
+    direction: 1,
+    label: 'Y',
+    vector: new THREE.Vector3(0, 0, 1),
+  },
+  {
+    id: 'y-negative',
+    axis: 'y',
+    direction: -1,
+    label: '-Y',
+    vector: new THREE.Vector3(0, 0, -1),
+  },
+  {
+    id: 'z-positive',
+    axis: 'z',
+    direction: 1,
+    label: 'Z',
+    vector: new THREE.Vector3(0, 1, 0),
+  },
+  {
+    id: 'z-negative',
+    axis: 'z',
+    direction: -1,
+    label: '-Z',
+    vector: new THREE.Vector3(0, -1, 0),
+  },
+] as const;
 
 export interface VisualizerWorkspaceCameraState {
   position: PersistedVector3;
@@ -380,6 +479,80 @@ function createDefaultCameraState(
   };
 }
 
+function createCameraOrbitPresetState(
+  preset: VisualizerCameraOrbitPreset,
+  current: VisualizerWorkspaceCameraState,
+  viewport: VisualizerViewportInfo
+): VisualizerWorkspaceCameraState {
+  const currentDistance = new THREE.Vector3(
+    current.position.x - current.target.x,
+    current.position.y - current.target.y,
+    current.position.z - current.target.z
+  ).length();
+  const defaultDistance = cameraDistanceForViewport(viewport);
+  const distance = preset === 'home'
+    ? defaultDistance
+    : Number.isFinite(currentDistance) && currentDistance > 1
+    ? currentDistance
+    : defaultDistance;
+  const target = current.target;
+  const poleOffset = Math.max(0.1, distance * 0.001);
+
+  if (preset === 'home') {
+    return createDefaultCameraState('top', viewport);
+  }
+
+  if (preset === 'x-positive') {
+    return {
+      position: { x: target.x + distance, y: target.y, z: target.z },
+      target,
+      zoom: current.zoom,
+    };
+  }
+
+  if (preset === 'x-negative') {
+    return {
+      position: { x: target.x - distance, y: target.y, z: target.z },
+      target,
+      zoom: current.zoom,
+    };
+  }
+
+  if (preset === 'y-positive') {
+    return {
+      position: { x: target.x, y: target.y, z: target.z + distance },
+      target,
+      zoom: current.zoom,
+    };
+  }
+
+  if (preset === 'y-negative') {
+    return {
+      position: { x: target.x, y: target.y, z: target.z - distance },
+      target,
+      zoom: current.zoom,
+    };
+  }
+
+  if (preset === 'z-positive') {
+    return {
+      position: { x: target.x, y: target.y + distance, z: target.z + poleOffset },
+      target,
+      zoom: current.zoom,
+    };
+  }
+
+  if (preset === 'z-negative') {
+    return {
+      position: { x: target.x, y: target.y - distance, z: target.z - poleOffset },
+      target,
+      zoom: current.zoom,
+    };
+  }
+
+  return createDefaultCameraState(DEFAULT_VIEW_MODE, viewport);
+}
+
 function sanitizeCameraState(
   value: unknown,
   fallback: VisualizerWorkspaceCameraState
@@ -464,6 +637,17 @@ export function readStoredVisualizerWorkspaceViewMode(sceneId: string): Visualiz
   return viewModes[sceneId] ?? DEFAULT_VIEW_MODE;
 }
 
+function configureGridHelper(helper: THREE.GridHelper, opacity: number): THREE.GridHelper {
+  helper.position.y = WORLD_GRID_Y;
+  helper.renderOrder = 0;
+  const material = helper.material as THREE.LineBasicMaterial;
+  material.transparent = true;
+  material.opacity = opacity;
+  material.depthWrite = false;
+  material.toneMapped = false;
+  return helper;
+}
+
 export class VisualizerWorkspaceRuntime {
   private readonly canvas: HTMLCanvasElement;
 
@@ -497,6 +681,10 @@ export class VisualizerWorkspaceRuntime {
 
   private readonly surfaceGroup = new THREE.Group();
 
+  private readonly componentNodeRoot = new THREE.Group();
+
+  private readonly worldGridGroup = new THREE.Group();
+
   private readonly surfaceCanvas = document.createElement('canvas');
 
   private readonly surfaceContext: CanvasRenderingContext2D;
@@ -521,6 +709,19 @@ export class VisualizerWorkspaceRuntime {
     zoom: DEFAULT_ZOOM,
   };
 
+  private surfaceFrame: VisualizerSurfaceFrame = {
+    centerX: 0,
+    centerY: 0,
+    width: 1,
+    height: 1,
+    viewport: createViewportInfo(1, 1, 1),
+    viewState: {
+      panX: 0,
+      panY: 0,
+      zoom: DEFAULT_ZOOM,
+    },
+  };
+
   private readonly editState: VisualizerCanvasEditState = {
     panX: 0,
     panY: 0,
@@ -528,6 +729,7 @@ export class VisualizerWorkspaceRuntime {
     editMode: false,
     hoveredComponentId: null,
     selectedComponentId: null,
+    selectedComponentIds: [],
     draggingComponentId: null,
     resizingComponentId: null,
     hoveredHandle: null,
@@ -568,6 +770,10 @@ export class VisualizerWorkspaceRuntime {
 
   private readonly cleanupTasks: Array<() => void> = [];
 
+  private readonly onViewGizmoChange: ((state: VisualizerViewGizmoState) => void) | null;
+
+  private viewGizmoSignature = '';
+
   private readonly progressHoverInfo = {
     active: false,
     angle: 0,
@@ -578,10 +784,10 @@ export class VisualizerWorkspaceRuntime {
     this.canvas = options.canvas;
     this.resizeTarget = this.canvas.parentElement ?? this.canvas;
     this.componentHostRoot = options.componentHostRoot ?? null;
+    this.onViewGizmoChange = options.onViewGizmoChange ?? null;
     this.quality = options.quality;
     this.sceneId = options.sceneId;
     this.viewMode = options.viewMode ?? readStoredVisualizerWorkspaceViewMode(options.sceneId);
-
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
       antialias: true,
@@ -601,13 +807,18 @@ export class VisualizerWorkspaceRuntime {
     this.surfaceTexture.generateMipmaps = false;
     this.surfaceTexture.minFilter = THREE.LinearFilter;
     this.surfaceTexture.magFilter = THREE.LinearFilter;
+    this.surfaceTexture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
 
     const surfaceMaterial = new THREE.MeshBasicMaterial({
       map: this.surfaceTexture,
       side: THREE.DoubleSide,
+      transparent: true,
+      depthWrite: false,
     });
     this.surfaceMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), surfaceMaterial);
     this.surfaceMesh.name = 'visualizer-web-surface';
+    this.surfaceMesh.frustumCulled = false;
+    this.surfaceMesh.renderOrder = 2;
     this.surfaceMesh.userData = {
       visualizerRole: 'webSurfaceRoot',
       editableUnitId: SURFACE_ROOT_ID,
@@ -617,8 +828,15 @@ export class VisualizerWorkspaceRuntime {
       visualizerRole: 'componentHostRoot',
       editableUnitId: SURFACE_ROOT_ID,
     };
+    this.componentNodeRoot.name = 'visualizer-scene-component-nodes';
+    this.componentNodeRoot.userData = {
+      visualizerRole: 'sceneGraphRoot',
+      editableUnitId: SURFACE_ROOT_ID,
+    };
     this.surfaceGroup.rotation.x = -Math.PI / 2;
-    this.surfaceGroup.add(this.surfaceMesh);
+    this.surfaceGroup.add(this.surfaceMesh, this.componentNodeRoot);
+    this.configureWorldGrid();
+    this.scene.add(this.worldGridGroup);
     this.scene.add(this.surfaceGroup);
 
     this.orbitControls = new OrbitControls(this.activeCamera, this.canvas);
@@ -627,6 +845,8 @@ export class VisualizerWorkspaceRuntime {
     this.orbitControls.screenSpacePanning = true;
     this.orbitControls.minDistance = 120;
     this.orbitControls.maxDistance = CAMERA_FAR * 0.6;
+    this.orbitControls.minPolarAngle = PERSPECTIVE_MIN_POLAR_ANGLE;
+    this.orbitControls.maxPolarAngle = PERSPECTIVE_MAX_POLAR_ANGLE;
     this.orbitControls.minZoom = 0.2;
     this.orbitControls.maxZoom = 8;
 
@@ -650,6 +870,7 @@ export class VisualizerWorkspaceRuntime {
     this.applyStoredViewState(this.sceneId);
     this.applyStoredViewMode(options.viewMode ?? this.layoutStore.viewModes?.[this.sceneId] ?? this.viewMode);
     this.activateScene(this.sceneId);
+    this.updateViewGizmoState();
   }
 
   private get cameraByMode(): Record<VisualizerWorkspaceViewMode, WorkspaceCamera> {
@@ -659,6 +880,26 @@ export class VisualizerWorkspaceRuntime {
       front: this.frontCamera,
       side: this.sideCamera,
     };
+  }
+
+  private configureWorldGrid(): void {
+    this.worldGridGroup.name = 'visualizer-world-grid';
+    this.worldGridGroup.visible = this.viewMode === 'perspective';
+
+    const minorGrid = configureGridHelper(
+      new THREE.GridHelper(WORLD_GRID_SIZE, WORLD_GRID_MINOR_DIVISIONS, 0x191919, 0x0d0d0d),
+      0.62
+    );
+    minorGrid.name = 'visualizer-world-grid-minor';
+
+    const majorGrid = configureGridHelper(
+      new THREE.GridHelper(WORLD_GRID_SIZE, WORLD_GRID_MAJOR_DIVISIONS, 0x2f2f2f, 0x171717),
+      0.68
+    );
+    majorGrid.name = 'visualizer-world-grid-major';
+    majorGrid.position.y = WORLD_GRID_Y + 0.005;
+
+    this.worldGridGroup.add(minorGrid, majorGrid);
   }
 
   private attachControls(): void {
@@ -944,6 +1185,97 @@ export class VisualizerWorkspaceRuntime {
     };
   }
 
+  private updateViewGizmoState(): void {
+    if (!this.onViewGizmoChange || this.disposed) return;
+
+    const cameraQuat = new THREE.Quaternion();
+    this.activeCamera.getWorldQuaternion(cameraQuat);
+    const inverseQuat = cameraQuat.clone().invert();
+    const nextAxes = VIEW_GIZMO_AXIS_SPECS.map((spec) => {
+      const local = spec.vector.clone().applyQuaternion(inverseQuat);
+      const depth = Number.isFinite(local.z) ? local.z : 0;
+      const normalized = Math.min(1, Math.hypot(local.x, local.y));
+      const angle = Math.atan2(local.y, local.x);
+      const radius = VIEW_GIZMO_RADIUS * normalized;
+      return {
+        id: spec.id,
+        axis: spec.axis,
+        direction: spec.direction,
+        label: spec.label,
+        x: VIEW_GIZMO_RADIUS + Math.cos(angle) * radius,
+        y: VIEW_GIZMO_RADIUS - Math.sin(angle) * radius,
+        depth,
+        visible: depth > VIEW_GIZMO_DEPTH_EPSILON,
+      };
+    });
+    const signature = nextAxes
+      .map((axis) => [
+        axis.id,
+        axis.x.toFixed(1),
+        axis.y.toFixed(1),
+        axis.depth.toFixed(2),
+        axis.visible ? '1' : '0',
+      ].join(':'))
+      .join('|');
+    if (signature === this.viewGizmoSignature) return;
+    this.viewGizmoSignature = signature;
+    this.onViewGizmoChange({
+      axes: nextAxes,
+    });
+  }
+
+  private resolveSceneBounds(): VisualizerSceneBounds {
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const entry of this.sceneComponents) {
+      if (!entry.transform.visible) continue;
+      const baseSize = resolveComponentBaseSize(entry.component.manifest.geometry);
+      const scale = normalizeScale(entry.transform.scale);
+      const rotation = getTransformRotation(entry.transform);
+      const rawWidth = baseSize.width * scale.x;
+      const rawHeight = baseSize.height * scale.y;
+      const absCos = Math.abs(Math.cos(rotation));
+      const absSin = Math.abs(Math.sin(rotation));
+      const halfWidth = (rawWidth * absCos + rawHeight * absSin) / 2;
+      const halfHeight = (rawWidth * absSin + rawHeight * absCos) / 2;
+      const x = Number.isFinite(entry.transform.position.x) ? entry.transform.position.x : 0;
+      const y = Number.isFinite(entry.transform.position.y) ? entry.transform.position.y : 0;
+      minX = Math.min(minX, x - halfWidth);
+      minY = Math.min(minY, y - halfHeight);
+      maxX = Math.max(maxX, x + halfWidth);
+      maxY = Math.max(maxY, y + halfHeight);
+    }
+
+    if (
+      !Number.isFinite(minX) ||
+      !Number.isFinite(minY) ||
+      !Number.isFinite(maxX) ||
+      !Number.isFinite(maxY)
+    ) {
+      const halfSize = REFERENCE_STAGE_SIZE / 2;
+      minX = -halfSize;
+      minY = -halfSize;
+      maxX = halfSize;
+      maxY = halfSize;
+    }
+
+    const width = Math.max(1, maxX - minX);
+    const height = Math.max(1, maxY - minY);
+    return {
+      minX,
+      minY,
+      maxX,
+      maxY,
+      centerX: minX + width / 2,
+      centerY: minY + height / 2,
+      width,
+      height,
+    };
+  }
+
   private activateScene(sceneId: string): void {
     for (const entry of this.sceneComponents) {
       try {
@@ -1046,10 +1378,19 @@ export class VisualizerWorkspaceRuntime {
     this.lastFrameAt = timestamp;
     const snapshot = this.audioBus.sample(timestamp);
     this.globalRotation += 0.001;
+    this.orbitControls.update();
+    this.updateViewGizmoState();
+    const surfaceFrame = this.updateSurfaceFrame();
+    const frameEditState: VisualizerCanvasEditState = {
+      ...this.editState,
+      panX: surfaceFrame.viewState.panX,
+      panY: surfaceFrame.viewState.panY,
+      zoom: surfaceFrame.viewState.zoom,
+    };
 
     renderSceneFrame({
       ctx: this.surfaceContext,
-      viewport: this.viewport,
+      viewport: surfaceFrame.viewport,
       audioSnapshot: snapshot,
       frame: {
         timestamp,
@@ -1060,15 +1401,93 @@ export class VisualizerWorkspaceRuntime {
       scene: resolveVisualizerScene(this.sceneId),
       components: this.sceneComponents,
       quality: this.quality,
-      viewState: this.viewState,
-      editState: this.editState,
+      viewState: surfaceFrame.viewState,
+      editState: frameEditState,
       workspace: this.createWorkspaceContext(),
     });
     this.surfaceTexture.needsUpdate = true;
 
-    this.orbitControls.update();
     this.renderer.render(this.scene, this.activeCamera);
     this.requestFrame();
+  }
+
+  private createSurfaceFrame(): VisualizerSurfaceFrame {
+    const aspect = this.viewport.width / Math.max(1, this.viewport.height);
+    const fallbackWidth = Math.max(this.viewport.width, REFERENCE_STAGE_SIZE + SURFACE_STAGE_PADDING * 2);
+    const fallbackHeight = Math.max(this.viewport.height, fallbackWidth / aspect);
+    const sceneBounds = this.resolveSceneBounds();
+
+    const centerX = 0;
+    const centerY = 0;
+    let width = fallbackWidth;
+    let height = fallbackHeight;
+    width = Math.max(
+      width,
+      sceneBounds.width + SURFACE_STAGE_PADDING * 2,
+      Math.max(Math.abs(sceneBounds.minX), Math.abs(sceneBounds.maxX), REFERENCE_STAGE_SIZE / 2) * 2 +
+        SURFACE_STAGE_PADDING * 2
+    );
+    height = Math.max(
+      height,
+      sceneBounds.height + SURFACE_STAGE_PADDING * 2,
+      Math.max(Math.abs(sceneBounds.minY), Math.abs(sceneBounds.maxY), REFERENCE_STAGE_SIZE / 2) * 2 +
+        SURFACE_STAGE_PADDING * 2
+    );
+
+    const currentAspect = width / Math.max(1, height);
+    if (currentAspect < aspect) {
+      width = height * aspect;
+    } else if (currentAspect > aspect) {
+      height = width / aspect;
+    }
+
+    const maxWidth = Math.max(this.viewport.width, SURFACE_STAGE_MAX_SIZE);
+    const maxHeight = Math.max(this.viewport.height, SURFACE_STAGE_MAX_SIZE / aspect);
+    const clampScale = Math.min(1, maxWidth / Math.max(1, width), maxHeight / Math.max(1, height));
+    width = Math.max(REFERENCE_STAGE_SIZE, width * clampScale);
+    height = Math.max(REFERENCE_STAGE_SIZE / aspect, height * clampScale);
+
+    const maxTextureScale = SURFACE_TEXTURE_MAX_SIDE / Math.max(1, width, height);
+    const texturePixelRatio = Math.max(
+      0.75,
+      Math.min(this.viewport.devicePixelRatio, maxTextureScale)
+    );
+    const frameViewport = createViewportInfo(width, height, texturePixelRatio);
+    return {
+      centerX,
+      centerY,
+      width: frameViewport.width,
+      height: frameViewport.height,
+      viewport: frameViewport,
+      viewState: {
+        panX: this.viewState.panX,
+        panY: this.viewState.panY,
+        zoom: this.viewState.zoom,
+      },
+    };
+  }
+
+  private updateSurfaceCanvasSize(frame: VisualizerSurfaceFrame): void {
+    const ratio = Math.max(0.75, frame.viewport.devicePixelRatio);
+    const width = Math.max(1, Math.round(frame.viewport.width * ratio));
+    const height = Math.max(1, Math.round(frame.viewport.height * ratio));
+
+    if (this.surfaceCanvas.width !== width) this.surfaceCanvas.width = width;
+    if (this.surfaceCanvas.height !== height) this.surfaceCanvas.height = height;
+    this.surfaceCanvas.style.width = `${frame.viewport.width}px`;
+    this.surfaceCanvas.style.height = `${frame.viewport.height}px`;
+    this.surfaceContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+  }
+
+  private updateSurfaceFrame(): VisualizerSurfaceFrame {
+    const frame = this.createSurfaceFrame();
+
+    this.surfaceFrame = frame;
+    this.surfaceMesh.position.set(0, 0, 0);
+    this.surfaceMesh.scale.set(frame.width, frame.height, 1);
+    this.updateSurfaceCanvasSize(frame);
+
+    return frame;
   }
 
   private setSurfaceViewTransform(panX: number, panY: number, zoom: number): void {
@@ -1099,8 +1518,8 @@ export class VisualizerWorkspaceRuntime {
     const [hit] = this.raycaster.intersectObject(this.surfaceMesh, false);
     if (hit?.uv) {
       return {
-        x: hit.uv.x * this.viewport.width,
-        y: (1 - hit.uv.y) * this.viewport.height,
+        x: hit.uv.x * this.surfaceFrame.viewport.width,
+        y: (1 - hit.uv.y) * this.surfaceFrame.viewport.height,
       };
     }
 
@@ -1114,8 +1533,8 @@ export class VisualizerWorkspaceRuntime {
 
     const localPoint = this.surfaceMesh.worldToLocal(worldPoint.clone());
     return {
-      x: (localPoint.x + 0.5) * this.viewport.width,
-      y: (0.5 - localPoint.y) * this.viewport.height,
+      x: (localPoint.x + 0.5) * this.surfaceFrame.viewport.width,
+      y: (0.5 - localPoint.y) * this.surfaceFrame.viewport.height,
     };
   }
 
@@ -1126,12 +1545,17 @@ export class VisualizerWorkspaceRuntime {
       return;
     }
 
-    if (surfaceX < 0 || surfaceY < 0 || surfaceX > this.viewport.width || surfaceY > this.viewport.height) {
+    if (
+      surfaceX < 0 ||
+      surfaceY < 0 ||
+      surfaceX > this.surfaceFrame.viewport.width ||
+      surfaceY > this.surfaceFrame.viewport.height
+    ) {
       this.progressHoverInfo.active = false;
       return;
     }
 
-    const world = screenToWorld(surfaceX, surfaceY, this.viewport, this.viewState);
+    const world = screenToWorld(surfaceX, surfaceY, this.surfaceFrame.viewport, this.surfaceFrame.viewState);
     const scaleValue = progressEntry.transform.scale;
     const scale =
       typeof scaleValue === 'number'
@@ -1178,7 +1602,12 @@ export class VisualizerWorkspaceRuntime {
       return right.transform.zIndex - left.transform.zIndex;
     });
 
-    const metricsById = getVisualizerEditMetricsById(candidates, this.viewport, this.viewState, this.surfaceContext);
+    const metricsById = getVisualizerEditMetricsById(
+      candidates,
+      this.surfaceFrame.viewport,
+      this.surfaceFrame.viewState,
+      this.surfaceContext
+    );
 
     for (const entry of candidates) {
       if (!entry.transform.visible) continue;
@@ -1300,7 +1729,12 @@ export class VisualizerWorkspaceRuntime {
     const surfacePoint = this.getSurfacePoint(event.clientX, event.clientY, true);
     if (!surfacePoint) return;
 
-    const world = screenToWorld(surfacePoint.x, surfacePoint.y, this.viewport, this.viewState);
+    const world = screenToWorld(
+      surfacePoint.x,
+      surfacePoint.y,
+      this.surfaceFrame.viewport,
+      this.surfaceFrame.viewState
+    );
 
     if (this.editState.editMode && hit?.type === 'scale-handle') {
       const entry = this.sceneComponentMap.get(hit.componentId);
@@ -1381,7 +1815,12 @@ export class VisualizerWorkspaceRuntime {
       const surfacePoint = this.getSurfacePoint(event.clientX, event.clientY, true);
       if (!surfacePoint) return;
 
-      const world = screenToWorld(surfacePoint.x, surfacePoint.y, this.viewport, this.viewState);
+      const world = screenToWorld(
+        surfacePoint.x,
+        surfacePoint.y,
+        this.surfaceFrame.viewport,
+        this.surfaceFrame.viewState
+      );
 
       if (this.pointerDrag.mode === 'component') {
         const deltaX = world.x - this.pointerDrag.startWorldX;
@@ -1556,9 +1995,14 @@ export class VisualizerWorkspaceRuntime {
         createDefaultCameraState(this.viewMode, this.viewport).target
     );
     this.orbitControls.enableRotate = this.viewMode === 'perspective';
+    this.orbitControls.minPolarAngle =
+      this.viewMode === 'perspective' ? PERSPECTIVE_MIN_POLAR_ANGLE : 0;
+    this.orbitControls.maxPolarAngle =
+      this.viewMode === 'perspective' ? PERSPECTIVE_MAX_POLAR_ANGLE : Math.PI;
     this.orbitControls.enablePan = true;
     this.orbitControls.enableZoom = true;
     this.orbitControls.update();
+    this.worldGridGroup.visible = this.viewMode === 'perspective';
     this.transformControls.camera = this.activeCamera;
     this.transformControls.enabled = false;
     this.transformControls.detach();
@@ -1588,16 +2032,7 @@ export class VisualizerWorkspaceRuntime {
     this.canvas.style.width = '100%';
     this.canvas.style.height = '100%';
 
-    const width = Math.max(1, Math.round(cssWidth * nextRatio));
-    const height = Math.max(1, Math.round(cssHeight * nextRatio));
-    if (this.surfaceCanvas.width !== width) this.surfaceCanvas.width = width;
-    if (this.surfaceCanvas.height !== height) this.surfaceCanvas.height = height;
-    this.surfaceCanvas.style.width = `${cssWidth}px`;
-    this.surfaceCanvas.style.height = `${cssHeight}px`;
-    this.surfaceContext.setTransform(nextRatio, 0, 0, nextRatio, 0, 0);
-
     this.viewport = createViewportInfo(cssWidth, cssHeight, nextRatio);
-    this.surfaceMesh.scale.set(cssWidth, cssHeight, 1);
     this.updateCameraProjection();
 
     return changed;
@@ -1627,6 +2062,7 @@ export class VisualizerWorkspaceRuntime {
     this.editState.activeHandle = null;
     this.pointerDrag = null;
     this.activateScene(sceneId);
+    this.updateViewGizmoState();
     this.requestFrame();
   }
 
@@ -1638,40 +2074,71 @@ export class VisualizerWorkspaceRuntime {
     this.applyStoredCameraState(mode);
     this.rebindControls();
     this.scheduleLayoutPersist();
+    this.updateViewGizmoState();
+    this.requestFrame();
+  }
+
+  setCameraOrbitPreset(preset: VisualizerCameraOrbitPreset): void {
+    if (this.disposed) return;
+
+    if (preset === 'home') {
+      const defaultView = createDefaultViewState(this.viewport);
+      this.setSurfaceViewTransform(0, 0, defaultView.zoom);
+    }
+
+    const nextViewMode: VisualizerWorkspaceViewMode = preset === 'home' ? DEFAULT_VIEW_MODE : 'perspective';
+    const currentCamera = this.cloneActiveCameraState();
+    const nextCamera = createCameraOrbitPresetState(
+      preset,
+      {
+        ...currentCamera,
+        target: { x: 0, y: 0, z: 0 },
+      },
+      this.viewport
+    );
+    this.viewMode = nextViewMode;
+    this.activeCamera = this.cameraByMode[nextViewMode];
+    this.applyCameraState(nextViewMode, nextCamera);
+    this.orbitControls.object = this.activeCamera;
+    this.orbitControls.target.set(nextCamera.target.x, nextCamera.target.y, nextCamera.target.z);
+    this.orbitControls.enableRotate = nextViewMode === 'perspective';
+    this.orbitControls.minPolarAngle = nextViewMode === 'perspective' ? PERSPECTIVE_MIN_POLAR_ANGLE : 0;
+    this.orbitControls.maxPolarAngle = nextViewMode === 'perspective' ? PERSPECTIVE_MAX_POLAR_ANGLE : Math.PI;
+    this.orbitControls.enablePan = true;
+    this.orbitControls.enableZoom = true;
+    this.orbitControls.update();
+    this.worldGridGroup.visible = nextViewMode === 'perspective';
+    this.transformControls.camera = this.activeCamera;
+    this.configureComponentHostRoot();
+    this.scheduleLayoutPersist();
+    this.updateViewGizmoState();
     this.requestFrame();
   }
 
   centerCanvas(): void {
     if (this.disposed) return;
 
-    const current = this.cloneActiveCameraState();
-    const fallback = createDefaultCameraState(this.viewMode, this.viewport);
-    const distance = Math.max(
-      1,
-      new THREE.Vector3(
-        current.position.x - current.target.x,
-        current.position.y - current.target.y,
-        current.position.z - current.target.z
-      ).length()
+    const currentView = this.cloneCurrentViewState();
+    const currentCamera = this.cloneActiveCameraState();
+    const cameraOffset = new THREE.Vector3(
+      currentCamera.position.x - currentCamera.target.x,
+      currentCamera.position.y - currentCamera.target.y,
+      currentCamera.position.z - currentCamera.target.z
     );
-    const direction = new THREE.Vector3(
-      fallback.position.x - fallback.target.x,
-      fallback.position.y - fallback.target.y,
-      fallback.position.z - fallback.target.z
-    ).normalize();
-    const target = { x: 0, y: 0, z: 0 };
+    this.setSurfaceViewTransform(0, 0, currentView.zoom);
     this.applyCameraState(this.viewMode, {
       position: {
-        x: direction.x * distance,
-        y: direction.y * distance,
-        z: direction.z * distance,
+        x: cameraOffset.x,
+        y: cameraOffset.y,
+        z: cameraOffset.z,
       },
-      target,
-      zoom: current.zoom,
+      target: { x: 0, y: 0, z: 0 },
+      zoom: currentCamera.zoom,
     });
     this.orbitControls.target.set(0, 0, 0);
     this.orbitControls.update();
     this.scheduleLayoutPersist();
+    this.updateViewGizmoState();
     this.requestFrame();
   }
 
@@ -1684,6 +2151,7 @@ export class VisualizerWorkspaceRuntime {
     this.orbitControls.target.set(0, 0, 0);
     this.orbitControls.update();
     this.scheduleLayoutPersist();
+    this.updateViewGizmoState();
     this.requestFrame();
   }
 
@@ -1773,6 +2241,7 @@ export class VisualizerWorkspaceRuntime {
     }
 
     this.flushLayoutPersist();
+    this.updateViewGizmoState();
     this.requestFrame();
   }
 
@@ -1821,6 +2290,17 @@ export class VisualizerWorkspaceRuntime {
     this.transformControls.detach();
     this.transformControls.dispose();
     this.orbitControls.dispose();
+    for (const object of this.worldGridGroup.children) {
+      const line = object as THREE.LineSegments;
+      line.geometry?.dispose();
+      const lineMaterial = line.material;
+      if (Array.isArray(lineMaterial)) {
+        for (const entry of lineMaterial) entry.dispose();
+      } else {
+        lineMaterial?.dispose();
+      }
+    }
+    this.worldGridGroup.clear();
     this.surfaceTexture.dispose();
     this.surfaceMesh.geometry.dispose();
     const material = this.surfaceMesh.material;

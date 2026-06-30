@@ -295,6 +295,7 @@ export class CanvasRuntime {
     editMode: false,
     hoveredComponentId: null,
     selectedComponentId: null,
+    selectedComponentIds: [],
     draggingComponentId: null,
     resizingComponentId: null,
     hoveredHandle: null,
@@ -834,6 +835,7 @@ export class CanvasRuntime {
     }
 
     this.editState.selectedComponentId = componentId;
+    this.editState.selectedComponentIds = componentId ? [componentId] : [];
 
     if (componentId) {
       this.sceneComponentMap.get(componentId)?.component.onFocusChange?.(true);

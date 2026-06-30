@@ -158,6 +158,31 @@ describe('AudioDataBus', () => {
     expect(snapshot.timeDomain).not.toBe(nativeTimeDomain);
   });
 
+  it('smooths spectrum changes with fast attack and slower release', () => {
+    let bins = new Uint8Array([0, 0, 0, 0]);
+    const bus = new AudioDataBus(createAudioService({
+      getSpectrumFrame: () => ({
+        frameId: 9,
+        timestampMs: 1_000,
+        tap: 'post-dsp',
+        sampleRate: 44_100,
+        bins,
+      }),
+    }));
+
+    expect(bus.sample(1_000).frequency).toEqual(new Uint8Array([0, 0, 0, 0]));
+
+    bins = new Uint8Array([255, 0, 0, 0]);
+    const rising = bus.sample(1_016.67).frequency[0] ?? 0;
+    expect(rising).toBeGreaterThan(170);
+    expect(rising).toBeLessThan(255);
+
+    bins = new Uint8Array([0, 0, 0, 0]);
+    const falling = bus.sample(1_033.34).frequency[0] ?? 0;
+    expect(falling).toBeLessThan(rising);
+    expect(falling).toBeGreaterThan(100);
+  });
+
   it('advances playback time between low-frequency service updates', () => {
     const bus = new AudioDataBus(createAudioService());
 

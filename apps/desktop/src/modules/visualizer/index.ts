@@ -58,6 +58,7 @@ export type {
   VisualizerAudioSnapshot,
   VisualizerCapabilityId,
   VisualizerCapabilityRequirement,
+  VisualizerCameraOrbitPreset,
   VisualizerCircularSize,
   VisualizerComponent,
   VisualizerComponentContext,
@@ -82,6 +83,8 @@ export type {
   VisualizerSceneDescriptor,
   VisualizerTrackSnapshot,
   VisualizerViewportInfo,
+  VisualizerViewGizmoAxisState,
+  VisualizerViewGizmoState,
   VisualizerWorkspaceHostContext,
   VisualizerWorkspaceViewMode,
 } from './types';

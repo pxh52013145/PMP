@@ -56,9 +56,11 @@ export interface RenderSceneFrameInput {
 
 function drawBackground(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  viewport: VisualizerViewportInfo
+  viewport: VisualizerViewportInfo,
+  transparent = false
 ): void {
   ctx.clearRect(0, 0, viewport.width, viewport.height);
+  if (transparent) return;
   ctx.fillStyle = '#050505';
   ctx.fillRect(0, 0, viewport.width, viewport.height);
 }
@@ -241,6 +243,7 @@ function drawEditOverlay(
 ): void {
   const metricsById = getVisualizerEditMetricsById(components, viewport, viewState, ctx);
   const focusShapeById = new Map<string, VisualizerEditFocusShape>();
+  const selectedComponentIds = new Set(editState.selectedComponentIds);
 
   ctx.save();
   ctx.globalCompositeOperation = 'source-over';
@@ -282,7 +285,7 @@ function drawEditOverlay(
     if (!metrics || !focusShape) continue;
     const { label, scaleHandle } = metrics;
     const isHovered = editState.hoveredComponentId === entry.id;
-    const isSelected = editState.selectedComponentId === entry.id;
+    const isSelected = selectedComponentIds.has(entry.id);
     const isDragging = editState.draggingComponentId === entry.id;
     const isResizing = editState.resizingComponentId === entry.id;
     const active = isHovered || isSelected || isDragging || isResizing;
@@ -343,21 +346,25 @@ export function renderSceneFrame({
   editState,
   workspace,
 }: RenderSceneFrameInput): void {
-  drawBackground(ctx, viewport);
-  drawVisualizerGrid(
-    ctx,
-    viewport,
-    {
-      minorStep: 40,
-      majorEvery: 4,
-      color: 'rgba(255, 255, 255, 0.03)',
-      majorColor: 'rgba(255, 255, 255, 0.03)',
-      opacity: 1,
-      panX: viewState.panX,
-      panY: viewState.panY,
-      zoom: viewState.zoom,
-    }
-  );
+  const isPerspectiveViewport = workspace?.viewMode === 'perspective';
+
+  drawBackground(ctx, viewport, isPerspectiveViewport);
+  if (!isPerspectiveViewport) {
+    drawVisualizerGrid(
+      ctx,
+      viewport,
+      {
+        minorStep: 40,
+        majorEvery: 4,
+        color: 'rgba(255, 255, 255, 0.03)',
+        majorColor: 'rgba(255, 255, 255, 0.03)',
+        opacity: 1,
+        panX: viewState.panX,
+        panY: viewState.panY,
+        zoom: viewState.zoom,
+      }
+    );
+  }
 
   ctx.save();
   ctx.globalCompositeOperation = 'source-over';
@@ -370,12 +377,12 @@ export function renderSceneFrame({
     }
 
     const leftActive =
-      left.id === editState.selectedComponentId ||
+      editState.selectedComponentIds.includes(left.id) ||
       left.id === editState.hoveredComponentId ||
       left.id === editState.draggingComponentId ||
       left.id === editState.resizingComponentId;
     const rightActive =
-      right.id === editState.selectedComponentId ||
+      editState.selectedComponentIds.includes(right.id) ||
       right.id === editState.hoveredComponentId ||
       right.id === editState.draggingComponentId ||
       right.id === editState.resizingComponentId;
