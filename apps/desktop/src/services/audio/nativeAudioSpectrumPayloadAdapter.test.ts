@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyNativeAudioSpectrumPayload,
+  applyNativeAudioSpectrumBinaryFrame,
+  decodeNativeAudioSpectrumBinaryFrame,
   type NativeAudioSpectrumPayloadState,
 } from './nativeAudioSpectrumPayloadAdapter';
 
@@ -111,5 +113,51 @@ describe('nativeAudioSpectrumPayloadAdapter', () => {
       })
     ).toBe(false);
     expect(state.spectrumData).toBeNull();
+  });
+
+  it('decodes and applies a binary stream frame without copying its typed-array views', () => {
+    const state = createState();
+    const buffer = new ArrayBuffer(37);
+    const bytes = new Uint8Array(buffer);
+    bytes.set([0x50, 0x4d, 0x53, 0x31, 1, 1, 1, 0]);
+    const view = new DataView(buffer);
+    view.setUint32(8, 12, true);
+    view.setUint32(12, 0, true);
+    view.setUint32(16, 345, true);
+    view.setUint32(20, 0, true);
+    view.setUint32(24, 48_000, true);
+    view.setUint16(28, 3, true);
+    view.setUint16(30, 2, true);
+    bytes.set([7, 8, 9, 10, 11], 32);
+
+    const frame = decodeNativeAudioSpectrumBinaryFrame(buffer);
+    expect(frame).toMatchObject({
+      frameId: 12,
+      timestampMs: 345,
+      tap: 'post-dsp',
+      sampleRate: 48_000,
+    });
+    expect(applyNativeAudioSpectrumBinaryFrame(state, frame)).toBe(true);
+    expect(state.spectrumFrames['post-dsp']?.bins.buffer).toBe(buffer);
+    expect(Array.from(state.spectrumFrames['post-dsp']?.timeDomain ?? [])).toEqual([10, 11]);
+  });
+
+  it('rejects malformed and stale binary stream frames', () => {
+    const state = createState();
+    expect(decodeNativeAudioSpectrumBinaryFrame(new ArrayBuffer(31))).toBeNull();
+    expect(applyNativeAudioSpectrumBinaryFrame(state, {
+      frameId: 7,
+      timestampMs: 100,
+      tap: 'post-dsp',
+      sampleRate: 48_000,
+      bins: new Uint8Array([1]),
+    })).toBe(true);
+    expect(applyNativeAudioSpectrumBinaryFrame(state, {
+      frameId: 7,
+      timestampMs: 101,
+      tap: 'post-dsp',
+      sampleRate: 48_000,
+      bins: new Uint8Array([2]),
+    })).toBe(false);
   });
 });

@@ -151,8 +151,40 @@ export interface VisualizerComponentManifest {
 export interface VisualizerComponentQuality {
   level: number;
   barCount: number;
+}
+
+export type VisualizerFrameRateMode = 'realtime' | 'fixed' | 'paused';
+
+export interface VisualizerFrameRatePolicy {
+  mode: VisualizerFrameRateMode;
+  targetFps: number;
+  minFps: number;
+  backgroundFps: number;
+  adaptive: boolean;
+  sampleWindowMs: number;
+  frameBudgetRatio: number;
+  downgradeRatio: number;
+  upgradeRatio: number;
+  minRenderScale: number;
+  maxRenderScale: number;
+  renderScaleStep: number;
+}
+
+export interface VisualizerFrameRateSnapshot {
+  mode: VisualizerFrameRateMode;
+  targetFps: number;
+  effectiveFps: number;
+  backgroundFps: number;
   renderScale: number;
-  fpsLimit: number;
+  renderedFrames: number;
+  skippedFrames: number;
+  droppedFrames: number;
+  lastFrameMs: number;
+  avgFrameMs: number;
+  p95FrameMs: number;
+  actualFps: number;
+  frameBudgetMs: number;
+  sampleWindowMs: number;
 }
 
 export interface VisualizerViewportInfo {
@@ -346,6 +378,7 @@ export interface VisualizerRuntimeOptions {
   componentHostRoot?: HTMLElement | null;
   sceneId: string;
   quality: VisualizerComponentQuality;
+  frameRatePolicy?: Partial<VisualizerFrameRatePolicy>;
   viewMode?: VisualizerWorkspaceViewMode;
   onSelectionChange?: (selection: VisualizerCanvasSelectionChange) => void;
   onSelectionBoxChange?: (box: VisualizerScreenSpaceSelectionBox | null) => void;

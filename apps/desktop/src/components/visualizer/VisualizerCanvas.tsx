@@ -6,6 +6,7 @@ import { VisualizerWorkspaceRuntime } from '../../modules/visualizer';
 import type {
   VisualizerCameraOrbitPreset,
   VisualizerComponentQuality,
+  VisualizerFrameRatePolicy,
   VisualizerViewGizmoState,
   VisualizerWorkspaceViewMode,
 } from '../../modules/visualizer';
@@ -21,6 +22,7 @@ type VisualizerCanvasProps = {
   viewMode?: VisualizerWorkspaceViewMode;
   cameraOrbitPreset?: VisualizerCameraOrbitPreset;
   cameraOrbitRevision?: number;
+  frameRatePolicy?: Partial<VisualizerFrameRatePolicy>;
   onViewGizmoChange?: (state: VisualizerViewGizmoState) => void;
 };
 
@@ -30,8 +32,6 @@ function toVisualizerQuality(quality: QualityEffectiveConfig): VisualizerCompone
   return {
     level: Math.max(0, QUALITY_LEVEL_ORDER.indexOf(quality.level)),
     barCount: quality.visualizerBars,
-    renderScale: quality.renderScale,
-    fpsLimit: quality.fpsForeground > 0 ? quality.fpsForeground : quality.fpsEffects,
   };
 }
 
@@ -46,6 +46,7 @@ export function VisualizerCanvas({
   viewMode = 'top',
   cameraOrbitPreset = 'home',
   cameraOrbitRevision = 0,
+  frameRatePolicy,
   onViewGizmoChange,
 }: VisualizerCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -56,6 +57,7 @@ export function VisualizerCanvas({
   const initialVisualizerIdRef = useRef(visualizerId);
   const initialQualityRef = useRef(quality.effective);
   const initialViewModeRef = useRef(viewMode);
+  const initialFrameRatePolicyRef = useRef(frameRatePolicy);
 
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
@@ -68,6 +70,7 @@ export function VisualizerCanvas({
       componentHostRoot,
       sceneId: initialVisualizerIdRef.current,
       quality: toVisualizerQuality(initialQualityRef.current),
+      frameRatePolicy: initialFrameRatePolicyRef.current,
       viewMode: initialViewModeRef.current,
       onViewGizmoChange,
     });
@@ -89,6 +92,11 @@ export function VisualizerCanvas({
   useEffect(() => {
     runtimeRef.current?.setQuality(toVisualizerQuality(quality.effective));
   }, [quality.effective]);
+
+  useEffect(() => {
+    if (!frameRatePolicy) return;
+    runtimeRef.current?.setFrameRatePolicy(frameRatePolicy);
+  }, [frameRatePolicy]);
 
   useEffect(() => {
     runtimeRef.current?.setEditMode(editMode);

@@ -2329,10 +2329,24 @@ pub fn set_streaming_buffer_settings(
     Ok(engine.streaming_buffer_settings_payload())
 }
 
-pub fn set_spectrum_enabled(app_handle: &AppHandle, enabled: bool) -> Result<(), String> {
+pub fn set_spectrum_enabled(
+    app_handle: &AppHandle,
+    client_id: &str,
+    enabled: bool,
+) -> Result<(), String> {
     emitter::ensure_started(app_handle);
-    emitter::set_spectrum_enabled(enabled);
+    let effective_enabled = emitter::set_spectrum_enabled(client_id, enabled);
+    let engine = ENGINE
+        .lock()
+        .map_err(|_| "Native audio engine lock poisoned".to_string())?;
+    engine.set_spectrum_capture_enabled(effective_enabled);
     Ok(())
+}
+
+pub use crate::audio::spectrum_stream::SpectrumStreamEndpoint;
+
+pub fn open_spectrum_stream() -> Result<SpectrumStreamEndpoint, String> {
+    crate::audio::spectrum_stream::open()
 }
 
 fn parse_realtime_pressure_profile(

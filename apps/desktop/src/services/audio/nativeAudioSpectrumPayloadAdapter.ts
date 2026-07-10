@@ -8,6 +8,88 @@ export type NativeAudioSpectrumPayloadState = {
   spectrumFrames: Partial<Record<AudioSpectrumTap, AudioSpectrumFrame>>;
 };
 
+export type NativeAudioSpectrumBinaryFrame = {
+  frameId: number;
+  timestampMs: number;
+  tap: AudioSpectrumTap;
+  sampleRate: number;
+  bins: Uint8Array;
+  timeDomain?: Uint8Array;
+};
+
+const BINARY_FRAME_HEADER_BYTES = 32;
+const BINARY_FRAME_VERSION = 1;
+const FLAG_HAS_TIME_DOMAIN = 0b0000_0001;
+
+function readU64AsNumber(view: DataView, offset: number): number {
+  const low = view.getUint32(offset, true);
+  const high = view.getUint32(offset + 4, true);
+  return high * 0x1_0000_0000 + low;
+}
+
+export function decodeNativeAudioSpectrumBinaryFrame(
+  buffer: ArrayBuffer
+): NativeAudioSpectrumBinaryFrame | null {
+  if (buffer.byteLength < BINARY_FRAME_HEADER_BYTES) return null;
+
+  const bytes = new Uint8Array(buffer);
+  if (bytes[0] !== 0x50 || bytes[1] !== 0x4d || bytes[2] !== 0x53 || bytes[3] !== 0x31) {
+    return null;
+  }
+  if (bytes[4] !== BINARY_FRAME_VERSION) return null;
+
+  const tap = bytes[5] === 0 ? 'pre-dsp' : bytes[5] === 1 ? 'post-dsp' : null;
+  if (!tap) return null;
+
+  const flags = bytes[6] ?? 0;
+  const view = new DataView(buffer);
+  const frameId = readU64AsNumber(view, 8);
+  const timestampMs = readU64AsNumber(view, 16);
+  const sampleRate = view.getUint32(24, true);
+  const binsLength = view.getUint16(28, true);
+  const timeDomainLength = view.getUint16(30, true);
+  const payloadLength = binsLength + timeDomainLength;
+  if (buffer.byteLength !== BINARY_FRAME_HEADER_BYTES + payloadLength) return null;
+  if ((flags & FLAG_HAS_TIME_DOMAIN) === 0 && timeDomainLength !== 0) return null;
+
+  const bins = new Uint8Array(buffer, BINARY_FRAME_HEADER_BYTES, binsLength);
+  const timeDomain =
+    timeDomainLength > 0
+      ? new Uint8Array(buffer, BINARY_FRAME_HEADER_BYTES + binsLength, timeDomainLength)
+      : undefined;
+  return {
+    frameId,
+    timestampMs,
+    tap,
+    sampleRate,
+    bins,
+    ...(timeDomain ? { timeDomain } : {}),
+  };
+}
+
+export function applyNativeAudioSpectrumBinaryFrame(
+  state: NativeAudioSpectrumPayloadState,
+  frame: NativeAudioSpectrumBinaryFrame | null | undefined
+): boolean {
+  if (!frame || frame.bins.length === 0 || !Number.isFinite(frame.frameId)) return false;
+
+  const previous = state.spectrumFrames[frame.tap];
+  if (previous && frame.frameId <= previous.frameId) return false;
+
+  state.spectrumFrames[frame.tap] = {
+    frameId: frame.frameId,
+    timestampMs: frame.timestampMs,
+    tap: frame.tap,
+    sampleRate: frame.sampleRate,
+    bins: frame.bins,
+    ...(frame.timeDomain ? { timeDomain: frame.timeDomain } : {}),
+  };
+  if (frame.tap === 'post-dsp' || !state.spectrumData) {
+    state.spectrumData = frame.bins;
+  }
+  return true;
+}
+
 function resolveSpectrumTap(payload: NativeAudioSpectrumPayload): AudioSpectrumTap | null {
   if (payload.tapId === 'pre-dsp' || payload.tap === 'pre-dsp') return 'pre-dsp';
   if (payload.tapId === 'post-dsp' || payload.tap === 'post-dsp') return 'post-dsp';

@@ -119,6 +119,11 @@ import {
 } from './audioPlaylistShell';
 import { RecentSmartPlaylistWriter } from './recentSmartPlaylistWriter';
 import { NativeAudioSpectrumController } from './nativeAudioSpectrumController';
+import { NativeAudioSpectrumStreamClient } from './nativeAudioSpectrumStream';
+import {
+  applyNativeAudioSpectrumBinaryFrame,
+  type NativeAudioSpectrumPayloadState,
+} from './nativeAudioSpectrumPayloadAdapter';
 import { NativeAudioQueueMirror } from './nativeAudioQueueMirror';
 import { NativeAudioSourcePreparation } from './nativeAudioSourcePreparation';
 import {
@@ -252,6 +257,9 @@ export class NativeAudioService implements IAudioService {
   private playbackPreferencesListenerInitPromise: Promise<void> | null = null;
   private spectrumData: Uint8Array | null = null;
   private spectrumFrames: Partial<Record<AudioSpectrumTap, AudioSpectrumFrame>> = {};
+  private readonly spectrumStreamClient = new NativeAudioSpectrumStreamClient((frame) => {
+    applyNativeAudioSpectrumBinaryFrame(this as unknown as NativeAudioSpectrumPayloadState, frame);
+  });
   private readonly spectrumController = new NativeAudioSpectrumController({
     setBackendEnabled: (enabled) => this.setNativeSpectrumEnabled(enabled),
     onBackendSetFailed: (enabled, error) => {
@@ -2864,7 +2872,9 @@ export class NativeAudioService implements IAudioService {
   }
 
   private async setupNativeListeners() {
-    return setupNativeListenersImpl.call(this as unknown as import('./nativeAudioNativeListeners').NativeAudioListenerHost);
+    return setupNativeListenersImpl.call(
+      this as unknown as import('./nativeAudioNativeListeners').NativeAudioListenerHost
+    );
   }
 
   private async setupRuntimeAudioComponentsListeners(): Promise<void> {
@@ -4144,11 +4154,24 @@ export class NativeAudioService implements IAudioService {
   }
 
   private async setNativeSpectrumEnabled(enabled: boolean): Promise<void> {
-    await invokeWithTelemetry('native_audio_set_spectrum_enabled', { enabled }, {
-      moduleId: 'audio',
-      component: 'NativeAudioService',
-      event: 'audio.spectrum.set-enabled',
-    });
+    if (enabled) {
+      this.spectrumStreamClient.start();
+    }
+    try {
+      await invokeWithTelemetry('native_audio_set_spectrum_enabled', { enabled }, {
+        moduleId: 'audio',
+        component: 'NativeAudioService',
+        event: 'audio.spectrum.set-enabled',
+      });
+    } catch (error) {
+      if (enabled) {
+        this.spectrumStreamClient.destroy();
+      }
+      throw error;
+    }
+    if (!enabled) {
+      this.spectrumStreamClient.destroy();
+    }
   }
 
   private clearSpectrumData(): void {
@@ -4220,6 +4243,7 @@ export class NativeAudioService implements IAudioService {
       this.errorListener();
       this.errorListener = undefined;
     }
+    this.spectrumStreamClient.destroy();
     this.runtimeComponentsListeners.forEach((unlisten) => unlisten());
     this.runtimeComponentsListeners = [];
     this.spectrumController.destroy();

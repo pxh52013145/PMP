@@ -190,7 +190,7 @@ export const STORAGE_KEYS = {
   MAGNET_PLACEMENT_REQUEST_V1: 'pixel-matrix-magnet-placement-request-v1', // Request placing a magnet into the main matrix (v1)
   MAGNET_LIBRARY_FOCUS_REQUEST_V1: 'pixel-matrix-magnet-library-focus-request-v1', // Request focusing a magnet in the library window (v1)
   MAGNET_CHROME_OVERRIDE_MODE_V1: 'pixel-matrix-magnet-chrome-override-mode-v1', // Global magnet chrome override mode (v1)
-  VISUALIZER_LAYOUT_V1: 'pixel-matrix-visualizer-layout-v1', // Visualizer component layout overrides
+  VISUALIZER_WORKSPACE_LAYOUT_V1: 'pixel-matrix-visualizer-workspace-layout-v1', // Visualizer workspace camera and surface layout
   MUSIC_PLATFORM_WORKSPACE_OWNERSHIP_V1:
     'pixel-matrix-music-platform-workspace-ownership-v1', // Music platform workspace ownership migration setting
   BACKGROUND_SETTINGS: 'pixel-matrix-background-settings', // 鑳屾櫙璁剧疆

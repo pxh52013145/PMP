@@ -659,19 +659,18 @@ pub(crate) enum SpectrumTapKind {
     PostDsp,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct SpectrumFrameSnapshot {
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SpectrumFrameMetadata {
     pub frame_id: u64,
     pub timestamp_ms: u64,
     pub tap: SpectrumTapKind,
     pub sample_rate: u32,
-    pub window: Vec<f32>,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct DualSpectrumSnapshot {
-    pub pre: Option<SpectrumFrameSnapshot>,
-    pub post: Option<SpectrumFrameSnapshot>,
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DualSpectrumFrameMetadata {
+    pub pre: Option<SpectrumFrameMetadata>,
+    pub post: Option<SpectrumFrameMetadata>,
 }
 
 pub(crate) struct PreparedLoad {
@@ -2942,28 +2941,39 @@ impl NativeAudioEngine {
         Ok(())
     }
 
-    pub(crate) fn snapshot_for_dual_spectrum(&mut self) -> Option<DualSpectrumSnapshot> {
-        let pre = self.spectrum_pre_tap.snapshot();
-        let post = self.spectrum_post_tap.snapshot();
+    pub(crate) fn set_spectrum_capture_enabled(&self, enabled: bool) {
+        self.spectrum_pre_tap.set_enabled(enabled);
+        self.spectrum_post_tap.set_enabled(enabled);
+        if !enabled {
+            self.spectrum_pre_tap.clear();
+            self.spectrum_post_tap.clear();
+        }
+    }
+
+    pub(crate) fn snapshot_for_dual_spectrum_into(
+        &mut self,
+        pre_window: &mut Vec<f32>,
+        post_window: &mut Vec<f32>,
+    ) -> Option<DualSpectrumFrameMetadata> {
+        let pre = self.spectrum_pre_tap.snapshot_into(pre_window);
+        let post = self.spectrum_post_tap.snapshot_into(post_window);
         if pre.is_none() && post.is_none() {
             return None;
         }
 
         let frame_id = self.next_spectrum_frame_id();
         let timestamp_ms = crate::audio::diagnostics::current_timestamp_ms();
-        let map_frame = |snapshot: Option<(Vec<f32>, u32)>,
-                         tap: SpectrumTapKind|
-         -> Option<SpectrumFrameSnapshot> {
-            snapshot.map(|(window, sample_rate)| SpectrumFrameSnapshot {
-                frame_id,
-                timestamp_ms,
-                tap,
-                sample_rate,
-                window,
-            })
-        };
+        let map_frame =
+            |sample_rate: Option<u32>, tap: SpectrumTapKind| -> Option<SpectrumFrameMetadata> {
+                sample_rate.map(|sample_rate| SpectrumFrameMetadata {
+                    frame_id,
+                    timestamp_ms,
+                    tap,
+                    sample_rate,
+                })
+            };
 
-        Some(DualSpectrumSnapshot {
+        Some(DualSpectrumFrameMetadata {
             pre: map_frame(pre, SpectrumTapKind::PreDsp),
             post: map_frame(post, SpectrumTapKind::PostDsp),
         })

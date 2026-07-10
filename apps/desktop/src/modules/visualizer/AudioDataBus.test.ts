@@ -155,7 +155,7 @@ describe('AudioDataBus', () => {
     const snapshot = bus.sample(1_200);
 
     expect(snapshot.timeDomain).toEqual(nativeTimeDomain);
-    expect(snapshot.timeDomain).not.toBe(nativeTimeDomain);
+    expect(snapshot.timeDomain).toBe(nativeTimeDomain);
   });
 
   it('smooths spectrum changes with fast attack and slower release', () => {

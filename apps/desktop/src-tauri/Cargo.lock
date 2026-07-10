@@ -3348,6 +3348,7 @@ dependencies = [
  "rusty-chromaprint",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "symphonia",
  "tauri",

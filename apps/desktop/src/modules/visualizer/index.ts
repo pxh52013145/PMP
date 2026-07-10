@@ -2,7 +2,11 @@
 export {
   AudioDataBus,
 } from './AudioDataBus';
-export { CanvasRuntime } from './CanvasRuntime';
+export {
+  DEFAULT_VISUALIZER_FRAME_RATE_POLICY,
+  VisualizerFrameGovernor,
+  normalizeVisualizerFrameRatePolicy,
+} from './FrameGovernor';
 export {
   readStoredVisualizerWorkspaceViewMode,
   VisualizerWorkspaceRuntime,
@@ -68,6 +72,9 @@ export type {
   VisualizerComponentGeometry,
   VisualizerComponentManifest,
   VisualizerComponentQuality,
+  VisualizerFrameRateMode,
+  VisualizerFrameRatePolicy,
+  VisualizerFrameRateSnapshot,
   VisualizerComponentRotation,
   VisualizerComponentScale,
   VisualizerComponentTransform,

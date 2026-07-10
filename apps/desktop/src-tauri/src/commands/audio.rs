@@ -1,4 +1,5 @@
 use crate::{audio::analysis, audio::decoder_sidecar, native_audio};
+use tauri::Manager;
 
 #[tauri::command]
 pub async fn native_audio_load(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> {
@@ -330,12 +331,24 @@ pub async fn native_audio_set_streaming_buffer_settings(
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn native_audio_set_spectrum_enabled(
-    app: tauri::AppHandle,
+    window: tauri::Window,
     enabled: bool,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || native_audio::set_spectrum_enabled(&app, enabled))
+    let app = window.app_handle();
+    let client_id = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::set_spectrum_enabled(&app, &client_id, enabled)
+    })
+    .await
+    .map_err(|e| format!("Native audio set spectrum enabled task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn native_audio_open_spectrum_stream(
+) -> Result<native_audio::SpectrumStreamEndpoint, String> {
+    tauri::async_runtime::spawn_blocking(native_audio::open_spectrum_stream)
         .await
-        .map_err(|e| format!("Native audio set spectrum enabled task failed: {e}"))?
+        .map_err(|e| format!("Native audio open spectrum stream task failed: {e}"))?
 }
 
 #[tauri::command]

@@ -2223,6 +2223,7 @@ where
 #[derive(Clone)]
 pub(crate) struct SpectrumTap {
     inner: Arc<Mutex<SpectrumTapRing>>,
+    enabled: Arc<AtomicBool>,
 }
 
 struct SpectrumTapRing {
@@ -2259,25 +2260,6 @@ impl SpectrumTapRing {
         }
     }
 
-    fn snapshot_to_vec(&self) -> Vec<f32> {
-        if self.count == 0 {
-            return Vec::new();
-        }
-
-        let mut result = Vec::with_capacity(self.count);
-        let start = if self.count < self.capacity {
-            0
-        } else {
-            self.write_pos
-        };
-
-        for i in 0..self.count {
-            result.push(self.data[(start + i) % self.capacity]);
-        }
-
-        result
-    }
-
     fn clear(&mut self) {
         self.write_pos = 0;
         self.count = 0;
@@ -2288,7 +2270,12 @@ impl SpectrumTap {
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(SpectrumTapRing::new(capacity))),
+            enabled: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub(crate) fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Release);
     }
 
     pub(crate) fn set_sample_rate(&self, sample_rate: u32) {
@@ -2304,7 +2291,7 @@ impl SpectrumTap {
     }
 
     pub(crate) fn push_interleaved(&self, samples: &[f32], channels: usize) {
-        if channels == 0 || samples.is_empty() {
+        if !self.enabled.load(Ordering::Acquire) || channels == 0 || samples.is_empty() {
             return;
         }
 
@@ -2339,12 +2326,25 @@ impl SpectrumTap {
         ring.push_mono_slice(mono);
     }
 
-    pub(crate) fn snapshot(&self) -> Option<(Vec<f32>, u32)> {
+    pub(crate) fn snapshot_into(&self, target: &mut Vec<f32>) -> Option<u32> {
         let ring = self.inner.try_lock().ok()?;
         if ring.sample_rate == 0 || ring.count == 0 {
+            target.clear();
             return None;
         }
-        Some((ring.snapshot_to_vec(), ring.sample_rate))
+        target.clear();
+        if target.capacity() < ring.count {
+            target.reserve(ring.count - target.capacity());
+        }
+        let start = if ring.count < ring.capacity {
+            0
+        } else {
+            ring.write_pos
+        };
+        for index in 0..ring.count {
+            target.push(ring.data[(start + index) % ring.capacity]);
+        }
+        Some(ring.sample_rate)
     }
 }
 
@@ -3225,9 +3225,11 @@ mod tests {
     fn spectrum_tap_push_and_snapshot_roundtrip() {
         let tap = SpectrumTap::new(8);
         tap.set_sample_rate(48_000);
+        tap.set_enabled(true);
 
         tap.push_interleaved(&[1.0, -1.0, 0.5, 0.0, -0.5, 0.5], 2);
-        let (window, sample_rate) = tap.snapshot().expect("snapshot");
+        let mut window = Vec::new();
+        let sample_rate = tap.snapshot_into(&mut window).expect("snapshot");
 
         assert_eq!(sample_rate, 48_000);
         assert_eq!(window, vec![0.0, 0.25, 0.0]);
@@ -3237,12 +3239,14 @@ mod tests {
     fn spectrum_tap_circular_overwrites_oldest() {
         let tap = SpectrumTap::new(4);
         tap.set_sample_rate(48_000);
+        tap.set_enabled(true);
 
         tap.push_interleaved(
             &[0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0],
             2,
         );
-        let (window, _) = tap.snapshot().expect("snapshot");
+        let mut window = Vec::new();
+        tap.snapshot_into(&mut window).expect("snapshot");
 
         assert_eq!(window, vec![2.0, 3.0, 4.0, 5.0]);
     }
@@ -3252,26 +3256,28 @@ mod tests {
         let tap = SpectrumTap::new(8);
         tap.set_sample_rate(48_000);
 
-        assert!(tap.snapshot().is_none());
+        assert!(tap.snapshot_into(&mut Vec::new()).is_none());
     }
 
     #[test]
     fn spectrum_tap_clear_resets() {
         let tap = SpectrumTap::new(8);
         tap.set_sample_rate(48_000);
+        tap.set_enabled(true);
 
         tap.push_interleaved(&[0.25, 0.25, 0.5, 0.5], 2);
-        assert!(tap.snapshot().is_some());
+        assert!(tap.snapshot_into(&mut Vec::new()).is_some());
 
         tap.clear();
 
-        assert!(tap.snapshot().is_none());
+        assert!(tap.snapshot_into(&mut Vec::new()).is_none());
     }
 
     #[test]
     fn spectrum_tap_writer_reader_concurrent_access() {
         let tap = SpectrumTap::new(128);
         tap.set_sample_rate(48_000);
+        tap.set_enabled(true);
 
         let writer = tap.clone();
         let reader = tap.clone();
@@ -3289,8 +3295,9 @@ mod tests {
 
         let reader_handle = std::thread::spawn(move || {
             let mut saw_snapshot = false;
+            let mut window = Vec::with_capacity(128);
             for _ in 0..10_000 {
-                if let Some((window, sample_rate)) = reader.snapshot() {
+                if let Some(sample_rate) = reader.snapshot_into(&mut window) {
                     assert_eq!(sample_rate, 48_000);
                     if !window.is_empty() {
                         saw_snapshot = true;
@@ -3314,15 +3321,17 @@ mod tests {
     fn spectrum_tap_drops_samples_when_contended() {
         let tap = SpectrumTap::new(8);
         tap.set_sample_rate(48_000);
+        tap.set_enabled(true);
 
         let guard = tap.inner.lock().expect("tap lock");
         tap.push_interleaved(&[0.25, 0.25, 0.5, 0.5], 2);
         drop(guard);
 
-        assert!(tap.snapshot().is_none());
+        assert!(tap.snapshot_into(&mut Vec::new()).is_none());
 
         tap.push_interleaved(&[1.0, -1.0, 0.5, 0.5], 2);
-        let (window, sample_rate) = tap.snapshot().expect("snapshot");
+        let mut window = Vec::new();
+        let sample_rate = tap.snapshot_into(&mut window).expect("snapshot");
         assert_eq!(sample_rate, 48_000);
         assert_eq!(window.len(), 2);
         assert!(window[1] > 0.4);

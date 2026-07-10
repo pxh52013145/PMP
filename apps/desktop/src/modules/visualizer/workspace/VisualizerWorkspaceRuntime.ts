@@ -7,6 +7,7 @@ import { readJson } from '../../storage';
 import { broadcastDataUpdate, STORAGE_KEYS } from '../../../utils/windowCommunication';
 import { AudioDataBus } from '../AudioDataBus';
 import { ComponentRegistry } from '../ComponentRegistry';
+import { VisualizerFrameGovernor } from '../FrameGovernor';
 import {
   clamp,
   createViewportInfo,
@@ -33,6 +34,8 @@ import type {
   VisualizerComponentRotation,
   VisualizerComponentScale,
   VisualizerComponentTransform,
+  VisualizerFrameRatePolicy,
+  VisualizerFrameRateSnapshot,
   VisualizerRuntimeOptions,
   VisualizerViewGizmoState,
   VisualizerViewportInfo,
@@ -49,8 +52,6 @@ const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 6;
 const MIN_SCALE = 0.15;
 const MAX_SCALE = 4;
-const MIN_VISUALIZER_FPS = 60;
-const FRAME_INTERVAL_EPSILON_MS = 1;
 const REFERENCE_STAGE_SIZE = 840;
 const CAMERA_NEAR = 0.1;
 const CAMERA_FAR = 10000;
@@ -630,7 +631,7 @@ function writeSceneCameraState(
 }
 
 export function readStoredVisualizerWorkspaceViewMode(sceneId: string): VisualizerWorkspaceViewMode {
-  const raw = readJson<unknown>(STORAGE_KEYS.VISUALIZER_LAYOUT_V1, null);
+  const raw = readJson<unknown>(STORAGE_KEYS.VISUALIZER_WORKSPACE_LAYOUT_V1, null);
   if (!isLayoutStorage(raw)) return DEFAULT_VIEW_MODE;
 
   const viewModes = sanitizeViewModes(raw.viewModes);
@@ -746,6 +747,8 @@ export class VisualizerWorkspaceRuntime {
 
   private quality: VisualizerComponentQuality;
 
+  private readonly frameGovernor: VisualizerFrameGovernor;
+
   private sceneId: string;
 
   private viewMode: VisualizerWorkspaceViewMode;
@@ -753,8 +756,6 @@ export class VisualizerWorkspaceRuntime {
   private frameNumber = 0;
 
   private globalRotation = 0;
-
-  private lastFrameAt = 0;
 
   private rafId: number | null = null;
 
@@ -786,6 +787,7 @@ export class VisualizerWorkspaceRuntime {
     this.componentHostRoot = options.componentHostRoot ?? null;
     this.onViewGizmoChange = options.onViewGizmoChange ?? null;
     this.quality = options.quality;
+    this.frameGovernor = new VisualizerFrameGovernor(options.frameRatePolicy);
     this.sceneId = options.sceneId;
     this.viewMode = options.viewMode ?? readStoredVisualizerWorkspaceViewMode(options.sceneId);
     this.renderer = new THREE.WebGLRenderer({
@@ -968,6 +970,10 @@ export class VisualizerWorkspaceRuntime {
     const onResize = () => {
       this.scheduleResize();
     };
+    const onVisibilityChange = () => {
+      this.frameGovernor.invalidate();
+      this.requestFrame();
+    };
     const onWheel = (event: WheelEvent) => this.handleWheel(event);
     const onKeyDown = (event: KeyboardEvent) => this.handleKeyDown(event);
     const onBlur = () => {
@@ -987,6 +993,7 @@ export class VisualizerWorkspaceRuntime {
     window.addEventListener('blur', onBlur);
     window.addEventListener('resize', onResize);
     window.visualViewport?.addEventListener('resize', onResize);
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     this.cleanupTasks.push(
       () => this.canvas.removeEventListener('pointerdown', onPointerDown, true),
@@ -999,8 +1006,13 @@ export class VisualizerWorkspaceRuntime {
       () => window.removeEventListener('keydown', onKeyDown, true),
       () => window.removeEventListener('blur', onBlur),
       () => window.removeEventListener('resize', onResize),
-      () => window.visualViewport?.removeEventListener('resize', onResize)
+      () => window.visualViewport?.removeEventListener('resize', onResize),
+      () => document.removeEventListener('visibilitychange', onVisibilityChange)
     );
+  }
+
+  private isBackgroundFrame(): boolean {
+    return typeof document !== 'undefined' && document.visibilityState !== 'visible';
   }
 
   private readLayoutSize(): { width: number; height: number } {
@@ -1063,7 +1075,7 @@ export class VisualizerWorkspaceRuntime {
   }
 
   private loadLayoutStore(): VisualizerLayoutStorageV1 {
-    const raw = readJson<unknown>(STORAGE_KEYS.VISUALIZER_LAYOUT_V1, null);
+    const raw = readJson<unknown>(STORAGE_KEYS.VISUALIZER_WORKSPACE_LAYOUT_V1, null);
     if (isLayoutStorage(raw)) {
       const scenes: Record<string, LayoutOverrides> = {};
       for (const [sceneId, sceneValue] of Object.entries(raw.scenes)) {
@@ -1158,7 +1170,7 @@ export class VisualizerWorkspaceRuntime {
       },
       cameras,
     };
-    void broadcastDataUpdate(STORAGE_KEYS.VISUALIZER_LAYOUT_V1, this.layoutStore);
+    void broadcastDataUpdate(STORAGE_KEYS.VISUALIZER_WORKSPACE_LAYOUT_V1, this.layoutStore);
   }
 
   private flushLayoutPersist(): void {
@@ -1345,10 +1357,13 @@ export class VisualizerWorkspaceRuntime {
     this.requestFrame();
   }
 
-  private requestFrame(): void {
+  private requestFrame(force = true): void {
     if (this.rafId !== null || this.disposed) return;
     if (this.resizePending) {
       return;
+    }
+    if (force) {
+      this.frameGovernor.invalidate();
     }
 
     this.rafId = window.requestAnimationFrame((timestamp) => {
@@ -1363,21 +1378,18 @@ export class VisualizerWorkspaceRuntime {
       return;
     }
 
-    const fpsLimit = Math.max(MIN_VISUALIZER_FPS, this.quality.fpsLimit);
-    const frameInterval = fpsLimit > 0 ? 1000 / fpsLimit : 0;
-    if (
-      frameInterval > 0 &&
-      this.lastFrameAt > 0 &&
-      timestamp - this.lastFrameAt + FRAME_INTERVAL_EPSILON_MS < frameInterval
-    ) {
-      this.requestFrame();
+    const isBackground = this.isBackgroundFrame();
+    const frame = this.frameGovernor.beginFrame(timestamp, isBackground);
+    if (!frame.shouldRender) {
+      if (this.frameGovernor.shouldContinue(isBackground)) {
+        this.requestFrame(false);
+      }
       return;
     }
 
-    const deltaTime = this.lastFrameAt > 0 ? timestamp - this.lastFrameAt : 0;
-    this.lastFrameAt = timestamp;
+    const renderStartedAt = performance.now();
     const snapshot = this.audioBus.sample(timestamp);
-    this.globalRotation += 0.001;
+    this.globalRotation += frame.deltaTime * 0.00006;
     this.orbitControls.update();
     this.updateViewGizmoState();
     const surfaceFrame = this.updateSurfaceFrame();
@@ -1394,7 +1406,7 @@ export class VisualizerWorkspaceRuntime {
       audioSnapshot: snapshot,
       frame: {
         timestamp,
-        deltaTime,
+        deltaTime: frame.deltaTime,
         frameNumber: (this.frameNumber += 1),
         globalRotation: this.globalRotation,
       },
@@ -1408,7 +1420,17 @@ export class VisualizerWorkspaceRuntime {
     this.surfaceTexture.needsUpdate = true;
 
     this.renderer.render(this.scene, this.activeCamera);
-    this.requestFrame();
+    const commit = this.frameGovernor.endFrame(
+      timestamp,
+      performance.now() - renderStartedAt,
+      frame.isBackground
+    );
+    if (commit.renderScaleChanged && !this.resizePending) {
+      this.resize();
+    }
+    if (this.frameGovernor.shouldContinue(isBackground)) {
+      this.requestFrame(false);
+    }
   }
 
   private createSurfaceFrame(): VisualizerSurfaceFrame {
@@ -2020,7 +2042,7 @@ export class VisualizerWorkspaceRuntime {
     if (this.disposed) return false;
     const { width: cssWidth, height: cssHeight } = this.readLayoutSize();
     const pixelRatio = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-    const scaledRatio = pixelRatio * Math.max(0.5, this.quality.renderScale);
+    const scaledRatio = pixelRatio * Math.max(0.5, this.frameGovernor.getRenderScale());
     const nextRatio = Math.max(0.5, Math.min(2, scaledRatio));
     const changed =
       this.viewport.width !== cssWidth ||
@@ -2064,6 +2086,18 @@ export class VisualizerWorkspaceRuntime {
     this.activateScene(sceneId);
     this.updateViewGizmoState();
     this.requestFrame();
+  }
+
+  setFrameRatePolicy(policy: Partial<VisualizerFrameRatePolicy>): void {
+    this.frameGovernor.setPolicy(policy);
+    if (!this.resizePending) {
+      this.resize();
+    }
+    this.requestFrame();
+  }
+
+  getFrameRateSnapshot(): VisualizerFrameRateSnapshot {
+    return this.frameGovernor.getSnapshot();
   }
 
   setViewMode(mode: VisualizerWorkspaceViewMode): void {

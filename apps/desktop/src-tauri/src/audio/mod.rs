@@ -27,6 +27,7 @@ pub(crate) mod resample;
 pub(crate) mod retire_plane;
 pub(crate) mod source;
 pub(crate) mod spectrum;
+pub(crate) mod spectrum_stream;
 pub(crate) mod stability;
 pub(crate) mod stability_controller;
 pub(crate) mod symphonia_metadata;
@@ -35,4 +36,5 @@ pub(crate) mod threading;
 pub(crate) fn shutdown() {
     retire_plane::shutdown();
     emitter::shutdown();
+    spectrum_stream::shutdown();
 }

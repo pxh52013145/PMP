@@ -1,7 +1,7 @@
 use rustfft::num_complex::Complex;
 use std::sync::Arc;
 
-use crate::audio::{engine::SpectrumFrameSnapshot, events::NativeAudioSpectrumFramePayload};
+use crate::audio::{engine::SpectrumFrameMetadata, events::NativeAudioSpectrumFramePayload};
 
 pub(crate) const SPECTRUM_WINDOW_SIZE: usize = 1024;
 pub(crate) const SPECTRUM_BINS: usize = 128;
@@ -103,43 +103,45 @@ impl DualSpectrumComputer {
     pub fn compute_pre_frame<'a>(
         &'a mut self,
         fft: &Arc<dyn rustfft::Fft<f32>>,
-        snapshot: Option<&SpectrumFrameSnapshot>,
+        metadata: SpectrumFrameMetadata,
+        window: &[f32],
     ) -> Option<NativeAudioSpectrumFramePayload<'a>> {
-        self.compute_frame(fft, snapshot, true)
+        self.compute_frame(fft, metadata, window, true)
     }
 
     pub fn compute_post_frame<'a>(
         &'a mut self,
         fft: &Arc<dyn rustfft::Fft<f32>>,
-        snapshot: Option<&SpectrumFrameSnapshot>,
+        metadata: SpectrumFrameMetadata,
+        window: &[f32],
     ) -> Option<NativeAudioSpectrumFramePayload<'a>> {
-        self.compute_frame(fft, snapshot, false)
+        self.compute_frame(fft, metadata, window, false)
     }
 
     fn compute_frame<'a>(
         &'a mut self,
         fft: &Arc<dyn rustfft::Fft<f32>>,
-        snapshot: Option<&SpectrumFrameSnapshot>,
+        metadata: SpectrumFrameMetadata,
+        window: &[f32],
         use_pre: bool,
     ) -> Option<NativeAudioSpectrumFramePayload<'a>> {
-        let snapshot = snapshot?;
         let (bins, time_domain) = if use_pre {
             self.pre
-                .compute_frame_from_window(fft, snapshot.sample_rate, &snapshot.window)?
+                .compute_frame_from_window(fft, metadata.sample_rate, window)?
         } else {
             self.post
-                .compute_frame_from_window(fft, snapshot.sample_rate, &snapshot.window)?
+                .compute_frame_from_window(fft, metadata.sample_rate, window)?
         };
 
         Some(NativeAudioSpectrumFramePayload {
-            frame_id: snapshot.frame_id,
-            timestamp_ms: snapshot.timestamp_ms,
-            tap: snapshot.tap,
-            tap_id: Some(match snapshot.tap {
+            frame_id: metadata.frame_id,
+            timestamp_ms: metadata.timestamp_ms,
+            tap: metadata.tap,
+            tap_id: Some(match metadata.tap {
                 crate::audio::engine::SpectrumTapKind::PreDsp => "pre-dsp",
                 crate::audio::engine::SpectrumTapKind::PostDsp => "post-dsp",
             }),
-            sample_rate: snapshot.sample_rate,
+            sample_rate: metadata.sample_rate,
             bins,
             time_domain: Some(time_domain),
         })

@@ -14,6 +14,7 @@ const SMOOTHING_FRAME_MS = 1000 / 60;
 const SMOOTHING_MAX_DELTA_FRAMES = 8;
 const FREQUENCY_ATTACK_ALPHA = 0.72;
 const FREQUENCY_RELEASE_ALPHA = 0.24;
+const EMPTY_FREQUENCY_DATA = new Uint8Array(0);
 
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -157,6 +158,8 @@ export class AudioDataBus implements VisualizerAudioAdapter {
 
   private smoothedFrequency: Float32Array | null = null;
 
+  private smoothedFrequencyOutput: Uint8Array | null = null;
+
   private lastFrequencySmoothTimestamp: number | null = null;
 
   private clockBaseTimeSec: number | null = null;
@@ -204,6 +207,7 @@ export class AudioDataBus implements VisualizerAudioAdapter {
   private smoothFrequencyData(source: Uint8Array, timestamp: number): Uint8Array {
     if (source.length === 0) {
       this.smoothedFrequency = null;
+      this.smoothedFrequencyOutput = null;
       this.lastFrequencySmoothTimestamp = null;
       return source;
     }
@@ -213,8 +217,9 @@ export class AudioDataBus implements VisualizerAudioAdapter {
       for (let index = 0; index < source.length; index += 1) {
         this.smoothedFrequency[index] = source[index] ?? 0;
       }
+      this.smoothedFrequencyOutput = new Uint8Array(source);
       this.lastFrequencySmoothTimestamp = Number.isFinite(timestamp) ? timestamp : null;
-      return new Uint8Array(source);
+      return this.smoothedFrequencyOutput;
     }
 
     const previousTimestamp = this.lastFrequencySmoothTimestamp ?? timestamp;
@@ -225,7 +230,8 @@ export class AudioDataBus implements VisualizerAudioAdapter {
     const attackAlpha = resolveSmoothingAlpha(FREQUENCY_ATTACK_ALPHA, deltaMs);
     const releaseAlpha = resolveSmoothingAlpha(FREQUENCY_RELEASE_ALPHA, deltaMs);
     const target = this.smoothedFrequency;
-    const output = new Uint8Array(source.length);
+    const output = this.smoothedFrequencyOutput ?? new Uint8Array(source.length);
+    this.smoothedFrequencyOutput = output;
     for (let index = 0; index < source.length; index += 1) {
       const previous = target[index] ?? 0;
       const next = source[index] ?? 0;
@@ -310,7 +316,7 @@ export class AudioDataBus implements VisualizerAudioAdapter {
       const spectrumFrame = this.getSpectrumFrame(this.spectrumTap);
       const frequencySource = spectrumFrame?.bins ?? this.getFrequencyData();
       const frequency = this.smoothFrequencyData(
-        frequencySource ? new Uint8Array(frequencySource) : new Uint8Array(0),
+        frequencySource ?? EMPTY_FREQUENCY_DATA,
         timestamp
       );
       const liveCurrentTime = this.audioService.getCurrentTime();
@@ -328,7 +334,7 @@ export class AudioDataBus implements VisualizerAudioAdapter {
       const treble = frequency.length > 0 ? computeAverage(frequency, Math.floor(frequency.length * 0.52), frequency.length) : 0;
       const timeDomain =
         spectrumFrame?.timeDomain && spectrumFrame.timeDomain.length > 0
-          ? new Uint8Array(spectrumFrame.timeDomain)
+          ? spectrumFrame.timeDomain
           : synthesizeTimeDomain(frequency, timestamp, energy, bass, mid);
       const peak = computePeak(frequency);
       const centroid = computeSpectralCentroid(frequency);
