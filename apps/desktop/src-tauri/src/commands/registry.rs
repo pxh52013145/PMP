@@ -160,6 +160,9 @@ pub const LIBRARY_COMMAND_NAMES: &[&str] = &[
 
 pub const MUSIC_TAG_COMMAND_NAMES: &[&str] = &[
     "music_tag_read_local_tags",
+    "music_tag_list_metadata_providers",
+    "music_tag_list_history",
+    "music_tag_rollback_history",
     "music_tag_preview_db_patch",
     "music_tag_apply_db_patch",
     "music_tag_search_candidates",
@@ -497,6 +500,9 @@ macro_rules! pmp_generate_handler {
             crate::commands::library::music_library_db_list_albums,
             crate::commands::library::music_library_db_get_stats,
             crate::commands::music_tag::music_tag_read_local_tags,
+            crate::commands::music_tag::music_tag_list_metadata_providers,
+            crate::commands::music_tag::music_tag_list_history,
+            crate::commands::music_tag::music_tag_rollback_history,
             crate::commands::music_tag::music_tag_preview_db_patch,
             crate::commands::music_tag::music_tag_apply_db_patch,
             crate::commands::music_tag::music_tag_search_candidates,

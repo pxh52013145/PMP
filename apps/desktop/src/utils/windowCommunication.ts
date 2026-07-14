@@ -181,6 +181,8 @@ export const STORAGE_KEYS = {
   CONFIG: 'pixel-matrix-player-config', // 涓婚厤缃枃浠讹紙鍖呭惈 magnet銆乬rid銆乻tyleOverride锛?
   LOCALE: 'pixel-matrix-locale', // UI locale锛坕18n锛?
   KEYBINDINGS_USER_V1: 'pixel-matrix-keybindings-user-v1', // 鐢ㄦ埛鑷畾涔夊揩鎹烽敭锛坅rray, VSCode-like rules锛?
+  MUSIC_TAG_WORKBENCH_QUEUE_V1: 'pixel-matrix-music-tag-workbench-queue-v1',
+  MUSIC_TAG_WORKBENCH_DRAFTS_V1: 'pixel-matrix-music-tag-workbench-drafts-v1',
   // === 杩愯鏃舵暟鎹紙杈呭姪/缂撳瓨锛?===
   MAGNET_SPACES: 'pixel-matrix-magnet-spaces-v1', // Magnet spaces锛坅ctive space + list锛?
   MAGNET_SPACE_LAYOUT: 'pixel-matrix-magnet-space-layout-v1', // Per-space magnet layout (active ids + anchors)

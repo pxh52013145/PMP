@@ -36,9 +36,30 @@ export type MusicTagMetadataFieldKey = keyof MusicTagCanonicalMetadata;
 export type MusicTagCandidateProvider = 'local-tags' | 'musicbrainz' | 'acoustid' | 'lyrics' | 'manual' | string;
 export type MusicTagCandidateConfidence = 'exact' | 'high' | 'medium' | 'low' | string;
 export type MusicTagDbLockMode = 'merge' | 'replace' | string;
+export type MusicTagProviderCapability = 'metadata' | 'fingerprint' | 'lyrics' | 'cover-art';
+
+export interface MusicTagMetadataProviderDescriptor {
+  id: string;
+  displayName: string;
+  description: string;
+  capabilities: MusicTagProviderCapability[];
+  builtin: boolean;
+  requiresNetwork: boolean;
+  requiresApiKey: boolean;
+  enabled: boolean;
+  priority: number;
+}
 
 export interface MusicTagReadLocalRequest {
   filePath: string;
+  includeCover?: boolean;
+}
+
+export interface MusicTagEmbeddedCover {
+  mimeType: string;
+  dataBase64: string;
+  byteLength: number;
+  pictureType: string;
 }
 
 export interface MusicTagReadLocalResult {
@@ -50,6 +71,7 @@ export interface MusicTagReadLocalResult {
   tagTypes: string[];
   fieldCount: number;
   metadata: MusicTagCanonicalMetadata;
+  embeddedCover?: MusicTagEmbeddedCover | null;
   warnings: string[];
   readAtMs: number;
 }
@@ -107,6 +129,7 @@ export interface MusicTagCandidateSearchRequest {
   acoustidFingerprint?: string;
   acoustidApiKey?: string;
   limit?: number;
+  providerIds?: string[];
   includeNetwork?: boolean;
   includeLyrics?: boolean;
 }
@@ -117,6 +140,7 @@ export interface MusicTagCandidate {
   providerEntityType: string;
   providerEntityId?: string | null;
   metadata: MusicTagCanonicalMetadata;
+  artworkUrl?: string | null;
   score: number;
   confidence: MusicTagCandidateConfidence;
   reasons: string[];
@@ -145,16 +169,65 @@ export interface MusicTagCandidateSearchResult {
   fetchedAtMs: number;
 }
 
+export interface MusicTagHistoryQuery {
+  trackId?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface MusicTagHistoryEntry {
+  id: string;
+  trackId: string;
+  filePath: string;
+  selectedCandidateIds: string[];
+  beforeDb: unknown;
+  afterDb: unknown;
+  beforeFile?: MusicTagCanonicalMetadata | null;
+  afterFile?: MusicTagCanonicalMetadata | null;
+  changedFields: MusicTagDbFieldChangeRecord[];
+  writeDb: boolean;
+  writeFile: boolean;
+  fileMtimeBeforeMs?: number | null;
+  fileMtimeAfterMs?: number | null;
+  status: 'applied' | 'rollback' | 'failed' | string;
+  errorMessage?: string | null;
+  createdAtMs: number;
+  appliedBy: string;
+}
+
+export interface MusicTagHistoryPage {
+  items: MusicTagHistoryEntry[];
+  total: number;
+}
+
+export interface MusicTagRollbackRequest {
+  auditId: string;
+}
+
+export interface MusicTagRollbackResult {
+  rolledBackAuditId: string;
+  createdAuditId?: string | null;
+  trackId: string;
+  restoredDb: boolean;
+  restoredFile: boolean;
+  dbResult?: MusicTagDbPatchResult | null;
+  warnings: string[];
+}
+
 export interface MusicTagWriteFileRequest {
+  trackId?: string;
   filePath: string;
   metadata: MusicTagCanonicalMetadata;
   expectedMtimeMs: number;
   writeCover?: boolean;
   coverDataBase64?: string;
+  coverUrl?: string;
   coverMimeType?: string;
+  replaceAll?: boolean;
 }
 
 export interface MusicTagWriteFileResult {
+  auditId?: string | null;
   filePath: string;
   format: string;
   fieldsWritten: number;

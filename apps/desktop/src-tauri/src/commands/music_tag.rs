@@ -1,11 +1,38 @@
-use crate::music_library_db::MusicTagDbPatchResult;
+use crate::music_library_db::{MusicTagDbPatchResult, MusicTagHistoryPage, MusicTagHistoryQuery};
 use crate::music_tag::{
     ChromaprintRequest, ChromaprintResult, CoverArtDownloadRequest, CoverArtDownloadResult,
     CoverArtSearchRequest, CoverArtSearchResult, MusicTagBatchRequest, MusicTagBatchState,
     MusicTagCandidateSearchRequest, MusicTagCandidateSearchResult, MusicTagDbPatchRequest,
-    MusicTagReadLocalRequest, MusicTagReadLocalResult, MusicTagWriteFileRequest,
+    MusicTagMetadataProviderDescriptor, MusicTagReadLocalRequest, MusicTagReadLocalResult,
+    MusicTagRollbackRequest, MusicTagRollbackResult, MusicTagWriteFileRequest,
     MusicTagWriteFileResult,
 };
+
+#[tauri::command]
+pub async fn music_tag_list_metadata_providers(
+) -> Result<Vec<MusicTagMetadataProviderDescriptor>, String> {
+    Ok(crate::music_tag::list_metadata_providers())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_tag_list_history(
+    app: tauri::AppHandle,
+    query: MusicTagHistoryQuery,
+) -> Result<MusicTagHistoryPage, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::music_tag::list_history(&app, query))
+        .await
+        .map_err(|error| format!("Music tag history query task failed: {error}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_tag_rollback_history(
+    app: tauri::AppHandle,
+    request: MusicTagRollbackRequest,
+) -> Result<MusicTagRollbackResult, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::music_tag::rollback_history(&app, request))
+        .await
+        .map_err(|error| format!("Music tag history rollback task failed: {error}"))?
+}
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn music_tag_read_local_tags(

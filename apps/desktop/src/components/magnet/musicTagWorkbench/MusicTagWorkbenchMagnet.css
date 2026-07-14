@@ -32,6 +32,27 @@
   gap: 12px;
 }
 
+.music-tag-workbench-magnet__openButton {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  border: 1px solid rgba(122, 205, 214, 0.28);
+  border-radius: 7px;
+  padding: 0 8px;
+  background: rgba(122, 205, 214, 0.08);
+  color: rgba(226, 250, 250, 0.92);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.music-tag-workbench-magnet__openButton:hover {
+  background: rgba(122, 205, 214, 0.16);
+}
+
 .music-tag-workbench-magnet__title {
   gap: 8px;
   color: rgba(255, 255, 255, 0.95);
@@ -479,5 +500,341 @@
 
   .music-tag-workbench-magnet__body {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.music-tag-workbench-magnet {
+  container-type: inline-size;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px;
+  background: rgba(9, 9, 11, 0.72);
+  overflow: hidden;
+}
+
+.music-tag-workbench-magnet > .music-tag-workbench-magnet__trackBand,
+.music-tag-workbench-magnet > .music-tag-workbench-magnet__statusGrid,
+.music-tag-workbench-magnet > .music-tag-workbench-magnet__body {
+  display: none;
+}
+
+.music-tag-workbench-magnet__header {
+  min-height: 30px;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.music-tag-workbench-magnet__title > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.music-tag-workbench-magnet__title small {
+  overflow: hidden;
+  color: rgba(203, 213, 225, 0.5);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-tag-workbench-magnet__queueBadge {
+  min-width: 0;
+  height: 25px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgba(129, 140, 248, 0.28);
+  border-radius: 5px;
+  padding: 0 7px;
+  color: rgba(199, 210, 254, 0.9);
+  background: rgba(99, 102, 241, 0.1);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.music-tag-workbench-magnet__queueBadge span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-tag-workbench-magnet__compact {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(190px, 0.9fr) minmax(230px, 1.1fr);
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  gap: 9px 12px;
+  overflow: hidden;
+}
+
+.music-tag-workbench-magnet__compactTrack {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  padding-right: 12px;
+}
+
+.music-tag-workbench-magnet__compactCover {
+  width: clamp(60px, 18cqi, 108px);
+  aspect-ratio: 1;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  color: rgba(148, 163, 184, 0.48);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.music-tag-workbench-magnet__compactCover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.music-tag-workbench-magnet__compactIdentity {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.music-tag-workbench-magnet__compactIdentity > strong,
+.music-tag-workbench-magnet__compactIdentity > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-tag-workbench-magnet__compactIdentity > strong {
+  color: rgba(255, 255, 255, 0.96);
+  font-size: 15px;
+  font-weight: 760;
+}
+
+.music-tag-workbench-magnet__compactIdentity > span {
+  color: rgba(203, 213, 225, 0.58);
+  font-size: 11px;
+}
+
+.music-tag-workbench-magnet__compactIdentity > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.music-tag-workbench-magnet__compactIdentity em {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 3px 5px;
+  color: rgba(203, 213, 225, 0.68);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-tag-workbench-magnet__compactIdentity em.is-warning {
+  border-color: rgba(245, 158, 11, 0.28);
+  color: rgba(252, 211, 77, 0.9);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.music-tag-workbench-magnet__compactIdentity em.is-ready {
+  border-color: rgba(34, 197, 94, 0.24);
+  color: rgba(134, 239, 172, 0.86);
+}
+
+.music-tag-workbench-magnet__compactFields {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: center;
+  gap: 6px;
+}
+
+.music-tag-workbench-magnet__compactFields > div {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+  padding: 7px 22px 7px 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.music-tag-workbench-magnet__compactFields span,
+.music-tag-workbench-magnet__compactFields strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-tag-workbench-magnet__compactFields span {
+  color: rgba(203, 213, 225, 0.46);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.music-tag-workbench-magnet__compactFields strong {
+  color: rgba(248, 250, 252, 0.88);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.music-tag-workbench-magnet__compactFields i {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(148, 163, 184, 0.32);
+  transform: translateY(-50%);
+}
+
+.music-tag-workbench-magnet__compactFields i.is-different,
+.music-tag-workbench-magnet__compactFields i.is-missingDb,
+.music-tag-workbench-magnet__compactFields i.is-missingFile {
+  background: #f59e0b;
+}
+
+.music-tag-workbench-magnet__compactFields i.is-same {
+  background: #22c55e;
+}
+
+.music-tag-workbench-magnet__compactNotice {
+  min-width: 0;
+  min-height: 28px;
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 7px;
+  color: rgba(203, 213, 225, 0.58);
+  font-size: 10px;
+}
+
+.music-tag-workbench-magnet__compactNotice span {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-tag-workbench-magnet__compactNotice strong {
+  flex: 0 0 auto;
+  color: rgba(199, 210, 254, 0.8);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.music-tag-workbench-magnet__compactNotice.is-error {
+  color: rgba(252, 165, 165, 0.9);
+}
+
+.music-tag-workbench-magnet__compactActions {
+  min-width: 0;
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.music-tag-workbench-magnet__compactActions button {
+  min-width: 0;
+  height: 29px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 5px;
+  padding: 0 8px;
+  color: rgba(226, 232, 240, 0.82);
+  background: rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.music-tag-workbench-magnet__compactActions button.is-primary {
+  border-color: rgba(99, 102, 241, 0.7);
+  color: #fff;
+  background: rgba(79, 70, 229, 0.9);
+}
+
+.music-tag-workbench-magnet__compactActions button:disabled {
+  opacity: 0.36;
+  cursor: not-allowed;
+}
+
+@container (max-width: 520px) {
+  .music-tag-workbench-magnet__compact {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto;
+    overflow-y: auto;
+  }
+
+  .music-tag-workbench-magnet__compactTrack {
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding-right: 0;
+    padding-bottom: 9px;
+  }
+
+  .music-tag-workbench-magnet__compactCover {
+    width: 64px;
+  }
+
+  .music-tag-workbench-magnet__compactFields,
+  .music-tag-workbench-magnet__compactNotice,
+  .music-tag-workbench-magnet__compactActions {
+    grid-column: 1;
+  }
+
+  .music-tag-workbench-magnet__compactActions {
+    justify-content: stretch;
+  }
+
+  .music-tag-workbench-magnet__compactActions button {
+    flex: 1 1 0;
+  }
+
+  .music-tag-workbench-magnet__compactActions button span {
+    display: none;
+  }
+}
+
+@container (max-width: 340px) {
+  .music-tag-workbench-magnet__compactFields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .music-tag-workbench-magnet__queueBadge span {
+    display: none;
   }
 }

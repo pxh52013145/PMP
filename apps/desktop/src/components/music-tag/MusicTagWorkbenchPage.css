@@ -360,6 +360,73 @@
   font-weight: 650;
 }
 
+.music-tag-workbench-page__panel.is-workbench > .music-tag-workbench-page__panelHeader {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.music-tag-workbench-page__panel.is-workbench > .music-tag-workbench-page__panelHeader .music-tag-workbench-page__panelActions {
+  justify-content: flex-start;
+}
+
+.music-tag-workbench-page__providerPicker {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.music-tag-workbench-page__providerPickerLabel {
+  padding-top: 6px;
+  color: rgba(203, 213, 225, 0.62);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.music-tag-workbench-page__providerOptions {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.music-tag-workbench-page__providerOptions label {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.16);
+  color: rgba(203, 213, 225, 0.72);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.music-tag-workbench-page__providerOptions label.is-selected {
+  border-color: rgba(122, 205, 214, 0.35);
+  background: rgba(122, 205, 214, 0.1);
+  color: rgba(241, 245, 249, 0.94);
+}
+
+.music-tag-workbench-page__providerOptions input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+}
+
+.music-tag-workbench-page__providerOptions em {
+  color: rgba(247, 202, 116, 0.84);
+  font-size: 10px;
+  font-style: normal;
+}
+
 .music-tag-workbench-page__candidateInputs {
   min-width: 0;
   display: grid;
@@ -523,9 +590,89 @@
 }
 
 .music-tag-workbench-page__lockPanel,
-.music-tag-workbench-page__patchPanel {
+.music-tag-workbench-page__patchPanel,
+.music-tag-workbench-page__historyPanel {
   min-width: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.music-tag-workbench-page__historyPanel .music-tag-workbench-page__subhead button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  padding: 0 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(241, 245, 249, 0.86);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.music-tag-workbench-page__historyPanel .music-tag-workbench-page__subhead button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.music-tag-workbench-page__historyList {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.music-tag-workbench-page__historyRow {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.music-tag-workbench-page__historyRow > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.music-tag-workbench-page__historyRow strong,
+.music-tag-workbench-page__historyRow span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-tag-workbench-page__historyRow strong {
+  color: rgba(241, 245, 249, 0.9);
+  font-size: 12px;
+}
+
+.music-tag-workbench-page__historyRow span {
+  color: rgba(203, 213, 225, 0.62);
+  font-size: 11px;
+}
+
+.music-tag-workbench-page__historyRow button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  border: 1px solid rgba(247, 202, 116, 0.22);
+  border-radius: 7px;
+  padding: 0 8px;
+  background: rgba(247, 202, 116, 0.07);
+  color: rgba(247, 202, 116, 0.92);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.music-tag-workbench-page__historyRow button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .music-tag-workbench-page__subhead {
@@ -823,12 +970,28 @@
   }
 
   .music-tag-workbench-page__panelActions button {
-    flex: 1 1 0;
+    flex: 1 1 140px;
     justify-content: center;
   }
 
+  .music-tag-workbench-page__patchActions {
+    justify-content: stretch;
+    flex-wrap: wrap;
+  }
+
+  .music-tag-workbench-page__patchActions button {
+    flex: 1 1 140px;
+  }
+
+  .music-tag-workbench-page__targetStrip strong {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
   .music-tag-workbench-page__candidateInputs,
-  .music-tag-workbench-page__lockGrid {
+  .music-tag-workbench-page__lockGrid,
+  .music-tag-workbench-page__providerPicker {
     grid-template-columns: 1fr;
   }
 

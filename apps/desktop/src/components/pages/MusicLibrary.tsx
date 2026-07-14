@@ -36,7 +36,7 @@ import {
 } from '../../themes/surfaceMotion';
 
 import { useAudioService } from '../../contexts/AudioEngineContext';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { useNavigation } from '../../contexts/NavigationContext';
 import {
   getProcessPerfTotalsSnapshot,
@@ -276,6 +276,7 @@ import {
 import { useCoverUrlForTrack } from '../magnet/shared/useCoverUrlForTrack';
 
 import { buildLibraryTrackContextMenu } from '../magnet/trackContextMenu';
+import { addMusicTagWorkbenchTracks } from '../../modules/music-tag/workbenchQueue';
 
 import { useBaseControlPanels } from './useBaseControlPanels';
 import { PmpButton, PmpDialog } from '../primitives';
@@ -7479,10 +7480,17 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       },
 
-      editTagsLabel: t('common.action.editTags'),
+      openInMusicTagLabel: t('common.action.openInMusicTag'),
 
-      onEditTags: () => {
-        navigation.navigateTo('music-tag-workbench', { trackIds: [track.id] });
+      onOpenInMusicTag: () => {
+        const trackIds = addMusicTagWorkbenchTracks([track.id]);
+        navigation.navigateTo('music-tag-workbench', { trackIds });
+      },
+
+      addToMusicTagLabel: t('common.action.addToMusicTag'),
+
+      onAddToMusicTag: () => {
+        addMusicTagWorkbenchTracks([track.id]);
       },
 
     });

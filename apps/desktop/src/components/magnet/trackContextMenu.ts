@@ -40,8 +40,10 @@ interface BuildLibraryTrackContextMenuOptions extends BuildTrackContextMenuBaseO
   viewArtistLabel: string;
   viewArtistDisabled?: boolean;
   onViewArtist: () => void;
-  editTagsLabel?: string;
-  onEditTags?: () => void;
+  openInMusicTagLabel?: string;
+  onOpenInMusicTag?: () => void;
+  addToMusicTagLabel?: string;
+  onAddToMusicTag?: () => void;
 }
 
 export interface TrackPlaylistMembership {
@@ -210,13 +212,22 @@ export const buildLibraryTrackContextMenu = (
       disabled: options.viewArtistDisabled,
       onClick: options.onViewArtist,
     },
-    ...(options.editTagsLabel && options.onEditTags
+    ...(options.openInMusicTagLabel && options.onOpenInMusicTag
       ? [
           { divider: true } as ContextMenuItem,
           {
-            label: options.editTagsLabel,
+            label: options.openInMusicTagLabel,
             icon: 'T',
-            onClick: options.onEditTags,
+            onClick: options.onOpenInMusicTag,
+          } as ContextMenuItem,
+        ]
+      : []),
+    ...(options.addToMusicTagLabel && options.onAddToMusicTag
+      ? [
+          {
+            label: options.addToMusicTagLabel,
+            icon: '+',
+            onClick: options.onAddToMusicTag,
           } as ContextMenuItem,
         ]
       : []),

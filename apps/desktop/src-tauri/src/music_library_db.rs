@@ -231,9 +231,10 @@ pub struct MusicTagDbPatchInput {
     pub tag_source: Option<String>,
     pub tag_confidence: Option<f64>,
     pub expected_mtime_ms: Option<i64>,
+    pub restore_null_fields: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MusicTagDbFieldChangeRecord {
     pub field: String,
@@ -262,6 +263,65 @@ pub struct MusicTagDbPatchResult {
     pub applied: bool,
     pub can_apply: bool,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicTagHistoryQuery {
+    pub track_id: Option<String>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicTagHistoryEntry {
+    pub id: String,
+    pub track_id: String,
+    pub file_path: String,
+    pub selected_candidate_ids: Vec<String>,
+    pub before_db: JsonValue,
+    pub after_db: JsonValue,
+    pub before_file: Option<JsonValue>,
+    pub after_file: Option<JsonValue>,
+    pub changed_fields: Vec<MusicTagDbFieldChangeRecord>,
+    pub write_db: bool,
+    pub write_file: bool,
+    pub file_mtime_before_ms: Option<i64>,
+    pub file_mtime_after_ms: Option<i64>,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub created_at_ms: i64,
+    pub applied_by: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicTagHistoryPage {
+    pub items: Vec<MusicTagHistoryEntry>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicTagDbRollbackResult {
+    pub rolled_back_audit_id: String,
+    pub created_audit_id: Option<String>,
+    pub track_id: String,
+    pub db_result: MusicTagDbPatchResult,
+    pub warnings: Vec<String>,
+}
+
+pub struct MusicTagFileAuditInput {
+    pub track_id: String,
+    pub file_path: String,
+    pub before_file: JsonValue,
+    pub after_file: JsonValue,
+    pub changed_fields: Vec<MusicTagDbFieldChangeRecord>,
+    pub file_mtime_before_ms: Option<i64>,
+    pub file_mtime_after_ms: Option<i64>,
+    pub status: String,
+    pub applied_by: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2526,7 +2586,10 @@ fn music_tag_row_value_to_json(
     })
 }
 
-fn music_tag_metadata_map_from_json(value: &JsonValue) -> JsonMap<String, JsonValue> {
+fn music_tag_metadata_map_from_json(
+    value: &JsonValue,
+    restore_null_fields: bool,
+) -> JsonMap<String, JsonValue> {
     let mut map = JsonMap::new();
     let Some(source) = value.as_object() else {
         return map;
@@ -2537,6 +2600,9 @@ fn music_tag_metadata_map_from_json(value: &JsonValue) -> JsonMap<String, JsonVa
             continue;
         };
         if raw.is_null() {
+            if restore_null_fields {
+                map.insert(column.field.to_string(), JsonValue::Null);
+            }
             continue;
         }
         let normalized = match column.kind {
@@ -9322,7 +9388,8 @@ fn music_tag_db_patch_inner(
         .ok_or_else(|| "MusicTag DB patch requires track_id".to_string())?;
     let source_value = serde_json::from_str::<JsonValue>(input.source_metadata_json.as_str())
         .map_err(|error| format!("Invalid MusicTag source metadata JSON: {error}"))?;
-    let source_metadata = music_tag_metadata_map_from_json(&source_value);
+    let source_metadata =
+        music_tag_metadata_map_from_json(&source_value, input.restore_null_fields);
     let selected_candidate_ids = normalize_music_tag_candidate_ids(&input.selected_candidate_ids);
     let requested_locked_fields = music_tag_normalize_locked_fields(&input.locked_fields);
     let tag_source = normalize_text(input.tag_source.as_deref()).or_else(|| {
@@ -9572,6 +9639,344 @@ pub fn apply_music_tag_db_patch(
 ) -> Result<MusicTagDbPatchResult, String> {
     ensure_initialized(app)?;
     with_conn(|conn| music_tag_db_patch_inner(conn, input, true))
+}
+
+pub fn record_music_tag_file_audit(
+    app: &AppHandle,
+    input: MusicTagFileAuditInput,
+) -> Result<String, String> {
+    ensure_initialized(app)?;
+    let track_id = normalize_text(Some(input.track_id.as_str()))
+        .ok_or_else(|| "MusicTag file audit requires track_id".to_string())?;
+    with_conn(|conn| {
+        let snapshot = read_music_tag_track_snapshot(conn, track_id.as_str())?
+            .ok_or_else(|| "MusicTag file audit target track was not found".to_string())?;
+        let now = now_ms();
+        let audit_id = music_tag_hash_id(
+            "music-tag-audit",
+            format!("{}|{}|file|{}", track_id, now, input.file_path).as_str(),
+        );
+        let db_state = music_tag_db_state_json(
+            music_tag_metadata_from_json_map(&snapshot.metadata),
+            snapshot.locked_fields.as_slice(),
+            snapshot.tag_source.as_deref(),
+            snapshot.tag_confidence,
+            snapshot.tag_updated_at_ms,
+            snapshot.tag_last_audit_id.as_deref(),
+        );
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("Failed to start MusicTag file audit transaction: {error}"))?;
+        tx.execute(
+            "UPDATE local_tracks SET tag_last_audit_id = ?1, updated_at_ms = ?2 WHERE id = ?3",
+            params![audit_id, now, track_id],
+        )
+        .map_err(|error| format!("Failed to link MusicTag file audit: {error}"))?;
+        tx.execute(
+            r#"
+            INSERT INTO track_metadata_apply_audit(
+              id, track_id, file_path, selected_candidate_ids_json,
+              before_db_json, after_db_json, before_file_json, after_file_json,
+              changed_fields_json, write_db, write_file,
+              file_mtime_before_ms, file_mtime_after_ms, status, error_message,
+              created_at_ms, applied_by
+            )
+            VALUES (?1, ?2, ?3, '[]', ?4, ?4, ?5, ?6, ?7, 0, 1, ?8, ?9, ?10, NULL, ?11, ?12)
+            "#,
+            params![
+                audit_id,
+                track_id,
+                input.file_path,
+                serde_json::to_string(&db_state)
+                    .map_err(|error| format!("Failed to encode MusicTag DB snapshot: {error}"))?,
+                serde_json::to_string(&input.before_file)
+                    .map_err(|error| format!("Failed to encode MusicTag file snapshot: {error}"))?,
+                serde_json::to_string(&input.after_file)
+                    .map_err(|error| format!("Failed to encode MusicTag file snapshot: {error}"))?,
+                serde_json::to_string(&input.changed_fields)
+                    .map_err(|error| format!("Failed to encode MusicTag file changes: {error}"))?,
+                input.file_mtime_before_ms,
+                input.file_mtime_after_ms,
+                input.status,
+                now,
+                input.applied_by,
+            ],
+        )
+        .map_err(|error| format!("Failed to write MusicTag file audit: {error}"))?;
+        tx.commit()
+            .map_err(|error| format!("Failed to commit MusicTag file audit: {error}"))?;
+        invalidate_track_query_count_cache();
+        Ok(audit_id)
+    })
+}
+
+pub fn get_music_tag_history_entry(
+    app: &AppHandle,
+    audit_id: &str,
+) -> Result<Option<MusicTagHistoryEntry>, String> {
+    ensure_initialized(app)?;
+    let audit_id = normalize_text(Some(audit_id))
+        .ok_or_else(|| "MusicTag history requires audit_id".to_string())?;
+    with_conn(|conn| {
+        let raw = conn
+            .query_row(
+                r#"
+                SELECT
+                  id, track_id, file_path, selected_candidate_ids_json,
+                  before_db_json, after_db_json, before_file_json, after_file_json,
+                  changed_fields_json, write_db, write_file,
+                  file_mtime_before_ms, file_mtime_after_ms, status, error_message,
+                  created_at_ms, applied_by
+                FROM track_metadata_apply_audit WHERE id = ?1
+                "#,
+                params![audit_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, i64>(9)?,
+                        row.get::<_, i64>(10)?,
+                        row.get::<_, Option<i64>>(11)?,
+                        row.get::<_, Option<i64>>(12)?,
+                        row.get::<_, String>(13)?,
+                        row.get::<_, Option<String>>(14)?,
+                        row.get::<_, i64>(15)?,
+                        row.get::<_, String>(16)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|error| format!("Failed to read MusicTag history version: {error}"))?;
+        let Some(raw) = raw else {
+            return Ok(None);
+        };
+        Ok(Some(MusicTagHistoryEntry {
+            id: raw.0,
+            track_id: raw.1,
+            file_path: raw.2,
+            selected_candidate_ids: serde_json::from_str(&raw.3).unwrap_or_default(),
+            before_db: serde_json::from_str(&raw.4).unwrap_or(JsonValue::Null),
+            after_db: serde_json::from_str(&raw.5).unwrap_or(JsonValue::Null),
+            before_file: raw
+                .6
+                .as_deref()
+                .and_then(|value| serde_json::from_str(value).ok()),
+            after_file: raw
+                .7
+                .as_deref()
+                .and_then(|value| serde_json::from_str(value).ok()),
+            changed_fields: serde_json::from_str(&raw.8).unwrap_or_default(),
+            write_db: raw.9 != 0,
+            write_file: raw.10 != 0,
+            file_mtime_before_ms: raw.11,
+            file_mtime_after_ms: raw.12,
+            status: raw.13,
+            error_message: raw.14,
+            created_at_ms: raw.15,
+            applied_by: raw.16,
+        }))
+    })
+}
+
+pub fn list_music_tag_history(
+    app: &AppHandle,
+    query: MusicTagHistoryQuery,
+) -> Result<MusicTagHistoryPage, String> {
+    ensure_initialized(app)?;
+    let track_id = normalize_text(query.track_id.as_deref());
+    let limit = i64::from(query.limit.unwrap_or(30).clamp(1, 200));
+    let offset = i64::from(query.offset.unwrap_or(0));
+
+    with_conn(|conn| {
+        let total = conn
+            .query_row(
+                "SELECT COUNT(*) FROM track_metadata_apply_audit WHERE (?1 IS NULL OR track_id = ?1)",
+                params![track_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|error| format!("Failed to count MusicTag history: {error}"))?
+            .max(0) as u64;
+
+        let mut statement = conn
+            .prepare(
+                r#"
+                SELECT
+                  id, track_id, file_path, selected_candidate_ids_json,
+                  before_db_json, after_db_json, before_file_json, after_file_json,
+                  changed_fields_json, write_db, write_file,
+                  file_mtime_before_ms, file_mtime_after_ms, status, error_message,
+                  created_at_ms, applied_by
+                FROM track_metadata_apply_audit
+                WHERE (?1 IS NULL OR track_id = ?1)
+                ORDER BY created_at_ms DESC, id DESC
+                LIMIT ?2 OFFSET ?3
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare MusicTag history query: {error}"))?;
+        let rows = statement
+            .query_map(params![track_id, limit, offset], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, Option<i64>>(12)?,
+                    row.get::<_, String>(13)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, i64>(15)?,
+                    row.get::<_, String>(16)?,
+                ))
+            })
+            .map_err(|error| format!("Failed to query MusicTag history: {error}"))?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            let (
+                id,
+                track_id,
+                file_path,
+                selected_candidate_ids_json,
+                before_db_json,
+                after_db_json,
+                before_file_json,
+                after_file_json,
+                changed_fields_json,
+                write_db,
+                write_file,
+                file_mtime_before_ms,
+                file_mtime_after_ms,
+                status,
+                error_message,
+                created_at_ms,
+                applied_by,
+            ) = row.map_err(|error| format!("Failed to read MusicTag history row: {error}"))?;
+            items.push(MusicTagHistoryEntry {
+                id,
+                track_id,
+                file_path,
+                selected_candidate_ids: serde_json::from_str(&selected_candidate_ids_json)
+                    .unwrap_or_default(),
+                before_db: serde_json::from_str(&before_db_json).unwrap_or(JsonValue::Null),
+                after_db: serde_json::from_str(&after_db_json).unwrap_or(JsonValue::Null),
+                before_file: before_file_json
+                    .as_deref()
+                    .and_then(|value| serde_json::from_str(value).ok()),
+                after_file: after_file_json
+                    .as_deref()
+                    .and_then(|value| serde_json::from_str(value).ok()),
+                changed_fields: serde_json::from_str(&changed_fields_json).unwrap_or_default(),
+                write_db: write_db != 0,
+                write_file: write_file != 0,
+                file_mtime_before_ms,
+                file_mtime_after_ms,
+                status,
+                error_message,
+                created_at_ms,
+                applied_by,
+            });
+        }
+
+        Ok(MusicTagHistoryPage { items, total })
+    })
+}
+
+pub fn rollback_music_tag_db_audit(
+    app: &AppHandle,
+    audit_id: &str,
+) -> Result<MusicTagDbRollbackResult, String> {
+    ensure_initialized(app)?;
+    let audit_id = normalize_text(Some(audit_id))
+        .ok_or_else(|| "MusicTag rollback requires audit_id".to_string())?;
+
+    with_conn(|conn| {
+        let audit = conn
+            .query_row(
+                r#"
+                SELECT track_id, before_db_json, write_db
+                FROM track_metadata_apply_audit
+                WHERE id = ?1
+                "#,
+                params![audit_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)? != 0,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|error| format!("Failed to read MusicTag rollback version: {error}"))?
+            .ok_or_else(|| "MusicTag history version was not found".to_string())?;
+        if !audit.2 {
+            return Err("Selected MusicTag version does not contain a DB change".to_string());
+        }
+
+        let before_db = serde_json::from_str::<JsonValue>(&audit.1)
+            .map_err(|error| format!("Invalid MusicTag history snapshot: {error}"))?;
+        let metadata = before_db
+            .get("metadata")
+            .cloned()
+            .ok_or_else(|| "MusicTag history snapshot has no metadata".to_string())?;
+        let locked_fields = before_db
+            .get("lockedFields")
+            .and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
+            .unwrap_or_default();
+        let tag_source = before_db
+            .get("tagSource")
+            .and_then(JsonValue::as_str)
+            .map(str::to_string)
+            .or_else(|| Some("history-rollback".to_string()));
+        let tag_confidence = before_db.get("tagConfidence").and_then(JsonValue::as_f64);
+
+        let result = music_tag_db_patch_inner(
+            conn,
+            MusicTagDbPatchInput {
+                track_id: audit.0.clone(),
+                source_metadata_json: serde_json::to_string(&metadata)
+                    .map_err(|error| format!("Failed to encode rollback metadata: {error}"))?,
+                selected_candidate_ids: Vec::new(),
+                locked_fields,
+                lock_mode: Some("replace".to_string()),
+                tag_source,
+                tag_confidence,
+                expected_mtime_ms: None,
+                restore_null_fields: true,
+            },
+            true,
+        )?;
+        let created_audit_id = result.tag_last_audit_id.clone();
+        if let Some(created_audit_id) = created_audit_id.as_deref() {
+            conn.execute(
+                "UPDATE track_metadata_apply_audit SET status = 'rollback', applied_by = 'music-tag-history' WHERE id = ?1",
+                params![created_audit_id],
+            )
+            .map_err(|error| format!("Failed to mark MusicTag rollback audit: {error}"))?;
+        }
+
+        Ok(MusicTagDbRollbackResult {
+            rolled_back_audit_id: audit_id.to_string(),
+            created_audit_id,
+            track_id: audit.0,
+            db_result: result,
+            warnings: Vec::new(),
+        })
+    })
 }
 
 pub fn replace_music_tag_candidates(

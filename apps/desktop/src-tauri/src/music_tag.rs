@@ -17,13 +17,25 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::backend_telemetry::{self, BackendTelemetryOptions};
 use crate::{lyrics, music_library_db};
 
+mod providers;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MusicTagReadLocalRequest {
     pub file_path: String,
+    pub include_cover: Option<bool>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicTagEmbeddedCover {
+    pub mime_type: String,
+    pub data_base64: String,
+    pub byte_length: u64,
+    pub picture_type: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MusicTagCanonicalMetadata {
     pub title: Option<String>,
@@ -70,6 +82,7 @@ pub struct MusicTagReadLocalResult {
     pub tag_types: Vec<String>,
     pub field_count: u32,
     pub metadata: MusicTagCanonicalMetadata,
+    pub embedded_cover: Option<MusicTagEmbeddedCover>,
     pub warnings: Vec<String>,
     pub read_at_ms: i64,
 }
@@ -90,17 +103,21 @@ pub struct MusicTagDbPatchRequest {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MusicTagWriteFileRequest {
+    pub track_id: Option<String>,
     pub file_path: String,
     pub metadata: MusicTagCanonicalMetadata,
     pub expected_mtime_ms: i64,
     pub write_cover: Option<bool>,
     pub cover_data_base64: Option<String>,
+    pub cover_url: Option<String>,
     pub cover_mime_type: Option<String>,
+    pub replace_all: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MusicTagWriteFileResult {
+    pub audit_id: Option<String>,
     pub file_path: String,
     pub format: String,
     pub fields_written: u32,
@@ -186,8 +203,41 @@ pub struct MusicTagCandidateSearchRequest {
     pub acoustid_fingerprint: Option<String>,
     pub acoustid_api_key: Option<String>,
     pub limit: Option<u32>,
+    pub provider_ids: Option<Vec<String>>,
     pub include_network: Option<bool>,
     pub include_lyrics: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicTagMetadataProviderDescriptor {
+    pub id: String,
+    pub display_name: String,
+    pub description: String,
+    pub capabilities: Vec<String>,
+    pub builtin: bool,
+    pub requires_network: bool,
+    pub requires_api_key: bool,
+    pub enabled: bool,
+    pub priority: i32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicTagRollbackRequest {
+    pub audit_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicTagRollbackResult {
+    pub rolled_back_audit_id: String,
+    pub created_audit_id: Option<String>,
+    pub track_id: String,
+    pub restored_db: bool,
+    pub restored_file: bool,
+    pub db_result: Option<music_library_db::MusicTagDbPatchResult>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -198,6 +248,7 @@ pub struct MusicTagCandidate {
     pub provider_entity_type: String,
     pub provider_entity_id: Option<String>,
     pub metadata: MusicTagCanonicalMetadata,
+    pub artwork_url: Option<String>,
     pub score: f64,
     pub confidence: String,
     pub reasons: Vec<String>,
@@ -228,6 +279,112 @@ pub struct MusicTagCandidateSearchResult {
     pub searched_providers: Vec<String>,
     pub warnings: Vec<String>,
     pub fetched_at_ms: i64,
+}
+
+pub fn list_metadata_providers() -> Vec<MusicTagMetadataProviderDescriptor> {
+    providers::provider_descriptors()
+}
+
+pub fn list_history(
+    app: &AppHandle,
+    query: music_library_db::MusicTagHistoryQuery,
+) -> Result<music_library_db::MusicTagHistoryPage, String> {
+    music_library_db::list_music_tag_history(app, query)
+}
+
+pub fn rollback_history(
+    app: &AppHandle,
+    request: MusicTagRollbackRequest,
+) -> Result<MusicTagRollbackResult, String> {
+    let entry = music_library_db::get_music_tag_history_entry(app, request.audit_id.as_str())?
+        .ok_or_else(|| "MusicTag history version was not found".to_string())?;
+    let mut created_audit_id = None;
+    let mut db_result = None;
+    let mut restored_db = false;
+    let mut restored_file = false;
+    let mut warnings = Vec::new();
+
+    if entry.write_db {
+        let result = music_library_db::rollback_music_tag_db_audit(app, request.audit_id.as_str())?;
+        restored_db = result.db_result.applied;
+        created_audit_id = result.created_audit_id.clone();
+        warnings.extend(result.warnings);
+        db_result = Some(result.db_result);
+    }
+
+    if entry.write_file {
+        let metadata = entry
+            .before_file
+            .clone()
+            .ok_or_else(|| "MusicTag file version has no restorable snapshot".to_string())
+            .and_then(|value| {
+                serde_json::from_value::<MusicTagCanonicalMetadata>(value)
+                    .map_err(|error| format!("Invalid MusicTag file snapshot: {error}"))
+            })?;
+        let current = read_local_tags_inner(MusicTagReadLocalRequest {
+            file_path: entry.file_path.clone(),
+            include_cover: Some(false),
+        })?;
+        let output = write_file_tags_inner(&MusicTagWriteFileRequest {
+            track_id: Some(entry.track_id.clone()),
+            file_path: entry.file_path.clone(),
+            metadata,
+            expected_mtime_ms: current.mtime_ms,
+            write_cover: Some(false),
+            cover_data_base64: None,
+            cover_url: None,
+            cover_mime_type: None,
+            replace_all: Some(true),
+        })?;
+        let restored = read_local_tags_inner(MusicTagReadLocalRequest {
+            file_path: entry.file_path.clone(),
+            include_cover: Some(false),
+        })?;
+        let file_audit_id = music_library_db::record_music_tag_file_audit(
+            app,
+            music_library_db::MusicTagFileAuditInput {
+                track_id: entry.track_id.clone(),
+                file_path: entry.file_path.clone(),
+                before_file: serde_json::to_value(&current.metadata).unwrap_or(JsonValue::Null),
+                after_file: serde_json::to_value(&restored.metadata).unwrap_or(JsonValue::Null),
+                changed_fields: metadata_changes(&current.metadata, &restored.metadata),
+                file_mtime_before_ms: Some(current.mtime_ms),
+                file_mtime_after_ms: Some(restored.mtime_ms),
+                status: "rollback".to_string(),
+                applied_by: "music-tag-history".to_string(),
+            },
+        )?;
+        if created_audit_id.is_none() {
+            created_audit_id = Some(file_audit_id);
+        }
+        restored_file = output.verified;
+        warnings.extend(output.warnings);
+        warnings.push("cover-art-not-versioned".to_string());
+    }
+
+    if !entry.write_db && !entry.write_file {
+        return Err("Selected MusicTag version has no restorable changes".to_string());
+    }
+    backend_telemetry::info(
+        app,
+        "music-tag",
+        "music-tag.audit.rollback.completed",
+        BackendTelemetryOptions::new()
+            .component("music_tag")
+            .field("trackId", json!(&entry.track_id))
+            .field("restoredDb", json!(restored_db))
+            .field("restoredFile", json!(restored_file))
+            .field("warningCount", json!(warnings.len())),
+    );
+    Ok(MusicTagRollbackResult {
+        rolled_back_audit_id: entry.id,
+        created_audit_id,
+        track_id: entry.track_id,
+        restored_db,
+        restored_file,
+        db_result,
+        warnings,
+    })
 }
 
 pub fn read_local_tags<R: Runtime>(
@@ -268,6 +425,7 @@ pub fn read_local_tags<R: Runtime>(
 pub fn read_local_tags_from_path(file_path: &str) -> Result<MusicTagReadLocalResult, String> {
     read_local_tags_inner(MusicTagReadLocalRequest {
         file_path: file_path.to_string(),
+        include_cover: Some(false),
     })
 }
 
@@ -299,6 +457,16 @@ pub fn search_candidates(
     let limit = request.limit.unwrap_or(8).clamp(1, 20) as usize;
     let include_network = request.include_network.unwrap_or(true);
     let include_lyrics = request.include_lyrics.unwrap_or(true);
+    let requested_provider_ids = request
+        .provider_ids
+        .as_ref()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| normalize_text(value).map(str::to_string))
+                .collect::<std::collections::BTreeSet<_>>()
+        })
+        .filter(|values| !values.is_empty());
     let seed_metadata = metadata_from_candidate_request(&request);
 
     let mut candidates = Vec::new();
@@ -306,32 +474,50 @@ pub fn search_candidates(
     let mut warnings = Vec::new();
     let mut lyrics_resolution = None;
 
-    if include_network {
-        searched_providers.push("musicbrainz".to_string());
-        match search_musicbrainz_candidates(&request, &seed_metadata, limit, fetched_at_ms) {
-            Ok(mut items) => candidates.append(&mut items),
-            Err(error) => warnings.push(format!("musicbrainz: {error}")),
+    for provider in providers::builtin_providers() {
+        let descriptor = provider.descriptor();
+        if !descriptor.enabled {
+            continue;
+        }
+        if requested_provider_ids
+            .as_ref()
+            .is_some_and(|ids| !ids.contains(descriptor.id.as_str()))
+        {
+            continue;
+        }
+        if descriptor.id == "lyrics" && !include_lyrics {
+            continue;
+        }
+        if descriptor.requires_network && descriptor.id != "lyrics" && !include_network {
+            continue;
         }
 
-        searched_providers.push("acoustid".to_string());
-        match search_acoustid_candidates(&request, &seed_metadata, limit, fetched_at_ms) {
-            Ok(mut items) => candidates.append(&mut items),
-            Err(error) => warnings.push(format!("acoustid: {error}")),
-        }
-    }
-
-    if include_lyrics {
-        searched_providers.push("lyrics".to_string());
-        match resolve_lyrics_candidate(app, &request, &seed_metadata, fetched_at_ms) {
-            Ok((summary, candidate)) => {
-                lyrics_resolution = summary;
-                if let Some(candidate) = candidate {
-                    candidates.push(candidate);
+        searched_providers.push(descriptor.id.clone());
+        let context = providers::ProviderSearchContext {
+            app,
+            request: &request,
+            metadata: &seed_metadata,
+            limit,
+            fetched_at_ms,
+        };
+        match provider.search(&context) {
+            Ok(mut output) => {
+                candidates.append(&mut output.candidates);
+                if output.lyrics_resolution.is_some() {
+                    lyrics_resolution = output.lyrics_resolution;
                 }
             }
-            Err(error) => warnings.push(format!("lyrics: {error}")),
+            Err(error) => warnings.push(format!("{}: {error}", descriptor.id)),
         }
     }
+
+    candidates.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    candidates.truncate(limit.saturating_mul(searched_providers.len().max(1)));
 
     if let Some(track_id) = request.track_id.as_deref().and_then(normalize_text) {
         let persist_inputs = candidates
@@ -387,6 +573,7 @@ fn db_patch_request_to_input(
         tag_source: request.tag_source,
         tag_confidence: request.tag_confidence,
         expected_mtime_ms: request.expected_mtime_ms,
+        restore_null_fields: false,
     })
 }
 
@@ -557,6 +744,7 @@ fn search_musicbrainz_candidates(
             provider_entity_type: "recording".to_string(),
             provider_entity_id: Some(recording_id),
             metadata: candidate_metadata,
+            artwork_url: None,
             score,
             confidence: confidence_from_score(score).to_string(),
             reasons: vec!["musicbrainz-recording-search".to_string()],
@@ -567,6 +755,152 @@ fn search_musicbrainz_candidates(
     }
 
     Ok(candidates)
+}
+
+fn search_netease_candidates(
+    request: &MusicTagCandidateSearchRequest,
+    metadata: &MusicTagCanonicalMetadata,
+    limit: usize,
+    fetched_at_ms: i64,
+) -> Result<Vec<MusicTagCandidate>, String> {
+    let query = [metadata.title.as_deref(), metadata.artist.as_deref()]
+        .into_iter()
+        .flatten()
+        .filter_map(normalize_text)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if query.is_empty() {
+        return Err("metadata text is required".to_string());
+    }
+
+    let mut url = reqwest::Url::parse("https://music.163.com/api/search/get")
+        .map_err(|error| format!("build NetEase Cloud Music URL failed: {error}"))?;
+    url.query_pairs_mut()
+        .append_pair("s", query.as_str())
+        .append_pair("type", "1")
+        .append_pair("offset", "0")
+        .append_pair("limit", limit.to_string().as_str());
+
+    let payload: JsonValue = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|error| format!("build NetEase Cloud Music client failed: {error}"))?
+        .get(url)
+        .header(
+            reqwest::header::USER_AGENT,
+            "PixelMatrixPlayer/0.1 (music-tag-workbench)",
+        )
+        .send()
+        .map_err(|error| format!("NetEase Cloud Music request failed: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("NetEase Cloud Music response failed: {error}"))?
+        .json()
+        .map_err(|error| format!("NetEase Cloud Music JSON parse failed: {error}"))?;
+
+    let songs = payload
+        .get("result")
+        .and_then(|value| value.get("songs"))
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "NetEase Cloud Music response has no songs".to_string())?;
+
+    let expected_title = metadata
+        .title
+        .as_deref()
+        .and_then(normalize_text)
+        .map(|value| value.to_lowercase());
+    let expected_artist = metadata
+        .artist
+        .as_deref()
+        .and_then(normalize_text)
+        .map(|value| value.to_lowercase());
+    let mut candidates = Vec::new();
+
+    for (index, song) in songs.iter().take(limit).enumerate() {
+        let Some(entity_id) = song.get("id").and_then(|value| {
+            value
+                .as_i64()
+                .map(|id| id.to_string())
+                .or_else(|| json_string(value))
+        }) else {
+            continue;
+        };
+        let title = song.get("name").and_then(json_string);
+        let artist = song
+            .get("artists")
+            .and_then(|value| value.as_array())
+            .map(|artists| {
+                artists
+                    .iter()
+                    .filter_map(|artist| artist.get("name").and_then(json_string))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .and_then(normalize_owned_text);
+        let album_value = song.get("album");
+        let album = album_value
+            .and_then(|value| value.get("name"))
+            .and_then(json_string);
+        let artwork_url = album_value
+            .and_then(|value| value.get("picUrl").or_else(|| value.get("blurPicUrl")))
+            .and_then(json_string);
+        let score = score_text_candidate(
+            expected_title.as_deref(),
+            expected_artist.as_deref(),
+            title.as_deref(),
+            artist.as_deref(),
+            index,
+        );
+        let candidate_metadata = MusicTagCanonicalMetadata {
+            title,
+            artist,
+            album,
+            ..MusicTagCanonicalMetadata::default()
+        };
+        candidates.push(MusicTagCandidate {
+            id: candidate_id(
+                request.track_id.as_deref(),
+                "netease-cloud",
+                Some(entity_id.as_str()),
+                &candidate_metadata,
+            ),
+            provider: "netease-cloud".to_string(),
+            provider_entity_type: "song".to_string(),
+            provider_entity_id: Some(entity_id),
+            metadata: candidate_metadata,
+            artwork_url,
+            score,
+            confidence: confidence_from_score(score).to_string(),
+            reasons: vec!["netease-cloud-song-search".to_string()],
+            warnings: Vec::new(),
+            fetched_at_ms,
+            expires_at_ms: Some(fetched_at_ms + 7 * 24 * 60 * 60 * 1000),
+        });
+    }
+
+    Ok(candidates)
+}
+
+fn score_text_candidate(
+    expected_title: Option<&str>,
+    expected_artist: Option<&str>,
+    title: Option<&str>,
+    artist: Option<&str>,
+    rank: usize,
+) -> f64 {
+    let title = title.map(str::to_lowercase);
+    let artist = artist.map(str::to_lowercase);
+    let mut score: f64 = 0.45 + 0.2 / (rank as f64 + 1.0);
+    if expected_title.is_some() && expected_title == title.as_deref() {
+        score += 0.25;
+    }
+    if expected_artist.is_some()
+        && artist
+            .as_deref()
+            .is_some_and(|value| value.contains(expected_artist.unwrap_or_default()))
+    {
+        score += 0.15;
+    }
+    score.clamp(0.0, 0.99)
 }
 
 fn search_acoustid_candidates(
@@ -672,6 +1006,7 @@ fn search_acoustid_candidates(
             provider_entity_type: "recording".to_string(),
             provider_entity_id,
             metadata: candidate_metadata,
+            artwork_url: None,
             score,
             confidence: confidence_from_score(score).to_string(),
             reasons: vec!["acoustid-lookup".to_string()],
@@ -784,6 +1119,7 @@ fn resolve_lyrics_candidate(
         provider_entity_type: "lyrics".to_string(),
         provider_entity_id: Some(document.id),
         metadata: candidate_metadata,
+        artwork_url: None,
         score,
         confidence: confidence_from_score(score).to_string(),
         reasons: vec![format!(
@@ -981,6 +1317,11 @@ fn read_local_tags_inner(
         .collect::<Vec<_>>();
     let extracted = extract_metadata_from_tags(tags);
     let field_count = extracted.filled_field_count();
+    let embedded_cover = if request.include_cover.unwrap_or(false) {
+        extract_embedded_cover(tags, &mut warnings)
+    } else {
+        None
+    };
 
     Ok(MusicTagReadLocalResult {
         file_path: file_path.to_string(),
@@ -991,9 +1332,71 @@ fn read_local_tags_inner(
         tag_types,
         field_count,
         metadata: extracted,
+        embedded_cover,
         warnings,
         read_at_ms: now_ms(),
     })
+}
+
+fn extract_embedded_cover(
+    tags: &[Tag],
+    warnings: &mut Vec<String>,
+) -> Option<MusicTagEmbeddedCover> {
+    const MAX_EMBEDDED_COVER_BYTES: usize = 8 * 1024 * 1024;
+
+    let mut first_picture = None;
+    let mut front_cover = None;
+    for tag in tags {
+        for picture in tag.pictures() {
+            if first_picture.is_none() {
+                first_picture = Some(picture);
+            }
+            if picture.pic_type() == lofty::picture::PictureType::CoverFront {
+                front_cover = Some(picture);
+                break;
+            }
+        }
+        if front_cover.is_some() {
+            break;
+        }
+    }
+
+    let picture = front_cover.or(first_picture)?;
+    let data = picture.data();
+    if data.is_empty() {
+        warnings.push("embedded-cover-empty".to_string());
+        return None;
+    }
+    if data.len() > MAX_EMBEDDED_COVER_BYTES {
+        warnings.push("embedded-cover-too-large".to_string());
+        return None;
+    }
+
+    let mime_type = picture
+        .mime_type()
+        .map(|value| value.as_str().to_string())
+        .unwrap_or_else(|| infer_embedded_cover_mime(data).to_string());
+    use base64::Engine;
+    Some(MusicTagEmbeddedCover {
+        mime_type,
+        data_base64: base64::engine::general_purpose::STANDARD.encode(data),
+        byte_length: data.len() as u64,
+        picture_type: format!("{:?}", picture.pic_type()),
+    })
+}
+
+fn infer_embedded_cover_mime(data: &[u8]) -> &'static str {
+    if data.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "image/png"
+    } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "image/jpeg"
+    } else if data.starts_with(b"GIF8") {
+        "image/gif"
+    } else if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WEBP") {
+        "image/webp"
+    } else {
+        "application/octet-stream"
+    }
 }
 
 fn extract_metadata_from_tags(tags: &[Tag]) -> MusicTagCanonicalMetadata {
@@ -1350,11 +1753,45 @@ fn system_time_to_millis(time: SystemTime) -> i64 {
         .unwrap_or(0)
 }
 
-pub fn write_file_tags<R: Runtime>(
-    app: &AppHandle<R>,
+pub fn write_file_tags(
+    app: &AppHandle,
     request: MusicTagWriteFileRequest,
 ) -> Result<MusicTagWriteFileResult, String> {
-    let result = write_file_tags_inner(&request);
+    let before = read_local_tags_inner(MusicTagReadLocalRequest {
+        file_path: request.file_path.clone(),
+        include_cover: Some(false),
+    })
+    .ok();
+    let mut result = write_file_tags_inner(&request);
+    if let (Ok(output), Some(track_id), Some(before)) = (
+        result.as_mut(),
+        request.track_id.as_deref().and_then(normalize_text),
+        before,
+    ) {
+        if let Ok(after) = read_local_tags_inner(MusicTagReadLocalRequest {
+            file_path: request.file_path.clone(),
+            include_cover: Some(false),
+        }) {
+            let changes = metadata_changes(&before.metadata, &after.metadata);
+            match music_library_db::record_music_tag_file_audit(
+                app,
+                music_library_db::MusicTagFileAuditInput {
+                    track_id: track_id.to_string(),
+                    file_path: request.file_path.clone(),
+                    before_file: serde_json::to_value(&before.metadata).unwrap_or(JsonValue::Null),
+                    after_file: serde_json::to_value(&after.metadata).unwrap_or(JsonValue::Null),
+                    changed_fields: changes,
+                    file_mtime_before_ms: Some(before.mtime_ms),
+                    file_mtime_after_ms: Some(after.mtime_ms),
+                    status: "applied".to_string(),
+                    applied_by: "user".to_string(),
+                },
+            ) {
+                Ok(audit_id) => output.audit_id = Some(audit_id),
+                Err(error) => output.warnings.push(format!("audit: {error}")),
+            }
+        }
+    }
     match &result {
         Ok(result) => {
             backend_telemetry::info(
@@ -1382,6 +1819,48 @@ pub fn write_file_tags<R: Runtime>(
         }
     }
     result
+}
+
+fn metadata_changes(
+    before: &MusicTagCanonicalMetadata,
+    after: &MusicTagCanonicalMetadata,
+) -> Vec<music_library_db::MusicTagDbFieldChangeRecord> {
+    let before = serde_json::to_value(before).unwrap_or(JsonValue::Null);
+    let after = serde_json::to_value(after).unwrap_or(JsonValue::Null);
+    let Some(before) = before.as_object() else {
+        return Vec::new();
+    };
+    let Some(after) = after.as_object() else {
+        return Vec::new();
+    };
+    let fields = before
+        .keys()
+        .chain(after.keys())
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    fields
+        .into_iter()
+        .filter_map(|field| {
+            let before_value = before
+                .get(field.as_str())
+                .cloned()
+                .unwrap_or(JsonValue::Null);
+            let after_value = after
+                .get(field.as_str())
+                .cloned()
+                .unwrap_or(JsonValue::Null);
+            if before_value == after_value {
+                return None;
+            }
+            Some(music_library_db::MusicTagDbFieldChangeRecord {
+                field: field.clone(),
+                column_name: field,
+                before: before_value,
+                after: after_value,
+                locked: false,
+            })
+        })
+        .collect()
 }
 
 pub fn search_cover_art(
@@ -1448,7 +1927,9 @@ pub fn download_cover_art<R: Runtime>(
     result
 }
 
-fn write_file_tags_inner(request: &MusicTagWriteFileRequest) -> Result<MusicTagWriteFileResult, String> {
+fn write_file_tags_inner(
+    request: &MusicTagWriteFileRequest,
+) -> Result<MusicTagWriteFileResult, String> {
     let file_path = request.file_path.trim();
     if file_path.is_empty() {
         return Err("music tag file write requires file_path".to_string());
@@ -1482,30 +1963,31 @@ fn write_file_tags_inner(request: &MusicTagWriteFileRequest) -> Result<MusicTagW
         .tag_mut(target_tag_type)
         .ok_or_else(|| "Failed to acquire mutable tag reference".to_string())?;
 
+    if request.replace_all.unwrap_or(false) {
+        clear_supported_metadata(tag);
+    }
     let fields_written = set_metadata_to_tag(tag, &request.metadata);
 
     let mut warnings = Vec::new();
 
     if request.write_cover.unwrap_or(false) {
-        if let Some(ref cover_b64) = request.cover_data_base64 {
-            match base64_decode(cover_b64) {
-                Ok(data) => {
-                    let mime = request
-                        .cover_mime_type
-                        .as_deref()
-                        .unwrap_or("image/jpeg");
-                    let picture = lofty::picture::Picture::new_unchecked(
-                        lofty::picture::PictureType::CoverFront,
-                        Some(lofty::picture::MimeType::from_str(mime)),
-                        None,
-                        data,
-                    );
-                    tag.push_picture(picture);
-                }
-                Err(error) => {
-                    warnings.push(format!("cover-decode-failed: {error}"));
-                }
+        match load_cover_bytes(request) {
+            Ok(Some((data, detected_mime))) => {
+                let mime = request
+                    .cover_mime_type
+                    .as_deref()
+                    .or(detected_mime.as_deref())
+                    .unwrap_or("image/jpeg");
+                let picture = lofty::picture::Picture::new_unchecked(
+                    lofty::picture::PictureType::CoverFront,
+                    Some(lofty::picture::MimeType::from_str(mime)),
+                    None,
+                    data,
+                );
+                tag.push_picture(picture);
             }
+            Ok(None) => warnings.push("cover-data-missing".to_string()),
+            Err(error) => warnings.push(format!("cover-load-failed: {error}")),
         }
     }
 
@@ -1515,14 +1997,22 @@ fn write_file_tags_inner(request: &MusicTagWriteFileRequest) -> Result<MusicTagW
 
     let fs_meta_after = std::fs::metadata(path)
         .map_err(|error| format!("Unable to inspect file after tag write: {error}"))?;
-    let mtime_after_ms = fs_meta_after.modified().map(system_time_to_millis).unwrap_or(0);
+    let mtime_after_ms = fs_meta_after
+        .modified()
+        .map(system_time_to_millis)
+        .unwrap_or(0);
 
-    let verified = verify_written_tags(path, &request.metadata);
+    let verified = verify_written_tags(
+        path,
+        &request.metadata,
+        request.replace_all.unwrap_or(false),
+    );
     if !verified {
         warnings.push("verification-partial".to_string());
     }
 
     Ok(MusicTagWriteFileResult {
+        audit_id: None,
         file_path: file_path.to_string(),
         format,
         fields_written,
@@ -1531,6 +2021,58 @@ fn write_file_tags_inner(request: &MusicTagWriteFileRequest) -> Result<MusicTagW
         verified,
         warnings,
     })
+}
+
+fn load_cover_bytes(
+    request: &MusicTagWriteFileRequest,
+) -> Result<Option<(Vec<u8>, Option<String>)>, String> {
+    if let Some(cover_b64) = request
+        .cover_data_base64
+        .as_deref()
+        .and_then(normalize_text)
+    {
+        let payload = cover_b64
+            .split_once(",")
+            .filter(|(prefix, _)| prefix.starts_with("data:"))
+            .map(|(_, payload)| payload)
+            .unwrap_or(cover_b64);
+        return base64_decode(payload).map(|data| Some((data, None)));
+    }
+    let Some(cover_url) = request.cover_url.as_deref().and_then(normalize_text) else {
+        return Ok(None);
+    };
+    let response = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|error| format!("build cover client failed: {error}"))?
+        .get(cover_url)
+        .header(
+            reqwest::header::USER_AGENT,
+            "PixelMatrixPlayer/0.1 (music-tag-workbench)",
+        )
+        .send()
+        .map_err(|error| format!("cover request failed: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("cover response failed: {error}"))?;
+    if response
+        .content_length()
+        .is_some_and(|size| size > 15 * 1024 * 1024)
+    {
+        return Err("cover image exceeds 15 MiB".to_string());
+    }
+    let mime = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let data = response
+        .bytes()
+        .map_err(|error| format!("read cover response failed: {error}"))?
+        .to_vec();
+    if data.len() > 15 * 1024 * 1024 {
+        return Err("cover image exceeds 15 MiB".to_string());
+    }
+    Ok(Some((data, mime)))
 }
 
 fn preferred_tag_type(file_type: FileType) -> TagType {
@@ -1604,9 +2146,15 @@ fn set_metadata_to_tag(tag: &mut Tag, metadata: &MusicTagCanonicalMetadata) -> u
     set_text!(metadata.lyrics, ItemKey::Lyrics);
     set_text!(metadata.mbid_recording, ItemKey::MusicBrainzRecordingId);
     set_text!(metadata.mbid_release, ItemKey::MusicBrainzReleaseId);
-    set_text!(metadata.mbid_release_group, ItemKey::MusicBrainzReleaseGroupId);
+    set_text!(
+        metadata.mbid_release_group,
+        ItemKey::MusicBrainzReleaseGroupId
+    );
     set_text!(metadata.mbid_artist, ItemKey::MusicBrainzArtistId);
-    set_text!(metadata.mbid_album_artist, ItemKey::MusicBrainzReleaseArtistId);
+    set_text!(
+        metadata.mbid_album_artist,
+        ItemKey::MusicBrainzReleaseArtistId
+    );
 
     if let Some(ref acoustid_value) = metadata.acoustid {
         let trimmed = acoustid_value.trim();
@@ -1622,12 +2170,59 @@ fn set_metadata_to_tag(tag: &mut Tag, metadata: &MusicTagCanonicalMetadata) -> u
     count
 }
 
-fn verify_written_tags(path: &Path, expected: &MusicTagCanonicalMetadata) -> bool {
+fn clear_supported_metadata(tag: &mut Tag) {
+    let keys = [
+        ItemKey::TrackTitle,
+        ItemKey::TrackArtist,
+        ItemKey::AlbumTitle,
+        ItemKey::AlbumArtist,
+        ItemKey::Genre,
+        ItemKey::Year,
+        ItemKey::RecordingDate,
+        ItemKey::OriginalReleaseDate,
+        ItemKey::TrackNumber,
+        ItemKey::TrackTotal,
+        ItemKey::DiscNumber,
+        ItemKey::DiscTotal,
+        ItemKey::Composer,
+        ItemKey::Lyricist,
+        ItemKey::Conductor,
+        ItemKey::Arranger,
+        ItemKey::Label,
+        ItemKey::CatalogNumber,
+        ItemKey::Barcode,
+        ItemKey::Isrc,
+        ItemKey::Bpm,
+        ItemKey::InitialKey,
+        ItemKey::Language,
+        ItemKey::Comment,
+        ItemKey::Lyrics,
+        ItemKey::MusicBrainzRecordingId,
+        ItemKey::MusicBrainzReleaseId,
+        ItemKey::MusicBrainzReleaseGroupId,
+        ItemKey::MusicBrainzArtistId,
+        ItemKey::MusicBrainzReleaseArtistId,
+        ItemKey::Unknown("ACOUSTID_ID".to_string()),
+    ];
+    for key in keys {
+        tag.remove_key(&key);
+    }
+}
+
+fn verify_written_tags(
+    path: &Path,
+    expected: &MusicTagCanonicalMetadata,
+    replace_all: bool,
+) -> bool {
     let Ok(tagged_file) = read_from_path(path) else {
         return false;
     };
     let tags = tagged_file.tags();
     let actual = extract_metadata_from_tags(tags);
+
+    if replace_all {
+        return &actual == expected;
+    }
 
     let mut verified = true;
     if expected.title.is_some() && actual.title != expected.title {
@@ -1696,11 +2291,19 @@ fn search_cover_art_inner(request: &CoverArtSearchRequest) -> Result<CoverArtSea
 
             let thumbnail_url = image
                 .get("thumbnails")
-                .and_then(|t| t.get("500").or_else(|| t.get("large")).or_else(|| t.get("small")))
+                .and_then(|t| {
+                    t.get("500")
+                        .or_else(|| t.get("large"))
+                        .or_else(|| t.get("small"))
+                })
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
-            let cover_type = if image.get("front").and_then(|v| v.as_bool()).unwrap_or(false) {
+            let cover_type = if image
+                .get("front")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 "front".to_string()
             } else if image.get("back").and_then(|v| v.as_bool()).unwrap_or(false) {
                 "back".to_string()
@@ -1758,7 +2361,10 @@ fn download_cover_art_inner<R: Runtime>(
         .map_err(|error| format!("Cover art download failed: {error}"))?;
 
     if !response.status().is_success() {
-        return Err(format!("Cover art download returned status {}", response.status()));
+        return Err(format!(
+            "Cover art download returned status {}",
+            response.status()
+        ));
     }
 
     let content_type = response
@@ -1877,8 +2483,7 @@ fn generate_chromaprint_inner(request: &ChromaprintRequest) -> Result<Chromaprin
     let file_path = &request.file_path;
     let max_duration = request.max_duration_seconds.unwrap_or(120.0);
 
-    let file = std::fs::File::open(file_path)
-        .map_err(|e| format!("open file failed: {e}"))?;
+    let file = std::fs::File::open(file_path).map_err(|e| format!("open file failed: {e}"))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
@@ -2030,7 +2635,10 @@ struct ChromaprintBitWriter {
 
 impl ChromaprintBitWriter {
     fn new() -> Self {
-        Self { bytes: Vec::new(), bit_count: 0 }
+        Self {
+            bytes: Vec::new(),
+            bit_count: 0,
+        }
     }
 
     fn write_bits(&mut self, mut value: u32, num_bits: u32) {
@@ -2126,9 +2734,9 @@ struct BatchJob {
     cancel: Arc<AtomicBool>,
 }
 
+use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use once_cell::sync::Lazy;
 
 static BATCH_STATE: Lazy<Mutex<MusicTagBatchState>> = Lazy::new(|| {
     Mutex::new(MusicTagBatchState {
@@ -2154,10 +2762,7 @@ pub fn start_batch_job(app: &AppHandle, request: MusicTagBatchRequest) -> Result
         }
     }
 
-    let run_id = format!(
-        "batch-{}",
-        BATCH_NONCE.fetch_add(1, Ordering::Relaxed)
-    );
+    let run_id = format!("batch-{}", BATCH_NONCE.fetch_add(1, Ordering::Relaxed));
 
     let total = request.items.len() as u32;
     let mode = request.mode.clone();
@@ -2179,7 +2784,9 @@ pub fn start_batch_job(app: &AppHandle, request: MusicTagBatchRequest) -> Result
     let cancel = Arc::new(AtomicBool::new(false));
     {
         let mut guard = BATCH_JOB.lock().unwrap_or_else(|p| p.into_inner());
-        *guard = Some(BatchJob { cancel: cancel.clone() });
+        *guard = Some(BatchJob {
+            cancel: cancel.clone(),
+        });
     }
 
     let app_handle = app.clone();
@@ -2255,14 +2862,20 @@ fn run_batch_job(
             MusicTagBatchMode::WriteFile => {}
         }
 
-        if matches!(mode, MusicTagBatchMode::WriteFile | MusicTagBatchMode::ApplyAndWrite) {
+        if matches!(
+            mode,
+            MusicTagBatchMode::WriteFile | MusicTagBatchMode::ApplyAndWrite
+        ) {
             let write_request = MusicTagWriteFileRequest {
+                track_id: Some(item.track_id.clone()),
                 file_path: item.file_path.clone(),
                 metadata: item.source_metadata.clone(),
                 expected_mtime_ms: item.expected_mtime_ms.unwrap_or(0),
                 write_cover: None,
                 cover_data_base64: None,
+                cover_url: None,
                 cover_mime_type: None,
+                replace_all: None,
             };
             match write_file_tags(app, write_request) {
                 Ok(_) => {
@@ -2339,14 +2952,18 @@ pub fn cancel_batch_job() -> Result<bool, String> {
 }
 
 pub fn get_batch_state() -> MusicTagBatchState {
-    BATCH_STATE.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    BATCH_STATE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
 }
 
 #[cfg(test)]
 mod tests {
+    use lofty::picture::{MimeType, Picture, PictureType};
     use lofty::tag::{ItemKey, ItemValue, Tag, TagItem, TagType};
 
-    use super::{extract_metadata_from_tags, parse_position_pair, parse_year};
+    use super::{extract_embedded_cover, extract_metadata_from_tags, parse_position_pair, parse_year};
 
     #[test]
     fn parses_position_pair() {
@@ -2394,5 +3011,23 @@ mod tests {
 
         let metadata = extract_metadata_from_tags(&[tag]);
         assert_eq!(metadata.acoustid.as_deref(), Some("acoustid-1"));
+    }
+
+    #[test]
+    fn extracts_front_cover_as_base64() {
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.push_picture(Picture::new_unchecked(
+            PictureType::CoverFront,
+            Some(MimeType::Jpeg),
+            None,
+            vec![0xFF, 0xD8, 0xFF, 0x01],
+        ));
+
+        let mut warnings = Vec::new();
+        let cover = extract_embedded_cover(&[tag], &mut warnings).expect("cover");
+        assert_eq!(cover.mime_type, "image/jpeg");
+        assert_eq!(cover.byte_length, 4);
+        assert_eq!(cover.data_base64, "/9j/AQ==");
+        assert!(warnings.is_empty());
     }
 }

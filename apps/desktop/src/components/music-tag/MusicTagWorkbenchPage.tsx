@@ -5,6 +5,8 @@ import {
   AlertCircle,
   BadgeCheck,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Database,
   Eye,
   FileAudio,
@@ -13,15 +15,18 @@ import {
   Library,
   ListChecks,
   Loader2,
+  LockOpen,
   LockKeyhole,
+  History,
   Music2,
   Network,
-  Pencil,
   Save,
   Search,
   ShieldCheck,
   Tags,
   TextQuote,
+  RotateCcw,
+  Trash2,
 } from 'lucide-react';
 import type {
   CoverArtCandidate,
@@ -31,12 +36,14 @@ import type {
   MusicTagCanonicalMetadata,
   MusicTagDbPatchRequest,
   MusicTagDbPatchResult,
+  MusicTagHistoryEntry,
   MusicTagMetadataFieldKey,
+  MusicTagMetadataProviderDescriptor,
   MusicTagReadLocalResult,
   MusicTagWriteFileResult,
 } from '../../contracts/musicTag';
 import { useAudioService } from '../../contexts/AudioEngineContext';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import {
@@ -49,17 +56,30 @@ import {
   applyMusicTagDbPatch,
   cancelMusicTagBatch,
   generateChromaprint,
+  listMusicTagHistory,
+  listMusicTagMetadataProviders,
   previewMusicTagDbPatch,
   readLocalMusicTags,
+  rollbackMusicTagHistory,
   searchCoverArtCandidates,
   searchMusicTagCandidates,
   startMusicTagBatch,
   writeMusicTagFileTags,
 } from '../../modules/music-tag/nativeMusicTag';
+import {
+  clearMusicTagWorkbenchQueue,
+  readMusicTagWorkbenchDraft,
+  readMusicTagWorkbenchDrafts,
+  readMusicTagWorkbenchQueue,
+  removeMusicTagWorkbenchTrack,
+  writeMusicTagWorkbenchDraft,
+} from '../../modules/music-tag/workbenchQueue';
 import type { Track } from '../../services/audio';
 import { COMMANDS_SERVICE_TOKEN, dispatchCommandOrFallback } from '../../services/commands';
 import { broadcastDataUpdate } from '../../utils/windowCommunication';
+import { isTauriRuntime } from '../../utils/tauriRuntime';
 import './MusicTagWorkbenchPage.css';
+import './MusicTagWorkbenchReference.css';
 
 type LocalTagReadState = 'idle' | 'loading' | 'ready' | 'error';
 type CompareState = 'same' | 'different' | 'missingDb' | 'missingFile' | 'missingBoth';
@@ -69,6 +89,7 @@ type DbPatchState = 'idle' | 'previewing' | 'ready' | 'applying' | 'applied' | '
 type CandidateState = 'idle' | 'searching' | 'ready' | 'error';
 type WriteFileState = 'idle' | 'writing' | 'done' | 'error';
 type CoverArtState = 'idle' | 'searching' | 'ready' | 'error';
+type WorkbenchTool = 'match' | 'cover' | 'lyrics' | 'history';
 
 interface MusicTagWorkbenchPageProps {
   trackIds?: string[];
@@ -236,6 +257,10 @@ const LOCK_FIELD_OPTIONS: LockFieldOption[] = [
     labelKey: 'pages.musicTagWorkbench.fields.composer',
   },
   {
+    key: 'comment',
+    labelKey: 'pages.musicTagWorkbench.fields.comment',
+  },
+  {
     key: 'isrc',
     labelKey: 'pages.musicTagWorkbench.fields.isrc',
   },
@@ -253,7 +278,11 @@ const LOCK_FIELD_OPTIONS: LockFieldOption[] = [
   },
 ];
 
-const BATCH_PREVIEW_LIMIT = 50;
+const EDITOR_FIELD_OPTIONS = LOCK_FIELD_OPTIONS.filter(
+  (field) => field.key !== 'mbidRecording' && field.key !== 'acoustid'
+);
+
+const BATCH_PREVIEW_LIMIT = 200;
 
 function hasText(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0;
@@ -436,6 +465,9 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
   const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const navigation = useNavigation();
   const t = useT();
+  const [workbenchTrackIds, setWorkbenchTrackIds] = useState<string[]>(
+    () => (trackIds?.length ? trackIds : readMusicTagWorkbenchQueue())
+  );
   const [track, setTrack] = useState<Track | null>(() => audioService.getState().currentTrack);
   const [localTagState, setLocalTagState] = useState<LocalTagReadState>('idle');
   const [localTagResult, setLocalTagResult] = useState<MusicTagReadLocalResult | null>(null);
@@ -454,6 +486,8 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
   const [candidateResult, setCandidateResult] = useState<MusicTagCandidateSearchResult | null>(null);
   const [candidateError, setCandidateError] = useState<string | null>(null);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const [providers, setProviders] = useState<MusicTagMetadataProviderDescriptor[]>([]);
+  const [selectedProviderIds, setSelectedProviderIds] = useState<Set<string>>(new Set());
   const [includeNetworkCandidates, setIncludeNetworkCandidates] = useState(true);
   const [includeLyricsCandidates, setIncludeLyricsCandidates] = useState(true);
   const [acoustidFingerprint, setAcoustidFingerprint] = useState('');
@@ -461,7 +495,6 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
   const [chromaprintState, setChromaprintState] = useState<'idle' | 'generating' | 'ready' | 'error'>('idle');
 
   const [manualEdits, setManualEdits] = useState<Partial<MusicTagCanonicalMetadata>>({});
-  const [editingField, setEditingField] = useState<MusicTagMetadataFieldKey | null>(null);
   const [selectedPatchFields, setSelectedPatchFields] = useState<Set<MusicTagMetadataFieldKey>>(
     () => new Set(COMPARISON_FIELDS.map((f) => f.key))
   );
@@ -477,31 +510,107 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
   const [lyricsExpanded, setLyricsExpanded] = useState(false);
   const [batchApplyState, setBatchApplyState] = useState<'idle' | 'running' | 'done' | 'cancelled' | 'error'>('idle');
   const [batchApplyProgress, setBatchApplyProgress] = useState<MusicTagBatchProgressPayload | null>(null);
-  const editInputRef = useRef<HTMLInputElement>(null);
+  const [historyEntries, setHistoryEntries] = useState<MusicTagHistoryEntry[]>([]);
+  const [historyState, setHistoryState] = useState<'idle' | 'loading' | 'ready' | 'error' | 'rolling-back'>('idle');
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [activeTool, setActiveTool] = useState<WorkbenchTool>('match');
+  const [isQueueCollapsed, setIsQueueCollapsed] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches
+  );
+  const [draftHydratedTrackId, setDraftHydratedTrackId] = useState<string | null>(null);
+  const localReadRequestIdRef = useRef(0);
 
   useEffect(() => {
-    if (trackIds && trackIds.length > 0) return;
+    const mediaQuery = window.matchMedia('(max-width: 900px)');
+    const handleBreakpointChange = (event: MediaQueryListEvent) => {
+      setIsQueueCollapsed(event.matches);
+    };
+    mediaQuery.addEventListener('change', handleBreakpointChange);
+    return () => mediaQuery.removeEventListener('change', handleBreakpointChange);
+  }, []);
+
+  const selectedBatchRow = useMemo(
+    () => batchRows.find((row) => row.track.id === selectedBatchTrackId) ?? null,
+    [batchRows, selectedBatchTrackId]
+  );
+  const activeDbTrack = selectedBatchRow?.track ?? currentDbTrack;
+  const activeFilePath = useMemo(
+    () => activeDbTrack ? readNativeTrackFilePath(activeDbTrack) : readTrackFilePath(track),
+    [activeDbTrack, track]
+  );
+
+  useEffect(() => {
+    if (!trackIds?.length) return;
+    setWorkbenchTrackIds(Array.from(new Set(trackIds.map((id) => id.trim()).filter(Boolean))));
+  }, [trackIds]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listMusicTagMetadataProviders()
+      .then((items) => {
+        if (cancelled) return;
+        setProviders(items);
+        setSelectedProviderIds(
+          new Set(
+            items
+              .filter((provider) => provider.enabled && !provider.requiresApiKey)
+              .map((provider) => provider.id)
+          )
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setProviders([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (workbenchTrackIds.length > 0) return;
     setTrack(audioService.getState().currentTrack);
     return audioService.onStateChange((state) => {
       setTrack(state.currentTrack);
     });
-  }, [audioService, trackIds]);
+  }, [audioService, workbenchTrackIds.length]);
 
   useEffect(() => {
-    if (!trackIds || trackIds.length === 0) return;
+    if (workbenchTrackIds.length === 0) return;
     let cancelled = false;
-    void queryNativeLibraryTracksPage({
-      limit: 1,
-      offset: 0,
-      includeMissing: true,
-      visibleOnly: false,
-      projection: 'full',
-      trackId: trackIds[0],
-    })
-      .then((result) => {
+    const normalizedTrackIds = Array.from(new Set(workbenchTrackIds.map((id) => id.trim()).filter(Boolean))).slice(
+      0,
+      BATCH_PREVIEW_LIMIT
+    );
+    void Promise.all(
+      normalizedTrackIds.map((trackId) =>
+        queryNativeLibraryTracksPage({
+          limit: 1,
+          offset: 0,
+          includeMissing: true,
+          visibleOnly: false,
+          projection: 'full',
+          trackId,
+        })
+      )
+    )
+      .then((results) => {
         if (cancelled) return;
-        const dbTrack = result.items[0] ?? null;
+        const tracks = results
+          .map((result) => result.items[0])
+          .filter((item): item is NativeLibraryTrackRecord => Boolean(item));
+        const dbTrack = tracks[0] ?? null;
         setCurrentDbTrack(dbTrack);
+        setBatchRows(
+          tracks.map((item) => ({
+            track: item,
+            state: 'pending',
+            diffCount: null,
+            fieldCount: null,
+          }))
+        );
+        setBatchTotal(tracks.length);
+        setBatchState(tracks.length > 0 ? 'ready' : 'idle');
+        setSelectedBatchTrackId(tracks[0]?.id ?? null);
         if (dbTrack) {
           setTrack({
             id: dbTrack.id,
@@ -522,25 +631,32 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
         }
       })
       .catch(() => {
-        if (!cancelled) setCurrentDbTrack(null);
+        if (!cancelled) {
+          setCurrentDbTrack(null);
+          setBatchRows([]);
+          setBatchState('error');
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [trackIds]);
+  }, [workbenchTrackIds]);
 
-  const filePath = useMemo(() => readTrackFilePath(track), [track]);
-  const hasLocalFile = isLocalFilePath(filePath);
-  const hasLyrics = hasText(track?.lyrics);
+  const filePath = activeFilePath;
+  const hasLocalFile = isLocalFilePath(activeFilePath);
+  const hasLyrics = hasText(activeDbTrack?.lyrics ?? track?.lyrics);
   const empty = t('pages.musicTagWorkbench.emptyValue');
   const present = t('pages.musicTagWorkbench.value.present');
 
   useEffect(() => {
+    localReadRequestIdRef.current += 1;
     setLocalTagState('idle');
     setLocalTagResult(null);
     setLocalTagError(null);
-    setSelectedBatchTrackId(null);
-  }, [filePath]);
+    if (workbenchTrackIds.length === 0) {
+      setSelectedBatchTrackId(null);
+    }
+  }, [filePath, workbenchTrackIds.length]);
 
   useEffect(() => {
     let cancelled = false;
@@ -574,12 +690,14 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
   }, [track?.id]);
 
   const handleReadLocalTags = useCallback(async () => {
-    if (!hasLocalFile || localTagState === 'loading') return;
+    if (!hasLocalFile) return;
 
+    const requestId = ++localReadRequestIdRef.current;
     setLocalTagState('loading');
     setLocalTagError(null);
     try {
-      const result = await readLocalMusicTags(filePath);
+      const result = await readLocalMusicTags(activeFilePath, { includeCover: true });
+      if (requestId !== localReadRequestIdRef.current) return;
       if (!result) {
         setLocalTagResult(null);
         setLocalTagState('error');
@@ -588,15 +706,44 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
       }
       setLocalTagResult(result);
       setLocalTagState('ready');
+      if (activeDbTrack?.id) {
+        setBatchRows((rows) => rows.map((row) =>
+          row.track.id === activeDbTrack.id
+            ? {
+                ...row,
+                state: 'ready',
+                diffCount: countBatchDiffs(row.track, result),
+                fieldCount: result.fieldCount,
+                localTagResult: result,
+                format: result.format,
+                error: null,
+              }
+            : row
+        ));
+      }
     } catch (error) {
+      if (requestId !== localReadRequestIdRef.current) return;
       setLocalTagResult(null);
       setLocalTagState('error');
       setLocalTagError(readErrorMessage(error));
     }
-  }, [filePath, hasLocalFile, localTagState]);
+  }, [activeDbTrack?.id, activeFilePath, hasLocalFile]);
+
+  useEffect(() => {
+    setSelectedCandidateId(null);
+    setWriteFileState('idle');
+    setWriteFileResult(null);
+    setWriteFileError(null);
+    if (!hasLocalFile) return;
+    void handleReadLocalTags();
+  }, [activeDbTrack?.id, activeFilePath, handleReadLocalTags, hasLocalFile]);
 
   const loadBatchCandidates = useCallback(async (): Promise<BatchPreviewRow[]> => {
     if (batchState === 'loading' || batchState === 'running') return batchRows;
+
+    if (workbenchTrackIds.length > 0 && batchRows.length > 0) {
+      return batchRows;
+    }
 
     setBatchState('loading');
     setBatchError(null);
@@ -634,7 +781,7 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
       setBatchError(readErrorMessage(error));
       return [];
     }
-  }, [batchRows, batchState]);
+  }, [batchRows, batchState, workbenchTrackIds.length]);
 
   const handleRunBatchPreview = useCallback(async () => {
     if (batchState === 'loading' || batchState === 'running') return;
@@ -650,7 +797,7 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
       state: 'pending' as BatchTrackState,
       diffCount: null,
       fieldCount: null,
-      localTagResult: null,
+      localTagResult: row.localTagResult ?? null,
       error: null,
     }));
 
@@ -685,7 +832,7 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
             state: 'error',
             diffCount: null,
             fieldCount: null,
-            localTagResult: null,
+            localTagResult: row.localTagResult ?? null,
             error: 'native-unavailable',
           };
         } else {
@@ -694,7 +841,10 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
             state: 'ready',
             diffCount: countBatchDiffs(row.track, result),
             fieldCount: result.fieldCount,
-            localTagResult: result,
+            localTagResult: {
+              ...result,
+              embeddedCover: result.embeddedCover ?? row.localTagResult?.embeddedCover,
+            },
             format: result.format,
             error: null,
           };
@@ -705,7 +855,7 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
           state: 'error',
           diffCount: null,
           fieldCount: null,
-          localTagResult: null,
+          localTagResult: row.localTagResult ?? null,
           error: readErrorMessage(error),
         };
       }
@@ -715,12 +865,44 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
     setBatchState('done');
   }, [batchRows, batchState, loadBatchCandidates]);
 
-  const selectedBatchRow = useMemo(
-    () => batchRows.find((row) => row.track.id === selectedBatchTrackId) ?? null,
-    [batchRows, selectedBatchTrackId]
-  );
-  const activeDbTrack = selectedBatchRow?.track ?? currentDbTrack;
-  const activeLocalTagResult = selectedBatchRow ? selectedBatchRow.localTagResult ?? null : localTagResult;
+  useEffect(() => {
+    if (workbenchTrackIds.length === 0 || batchState !== 'ready' || batchRows.length === 0) return;
+    void handleRunBatchPreview();
+  }, [batchRows.length, batchState, handleRunBatchPreview, workbenchTrackIds.length]);
+
+  const loadHistory = useCallback(async () => {
+    if (!activeDbTrack?.id) {
+      setHistoryEntries([]);
+      setHistoryState('idle');
+      return;
+    }
+    setHistoryState('loading');
+    setHistoryError(null);
+    try {
+      const result = await listMusicTagHistory({ trackId: activeDbTrack.id, limit: 20 });
+      setHistoryEntries(result?.items ?? []);
+      setHistoryState('ready');
+    } catch (error) {
+      setHistoryEntries([]);
+      setHistoryState('error');
+      setHistoryError(readErrorMessage(error));
+    }
+  }, [activeDbTrack?.id]);
+
+  useEffect(() => {
+    void loadHistory();
+  }, [loadHistory]);
+  const activeLocalTagResult = localTagResult?.filePath === activeFilePath
+    ? localTagResult
+    : selectedBatchRow?.localTagResult?.filePath === activeFilePath
+      ? selectedBatchRow.localTagResult
+      : null;
+  const embeddedCoverUrl = useMemo(() => {
+    const cover = activeLocalTagResult?.embeddedCover;
+    if (!cover?.dataBase64 || !cover.mimeType) return null;
+    return `data:${cover.mimeType};base64,${cover.dataBase64}`;
+  }, [activeLocalTagResult?.embeddedCover]);
+  const persistedDrafts = readMusicTagWorkbenchDrafts();
   const activeSeedMetadata = useMemo(
     () =>
       mergeMetadata(
@@ -741,7 +923,9 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
     return mergeMetadata(manualEdits as MusicTagCanonicalMetadata, base ?? {});
   }, [activeLocalTagResult?.metadata, manualEdits, selectedCandidate?.metadata]);
   const canPreviewDbPatch = Boolean(activeDbTrack?.id && activeSourceMetadata && hasAnyMetadata(activeSourceMetadata));
-  const canSearchCandidates = Boolean(activeDbTrack?.id && hasAnyMetadata(activeSeedMetadata));
+  const canSearchCandidates = Boolean(
+    activeDbTrack?.id && hasAnyMetadata(activeSeedMetadata) && selectedProviderIds.size > 0
+  );
   const activeDbTrackLockedFieldsKey = activeDbTrack?.tagLockedFields?.join('|') ?? '';
   const lockedFieldsKey = lockedFields.join('|');
   const activeDbTrackLockedFields = useMemo(
@@ -753,7 +937,15 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
   );
 
   useEffect(() => {
-    setLockedFields(activeDbTrackLockedFields);
+    const trackId = activeDbTrack?.id?.trim() ?? '';
+    setDraftHydratedTrackId(null);
+    const draft = trackId ? readMusicTagWorkbenchDraft(trackId) : null;
+    setManualEdits(draft?.metadata ?? {});
+    setLockedFields(draft?.lockedFields ?? activeDbTrackLockedFields);
+    setSelectedPatchFields(new Set(
+      draft?.selectedPatchFields ?? COMPARISON_FIELDS.map((field) => field.key)
+    ));
+    setSelectedCoverArt(draft?.selectedCover ?? null);
     setDbPatchState('idle');
     setDbPatchResult(null);
     setDbPatchError(null);
@@ -761,7 +953,26 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
     setCandidateResult(null);
     setCandidateError(null);
     setSelectedCandidateId(null);
+    setDraftHydratedTrackId(trackId || null);
   }, [activeDbTrack?.id, activeDbTrackLockedFields]);
+
+  useEffect(() => {
+    const trackId = activeDbTrack?.id?.trim() ?? '';
+    if (!trackId || draftHydratedTrackId !== trackId) return;
+    writeMusicTagWorkbenchDraft(trackId, {
+      metadata: manualEdits as MusicTagCanonicalMetadata,
+      lockedFields,
+      selectedPatchFields: Array.from(selectedPatchFields),
+      selectedCover: selectedCoverArt,
+    });
+  }, [
+    activeDbTrack?.id,
+    draftHydratedTrackId,
+    lockedFields,
+    manualEdits,
+    selectedCoverArt,
+    selectedPatchFields,
+  ]);
 
   useEffect(() => {
     setDbPatchState('idle');
@@ -850,12 +1061,57 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
           trackId: activeDbTrack.id,
           changedFields: result.changedFields.map((c) => c.field),
         });
+        void loadHistory();
       }
     } catch (error) {
       setDbPatchState('error');
       setDbPatchError(readErrorMessage(error));
     }
-  }, [activeDbTrack, buildDbPatchRequest, dbPatchState, selectedBatchRow]);
+  }, [activeDbTrack, buildDbPatchRequest, dbPatchState, loadHistory, selectedBatchRow]);
+
+  const handleRollbackHistory = useCallback(
+    async (entry: MusicTagHistoryEntry) => {
+      if (historyState === 'rolling-back') return;
+      setHistoryState('rolling-back');
+      setHistoryError(null);
+      try {
+        const result = await rollbackMusicTagHistory({ auditId: entry.id });
+        if (!result || (!result.restoredDb && !result.restoredFile)) {
+          setHistoryState('error');
+          setHistoryError(result?.warnings.join(', ') || 'rollback-failed');
+          return;
+        }
+        if (activeDbTrack && result.dbResult?.trackId === activeDbTrack.id) {
+          const updatedTrack = patchResultToTrack(activeDbTrack, result.dbResult);
+          if (selectedBatchRow) {
+            setBatchRows((rows) =>
+              rows.map((row) => (row.track.id === updatedTrack.id ? { ...row, track: updatedTrack } : row))
+            );
+          } else {
+            setCurrentDbTrack(updatedTrack);
+          }
+        }
+        if (result.restoredFile && activeDbTrack) {
+          const restoredLocalTags = await readLocalMusicTags(readNativeTrackFilePath(activeDbTrack), {
+            includeCover: true,
+          });
+          if (restoredLocalTags) {
+            setLocalTagResult(restoredLocalTags);
+            setLocalTagState('ready');
+          }
+        }
+        void broadcastDataUpdate('music-tag-workbench:track-updated', {
+          trackId: result.trackId,
+          rollbackAuditId: entry.id,
+        });
+        await loadHistory();
+      } catch (error) {
+        setHistoryState('error');
+        setHistoryError(readErrorMessage(error));
+      }
+    },
+    [activeDbTrack, historyState, loadHistory, selectedBatchRow]
+  );
 
   const handleGenerateChromaprint = useCallback(async () => {
     if (!activeDbTrack || chromaprintState === 'generating') return;
@@ -901,6 +1157,7 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
   }, [activeDbTrack, activeLocalTagResult, lyricsResolveState]);
 
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     let unlisten: UnlistenFn | null = null;
     listen<MusicTagBatchProgressPayload>('music-tag-batch-progress', (event) => {
       setBatchApplyProgress(event.payload);
@@ -966,6 +1223,25 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
     await cancelMusicTagBatch();
   }, []);
 
+  const handleClearQueue = useCallback(() => {
+    clearMusicTagWorkbenchQueue();
+    setWorkbenchTrackIds([]);
+    setBatchRows([]);
+    setBatchTotal(0);
+    setBatchState('idle');
+    setSelectedBatchTrackId(null);
+    setCurrentDbTrack(null);
+    setTrack(audioService.getState().currentTrack);
+  }, [audioService]);
+
+  const handleRemoveQueueTrack = useCallback((trackId: string) => {
+    const nextTrackIds = removeMusicTagWorkbenchTrack(trackId);
+    setWorkbenchTrackIds(nextTrackIds);
+    setBatchRows((rows) => rows.filter((row) => row.track.id !== trackId));
+    setBatchTotal((total) => Math.max(0, total - 1));
+    setSelectedBatchTrackId((selectedId) => selectedId === trackId ? nextTrackIds[0] ?? null : selectedId);
+  }, []);
+
   const handleSearchCandidates = useCallback(async () => {
     if (!activeDbTrack || candidateState === 'searching') return;
     setCandidateState('searching');
@@ -986,6 +1262,7 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
         acoustidFingerprint: acoustidFingerprint.trim() || undefined,
         acoustidApiKey: acoustidApiKey.trim() || undefined,
         limit: 8,
+        providerIds: Array.from(selectedProviderIds),
         includeNetwork: includeNetworkCandidates,
         includeLyrics: includeLyricsCandidates,
       });
@@ -1012,23 +1289,26 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
     candidateState,
     includeLyricsCandidates,
     includeNetworkCandidates,
+    selectedProviderIds,
     track,
   ]);
+
+  const toggleProvider = useCallback((providerId: string) => {
+    setSelectedProviderIds((current) => {
+      const next = new Set(current);
+      if (next.has(providerId)) {
+        next.delete(providerId);
+      } else {
+        next.add(providerId);
+      }
+      return next;
+    });
+  }, []);
 
   const toggleLockedField = useCallback((field: MusicTagMetadataFieldKey) => {
     setLockedFields((fields) =>
       fields.includes(field) ? fields.filter((item) => item !== field) : [...fields, field]
     );
-  }, []);
-
-  const handleManualEdit = useCallback((field: MusicTagMetadataFieldKey, value: string) => {
-    setManualEdits((prev) => ({ ...prev, [field]: value.trim() || undefined }));
-    setEditingField(null);
-  }, []);
-
-  const handleStartEdit = useCallback((field: MusicTagMetadataFieldKey) => {
-    setEditingField(field);
-    setTimeout(() => editInputRef.current?.focus(), 0);
   }, []);
 
   const togglePatchField = useCallback((field: MusicTagMetadataFieldKey) => {
@@ -1098,11 +1378,17 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
     setWriteFileError(null);
     try {
       const result = await writeMusicTagFileTags({
+        trackId: activeDbTrack.id,
         filePath: activeFilePath,
         metadata: filteredMetadata,
         expectedMtimeMs: activeLocalTagResult?.mtimeMs ?? activeDbTrack.mtimeMs ?? 0,
         writeCover: Boolean(selectedCoverArt),
-        coverDataBase64: selectedCoverArt?.thumbnailUrl ?? undefined,
+        coverDataBase64: selectedCoverArt?.url.startsWith('data:')
+          ? selectedCoverArt.url.split(',', 2)[1]
+          : undefined,
+        coverUrl: selectedCoverArt && !selectedCoverArt.url.startsWith('data:')
+          ? selectedCoverArt.url
+          : undefined,
         coverMimeType: 'image/jpeg',
       });
       if (!result) {
@@ -1118,64 +1404,55 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
         fieldsWritten: result.fieldsWritten,
       });
       if (result.verified) {
-        const refreshed = await readLocalMusicTags(activeFilePath);
+        const refreshed = await readLocalMusicTags(activeFilePath, { includeCover: true });
         if (refreshed) {
           setLocalTagResult(refreshed);
           setLocalTagState('ready');
         }
       }
+      await loadHistory();
     } catch (error) {
       setWriteFileState('error');
       setWriteFileError(readErrorMessage(error));
     }
-  }, [activeDbTrack, activeLocalTagResult, activeSourceMetadata, selectedCoverArt, selectedPatchFields, writeFileState]);
+  }, [activeDbTrack, activeLocalTagResult, activeSourceMetadata, loadHistory, selectedCoverArt, selectedPatchFields, writeFileState]);
 
-  const metadataRows = useMemo(
-    () => [
-      {
-        key: 'title',
-        label: t('pages.musicTagWorkbench.fields.title'),
-        value: formatFieldValue(track?.title, empty),
-      },
-      {
-        key: 'artist',
-        label: t('pages.musicTagWorkbench.fields.artist'),
-        value: formatFieldValue(track?.artist, t('common.unknown.artist')),
-      },
-      {
-        key: 'album',
-        label: t('pages.musicTagWorkbench.fields.album'),
-        value: formatFieldValue(track?.album, t('common.unknown.album')),
-      },
-      {
-        key: 'albumArtist',
-        label: t('pages.musicTagWorkbench.fields.albumArtist'),
-        value: formatFieldValue(track?.albumArtist, empty),
-      },
-      {
-        key: 'genre',
-        label: t('pages.musicTagWorkbench.fields.genre'),
-        value: formatFieldValue(track?.genre, empty),
-      },
-      {
-        key: 'year',
-        label: t('pages.musicTagWorkbench.fields.year'),
-        value: formatFieldValue(track?.year, empty),
-      },
-      {
-        key: 'file',
-        label: t('pages.musicTagWorkbench.fields.file'),
-        value: formatFieldValue(filePath, empty),
-      },
-    ],
-    [empty, filePath, t, track]
-  );
+  const editorRows = useMemo(() => {
+    const dbMetadata = mergeMetadata(
+      metadataFromNativeTrack(activeDbTrack),
+      metadataFromPlaybackTrack(track)
+    );
+    const originalMetadata = mergeMetadata(activeLocalTagResult?.metadata, dbMetadata);
+    const matchedMetadata = mergeMetadata(selectedCandidate?.metadata, originalMetadata);
+    const pendingMetadata = mergeMetadata(manualEdits as MusicTagCanonicalMetadata, matchedMetadata);
+
+    return EDITOR_FIELD_OPTIONS.map((field) => {
+      const beforeRawValue = originalMetadata[field.key];
+      const afterRawValue = pendingMetadata[field.key];
+      const state = compareValues(beforeRawValue, afterRawValue);
+      const isLongText = field.key === 'lyrics' || field.key === 'comment';
+      return {
+        ...field,
+        label: t(field.labelKey),
+        beforeValue: isLongText && hasMetadataValue(beforeRawValue)
+          ? t('pages.musicTagWorkbench.value.present')
+          : formatFieldValue(beforeRawValue, empty),
+        afterValue: isLongText && hasMetadataValue(afterRawValue)
+          ? t('pages.musicTagWorkbench.value.present')
+          : formatFieldValue(afterRawValue, empty),
+        inputValue: formatFieldValue(afterRawValue, ''),
+        state,
+        changed: state !== 'same' && state !== 'missingBoth',
+        isLongText,
+      };
+    });
+  }, [activeDbTrack, activeLocalTagResult?.metadata, empty, manualEdits, selectedCandidate?.metadata, t, track]);
 
   const comparisonRows = useMemo(
     () =>
       COMPARISON_FIELDS.map((field) => {
-        const dbRawValue = field.readTrackValue(track);
-        const fileRawValue = localTagResult?.metadata[field.key];
+        const dbRawValue = metadataFromNativeTrack(activeDbTrack)[field.key] ?? field.readTrackValue(track);
+        const fileRawValue = activeLocalTagResult?.metadata[field.key];
         const state = compareValues(dbRawValue, fileRawValue);
         const dbValue =
           field.isLongText && hasMetadataValue(dbRawValue)
@@ -1195,7 +1472,7 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
           stateLabel: t(`pages.musicTagWorkbench.diff.${state}`),
         };
       }),
-    [empty, localTagResult, present, t, track]
+    [activeDbTrack, activeLocalTagResult, empty, present, t, track]
   );
 
   const diffFieldCount = useMemo(
@@ -1372,29 +1649,225 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
               ? t('pages.musicTagWorkbench.dbPatch.failed')
               : t('pages.musicTagWorkbench.dbPatch.idle');
 
-  const title = hasText(track?.title) ? track!.title : t('pages.musicTagWorkbench.noTrackTitle');
-  const artist = hasText(track?.artist)
-    ? track!.artist
-    : track
-      ? t('common.unknown.artist')
-      : t('pages.musicTagWorkbench.noTrackArtist');
+  const title = activeTargetTitle;
+  const artist = activeTargetArtist;
 
   return (
-    <main className="music-tag-workbench-page">
+    <main
+      className={`music-tag-workbench-page music-tag-reference ${isQueueCollapsed ? 'is-queue-collapsed' : ''}`}
+    >
+      <aside
+        id="music-tag-file-queue"
+        className="music-tag-reference__sidebar"
+        aria-label={t('pages.musicTagWorkbench.reference.fileQueue')}
+      >
+        <div className="music-tag-reference__brand">
+          <div>
+            <strong>MusicTag</strong>
+            <span>{t('pages.musicTagWorkbench.reference.subtitle')}</span>
+          </div>
+          <button
+            type="button"
+            className="music-tag-reference__queueToggle"
+            onClick={() => setIsQueueCollapsed((collapsed) => !collapsed)}
+            title={t(
+              isQueueCollapsed
+                ? 'pages.musicTagWorkbench.reference.expandQueue'
+                : 'pages.musicTagWorkbench.reference.collapseQueue'
+            )}
+            aria-label={t(
+              isQueueCollapsed
+                ? 'pages.musicTagWorkbench.reference.expandQueue'
+                : 'pages.musicTagWorkbench.reference.collapseQueue'
+            )}
+            aria-controls="music-tag-file-queue"
+            aria-expanded={!isQueueCollapsed}
+          >
+            {isQueueCollapsed ? (
+              <ChevronRight size={17} aria-hidden="true" />
+            ) : (
+              <ChevronLeft size={17} aria-hidden="true" />
+            )}
+          </button>
+        </div>
+        <div className="music-tag-reference__queueHeader">
+          <div>
+            <ListChecks size={14} aria-hidden="true" />
+            <span>{t('pages.musicTagWorkbench.reference.fileQueue')}</span>
+          </div>
+          <strong>{batchRows.length}</strong>
+        </div>
+        <div className="music-tag-reference__queueList">
+          {batchRows.length > 0 ? (
+            batchRows.map((row) => {
+              const rowDraftMetadata = row.track.id === activeDbTrack?.id
+                ? manualEdits
+                : persistedDrafts[row.track.id]?.metadata;
+              const rowTitle = formatFieldValue(
+                rowDraftMetadata?.title ?? row.localTagResult?.metadata.title ?? row.track.title,
+                t('pages.musicTagWorkbench.noTrackTitle')
+              );
+              const rowArtist = formatFieldValue(
+                rowDraftMetadata?.artist ?? row.localTagResult?.metadata.artist ?? row.track.artist,
+                t('common.unknown.artist')
+              );
+              const rowStateLabel =
+                row.state === 'ready'
+                  ? t('pages.musicTagWorkbench.batch.rowReady', { count: row.diffCount ?? 0 })
+                  : row.state === 'reading'
+                    ? t('pages.musicTagWorkbench.stageState.reading')
+                    : row.state === 'error'
+                      ? t('pages.musicTagWorkbench.stageState.failed')
+                      : t('pages.musicTagWorkbench.stageState.pending');
+              return (
+                <div key={row.track.id} className="music-tag-reference__queueEntry">
+                  <button
+                    type="button"
+                    className={selectedBatchTrackId === row.track.id ? 'is-selected' : ''}
+                    onClick={() => setSelectedBatchTrackId(row.track.id)}
+                    title={t('pages.musicTagWorkbench.batch.selectRow')}
+                    aria-label={t('pages.musicTagWorkbench.batch.selectRow')}
+                  >
+                    <span className="music-tag-reference__queueMarker" aria-hidden="true" />
+                    <span className="music-tag-reference__queueText">
+                      <strong title={rowTitle}>{rowTitle}</strong>
+                      <span title={rowArtist}>{rowArtist}</span>
+                    </span>
+                    <em className={`is-${row.state}`}>{rowStateLabel}</em>
+                  </button>
+                  <button
+                    type="button"
+                    className="music-tag-reference__queueRemove"
+                    onClick={() => handleRemoveQueueTrack(row.track.id)}
+                    title={t('pages.musicTagWorkbench.reference.removeFromQueue')}
+                    aria-label={t('pages.musicTagWorkbench.reference.removeFromQueue')}
+                  >
+                    <Trash2 size={13} aria-hidden="true" />
+                  </button>
+                </div>
+              );
+            })
+          ) : (
+            <div className="music-tag-reference__queueEmpty">
+              <Music2 size={24} aria-hidden="true" />
+              <strong>{t('pages.musicTagWorkbench.reference.emptyQueue')}</strong>
+              <span>{t('pages.musicTagWorkbench.reference.emptyQueueHint')}</span>
+            </div>
+          )}
+        </div>
+        <div className="music-tag-reference__queueFooter">
+          <button
+            type="button"
+            disabled={batchState === 'loading' || batchState === 'running'}
+            onClick={() => void handleRunBatchPreview()}
+            title={t('pages.musicTagWorkbench.reference.autoMatch')}
+            aria-label={t('pages.musicTagWorkbench.reference.autoMatch')}
+          >
+            {batchState === 'running' ? (
+              <Loader2 className="music-tag-workbench-page__spin" size={14} aria-hidden="true" />
+            ) : (
+              <BadgeCheck size={14} aria-hidden="true" />
+            )}
+            <span>{t('pages.musicTagWorkbench.reference.autoMatch')}</span>
+          </button>
+          <button
+            type="button"
+            className="is-icon"
+            disabled={batchRows.length === 0 || batchState === 'running'}
+            onClick={handleClearQueue}
+            title={t('pages.musicTagWorkbench.action.clearQueue')}
+            aria-label={t('pages.musicTagWorkbench.action.clearQueue')}
+          >
+            <Trash2 size={15} aria-hidden="true" />
+          </button>
+        </div>
+        {batchRows.some((row) => row.state === 'ready' && (row.diffCount ?? 0) > 0) ? (
+          <div className="music-tag-reference__batchCommit">
+            <button
+              type="button"
+              disabled={batchApplyState === 'running'}
+              onClick={() => void handleBatchApplyDb()}
+              title={t('pages.musicTagWorkbench.batch.applyAll')}
+              aria-label={t('pages.musicTagWorkbench.batch.applyAll')}
+            >
+              <Database size={14} aria-hidden="true" />
+              <span>{t('pages.musicTagWorkbench.batch.applyAll')}</span>
+            </button>
+            <button
+              type="button"
+              disabled={batchApplyState === 'running'}
+              onClick={() => void handleBatchWriteFiles()}
+              title={t('pages.musicTagWorkbench.batch.writeAll')}
+              aria-label={t('pages.musicTagWorkbench.batch.writeAll')}
+            >
+              <FileDown size={14} aria-hidden="true" />
+              <span>{t('pages.musicTagWorkbench.batch.writeAll')}</span>
+            </button>
+          </div>
+        ) : null}
+      </aside>
+
+      <div className="music-tag-reference__workspace">
       <header className="music-tag-workbench-page__header">
         <div className="music-tag-workbench-page__heading">
           <span className="music-tag-workbench-page__icon" aria-hidden="true">
-            <Tags size={22} />
+            <Music2 size={20} />
           </span>
           <div>
-            <h1>{t('pages.musicTagWorkbench.title')}</h1>
-            <span>{t('pages.musicTagWorkbench.phase')}</span>
+            <h1>{title}</h1>
+            <span>{artist}</span>
           </div>
         </div>
-        <button type="button" className="music-tag-workbench-page__libraryButton" onClick={openMusicLibrary}>
-          <Library size={16} aria-hidden="true" />
-          <span>{t('pages.musicTagWorkbench.action.openLibrary')}</span>
-        </button>
+        <div className="music-tag-reference__toolbar">
+          <button
+            type="button"
+            onClick={openMusicLibrary}
+            title={t('pages.musicTagWorkbench.action.openLibrary')}
+            aria-label={t('pages.musicTagWorkbench.action.openLibrary')}
+          >
+            <Library size={15} aria-hidden="true" />
+            <span>{t('pages.musicTagWorkbench.reference.library')}</span>
+          </button>
+          <button
+            type="button"
+            disabled={!canSearchCandidates || candidateState === 'searching'}
+            onClick={() => void handleSearchCandidates()}
+            title={t('pages.musicTagWorkbench.reference.match')}
+            aria-label={t('pages.musicTagWorkbench.reference.match')}
+          >
+            {candidateState === 'searching' ? (
+              <Loader2 className="music-tag-workbench-page__spin" size={15} aria-hidden="true" />
+            ) : (
+              <Search size={15} aria-hidden="true" />
+            )}
+            <span>{t('pages.musicTagWorkbench.reference.match')}</span>
+          </button>
+          <button
+            type="button"
+            disabled={!canPreviewDbPatch || dbPatchState === 'applying'}
+            onClick={() => void handleApplyDbPatch()}
+            title={t('pages.musicTagWorkbench.reference.saveDb')}
+            aria-label={t('pages.musicTagWorkbench.reference.saveDb')}
+          >
+            <Database size={15} aria-hidden="true" />
+            <span>{t('pages.musicTagWorkbench.reference.saveDb')}</span>
+          </button>
+          <button
+            type="button"
+            className="is-primary"
+            disabled={!activeDbTrack || !activeSourceMetadata || writeFileState === 'writing'}
+            onClick={() => void handleWriteFileTags()}
+            title={t('pages.musicTagWorkbench.reference.saveFile')}
+            aria-label={t('pages.musicTagWorkbench.reference.saveFile')}
+          >
+            {writeFileState === 'writing' ? (
+              <Loader2 className="music-tag-workbench-page__spin" size={15} aria-hidden="true" />
+            ) : (
+              <Save size={15} aria-hidden="true" />
+            )}
+            <span>{t('pages.musicTagWorkbench.reference.saveFile')}</span>
+          </button>
+        </div>
       </header>
 
       <section className="music-tag-workbench-page__trackBand" aria-label={t('pages.musicTagWorkbench.currentTrack')}>
@@ -1453,6 +1926,43 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
               </span>
             </button>
           </div>
+          <div className="music-tag-reference__coverSummary">
+            <button
+              type="button"
+              className="music-tag-reference__cover"
+              onClick={() => setActiveTool('cover')}
+              title={t('pages.musicTagWorkbench.reference.tool.cover')}
+            >
+              {selectedCoverArt?.thumbnailUrl || selectedCoverArt?.url || selectedCandidate?.artworkUrl || embeddedCoverUrl ? (
+                <img
+                  src={
+                    selectedCoverArt?.thumbnailUrl ??
+                    selectedCoverArt?.url ??
+                    selectedCandidate?.artworkUrl ??
+                    embeddedCoverUrl ??
+                    undefined
+                  }
+                  alt={title}
+                />
+              ) : (
+                <Image size={34} aria-hidden="true" />
+              )}
+            </button>
+            <div className="music-tag-reference__fileInfo">
+              <strong>{title}</strong>
+              <span>{artist}</span>
+              <dl>
+                <div>
+                  <dt>{t('pages.musicTagWorkbench.fields.format')}</dt>
+                  <dd>{activeLocalTagResult?.format ?? activeDbTrack?.format ?? empty}</dd>
+                </div>
+                <div>
+                  <dt>{t('pages.musicTagWorkbench.reference.fields')}</dt>
+                  <dd>{activeLocalTagResult?.fieldCount ?? 0}</dd>
+                </div>
+              </dl>
+            </div>
+          </div>
           <div className={`music-tag-workbench-page__readNotice is-${localTagState}`}>
             {localTagState === 'error' ? (
               <AlertCircle size={15} aria-hidden="true" />
@@ -1460,140 +1970,124 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
               <FileAudio size={15} aria-hidden="true" />
             )}
             <span title={localTagError ?? undefined}>{localReadStatusText}</span>
-            {localTagResult?.format ? <strong>{localTagResult.format}</strong> : null}
+            {activeLocalTagResult?.format ? <strong>{activeLocalTagResult.format}</strong> : null}
           </div>
-          {localTagState === 'ready' && localTagResult ? (
-            <div className="music-tag-workbench-page__comparisonTable">
-              <div className="music-tag-workbench-page__comparisonHead">
-                <span>{t('pages.musicTagWorkbench.compare.field')}</span>
-                <span>{t('pages.musicTagWorkbench.compare.library')}</span>
-                <span>{t('pages.musicTagWorkbench.compare.file')}</span>
-                <span>{t('pages.musicTagWorkbench.compare.status')}</span>
-              </div>
-              {comparisonRows.map((row) => (
-                <div key={row.key} className={`music-tag-workbench-page__comparisonRow is-${row.state}`}>
-                  <span>{row.label}</span>
-                  <strong title={row.dbValue}>{row.dbValue}</strong>
-                  {editingField === row.key ? (
-                    <input
-                      ref={editInputRef}
-                      className="music-tag-workbench-page__inlineEdit"
-                      defaultValue={
-                        (manualEdits[row.key] as string | undefined) ?? row.fileValue === empty ? '' : row.fileValue
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleManualEdit(row.key, e.currentTarget.value);
-                        if (e.key === 'Escape') setEditingField(null);
-                      }}
-                      onBlur={(e) => handleManualEdit(row.key, e.currentTarget.value)}
-                    />
-                  ) : (
-                    <strong
-                      className="music-tag-workbench-page__editableField"
-                      title={`${row.fileValue} — ${t('pages.musicTagWorkbench.edit.clickToEdit')}`}
-                      onClick={() => handleStartEdit(row.key)}
+          <div className="music-tag-reference__fieldGrid">
+            {editorRows.map((row) => {
+              const isLocked = lockedFields.includes(row.key);
+              const fieldId = `music-tag-field-${row.key}`;
+              return (
+                <div
+                  key={row.key}
+                  className={`music-tag-reference__field ${row.changed ? 'is-changed' : ''} ${isLocked ? 'is-locked' : ''} ${row.isLongText ? 'is-wide' : ''}`}
+                >
+                  <div className="music-tag-reference__fieldLabel">
+                    <label htmlFor={fieldId}>{row.label}</label>
+                    {row.changed ? (
+                      <span className="music-tag-reference__diffHint">
+                        <Eye size={12} aria-hidden="true" />
+                        {t('pages.musicTagWorkbench.reference.changed')}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="music-tag-reference__fieldControl">
+                    {row.isLongText ? (
+                      <textarea
+                        id={fieldId}
+                        value={row.inputValue}
+                        readOnly={isLocked}
+                        rows={row.key === 'lyrics' ? 5 : 2}
+                        onChange={(event) => setManualEdits((current) => ({
+                          ...current,
+                          [row.key]: event.currentTarget.value,
+                        }))}
+                      />
+                    ) : (
+                      <input
+                        id={fieldId}
+                        type="text"
+                        value={row.inputValue}
+                        readOnly={isLocked}
+                        onChange={(event) => setManualEdits((current) => ({
+                          ...current,
+                          [row.key]: event.currentTarget.value,
+                        }))}
+                      />
+                    )}
+                    <label
+                      className="music-tag-reference__applyField"
+                      title={t('pages.musicTagWorkbench.reference.includeField')}
                     >
-                      {manualEdits[row.key] != null
-                        ? formatFieldValue(manualEdits[row.key], empty)
-                        : row.fileValue}
-                      <Pencil size={12} aria-hidden="true" />
-                    </strong>
-                  )}
-                  <em>{row.stateLabel}</em>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="music-tag-workbench-page__fieldTable">
-              {metadataRows.map((row) => (
-                <div key={row.key} className="music-tag-workbench-page__fieldRow">
-                  <span>{row.label}</span>
-                  {row.key !== 'file' && editingField === row.key ? (
-                    <input
-                      ref={editInputRef}
-                      className="music-tag-workbench-page__inlineEdit"
-                      defaultValue={
-                        (manualEdits[row.key as MusicTagMetadataFieldKey] as string | undefined) ?? (row.value === empty ? '' : row.value)
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleManualEdit(row.key as MusicTagMetadataFieldKey, e.currentTarget.value);
-                        if (e.key === 'Escape') setEditingField(null);
-                      }}
-                      onBlur={(e) => handleManualEdit(row.key as MusicTagMetadataFieldKey, e.currentTarget.value)}
-                    />
-                  ) : row.key !== 'file' ? (
-                    <strong
-                      className="music-tag-workbench-page__editableField"
-                      title={`${row.value} — ${t('pages.musicTagWorkbench.edit.clickToEdit')}`}
-                      onClick={() => handleStartEdit(row.key as MusicTagMetadataFieldKey)}
+                      <input
+                        type="checkbox"
+                        checked={selectedPatchFields.has(row.key)}
+                        onChange={() => togglePatchField(row.key)}
+                      />
+                      <span aria-hidden="true" />
+                    </label>
+                    <button
+                      type="button"
+                      className="music-tag-reference__fieldLock"
+                      onClick={() => toggleLockedField(row.key)}
+                      title={isLocked
+                        ? t('pages.musicTagWorkbench.reference.unlockField')
+                        : t('pages.musicTagWorkbench.reference.lockField')}
+                      aria-label={isLocked
+                        ? t('pages.musicTagWorkbench.reference.unlockField')
+                        : t('pages.musicTagWorkbench.reference.lockField')}
                     >
-                      {manualEdits[row.key as MusicTagMetadataFieldKey] != null
-                        ? formatFieldValue(manualEdits[row.key as MusicTagMetadataFieldKey], empty)
-                        : row.value}
-                      <Pencil size={12} aria-hidden="true" />
-                    </strong>
-                  ) : (
-                    <strong title={row.value}>{row.value}</strong>
-                  )}
+                      {isLocked ? (
+                        <LockKeyhole size={14} aria-hidden="true" />
+                      ) : (
+                        <LockOpen size={14} aria-hidden="true" />
+                      )}
+                    </button>
+                  </div>
+                  {row.changed ? (
+                    <div className="music-tag-reference__diffPopover" role="tooltip">
+                      <div>
+                        <span>{t('pages.musicTagWorkbench.reference.before')}</span>
+                        <strong>{row.beforeValue}</strong>
+                      </div>
+                      <ArrowRight size={14} aria-hidden="true" />
+                      <div>
+                        <span>{t('pages.musicTagWorkbench.reference.after')}</span>
+                        <strong>{row.afterValue}</strong>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-              ))}
-            </div>
-          )}
+              );
+            })}
+          </div>
         </section>
 
-        <section className="music-tag-workbench-page__panel" aria-label={t('pages.musicTagWorkbench.queuePanel')}>
+        <section
+          className={`music-tag-workbench-page__panel is-workbench is-tool-${activeTool}`}
+          aria-label={t('pages.musicTagWorkbench.queuePanel')}
+        >
           <div className="music-tag-workbench-page__panelHeader">
-            <h2>{t('pages.musicTagWorkbench.queuePanel')}</h2>
-            <div className="music-tag-workbench-page__panelActions">
-              <button
-                type="button"
-                disabled={!canSearchCandidates || candidateState === 'searching'}
-                title={
-                  canSearchCandidates
-                    ? t('pages.musicTagWorkbench.action.searchCandidates')
-                    : t('pages.musicTagWorkbench.candidates.requiresTarget')
-                }
-                onClick={() => {
-                  void handleSearchCandidates();
-                }}
-              >
-                {candidateState === 'searching' ? (
-                  <Loader2 className="music-tag-workbench-page__spin" size={15} aria-hidden="true" />
-                ) : (
-                  <Search size={15} aria-hidden="true" />
-                )}
-                <span>{t('pages.musicTagWorkbench.action.searchCandidates')}</span>
-              </button>
-              <button
-                type="button"
-                disabled={batchState === 'loading' || batchState === 'running'}
-                title={t('pages.musicTagWorkbench.action.loadBatch')}
-                onClick={() => {
-                  void loadBatchCandidates();
-                }}
-              >
-                {batchState === 'loading' ? (
-                  <Loader2 className="music-tag-workbench-page__spin" size={15} aria-hidden="true" />
-                ) : (
-                  <Database size={15} aria-hidden="true" />
-                )}
-                <span>{t('pages.musicTagWorkbench.action.loadBatch')}</span>
-              </button>
-              <button
-                type="button"
-                disabled={batchState === 'loading' || batchState === 'running'}
-                title={t('pages.musicTagWorkbench.action.runBatchPreview')}
-                onClick={() => {
-                  void handleRunBatchPreview();
-                }}
-              >
-                {batchState === 'running' ? (
-                  <Loader2 className="music-tag-workbench-page__spin" size={15} aria-hidden="true" />
-                ) : (
-                  <ListChecks size={15} aria-hidden="true" />
-                )}
-                <span>{t('pages.musicTagWorkbench.action.runBatchPreview')}</span>
-              </button>
+            <h2>{t(`pages.musicTagWorkbench.reference.tool.${activeTool}`)}</h2>
+            <div className="music-tag-reference__toolTabs" role="tablist">
+              {([
+                ['match', Search],
+                ['cover', Image],
+                ['lyrics', TextQuote],
+                ['history', History],
+              ] as const).map(([tool, Icon]) => (
+                <button
+                  key={tool}
+                  type="button"
+                  role="tab"
+                  className={activeTool === tool ? 'is-active' : ''}
+                  aria-selected={activeTool === tool}
+                  onClick={() => setActiveTool(tool)}
+                  title={t(`pages.musicTagWorkbench.reference.tool.${tool}`)}
+                >
+                  <Icon size={14} aria-hidden="true" />
+                  <span>{t(`pages.musicTagWorkbench.reference.tool.${tool}`)}</span>
+                </button>
+              ))}
             </div>
           </div>
           <div className="music-tag-workbench-page__targetStrip">
@@ -1630,6 +2124,28 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
               />
               <span>{t('pages.musicTagWorkbench.candidates.includeLyrics')}</span>
             </label>
+          </div>
+          <div className="music-tag-workbench-page__providerPicker" aria-label={t('pages.musicTagWorkbench.providers.title')}>
+            <span className="music-tag-workbench-page__providerPickerLabel">
+              {t('pages.musicTagWorkbench.providers.title')}
+            </span>
+            <div className="music-tag-workbench-page__providerOptions">
+              {providers.map((provider) => (
+                <label
+                  key={provider.id}
+                  className={selectedProviderIds.has(provider.id) ? 'is-selected' : ''}
+                  title={provider.description}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedProviderIds.has(provider.id)}
+                    onChange={() => toggleProvider(provider.id)}
+                  />
+                  <span>{provider.displayName}</span>
+                  {provider.requiresApiKey ? <em>{t('pages.musicTagWorkbench.providers.apiKey')}</em> : null}
+                </label>
+              ))}
+            </div>
           </div>
           <div className="music-tag-workbench-page__candidateInputs">
             <label>
@@ -1708,9 +2224,33 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
                     className={`music-tag-workbench-page__candidateRow ${
                       selectedCandidateId === candidate.id ? 'is-selected' : ''
                     }`}
-                    onClick={() => setSelectedCandidateId(candidate.id)}
+                    onClick={() => {
+                      setSelectedCandidateId(candidate.id);
+                      setManualEdits((current) => {
+                        const next = { ...current };
+                        for (const [field, value] of Object.entries(candidate.metadata) as [
+                          MusicTagMetadataFieldKey,
+                          MusicTagCanonicalMetadata[MusicTagMetadataFieldKey],
+                        ][]) {
+                          if (lockedFields.includes(field) || value === undefined || value === null) continue;
+                          next[field] = value as never;
+                        }
+                        return next;
+                      });
+                      if (candidate.artworkUrl) {
+                        setSelectedCoverArt({
+                          url: candidate.artworkUrl,
+                          thumbnailUrl: candidate.artworkUrl,
+                          coverType: candidate.provider,
+                          approved: false,
+                        });
+                      }
+                    }}
                   >
-                    <span>{t(`pages.musicTagWorkbench.candidates.provider.${candidate.provider}`)}</span>
+                    <span>
+                      {providers.find((provider) => provider.id === candidate.provider)?.displayName ??
+                        candidate.provider}
+                    </span>
                     <strong title={`${candidateTitle} - ${candidateArtist}`}>
                       {candidateTitle}
                     </strong>
@@ -2009,6 +2549,64 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
               {t('pages.musicTagWorkbench.lyrics.priority')}
             </div>
           </div>
+          <div className="music-tag-workbench-page__historyPanel">
+            <div className="music-tag-workbench-page__subhead">
+              <History size={15} aria-hidden="true" />
+              <strong>{t('pages.musicTagWorkbench.history.title')}</strong>
+              <span>{t('pages.musicTagWorkbench.history.count', { count: historyEntries.length })}</span>
+              <button
+                type="button"
+                disabled={!activeDbTrack || historyState === 'loading' || historyState === 'rolling-back'}
+                onClick={() => void loadHistory()}
+                title={t('pages.musicTagWorkbench.history.refresh')}
+              >
+                {historyState === 'loading' ? (
+                  <Loader2 className="music-tag-workbench-page__spin" size={14} aria-hidden="true" />
+                ) : (
+                  <History size={14} aria-hidden="true" />
+                )}
+                <span>{t('pages.musicTagWorkbench.history.refresh')}</span>
+              </button>
+            </div>
+            {historyError ? (
+              <div className="music-tag-workbench-page__readNotice is-error">
+                <AlertCircle size={15} aria-hidden="true" />
+                <span title={historyError}>{t('pages.musicTagWorkbench.history.failed')}</span>
+              </div>
+            ) : null}
+            {historyEntries.length > 0 ? (
+              <div className="music-tag-workbench-page__historyList">
+                {historyEntries.map((entry) => (
+                  <div key={entry.id} className="music-tag-workbench-page__historyRow">
+                    <div>
+                      <strong>{new Date(entry.createdAtMs).toLocaleString()}</strong>
+                      <span>
+                        {t('pages.musicTagWorkbench.history.changeCount', {
+                          count: entry.changedFields.length,
+                        })}
+                        {' · '}
+                        {entry.status}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={historyState === 'rolling-back' || (!entry.writeDb && !entry.writeFile)}
+                      onClick={() => void handleRollbackHistory(entry)}
+                      title={t('pages.musicTagWorkbench.history.rollback')}
+                    >
+                      <RotateCcw size={14} aria-hidden="true" />
+                      <span>{t('pages.musicTagWorkbench.history.rollback')}</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : historyState === 'ready' ? (
+              <div className="music-tag-workbench-page__readNotice is-idle">
+                <History size={15} aria-hidden="true" />
+                <span>{t('pages.musicTagWorkbench.history.empty')}</span>
+              </div>
+            ) : null}
+          </div>
           {batchRows.length > 0 ? (
             <div className="music-tag-workbench-page__batchList">
               {batchRows.slice(0, 10).map((row) => {
@@ -2129,6 +2727,7 @@ export function MusicTagWorkbenchPage({ trackIds }: MusicTagWorkbenchPageProps) 
             </div>
           </div>
         </section>
+      </div>
       </div>
     </main>
   );

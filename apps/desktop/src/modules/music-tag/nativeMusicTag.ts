@@ -11,22 +11,127 @@ import type {
   MusicTagCandidateSearchResult,
   MusicTagDbPatchRequest,
   MusicTagDbPatchResult,
+  MusicTagHistoryPage,
+  MusicTagHistoryQuery,
+  MusicTagMetadataProviderDescriptor,
   MusicTagReadLocalRequest,
   MusicTagReadLocalResult,
+  MusicTagRollbackRequest,
+  MusicTagRollbackResult,
   MusicTagWriteFileRequest,
   MusicTagWriteFileResult,
 } from '../../contracts/musicTag';
 import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 
+const FALLBACK_METADATA_PROVIDERS: MusicTagMetadataProviderDescriptor[] = [
+  {
+    id: 'musicbrainz',
+    displayName: 'MusicBrainz',
+    description: 'Open music metadata catalog',
+    capabilities: ['metadata'],
+    builtin: true,
+    requiresNetwork: true,
+    requiresApiKey: false,
+    enabled: true,
+    priority: 100,
+  },
+  {
+    id: 'netease-cloud',
+    displayName: 'NetEase Cloud Music',
+    description: 'Built-in Cloud Music metadata source',
+    capabilities: ['metadata', 'cover-art'],
+    builtin: true,
+    requiresNetwork: true,
+    requiresApiKey: false,
+    enabled: true,
+    priority: 90,
+  },
+  {
+    id: 'acoustid',
+    displayName: 'AcoustID',
+    description: 'Chromaprint fingerprint lookup',
+    capabilities: ['metadata', 'fingerprint'],
+    builtin: true,
+    requiresNetwork: true,
+    requiresApiKey: true,
+    enabled: true,
+    priority: 80,
+  },
+  {
+    id: 'lyrics',
+    displayName: 'Lyrics Resolver',
+    description: 'Local, sidecar and network lyrics resolution pipeline',
+    capabilities: ['lyrics'],
+    builtin: true,
+    requiresNetwork: true,
+    requiresApiKey: false,
+    enabled: true,
+    priority: 70,
+  },
+];
+
+export async function listMusicTagMetadataProviders(): Promise<
+  MusicTagMetadataProviderDescriptor[]
+> {
+  if (!isTauriRuntime()) return FALLBACK_METADATA_PROVIDERS;
+
+  return invokeWithTelemetry<MusicTagMetadataProviderDescriptor[]>(
+    'music_tag_list_metadata_providers',
+    {},
+    {
+      moduleId: 'music-tag',
+      component: 'nativeMusicTag',
+      event: 'music-tag.providers.list',
+      includeResultSize: true,
+    }
+  );
+}
+
+export async function listMusicTagHistory(
+  query: MusicTagHistoryQuery
+): Promise<MusicTagHistoryPage | null> {
+  if (!isTauriRuntime()) return null;
+
+  return invokeWithTelemetry<MusicTagHistoryPage>(
+    'music_tag_list_history',
+    { query },
+    {
+      moduleId: 'music-tag',
+      component: 'nativeMusicTag',
+      event: 'music-tag.audit.list',
+      includeResultSize: true,
+    }
+  );
+}
+
+export async function rollbackMusicTagHistory(
+  request: MusicTagRollbackRequest
+): Promise<MusicTagRollbackResult | null> {
+  if (!isTauriRuntime() || !request.auditId.trim()) return null;
+
+  return invokeWithTelemetry<MusicTagRollbackResult>(
+    'music_tag_rollback_history',
+    { request },
+    {
+      moduleId: 'music-tag',
+      component: 'nativeMusicTag',
+      event: 'music-tag.audit.rollback',
+      includeResultSize: true,
+    }
+  );
+}
+
 export async function readLocalMusicTags(
-  filePath: string
+  filePath: string,
+  options?: { includeCover?: boolean }
 ): Promise<MusicTagReadLocalResult | null> {
   const normalizedFilePath = filePath.trim();
   if (!normalizedFilePath || !isTauriRuntime()) return null;
 
   const request: MusicTagReadLocalRequest = {
     filePath: normalizedFilePath,
+    includeCover: options?.includeCover ?? false,
   };
 
   return invokeWithTelemetry<MusicTagReadLocalResult>(
