@@ -93,6 +93,12 @@ const HIDDEN_PHASE_TAURI_ACTIONS: readonly MemoryGovernanceAction[] = [
   'destroy-hidden-vst-manager-windows',
 ];
 
+const EDITOR_EXIT_TAURI_ACTIONS: readonly MemoryGovernanceAction[] = [
+  'destroy-hidden-editor-windows',
+  'trim-webview2-working-set',
+  'trim-tree-working-set',
+];
+
 const ACTION_TO_COVER_RUNTIME_POLICY: Partial<
   Record<MemoryGovernanceAction, MemoryGovernanceCoverRuntimeCachePolicy>
 > = {
@@ -122,6 +128,7 @@ const MEMORY_GOVERNANCE_REASON_PRIORITY: Record<MemoryGovernanceReason, number> 
   'runtime-release': 2,
   'space-switch': 2,
   manual: 2,
+  'editor-exit': 3,
   'visibility-hidden': 3,
   'tauri-main-window-hidden': 3,
   'tauri-window-hidden': 3,
@@ -157,6 +164,9 @@ function buildPlannedActions(
   isTauri: boolean
 ): MemoryGovernanceAction[] {
   const plannedActions: MemoryGovernanceAction[] = [...baseActions];
+  if (reason === 'editor-exit' && isTauri) {
+    appendUniqueActions(plannedActions, EDITOR_EXIT_TAURI_ACTIONS);
+  }
   if (!HIDDEN_PHASE_REASONS.has(reason)) {
     return plannedActions;
   }

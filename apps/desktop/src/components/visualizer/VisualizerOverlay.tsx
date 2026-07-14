@@ -1,7 +1,7 @@
 import { appWindow } from '@tauri-apps/api/window';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Check, ChevronDown, Crosshair, Eye, EyeOff, Home, ListTree, PanelBottom, Pencil, RotateCcw, Scan } from 'lucide-react';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import type { VisualizerContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n/react';
 import {

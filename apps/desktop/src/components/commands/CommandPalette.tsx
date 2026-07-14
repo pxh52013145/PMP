@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CommandContribution } from '../../contracts/contributions';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { COMMANDS_SERVICE_TOKEN } from '../../services/commands';
 import { useT } from '../../i18n/react';
 import './CommandPalette.css';

@@ -124,12 +124,21 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
         });
 
         registerWindowOpenCommand({
-          id: 'app:open-theme-editor-window',
-          titleKey: 'commands.app.open-theme-editor-window.title',
-          descriptionKey: 'commands.app.open-theme-editor-window.description',
+          id: 'app:open-registration-center-window',
+          titleKey: 'commands.app.open-registration-center-window.title',
+          descriptionKey: 'commands.app.open-registration-center-window.description',
           group: 'core',
           order: 4,
-          windowId: 'editor:theme',
+          windowId: 'editor:registration',
+        });
+
+        registerWindowOpenCommand({
+          id: 'app:open-theme-editor-window',
+          titleKey: 'commands.app.open-registration-center-window.title',
+          descriptionKey: 'commands.app.open-registration-center-window.description',
+          group: 'compatibility',
+          order: 4.1,
+          windowId: 'editor:registration',
         });
 
         registerWindowOpenCommand({
@@ -449,8 +458,7 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
               services.get(NAVIGATION_SERVICE_TOKEN),
               {
                 windowId: 'vst-manager',
-                title:
-                  readOptionalTitle(commandOptions?.title) ?? t('windows.vst-manager.title'),
+                title: readOptionalTitle(commandOptions?.title) ?? t('windows.vst-manager.title'),
                 width: readFiniteNumber(commandOptions?.width),
                 height: readFiniteNumber(commandOptions?.height),
                 x: readFiniteNumber(commandOptions?.x),

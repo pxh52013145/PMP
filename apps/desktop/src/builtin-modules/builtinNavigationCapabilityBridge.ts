@@ -1,8 +1,5 @@
 import type { NavigationPageType } from '../contracts/navigation';
-import type {
-  PluginPageParams,
-  PluginVisualizerParams,
-} from '../contracts/navigationParams';
+import type { PluginPageParams, PluginVisualizerParams } from '../contracts/navigationParams';
 import {
   invokePluginHostCapability,
   type HostNavigation,
@@ -43,18 +40,19 @@ const BUILTIN_EDITOR_WINDOW_CAPABILITY_IDS: Partial<Record<EditorWindowType, str
   'style-border-effect': 'editor-style-border-effect',
   background: 'editor-background',
   'custom-background': 'editor-custom-background',
-  theme: 'editor-theme',
+  registration: 'editor-registration',
   debug: 'editor-debug',
 };
 
-const BUILTIN_EDITOR_WINDOW_TYPES_BY_CAPABILITY_ID = Object.freeze(
-  Object.fromEntries(
+const BUILTIN_EDITOR_WINDOW_TYPES_BY_CAPABILITY_ID = Object.freeze({
+  ...Object.fromEntries(
     Object.entries(BUILTIN_EDITOR_WINDOW_CAPABILITY_IDS).map(([type, capabilityId]) => [
       capabilityId,
       type as EditorWindowType,
     ])
-  ) as Record<string, EditorWindowType>
-);
+  ),
+  'editor-theme': 'registration',
+} as Record<string, EditorWindowType>);
 
 function createHostNavigationBridge(navigation: NavigationService): HostNavigation {
   return {
@@ -94,10 +92,7 @@ function encodeBuiltinWindowCapabilityId(windowId: string): string {
   return windowId;
 }
 
-function createBuiltinWindowBridge(
-  navigation: NavigationService,
-  hostLabel: string
-) {
+function createBuiltinWindowBridge(navigation: NavigationService, hostLabel: string) {
   return {
     open: async (
       windowId: string,
@@ -304,10 +299,7 @@ export async function openBuiltinPluginWindowViaHostCapability(
 export async function openBuiltinWindowViaHostCapability(
   navigation: NavigationService,
   params: {
-    windowId:
-      | 'keyboard-shortcuts'
-      | 'vst-manager'
-      | `editor:${EditorWindowType}`;
+    windowId: 'keyboard-shortcuts' | 'vst-manager' | `editor:${EditorWindowType}` | 'editor:theme';
     title?: string;
     width?: number;
     height?: number;

@@ -5,7 +5,7 @@ import type {
 } from '@pixel-matrix/plugin-platform-contracts';
 import { APP_VERSION, HOST_API_VERSION } from '../../constants/versions';
 import { useAudioService } from '../../contexts/AudioEngineContext';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { COMMANDS_SERVICE_TOKEN } from '../../services/commands';
 import { KEYBINDINGS_SERVICE_TOKEN } from '../../services/keybindings';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';

@@ -1,5 +1,6 @@
 export {
   PERFORMANCE_CONTROL_SERVICE_TOKEN,
+  readPerformanceControlSettingsFromStorage,
   type PerformanceControlService,
 } from './PerformanceControlService';
 export {

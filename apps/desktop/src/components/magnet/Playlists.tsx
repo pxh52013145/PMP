@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { Playlist, Track } from '../../services/audio';
 import { useAudioService } from '../../contexts/AudioEngineContext';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { useT } from '../../i18n';
 import type { CoverSizeHint } from '../../services/audio/MusicLibraryService';
 import {

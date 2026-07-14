@@ -3,7 +3,7 @@
  * 负责导航逻辑
  */
 
-import { useKernel } from '../../../contexts/KernelContext';
+import { useKernel } from '../../../contexts/KernelApiContext';
 import { useNavigation } from '../../../contexts/NavigationContext';
 import { COMMANDS_SERVICE_TOKEN, dispatchCommandOrFallback } from '../../../services/commands';
 

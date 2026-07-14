@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useEditor } from '../../contexts/EditorContext';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 

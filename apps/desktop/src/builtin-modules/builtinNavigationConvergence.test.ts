@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppEvents } from '../contracts/events';
-import type {
-  VisualizerContribution,
-  WindowContribution,
-} from '../contracts/contributions';
+import type { VisualizerContribution, WindowContribution } from '../contracts/contributions';
 import { ContributionRegistry, EventBus, ServiceRegistry } from '../kernel';
 import type { NavigationService } from '../services/navigation';
 import { NAVIGATION_SERVICE_TOKEN } from '../services/navigation';
@@ -31,8 +28,7 @@ vi.mock('./builtinNavigationCapabilityBridge', () => ({
   openBuiltinPluginPageViaHostCapability: vi.fn(async () => {}),
   openBuiltinPluginVisualizerViaHostCapability:
     mocks.openBuiltinPluginVisualizerViaHostCapabilityMock,
-  openBuiltinPluginWindowViaHostCapability:
-    mocks.openBuiltinPluginWindowViaHostCapabilityMock,
+  openBuiltinPluginWindowViaHostCapability: mocks.openBuiltinPluginWindowViaHostCapabilityMock,
 }));
 
 vi.mock('../magnet-system/plugins/extensions', () => ({
@@ -105,11 +101,9 @@ describe('builtin navigation convergence', () => {
   it('routes builtin keyboard shortcut window opens through command -> capability', async () => {
     const navigation = createNavigationServiceStub();
     const ctx = createModuleContext(navigation);
-    ctx.services.register(
-      COMMANDS_SERVICE_TOKEN,
-      new DefaultCommandsService(ctx.contributions),
-      { replace: true }
-    );
+    ctx.services.register(COMMANDS_SERVICE_TOKEN, new DefaultCommandsService(ctx.contributions), {
+      replace: true,
+    });
 
     createBuiltinCommandsModule().activate(ctx);
     createBuiltinContributionsModule().activate(ctx);
@@ -243,11 +237,9 @@ describe('builtin navigation convergence', () => {
   it('routes shell.menu activation into builtin window/navigation command capability paths', async () => {
     const navigation = createNavigationServiceStub();
     const ctx = createModuleContext(navigation);
-    ctx.services.register(
-      COMMANDS_SERVICE_TOKEN,
-      new DefaultCommandsService(ctx.contributions),
-      { replace: true }
-    );
+    ctx.services.register(COMMANDS_SERVICE_TOKEN, new DefaultCommandsService(ctx.contributions), {
+      replace: true,
+    });
     createBuiltinContributionsModule().activate(ctx);
     createBuiltinCommandsModule().activate(ctx);
 
@@ -276,9 +268,13 @@ describe('builtin navigation convergence', () => {
         itemId: 'app:open-keyboard-shortcuts-window',
       }
     );
-    const navigateHomeResult = await api.host.invokeCapability('host.pmp.shell.menu', 'activateItem', {
-      itemId: 'app:navigate-home',
-    });
+    const navigateHomeResult = await api.host.invokeCapability(
+      'host.pmp.shell.menu',
+      'activateItem',
+      {
+        itemId: 'app:navigate-home',
+      }
+    );
     const navigateSettingsResult = await api.host.invokeCapability(
       'host.pmp.shell.menu',
       'activateItem',
@@ -321,15 +317,27 @@ describe('builtin navigation convergence', () => {
         itemId: 'app:navigate-native-debug',
       }
     );
-    const themeEditorResult = await api.host.invokeCapability('host.pmp.shell.menu', 'activateItem', {
-      itemId: 'app:open-theme-editor-window',
-    });
-    const debugEditorResult = await api.host.invokeCapability('host.pmp.shell.menu', 'activateItem', {
-      itemId: 'app:open-debug-editor-window',
-    });
-    const controlEditorResult = await api.host.invokeCapability('host.pmp.shell.menu', 'activateItem', {
-      itemId: 'app:open-control-editor-window',
-    });
+    const themeEditorResult = await api.host.invokeCapability(
+      'host.pmp.shell.menu',
+      'activateItem',
+      {
+        itemId: 'app:open-theme-editor-window',
+      }
+    );
+    const debugEditorResult = await api.host.invokeCapability(
+      'host.pmp.shell.menu',
+      'activateItem',
+      {
+        itemId: 'app:open-debug-editor-window',
+      }
+    );
+    const controlEditorResult = await api.host.invokeCapability(
+      'host.pmp.shell.menu',
+      'activateItem',
+      {
+        itemId: 'app:open-control-editor-window',
+      }
+    );
     const customBackgroundEditorResult = await api.host.invokeCapability(
       'host.pmp.shell.menu',
       'activateItem',
@@ -337,21 +345,41 @@ describe('builtin navigation convergence', () => {
         itemId: 'app:open-custom-background-editor-window',
       }
     );
-    const statisticsEditorResult = await api.host.invokeCapability('host.pmp.shell.menu', 'activateItem', {
-      itemId: 'app:open-statistics-editor-window',
-    });
-    const libraryEditorResult = await api.host.invokeCapability('host.pmp.shell.menu', 'activateItem', {
-      itemId: 'app:open-library-editor-window',
-    });
-    const styleEditorResult = await api.host.invokeCapability('host.pmp.shell.menu', 'activateItem', {
-      itemId: 'app:open-style-editor-window',
-    });
-    const backgroundEditorResult = await api.host.invokeCapability('host.pmp.shell.menu', 'activateItem', {
-      itemId: 'app:open-background-editor-window',
-    });
-    const stylePixelEditorResult = await api.host.invokeCapability('host.pmp.shell.menu', 'activateItem', {
-      itemId: 'app:open-style-pixel-editor-window',
-    });
+    const statisticsEditorResult = await api.host.invokeCapability(
+      'host.pmp.shell.menu',
+      'activateItem',
+      {
+        itemId: 'app:open-statistics-editor-window',
+      }
+    );
+    const libraryEditorResult = await api.host.invokeCapability(
+      'host.pmp.shell.menu',
+      'activateItem',
+      {
+        itemId: 'app:open-library-editor-window',
+      }
+    );
+    const styleEditorResult = await api.host.invokeCapability(
+      'host.pmp.shell.menu',
+      'activateItem',
+      {
+        itemId: 'app:open-style-editor-window',
+      }
+    );
+    const backgroundEditorResult = await api.host.invokeCapability(
+      'host.pmp.shell.menu',
+      'activateItem',
+      {
+        itemId: 'app:open-background-editor-window',
+      }
+    );
+    const stylePixelEditorResult = await api.host.invokeCapability(
+      'host.pmp.shell.menu',
+      'activateItem',
+      {
+        itemId: 'app:open-style-pixel-editor-window',
+      }
+    );
     const styleCoverColorEditorResult = await api.host.invokeCapability(
       'host.pmp.shell.menu',
       'activateItem',
@@ -373,12 +401,20 @@ describe('builtin navigation convergence', () => {
         itemId: 'app:open-style-border-effect-editor-window',
       }
     );
-    const perfMonitorResult = await api.host.invokeCapability('host.pmp.shell.menu', 'activateItem', {
-      itemId: 'app:navigate-perf-monitor',
-    });
-    const vstManagerResult = await api.host.invokeCapability('host.pmp.shell.menu', 'activateItem', {
-      itemId: 'app:open-vst3-plugin-manager',
-    });
+    const perfMonitorResult = await api.host.invokeCapability(
+      'host.pmp.shell.menu',
+      'activateItem',
+      {
+        itemId: 'app:navigate-perf-monitor',
+      }
+    );
+    const vstManagerResult = await api.host.invokeCapability(
+      'host.pmp.shell.menu',
+      'activateItem',
+      {
+        itemId: 'app:open-vst3-plugin-manager',
+      }
+    );
 
     expect(keyboardShortcutsResult).toEqual({
       ok: true,
@@ -619,7 +655,7 @@ describe('builtin navigation convergence', () => {
     expect(mocks.openBuiltinWindowViaHostCapabilityMock).toHaveBeenCalledWith(
       navigation,
       {
-        windowId: 'editor:theme',
+        windowId: 'editor:registration',
         title: undefined,
         width: undefined,
         height: undefined,

@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from 'react';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN } from './installedExtensionRuntimeManager';
 
 export function useInstalledExtensionRuntimeRestartToken(pluginId: string): number {

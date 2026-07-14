@@ -131,6 +131,65 @@ export const PERFORMANCE_CONTROL_SERVICE_TOKEN = createServiceToken<PerformanceC
   'service.performanceControl'
 );
 
+export function readPerformanceControlSettingsFromStorage(): PerformanceControlSettingsSnapshot {
+  const baseFallback = DEFAULT_PERFORMANCE_CONTROL_SNAPSHOT.settings;
+  const hasRuntimeProfile = readString(STORAGE_KEYS.PERFORMANCE_RUNTIME_PROFILE) !== null;
+  const runtimeProfile = parsePerformanceRuntimeProfile(
+    readJson<unknown>(STORAGE_KEYS.PERFORMANCE_RUNTIME_PROFILE, baseFallback.runtimeProfile),
+    baseFallback.runtimeProfile
+  );
+  const profileBaseline = mergeRuntimeProfileSettings(runtimeProfile, baseFallback);
+
+  if (!hasRuntimeProfile) return profileBaseline;
+
+  return sanitizeRuntimeProfileByFieldOverrides({
+    runtimeProfile,
+    editorLowPerformanceMode: parseBoolean(
+      readJson<unknown>(
+        STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE,
+        profileBaseline.editorLowPerformanceMode
+      ),
+      profileBaseline.editorLowPerformanceMode
+    ),
+    gifImportMaxFps: clampInteger(
+      readJson<unknown>(
+        STORAGE_KEYS.BACKGROUND_GIF_IMPORT_MAX_FPS,
+        profileBaseline.gifImportMaxFps
+      ),
+      0,
+      60,
+      profileBaseline.gifImportMaxFps
+    ),
+    coverMaxEdgePx: clampInteger(
+      readJson<unknown>(
+        STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX,
+        profileBaseline.coverMaxEdgePx
+      ),
+      0,
+      4096,
+      profileBaseline.coverMaxEdgePx
+    ),
+    backgroundRenderPolicy: parseBackgroundRenderPolicy(
+      readJson<unknown>(
+        STORAGE_KEYS.BACKGROUND_RENDER_POLICY,
+        profileBaseline.backgroundRenderPolicy
+      ),
+      profileBaseline.backgroundRenderPolicy
+    ),
+    memoryGovernanceAutoEnabled: parseBoolean(
+      readJson<unknown>(
+        STORAGE_KEYS.MEMORY_GOVERNANCE_AUTO_ENABLED,
+        profileBaseline.memoryGovernanceAutoEnabled
+      ),
+      profileBaseline.memoryGovernanceAutoEnabled
+    ),
+    uiQualitySettings: parseQualitySettings(
+      readJson<unknown>(STORAGE_KEYS.UI_QUALITY_SETTINGS_V1, profileBaseline.uiQualitySettings),
+      profileBaseline.uiQualitySettings
+    ),
+  });
+}
+
 export class DefaultPerformanceControlService implements PerformanceControlService {
   private snapshot: PerformanceControlSnapshot = DEFAULT_PERFORMANCE_CONTROL_SNAPSHOT;
 
@@ -150,72 +209,7 @@ export class DefaultPerformanceControlService implements PerformanceControlServi
   }
 
   refreshSettingsFromStorage(): PerformanceControlSettingsSnapshot {
-    const baseFallback = DEFAULT_PERFORMANCE_CONTROL_SNAPSHOT.settings;
-    const hasRuntimeProfile = readString(STORAGE_KEYS.PERFORMANCE_RUNTIME_PROFILE) !== null;
-    const runtimeProfile = parsePerformanceRuntimeProfile(
-      readJson<unknown>(STORAGE_KEYS.PERFORMANCE_RUNTIME_PROFILE, baseFallback.runtimeProfile),
-      baseFallback.runtimeProfile
-    );
-    const profileBaseline = mergeRuntimeProfileSettings(runtimeProfile, baseFallback);
-
-    if (!hasRuntimeProfile) {
-      this.snapshot = {
-        ...this.snapshot,
-        updatedAtMs: Date.now(),
-        settings: profileBaseline,
-      };
-      this.events.emit('performance-control/changed', this.snapshot);
-      return profileBaseline;
-    }
-
-    const nextSettings: PerformanceControlSettingsSnapshot = {
-      runtimeProfile,
-      editorLowPerformanceMode: parseBoolean(
-        readJson<unknown>(
-          STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE,
-          profileBaseline.editorLowPerformanceMode
-        ),
-        profileBaseline.editorLowPerformanceMode
-      ),
-      gifImportMaxFps: clampInteger(
-        readJson<unknown>(
-          STORAGE_KEYS.BACKGROUND_GIF_IMPORT_MAX_FPS,
-          profileBaseline.gifImportMaxFps
-        ),
-        0,
-        60,
-        profileBaseline.gifImportMaxFps
-      ),
-      coverMaxEdgePx: clampInteger(
-        readJson<unknown>(
-          STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX,
-          profileBaseline.coverMaxEdgePx
-        ),
-        0,
-        4096,
-        profileBaseline.coverMaxEdgePx
-      ),
-      backgroundRenderPolicy: parseBackgroundRenderPolicy(
-        readJson<unknown>(
-          STORAGE_KEYS.BACKGROUND_RENDER_POLICY,
-          profileBaseline.backgroundRenderPolicy
-        ),
-        profileBaseline.backgroundRenderPolicy
-      ),
-      memoryGovernanceAutoEnabled: parseBoolean(
-        readJson<unknown>(
-          STORAGE_KEYS.MEMORY_GOVERNANCE_AUTO_ENABLED,
-          profileBaseline.memoryGovernanceAutoEnabled
-        ),
-        profileBaseline.memoryGovernanceAutoEnabled
-      ),
-      uiQualitySettings: parseQualitySettings(
-        readJson<unknown>(STORAGE_KEYS.UI_QUALITY_SETTINGS_V1, profileBaseline.uiQualitySettings),
-        profileBaseline.uiQualitySettings
-      ),
-    };
-
-    const normalizedSettings = sanitizeRuntimeProfileByFieldOverrides(nextSettings);
+    const normalizedSettings = readPerformanceControlSettingsFromStorage();
 
     this.snapshot = {
       ...this.snapshot,

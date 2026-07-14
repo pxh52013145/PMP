@@ -1,6 +1,6 @@
 import './SettingsPage.css';
 import React, { useEffect, useMemo, useState } from 'react';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import type { SettingsPanelContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
@@ -31,11 +31,7 @@ function resolveSettingsSectionId(panel: SettingsPanelContribution): SettingsSec
     if (isSettingsSectionId(normalized)) return normalized;
   }
 
-  if (
-    panel.id === 'plugins' ||
-    panel.source === 'plugin' ||
-    panel.group === 'plugin'
-  ) {
+  if (panel.id === 'plugins' || panel.source === 'plugin' || panel.group === 'plugin') {
     return 'plugins';
   }
 
@@ -77,7 +73,9 @@ export const SettingsPage: React.FC = () => {
     unmountOnExit: false,
   });
   const pageMotionStyle =
-    pagePresence.phase === 'enter' ? buildThemePresenceAnimationStyle(pageEnterMotion?.spec, 'enter') : undefined;
+    pagePresence.phase === 'enter'
+      ? buildThemePresenceAnimationStyle(pageEnterMotion?.spec, 'enter')
+      : undefined;
   const [revision, setRevision] = useState(0);
   const [activePanelId, setActivePanelId] = useState<string | null>(null);
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
@@ -138,7 +136,7 @@ export const SettingsPage: React.FC = () => {
       section.panels.sort(sortPanels);
     }
 
-    return sorted;
+    return sorted.filter((section) => section.panels.length > 0);
   }, [panels, t]);
 
   useEffect(() => {
@@ -164,7 +162,7 @@ export const SettingsPage: React.FC = () => {
         ? null
         : sectionPanels.some((panel) => panel.id === activePanelId)
           ? activePanelId
-          : sectionPanels[0]?.id ?? null;
+          : (sectionPanels[0]?.id ?? null);
 
     if (nextSectionId !== activeSectionId) setActiveSectionId(nextSectionId);
     if (nextPanelId !== activePanelId) setActivePanelId(nextPanelId);
@@ -224,7 +222,9 @@ export const SettingsPage: React.FC = () => {
       data-surface-variant={pageSurface.variant}
       data-pmp-motion-phase={pagePresence.phase}
       {...(pageEnterMotion?.name ? { 'data-pmp-motion-channel': pageEnterMotion.name } : {})}
-      {...(pageEnterMotion?.spec.preset ? { 'data-pmp-motion-preset': pageEnterMotion.spec.preset } : {})}
+      {...(pageEnterMotion?.spec.preset
+        ? { 'data-pmp-motion-preset': pageEnterMotion.spec.preset }
+        : {})}
     >
       {panels.length === 0 ? (
         <div className="settings-card-note">{t('pages.settings.empty')}</div>
@@ -233,7 +233,12 @@ export const SettingsPage: React.FC = () => {
           <header className="settings-topbar" data-pmp-part="header">
             <div className="settings-topbar-left" data-pmp-part="header-main">
               {sections.length > 1 ? (
-                <div className="settings-main-tabs" data-pmp-part="main-tabs" role="tablist" aria-label={t('pages.settings.title')}>
+                <div
+                  className="settings-main-tabs"
+                  data-pmp-part="main-tabs"
+                  role="tablist"
+                  aria-label={t('pages.settings.title')}
+                >
                   {sections.map((section, index) => {
                     const isActive = section.id === activeSectionId;
                     return (
@@ -279,7 +284,11 @@ export const SettingsPage: React.FC = () => {
 
           <div className="settings-divider" data-pmp-part="divider" />
 
-          <nav className="settings-subbar" data-pmp-part="subbar" aria-label={t('pages.settings.title')}>
+          <nav
+            className="settings-subbar"
+            data-pmp-part="subbar"
+            aria-label={t('pages.settings.title')}
+          >
             <div
               ref={subTabsRef}
               className="settings-sub-tabs"
@@ -333,11 +342,15 @@ export const SettingsPage: React.FC = () => {
                     <p className="settings-content-desc">{activePanel.description}</p>
                   )}
                 </div>
-                <div className="settings-content-body">{activePanel.render() as React.ReactNode}</div>
+                <div className="settings-content-body">
+                  {activePanel.render() as React.ReactNode}
+                </div>
               </section>
             ) : (
               <div className="settings-card-note">
-                {t('pages.settings.emptySection', { section: activeSection?.title ?? t('pages.settings.title') })}
+                {t('pages.settings.emptySection', {
+                  section: activeSection?.title ?? t('pages.settings.title'),
+                })}
               </div>
             )}
           </main>

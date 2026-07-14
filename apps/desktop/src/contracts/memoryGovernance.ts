@@ -16,6 +16,7 @@ export type MemoryGovernanceReason =
   | 'playback-active'
   | 'runtime-release'
   | 'space-switch'
+  | 'editor-exit'
   | 'editor-window-hidden'
   | 'plugin-window-hidden'
   | 'vst-manager-window-hidden'

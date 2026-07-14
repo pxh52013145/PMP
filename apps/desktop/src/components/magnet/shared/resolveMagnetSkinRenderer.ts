@@ -7,9 +7,13 @@ export function resolveMagnetSkinRenderer<P>(
   renderers: Record<string, ComponentType<P>>,
   defaultRendererId: string
 ): ComponentType<P> {
+  const explicitRenderer =
+    skin.rendererId !== defaultRendererId ? renderers[skin.rendererId] : undefined;
+
   return (
-    renderers[skin.rendererId] ??
+    explicitRenderer ??
     renderers[skin.variant] ??
+    renderers[skin.rendererId] ??
     renderers[defaultRendererId] ??
     Object.values(renderers)[0]
   );

@@ -1,10 +1,19 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useSyncExternalStore } from 'react';
 import { Magnet, PixelAnchor, AnchorType } from '../../types/pixel';
 import { useEditor } from '../../contexts/EditorContext';
 import { MagnetComponent } from '../magnet/Magnet';
 import { computeMagnetVisualBounds } from '../../modules/magnets/geometry';
 import { getMagnetOccupiedPixels } from '../../utils/magnetEditor';
-import { listMagnetVariants } from '../../magnet-system/variantRegistry';
+import {
+  getMagnetVariantsRevision,
+  listMagnetVariants,
+  subscribeMagnetVariants,
+} from '../../magnet-system/variantRegistry';
+import {
+  getMagnetPreviewNode,
+  getMagnetRenderersRevision,
+  subscribeMagnetRenderers,
+} from '../../magnet-system/registry';
 import {
   appendMagnetHistory,
   loadMagnetHistory,
@@ -18,6 +27,7 @@ import {
   PREVIEW_STAGE_SIZE,
   buildAnchorsFromOrigin,
   buildEditorMagnet,
+  buildMagnetGridFootprint,
   createEmptyInsetDraft,
   createInsetDraft,
   getPreviewScaleFromBounds,
@@ -25,11 +35,15 @@ import {
   normalizeMagnetVariant,
   parseInsetDraft,
   parseMagnetSkinPropsDraft,
+  resolveMagnetAnchorDraftDimensions,
+  resolveMagnetAnchorOrigin,
+  resolvePreviewAnchorOrigin,
 } from './magnetCreatorModel';
 import { createDefaultBoundsForMagnet } from '../../modules/magnets/layoutPresets';
 import { DEFAULT_MAGNET_TRANSITION } from '../../modules/magnets/chromePresets';
 import { useLocale, useT } from '../../i18n';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
+import { MagnetPreviewBoundary } from './MagnetPreviewBoundary';
 import './MagnetCreator.css';
 
 interface MagnetCreatorProps {
@@ -232,20 +246,11 @@ export function MagnetCreator({
     setChromeInsetDraft(createInsetDraft(magnet.chrome?.inset));
     setChromeOutsetDraft(createInsetDraft(magnet.chrome?.outset));
 
-    if (magnet.anchors.length >= 2) {
-      if (magnet.anchorType === 'horizontal') {
-        const width = Math.abs(magnet.anchors[1].gridX - magnet.anchors[0].gridX) + 1;
-        setHorizontalPixels(width);
-      } else if (magnet.anchorType === 'vertical') {
-        const height = Math.abs(magnet.anchors[1].gridY - magnet.anchors[0].gridY) + 1;
-        setVerticalPixels(height);
-      } else if (magnet.anchorType === 'rectangular') {
-        const width = Math.abs(magnet.anchors[1].gridX - magnet.anchors[0].gridX) + 1;
-        const height = Math.abs(magnet.anchors[2].gridY - magnet.anchors[0].gridY) + 1;
-        setRectWidth(width);
-        setRectHeight(height);
-      }
-    }
+    const dimensions = resolveMagnetAnchorDraftDimensions(magnet);
+    setHorizontalPixels(dimensions.horizontalPixels);
+    setVerticalPixels(dimensions.verticalPixels);
+    setRectWidth(dimensions.rectWidth);
+    setRectHeight(dimensions.rectHeight);
 
     if (magnet.style) {
       setStyleJson(JSON.stringify(magnet.style, null, 2));
@@ -268,7 +273,8 @@ export function MagnetCreator({
   }, [mode, editingMagnet, loadMagnetConfig]);
 
   const generateAnchors = useMemo((): PixelAnchor[] => {
-    return buildAnchorsFromOrigin(anchorType, 10, 10, anchorDimensions);
+    const origin = resolvePreviewAnchorOrigin(anchorType, anchorDimensions);
+    return buildAnchorsFromOrigin(anchorType, origin.x, origin.y, anchorDimensions);
   }, [anchorType, anchorDimensions]);
 
   const anchorsValidation = useMemo(() => {
@@ -278,38 +284,50 @@ export function MagnetCreator({
     const warnings: string[] = [];
 
     let anchorsToValidate: PixelAnchor[];
+    const isCatalogFootprintOnly =
+      mode === 'edit' && editingMagnet && (editingMagnet.anchors?.length ?? 0) === 0;
 
     if (mode === 'edit' && editingMagnet) {
-      const baseAnchor = editingMagnet.anchors[0];
-      const baseX = baseAnchor.gridX;
-      const baseY = baseAnchor.gridY;
+      const origin = resolveMagnetAnchorOrigin(editingMagnet);
 
-      anchorsToValidate = buildAnchorsFromOrigin(anchorType, baseX, baseY, anchorDimensions);
+      anchorsToValidate = buildAnchorsFromOrigin(
+        anchorType,
+        origin.x,
+        origin.y,
+        anchorDimensions
+      );
     } else {
 
       anchorsToValidate = generateAnchors;
     }
 
-    anchorsToValidate.forEach((anchor) => {
-      if (anchor.gridX < 0 || anchor.gridX > maxX) {
-        errors.push(
-          t('editor.magnet-creator.validation.anchorOutOfRangeX', {
-            id: anchor.id,
-            value: anchor.gridX,
-          })
-        );
-      }
-      if (anchor.gridY < 0 || anchor.gridY > maxY) {
-        errors.push(
-          t('editor.magnet-creator.validation.anchorOutOfRangeY', {
-            id: anchor.id,
-            value: anchor.gridY,
-          })
-        );
-      }
-    });
+    if (!isCatalogFootprintOnly) {
+      anchorsToValidate.forEach((anchor) => {
+        if (anchor.gridX < 0 || anchor.gridX > maxX) {
+          errors.push(
+            t('editor.magnet-creator.validation.anchorOutOfRangeX', {
+              id: anchor.id,
+              value: anchor.gridX,
+            })
+          );
+        }
+        if (anchor.gridY < 0 || anchor.gridY > maxY) {
+          errors.push(
+            t('editor.magnet-creator.validation.anchorOutOfRangeY', {
+              id: anchor.id,
+              value: anchor.gridY,
+            })
+          );
+        }
+      });
+    }
 
-    if (mode === 'edit' && editingMagnet && anchorsToValidate.length > 0) {
+    if (
+      mode === 'edit' &&
+      editingMagnet &&
+      !isCatalogFootprintOnly &&
+      anchorsToValidate.length > 0
+    ) {
 
       const tempMagnet: Magnet = {
         ...editingMagnet,
@@ -385,6 +403,7 @@ export function MagnetCreator({
       name,
       anchorType,
       anchors: generateAnchors,
+      gridFootprint: buildMagnetGridFootprint(anchorType, anchorDimensions),
       bounds: parsedBounds,
       content,
       style: parsedStyle,
@@ -408,6 +427,7 @@ export function MagnetCreator({
     parsedStyle,
     variant,
     sourceMagnet,
+    anchorDimensions,
   ]);
 
   const previewBounds = useMemo(() => {
@@ -421,15 +441,12 @@ export function MagnetCreator({
   const handleSave = () => {
     if (isSaving || !id || !name || !parsedBounds) return;
 
-    const anchorsToSave =
-      mode === 'edit' && editingMagnet
-        ? buildAnchorsFromOrigin(
-            anchorType,
-            editingMagnet.anchors[0].gridX,
-            editingMagnet.anchors[0].gridY,
-            anchorDimensions
-          )
-        : generateAnchors;
+    const preserveCatalogFootprint =
+      mode === 'edit' && editingMagnet && (editingMagnet.anchors?.length ?? 0) === 0;
+    const origin = editingMagnet ? resolveMagnetAnchorOrigin(editingMagnet) : { x: 10, y: 10 };
+    const anchorsToSave = preserveCatalogFootprint
+      ? []
+      : buildAnchorsFromOrigin(anchorType, origin.x, origin.y, anchorDimensions);
 
     const magnetToSave = buildEditorMagnet({
       seedMagnet: sourceMagnet ?? editingMagnet ?? undefined,
@@ -439,6 +456,7 @@ export function MagnetCreator({
       name,
       anchorType,
       anchors: anchorsToSave,
+      gridFootprint: buildMagnetGridFootprint(anchorType, anchorDimensions),
       bounds: parsedBounds,
       content,
       style: parsedStyle,
@@ -494,10 +512,33 @@ export function MagnetCreator({
       !animationError &&
       !skinPropsError
   );
-  const rendererId = editingMagnet?.renderer ?? editingMagnet?.id ?? id;
-  const rendererVariants = rendererId ? listMagnetVariants(rendererId) : [];
+  const rendererRevision = useSyncExternalStore(
+    subscribeMagnetRenderers,
+    getMagnetRenderersRevision,
+    getMagnetRenderersRevision
+  );
+  const variantRevision = useSyncExternalStore(
+    subscribeMagnetVariants,
+    getMagnetVariantsRevision,
+    getMagnetVariantsRevision
+  );
+  const rendererId = sourceMagnet?.renderer ?? sourceMagnet?.id ?? id;
+  const rendererVariants = useMemo(() => {
+    void variantRevision;
+    return rendererId ? listMagnetVariants(rendererId) : [];
+  }, [rendererId, variantRevision]);
+  const selectableRendererVariants = useMemo(
+    () => rendererVariants.filter((candidate) => candidate.id !== 'default'),
+    [rendererVariants]
+  );
   const selectedVariantKnown =
     !variant || rendererVariants.some((candidate) => candidate.id === variant);
+  const staticPreviewContent = useMemo(() => {
+    void rendererRevision;
+    return previewMagnet ? getMagnetPreviewNode(previewMagnet) : null;
+  }, [previewMagnet, rendererRevision]);
+  const shouldMountLiveRenderer =
+    windowActivity.isActive && selectableRendererVariants.length > 0;
 
   return (
     <div className="editor-creator">
@@ -526,11 +567,22 @@ export function MagnetCreator({
                     height: `${PREVIEW_STAGE_SIZE}px`,
                   }}
                 >
-                  <MagnetComponent
-                    magnet={previewMagnet}
-                    pixelPositions={PREVIEW_PIXEL_POSITIONS}
-                    disableMotion={windowActivity.renderMode !== 'full'}
-                  />
+                  <MagnetPreviewBoundary
+                    key={`${previewMagnet.id}:${rendererId}:${variant}:${shouldMountLiveRenderer}`}
+                    magnetId={previewMagnet.id}
+                    fallback={staticPreviewContent ?? previewMagnet.name}
+                  >
+                    <MagnetComponent
+                      magnet={previewMagnet}
+                      pixelPositions={PREVIEW_PIXEL_POSITIONS}
+                      disableMotion={windowActivity.renderMode !== 'full'}
+                      rendererContentOverride={
+                        shouldMountLiveRenderer
+                          ? undefined
+                          : (staticPreviewContent ?? previewMagnet.name)
+                      }
+                    />
+                  </MagnetPreviewBoundary>
                 </div>
               </div>
             </div>
@@ -766,27 +818,39 @@ export function MagnetCreator({
               <label className="creator-label">
                 {t('editor.magnet-library.magnet.variant.label')}
               </label>
-              <select
-                className="creator-select"
-                value={variant}
-                onChange={(e) => setVariant(e.target.value)}
-              >
-                <option value="">{t('editor.magnet-library.magnet.variant.default')}</option>
-                {rendererVariants.map((candidate) => (
-                  <option key={candidate.id} value={candidate.id}>
-                    {candidate.label}
-                  </option>
-                ))}
-                {variant && !selectedVariantKnown ? (
-                  <option value={variant}>
-                    {t('editor.magnet-library.magnet.variant.unknown', { variant })}
-                  </option>
-                ) : null}
-              </select>
+              {selectableRendererVariants.length > 0 ? (
+                <select
+                  className="creator-select"
+                  value={variant === 'default' ? '' : variant}
+                  onChange={(e) => setVariant(e.target.value)}
+                >
+                  <option value="">{t('editor.magnet-library.magnet.variant.default')}</option>
+                  {selectableRendererVariants.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.label}
+                    </option>
+                  ))}
+                  {variant && !selectedVariantKnown ? (
+                    <option value={variant}>
+                      {t('editor.magnet-library.magnet.variant.unknown', { variant })}
+                    </option>
+                  ) : null}
+                </select>
+              ) : variant ? (
+                <button
+                  type="button"
+                  className="creator-variant-clear"
+                  onClick={() => setVariant('')}
+                >
+                  {t('common.action.clear')}: {variant}
+                </button>
+              ) : null}
             </div>
             <div className="creator-hint">
-              {rendererVariants.length > 0
-                ? t('editor.magnet-library.magnet.variant.hint', { count: rendererVariants.length })
+              {selectableRendererVariants.length > 0
+                ? t('editor.magnet-library.magnet.variant.hint', {
+                    count: selectableRendererVariants.length,
+                  })
                 : t('editor.magnet-library.editor.variantEmpty', { rendererId: rendererId || '-' })}
             </div>
             <div className="creator-form-column">

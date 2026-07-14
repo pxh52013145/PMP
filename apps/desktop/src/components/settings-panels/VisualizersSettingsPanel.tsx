@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import type { VisualizerContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';

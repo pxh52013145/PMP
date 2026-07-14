@@ -1,6 +1,5 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { KernelProvider } from './contexts/KernelContext';
 import { I18nSync, readPersistedLocale, setLocale } from './i18n';
 import { installConsoleBridge } from './services/telemetry/consoleBridge';
 import { getTelemetryLogger } from './services/telemetry/TelemetryService';
@@ -210,6 +209,12 @@ async function bootstrap(): Promise<void> {
     },
   });
   const RootApp = rootApp.component;
+  const KernelProvider =
+    rootApp.kind === 'desktop-lyrics-overlay'
+      ? null
+      : rootApp.kind === 'editor'
+        ? (await import('./contexts/EditorKernelProvider')).EditorKernelProvider
+        : (await import('./contexts/KernelContext')).KernelProvider;
   const overlay = document.getElementById('pmp-startup-overlay');
   const useSharedStartupOverlay = usesSharedStartupOverlay(rootApp.kind);
 
@@ -227,7 +232,7 @@ async function bootstrap(): Promise<void> {
   );
 
   const appContent =
-    rootApp.kind === 'desktop-lyrics-overlay' ? (
+    rootApp.kind === 'desktop-lyrics-overlay' || !KernelProvider ? (
       rootContent
     ) : (
       <KernelProvider>{rootContent}</KernelProvider>

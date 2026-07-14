@@ -13,7 +13,7 @@ import WindowResizeHandles from '../../components/core/WindowResizeHandles';
 import MatrixRainEffect from '../../components/effects/MatrixRainEffect';
 import { MagnetLayer } from '../../components/magnet/MagnetLayer';
 import { useEditor } from '../../contexts/EditorContext';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { PixelAnchor } from '../../types/pixel';
 import { BackgroundSettings } from '../../types/background';
 import { DEFAULT_BACKGROUND_SETTINGS } from '../../constants/defaultBackground';
@@ -142,7 +142,7 @@ export function MatrixWorkbench({
     return readJson(STORAGE_KEYS.BACKGROUND_SETTINGS, DEFAULT_BACKGROUND_SETTINGS);
   });
 
-  const { editorState, toggleEditMode, exitEditMode, updateOccupancy } = useEditor();
+  const { editorState, toggleEditMode, updateOccupancy } = useEditor();
   const { magnetLibrary, activeMagnetIds, activeSpaceId, updateMagnetAnchors, activateMagnet } =
     useMagnetConfig();
   const chromeOverrideMode = useMagnetChromeOverrideMode();
@@ -479,23 +479,6 @@ export function MatrixWorkbench({
       cleanupPromise.then((cleanup) => cleanup());
     };
   }, []);
-
-  // 监听编辑器窗口的退出信号
-  useEffect(() => {
-    // 监听 Tauri 退出编辑模式事件
-    const setupExitListener = async () => {
-      const unlisten = await setupTauriListener(TAURI_EVENTS.EDITOR_EXIT, () => {
-        exitEditMode();
-      });
-      return unlisten;
-    };
-
-    const unlistenPromise = setupExitListener();
-
-    return () => {
-      unlistenPromise.then((unlisten) => unlisten());
-    };
-  }, [exitEditMode]);
 
   useEffect(() => {
     if (!isTauri) return;

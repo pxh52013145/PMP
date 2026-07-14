@@ -29,6 +29,12 @@
   --editor-window-glass-blur: 0px;
 }
 
+.editor-window-panel-loading {
+  width: 100%;
+  height: 2px;
+  background: rgba(71, 190, 168, 0.7);
+}
+
 .editor-window-app.editor-window-app--control {
   /* The control window is narrow; avoid wasting width with global padding. */
   padding: 8px;

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { QualitySnapshot } from '../contracts/quality';
 import { DEFAULT_QUALITY_SETTINGS_V1, resolveQualityProfile } from '../contracts/quality';
-import { useKernel } from './KernelContext';
+import { useKernel } from './KernelApiContext';
 import { QUALITY_SERVICE_TOKEN, type QualityService } from '../services/quality';
 import { useWindowActivity } from './WindowActivityContext';
 

@@ -1,5 +1,6 @@
 import {
   memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -7,7 +8,7 @@ import {
   type ComponentType,
   type ReactNode,
 } from 'react';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
@@ -151,8 +152,8 @@ const ProcessPerfMonitorDefaultRenderer = memo(function ProcessPerfMonitorDefaul
     });
   }, [snapshot, t]);
 
-  const renderMemoryValue = useMemo(() => {
-    return (
+  const renderMemoryValue = useCallback(
+    (
       privateWorkingSetBytes: number | null | undefined,
       workingSetBytes: number | null | undefined,
       privateBytes: number | null | undefined
@@ -166,8 +167,9 @@ const ProcessPerfMonitorDefaultRenderer = memo(function ProcessPerfMonitorDefaul
           {t('magnet.processPerf.token.commit')} {toMb(privateBytes)}
         </span>
       </span>
-    );
-  }, [t]);
+    ),
+    [t]
+  );
 
   const statRows = useMemo(() => {
     const rows: StatRow[] = [

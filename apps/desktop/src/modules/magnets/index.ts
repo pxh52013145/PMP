@@ -8,11 +8,7 @@
  * This is intentionally small to enable incremental refactors.
  */
 export { createDefaultMagnetLibrary } from './defaultLibrary';
-export {
-  getBuiltinMagnetLabelKey,
-  getMagnetDisplayName,
-  getMagnetPreviewText,
-} from './display';
+export { getBuiltinMagnetLabelKey, getMagnetDisplayName, getMagnetPreviewText } from './display';
 export { createInitialMagnetState } from './state';
 export type { MagnetStateSnapshot, CreateInitialMagnetStateOptions } from './state';
 export {
@@ -83,6 +79,7 @@ export {
 export {
   MagnetLibraryProvider,
   useMagnetConfig,
+  useOptionalMagnetConfig,
   type MagnetConfigContextValue,
   type MagnetLibraryProviderProps,
 } from './MagnetLibraryProvider';

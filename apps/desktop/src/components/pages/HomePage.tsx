@@ -1,6 +1,6 @@
 import React from 'react';
 import './HomePage.css';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import { COMMANDS_SERVICE_TOKEN, dispatchCommandOrFallback } from '../../services/commands';

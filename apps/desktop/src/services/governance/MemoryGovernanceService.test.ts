@@ -196,6 +196,28 @@ describe('DefaultMemoryGovernanceService', () => {
     expect(refreshTotalsSnapshot).not.toHaveBeenCalled();
   });
 
+  it('enforces Editor teardown and working-set trimming on edit exit without memory pressure', async () => {
+    mocks.isTauri = true;
+    const result = await createService().runOnce('editor-exit');
+
+    expect(result.plan.tier).toBe(0);
+    expect(result.executed).toEqual(
+      expect.arrayContaining([
+        'destroy-hidden-editor-windows',
+        'trim-webview2-working-set',
+        'trim-tree-working-set',
+      ])
+    );
+    expect(mocks.scheduleProcessWorkingSetTrim).toHaveBeenCalledWith(
+      'webview2',
+      expect.objectContaining({ reason: 'memory-governance:editor-exit' })
+    );
+    expect(mocks.scheduleProcessWorkingSetTrim).toHaveBeenCalledWith(
+      'tree',
+      expect.objectContaining({ reason: 'memory-governance:editor-exit' })
+    );
+  });
+
   it('hibernates idle capsules that exceed declared participant budgets before retention expires', async () => {
     mocks.isTauri = false;
     let now = 1_000;

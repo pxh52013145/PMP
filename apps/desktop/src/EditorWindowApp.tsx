@@ -1,29 +1,22 @@
 ﻿import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useT } from './i18n';
+import { lazy, Suspense } from 'react';
 import { EditorProvider } from './contexts/EditorContext';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
 import { QualityProvider } from './contexts/QualityContext';
-import { useKernel } from './contexts/KernelContext';
+import { useKernel } from './contexts/KernelApiContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { NavigationProvider } from './contexts/NavigationContext';
 import { AudioEngineProvider } from './contexts/AudioEngineContext';
-import { EditorStatistics } from './components/editor/EditorStatistics';
-import { EditorMagnetLibrary } from './components/editor/EditorMagnetLibrary';
-import { StyleBar } from './components/editor/StyleBar';
-import { StyleBackgroundEffectPopup } from './components/editor/style/StyleBackgroundEffectPopup';
-import { StyleBorderEffectPopup } from './components/editor/style/StyleBorderEffectPopup';
-import { StyleCoverColorPopup } from './components/editor/style/StyleCoverColorPopup';
-import { StylePixelPopup } from './components/editor/style/StylePixelPopup';
-import { MagnetCreator } from './components/editor/MagnetCreator';
-import { BackgroundManager } from './components/editor/BackgroundManager';
-import { CustomBackgroundEditor } from './components/editor/CustomBackgroundEditor';
-import { ThemeEditor } from './components/editor/ThemeEditor';
-import { ThemeDebugPage } from './components/debug/ThemeDebugPage';
 import { Magnet } from './types/pixel';
 import { BackgroundSettings, BackgroundConfig } from './types/background';
 import { DEFAULT_BACKGROUND_SETTINGS } from './constants/defaultBackground';
-import { BUILTIN_MAGNET_IDS, DEFAULT_ACTIVE_MAGNET_IDS, REQUIRED_MAGNET_IDS } from './constants/magnets';
+import {
+  BUILTIN_MAGNET_IDS,
+  DEFAULT_ACTIVE_MAGNET_IDS,
+  REQUIRED_MAGNET_IDS,
+} from './constants/magnets';
 import { saveConfig, type MagnetStateConfig } from './utils/configManager';
 import {
   createDefaultMagnetLibrary,
@@ -80,6 +73,45 @@ import './components/editor/ThemeEditor.css';
 const editorControlTelemetry = getTelemetryLogger('editor', 'EditorControlPanel');
 const editorWindowTelemetry = getTelemetryLogger('editor', 'EditorWindowApp');
 
+const EditorStatistics = lazy(async () => ({
+  default: (await import('./components/editor/EditorStatistics')).EditorStatistics,
+}));
+const EditorMagnetLibrary = lazy(async () => ({
+  default: (await import('./components/editor/EditorMagnetLibrary')).EditorMagnetLibrary,
+}));
+const StyleBar = lazy(async () => ({
+  default: (await import('./components/editor/StyleBar')).StyleBar,
+}));
+const StyleBackgroundEffectPopup = lazy(async () => ({
+  default: (await import('./components/editor/style/StyleBackgroundEffectPopup'))
+    .StyleBackgroundEffectPopup,
+}));
+const StyleBorderEffectPopup = lazy(async () => ({
+  default: (await import('./components/editor/style/StyleBorderEffectPopup'))
+    .StyleBorderEffectPopup,
+}));
+const StyleCoverColorPopup = lazy(async () => ({
+  default: (await import('./components/editor/style/StyleCoverColorPopup')).StyleCoverColorPopup,
+}));
+const StylePixelPopup = lazy(async () => ({
+  default: (await import('./components/editor/style/StylePixelPopup')).StylePixelPopup,
+}));
+const MagnetCreator = lazy(async () => ({
+  default: (await import('./components/editor/MagnetCreator')).MagnetCreator,
+}));
+const BackgroundManager = lazy(async () => ({
+  default: (await import('./components/editor/BackgroundManager')).BackgroundManager,
+}));
+const CustomBackgroundEditor = lazy(async () => ({
+  default: (await import('./components/editor/CustomBackgroundEditor')).CustomBackgroundEditor,
+}));
+const RegistrationCenter = lazy(async () => ({
+  default: (await import('./components/editor/RegistrationCenter')).RegistrationCenter,
+}));
+const ThemeDebugPage = lazy(async () => ({
+  default: (await import('./components/debug/ThemeDebugPage')).ThemeDebugPage,
+}));
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -88,12 +120,12 @@ interface EditorControlPanelProps {
   onExitEditMode: () => void;
 }
 
-type ControlPanelToggleType = 'statistics' | 'library' | 'style' | 'theme' | 'background';
+type ControlPanelToggleType = 'statistics' | 'library' | 'style' | 'registration' | 'background';
 const CONTROL_PANEL_OPEN_COMMAND_BY_TYPE: Record<ControlPanelToggleType, string> = {
   statistics: 'app:open-statistics-editor-window',
   library: 'app:open-library-editor-window',
   style: 'app:open-style-editor-window',
-  theme: 'app:open-theme-editor-window',
+  registration: 'app:open-registration-center-window',
   background: 'app:open-background-editor-window',
 };
 
@@ -104,7 +136,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
   const [statisticsOpen, setStatisticsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
-  const [themeOpen, setThemeOpen] = useState(false);
+  const [registrationOpen, setRegistrationOpen] = useState(false);
   const [backgroundOpen, setBackgroundOpen] = useState(false);
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false);
   const [pixelHintsVisible, setPixelHintsVisible] = useState(() =>
@@ -114,7 +146,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
     statistics: false,
     library: false,
     style: false,
-    theme: false,
+    registration: false,
     background: false,
   });
 
@@ -165,8 +197,9 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
       case 'style':
         setStyleOpen(open);
         return;
+      case 'registration':
       case 'theme':
-        setThemeOpen(open);
+        setRegistrationOpen(open);
         return;
       case 'background':
         setBackgroundOpen(open);
@@ -190,18 +223,18 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         }
       };
 
-      const [statistics, library, style, theme, background] = await Promise.all([
+      const [statistics, library, style, registration, background] = await Promise.all([
         getVisible('statistics'),
         getVisible('library'),
         getVisible('style'),
-        getVisible('theme'),
+        getVisible('registration'),
         getVisible('background'),
       ]);
 
       setStatisticsOpen(statistics);
       setLibraryOpen(library);
       setStyleOpen(style);
-      setThemeOpen(theme);
+      setRegistrationOpen(registration);
       setBackgroundOpen(background);
     } catch {
       // best-effort: visibility sync is non-critical
@@ -252,7 +285,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
             setStatisticsOpen(false);
             setLibraryOpen(false);
             setStyleOpen(false);
-            setThemeOpen(false);
+            setRegistrationOpen(false);
             setBackgroundOpen(false);
             return;
           }
@@ -267,7 +300,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
             setStatisticsOpen(false);
             setLibraryOpen(false);
             setStyleOpen(false);
-            setThemeOpen(false);
+            setRegistrationOpen(false);
             setBackgroundOpen(false);
             void syncWindowStates();
             return;
@@ -340,9 +373,11 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
       try {
         const { appWindow } = await import('@tauri-apps/api/window');
         const resolvedPinned = await (
-          (appWindow as typeof appWindow & {
-            isAlwaysOnTop?: () => Promise<boolean>;
-          }).isAlwaysOnTop?.() ?? Promise.resolve(false)
+          (
+            appWindow as typeof appWindow & {
+              isAlwaysOnTop?: () => Promise<boolean>;
+            }
+          ).isAlwaysOnTop?.() ?? Promise.resolve(false)
         ).catch(() => false);
         if (!disposed) {
           setIsAlwaysOnTop(Boolean(resolvedPinned));
@@ -382,8 +417,8 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
     void runWindowToggle('style', styleOpen, setStyleOpen);
   };
 
-  const handleToggleTheme = () => {
-    void runWindowToggle('theme', themeOpen, setThemeOpen);
+  const handleToggleRegistration = () => {
+    void runWindowToggle('registration', registrationOpen, setRegistrationOpen);
   };
 
   const handleToggleBackground = () => {
@@ -400,7 +435,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
       STORAGE_KEYS.EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE,
       newState,
       TAURI_EVENTS.EDITOR_OVERLAY_PIXEL_HINTS_UPDATED
-      );
+    );
   };
 
   const handleUndoLayout = (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -490,7 +525,9 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
             className={`cyber-btn pin-btn ${isAlwaysOnTop ? 'active' : ''}`}
             onClick={handleToggleAlwaysOnTop}
             title={
-              isAlwaysOnTop ? t('editor.control-panel.pin.title.unpin') : t('editor.control-panel.pin.title.pin')
+              isAlwaysOnTop
+                ? t('editor.control-panel.pin.title.unpin')
+                : t('editor.control-panel.pin.title.pin')
             }
           >
             <span className="btn-text"></span>
@@ -542,15 +579,15 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         <span className="glow-label">{t('editor.control-panel.toggle.background.label')}</span>
       </div>
 
-      {/* Theme Editor 开关 */}
+      {/* 注册中心开关 */}
       <div className="switch-container">
         <button
-          className={`cyber-switch-btn ${themeOpen ? 'active' : ''}`}
-          onClick={handleToggleTheme}
+          className={`cyber-switch-btn ${registrationOpen ? 'active' : ''}`}
+          onClick={handleToggleRegistration}
         >
           <span className="switch-indicator"></span>
         </button>
-        <span className="glow-label">{t('editor.control-panel.toggle.theme.label')}</span>
+        <span className="glow-label">{t('editor.control-panel.toggle.registration.label')}</span>
       </div>
     </div>
   );
@@ -585,7 +622,9 @@ const getWindowTypeFromHash = (): string => {
   const hash = window.location.hash;
   const match = hash.match(/#\/editor\/([\w-]+)/);
   const raw = match ? match[1] : 'control';
-  return raw === 'help' ? 'debug' : raw;
+  if (raw === 'help') return 'debug';
+  if (raw === 'theme') return 'registration';
+  return raw;
 };
 
 export function EditorWindowApp() {
@@ -603,9 +642,12 @@ export function EditorWindowApp() {
   const [isPageFrozen, setIsPageFrozen] = useState(false);
   const editorLowPerformanceMode = performanceSettings.editorLowPerformanceMode;
   const backgroundRenderPolicy = performanceSettings.backgroundRenderPolicy;
-  const [qualityLevel, setQualityLevel] = useState(() => qualityService.getSnapshot().effective.level);
-  const isWindowActive = isWindowVisible && isDocumentVisible && !isWindowMinimized && !isPageFrozen && isWindowFocused;
-  const isWindowSyncReady = isWindowVisible && isDocumentVisible && !isWindowMinimized && !isPageFrozen;
+  const [qualityLevel, setQualityLevel] = useState(
+    () => qualityService.getSnapshot().effective.level
+  );
+  const isWindowActive =
+    isWindowVisible && isDocumentVisible && !isWindowMinimized && !isPageFrozen && isWindowFocused;
+  const isWindowSyncReady = isWindowActive;
   const activityRef = useRef({ isWindowActive, isWindowSyncReady });
   activityRef.current.isWindowActive = isWindowActive;
   activityRef.current.isWindowSyncReady = isWindowSyncReady;
@@ -614,7 +656,10 @@ export function EditorWindowApp() {
   const effectsReadyRef = useRef(false);
   const isTauri = useMemo(() => isTauriRuntime(), []);
   const needsMagnetConfigSync =
-    windowType === 'library' || windowType === 'statistics' || windowType === 'creator';
+    windowType === 'library' ||
+    windowType === 'statistics' ||
+    windowType === 'creator' ||
+    windowType === 'registration';
 
   useEffect(() => {
     const onVisibilityChange = () => setIsDocumentVisible(!document.hidden);
@@ -814,7 +859,10 @@ export function EditorWindowApp() {
   activeEditorSpaceIdRef.current = activeEditorSpaceId;
   const builtInMagnetIds = useMemo(() => new Set(BUILTIN_MAGNET_IDS), []);
   const [backgroundSettings, setBackgroundSettings] = useState<BackgroundSettings>(() => {
-    return readJson<BackgroundSettings>(STORAGE_KEYS.BACKGROUND_SETTINGS, DEFAULT_BACKGROUND_SETTINGS);
+    return readJson<BackgroundSettings>(
+      STORAGE_KEYS.BACKGROUND_SETTINGS,
+      DEFAULT_BACKGROUND_SETTINGS
+    );
   });
   const [isMaximized, setIsMaximized] = useState(() => {
     return readJson<boolean>(STORAGE_KEYS.IS_MAXIMIZED, false);
@@ -970,7 +1018,10 @@ export function EditorWindowApp() {
           setActiveMagnetIds(snapshot.activeMagnetIds);
         }
 
-        const backgroundData = readJson<BackgroundSettings | null>(STORAGE_KEYS.BACKGROUND_SETTINGS, null);
+        const backgroundData = readJson<BackgroundSettings | null>(
+          STORAGE_KEYS.BACKGROUND_SETTINGS,
+          null
+        );
         if (disposed || requestId !== loadRequestId) return;
         if (backgroundData) setBackgroundSettings(backgroundData);
 
@@ -1092,7 +1143,6 @@ export function EditorWindowApp() {
       });
     }
   };
-
 
   const handleMagnetActivate = async (magnetId: string) => {
     if (isTauri) {
@@ -1291,7 +1341,9 @@ export function EditorWindowApp() {
   };
 
   const handleApplyRendererBindings = useCallback(
-    async (bindings: Array<{ magnetId: string; rendererId: string }>): Promise<{ updated: number }> => {
+    async (
+      bindings: Array<{ magnetId: string; rendererId: string }>
+    ): Promise<{ updated: number }> => {
       const bindingByMagnetId = new Map<string, string>();
       for (const binding of bindings) {
         const magnetId = typeof binding.magnetId === 'string' ? binding.magnetId.trim() : '';
@@ -1373,7 +1425,10 @@ export function EditorWindowApp() {
 
     // Auto-add to background history (so custom backgrounds are discoverable without extra clicks).
     try {
-      const history = readJson<Array<{ id: string; config: BackgroundConfig; timestamp: number }>>(STORAGE_KEYS.BACKGROUND_HISTORY, []);
+      const history = readJson<Array<{ id: string; config: BackgroundConfig; timestamp: number }>>(
+        STORAGE_KEYS.BACKGROUND_HISTORY,
+        []
+      );
       const newItem = {
         id: `history-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         config,
@@ -1419,104 +1474,121 @@ export function EditorWindowApp() {
       <AudioEngineProvider>
         <NavigationProvider>
           <EditorProvider magnets={activeMagnets}>
-            <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive, renderMode }}>
+            <WindowActivityProvider
+              value={{ isVisible: isWindowVisible, isActive: isWindowActive, renderMode }}
+            >
               <QualityProvider>
                 <div
-                className={`editor-window-app ${windowType === 'control' ? 'editor-window-app--control' : ''} ${windowType === 'style' ? 'editor-window-app--style-bar' : ''} ${isTauri ? 'editor-window-app--tauri' : ''} ${editorLowPerformanceMode ? 'editor-window-app--low-performance' : ''} editor-window-app--skin-${editorSkinVariant} ${editorSkinMotionPaused ? 'editor-window-app--motion-paused' : ''} ${editorSkinEffectsReduced ? 'editor-window-app--effects-reduced' : ''}`}
-                ref={rootRef}
-              >
-                  {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}
+                  className={`editor-window-app ${windowType === 'control' ? 'editor-window-app--control' : ''} ${windowType === 'style' ? 'editor-window-app--style-bar' : ''} ${isTauri ? 'editor-window-app--tauri' : ''} ${editorLowPerformanceMode ? 'editor-window-app--low-performance' : ''} editor-window-app--skin-${editorSkinVariant} ${editorSkinMotionPaused ? 'editor-window-app--motion-paused' : ''} ${editorSkinEffectsReduced ? 'editor-window-app--effects-reduced' : ''}`}
+                  ref={rootRef}
+                >
+                  <Suspense
+                    fallback={<div className="editor-window-panel-loading" aria-hidden="true" />}
+                  >
+                    {windowType === 'control' && (
+                      <EditorControlPanel onExitEditMode={handleExitEditMode} />
+                    )}
 
-            {windowType === 'statistics' && <EditorStatistics />}
+                    {windowType === 'statistics' && <EditorStatistics />}
 
-            {windowType === 'library' && (
-              <EditorMagnetLibrary
-                magnetLibrary={magnetLibrary}
-                activeMagnetIds={activeMagnetIds}
-                builtInMagnetIds={builtInMagnetIds}
-                onMagnetUpdate={handleMagnetUpdate}
-                onMagnetActivate={handleMagnetActivate}
-                onMagnetDeactivate={handleMagnetDeactivate}
-                onMagnetDeleteFromLibrary={handleMagnetDeleteFromLibrary}
-              />
-            )}
+                    {windowType === 'library' && (
+                      <EditorMagnetLibrary
+                        magnetLibrary={magnetLibrary}
+                        activeMagnetIds={activeMagnetIds}
+                        builtInMagnetIds={builtInMagnetIds}
+                        onMagnetUpdate={handleMagnetUpdate}
+                        onMagnetActivate={handleMagnetActivate}
+                        onMagnetDeactivate={handleMagnetDeactivate}
+                        onMagnetDeleteFromLibrary={handleMagnetDeleteFromLibrary}
+                      />
+                    )}
 
-            {windowType === 'style' && <StyleBar />}
+                    {windowType === 'style' && <StyleBar />}
 
-            {windowType === 'style-pixel' && <StylePixelPopup />}
-            {windowType === 'style-cover-color' && <StyleCoverColorPopup />}
-            {windowType === 'style-background-effect' && <StyleBackgroundEffectPopup />}
-            {windowType === 'style-border-effect' && <StyleBorderEffectPopup />}
-            {windowType === 'creator' && (
-              <MagnetCreator
-                mode={creatorMode}
-                editingMagnet={editingMagnet}
-                defaultMagnet={
-                  editingMagnet ? defaultMagnetLibrary.find((m) => m.id === editingMagnet.id) : undefined
-                }
-                onSave={async (magnet) => {
-                  try {
-                    await handleMagnetUpdate(magnet);
-                    removeKey(STORAGE_KEYS.MAGNET_EDITOR_MODE);
-                    removeKey(STORAGE_KEYS.MAGNET_EDITOR_DATA);
-                    await broadcastDataUpdate(
-                      STORAGE_KEYS.CREATOR_WINDOW_OPEN,
-                      false,
-                      TAURI_EVENTS.CREATOR_WINDOW_CLOSED
-                    );
-                    const { closeEditorWindow } = await import('./utils/editorWindows');
-                    await closeEditorWindow('creator');
-                  } catch (error) {
-                    editorWindowTelemetry.error('editor.magnet-editor.save.failed', {
-                      message: getErrorMessage(error),
-                    });
-                    throw error;
-                  }
-                }}
-                onCancel={async () => {
-                  try {
-                    removeKey(STORAGE_KEYS.MAGNET_EDITOR_MODE);
-                    removeKey(STORAGE_KEYS.MAGNET_EDITOR_DATA);
-                    await broadcastDataUpdate(
-                      STORAGE_KEYS.CREATOR_WINDOW_OPEN,
-                      false,
-                      TAURI_EVENTS.CREATOR_WINDOW_CLOSED
-                    );
-                    const { closeEditorWindow } = await import('./utils/editorWindows');
-                    await closeEditorWindow('creator');
-                  } catch (error) {
-                    editorWindowTelemetry.error('editor.magnet-editor.window.close.failed', {
-                      message: getErrorMessage(error),
-                    });
-                  }
-                }}
-              />
-            )}
+                    {windowType === 'style-pixel' && <StylePixelPopup />}
+                    {windowType === 'style-cover-color' && <StyleCoverColorPopup />}
+                    {windowType === 'style-background-effect' && <StyleBackgroundEffectPopup />}
+                    {windowType === 'style-border-effect' && <StyleBorderEffectPopup />}
+                    {windowType === 'creator' && (
+                      <MagnetCreator
+                        mode={creatorMode}
+                        editingMagnet={editingMagnet}
+                        defaultMagnet={
+                          editingMagnet
+                            ? defaultMagnetLibrary.find((m) => m.id === editingMagnet.id)
+                            : undefined
+                        }
+                        onSave={async (magnet) => {
+                          try {
+                            await handleMagnetUpdate(magnet);
+                            removeKey(STORAGE_KEYS.MAGNET_EDITOR_MODE);
+                            removeKey(STORAGE_KEYS.MAGNET_EDITOR_DATA);
+                            await broadcastDataUpdate(
+                              STORAGE_KEYS.CREATOR_WINDOW_OPEN,
+                              false,
+                              TAURI_EVENTS.CREATOR_WINDOW_CLOSED
+                            );
+                            const { closeEditorWindow } = await import('./utils/editorWindows');
+                            await closeEditorWindow('creator');
+                          } catch (error) {
+                            editorWindowTelemetry.error('editor.magnet-editor.save.failed', {
+                              message: getErrorMessage(error),
+                            });
+                            throw error;
+                          }
+                        }}
+                        onCancel={async () => {
+                          try {
+                            removeKey(STORAGE_KEYS.MAGNET_EDITOR_MODE);
+                            removeKey(STORAGE_KEYS.MAGNET_EDITOR_DATA);
+                            await broadcastDataUpdate(
+                              STORAGE_KEYS.CREATOR_WINDOW_OPEN,
+                              false,
+                              TAURI_EVENTS.CREATOR_WINDOW_CLOSED
+                            );
+                            const { closeEditorWindow } = await import('./utils/editorWindows');
+                            await closeEditorWindow('creator');
+                          } catch (error) {
+                            editorWindowTelemetry.error(
+                              'editor.magnet-editor.window.close.failed',
+                              {
+                                message: getErrorMessage(error),
+                              }
+                            );
+                          }
+                        }}
+                      />
+                    )}
 
-            {windowType === 'background' && (
-              <BackgroundManager
-                settings={backgroundSettings}
-                onSettingsChange={handleBackgroundSettingsChange}
-                currentWindowMode={isMaximized ? 'maximized' : 'windowed'}
-              />
-            )}
+                    {windowType === 'background' && (
+                      <BackgroundManager
+                        settings={backgroundSettings}
+                        onSettingsChange={handleBackgroundSettingsChange}
+                        currentWindowMode={isMaximized ? 'maximized' : 'windowed'}
+                      />
+                    )}
 
-            {windowType === 'custom-background' && (
-              <CustomBackgroundEditor
-                initialConfig={backgroundSettings[isMaximized ? 'maximized' : 'windowed']}
-                onSave={handleCustomBackgroundSave}
-              />
-            )}
+                    {windowType === 'custom-background' && (
+                      <CustomBackgroundEditor
+                        initialConfig={backgroundSettings[isMaximized ? 'maximized' : 'windowed']}
+                        onSave={handleCustomBackgroundSave}
+                      />
+                    )}
 
-            {windowType === 'theme' && (
-              <ThemeEditor
-                magnetLibrary={magnetLibrary}
-                applyRendererBindings={handleApplyRendererBindings}
-              />
-            )}
+                    {windowType === 'registration' && (
+                      <RegistrationCenter
+                        magnetLibrary={magnetLibrary}
+                        activeMagnetIds={activeMagnetIds}
+                        setMagnetLibrary={setMagnetLibrary}
+                        activateMagnet={handleMagnetActivate}
+                        deactivateMagnet={handleMagnetDeactivate}
+                        applyRendererBindings={handleApplyRendererBindings}
+                      />
+                    )}
 
-                {windowType === 'debug' && <ThemeDebugPage />}
-              </div>
+                    {windowType === 'debug' && <ThemeDebugPage />}
+                  </Suspense>
+                </div>
               </QualityProvider>
             </WindowActivityProvider>
           </EditorProvider>

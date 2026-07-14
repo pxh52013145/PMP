@@ -19,10 +19,7 @@ import {
   DefaultInstalledExtensionRuntimeManager,
   INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN,
 } from './installedExtensionRuntimeManager';
-import {
-  SHELL_SURFACE_MANAGER_TOKEN,
-  type ShellSurfaceManager,
-} from './shellSurfaceManager';
+import { SHELL_SURFACE_MANAGER_TOKEN, type ShellSurfaceManager } from './shellSurfaceManager';
 
 const PLUGIN_RUNTIME_CAPSULE_ID = 'plugin.runtime';
 const PLUGIN_RUNTIME_PARTICIPANT_ID = 'installed-extension-runtime-manager';
@@ -31,7 +28,14 @@ function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function createInstalledExtensionRuntimeManagerModule(): KernelModule<AppEvents> {
+export type InstalledExtensionRuntimeManagerModuleOptions = {
+  autoStartBackgroundRuntimes?: boolean;
+};
+
+export function createInstalledExtensionRuntimeManagerModule(
+  options: InstalledExtensionRuntimeManagerModuleOptions = {}
+): KernelModule<AppEvents> {
+  const autoStartBackgroundRuntimes = options.autoStartBackgroundRuntimes ?? true;
   return {
     id: 'installed-extension-runtime-manager',
     activate: ({ services, events }) => {
@@ -44,7 +48,9 @@ export function createInstalledExtensionRuntimeManagerModule(): KernelModule<App
         events,
       });
 
-      service.start();
+      if (autoStartBackgroundRuntimes) {
+        service.start();
+      }
       const unregister = services.register(INSTALLED_EXTENSION_RUNTIME_MANAGER_TOKEN, service);
       const runtimeCapsuleManager = services.getOptional(
         RUNTIME_CAPSULE_MANAGER_SERVICE_TOKEN
@@ -79,21 +85,20 @@ export function createInstalledExtensionRuntimeManagerModule(): KernelModule<App
       };
       const cleanupRuntimeResources = async (reason: string): Promise<void> => {
         cleanupInProgress = true;
-        const [runtimeResult, surfaceResult, hiddenWindowResult] =
-          await Promise.allSettled([
-            service.cleanupManagedRuntimes(reason),
-            shellSurfaceManager?.cleanupAllSurfaces(reason) ?? Promise.resolve(0),
-            isTauriRuntime()
-              ? invokeWithTelemetry<number>('governance_destroy_hidden_plugin_windows', undefined, {
-                  moduleId: 'plugins',
-                  component: 'installedExtensionRuntimeManagerModule',
-                  event: 'plugin.runtime.hidden-windows.destroy',
-                  successLevel: 'info',
-                })
-              : Promise.resolve(0),
-          ]).finally(() => {
-            cleanupInProgress = false;
-          });
+        const [runtimeResult, surfaceResult, hiddenWindowResult] = await Promise.allSettled([
+          service.cleanupManagedRuntimes(reason),
+          shellSurfaceManager?.cleanupAllSurfaces(reason) ?? Promise.resolve(0),
+          isTauriRuntime()
+            ? invokeWithTelemetry<number>('governance_destroy_hidden_plugin_windows', undefined, {
+                moduleId: 'plugins',
+                component: 'installedExtensionRuntimeManagerModule',
+                event: 'plugin.runtime.hidden-windows.destroy',
+                successLevel: 'info',
+              })
+            : Promise.resolve(0),
+        ]).finally(() => {
+          cleanupInProgress = false;
+        });
 
         if (runtimeResult.status === 'rejected') {
           telemetry.warn('plugin.runtime.cleanup.runtimes.failed', {
@@ -117,10 +122,8 @@ export function createInstalledExtensionRuntimeManagerModule(): KernelModule<App
         telemetry.info('plugin.runtime.cleanup.completed', {
           fields: {
             reason,
-            stoppedRuntimeCount:
-              runtimeResult.status === 'fulfilled' ? runtimeResult.value : null,
-            cleanedSurfaceCount:
-              surfaceResult.status === 'fulfilled' ? surfaceResult.value : null,
+            stoppedRuntimeCount: runtimeResult.status === 'fulfilled' ? runtimeResult.value : null,
+            cleanedSurfaceCount: surfaceResult.status === 'fulfilled' ? surfaceResult.value : null,
             destroyedHiddenPluginWindowCount:
               hiddenWindowResult.status === 'fulfilled' ? hiddenWindowResult.value : null,
           },

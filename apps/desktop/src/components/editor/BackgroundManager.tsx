@@ -1,5 +1,5 @@
 import { useState, useCallback, memo, useEffect, useMemo, useRef } from 'react';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { BackgroundConfig, BackgroundSettings, PRESET_BACKGROUNDS } from '../../types/background';
 import { setupStorageListener, STORAGE_KEYS } from '../../utils/windowCommunication';
 import { readJson, tryWriteJson } from '../../modules/storage';

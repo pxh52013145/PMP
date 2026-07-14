@@ -1159,3 +1159,234 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Registration Center presentation: dense, stable and free of nested workspace cards. */
+.editor-theme--embedded .theme-editor-content {
+  --theme-editor-sidebar-width: 280px;
+  background: #0d1014;
+}
+
+.editor-theme--embedded .theme-editor-content::before,
+.editor-theme--embedded .theme-editor-title::after,
+.editor-theme--embedded .theme-editor-workspace-nav::after,
+.editor-theme--embedded .theme-editor-main::before,
+.editor-theme--embedded .theme-editor-main-overlay {
+  display: none;
+}
+
+.editor-theme--embedded .theme-editor-title {
+  min-height: 44px;
+  padding: 7px 16px;
+  background: #101419;
+  border-bottom-color: rgba(255, 255, 255, 0.07);
+  box-shadow: none;
+}
+
+.editor-theme--embedded .theme-editor-title-text {
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 13px;
+  text-shadow: none;
+}
+
+.editor-theme--embedded .theme-editor-title-actions {
+  gap: 6px;
+}
+
+.editor-theme--embedded .theme-editor-action-btn {
+  min-height: 28px;
+  padding: 0 9px;
+  color: rgba(255, 255, 255, 0.76);
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.editor-theme--embedded .theme-editor-action-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.editor-theme--embedded .theme-editor-workspace-nav {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  padding: 5px 8px;
+  overflow: visible;
+  background: #0f1317;
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+}
+
+.editor-theme--embedded .theme-editor-workspace-tab {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 9px;
+  align-items: center;
+  background: transparent;
+  border-color: transparent;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.editor-theme--embedded .theme-editor-workspace-tab:hover {
+  background: rgba(255, 255, 255, 0.045);
+  border-color: transparent;
+}
+
+.editor-theme--embedded .theme-editor-workspace-tab.is-active {
+  background: rgba(101, 203, 182, 0.1);
+  border-color: rgba(101, 203, 182, 0.24);
+  box-shadow: none;
+}
+
+.editor-theme--embedded .theme-editor-workspace-tab-title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-theme--embedded .theme-editor-workspace-tab-desc {
+  display: none;
+}
+
+.editor-theme--embedded .theme-editor-workspace-tab-badge {
+  max-width: 72px;
+  overflow: hidden;
+  padding: 2px 5px;
+  color: rgba(255, 255, 255, 0.64);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.09);
+  border-radius: 3px;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-theme--embedded .theme-editor-main {
+  box-shadow: none;
+}
+
+.editor-theme--embedded .theme-editor-sidebar {
+  min-width: 260px;
+  background: #101419;
+  border-right-color: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+}
+
+.editor-theme--embedded .theme-editor-sidebar-title {
+  padding: 14px 14px 4px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.editor-theme--embedded .theme-editor-sidebar-desc {
+  padding: 0 14px 12px;
+  line-height: 1.45;
+  border-bottom-color: rgba(255, 255, 255, 0.07);
+}
+
+.editor-theme--embedded .theme-editor-sidebar-summary {
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom-color: rgba(255, 255, 255, 0.07);
+}
+
+.editor-theme--embedded .theme-editor-sidebar-scroll {
+  padding: 10px 14px 16px;
+}
+
+.editor-theme--embedded .theme-editor-sidebar-card,
+.editor-theme--embedded .theme-editor-sidebar-card--accent,
+.editor-theme--embedded .theme-editor-sidebar-card--success,
+.editor-theme--embedded .theme-editor-sidebar-card--warning {
+  padding: 9px;
+  background: rgba(255, 255, 255, 0.025);
+  border-color: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+}
+
+.editor-theme--embedded .theme-editor-sidebar-card-value {
+  margin-top: 4px;
+}
+
+.editor-theme--embedded .theme-editor-panel {
+  padding: 16px 18px 28px;
+}
+
+.editor-theme--embedded .theme-editor-panel-inner {
+  gap: 12px;
+}
+
+.editor-theme--embedded .theme-editor-workspace-hero {
+  gap: 5px;
+  padding: 0 0 12px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.editor-theme--embedded .theme-editor-workspace-hero-title {
+  font-size: 16px;
+}
+
+.editor-theme--embedded .theme-editor-workspace-hero-desc {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.editor-theme--embedded .theme-editor-section {
+  padding: 12px 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 0;
+}
+
+.editor-theme--embedded .theme-editor-renderer-item {
+  border-radius: 4px;
+}
+
+@media (max-width: 1180px) and (min-width: 761px) {
+  .editor-theme--embedded .theme-editor-main {
+    flex-direction: row;
+  }
+
+  .editor-theme--embedded .theme-editor-sidebar {
+    flex: 0 0 var(--theme-editor-sidebar-width);
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 0;
+  }
+
+  .editor-theme--embedded .theme-editor-sidebar::after {
+    display: none;
+  }
+
+  .editor-theme--embedded .theme-editor-sidebar-scroll {
+    max-height: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .editor-theme--embedded .theme-editor-workspace-nav {
+    grid-template-columns: repeat(5, minmax(96px, 1fr));
+    overflow-x: auto;
+  }
+
+  .editor-theme--embedded .theme-editor-workspace-tab-badge {
+    display: none;
+  }
+
+  .editor-theme--embedded .theme-editor-main {
+    flex-direction: column;
+  }
+
+  .editor-theme--embedded .theme-editor-sidebar {
+    min-width: 0;
+    max-height: 260px;
+  }
+}

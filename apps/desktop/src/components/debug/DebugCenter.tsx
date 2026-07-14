@@ -9,7 +9,7 @@ import {
 } from 'react';
 import './DebugCenter.css';
 import type { TelemetryQueryInput, TelemetryQueryResult, TelemetryRecord } from '../../contracts/telemetry';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { getGlobalProcessPerfService } from '../../services/performance-control';
 import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';

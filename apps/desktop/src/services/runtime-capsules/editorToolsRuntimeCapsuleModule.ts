@@ -31,6 +31,7 @@ export interface EditorToolsRuntimeActivity {
 export interface EditorToolsRuntimeCapsuleService {
   updateActivity(activity: EditorToolsRuntimeActivity): void;
   clearActivity(detail?: string): void;
+  teardown(detail?: string): void;
   dispose(): void;
 }
 
@@ -85,10 +86,11 @@ async function cleanupHiddenEditorWindows(reason: string): Promise<void> {
   }
 }
 
-class DefaultEditorToolsRuntimeCapsuleService implements EditorToolsRuntimeCapsuleService {
+export class DefaultEditorToolsRuntimeCapsuleService implements EditorToolsRuntimeCapsuleService {
   private participantState: RuntimeCapsuleState = 'cold';
   private participantDetail: Record<string, unknown> = {};
   private activeLeaseId: string | null = null;
+  private teardownPending = false;
   private disposed = false;
   private readonly unregisterParticipant: () => void;
 
@@ -137,7 +139,14 @@ class DefaultEditorToolsRuntimeCapsuleService implements EditorToolsRuntimeCapsu
 
   updateActivity(activity: EditorToolsRuntimeActivity): void {
     if (this.disposed) return;
+    if (activity.isEditing) {
+      this.teardownPending = false;
+    }
     this.participantDetail = activityToDetail(activity);
+    if (this.teardownPending) {
+      this.releaseLease('editor tools teardown pending');
+      return;
+    }
     this.syncLease(activity);
   }
 
@@ -149,6 +158,29 @@ class DefaultEditorToolsRuntimeCapsuleService implements EditorToolsRuntimeCapsu
       clearReason: detail,
     };
     this.releaseLease(detail);
+  }
+
+  teardown(detail = 'edit mode exited'): void {
+    if (this.disposed) return;
+    this.teardownPending = true;
+    this.clearActivity(detail);
+    const reclaimed = this.runtimeCapsuleManager.reclaimInactiveCapsules({
+      mode: 'teardown',
+      minMemoryTier: 'heavy',
+      bypassWarmRetention: true,
+      targetCapsuleIds: [EDITOR_TOOLS_CAPSULE_ID],
+      reason: {
+        kind: 'window-hidden',
+        sourceId: EDITOR_TOOLS_PARTICIPANT_ID,
+        detail,
+      },
+    });
+    telemetry.info('editor.tools.teardown.requested', {
+      fields: {
+        detail,
+        reclaimed: reclaimed.some((item) => item.capsuleId === EDITOR_TOOLS_CAPSULE_ID),
+      },
+    });
   }
 
   dispose(): void {

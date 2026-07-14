@@ -7,6 +7,8 @@ import type { PluginRuntimeResolution } from '../../magnet-system/plugins/runtim
 import type { PluginDevSessionRecord } from '../../magnet-system/plugins/devSessionRegistry';
 
 export type PluginStudioWorkspaceId =
+  | 'activation'
+  | 'displays'
   | 'installed'
   | 'package-import'
   | 'developer'
@@ -69,34 +71,19 @@ export interface BuildPluginStudioMetricsInput {
 
 export const PLUGIN_STUDIO_WORKSPACES: readonly PluginStudioWorkspaceDefinition[] = [
   {
-    id: 'installed',
-    titleKey: 'settings.plugins.studio.nav.installed',
-    descKey: 'settings.plugins.studio.nav.installed.desc',
-  },
-  {
     id: 'package-import',
     titleKey: 'settings.plugins.studio.nav.packageImport',
     descKey: 'settings.plugins.studio.nav.packageImport.desc',
   },
   {
-    id: 'developer',
-    titleKey: 'settings.plugins.studio.nav.developer',
-    descKey: 'settings.plugins.studio.nav.developer.desc',
+    id: 'activation',
+    titleKey: 'settings.plugins.studio.nav.activation',
+    descKey: 'settings.plugins.studio.nav.activation.desc',
   },
   {
-    id: 'magnets',
-    titleKey: 'settings.plugins.studio.nav.magnets',
-    descKey: 'settings.plugins.studio.nav.magnets.desc',
-  },
-  {
-    id: 'appearance',
-    titleKey: 'settings.plugins.studio.nav.appearance',
-    descKey: 'settings.plugins.studio.nav.appearance.desc',
-  },
-  {
-    id: 'diagnostics',
-    titleKey: 'settings.plugins.studio.nav.diagnostics',
-    descKey: 'settings.plugins.studio.nav.diagnostics.desc',
+    id: 'displays',
+    titleKey: 'settings.plugins.studio.nav.displays',
+    descKey: 'settings.plugins.studio.nav.displays.desc',
   },
 ] as const;
 

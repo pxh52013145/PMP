@@ -1,7 +1,7 @@
 import './KeyboardShortcutsPage.css';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CommandContribution } from '../../contracts/contributions';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { useT } from '../../i18n';
 import { KEYBINDINGS_SERVICE_TOKEN, type KeybindingRule } from '../../services/keybindings';
 import type { KeybindingsSnapshot } from '../../services/keybindings/types';

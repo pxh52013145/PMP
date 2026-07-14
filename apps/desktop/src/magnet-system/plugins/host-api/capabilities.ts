@@ -197,6 +197,7 @@ const SHELL_MENU_ITEM_PERMISSION_BY_COMMAND_ID: Record<string, string | null> = 
   'commandPalette:toggle': null,
   'commandPalette:close': null,
   'app:open-keyboard-shortcuts-window': 'api:window',
+  'app:open-registration-center-window': 'api:window',
   'app:open-theme-editor-window': 'api:window',
   'app:open-debug-editor-window': 'api:window',
   'app:open-control-editor-window': 'api:window',
@@ -4272,8 +4273,7 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
           return target;
         }
         const collectionId =
-          asNonEmptyString(payload?.collectionId) ??
-          asNonEmptyString(payload?.playlistId);
+          asNonEmptyString(payload?.collectionId) ?? asNonEmptyString(payload?.playlistId);
         if (!collectionId) {
           return resultError('INVALID_PAYLOAD', 'payload.collectionId is required');
         }
@@ -4329,8 +4329,7 @@ function createPmpMusicPlatformWorkspaceHandler(): PluginHostCapabilityHandler {
         if ('ok' in target) {
           return target;
         }
-        const query =
-          asNonEmptyString(payload?.query) ?? asNonEmptyString(payload?.keyword);
+        const query = asNonEmptyString(payload?.query) ?? asNonEmptyString(payload?.keyword);
         if (!query) {
           return resultError('INVALID_PAYLOAD', 'payload.query is required');
         }
@@ -4521,17 +4520,13 @@ function createPmpMusicPlatformPrepareHandler(): PluginHostCapabilityHandler {
           instanceId: asNonEmptyString(payload?.instanceId) ?? undefined,
         });
         if (!prepared) {
-          return resultError(
-            'NOT_FOUND',
-            'Unable to prepare platform playback',
-            {
-              details: {
-                sourceLocator,
-                connectorId: asNonEmptyString(payload?.connectorId) ?? undefined,
-                instanceId: asNonEmptyString(payload?.instanceId) ?? undefined,
-              },
-            }
-          );
+          return resultError('NOT_FOUND', 'Unable to prepare platform playback', {
+            details: {
+              sourceLocator,
+              connectorId: asNonEmptyString(payload?.connectorId) ?? undefined,
+              instanceId: asNonEmptyString(payload?.instanceId) ?? undefined,
+            },
+          });
         }
         return resultOk(prepared);
       }
@@ -4577,8 +4572,7 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
       case 'listAuthSnapshots': {
         const platform = await loadMusicPlatformApi();
         const payload = asObject(request.payload);
-        const forceRefresh =
-          payload?.refresh === true || payload?.forceRefresh === true;
+        const forceRefresh = payload?.refresh === true || payload?.forceRefresh === true;
         return resultOk({
           snapshots: await platform.listPlatformInstanceAuthSnapshots({
             refresh: forceRefresh,
@@ -4593,15 +4587,17 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
           instanceId: asNonEmptyString(payload?.instanceId),
           connectorId,
         });
-        const forceRefresh =
-          payload?.refresh === true || payload?.forceRefresh === true;
+        const forceRefresh = payload?.refresh === true || payload?.forceRefresh === true;
         if (!instanceId) {
-          return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
+          return resultError(
+            'INVALID_PAYLOAD',
+            'payload.instanceId or payload.connectorId is required'
+          );
         }
         const cachedSnapshot = platform.getPlatformInstanceAuthSnapshot(instanceId);
         const snapshot = forceRefresh
-          ? (await platform.refreshPlatformInstanceAuthSnapshot(instanceId)) ?? cachedSnapshot
-          : cachedSnapshot ?? (await platform.refreshPlatformInstanceAuthSnapshot(instanceId));
+          ? ((await platform.refreshPlatformInstanceAuthSnapshot(instanceId)) ?? cachedSnapshot)
+          : (cachedSnapshot ?? (await platform.refreshPlatformInstanceAuthSnapshot(instanceId)));
         return resultOk({
           connectorId,
           instanceId,
@@ -4617,7 +4613,10 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
           connectorId,
         });
         if (!instanceId) {
-          return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
+          return resultError(
+            'INVALID_PAYLOAD',
+            'payload.instanceId or payload.connectorId is required'
+          );
         }
         const session = await platform.beginPlatformInstanceQrLogin(instanceId);
         return resultOk({
@@ -4636,7 +4635,10 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
         });
         const sessionId = asNonEmptyString(payload?.sessionId);
         if (!instanceId) {
-          return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
+          return resultError(
+            'INVALID_PAYLOAD',
+            'payload.instanceId or payload.connectorId is required'
+          );
         }
         if (!sessionId) {
           return resultError('INVALID_PAYLOAD', 'payload.sessionId is required');
@@ -4658,7 +4660,10 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
           connectorId,
         });
         if (!instanceId) {
-          return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
+          return resultError(
+            'INVALID_PAYLOAD',
+            'payload.instanceId or payload.connectorId is required'
+          );
         }
         const snapshot = await platform.logoutPlatformInstance(instanceId);
         return resultOk({
@@ -4676,7 +4681,10 @@ function createPmpConnectorAuthHandler(): PluginHostCapabilityHandler {
           connectorId,
         });
         if (!instanceId) {
-          return resultError('INVALID_PAYLOAD', 'payload.instanceId or payload.connectorId is required');
+          return resultError(
+            'INVALID_PAYLOAD',
+            'payload.instanceId or payload.connectorId is required'
+          );
         }
         const snapshot = await platform.clearPlatformInstanceAuthCookies(instanceId);
         return resultOk({

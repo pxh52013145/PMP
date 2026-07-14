@@ -2,6 +2,7 @@ import type {
   AnchorType,
   Magnet,
   MagnetChromeConfig,
+  MagnetGridFootprint,
   MagnetInsetConfig,
   MagnetInteractions,
   PixelAnchor,
@@ -37,6 +38,7 @@ export interface BuildEditorMagnetOptions {
   name: string;
   anchorType: AnchorType;
   anchors: PixelAnchor[];
+  gridFootprint?: MagnetGridFootprint;
   bounds: Magnet['bounds'];
   content: Magnet['content'];
   style: Magnet['style'];
@@ -189,6 +191,83 @@ export function buildAnchorsFromOrigin(
   }
 }
 
+function normalizeGridDimension(value: unknown, fallback = 1): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(1, Math.round(value))
+    : fallback;
+}
+
+export function resolveMagnetAnchorOrigin(
+  magnet: Pick<Magnet, 'anchors'>,
+  fallback = { x: 10, y: 10 }
+): { x: number; y: number } {
+  const anchors = Array.isArray(magnet.anchors) ? magnet.anchors : [];
+  const anchor = anchors.find((candidate) => candidate.role === 'anchor') ?? anchors[0];
+  if (!anchor) return fallback;
+  return {
+    x: Number.isFinite(anchor.gridX) ? anchor.gridX : fallback.x,
+    y: Number.isFinite(anchor.gridY) ? anchor.gridY : fallback.y,
+  };
+}
+
+export function resolveMagnetAnchorDraftDimensions(
+  magnet: Pick<Magnet, 'anchorType' | 'anchors' | 'gridFootprint'>
+): MagnetAnchorDraftDimensions {
+  const anchors = Array.isArray(magnet.anchors) ? magnet.anchors : [];
+  const footprintWidth = normalizeGridDimension(magnet.gridFootprint?.width);
+  const footprintHeight = normalizeGridDimension(magnet.gridFootprint?.height);
+
+  let anchorWidth = 1;
+  let anchorHeight = 1;
+  if (anchors.length > 0) {
+    const xs = anchors.map((anchor) => anchor.gridX).filter(Number.isFinite);
+    const ys = anchors.map((anchor) => anchor.gridY).filter(Number.isFinite);
+    if (xs.length > 0) anchorWidth = Math.max(...xs) - Math.min(...xs) + 1;
+    if (ys.length > 0) anchorHeight = Math.max(...ys) - Math.min(...ys) + 1;
+  }
+
+  const width = anchors.length > 0 ? normalizeGridDimension(anchorWidth) : footprintWidth;
+  const height = anchors.length > 0 ? normalizeGridDimension(anchorHeight) : footprintHeight;
+
+  return {
+    horizontalPixels: magnet.anchorType === 'horizontal' ? width : footprintWidth,
+    verticalPixels: magnet.anchorType === 'vertical' ? height : footprintHeight,
+    rectWidth: magnet.anchorType === 'rectangular' ? width : footprintWidth,
+    rectHeight: magnet.anchorType === 'rectangular' ? height : footprintHeight,
+  };
+}
+
+export function buildMagnetGridFootprint(
+  anchorType: AnchorType,
+  dimensions: MagnetAnchorDraftDimensions
+): MagnetGridFootprint {
+  switch (anchorType) {
+    case 'horizontal':
+      return { width: normalizeGridDimension(dimensions.horizontalPixels), height: 1 };
+    case 'vertical':
+      return { width: 1, height: normalizeGridDimension(dimensions.verticalPixels) };
+    case 'rectangular':
+      return {
+        width: normalizeGridDimension(dimensions.rectWidth),
+        height: normalizeGridDimension(dimensions.rectHeight),
+      };
+    case 'single':
+    default:
+      return { width: 1, height: 1 };
+  }
+}
+
+export function resolvePreviewAnchorOrigin(
+  anchorType: AnchorType,
+  dimensions: MagnetAnchorDraftDimensions
+): { x: number; y: number } {
+  const footprint = buildMagnetGridFootprint(anchorType, dimensions);
+  return {
+    x: Math.max(0, Math.floor((PREVIEW_GRID_SIZE - footprint.width) / 2)),
+    y: Math.max(0, Math.floor((PREVIEW_GRID_SIZE - footprint.height) / 2)),
+  };
+}
+
 export function buildEditorMagnet({
   seedMagnet,
   fallbackType = 'custom',
@@ -197,6 +276,7 @@ export function buildEditorMagnet({
   name,
   anchorType,
   anchors,
+  gridFootprint,
   bounds,
   content,
   style,
@@ -213,6 +293,7 @@ export function buildEditorMagnet({
     name,
     anchorType,
     anchors,
+    ...(gridFootprint ? { gridFootprint } : {}),
     bounds,
     content,
     style,

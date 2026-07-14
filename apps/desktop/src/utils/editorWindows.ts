@@ -16,7 +16,7 @@ export type EditorWindowType =
   | 'creator'
   | 'background'
   | 'custom-background'
-  | 'theme'
+  | 'registration'
   | 'debug';
 
 export interface EditorWindowConfig {
@@ -25,6 +25,35 @@ export interface EditorWindowConfig {
   y: number;
   width: number;
   height: number;
+}
+
+export interface EditorWindowDebugInfo {
+  windowType: string;
+  exists: boolean;
+  visible: boolean;
+}
+
+export interface EditorWindowsDebugState {
+  windows: EditorWindowDebugInfo[];
+}
+
+export interface EditorWindowCloseFailure {
+  windowType: string;
+  message: string;
+}
+
+export interface EditorWindowsCloseReport {
+  requestedWindowTypes: string[];
+  closeRequestedWindowTypes: string[];
+  alreadyClosedWindowTypes: string[];
+  failures: EditorWindowCloseFailure[];
+  remainingWindows: EditorWindowDebugInfo[];
+}
+
+export interface EditorWindowsTeardownResult {
+  closeReport: EditorWindowsCloseReport | null;
+  verificationCount: number;
+  remainingWindows: EditorWindowDebugInfo[];
 }
 
 // 缓存窗口位置，避免重复计算
@@ -54,20 +83,24 @@ export async function openEditorWindow(config: EditorWindowConfig): Promise<void
         memoryFirst,
       },
     });
-    await invokeWithTelemetry('open_editor_window', {
-      windowType: config.type,
-      x: config.x,
-      y: config.y,
-      width: config.width,
-      height: config.height,
-      alwaysOnTop,
-      memoryFirst,
-    }, {
-      moduleId: 'windowing',
-      component: 'editorWindows',
-      event: 'window.editor.open',
-      successLevel: 'info',
-    });
+    await invokeWithTelemetry(
+      'open_editor_window',
+      {
+        windowType: config.type,
+        x: config.x,
+        y: config.y,
+        width: config.width,
+        height: config.height,
+        alwaysOnTop,
+        memoryFirst,
+      },
+      {
+        moduleId: 'windowing',
+        component: 'editorWindows',
+        event: 'window.editor.open',
+        successLevel: 'info',
+      }
+    );
     telemetry.info('window.editor.open.completed', {
       fields: {
         windowType: config.type,
@@ -90,23 +123,19 @@ export async function openEditorWindow(config: EditorWindowConfig): Promise<void
  * 当父窗口关闭时，其所有子窗口也应该关闭
  */
 const WINDOW_HIERARCHY: Record<EditorWindowType, EditorWindowType[]> = {
-  control: ['statistics', 'library', 'style', 'background', 'theme', 'debug'], // control 关闭时关闭所有主要窗口
+  // The native control-window close is the single owner of the full Editor teardown transaction.
+  control: [],
   library: ['creator'], // Legacy internal type for the Magnet Editor child window.
   background: ['custom-background'], // background 关闭时关闭 custom-background
   statistics: [],
-  style: [
-    'style-pixel',
-    'style-cover-color',
-    'style-background-effect',
-    'style-border-effect',
-  ],
+  style: ['style-pixel', 'style-cover-color', 'style-background-effect', 'style-border-effect'],
   'style-pixel': [],
   'style-cover-color': [],
   'style-background-effect': [],
   'style-border-effect': [],
   creator: [],
   'custom-background': [],
-  theme: ['debug'],
+  registration: ['debug'],
   debug: [],
 };
 
@@ -133,16 +162,23 @@ export async function closeEditorWindow(
       await closeEditorWindow(childType, { memoryFirst }); // 递归关闭子窗口及其子窗口
     }
 
+    const { disposeKernelRuntimeForEditorWindow } = await import('../contexts/KernelApiContext');
+    disposeKernelRuntimeForEditorWindow(type);
+
     // 再关闭自己
-    await invokeWithTelemetry('close_editor_window', {
-      windowType: type,
-      memoryFirst,
-    }, {
-      moduleId: 'windowing',
-      component: 'editorWindows',
-      event: 'window.editor.close',
-      successLevel: 'info',
-    });
+    await invokeWithTelemetry(
+      'close_editor_window',
+      {
+        windowType: type,
+        memoryFirst,
+      },
+      {
+        moduleId: 'windowing',
+        component: 'editorWindows',
+        event: 'window.editor.close',
+        successLevel: 'info',
+      }
+    );
     // 清除该窗口的位置缓存，下次打开时重新计算
     windowPositionCache.delete(type);
     telemetry.info('window.editor.close.completed', {
@@ -165,25 +201,81 @@ export async function closeEditorWindow(
 /**
  * 关闭所有编辑器窗口
  */
-export async function closeAllEditorWindows(): Promise<void> {
+export async function closeAllEditorWindows(): Promise<EditorWindowsCloseReport | null> {
   try {
-    if (!isTauriRuntime()) return;
+    if (!isTauriRuntime()) return null;
     telemetry.info('window.editor.close-all.requested');
-    await invokeWithTelemetry('close_all_editor_windows', undefined, {
-      moduleId: 'windowing',
-      component: 'editorWindows',
-      event: 'window.editor.close-all',
-      successLevel: 'info',
-    });
+    const report = await invokeWithTelemetry<EditorWindowsCloseReport>(
+      'close_all_editor_windows',
+      undefined,
+      {
+        moduleId: 'windowing',
+        component: 'editorWindows',
+        event: 'window.editor.close-all',
+        successLevel: 'info',
+      }
+    );
     // 清除所有窗口的位置缓存
     windowPositionCache.clear();
-    telemetry.info('window.editor.close-all.completed');
+    telemetry.info('window.editor.close-all.completed', {
+      fields: {
+        closeRequestedCount: report.closeRequestedWindowTypes.length,
+        alreadyClosedCount: report.alreadyClosedWindowTypes.length,
+        failureCount: report.failures.length,
+        immediateRemainingCount: report.remainingWindows.length,
+      },
+    });
+    return report;
   } catch (error) {
     telemetry.error('window.editor.close-all.failed', {
       message: error instanceof Error ? error.message : String(error),
     });
     throw error;
   }
+}
+
+function waitForWindowTeardown(delayMs: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, delayMs));
+}
+
+async function readExistingEditorWindows(): Promise<EditorWindowDebugInfo[]> {
+  const state = await invokeWithTelemetry<EditorWindowsDebugState>(
+    'debug_get_editor_windows_state',
+    undefined,
+    {
+      moduleId: 'windowing',
+      component: 'editorWindows',
+      event: 'window.editor.teardown.verify',
+    }
+  );
+  return state.windows.filter((windowState) => windowState.exists);
+}
+
+/**
+ * Enforces the Edit-mode teardown boundary from a surviving window (normally the main window).
+ * Native WebView destruction is asynchronous, so verification is intentionally delayed and retried.
+ */
+export async function ensureEditorWindowsClosed(
+  verificationDelaysMs: readonly number[] = [80, 240, 700]
+): Promise<EditorWindowsTeardownResult> {
+  if (!isTauriRuntime()) {
+    return { closeReport: null, verificationCount: 0, remainingWindows: [] };
+  }
+
+  let closeReport: EditorWindowsCloseReport | null = null;
+  let remainingWindows: EditorWindowDebugInfo[] = [];
+  let verificationCount = 0;
+
+  for (const delayMs of verificationDelaysMs) {
+    await waitForWindowTeardown(Math.max(0, delayMs));
+    verificationCount += 1;
+    remainingWindows = await readExistingEditorWindows();
+    if (remainingWindows.length === 0) break;
+
+    closeReport = await closeAllEditorWindows();
+  }
+
+  return { closeReport, verificationCount, remainingWindows };
 }
 
 /**
@@ -410,7 +502,7 @@ export async function calculateWindowPosition(
     creator: { width: 900, height: 700 },
     background: { width: 480, height: 650 },
     'custom-background': { width: 600, height: 720 },
-    theme: { width: 1200, height: 800 },
+    registration: { width: 1200, height: 800 },
     debug: { width: 1200, height: 800 }, // 调试窗口 - 大窗口
   };
 
@@ -442,14 +534,14 @@ export async function calculateWindowPosition(
     creator: 5,
     background: 6,
     'custom-background': 7,
-    theme: 8,
+    registration: 8,
     debug: 9, // 调试窗口
   };
 
   if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
     offsetX = cached.x;
     y = cached.y;
-  } else if (type === 'custom-background' || type === 'theme' || type === 'debug') {
+  } else if (type === 'custom-background' || type === 'registration' || type === 'debug') {
     offsetX = (screenWidth - size.width) / 2;
     y = (screenHeight - size.height) / 2;
   } else if (

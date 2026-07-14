@@ -1,4 +1,4 @@
-import { memo, useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
+import { memo, useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect, useSyncExternalStore, type ReactNode } from 'react';
 import type { Magnet } from '../../types/pixel';
 import {
   getMagnetRenderer,
@@ -51,6 +51,7 @@ interface MagnetProps {
   sceneAnimation?: MagnetSceneAnimation;
   layoutMotionChannel?: ThemeMotionChannelSpec;
   disableMotion?: boolean;
+  rendererContentOverride?: ReactNode;
 }
 
 type MagnetShellStyle = React.CSSProperties & {
@@ -72,6 +73,7 @@ function MagnetComponentImpl({
   sceneAnimation,
   layoutMotionChannel,
   disableMotion = false,
+  rendererContentOverride,
 }: MagnetProps) {
   const lowRenderMode = import.meta.env.VITE_PERF_NEXT_LOW_RENDER === '1';
   const rendererId = magnet.renderer ?? magnet.id;
@@ -482,6 +484,7 @@ function MagnetComponentImpl({
   ]);
 
   const renderedContent = useMemo(() => {
+    if (rendererContentOverride !== undefined) return rendererContentOverride;
     void rendererRevision;
     const rendererEntry =
       getMagnetRenderer(rendererId) ??
@@ -493,7 +496,7 @@ function MagnetComponentImpl({
     }
 
     return magnet.content;
-  }, [rendererId, magnet.id, magnet.content, rendererRevision]);
+  }, [rendererContentOverride, rendererId, magnet.id, magnet.content, rendererRevision]);
 
   if (!layoutBounds || !shellStyle) return null;
 

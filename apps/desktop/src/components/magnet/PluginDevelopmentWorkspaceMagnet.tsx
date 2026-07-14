@@ -82,7 +82,7 @@ import {
 } from '../../modules/music-platform/platformRuntimeDescriptor';
 import { focusMusicPlatformWorkspaceInstance } from '../../modules/music-platform/platformWorkspaceFocus';
 import { useT } from '../../i18n';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import {
   SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN,
   type SpaceRuntimeGovernanceService,

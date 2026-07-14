@@ -35,6 +35,7 @@ import {
 import { useConfirmDialog } from '../core/ConfirmDialog';
 import { useT } from '../../i18n';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import { MagnetPreviewBoundary } from './MagnetPreviewBoundary';
 import './EditorMagnetLibrary.css';
 
 const telemetry = getTelemetryLogger('editor', 'EditorMagnetLibrary');
@@ -180,9 +181,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   const [highlightedMagnetId, setHighlightedMagnetId] = useState<string | null>(null);
   const lastLibraryFocusRequestIdRef = useRef<string | null>(null);
   const glitchTimerRef = useRef<number | null>(null);
-  const [magnetRendererOpacityDrafts, setMagnetRendererOpacityDrafts] = useState<Record<string, number>>(
-    {}
-  );
+  const [magnetRendererOpacityDrafts, setMagnetRendererOpacityDrafts] = useState<
+    Record<string, number>
+  >({});
   const opacityCommitInFlightRef = useRef<Set<string>>(new Set());
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
 
@@ -233,7 +234,8 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
     return baseMagnets.filter((magnet) => {
       const rendererId = magnet.renderer ?? magnet.id;
       const renderer =
-        getMagnetRenderer(rendererId) ?? (rendererId === magnet.id ? null : getMagnetRenderer(magnet.id));
+        getMagnetRenderer(rendererId) ??
+        (rendererId === magnet.id ? null : getMagnetRenderer(magnet.id));
       const displayName = getMagnetDisplayName(magnet, t);
       const searchable: string[] = [
         magnet.id,
@@ -319,7 +321,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
   useEffect(() => {
     if (!pendingFocusMagnetId) return;
-    const element = document.querySelector<HTMLElement>(`[data-magnet-id="${pendingFocusMagnetId}"]`);
+    const element = document.querySelector<HTMLElement>(
+      `[data-magnet-id="${pendingFocusMagnetId}"]`
+    );
     if (!element) return;
     element.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setHighlightedMagnetId(pendingFocusMagnetId);
@@ -353,7 +357,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
   const requestMagnetPlacement = useCallback(
     async (magnet: Magnet) => {
-      const activeMagnets = magnetLibrary.filter((m) => m.id !== magnet.id && activeMagnetIds.has(m.id));
+      const activeMagnets = magnetLibrary.filter(
+        (m) => m.id !== magnet.id && activeMagnetIds.has(m.id)
+      );
       const occupiedKeys = getOccupiedPixelKeys(activeMagnets);
 
       const candidate = findFirstMagnetPlacementCandidate(magnet, occupiedKeys);
@@ -385,36 +391,33 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   }, []);
 
   // 澶勭悊缂栬緫
-  const handleEdit = useCallback(
-    async (magnet: Magnet) => {
-      try {
-        // 灏嗚缂栬緫鐨?magnet 瀛樺偍鍒?localStorage锛堜复鏃舵暟鎹紝涓嶉渶瑕佸箍鎾級
-        writeJson(STORAGE_KEYS.MAGNET_EDITOR_DATA, magnet);
-        writeString(STORAGE_KEYS.MAGNET_EDITOR_MODE, 'edit');
+  const handleEdit = useCallback(async (magnet: Magnet) => {
+    try {
+      // 灏嗚缂栬緫鐨?magnet 瀛樺偍鍒?localStorage锛堜复鏃舵暟鎹紝涓嶉渶瑕佸箍鎾級
+      writeJson(STORAGE_KEYS.MAGNET_EDITOR_DATA, magnet);
+      writeString(STORAGE_KEYS.MAGNET_EDITOR_MODE, 'edit');
 
-        // 鏍囪绐楀彛鎵撳紑
-        await broadcastDataUpdate(
-          STORAGE_KEYS.CREATOR_WINDOW_OPEN,
-          true,
-          TAURI_EVENTS.CREATOR_WINDOW_OPENED
-        );
+      // 鏍囪绐楀彛鎵撳紑
+      await broadcastDataUpdate(
+        STORAGE_KEYS.CREATOR_WINDOW_OPEN,
+        true,
+        TAURI_EVENTS.CREATOR_WINDOW_OPENED
+      );
 
-        const position = await calculateWindowPosition('creator');
-        await openEditorWindow({ type: 'creator', ...position });
-      } catch (error) {
-        telemetry.error('editor.creator-window.open.failed', {
-          message: getErrorMessage(error),
-        });
-        // 错误时清理标记，避免残留的 open 状态锁死编辑入口
-        await broadcastDataUpdate(
-          STORAGE_KEYS.CREATOR_WINDOW_OPEN,
-          false,
-          TAURI_EVENTS.CREATOR_WINDOW_CLOSED
-        );
-      }
-    },
-    []
-  );
+      const position = await calculateWindowPosition('creator');
+      await openEditorWindow({ type: 'creator', ...position });
+    } catch (error) {
+      telemetry.error('editor.creator-window.open.failed', {
+        message: getErrorMessage(error),
+      });
+      // 错误时清理标记，避免残留的 open 状态锁死编辑入口
+      await broadcastDataUpdate(
+        STORAGE_KEYS.CREATOR_WINDOW_OPEN,
+        false,
+        TAURI_EVENTS.CREATOR_WINDOW_CLOSED
+      );
+    }
+  }, []);
 
   const handleRendererOpacityDraftChange = useCallback((magnetId: string, rawValue: string) => {
     const nextOpacity = clampMagnetRendererOpacity(Number.parseFloat(rawValue));
@@ -533,15 +536,18 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
               placeholder={t('editor.magnet-library.search.placeholder')}
             />
             {searchQuery.trim().length > 0 && (
-                <button
-                  className="library-search-clear-btn"
-                  onClick={() => setSearchQuery('')}
-                  title={t('editor.magnet-library.search.clearTitle')}
-                >
-                  脳
-                </button>
-              )}
-            <div className="library-search-count" title={t('editor.magnet-library.search.countTitle')}>
+              <button
+                className="library-search-clear-btn"
+                onClick={() => setSearchQuery('')}
+                title={t('editor.magnet-library.search.clearTitle')}
+              >
+                脳
+              </button>
+            )}
+            <div
+              className="library-search-count"
+              title={t('editor.magnet-library.search.countTitle')}
+            >
               {displayMagnets.length}
             </div>
           </div>
@@ -617,7 +623,15 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                         opacity: magnetRendererOpacity,
                       }}
                     />
-                    <div className="magnet-preview-content">{previewContent}</div>
+                    <div className="magnet-preview-content">
+                      <MagnetPreviewBoundary
+                        key={`${magnet.id}:${rendererRevision}`}
+                        magnetId={magnet.id}
+                        fallback={magnetDisplayName}
+                      >
+                        {previewContent}
+                      </MagnetPreviewBoundary>
+                    </div>
                   </div>
                   <div className="magnet-body">
                     <div className="magnet-info">
@@ -647,120 +661,120 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                         )}
                       </div>
                     </div>
-                  <div className="magnet-actions">
-                    {/* 缂栬緫 */}
-                    <button
-                      className={`magnet-action-btn edit ${glitchingButton?.magnetId === magnet.id && glitchingButton.action === 'edit' ? 'glitch' : ''}`}
-                      onClick={() => handleEdit(magnet)}
-                      title={t('editor.magnet-library.magnet.tooltip.edit')}
-                      data-text="◈"
-                    >
-                      ◈
-                    </button>
-
-                    {/* 澶栨寮€鍏?*/}
-                    <button
-                      className="magnet-action-btn chrome"
-                      onClick={() =>
-                        void onMagnetUpdate({
-                          ...magnet,
-                          chrome: { ...(magnet.chrome ?? {}), enabled: !chromeEnabled },
-                        })
-                      }
-                      title={
-                        chromeEnabled
-                          ? t('editor.magnet-library.magnet.tooltip.chrome.disable')
-                          : t('editor.magnet-library.magnet.tooltip.chrome.enable')
-                      }
-                    >
-                      {chromeEnabled ? '▣' : '▢'}
-                    </button>
-
-                    {/* 娣诲姞/绉婚櫎 */}
-                    {isActive ? (
+                    <div className="magnet-actions">
+                      {/* 缂栬緫 */}
                       <button
-                        className={`magnet-action-btn remove ${isRequired ? 'disabled' : ''} ${glitchingButton?.magnetId === magnet.id && glitchingButton.action === 'remove' ? 'glitch' : ''}`}
-                        onClick={() => {
-                          if (isRequired) {
-                            triggerActionGlitch(magnet.id, 'remove');
-                            return;
-                          }
-                          onMagnetDeactivate(magnet.id);
-                        }}
-                        aria-disabled={isRequired}
-                        title={
-                          isRequired
-                            ? t('editor.magnet-library.magnet.tooltip.cannotRemoveRequired')
-                            : t('editor.magnet-library.magnet.tooltip.removeFromMatrix')
+                        className={`magnet-action-btn edit ${glitchingButton?.magnetId === magnet.id && glitchingButton.action === 'edit' ? 'glitch' : ''}`}
+                        onClick={() => handleEdit(magnet)}
+                        title={t('editor.magnet-library.magnet.tooltip.edit')}
+                        data-text="◈"
+                      >
+                        ◈
+                      </button>
+
+                      {/* 澶栨寮€鍏?*/}
+                      <button
+                        className="magnet-action-btn chrome"
+                        onClick={() =>
+                          void onMagnetUpdate({
+                            ...magnet,
+                            chrome: { ...(magnet.chrome ?? {}), enabled: !chromeEnabled },
+                          })
                         }
-                        data-text="－"
+                        title={
+                          chromeEnabled
+                            ? t('editor.magnet-library.magnet.tooltip.chrome.disable')
+                            : t('editor.magnet-library.magnet.tooltip.chrome.enable')
+                        }
                       >
-                        －
+                        {chromeEnabled ? '▣' : '▢'}
                       </button>
-                    ) : (
-                      <button
-                        className="magnet-action-btn add"
-                        onClick={() => void requestMagnetPlacement(magnet)}
-                        title={t('editor.magnet-library.magnet.tooltip.addToMatrix')}
-                      >
-                        ＋
-                      </button>
-                    )}
 
-                    {/* 鍒犻櫎锛堜粎鑷畾涔?Magnet锛屼笖鍦ㄦ湭浣跨敤鐘舵€侊級 */}
-                    {!isBuiltIn && !isActive && (
-                      <button
-                        className="magnet-action-btn delete"
-                        onClick={() => onMagnetDeleteFromLibrary(magnet.id)}
-                        title={t('editor.magnet-library.magnet.tooltip.deleteFromLibrary')}
-                      >
-                        ╳
-                      </button>
-                    )}
-                  </div>
-                  <div className="magnet-opacity-control">
-                    <div className="magnet-opacity-label">
-                      {t('editor.magnet-library.magnet.opacity.label')}
+                      {/* 娣诲姞/绉婚櫎 */}
+                      {isActive ? (
+                        <button
+                          className={`magnet-action-btn remove ${isRequired ? 'disabled' : ''} ${glitchingButton?.magnetId === magnet.id && glitchingButton.action === 'remove' ? 'glitch' : ''}`}
+                          onClick={() => {
+                            if (isRequired) {
+                              triggerActionGlitch(magnet.id, 'remove');
+                              return;
+                            }
+                            onMagnetDeactivate(magnet.id);
+                          }}
+                          aria-disabled={isRequired}
+                          title={
+                            isRequired
+                              ? t('editor.magnet-library.magnet.tooltip.cannotRemoveRequired')
+                              : t('editor.magnet-library.magnet.tooltip.removeFromMatrix')
+                          }
+                          data-text="－"
+                        >
+                          －
+                        </button>
+                      ) : (
+                        <button
+                          className="magnet-action-btn add"
+                          onClick={() => void requestMagnetPlacement(magnet)}
+                          title={t('editor.magnet-library.magnet.tooltip.addToMatrix')}
+                        >
+                          ＋
+                        </button>
+                      )}
+
+                      {/* 鍒犻櫎锛堜粎鑷畾涔?Magnet锛屼笖鍦ㄦ湭浣跨敤鐘舵€侊級 */}
+                      {!isBuiltIn && !isActive && (
+                        <button
+                          className="magnet-action-btn delete"
+                          onClick={() => onMagnetDeleteFromLibrary(magnet.id)}
+                          title={t('editor.magnet-library.magnet.tooltip.deleteFromLibrary')}
+                        >
+                          ╳
+                        </button>
+                      )}
                     </div>
-                    <div className="magnet-opacity-slider-row">
-                      <div className="magnet-opacity-slider-shell">
-                        <div className="magnet-opacity-slider-track">
-                          <div className="magnet-opacity-slider-grid" />
-                          <div
-                            className="magnet-opacity-slider-fill"
-                            style={{ width: `${magnetRendererOpacityPercent}%` }}
+                    <div className="magnet-opacity-control">
+                      <div className="magnet-opacity-label">
+                        {t('editor.magnet-library.magnet.opacity.label')}
+                      </div>
+                      <div className="magnet-opacity-slider-row">
+                        <div className="magnet-opacity-slider-shell">
+                          <div className="magnet-opacity-slider-track">
+                            <div className="magnet-opacity-slider-grid" />
+                            <div
+                              className="magnet-opacity-slider-fill"
+                              style={{ width: `${magnetRendererOpacityPercent}%` }}
+                            />
+                          </div>
+                          <input
+                            className="magnet-opacity-slider"
+                            type="range"
+                            min={MAGNET_RENDERER_OPACITY_MIN}
+                            max={MAGNET_RENDERER_OPACITY_MAX}
+                            step={MAGNET_RENDERER_OPACITY_STEP}
+                            value={magnetRendererOpacity}
+                            onChange={(event) => {
+                              handleRendererOpacityDraftChange(magnet.id, event.target.value);
+                            }}
+                            onPointerUp={() => {
+                              void commitRendererOpacity(magnet);
+                            }}
+                            onBlur={() => {
+                              void commitRendererOpacity(magnet);
+                            }}
+                            onKeyUp={(event) => {
+                              if (event.key === 'Enter') {
+                                void commitRendererOpacity(magnet);
+                              }
+                            }}
                           />
                         </div>
-                        <input
-                          className="magnet-opacity-slider"
-                          type="range"
-                          min={MAGNET_RENDERER_OPACITY_MIN}
-                          max={MAGNET_RENDERER_OPACITY_MAX}
-                          step={MAGNET_RENDERER_OPACITY_STEP}
-                          value={magnetRendererOpacity}
-                          onChange={(event) => {
-                            handleRendererOpacityDraftChange(magnet.id, event.target.value);
-                          }}
-                          onPointerUp={() => {
-                            void commitRendererOpacity(magnet);
-                          }}
-                          onBlur={() => {
-                            void commitRendererOpacity(magnet);
-                          }}
-                          onKeyUp={(event) => {
-                            if (event.key === 'Enter') {
-                              void commitRendererOpacity(magnet);
-                            }
-                          }}
-                        />
+                        <span className="magnet-opacity-value">
+                          {t('editor.magnet-library.magnet.opacity.value', {
+                            percent: magnetRendererOpacityPercent,
+                          })}
+                        </span>
                       </div>
-                      <span className="magnet-opacity-value">
-                        {t('editor.magnet-library.magnet.opacity.value', {
-                          percent: magnetRendererOpacityPercent,
-                        })}
-                      </span>
                     </div>
-                  </div>
                   </div>
                 </div>
               );
@@ -772,5 +786,3 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
     </div>
   );
 });
-
-

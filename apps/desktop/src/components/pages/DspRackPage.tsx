@@ -1,7 +1,7 @@
 import React from 'react';
 import { ArrowDown, ArrowUp, Power, Trash2 } from 'lucide-react';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { useT } from '../../i18n';
 import { readString, writeString } from '../../modules/storage';
 import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';

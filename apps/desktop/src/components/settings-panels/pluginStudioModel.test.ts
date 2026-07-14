@@ -6,6 +6,7 @@ import {
   buildPluginStudioDiagnostics,
   getPluginStudioDiagnosticAreaLabelKey,
   getPluginStudioDiagnosticSeverityLabelKey,
+  PLUGIN_STUDIO_WORKSPACES,
 } from './pluginStudioModel';
 
 function createMagnet(overrides: Partial<Magnet> = {}): Magnet {
@@ -53,6 +54,14 @@ function buildDiagnosticsForMagnets(args: {
 }
 
 describe('plugin studio model', () => {
+  it('exposes only the three registry lifecycle workspaces', () => {
+    expect(PLUGIN_STUDIO_WORKSPACES.map((workspace) => workspace.id)).toEqual([
+      'package-import',
+      'activation',
+      'displays',
+    ]);
+  });
+
   it('updates and clears a magnet variant without mutating the original library', () => {
     const magnet = createMagnet();
     const library = [magnet];

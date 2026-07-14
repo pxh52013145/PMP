@@ -1,11 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useKernel } from '../../contexts/KernelContext';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { useT } from '../../i18n';
 import { useConfirmDialog } from '../core/ConfirmDialog';
 import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
-import { listRegisteredMagnetRenderers, type MagnetRendererDefinition } from '../../magnet-system/registry';
-import { listMagnetVariants } from '../../magnet-system/variantRegistry';
+import {
+  listRegisteredMagnetRenderers,
+  type MagnetRendererDefinition,
+} from '../../magnet-system/registry';
+import {
+  getMagnetVariantsRevision,
+  listMagnetVariants,
+  subscribeMagnetVariants,
+} from '../../magnet-system/variantRegistry';
 import { getInstalledPmpsShaderPack } from '../../shader-system/pmps';
 import { installPmpsShaderPackFromZipBytes } from '../../shader-system/pmps';
 import { APP_VERSION, HOST_API_VERSION } from '../../constants/versions';
@@ -59,10 +66,18 @@ import { assignMagnetBindingFragment, materializeThemeBinding } from '../../them
 import type { Theme, ThemeBindingId } from '../../themes/types/theme';
 import type { ThemeBindingFragment, ThemeImportCandidate } from '../../themes/types/themeImport';
 import { useThemeBindingEditor } from '../../themes/useThemeBindingEditor';
-import { applyMusicLibraryStarterTheme, isMusicLibrarySurfaceBinding } from '../../themes/starterPresets';
+import {
+  applyMusicLibraryStarterTheme,
+  isMusicLibrarySurfaceBinding,
+} from '../../themes/starterPresets';
 import type { Magnet } from '../../types/pixel';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
-import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS, setupTauriListenerWithPayload } from '../../utils/windowCommunication';
+import {
+  broadcastDataUpdate,
+  STORAGE_KEYS,
+  TAURI_EVENTS,
+  setupTauriListenerWithPayload,
+} from '../../utils/windowCommunication';
 import { ThemeBindingEditorPanel } from '../theme/ThemeBindingEditorPanel';
 import { ThemeSurfaceWorkbench } from '../theme/ThemeSurfaceWorkbench';
 import { ThemeTokenWorkbench } from '../theme/ThemeTokenWorkbench';
@@ -86,7 +101,12 @@ function formatRendererGroup(
 }
 
 type PanelMessage = { kind: 'error' | 'success'; text: string };
-type ThemeEditorWorkspaceId = 'surface' | 'theme-source' | 'theme-pack' | 'profile-pack' | 'renderer';
+type ThemeEditorWorkspaceId =
+  | 'surface'
+  | 'theme-source'
+  | 'theme-pack'
+  | 'profile-pack'
+  | 'renderer';
 type ThemeEditorSidebarCardTone = 'default' | 'accent' | 'success' | 'warning';
 type ThemeEditorSidebarCard = {
   id: string;
@@ -122,7 +142,11 @@ function assertObject(value: unknown, path: string): asserts value is Record<str
   }
 }
 
-function assertOnlyKeys(value: Record<string, unknown>, path: string, allowedKeys: readonly string[]): void {
+function assertOnlyKeys(
+  value: Record<string, unknown>,
+  path: string,
+  allowedKeys: readonly string[]
+): void {
   const allowed = new Set(allowedKeys);
   const unsupportedKey = Object.keys(value).find((key) => !allowed.has(key));
   if (unsupportedKey) {
@@ -149,7 +173,16 @@ function assertThemeTokenAssignments(value: unknown, path: string): void {
 
 function assertThemeTokens(value: unknown, path: string): void {
   assertObject(value, path);
-  assertOnlyKeys(value, path, ['color', 'motion', 'typography', 'radius', 'space', 'size', 'shadow', 'border']);
+  assertOnlyKeys(value, path, [
+    'color',
+    'motion',
+    'typography',
+    'radius',
+    'space',
+    'size',
+    'shadow',
+    'border',
+  ]);
   for (const [key, tokenValue] of Object.entries(value)) {
     assertThemeTokenAssignments(tokenValue, `${path}.${key}`);
   }
@@ -171,7 +204,14 @@ function assertThemeMotionChannelSpec(value: unknown, path: string): void {
     'origin',
   ]);
 
-  const stringFields = ['preset', 'easing', 'direction', 'fillMode', 'playState', 'origin'] as const;
+  const stringFields = [
+    'preset',
+    'easing',
+    'direction',
+    'fillMode',
+    'playState',
+    'origin',
+  ] as const;
   for (const key of stringFields) {
     const fieldValue = value[key];
     if (typeof fieldValue !== 'undefined' && typeof fieldValue !== 'string') {
@@ -190,7 +230,10 @@ function assertThemeMotionChannelSpec(value: unknown, path: string): void {
   const numberFields = ['scale'] as const;
   for (const key of numberFields) {
     const fieldValue = value[key];
-    if (typeof fieldValue !== 'undefined' && (typeof fieldValue !== 'number' || !Number.isFinite(fieldValue))) {
+    if (
+      typeof fieldValue !== 'undefined' &&
+      (typeof fieldValue !== 'number' || !Number.isFinite(fieldValue))
+    ) {
       throw new Error(`${path}.${key} must be a finite number`);
     }
   }
@@ -242,7 +285,13 @@ function assertThemeBindingMotionSpec(value: unknown, path: string): void {
 
   if (typeof value.layout !== 'undefined') {
     assertObject(value.layout, `${path}.layout`);
-    assertOnlyKeys(value.layout, `${path}.layout`, ['strategy', 'largeChange', 'sharedKey', 'move', 'resize']);
+    assertOnlyKeys(value.layout, `${path}.layout`, [
+      'strategy',
+      'largeChange',
+      'sharedKey',
+      'move',
+      'resize',
+    ]);
     const layoutStringFields = ['strategy', 'largeChange', 'sharedKey'] as const;
     for (const key of layoutStringFields) {
       const fieldValue = value.layout[key];
@@ -260,7 +309,13 @@ function assertThemeBindingMotionSpec(value: unknown, path: string): void {
 
   if (typeof value.attention !== 'undefined') {
     assertObject(value.attention, `${path}.attention`);
-    assertOnlyKeys(value.attention, `${path}.attention`, ['idle', 'hover', 'active', 'success', 'warning']);
+    assertOnlyKeys(value.attention, `${path}.attention`, [
+      'idle',
+      'hover',
+      'active',
+      'success',
+      'warning',
+    ]);
     const attentionKeys = ['idle', 'hover', 'active', 'success', 'warning'] as const;
     for (const key of attentionKeys) {
       if (typeof value.attention[key] !== 'undefined') {
@@ -344,7 +399,10 @@ function assertThemeMotionDocument(value: unknown, path: string): void {
   }
 }
 
-function assertDynamicColorCapability(value: unknown, path: string): asserts value is Record<string, unknown> {
+function assertDynamicColorCapability(
+  value: unknown,
+  path: string
+): asserts value is Record<string, unknown> {
   assertObject(value, path);
   assertOnlyKeys(value, path, ['dynamicColor']);
   const dynamicColor = value.dynamicColor;
@@ -382,7 +440,10 @@ function assertDynamicColorCapability(value: unknown, path: string): asserts val
   const numberFields = ['blendRatio', 'gradientAngle', 'dynamicSpeed'] as const;
   for (const key of numberFields) {
     const fieldValue = dynamicColor[key];
-    if (typeof fieldValue !== 'undefined' && (typeof fieldValue !== 'number' || !Number.isFinite(fieldValue))) {
+    if (
+      typeof fieldValue !== 'undefined' &&
+      (typeof fieldValue !== 'number' || !Number.isFinite(fieldValue))
+    ) {
       throw new Error(`${path}.dynamicColor.${key} must be a finite number`);
     }
   }
@@ -397,7 +458,11 @@ function assertDynamicColorCapability(value: unknown, path: string): asserts val
   }
 }
 
-function assertThemePartStateSpec(value: unknown, path: string, extraAllowedKeys: readonly string[] = []): void {
+function assertThemePartStateSpec(
+  value: unknown,
+  path: string,
+  extraAllowedKeys: readonly string[] = []
+): void {
   assertObject(value, path);
   assertOnlyKeys(value, path, ['classes', 'style', 'tokens', 'motion', ...extraAllowedKeys]);
   if (typeof value.classes !== 'undefined') {
@@ -444,7 +509,15 @@ function assertComponentThemeDocument(
   extraAllowedKeys: readonly string[] = []
 ): asserts value is Record<string, unknown> {
   assertObject(value, path);
-  assertOnlyKeys(value, path, ['extends', 'variant', 'tokens', 'parts', 'states', 'metadata', ...extraAllowedKeys]);
+  assertOnlyKeys(value, path, [
+    'extends',
+    'variant',
+    'tokens',
+    'parts',
+    'states',
+    'metadata',
+    ...extraAllowedKeys,
+  ]);
 
   if (typeof value.extends !== 'undefined' && typeof value.extends !== 'string') {
     throw new Error(`${path}.extends must be a string`);
@@ -470,7 +543,10 @@ function assertComponentThemeDocument(
   if (typeof value.metadata !== 'undefined') {
     assertObject(value.metadata, `${path}.metadata`);
     assertOnlyKeys(value.metadata, `${path}.metadata`, ['description']);
-    if (typeof value.metadata.description !== 'undefined' && typeof value.metadata.description !== 'string') {
+    if (
+      typeof value.metadata.description !== 'undefined' &&
+      typeof value.metadata.description !== 'string'
+    ) {
       throw new Error(`${path}.metadata.description must be a string`);
     }
   }
@@ -478,7 +554,14 @@ function assertComponentThemeDocument(
 
 function assertThemeBindingValue(value: unknown, path: string): void {
   assertObject(value, path);
-  assertOnlyKeys(value, path, ['surface', 'renderer', 'variant', 'props', 'motion', 'capabilities']);
+  assertOnlyKeys(value, path, [
+    'surface',
+    'renderer',
+    'variant',
+    'props',
+    'motion',
+    'capabilities',
+  ]);
   if (typeof value.surface !== 'undefined' && typeof value.surface !== 'string') {
     throw new Error(`${path}.surface must be a string`);
   }
@@ -573,14 +656,22 @@ function validateThemeJson(value: unknown): asserts value is ThemeImportCandidat
     throw new Error('theme.pixel.opacity must be a number');
   }
   assertObject(value.pixel.colors, 'theme.pixel.colors');
-  assertOnlyKeys(value.pixel.colors, 'theme.pixel.colors', ['default', 'hover', 'active', 'occupied']);
+  assertOnlyKeys(value.pixel.colors, 'theme.pixel.colors', [
+    'default',
+    'hover',
+    'active',
+    'occupied',
+  ]);
   for (const [key, tokenValue] of Object.entries(value.pixel.colors)) {
     assertObject(tokenValue, `theme.pixel.colors.${key}`);
     assertOnlyKeys(tokenValue, `theme.pixel.colors.${key}`, ['slot', 'alpha', 'state']);
     if (typeof tokenValue.slot !== 'string') {
       throw new Error(`theme.pixel.colors.${key}.slot is required`);
     }
-    if (typeof tokenValue.alpha !== 'undefined' && (typeof tokenValue.alpha !== 'number' || !Number.isFinite(tokenValue.alpha))) {
+    if (
+      typeof tokenValue.alpha !== 'undefined' &&
+      (typeof tokenValue.alpha !== 'number' || !Number.isFinite(tokenValue.alpha))
+    ) {
       throw new Error(`theme.pixel.colors.${key}.alpha must be a finite number`);
     }
     if (typeof tokenValue.state !== 'undefined' && typeof tokenValue.state !== 'string') {
@@ -606,7 +697,12 @@ function validateThemeJson(value: unknown): asserts value is ThemeImportCandidat
   }
   if (typeof value.globalEffects !== 'undefined') {
     assertObject(value.globalEffects, 'theme.globalEffects');
-    assertOnlyKeys(value.globalEffects, 'theme.globalEffects', ['blur', 'brightness', 'contrast', 'saturation']);
+    assertOnlyKeys(value.globalEffects, 'theme.globalEffects', [
+      'blur',
+      'brightness',
+      'contrast',
+      'saturation',
+    ]);
     for (const [key, effectValue] of Object.entries(value.globalEffects)) {
       if (typeof effectValue !== 'number' || !Number.isFinite(effectValue)) {
         throw new Error(`theme.globalEffects.${key} must be a finite number`);
@@ -680,12 +776,22 @@ const STATIC_BINDING_GROUPS: Array<{
   {
     id: 'page',
     label: 'Page',
-    bindingIds: ['page.music-library', 'page.settings', 'page.settings.main-tab', 'page.settings.sub-tab'],
+    bindingIds: [
+      'page.music-library',
+      'page.settings',
+      'page.settings.main-tab',
+      'page.settings.sub-tab',
+    ],
   },
   {
     id: 'overlay',
     label: 'Overlay',
-    bindingIds: ['overlay.confirm-dialog', 'overlay.context-menu', 'overlay.modal', 'overlay.drawer'],
+    bindingIds: [
+      'overlay.confirm-dialog',
+      'overlay.context-menu',
+      'overlay.modal',
+      'overlay.drawer',
+    ],
   },
   {
     id: 'primitive',
@@ -709,7 +815,8 @@ const STATIC_BINDING_GROUPS: Array<{
   },
 ];
 
-const DEFAULT_SELECTED_SURFACE_BINDING_ID = STATIC_BINDING_GROUPS[0]?.bindingIds[0] ?? ('page.settings' as ThemeBindingId);
+const DEFAULT_SELECTED_SURFACE_BINDING_ID =
+  STATIC_BINDING_GROUPS[0]?.bindingIds[0] ?? ('page.settings' as ThemeBindingId);
 
 function extractThemeRendererIds(themeValue: unknown): string[] {
   if (!isPlainObject(themeValue)) {
@@ -768,9 +875,16 @@ export type ThemeEditorProps = {
   applyRendererBindings: (
     bindings: Array<{ magnetId: string; rendererId: string }>
   ) => Promise<{ updated: number }>;
+  embedded?: boolean;
+  contractImportEnabled?: boolean;
 };
 
-export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEditorProps) {
+export function ThemeEditor({
+  magnetLibrary,
+  applyRendererBindings,
+  embedded = false,
+  contractImportEnabled = true,
+}: ThemeEditorProps) {
   const kernel = useKernel();
   const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const t = useT();
@@ -782,7 +896,14 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   const [rendererList, setRendererList] = useState<MagnetRendererDefinition[]>(() =>
     listRegisteredMagnetRenderers()
   );
-  const [selectedRendererId, setSelectedRendererId] = useState<string>(() => rendererList[0]?.id ?? '');
+  const [selectedRendererId, setSelectedRendererId] = useState<string>(
+    () => rendererList[0]?.id ?? ''
+  );
+  const variantRegistryRevision = useSyncExternalStore(
+    subscribeMagnetVariants,
+    getMagnetVariantsRevision,
+    getMagnetVariantsRevision
+  );
   const [themeJson, setThemeJson] = useState(() => JSON.stringify(theme, null, 2));
   const [themeMessage, setThemeMessage] = useState<PanelMessage | null>(null);
   const [themePack, setThemePack] = useState<ParsedThemePack | null>(null);
@@ -794,9 +915,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   const [themePackExportManifestJson, setThemePackExportManifestJson] = useState(() =>
     JSON.stringify(buildDefaultThemePackManifest(theme), null, 2)
   );
-  const [themePackExportBundles, setThemePackExportBundles] = useState<Record<string, ThemePackExportBundle>>(
-    {}
-  );
+  const [themePackExportBundles, setThemePackExportBundles] = useState<
+    Record<string, ThemePackExportBundle>
+  >({});
   const [themePackExportChecksumsEnabled, setThemePackExportChecksumsEnabled] = useState(true);
   const [profilePackExportManifestJson, setProfilePackExportManifestJson] = useState(() =>
     JSON.stringify(buildDefaultProfilePackManifest(theme), null, 2)
@@ -804,19 +925,24 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   const [profilePackExportChecksumsEnabled, setProfilePackExportChecksumsEnabled] = useState(true);
   const [profilePackApplyOpen, setProfilePackApplyOpen] = useState(false);
   const [profilePackApplyBusy, setProfilePackApplyBusy] = useState(false);
-  const [selectedSurfaceBindingId, setSelectedSurfaceBindingId] =
-    useState<ThemeBindingId>(DEFAULT_SELECTED_SURFACE_BINDING_ID);
-  const [profilePackApplyOptions, setProfilePackApplyOptions] = useState<ProfilePackApplyOptions>(() => ({
-    applyTheme: true,
-    applyMagnets: false,
-    magnetsMode: 'replace-all',
-    sourceSpaceId: 'space1',
-    targetSpaceId: 'space1',
-    acknowledgeOverwrite: false,
-  }));
+  const [selectedSurfaceBindingId, setSelectedSurfaceBindingId] = useState<ThemeBindingId>(
+    DEFAULT_SELECTED_SURFACE_BINDING_ID
+  );
+  const [profilePackApplyOptions, setProfilePackApplyOptions] = useState<ProfilePackApplyOptions>(
+    () => ({
+      applyTheme: true,
+      applyMagnets: false,
+      magnetsMode: 'replace-all',
+      sourceSpaceId: 'space1',
+      targetSpaceId: 'space1',
+      acknowledgeOverwrite: false,
+    })
+  );
 
   const [localMagnetSpacesState, setLocalMagnetSpacesState] = useState<MagnetSpacesState>(() =>
-    sanitizeMagnetSpacesState(readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState()))
+    sanitizeMagnetSpacesState(
+      readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState())
+    )
   );
 
   const magnetBindingIds = useMemo(() => {
@@ -884,11 +1010,12 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     return { total, color, references };
   }, [theme.tokens]);
 
-  const loadMagnetLayoutStoreState = useCallback(async (): Promise<MagnetLayoutStoreState | null> => {
-    if (!isTauri) return null;
-    const bootstrapped = await magnetLayoutStoreBootstrap();
-    return bootstrapped?.state ?? (await magnetLayoutStoreGetState());
-  }, [isTauri]);
+  const loadMagnetLayoutStoreState =
+    useCallback(async (): Promise<MagnetLayoutStoreState | null> => {
+      if (!isTauri) return null;
+      const bootstrapped = await magnetLayoutStoreBootstrap();
+      return bootstrapped?.state ?? (await magnetLayoutStoreGetState());
+    }, [isTauri]);
 
   const refreshLocalMagnetSpacesState = useCallback(async (): Promise<MagnetSpacesState> => {
     const fallbackSpaces = sanitizeMagnetSpacesState(
@@ -901,12 +1028,19 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   }, [loadMagnetLayoutStoreState]);
 
   const applyMagnetLayoutStorePatches = useCallback(
-    async (patches: MagnetLayoutStorePatch[], reason: string): Promise<MagnetLayoutStoreState | null> => {
+    async (
+      patches: MagnetLayoutStorePatch[],
+      reason: string
+    ): Promise<MagnetLayoutStoreState | null> => {
       if (!isTauri) return null;
       const store = await loadMagnetLayoutStoreState();
       if (!store) return null;
 
-      const response = await magnetLayoutStoreApplyPatch({ expectedRevision: store.revision, patches, reason });
+      const response = await magnetLayoutStoreApplyPatch({
+        expectedRevision: store.revision,
+        patches,
+        reason,
+      });
       if (!response) return store;
 
       setLocalMagnetSpacesState(response.state.spaces);
@@ -961,7 +1095,10 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     setProfilePackApplyOptions((prev) => ({ ...prev, targetSpaceId: fallback }));
   }, [localMagnetSpacesState.spaces, profilePackApplyOptions.targetSpaceId]);
 
-  const themePackRequires = useMemo(() => themePack?.manifest.requires ?? null, [themePack?.manifest.requires]);
+  const themePackRequires = useMemo(
+    () => themePack?.manifest.requires ?? null,
+    [themePack?.manifest.requires]
+  );
   const themePackAppVersionSatisfaction = useMemo(
     () => satisfiesSemverRange(APP_VERSION, themePackRequires?.appVersion ?? null),
     [themePackRequires?.appVersion]
@@ -971,7 +1108,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     [themePackRequires?.hostApiVersion]
   );
   const themePackRequiresViolated =
-    themePackAppVersionSatisfaction === 'violates' || themePackHostApiVersionSatisfaction === 'violates';
+    themePackAppVersionSatisfaction === 'violates' ||
+    themePackHostApiVersionSatisfaction === 'violates';
 
   const refreshRenderers = useCallback(() => {
     setRendererList(listRegisteredMagnetRenderers());
@@ -1061,7 +1199,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   const closeThemeWindow = useCallback(async () => {
     try {
       const { closeEditorWindow } = await import('../../utils/editorWindows');
-      await closeEditorWindow('theme');
+      await closeEditorWindow('registration');
     } catch (error) {
       telemetry.error('editor.theme-window.close.failed', {
         message: getErrorMessage(error),
@@ -1075,7 +1213,10 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
   const downloadVariantPresetPmpv = useCallback(() => {
     if (!selectedRendererId) {
-      setVariantPresetMessage({ kind: 'error', text: t('editor.theme-editor.pmpv.message.noRenderer') });
+      setVariantPresetMessage({
+        kind: 'error',
+        text: t('editor.theme-editor.pmpv.message.noRenderer'),
+      });
       return;
     }
 
@@ -1084,7 +1225,10 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       const rawId = `${theme.id}-${rendererId}`;
       const id = isValidId(rawId) ? rawId : isValidId(rendererId) ? rendererId : 'variant-preset';
 
-      const resolvedFragment = materializeThemeBinding(theme, `magnet.${rendererId}` as ThemeBindingId);
+      const resolvedFragment = materializeThemeBinding(
+        theme,
+        `magnet.${rendererId}` as ThemeBindingId
+      );
       const fragment = isPlainObject(resolvedFragment)
         ? (resolvedFragment as unknown as Record<string, unknown>)
         : {};
@@ -1207,7 +1351,10 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       link.download = filename;
       link.click();
       URL.revokeObjectURL(url);
-      setThemeMessage({ kind: 'success', text: t('editor.theme-editor.pmpt.message.exported', { name: filename }) });
+      setThemeMessage({
+        kind: 'success',
+        text: t('editor.theme-editor.pmpt.message.exported', { name: filename }),
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setThemeMessage({
@@ -1226,7 +1373,10 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         const parsed = JSON.parse(text) as unknown;
         validateThemeJson(parsed);
         await applyTheme(parsed);
-        setThemeMessage({ kind: 'success', text: t('editor.theme-editor.pmpt.message.fileLoaded', { name: file.name }) });
+        setThemeMessage({
+          kind: 'success',
+          text: t('editor.theme-editor.pmpt.message.fileLoaded', { name: file.name }),
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setThemeMessage({
@@ -1318,7 +1468,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         ? sanitizeMagnetSpacesState(packSpacesRaw)
         : null;
     if (!isTauri) {
-      const localSpaces = sanitizeMagnetSpacesState(readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState()));
+      const localSpaces = sanitizeMagnetSpacesState(
+        readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState())
+      );
       setProfilePackApplyOptions({
         applyTheme: Boolean(profilePack.themeEntry?.text),
         applyMagnets: false,
@@ -1348,7 +1500,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     const store = await loadMagnetLayoutStoreState();
     const spaces =
       store?.spaces ??
-      sanitizeMagnetSpacesState(readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState()));
+      sanitizeMagnetSpacesState(
+        readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState())
+      );
 
     const layoutsBySpaceId: Record<string, unknown> = {};
     const configsBySpaceId: Record<string, unknown> = {};
@@ -1391,12 +1545,18 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
     const options = profilePackApplyOptions;
     if (!options.applyTheme && !options.applyMagnets) {
-      setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.nothingSelected') });
+      setProfilePackMessage({
+        kind: 'error',
+        text: t('editor.theme-editor.profilePack.message.nothingSelected'),
+      });
       return;
     }
 
     if (options.applyMagnets && !options.acknowledgeOverwrite) {
-      setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.ackRequired') });
+      setProfilePackMessage({
+        kind: 'error',
+        text: t('editor.theme-editor.profilePack.message.ackRequired'),
+      });
       return;
     }
 
@@ -1419,7 +1579,10 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
       if (options.applyTheme) {
         if (!profilePack.themeEntry?.text) {
-          setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.themeMissing') });
+          setProfilePackMessage({
+            kind: 'error',
+            text: t('editor.theme-editor.profilePack.message.themeMissing'),
+          });
           return;
         }
 
@@ -1445,7 +1608,10 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
       if (options.applyMagnets) {
         if (!profilePack.profile) {
-          setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.profileMissing') });
+          setProfilePackMessage({
+            kind: 'error',
+            text: t('editor.theme-editor.profilePack.message.profileMissing'),
+          });
           return;
         }
 
@@ -1458,7 +1624,10 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
         const rawSpaces = profilePack.profile.magnets?.spaces?.value;
         if (!isPlainObject(rawSpaces) || rawSpaces.version !== 1) {
-          setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.invalidSpaces') });
+          setProfilePackMessage({
+            kind: 'error',
+            text: t('editor.theme-editor.profilePack.message.invalidSpaces'),
+          });
           return;
         }
 
@@ -1467,12 +1636,18 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
         const nextSpaces = sanitizeMagnetSpacesState(rawSpaces);
         const spaceIds = new Set(nextSpaces.spaces.map((s) => s.id));
-        const nextLayoutsBySpaceId: Record<string, unknown> = isPlainObject(rawLayouts) ? rawLayouts : {};
-        const nextConfigsBySpaceId: Record<string, unknown> = isPlainObject(rawConfigs) ? rawConfigs : {};
+        const nextLayoutsBySpaceId: Record<string, unknown> = isPlainObject(rawLayouts)
+          ? rawLayouts
+          : {};
+        const nextConfigsBySpaceId: Record<string, unknown> = isPlainObject(rawConfigs)
+          ? rawConfigs
+          : {};
 
         if (options.magnetsMode === 'replace-all') {
           if (isTauri) {
-            const patches: MagnetLayoutStorePatch[] = [{ kind: 'setSpacesState', spaces: nextSpaces }];
+            const patches: MagnetLayoutStorePatch[] = [
+              { kind: 'setSpacesState', spaces: nextSpaces },
+            ];
             for (const [spaceId, layoutValue] of Object.entries(nextLayoutsBySpaceId)) {
               if (!spaceIds.has(spaceId)) continue;
               if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
@@ -1502,35 +1677,45 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           for (const [spaceId, configValue] of Object.entries(nextConfigsBySpaceId)) {
             if (!spaceIds.has(spaceId)) continue;
             if (!isPlainObject(configValue)) continue;
-            const filtered = filterMagnetConfigSnapshotForImportWithReport(configValue, allowedMagnetIds);
+            const filtered = filterMagnetConfigSnapshotForImportWithReport(
+              configValue,
+              allowedMagnetIds
+            );
             recordSkippedImportMagnets(filtered.report.skippedMagnetIds);
             recordSkippedImportCustomMagnets(filtered.report.skippedCustomMagnetIds);
-            await broadcastDataUpdate(
-              resolveMagnetConfigStorageKey(spaceId),
-              filtered.value
-            );
+            await broadcastDataUpdate(resolveMagnetConfigStorageKey(spaceId), filtered.value);
           }
 
           if (!isTauri) {
-            await broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, nextSpaces, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+            await broadcastDataUpdate(
+              STORAGE_KEYS.MAGNET_SPACES,
+              nextSpaces,
+              TAURI_EVENTS.MAGNET_SPACES_UPDATED
+            );
           }
         } else {
           if (!spaceIds.has(options.sourceSpaceId)) {
             setProfilePackMessage({
               kind: 'error',
-              text: t('editor.theme-editor.profilePack.message.sourceSpaceMissing', { id: options.sourceSpaceId }),
+              text: t('editor.theme-editor.profilePack.message.sourceSpaceMissing', {
+                id: options.sourceSpaceId,
+              }),
             });
             return;
           }
 
           const localSpaces = isTauri
             ? await refreshLocalMagnetSpacesState()
-            : sanitizeMagnetSpacesState(readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState()));
+            : sanitizeMagnetSpacesState(
+                readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState())
+              );
           const localSpaceIds = new Set(localSpaces.spaces.map((s) => s.id));
           if (!localSpaceIds.has(options.targetSpaceId)) {
             setProfilePackMessage({
               kind: 'error',
-              text: t('editor.theme-editor.profilePack.message.targetSpaceMissing', { id: options.targetSpaceId }),
+              text: t('editor.theme-editor.profilePack.message.targetSpaceMissing', {
+                id: options.targetSpaceId,
+              }),
             });
             return;
           }
@@ -1549,13 +1734,19 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                 'profilePack.mapOne'
               );
             } else {
-              await broadcastDataUpdate(resolveMagnetLayoutStorageKey(options.targetSpaceId), layout);
+              await broadcastDataUpdate(
+                resolveMagnetLayoutStorageKey(options.targetSpaceId),
+                layout
+              );
             }
           }
 
           const configValue = nextConfigsBySpaceId[options.sourceSpaceId];
           if (isPlainObject(configValue)) {
-            const filtered = filterMagnetConfigSnapshotForImportWithReport(configValue, allowedMagnetIds);
+            const filtered = filterMagnetConfigSnapshotForImportWithReport(
+              configValue,
+              allowedMagnetIds
+            );
             recordSkippedImportMagnets(filtered.report.skippedMagnetIds);
             recordSkippedImportCustomMagnets(filtered.report.skippedCustomMagnetIds);
             await broadcastDataUpdate(
@@ -1565,7 +1756,11 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           }
 
           if (!isTauri) {
-            await broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, localSpaces, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+            await broadcastDataUpdate(
+              STORAGE_KEYS.MAGNET_SPACES,
+              localSpaces,
+              TAURI_EVENTS.MAGNET_SPACES_UPDATED
+            );
           }
         }
       }
@@ -1624,7 +1819,10 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     try {
       const raw = await readDurableText('profile-pack-backup', 'last');
       if (!raw) {
-        setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.rollback.missing') });
+        setProfilePackMessage({
+          kind: 'error',
+          text: t('editor.theme-editor.profilePack.rollback.missing'),
+        });
         return;
       }
 
@@ -1660,7 +1858,10 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           }
         }
       } else if (isTauri) {
-        await applyMagnetLayoutStorePatches([{ kind: 'setSpacesState', spaces }], 'profilePack.rollback');
+        await applyMagnetLayoutStorePatches(
+          [{ kind: 'setSpacesState', spaces }],
+          'profilePack.rollback'
+        );
       }
 
       const configsBySpaceId = (magnets as { configsBySpaceId?: unknown }).configsBySpaceId;
@@ -1673,19 +1874,32 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       }
 
       if (!isTauri) {
-        await broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, spaces, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+        await broadcastDataUpdate(
+          STORAGE_KEYS.MAGNET_SPACES,
+          spaces,
+          TAURI_EVENTS.MAGNET_SPACES_UPDATED
+        );
       }
 
-      setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.rollback.success') });
+      setProfilePackMessage({
+        kind: 'success',
+        text: t('editor.theme-editor.profilePack.rollback.success'),
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.rollback.failed', { message }) });
+      setProfilePackMessage({
+        kind: 'error',
+        text: t('editor.theme-editor.profilePack.rollback.failed', { message }),
+      });
     }
   }, [applyMagnetLayoutStorePatches, applyTheme, confirm, isTauri, t]);
 
   const applyThemePackTheme = useCallback(async () => {
     if (!themePack?.entryThemeText) {
-      setThemePackMessage({ kind: 'error', text: t('editor.theme-editor.pmpk.message.themeMissing') });
+      setThemePackMessage({
+        kind: 'error',
+        text: t('editor.theme-editor.pmpk.message.themeMissing'),
+      });
       return;
     }
     try {
@@ -1714,7 +1928,10 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       const parsed = JSON.parse(themePack.entryThemeText) as unknown;
       validateThemeJson(parsed);
       await applyTheme(parsed);
-      setThemePackMessage({ kind: 'success', text: t('editor.theme-editor.pmpk.message.themeApplied') });
+      setThemePackMessage({
+        kind: 'success',
+        text: t('editor.theme-editor.pmpk.message.themeApplied'),
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setThemePackMessage({
@@ -1759,7 +1976,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     if (!manifest) {
       setProfilePackMessage({
         kind: 'error',
-        text: t('editor.theme-editor.profilePack.export.manifestInvalid', { message: error ?? 'invalid' }),
+        text: t('editor.theme-editor.profilePack.export.manifestInvalid', {
+          message: error ?? 'invalid',
+        }),
       });
       return;
     }
@@ -1781,7 +2000,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     const store = await loadMagnetLayoutStoreState();
     const spaces =
       store?.spaces ??
-      sanitizeMagnetSpacesState(readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState()));
+      sanitizeMagnetSpacesState(
+        readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState())
+      );
 
     const layoutsBySpaceId: Record<string, unknown> = {};
     const configsBySpaceId: Record<string, unknown> = {};
@@ -1835,12 +2056,24 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       link.click();
       URL.revokeObjectURL(url);
 
-      setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.export.success', { name: filename }) });
+      setProfilePackMessage({
+        kind: 'success',
+        text: t('editor.theme-editor.profilePack.export.success', { name: filename }),
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.export.failed', { message }) });
+      setProfilePackMessage({
+        kind: 'error',
+        text: t('editor.theme-editor.profilePack.export.failed', { message }),
+      });
     }
-  }, [loadMagnetLayoutStoreState, profilePackExportChecksumsEnabled, profilePackExportManifest, t, themeJson]);
+  }, [
+    loadMagnetLayoutStoreState,
+    profilePackExportChecksumsEnabled,
+    profilePackExportManifest,
+    t,
+    themeJson,
+  ]);
 
   const themePackExportBundledDeps = useMemo(() => {
     const manifest = themePackExportManifest.manifest;
@@ -1875,7 +2108,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   }, [theme]);
 
   const resetProfilePackExport = useCallback(() => {
-    setProfilePackExportManifestJson(JSON.stringify(buildDefaultProfilePackManifest(theme), null, 2));
+    setProfilePackExportManifestJson(
+      JSON.stringify(buildDefaultProfilePackManifest(theme), null, 2)
+    );
     setProfilePackMessage(null);
   }, [theme]);
 
@@ -1977,7 +2212,10 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       }
       if (attached.depId !== dep.id) {
         bundleErrors.push(
-          t('editor.theme-editor.pmpk.export.bundle.idMismatch', { expected: dep.id, actual: attached.depId })
+          t('editor.theme-editor.pmpk.export.bundle.idMismatch', {
+            expected: dep.id,
+            actual: attached.depId,
+          })
         );
         continue;
       }
@@ -2046,12 +2284,17 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       const requiredRange = dep.version ?? null;
 
       const installedSatisfaction =
-        installedVersion && requiredRange ? satisfiesSemverRange(installedVersion, requiredRange) : 'unknown';
+        installedVersion && requiredRange
+          ? satisfiesSemverRange(installedVersion, requiredRange)
+          : 'unknown';
       const bundledSatisfaction =
-        bundledVersion && requiredRange ? satisfiesSemverRange(bundledVersion, requiredRange) : 'unknown';
+        bundledVersion && requiredRange
+          ? satisfiesSemverRange(bundledVersion, requiredRange)
+          : 'unknown';
 
       const bundleMissing = !dep.bundleBytes;
-      const bundleMetaError = Boolean(dep.bundleMetaError) || (Boolean(dep.bundleBytes) && !dep.bundleMeta);
+      const bundleMetaError =
+        Boolean(dep.bundleMetaError) || (Boolean(dep.bundleBytes) && !dep.bundleMeta);
       const bundleIdMismatch = dep.bundleMeta ? dep.bundleMeta.id !== dep.id : false;
       const bundleOutOfRange = Boolean(requiredRange) && bundledSatisfaction === 'violates';
 
@@ -2161,7 +2404,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     if (!themePack) return;
 
     const candidates = themePackDepsView.filter(
-      (item) => !item.installBlockedReason && !item.installedSatisfied && Boolean(item.dep.bundleBytes)
+      (item) =>
+        !item.installBlockedReason && !item.installedSatisfied && Boolean(item.dep.bundleBytes)
     );
 
     if (candidates.length === 0) {
@@ -2179,7 +2423,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       });
 
     const lines = candidates.map((item) => {
-      const installed = item.installedVersion ? ` (${t('editor.theme-editor.pmpk.deps.field.installed')}: ${item.installedVersion})` : '';
+      const installed = item.installedVersion
+        ? ` (${t('editor.theme-editor.pmpk.deps.field.installed')}: ${item.installedVersion})`
+        : '';
       return `${item.dep.kind} ${item.dep.id}@${item.bundledVersion ?? '?'}${installed}`;
     });
 
@@ -2203,7 +2449,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
             ]
           : []),
         ...lines,
-        ...(skipped.length > 0 ? ['', t('editor.theme-editor.pmpk.installAll.skipped.title'), ...skipped] : []),
+        ...(skipped.length > 0
+          ? ['', t('editor.theme-editor.pmpk.installAll.skipped.title'), ...skipped]
+          : []),
       ].join('\n'),
       confirmText: t('common.action.install'),
       danger: themePackRequiresViolated,
@@ -2225,7 +2473,10 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     setDependencyRevision((prev) => prev + 1);
 
     if (failures.length === 0) {
-      setThemePackMessage({ kind: 'success', text: t('editor.theme-editor.pmpk.installAll.success') });
+      setThemePackMessage({
+        kind: 'success',
+        text: t('editor.theme-editor.pmpk.installAll.success'),
+      });
       return;
     }
 
@@ -2301,7 +2552,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           updated: result.updated,
           missing: missing.length,
         });
-        const missingLines = missing.map((binding) => `${binding.magnetId} -> ${binding.rendererId}`);
+        const missingLines = missing.map(
+          (binding) => `${binding.magnetId} -> ${binding.rendererId}`
+        );
         setThemePackMessage({
           kind: 'success',
           text: missingLines.length > 0 ? `${summary}\n${missingLines.join('\n')}` : summary,
@@ -2358,12 +2611,15 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   });
 
   const selectedBindingVariantSuggestions = useMemo(() => {
+    void variantRegistryRevision;
     if (!selectedSurfaceBindingId.startsWith('magnet.')) {
       return [] as string[];
     }
 
-    return listMagnetVariants(selectedSurfaceBindingId.slice('magnet.'.length)).map((variant) => variant.id);
-  }, [selectedSurfaceBindingId]);
+    return listMagnetVariants(selectedSurfaceBindingId.slice('magnet.'.length)).map(
+      (variant) => variant.id
+    );
+  }, [selectedSurfaceBindingId, variantRegistryRevision]);
 
   const installSelectedSurfaceStarter = useCallback(async () => {
     if (!isMusicLibrarySurfaceBinding(selectedSurfaceBindingId)) {
@@ -2490,7 +2746,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
   useEffect(() => {
     if (editableSurfaceBindingIds.includes(selectedSurfaceBindingId)) return;
-    setSelectedSurfaceBindingId(editableSurfaceBindingIds[0] ?? DEFAULT_SELECTED_SURFACE_BINDING_ID);
+    setSelectedSurfaceBindingId(
+      editableSurfaceBindingIds[0] ?? DEFAULT_SELECTED_SURFACE_BINDING_ID
+    );
   }, [editableSurfaceBindingIds, selectedSurfaceBindingId]);
 
   useEffect(() => {
@@ -2506,7 +2764,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   }, [profilePackApplyBusy, profilePackApplyOpen]);
 
   const workspaceTabs = useMemo(
-    () => [
+    () =>
+      [
       {
         id: 'surface' as const,
         title: t('editor.theme-editor.workspace.surface.title'),
@@ -2537,8 +2796,20 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         description: t('editor.theme-editor.workspace.renderer.desc'),
         badge: String(rendererList.length),
       },
-    ],
-    [editableSurfaceBindingIds.length, profilePack, rendererList.length, t, themeTokenStats.total, themePack]
+    ].filter(
+      (workspace) =>
+        contractImportEnabled ||
+        (workspace.id !== 'theme-pack' && workspace.id !== 'profile-pack')
+    ),
+    [
+      contractImportEnabled,
+      editableSurfaceBindingIds.length,
+      profilePack,
+      rendererList.length,
+      t,
+      themeTokenStats.total,
+      themePack,
+    ]
   );
 
   const activeWorkspaceMeta =
@@ -2622,7 +2893,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         {
           id: 'profile-pack-id',
           label: t('editor.theme-editor.workspace.sidebar.package'),
-          value: profilePack?.manifest.metadata.id ?? t('editor.theme-editor.workspace.state.empty'),
+          value:
+            profilePack?.manifest.metadata.id ?? t('editor.theme-editor.workspace.state.empty'),
           badge: profilePack?.manifest.metadata.version,
           tone: profilePack ? 'accent' : 'default',
         },
@@ -2695,23 +2967,37 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   ]);
 
   return (
-    <div className="editor-theme">
-      <div className="editor-window-header" data-tauri-drag-region>
-        <span className="window-title" data-tauri-drag-region>
-          {t('windows.editor.theme.title')}
-        </span>
-        <button type="button" className="theme-editor-window-close" onClick={() => void closeThemeWindow()}>
-          {t('common.action.close')}
-        </button>
-      </div>
+    <div className={`editor-theme ${embedded ? 'editor-theme--embedded' : ''}`}>
+      {!embedded ? (
+        <div className="editor-window-header" data-tauri-drag-region>
+          <span className="window-title" data-tauri-drag-region>
+            {t('windows.editor.registration.title')}
+          </span>
+          <button
+            type="button"
+            className="theme-editor-window-close"
+            onClick={() => void closeThemeWindow()}
+          >
+            {t('common.action.close')}
+          </button>
+        </div>
+      ) : null}
 
       <div className="editor-window-content theme-editor-content">
         <div className="theme-editor-title">
           <div className="theme-editor-title-row">
-            <div className="theme-editor-title-text">{t('editor.theme-editor.title')}</div>
+            <div className="theme-editor-title-text">
+              {embedded
+                ? workspaceTabs.find((workspace) => workspace.id === activeWorkspace)?.title
+                : t('editor.theme-editor.title')}
+            </div>
             <div className="theme-editor-title-actions">
               {activeWorkspace === 'renderer' ? (
-                <button type="button" className="theme-editor-action-btn" onClick={refreshRenderers}>
+                <button
+                  type="button"
+                  className="theme-editor-action-btn"
+                  onClick={refreshRenderers}
+                >
                   {t('common.action.refresh')}
                 </button>
               ) : null}
@@ -2722,7 +3008,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
               </button>
             </div>
           </div>
-          <p className="theme-editor-subtitle">{t('editor.theme-editor.subtitle')}</p>
+          {!embedded ? (
+            <p className="theme-editor-subtitle">{t('editor.theme-editor.subtitle')}</p>
+          ) : null}
         </div>
 
         <div className="theme-editor-workspace-nav">
@@ -2828,7 +3116,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                 </div>
                 <div className="theme-editor-sidebar-scroll theme-editor-renderer-groups">
                   {rendererList.length === 0 ? (
-                    <div className="theme-editor-muted">{t('editor.theme-debug.renderers.empty')}</div>
+                    <div className="theme-editor-muted">
+                      {t('editor.theme-debug.renderers.empty')}
+                    </div>
                   ) : (
                     rendererGroups.map((group) => (
                       <div key={group.id || '__default__'} className="theme-editor-renderer-group">
@@ -2891,7 +3181,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   </div>
                   <div className="theme-editor-panel-meta">
                     <span className="theme-editor-panel-chip">
-                      {t('editor.theme-editor.surfaceStudio.hero.binding')}: {selectedSurfaceBindingId}
+                      {t('editor.theme-editor.surfaceStudio.hero.binding')}:{' '}
+                      {selectedSurfaceBindingId}
                     </span>
                     <span className="theme-editor-panel-chip">
                       {t('editor.theme-editor.surfaceStudio.hero.source')}:{' '}
@@ -2920,7 +3211,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                       {t('editor.theme-editor.workspace.sidebar.tokens')}: {themeTokenStats.total}
                     </span>
                     <span className="theme-editor-panel-chip">
-                      {t('editor.theme-editor.workspace.sidebar.colorTokens')}: {themeTokenStats.color}
+                      {t('editor.theme-editor.workspace.sidebar.colorTokens')}:{' '}
+                      {themeTokenStats.color}
                     </span>
                   </div>
                 </div>
@@ -2936,8 +3228,12 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   </div>
                   {themePack ? (
                     <div className="theme-editor-panel-meta">
-                      <span className="theme-editor-panel-chip">{themePack.manifest.metadata.id}</span>
-                      <span className="theme-editor-panel-chip">{themePack.manifest.metadata.version}</span>
+                      <span className="theme-editor-panel-chip">
+                        {themePack.manifest.metadata.id}
+                      </span>
+                      <span className="theme-editor-panel-chip">
+                        {themePack.manifest.metadata.version}
+                      </span>
                     </div>
                   ) : null}
                 </div>
@@ -2953,8 +3249,12 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   </div>
                   {profilePack ? (
                     <div className="theme-editor-panel-meta">
-                      <span className="theme-editor-panel-chip">{profilePack.manifest.metadata.id}</span>
-                      <span className="theme-editor-panel-chip">{profilePack.manifest.metadata.version}</span>
+                      <span className="theme-editor-panel-chip">
+                        {profilePack.manifest.metadata.id}
+                      </span>
+                      <span className="theme-editor-panel-chip">
+                        {profilePack.manifest.metadata.version}
+                      </span>
                     </div>
                   ) : null}
                 </div>
@@ -2983,690 +3283,835 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
               ) : null}
 
               {activeWorkspace === 'theme-source' ? (
-              <div className="theme-editor-section">
-                <ThemeTokenWorkbench theme={theme} />
-              </div>
+                <div className="theme-editor-section">
+                  <ThemeTokenWorkbench theme={theme} />
+                </div>
               ) : null}
 
               {activeWorkspace === 'theme-source' ? (
-              <div className="theme-editor-section">
-                <div className="theme-editor-section-title">
-                  {t('editor.theme-editor.pmpt.section.title')}
-                </div>
-
-                <div className="theme-editor-section-actions">
-                  <label className="theme-editor-file-btn">
-                    <input type="file" accept=".pmpt,.json,application/json" onChange={handleThemeFileUpload} />
-                    {t('editor.theme-editor.pmpt.importFile')}
-                  </label>
-                  <button type="button" className="theme-editor-action-btn" onClick={copyThemeJson}>
-                    {t('editor.theme-editor.pmpt.copyJson')}
-                  </button>
-                  <button type="button" className="theme-editor-action-btn" onClick={downloadThemePmpt}>
-                    {t('editor.theme-editor.pmpt.exportFile')}
-                  </button>
-                  <button type="button" className="theme-editor-action-btn" onClick={applyThemeJson}>
-                    {t('editor.theme-editor.pmpt.applyJson')}
-                  </button>
-                </div>
-
-                {themeMessage ? (
-                  <div className={`theme-editor-message theme-editor-message--${themeMessage.kind}`}>
-                    {themeMessage.text}
+                <div className="theme-editor-section">
+                  <div className="theme-editor-section-title">
+                    {t('editor.theme-editor.pmpt.section.title')}
                   </div>
-                ) : null}
 
-                <textarea
-                  className="theme-editor-textarea"
-                  value={themeJson}
-                  onChange={(event) => setThemeJson(event.target.value)}
-                  spellCheck={false}
-                />
-              </div>
-              ) : null}
+                  <div className="theme-editor-section-actions">
+                    {contractImportEnabled ? (
+                      <label className="theme-editor-file-btn">
+                        <input
+                          type="file"
+                          accept=".pmpt,.json,application/json"
+                          onChange={handleThemeFileUpload}
+                        />
+                        {t('editor.theme-editor.pmpt.importFile')}
+                      </label>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="theme-editor-action-btn"
+                      onClick={copyThemeJson}
+                    >
+                      {t('editor.theme-editor.pmpt.copyJson')}
+                    </button>
+                    <button
+                      type="button"
+                      className="theme-editor-action-btn"
+                      onClick={downloadThemePmpt}
+                    >
+                      {t('editor.theme-editor.pmpt.exportFile')}
+                    </button>
+                    <button
+                      type="button"
+                      className="theme-editor-action-btn"
+                      onClick={applyThemeJson}
+                    >
+                      {t('editor.theme-editor.pmpt.applyJson')}
+                    </button>
+                  </div>
 
-              {activeWorkspace === 'surface' ? (
-              <div className="theme-editor-section">
-                <div className="theme-editor-section-title">
-                  {t('editor.theme-editor.surfaceStudio.bindingEditor.title')}
-                </div>
+                  {themeMessage ? (
+                    <div
+                      className={`theme-editor-message theme-editor-message--${themeMessage.kind}`}
+                    >
+                      {themeMessage.text}
+                    </div>
+                  ) : null}
 
-                <div className="theme-binding-detail">
-                  <ThemeBindingEditorPanel
-                    bindingId={selectedSurfaceBindingId}
-                    bindingEditor={selectedBindingEditor}
-                    variantInput={{
-                      kind: 'input',
-                      suggestions: selectedBindingVariantSuggestions,
-                      placeholder: t('editor.theme-editor.bindingPanel.placeholder.variant'),
-                    }}
-                    renderActionButton={(button) => (
-                      <button
-                        type="button"
-                        className="theme-editor-action-btn"
-                        onClick={button.onClick}
-                      >
-                        {button.label}
-                      </button>
-                    )}
+                  <textarea
+                    className="theme-editor-textarea"
+                    value={themeJson}
+                    onChange={(event) => setThemeJson(event.target.value)}
+                    spellCheck={false}
                   />
                 </div>
-              </div>
               ) : null}
 
               {activeWorkspace === 'surface' ? (
-              <div className="theme-editor-section">
-                <ThemeSurfaceWorkbench
-                  bindingId={selectedSurfaceBindingId}
-                  bindingEditor={selectedBindingEditor}
-                  onInstallStarter={
-                    isMusicLibrarySurfaceBinding(selectedSurfaceBindingId) ? installSelectedSurfaceStarter : undefined
-                  }
-                />
-              </div>
+                <div className="theme-editor-section">
+                  <div className="theme-editor-section-title">
+                    {t('editor.theme-editor.surfaceStudio.bindingEditor.title')}
+                  </div>
+
+                  <div className="theme-binding-detail">
+                    <ThemeBindingEditorPanel
+                      bindingId={selectedSurfaceBindingId}
+                      bindingEditor={selectedBindingEditor}
+                      variantInput={{
+                        kind: 'input',
+                        suggestions: selectedBindingVariantSuggestions,
+                        placeholder: t('editor.theme-editor.bindingPanel.placeholder.variant'),
+                      }}
+                      renderActionButton={(button) => (
+                        <button
+                          type="button"
+                          className="theme-editor-action-btn"
+                          onClick={button.onClick}
+                        >
+                          {button.label}
+                        </button>
+                      )}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              {activeWorkspace === 'surface' ? (
+                <div className="theme-editor-section">
+                  <ThemeSurfaceWorkbench
+                    bindingId={selectedSurfaceBindingId}
+                    bindingEditor={selectedBindingEditor}
+                    onInstallStarter={
+                      isMusicLibrarySurfaceBinding(selectedSurfaceBindingId)
+                        ? installSelectedSurfaceStarter
+                        : undefined
+                    }
+                  />
+                </div>
               ) : null}
 
               {activeWorkspace === 'theme-pack' ? (
-              <div className="theme-editor-section">
-                <div className="theme-editor-section-title">
-                  {t('editor.theme-editor.pmpk.section.title')}
-                </div>
-
-                <div className="theme-editor-section-actions">
-                  <label className="theme-editor-file-btn">
-                    <input type="file" accept=".pmpk,application/zip" onChange={handleThemePackUpload} />
-                    {t('editor.theme-editor.pmpk.importFile')}
-                  </label>
-                  <button
-                    type="button"
-                    className="theme-editor-action-btn"
-                    onClick={applyThemePackTheme}
-                    disabled={!themePack?.entryThemeText}
-                  >
-                    {t('editor.theme-editor.pmpk.applyThemeOnly')}
-                  </button>
-                  <button
-                    type="button"
-                    className="theme-editor-action-btn"
-                    onClick={installAllThemePackDependencies}
-                    disabled={!themePack}
-                  >
-                    {t('editor.theme-editor.pmpk.installAll')}
-                  </button>
-                </div>
-
-                {themePackMessage ? (
-                  <div className={`theme-editor-message theme-editor-message--${themePackMessage.kind}`}>
-                    {themePackMessage.text}
+                <div className="theme-editor-section">
+                  <div className="theme-editor-section-title">
+                    {t('editor.theme-editor.pmpk.section.title')}
                   </div>
-                ) : null}
 
-                {themePack ? (
-                  <div className="theme-pack-summary">
-                    <div className="theme-pack-row">
-                      <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.idLabel')}</span>
-                      <span className="theme-pack-value">{themePack.manifest.metadata.id}</span>
-                      <span className="theme-pack-value">
-                        {themePack.manifest.metadata.version}
-                      </span>
-                    </div>
-                    <div className="theme-pack-row">
-                      <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.nameLabel')}</span>
-                      <span className="theme-pack-value">{themePack.manifest.metadata.name}</span>
-                    </div>
-                    <div className="theme-pack-row">
-                      <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.entryThemeLabel')}</span>
-                      <span className="theme-pack-value">{themePack.entryThemePath}</span>
-                      <span
-                        className={`theme-pack-status ${themePack.entryThemeBytes ? 'is-ok' : 'is-missing'}`}
-                      >
-                        {themePack.entryThemeBytes
-                          ? t('editor.theme-editor.pmpk.entryTheme.ok')
-                          : t('editor.theme-editor.pmpk.entryTheme.missing')}
-                      </span>
-                    </div>
-                    <div className="theme-pack-row">
-                      <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.integrityLabel')}</span>
-                      <span
-                        className={`theme-pack-status ${themePack.checksums ? 'is-ok' : 'is-missing'}`}
-                      >
-                        {themePack.checksums
-                          ? t('editor.theme-editor.pmpk.integrity.ok')
-                          : t('editor.theme-editor.pmpk.integrity.missing')}
-                      </span>
-                    </div>
+                  <div className="theme-editor-section-actions">
+                    <label className="theme-editor-file-btn">
+                      <input
+                        type="file"
+                        accept=".pmpk,application/zip"
+                        onChange={handleThemePackUpload}
+                      />
+                      {t('editor.theme-editor.pmpk.importFile')}
+                    </label>
+                    <button
+                      type="button"
+                      className="theme-editor-action-btn"
+                      onClick={applyThemePackTheme}
+                      disabled={!themePack?.entryThemeText}
+                    >
+                      {t('editor.theme-editor.pmpk.applyThemeOnly')}
+                    </button>
+                    <button
+                      type="button"
+                      className="theme-editor-action-btn"
+                      onClick={installAllThemePackDependencies}
+                      disabled={!themePack}
+                    >
+                      {t('editor.theme-editor.pmpk.installAll')}
+                    </button>
+                  </div>
 
-                    <div className="theme-pack-row">
-                      <span className="theme-pack-key">{t('editor.theme-editor.pmpk.requires.title')}</span>
-                      <div className="theme-pack-dep-chips">
-                        <span className={`theme-pack-chip theme-pack-chip--${themePackAppVersionSatisfaction}`}>
-                          {t('editor.theme-editor.pmpk.requires.appVersion')}: {themePackRequires?.appVersion ?? '-'}
-                          <span className="theme-pack-chip-suffix">
-                            {APP_VERSION} ·{' '}
-                            {t(`editor.theme-editor.pmpk.deps.satisfaction.${themePackAppVersionSatisfaction}`)}
-                          </span>
+                  {themePackMessage ? (
+                    <div
+                      className={`theme-editor-message theme-editor-message--${themePackMessage.kind}`}
+                    >
+                      {themePackMessage.text}
+                    </div>
+                  ) : null}
+
+                  {themePack ? (
+                    <div className="theme-pack-summary">
+                      <div className="theme-pack-row">
+                        <span className="theme-pack-key">
+                          {t('editor.theme-editor.pmpk.summary.idLabel')}
                         </span>
-                        <span className={`theme-pack-chip theme-pack-chip--${themePackHostApiVersionSatisfaction}`}>
-                          {t('editor.theme-editor.pmpk.requires.hostApiVersion')}: {themePackRequires?.hostApiVersion ?? '-'}
-                          <span className="theme-pack-chip-suffix">
-                            {HOST_API_VERSION} ·{' '}
-                            {t(`editor.theme-editor.pmpk.deps.satisfaction.${themePackHostApiVersionSatisfaction}`)}
-                          </span>
+                        <span className="theme-pack-value">{themePack.manifest.metadata.id}</span>
+                        <span className="theme-pack-value">
+                          {themePack.manifest.metadata.version}
                         </span>
                       </div>
-                    </div>
-
-                    <div className="theme-pack-deps">
-                      <div className="theme-pack-deps-title">
-                        {t('editor.theme-editor.pmpk.deps.title')}
+                      <div className="theme-pack-row">
+                        <span className="theme-pack-key">
+                          {t('editor.theme-editor.pmpk.summary.nameLabel')}
+                        </span>
+                        <span className="theme-pack-value">{themePack.manifest.metadata.name}</span>
                       </div>
-                      {themePackDepsView.length === 0 ? (
-                        <div className="theme-editor-muted">
-                          {t('editor.theme-editor.pmpk.deps.empty')}
-                        </div>
-                      ) : (
-                        themePackDepsView.map((item) => {
-                          const blockedReason = item.installBlockedReason
-                            ? t(`editor.theme-editor.pmpk.deps.blocked.${item.installBlockedReason}`)
-                            : null;
+                      <div className="theme-pack-row">
+                        <span className="theme-pack-key">
+                          {t('editor.theme-editor.pmpk.summary.entryThemeLabel')}
+                        </span>
+                        <span className="theme-pack-value">{themePack.entryThemePath}</span>
+                        <span
+                          className={`theme-pack-status ${themePack.entryThemeBytes ? 'is-ok' : 'is-missing'}`}
+                        >
+                          {themePack.entryThemeBytes
+                            ? t('editor.theme-editor.pmpk.entryTheme.ok')
+                            : t('editor.theme-editor.pmpk.entryTheme.missing')}
+                        </span>
+                      </div>
+                      <div className="theme-pack-row">
+                        <span className="theme-pack-key">
+                          {t('editor.theme-editor.pmpk.summary.integrityLabel')}
+                        </span>
+                        <span
+                          className={`theme-pack-status ${themePack.checksums ? 'is-ok' : 'is-missing'}`}
+                        >
+                          {themePack.checksums
+                            ? t('editor.theme-editor.pmpk.integrity.ok')
+                            : t('editor.theme-editor.pmpk.integrity.missing')}
+                        </span>
+                      </div>
 
-                          const installDisabled = Boolean(item.installBlockedReason) || item.installedSatisfied;
-
-                          return (
-                            <div
-                              key={`${item.dep.kind}:${item.dep.id}`}
-                              className={`theme-pack-dep ${installDisabled ? 'is-disabled' : ''}`}
-                            >
-                              <div className="theme-pack-dep-header">
-                                <div className="theme-pack-dep-header-left">
-                                  <span className="theme-pack-dep-kind">{item.dep.kind}</span>
-                                  <span className="theme-pack-dep-id">{item.dep.id}</span>
-                                </div>
-                                <div className="theme-pack-dep-actions">
-                                  <button
-                                    type="button"
-                                    className="theme-pack-dep-install-btn"
-                                    disabled={installDisabled}
-                                    onClick={() => installThemePackDependency(item)}
-                                  >
-                                    {t('common.action.install')}
-                                  </button>
-                                </div>
-                              </div>
-
-                              <div className="theme-pack-dep-chips">
-                                <span className="theme-pack-chip">
-                                  {t('editor.theme-editor.pmpk.deps.field.required')}: {item.requiredRange ?? '*'}
-                                </span>
-                                <span className={`theme-pack-chip theme-pack-chip--${item.installedSatisfaction}`}>
-                                  {t('editor.theme-editor.pmpk.deps.field.installed')}: {item.installedVersion ?? '-'}{' '}
-                                  <span className="theme-pack-chip-suffix">
-                                    {t(`editor.theme-editor.pmpk.deps.satisfaction.${item.installedSatisfaction}`)}
-                                  </span>
-                                </span>
-                                <span className={`theme-pack-chip theme-pack-chip--${item.bundledSatisfaction}`}>
-                                  {t('editor.theme-editor.pmpk.deps.field.bundle')}: {item.bundledVersion ?? '-'}{' '}
-                                  <span className="theme-pack-chip-suffix">
-                                    {t(`editor.theme-editor.pmpk.deps.satisfaction.${item.bundledSatisfaction}`)}
-                                  </span>
-                                </span>
-                              </div>
-
-                              {item.installedSatisfied ? (
-                                <div className="theme-editor-muted">
-                                  {t('editor.theme-editor.pmpk.deps.installedSatisfied')}
-                                </div>
-                              ) : null}
-
-                              {blockedReason ? <div className="theme-editor-muted">{blockedReason}</div> : null}
-
-                              {item.dep.bundleMetaError ? (
-                                <div className="theme-editor-muted">{item.dep.bundleMetaError}</div>
-                              ) : null}
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-
-                    {themePackRecommendedBindings.length > 0 ? (
-                      <div className="theme-pack-recommended">
-                        <div className="theme-pack-recommended-header">
-                          <div className="theme-pack-deps-title">
-                            {t('editor.theme-editor.pmpk.recommended.bindings.title')}
-                          </div>
-                          <button
-                            type="button"
-                            className="theme-pack-dep-install-btn"
-                            disabled={!themePackRecommendedBindings.some((item) => item.magnet)}
-                            onClick={() =>
-                              applyThemePackRendererBindings(
-                                themePackRecommendedBindings.map((item) => item.binding)
-                              )
-                            }
+                      <div className="theme-pack-row">
+                        <span className="theme-pack-key">
+                          {t('editor.theme-editor.pmpk.requires.title')}
+                        </span>
+                        <div className="theme-pack-dep-chips">
+                          <span
+                            className={`theme-pack-chip theme-pack-chip--${themePackAppVersionSatisfaction}`}
                           >
-                            {t('editor.theme-editor.pmpk.recommended.bindings.applyAll')}
-                          </button>
+                            {t('editor.theme-editor.pmpk.requires.appVersion')}:{' '}
+                            {themePackRequires?.appVersion ?? '-'}
+                            <span className="theme-pack-chip-suffix">
+                              {APP_VERSION} ·{' '}
+                              {t(
+                                `editor.theme-editor.pmpk.deps.satisfaction.${themePackAppVersionSatisfaction}`
+                              )}
+                            </span>
+                          </span>
+                          <span
+                            className={`theme-pack-chip theme-pack-chip--${themePackHostApiVersionSatisfaction}`}
+                          >
+                            {t('editor.theme-editor.pmpk.requires.hostApiVersion')}:{' '}
+                            {themePackRequires?.hostApiVersion ?? '-'}
+                            <span className="theme-pack-chip-suffix">
+                              {HOST_API_VERSION} ·{' '}
+                              {t(
+                                `editor.theme-editor.pmpk.deps.satisfaction.${themePackHostApiVersionSatisfaction}`
+                              )}
+                            </span>
+                          </span>
                         </div>
+                      </div>
 
-                        <div className="theme-pack-recommended-list">
-                          {themePackRecommendedBindings.map((item) => {
-                            const magnetMissing = !item.magnet;
-                            const rendererMissing = !item.renderer;
+                      <div className="theme-pack-deps">
+                        <div className="theme-pack-deps-title">
+                          {t('editor.theme-editor.pmpk.deps.title')}
+                        </div>
+                        {themePackDepsView.length === 0 ? (
+                          <div className="theme-editor-muted">
+                            {t('editor.theme-editor.pmpk.deps.empty')}
+                          </div>
+                        ) : (
+                          themePackDepsView.map((item) => {
+                            const blockedReason = item.installBlockedReason
+                              ? t(
+                                  `editor.theme-editor.pmpk.deps.blocked.${item.installBlockedReason}`
+                                )
+                              : null;
+
+                            const installDisabled =
+                              Boolean(item.installBlockedReason) || item.installedSatisfied;
 
                             return (
                               <div
-                                key={`${item.binding.magnetId}:${item.binding.rendererId}`}
-                                className={`theme-pack-dep ${magnetMissing ? 'is-disabled' : ''}`}
+                                key={`${item.dep.kind}:${item.dep.id}`}
+                                className={`theme-pack-dep ${installDisabled ? 'is-disabled' : ''}`}
                               >
                                 <div className="theme-pack-dep-header">
                                   <div className="theme-pack-dep-header-left">
-                                    <span className="theme-pack-dep-kind">{item.binding.magnetId}</span>
-                                    <span className="theme-pack-binding-arrow">→</span>
-                                    <span className="theme-pack-dep-id">{item.binding.rendererId}</span>
+                                    <span className="theme-pack-dep-kind">{item.dep.kind}</span>
+                                    <span className="theme-pack-dep-id">{item.dep.id}</span>
                                   </div>
                                   <div className="theme-pack-dep-actions">
                                     <button
                                       type="button"
                                       className="theme-pack-dep-install-btn"
-                                      disabled={magnetMissing}
-                                      onClick={() => applyThemePackRendererBindings([item.binding])}
+                                      disabled={installDisabled}
+                                      onClick={() => installThemePackDependency(item)}
                                     >
-                                      {t('editor.theme-editor.pmpk.recommended.bindings.applyOne')}
+                                      {t('common.action.install')}
                                     </button>
                                   </div>
                                 </div>
 
                                 <div className="theme-pack-dep-chips">
                                   <span className="theme-pack-chip">
-                                    {item.magnet ? getMagnetDisplayName(item.magnet, t) : item.binding.magnetId}
+                                    {t('editor.theme-editor.pmpk.deps.field.required')}:{' '}
+                                    {item.requiredRange ?? '*'}
                                   </span>
                                   <span
-                                    className={`theme-pack-chip theme-pack-chip--${
-                                      rendererMissing ? 'unknown' : 'satisfies'
-                                    }`}
+                                    className={`theme-pack-chip theme-pack-chip--${item.installedSatisfaction}`}
                                   >
-                                    {rendererMissing
-                                      ? t('editor.theme-editor.pmpk.recommended.bindings.rendererMissing')
-                                      : formatRendererSource(t, item.renderer?.source)}
+                                    {t('editor.theme-editor.pmpk.deps.field.installed')}:{' '}
+                                    {item.installedVersion ?? '-'}{' '}
+                                    <span className="theme-pack-chip-suffix">
+                                      {t(
+                                        `editor.theme-editor.pmpk.deps.satisfaction.${item.installedSatisfaction}`
+                                      )}
+                                    </span>
+                                  </span>
+                                  <span
+                                    className={`theme-pack-chip theme-pack-chip--${item.bundledSatisfaction}`}
+                                  >
+                                    {t('editor.theme-editor.pmpk.deps.field.bundle')}:{' '}
+                                    {item.bundledVersion ?? '-'}{' '}
+                                    <span className="theme-pack-chip-suffix">
+                                      {t(
+                                        `editor.theme-editor.pmpk.deps.satisfaction.${item.bundledSatisfaction}`
+                                      )}
+                                    </span>
                                   </span>
                                 </div>
 
-                                {magnetMissing ? (
+                                {item.installedSatisfied ? (
                                   <div className="theme-editor-muted">
-                                    {t('editor.theme-editor.pmpk.recommended.bindings.magnetMissing')}
+                                    {t('editor.theme-editor.pmpk.deps.installedSatisfied')}
+                                  </div>
+                                ) : null}
+
+                                {blockedReason ? (
+                                  <div className="theme-editor-muted">{blockedReason}</div>
+                                ) : null}
+
+                                {item.dep.bundleMetaError ? (
+                                  <div className="theme-editor-muted">
+                                    {item.dep.bundleMetaError}
                                   </div>
                                 ) : null}
                               </div>
                             );
-                          })}
+                          })
+                        )}
+                      </div>
+
+                      {themePackRecommendedBindings.length > 0 ? (
+                        <div className="theme-pack-recommended">
+                          <div className="theme-pack-recommended-header">
+                            <div className="theme-pack-deps-title">
+                              {t('editor.theme-editor.pmpk.recommended.bindings.title')}
+                            </div>
+                            <button
+                              type="button"
+                              className="theme-pack-dep-install-btn"
+                              disabled={!themePackRecommendedBindings.some((item) => item.magnet)}
+                              onClick={() =>
+                                applyThemePackRendererBindings(
+                                  themePackRecommendedBindings.map((item) => item.binding)
+                                )
+                              }
+                            >
+                              {t('editor.theme-editor.pmpk.recommended.bindings.applyAll')}
+                            </button>
+                          </div>
+
+                          <div className="theme-pack-recommended-list">
+                            {themePackRecommendedBindings.map((item) => {
+                              const magnetMissing = !item.magnet;
+                              const rendererMissing = !item.renderer;
+
+                              return (
+                                <div
+                                  key={`${item.binding.magnetId}:${item.binding.rendererId}`}
+                                  className={`theme-pack-dep ${magnetMissing ? 'is-disabled' : ''}`}
+                                >
+                                  <div className="theme-pack-dep-header">
+                                    <div className="theme-pack-dep-header-left">
+                                      <span className="theme-pack-dep-kind">
+                                        {item.binding.magnetId}
+                                      </span>
+                                      <span className="theme-pack-binding-arrow">→</span>
+                                      <span className="theme-pack-dep-id">
+                                        {item.binding.rendererId}
+                                      </span>
+                                    </div>
+                                    <div className="theme-pack-dep-actions">
+                                      <button
+                                        type="button"
+                                        className="theme-pack-dep-install-btn"
+                                        disabled={magnetMissing}
+                                        onClick={() =>
+                                          applyThemePackRendererBindings([item.binding])
+                                        }
+                                      >
+                                        {t(
+                                          'editor.theme-editor.pmpk.recommended.bindings.applyOne'
+                                        )}
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="theme-pack-dep-chips">
+                                    <span className="theme-pack-chip">
+                                      {item.magnet
+                                        ? getMagnetDisplayName(item.magnet, t)
+                                        : item.binding.magnetId}
+                                    </span>
+                                    <span
+                                      className={`theme-pack-chip theme-pack-chip--${
+                                        rendererMissing ? 'unknown' : 'satisfies'
+                                      }`}
+                                    >
+                                      {rendererMissing
+                                        ? t(
+                                            'editor.theme-editor.pmpk.recommended.bindings.rendererMissing'
+                                          )
+                                        : formatRendererSource(t, item.renderer?.source)}
+                                    </span>
+                                  </div>
+
+                                  {magnetMissing ? (
+                                    <div className="theme-editor-muted">
+                                      {t(
+                                        'editor.theme-editor.pmpk.recommended.bindings.magnetMissing'
+                                      )}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
+                      ) : null}
+
+                      <pre className="theme-editor-panel-json">
+                        {JSON.stringify(
+                          {
+                            requires: themePack.manifest.requires ?? null,
+                            recommended: themePack.manifest.recommended ?? null,
+                          },
+                          null,
+                          2
+                        )}
+                      </pre>
+                    </div>
+                  ) : (
+                    <div className="theme-editor-muted">{t('editor.theme-editor.pmpk.empty')}</div>
+                  )}
+
+                  <div className="theme-pack-divider" />
+
+                  <div className="theme-pack-export">
+                    <div className="theme-pack-export-header">
+                      <div className="theme-pack-export-title">
+                        {t('editor.theme-editor.pmpk.export.title')}
+                      </div>
+                      <div className="theme-editor-section-actions">
+                        <button
+                          type="button"
+                          className="theme-editor-action-btn"
+                          onClick={resetThemePackExport}
+                        >
+                          {t('common.action.reset')}
+                        </button>
+                        <button
+                          type="button"
+                          className="theme-editor-action-btn"
+                          onClick={downloadThemePackPmpk}
+                          disabled={!themePackExportManifest.manifest}
+                        >
+                          {t('editor.theme-editor.pmpk.export.exportFile')}
+                        </button>
+                      </div>
+                    </div>
+
+                    <label className="theme-pack-export-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={themePackExportChecksumsEnabled}
+                        onChange={(event) =>
+                          setThemePackExportChecksumsEnabled(event.target.checked)
+                        }
+                      />
+                      <span>{t('editor.theme-editor.pmpk.export.includeChecksums')}</span>
+                    </label>
+
+                    {themePackExportManifest.error ? (
+                      <div className="theme-editor-message theme-editor-message--error">
+                        {t('editor.theme-editor.pmpk.export.manifestError', {
+                          message: themePackExportManifest.error,
+                        })}
                       </div>
                     ) : null}
 
-                    <pre className="theme-editor-panel-json">
-                      {JSON.stringify(
-                        {
-                          requires: themePack.manifest.requires ?? null,
-                          recommended: themePack.manifest.recommended ?? null,
-                        },
-                        null,
-                        2
-                      )}
-                    </pre>
-                  </div>
-                ) : (
-                  <div className="theme-editor-muted">{t('editor.theme-editor.pmpk.empty')}</div>
-                )}
-
-                <div className="theme-pack-divider" />
-
-                <div className="theme-pack-export">
-                  <div className="theme-pack-export-header">
-                    <div className="theme-pack-export-title">
-                      {t('editor.theme-editor.pmpk.export.title')}
-                    </div>
-                    <div className="theme-editor-section-actions">
-                      <button type="button" className="theme-editor-action-btn" onClick={resetThemePackExport}>
-                        {t('common.action.reset')}
-                      </button>
-                      <button
-                        type="button"
-                        className="theme-editor-action-btn"
-                        onClick={downloadThemePackPmpk}
-                        disabled={!themePackExportManifest.manifest}
-                      >
-                        {t('editor.theme-editor.pmpk.export.exportFile')}
-                      </button>
-                    </div>
-                  </div>
-
-                  <label className="theme-pack-export-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={themePackExportChecksumsEnabled}
-                      onChange={(event) => setThemePackExportChecksumsEnabled(event.target.checked)}
+                    <textarea
+                      className="theme-editor-textarea theme-editor-textarea--compact"
+                      value={themePackExportManifestJson}
+                      onChange={(event) => setThemePackExportManifestJson(event.target.value)}
+                      spellCheck={false}
                     />
-                    <span>{t('editor.theme-editor.pmpk.export.includeChecksums')}</span>
-                  </label>
 
-                  {themePackExportManifest.error ? (
-                    <div className="theme-editor-message theme-editor-message--error">
-                      {t('editor.theme-editor.pmpk.export.manifestError', {
-                        message: themePackExportManifest.error,
-                      })}
-                    </div>
-                  ) : null}
+                    {themePackExportBundledDeps.length > 0 ? (
+                      <div className="theme-pack-export-bundles">
+                        <div className="theme-pack-deps-title">
+                          {t('editor.theme-editor.pmpk.export.bundles.title')}
+                        </div>
+                        {themePackExportBundledDeps.map((dep) => {
+                          const attachment = themePackExportBundles[dep.normalizedPath] ?? null;
+                          const attachmentLabel = attachment
+                            ? t('editor.theme-editor.pmpk.export.bundle.replace')
+                            : t('editor.theme-editor.pmpk.export.bundle.attach');
 
-                  <textarea
-                    className="theme-editor-textarea theme-editor-textarea--compact"
-                    value={themePackExportManifestJson}
-                    onChange={(event) => setThemePackExportManifestJson(event.target.value)}
-                    spellCheck={false}
-                  />
-
-                  {themePackExportBundledDeps.length > 0 ? (
-                    <div className="theme-pack-export-bundles">
-                      <div className="theme-pack-deps-title">
-                        {t('editor.theme-editor.pmpk.export.bundles.title')}
-                      </div>
-                      {themePackExportBundledDeps.map((dep) => {
-                        const attachment = themePackExportBundles[dep.normalizedPath] ?? null;
-                        const attachmentLabel = attachment
-                          ? t('editor.theme-editor.pmpk.export.bundle.replace')
-                          : t('editor.theme-editor.pmpk.export.bundle.attach');
-
-                        return (
-                          <div
-                            key={`${dep.kind}:${dep.id}:${dep.normalizedPath}`}
-                            className={`theme-pack-dep ${attachment?.metaError ? 'is-disabled' : ''}`}
-                          >
-                            <div className="theme-pack-dep-header">
-                              <div className="theme-pack-dep-header-left">
-                                <span className="theme-pack-dep-kind">{dep.kind}</span>
-                                <span className="theme-pack-dep-id">{dep.id}</span>
-                              </div>
-                              <div className="theme-pack-dep-actions">
-                                <label className="theme-editor-file-btn">
-                                  <input
-                                    type="file"
-                                    accept=".pmps,application/zip"
-                                    onChange={async (event) => {
-                                      const file = event.target.files?.[0];
-                                      if (!file) return;
-                                      try {
-                                        await attachThemePackExportBundle(dep, file);
-                                      } finally {
-                                        event.target.value = '';
+                          return (
+                            <div
+                              key={`${dep.kind}:${dep.id}:${dep.normalizedPath}`}
+                              className={`theme-pack-dep ${attachment?.metaError ? 'is-disabled' : ''}`}
+                            >
+                              <div className="theme-pack-dep-header">
+                                <div className="theme-pack-dep-header-left">
+                                  <span className="theme-pack-dep-kind">{dep.kind}</span>
+                                  <span className="theme-pack-dep-id">{dep.id}</span>
+                                </div>
+                                <div className="theme-pack-dep-actions">
+                                  <label className="theme-editor-file-btn">
+                                    <input
+                                      type="file"
+                                      accept=".pmps,application/zip"
+                                      onChange={async (event) => {
+                                        const file = event.target.files?.[0];
+                                        if (!file) return;
+                                        try {
+                                          await attachThemePackExportBundle(dep, file);
+                                        } finally {
+                                          event.target.value = '';
+                                        }
+                                      }}
+                                    />
+                                    {attachmentLabel}
+                                  </label>
+                                  {attachment ? (
+                                    <button
+                                      type="button"
+                                      className="theme-pack-dep-install-btn"
+                                      onClick={() =>
+                                        removeThemePackExportBundle(dep.normalizedPath)
                                       }
-                                    }}
-                                  />
-                                  {attachmentLabel}
-                                </label>
-                                {attachment ? (
-                                  <button
-                                    type="button"
-                                    className="theme-pack-dep-install-btn"
-                                    onClick={() => removeThemePackExportBundle(dep.normalizedPath)}
-                                  >
-                                    {t('common.action.remove')}
-                                  </button>
-                                ) : null}
+                                    >
+                                      {t('common.action.remove')}
+                                    </button>
+                                  ) : null}
+                                </div>
                               </div>
-                            </div>
 
-                            <div className="theme-pack-dep-chips">
-                              <span className="theme-pack-chip">
-                                {t('editor.theme-editor.pmpk.export.bundle.path')}: {dep.normalizedPath}
-                              </span>
-                              <span className="theme-pack-chip">
-                                {t('editor.theme-editor.pmpk.deps.field.required')}: {dep.version ?? '*'}
-                              </span>
-                              <span
-                                className={`theme-pack-chip theme-pack-chip--${
-                                  attachment ? (attachment.metaError ? 'violates' : 'satisfies') : 'unknown'
-                                }`}
-                              >
-                                {attachment
-                                  ? attachment.metaError
-                                    ? t('editor.theme-editor.pmpk.export.bundle.status.invalid')
-                                    : t('editor.theme-editor.pmpk.export.bundle.status.attached')
-                                  : t('editor.theme-editor.pmpk.export.bundle.status.missing')}
-                              </span>
-                            </div>
-
-                            {attachment ? (
-                              <div className="theme-editor-muted">
-                                {t('editor.theme-editor.pmpk.export.bundle.attached', {
-                                  name: attachment.fileName,
-                                })}
+                              <div className="theme-pack-dep-chips">
+                                <span className="theme-pack-chip">
+                                  {t('editor.theme-editor.pmpk.export.bundle.path')}:{' '}
+                                  {dep.normalizedPath}
+                                </span>
+                                <span className="theme-pack-chip">
+                                  {t('editor.theme-editor.pmpk.deps.field.required')}:{' '}
+                                  {dep.version ?? '*'}
+                                </span>
+                                <span
+                                  className={`theme-pack-chip theme-pack-chip--${
+                                    attachment
+                                      ? attachment.metaError
+                                        ? 'violates'
+                                        : 'satisfies'
+                                      : 'unknown'
+                                  }`}
+                                >
+                                  {attachment
+                                    ? attachment.metaError
+                                      ? t('editor.theme-editor.pmpk.export.bundle.status.invalid')
+                                      : t('editor.theme-editor.pmpk.export.bundle.status.attached')
+                                    : t('editor.theme-editor.pmpk.export.bundle.status.missing')}
+                                </span>
                               </div>
-                            ) : null}
 
-                            {attachment?.metaError ? (
-                              <div className="theme-editor-muted">{attachment.metaError}</div>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="theme-editor-muted">{t('editor.theme-editor.pmpk.export.bundles.empty')}</div>
-                  )}
+                              {attachment ? (
+                                <div className="theme-editor-muted">
+                                  {t('editor.theme-editor.pmpk.export.bundle.attached', {
+                                    name: attachment.fileName,
+                                  })}
+                                </div>
+                              ) : null}
+
+                              {attachment?.metaError ? (
+                                <div className="theme-editor-muted">{attachment.metaError}</div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="theme-editor-muted">
+                        {t('editor.theme-editor.pmpk.export.bundles.empty')}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
               ) : null}
 
               {activeWorkspace === 'profile-pack' ? (
-              <div className="theme-editor-section">
-                <div className="theme-editor-section-title">{t('editor.theme-editor.profilePack.section.title')}</div>
-
-                <div className="theme-editor-section-actions">
-                  <label className="theme-editor-file-btn">
-                    <input type="file" accept=".pmpk,application/zip" onChange={handleProfilePackUpload} />
-                    {t('editor.theme-editor.profilePack.importFile')}
-                  </label>
-                  <button
-                    type="button"
-                    className="theme-editor-action-btn"
-                    onClick={openProfilePackApplyDialog}
-                    disabled={!profilePack || profilePackApplyBusy}
-                  >
-                    {t('editor.theme-editor.profilePack.apply')}
-                  </button>
-                  <button
-                    type="button"
-                    className="theme-editor-action-btn"
-                    onClick={rollbackProfilePackBackup}
-                    disabled={profilePackApplyBusy}
-                  >
-                    {t('editor.theme-editor.profilePack.rollback')}
-                  </button>
-                </div>
-
-                {profilePackMessage ? (
-                  <div className={`theme-editor-message theme-editor-message--${profilePackMessage.kind}`}>
-                    {profilePackMessage.text}
-                  </div>
-                ) : null}
-
-                {profilePack ? (
-                  <div className="theme-pack-summary">
-                    <div className="theme-pack-row">
-                      <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.idLabel')}</span>
-                      <span className="theme-pack-value">{profilePack.manifest.metadata.id}</span>
-                    </div>
-                    <div className="theme-pack-row">
-                      <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.nameLabel')}</span>
-                      <span className="theme-pack-value">{profilePack.manifest.metadata.name}</span>
-                    </div>
-                    <div className="theme-pack-row">
-                      <span className="theme-pack-key">
-                        {t('editor.theme-editor.profilePack.summary.entryProfileLabel')}
-                      </span>
-                      <span className="theme-pack-value">{profilePack.entryProfilePath}</span>
-                      <span className={`theme-pack-status ${profilePack.profile ? 'is-ok' : 'is-missing'}`}>
-                        {profilePack.profile
-                          ? t('editor.theme-editor.pmpk.entryTheme.ok')
-                          : t('editor.theme-editor.pmpk.entryTheme.missing')}
-                      </span>
-                    </div>
-                    <div className="theme-pack-row">
-                      <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.entryThemeLabel')}</span>
-                      <span className="theme-pack-value">{profilePack.themeEntry?.path ?? '-'}</span>
-                      <span className={`theme-pack-status ${profilePack.themeEntry?.text ? 'is-ok' : 'is-missing'}`}>
-                        {profilePack.themeEntry?.text
-                          ? t('editor.theme-editor.pmpk.entryTheme.ok')
-                          : t('editor.theme-editor.pmpk.entryTheme.missing')}
-                      </span>
-                    </div>
-                    <div className="theme-pack-row">
-                      <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.integrityLabel')}</span>
-                      <span className={`theme-pack-status ${profilePack.checksums ? 'is-ok' : ''}`}>
-                        {profilePack.checksums
-                          ? t('editor.theme-editor.pmpk.integrity.ok')
-                          : t('editor.theme-editor.pmpk.integrity.missing')}
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="theme-editor-muted">{t('editor.theme-editor.profilePack.empty')}</div>
-                )}
-
-                <div className="theme-pack-divider" />
-
-                <div className="theme-pack-export">
-                  <div className="theme-pack-export-header">
-                    <div className="theme-pack-export-title">{t('editor.theme-editor.profilePack.export.title')}</div>
-                    <div className="theme-editor-section-actions">
-                      <button type="button" className="theme-editor-action-btn" onClick={resetProfilePackExport}>
-                        {t('common.action.reset')}
-                      </button>
-                      <button
-                        type="button"
-                        className="theme-editor-action-btn"
-                        onClick={downloadProfilePackPmpk}
-                        disabled={!profilePackExportManifest.manifest}
-                      >
-                        {t('editor.theme-editor.profilePack.export.exportFile')}
-                      </button>
-                    </div>
+                <div className="theme-editor-section">
+                  <div className="theme-editor-section-title">
+                    {t('editor.theme-editor.profilePack.section.title')}
                   </div>
 
-                  <label className="theme-pack-export-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={profilePackExportChecksumsEnabled}
-                      onChange={(event) => setProfilePackExportChecksumsEnabled(event.target.checked)}
-                    />
-                    <span>{t('editor.theme-editor.profilePack.export.includeChecksums')}</span>
-                  </label>
+                  <div className="theme-editor-section-actions">
+                    <label className="theme-editor-file-btn">
+                      <input
+                        type="file"
+                        accept=".pmpk,application/zip"
+                        onChange={handleProfilePackUpload}
+                      />
+                      {t('editor.theme-editor.profilePack.importFile')}
+                    </label>
+                    <button
+                      type="button"
+                      className="theme-editor-action-btn"
+                      onClick={openProfilePackApplyDialog}
+                      disabled={!profilePack || profilePackApplyBusy}
+                    >
+                      {t('editor.theme-editor.profilePack.apply')}
+                    </button>
+                    <button
+                      type="button"
+                      className="theme-editor-action-btn"
+                      onClick={rollbackProfilePackBackup}
+                      disabled={profilePackApplyBusy}
+                    >
+                      {t('editor.theme-editor.profilePack.rollback')}
+                    </button>
+                  </div>
 
-                  {profilePackExportManifest.error ? (
-                    <div className="theme-editor-message theme-editor-message--error">
-                      {t('editor.theme-editor.profilePack.export.manifestError', {
-                        message: profilePackExportManifest.error,
-                      })}
+                  {profilePackMessage ? (
+                    <div
+                      className={`theme-editor-message theme-editor-message--${profilePackMessage.kind}`}
+                    >
+                      {profilePackMessage.text}
                     </div>
                   ) : null}
 
-                  <textarea
-                    className="theme-editor-textarea theme-editor-textarea--compact"
-                    value={profilePackExportManifestJson}
-                    onChange={(event) => setProfilePackExportManifestJson(event.target.value)}
-                    spellCheck={false}
-                  />
+                  {profilePack ? (
+                    <div className="theme-pack-summary">
+                      <div className="theme-pack-row">
+                        <span className="theme-pack-key">
+                          {t('editor.theme-editor.pmpk.summary.idLabel')}
+                        </span>
+                        <span className="theme-pack-value">{profilePack.manifest.metadata.id}</span>
+                      </div>
+                      <div className="theme-pack-row">
+                        <span className="theme-pack-key">
+                          {t('editor.theme-editor.pmpk.summary.nameLabel')}
+                        </span>
+                        <span className="theme-pack-value">
+                          {profilePack.manifest.metadata.name}
+                        </span>
+                      </div>
+                      <div className="theme-pack-row">
+                        <span className="theme-pack-key">
+                          {t('editor.theme-editor.profilePack.summary.entryProfileLabel')}
+                        </span>
+                        <span className="theme-pack-value">{profilePack.entryProfilePath}</span>
+                        <span
+                          className={`theme-pack-status ${profilePack.profile ? 'is-ok' : 'is-missing'}`}
+                        >
+                          {profilePack.profile
+                            ? t('editor.theme-editor.pmpk.entryTheme.ok')
+                            : t('editor.theme-editor.pmpk.entryTheme.missing')}
+                        </span>
+                      </div>
+                      <div className="theme-pack-row">
+                        <span className="theme-pack-key">
+                          {t('editor.theme-editor.pmpk.summary.entryThemeLabel')}
+                        </span>
+                        <span className="theme-pack-value">
+                          {profilePack.themeEntry?.path ?? '-'}
+                        </span>
+                        <span
+                          className={`theme-pack-status ${profilePack.themeEntry?.text ? 'is-ok' : 'is-missing'}`}
+                        >
+                          {profilePack.themeEntry?.text
+                            ? t('editor.theme-editor.pmpk.entryTheme.ok')
+                            : t('editor.theme-editor.pmpk.entryTheme.missing')}
+                        </span>
+                      </div>
+                      <div className="theme-pack-row">
+                        <span className="theme-pack-key">
+                          {t('editor.theme-editor.pmpk.summary.integrityLabel')}
+                        </span>
+                        <span
+                          className={`theme-pack-status ${profilePack.checksums ? 'is-ok' : ''}`}
+                        >
+                          {profilePack.checksums
+                            ? t('editor.theme-editor.pmpk.integrity.ok')
+                            : t('editor.theme-editor.pmpk.integrity.missing')}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="theme-editor-muted">
+                      {t('editor.theme-editor.profilePack.empty')}
+                    </div>
+                  )}
+
+                  <div className="theme-pack-divider" />
+
+                  <div className="theme-pack-export">
+                    <div className="theme-pack-export-header">
+                      <div className="theme-pack-export-title">
+                        {t('editor.theme-editor.profilePack.export.title')}
+                      </div>
+                      <div className="theme-editor-section-actions">
+                        <button
+                          type="button"
+                          className="theme-editor-action-btn"
+                          onClick={resetProfilePackExport}
+                        >
+                          {t('common.action.reset')}
+                        </button>
+                        <button
+                          type="button"
+                          className="theme-editor-action-btn"
+                          onClick={downloadProfilePackPmpk}
+                          disabled={!profilePackExportManifest.manifest}
+                        >
+                          {t('editor.theme-editor.profilePack.export.exportFile')}
+                        </button>
+                      </div>
+                    </div>
+
+                    <label className="theme-pack-export-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={profilePackExportChecksumsEnabled}
+                        onChange={(event) =>
+                          setProfilePackExportChecksumsEnabled(event.target.checked)
+                        }
+                      />
+                      <span>{t('editor.theme-editor.profilePack.export.includeChecksums')}</span>
+                    </label>
+
+                    {profilePackExportManifest.error ? (
+                      <div className="theme-editor-message theme-editor-message--error">
+                        {t('editor.theme-editor.profilePack.export.manifestError', {
+                          message: profilePackExportManifest.error,
+                        })}
+                      </div>
+                    ) : null}
+
+                    <textarea
+                      className="theme-editor-textarea theme-editor-textarea--compact"
+                      value={profilePackExportManifestJson}
+                      onChange={(event) => setProfilePackExportManifestJson(event.target.value)}
+                      spellCheck={false}
+                    />
+                  </div>
                 </div>
-              </div>
               ) : null}
 
               {activeWorkspace === 'renderer' ? (
                 <div className="theme-editor-section">
-                  <div className="theme-editor-section-title">{t('editor.theme-editor.renderers.section.title')}</div>
+                  <div className="theme-editor-section-title">
+                    {t('editor.theme-editor.renderers.section.title')}
+                  </div>
                   {!selectedRenderer ? (
-                    <div className="theme-editor-muted">{t('editor.theme-debug.renderers.empty')}</div>
-                  ) : (
-                  <>
-                    <div className="theme-editor-panel-title">{selectedRenderer.id}</div>
-                    <div className="theme-editor-panel-meta">
-                      <span className="theme-editor-panel-chip">
-                        {formatRendererSource(t, selectedRenderer.source)}
-                      </span>
-                      {selectedRenderer.group ? (
-                        <span className="theme-editor-panel-chip">{selectedRenderer.group}</span>
-                      ) : null}
+                    <div className="theme-editor-muted">
+                      {t('editor.theme-debug.renderers.empty')}
                     </div>
-                    {selectedRenderer.description ? (
-                      <div className="theme-editor-panel-desc">{selectedRenderer.description}</div>
-                    ) : null}
-                    <pre className="theme-editor-panel-json">
-                      {JSON.stringify(
-                        {
-                          id: selectedRenderer.id,
-                          source: selectedRenderer.source ?? 'builtin',
-                          group: selectedRenderer.group ?? null,
-                          tags: selectedRenderer.tags ?? null,
-                          metadata: selectedRenderer.metadata ?? null,
-                        },
-                        null,
-                        2
-                      )}
-                    </pre>
-                  </>
-                )}
-              </div>
+                  ) : (
+                    <>
+                      <div className="theme-editor-panel-title">{selectedRenderer.id}</div>
+                      <div className="theme-editor-panel-meta">
+                        <span className="theme-editor-panel-chip">
+                          {formatRendererSource(t, selectedRenderer.source)}
+                        </span>
+                        {selectedRenderer.group ? (
+                          <span className="theme-editor-panel-chip">{selectedRenderer.group}</span>
+                        ) : null}
+                      </div>
+                      {selectedRenderer.description ? (
+                        <div className="theme-editor-panel-desc">
+                          {selectedRenderer.description}
+                        </div>
+                      ) : null}
+                      <pre className="theme-editor-panel-json">
+                        {JSON.stringify(
+                          {
+                            id: selectedRenderer.id,
+                            source: selectedRenderer.source ?? 'builtin',
+                            group: selectedRenderer.group ?? null,
+                            tags: selectedRenderer.tags ?? null,
+                            metadata: selectedRenderer.metadata ?? null,
+                          },
+                          null,
+                          2
+                        )}
+                      </pre>
+                    </>
+                  )}
+                </div>
               ) : null}
 
               {activeWorkspace === 'renderer' ? (
-              <div className="theme-editor-section">
-                <div className="theme-editor-section-title">{t('editor.theme-editor.pmpv.section.title')}</div>
-                {!selectedRenderer ? (
-                  <div className="theme-editor-muted">{t('editor.theme-debug.renderers.empty')}</div>
-                ) : (
-                  <>
-                    <div className="theme-editor-section-actions">
-                      <button
-                        type="button"
-                        className="theme-editor-action-btn"
-                        onClick={downloadVariantPresetPmpv}
-                      >
-                        {t('editor.theme-editor.pmpv.action.export')}
-                      </button>
-                      <label className="theme-editor-file-btn">
-                        {t('editor.theme-editor.pmpv.action.import')}
-                        <input
-                          type="file"
-                          accept=".pmpv,application/json"
-                          onChange={handleVariantPresetUpload}
-                        />
-                      </label>
+                <div className="theme-editor-section">
+                  <div className="theme-editor-section-title">
+                    {t('editor.theme-editor.pmpv.section.title')}
+                  </div>
+                  {!selectedRenderer ? (
+                    <div className="theme-editor-muted">
+                      {t('editor.theme-debug.renderers.empty')}
                     </div>
-
-                    {variantPresetMessage ? (
-                      <div
-                        className={`theme-editor-message theme-editor-message--${variantPresetMessage.kind}`}
-                      >
-                        {variantPresetMessage.text}
+                  ) : (
+                    <>
+                      <div className="theme-editor-section-actions">
+                        <button
+                          type="button"
+                          className="theme-editor-action-btn"
+                          onClick={downloadVariantPresetPmpv}
+                        >
+                          {t('editor.theme-editor.pmpv.action.export')}
+                        </button>
+                        {contractImportEnabled ? (
+                          <label className="theme-editor-file-btn">
+                            {t('editor.theme-editor.pmpv.action.import')}
+                            <input
+                              type="file"
+                              accept=".pmpv,application/json"
+                              onChange={handleVariantPresetUpload}
+                            />
+                          </label>
+                        ) : null}
                       </div>
-                    ) : null}
 
-                    <pre className="theme-editor-panel-json">
-                      {JSON.stringify(
-                        {
-                          rendererId: selectedRenderer.id,
-                          explicitBinding: theme.bindings?.[`magnet.${selectedRenderer.id}`] ?? null,
-                          materializedFragment: materializeThemeBinding(
-                            theme,
-                            `magnet.${selectedRenderer.id}` as ThemeBindingId
-                          ),
-                        },
-                        null,
-                        2
-                      )}
-                    </pre>
-                  </>
-                )}
-              </div>
+                      {variantPresetMessage ? (
+                        <div
+                          className={`theme-editor-message theme-editor-message--${variantPresetMessage.kind}`}
+                        >
+                          {variantPresetMessage.text}
+                        </div>
+                      ) : null}
+
+                      <pre className="theme-editor-panel-json">
+                        {JSON.stringify(
+                          {
+                            rendererId: selectedRenderer.id,
+                            explicitBinding:
+                              theme.bindings?.[`magnet.${selectedRenderer.id}`] ?? null,
+                            materializedFragment: materializeThemeBinding(
+                              theme,
+                              `magnet.${selectedRenderer.id}` as ThemeBindingId
+                            ),
+                          },
+                          null,
+                          2
+                        )}
+                      </pre>
+                    </>
+                  )}
+                </div>
               ) : null}
             </div>
           </div>
@@ -3686,22 +4131,33 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
             setProfilePackApplyOpen(false);
           }}
         >
-          <div className="pmp-confirm-modal profile-pack-apply-modal" onClick={(event) => event.stopPropagation()}>
+          <div
+            className="pmp-confirm-modal profile-pack-apply-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
             <div className="pmp-confirm-header">
-              <div className="pmp-confirm-title">{t('editor.theme-editor.profilePack.applyDialog.title')}</div>
+              <div className="pmp-confirm-title">
+                {t('editor.theme-editor.profilePack.applyDialog.title')}
+              </div>
             </div>
             <div className="pmp-confirm-body">
               <div className="profile-pack-apply-summary theme-pack-summary">
                 <div className="theme-pack-row">
-                  <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.idLabel')}</span>
+                  <span className="theme-pack-key">
+                    {t('editor.theme-editor.pmpk.summary.idLabel')}
+                  </span>
                   <span className="theme-pack-value">{profilePack.manifest.metadata.id}</span>
                 </div>
                 <div className="theme-pack-row">
-                  <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.nameLabel')}</span>
+                  <span className="theme-pack-key">
+                    {t('editor.theme-editor.pmpk.summary.nameLabel')}
+                  </span>
                   <span className="theme-pack-value">{profilePack.manifest.metadata.name}</span>
                 </div>
                 <div className="theme-pack-row">
-                  <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.versionLabel')}</span>
+                  <span className="theme-pack-key">
+                    {t('editor.theme-editor.pmpk.summary.versionLabel')}
+                  </span>
                   <span className="theme-pack-value">{profilePack.manifest.metadata.version}</span>
                 </div>
               </div>
@@ -3731,7 +4187,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                       setProfilePackApplyOptions((prev) => ({
                         ...prev,
                         applyMagnets: event.target.checked,
-                        acknowledgeOverwrite: event.target.checked ? prev.acknowledgeOverwrite : false,
+                        acknowledgeOverwrite: event.target.checked
+                          ? prev.acknowledgeOverwrite
+                          : false,
                       }))
                     }
                   />
@@ -3754,7 +4212,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                             }))
                           }
                         />
-                        <span>{t('editor.theme-editor.profilePack.applyDialog.mode.replaceAll')}</span>
+                        <span>
+                          {t('editor.theme-editor.profilePack.applyDialog.mode.replaceAll')}
+                        </span>
                       </label>
                       <label className="profile-pack-apply-radio">
                         <input
@@ -3840,7 +4300,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                           }))
                         }
                       />
-                      <span>{t('editor.theme-editor.profilePack.applyDialog.acknowledgeOverwrite')}</span>
+                      <span>
+                        {t('editor.theme-editor.profilePack.applyDialog.acknowledgeOverwrite')}
+                      </span>
                     </label>
                   </div>
                 ) : null}
@@ -3870,9 +4332,12 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   {profilePackApplyWarnings.embeddedCustomMagnetIds.length > 0 ? (
                     <>
                       <div className="theme-editor-muted">
-                        {t('editor.theme-editor.profilePack.applyDialog.warnings.customMagnetsIgnored', {
-                          count: profilePackApplyWarnings.embeddedCustomMagnetIds.length,
-                        })}
+                        {t(
+                          'editor.theme-editor.profilePack.applyDialog.warnings.customMagnetsIgnored',
+                          {
+                            count: profilePackApplyWarnings.embeddedCustomMagnetIds.length,
+                          }
+                        )}
                       </div>
                       <pre className="theme-editor-panel-json">
                         {profilePackApplyWarnings.embeddedCustomMagnetIds.join('\n')}
@@ -3883,9 +4348,12 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   {profilePackApplyWarnings.missingRendererIds.length > 0 ? (
                     <>
                       <div className="theme-editor-muted">
-                        {t('editor.theme-editor.profilePack.applyDialog.warnings.missingRenderers', {
-                          count: profilePackApplyWarnings.missingRendererIds.length,
-                        })}
+                        {t(
+                          'editor.theme-editor.profilePack.applyDialog.warnings.missingRenderers',
+                          {
+                            count: profilePackApplyWarnings.missingRendererIds.length,
+                          }
+                        )}
                       </div>
                       <pre className="theme-editor-panel-json">
                         {profilePackApplyWarnings.missingRendererIds.join('\n')}
@@ -3913,7 +4381,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   (!profilePackApplyOptions.applyTheme && !profilePackApplyOptions.applyMagnets) ||
                   (profilePackApplyOptions.applyTheme && !profilePack.themeEntry?.text) ||
                   (profilePackApplyOptions.applyMagnets && !profilePack.profile) ||
-                  (profilePackApplyOptions.applyMagnets && !profilePackApplyOptions.acknowledgeOverwrite)
+                  (profilePackApplyOptions.applyMagnets &&
+                    !profilePackApplyOptions.acknowledgeOverwrite)
                 }
               >
                 {t('common.action.apply')}

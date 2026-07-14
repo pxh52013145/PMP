@@ -10,7 +10,7 @@ import {
 import type { NavigationPageData, NavigationPageType } from '../contracts/navigation';
 import { NAVIGATION_SERVICE_TOKEN, type NavigationSnapshot } from '../services/navigation';
 import { getTelemetryLogger } from '../services/telemetry/TelemetryService';
-import { useKernel } from './KernelContext';
+import { useKernel } from './KernelApiContext';
 import { readData, setupDualListener, STORAGE_KEYS, TAURI_EVENTS } from '../utils/windowCommunication';
 
 export type { NavigationPageData, NavigationPageType, NavigationParamsMap } from '../contracts/navigation';

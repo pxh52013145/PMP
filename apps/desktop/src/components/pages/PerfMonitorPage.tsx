@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './PerfMonitorPage.css';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { useT } from '../../i18n';
 import { isTauriRuntime } from '../../utils/tauriRuntime';

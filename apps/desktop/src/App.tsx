@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState, useMemo, useCallback } from 'react';
+import { Suspense, lazy, useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { appWindow, getAll } from '@tauri-apps/api/window';
 import {
@@ -10,7 +10,7 @@ import {
 } from './utils/windowCommunication';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
-import { useKernel } from './contexts/KernelContext';
+import { useKernel } from './contexts/KernelApiContext';
 import { QualityProvider } from './contexts/QualityContext';
 import { CommandPalette } from './components/commands/CommandPalette';
 import { EditorProvider, useEditor } from './contexts/EditorContext';
@@ -34,7 +34,9 @@ import { WindowCloseProvider } from './contexts/WindowCloseContext';
 import { COMMANDS_SERVICE_TOKEN, dispatchCommandOrFallback } from './services/commands';
 import { KEYBINDINGS_SERVICE_TOKEN } from './services/keybindings';
 import {
+  MEMORY_GOVERNANCE_SERVICE_TOKEN,
   SPACE_RUNTIME_GOVERNANCE_SERVICE_TOKEN,
+  type MemoryGovernanceService,
   type SpaceRuntimeGovernanceService,
 } from './services/governance';
 import {
@@ -176,8 +178,14 @@ function AppContent() {
   const editorToolsRuntimeCapsule = kernel.services.getOptional(
     EDITOR_TOOLS_RUNTIME_CAPSULE_SERVICE_TOKEN
   ) as EditorToolsRuntimeCapsuleService | null;
+  const memoryGovernance = kernel.services.getOptional(
+    MEMORY_GOVERNANCE_SERVICE_TOKEN
+  ) as MemoryGovernanceService | null;
   const { navigateTo } = useNavigation();
-  const { editorState } = useEditor();
+  const { editorState, exitEditMode } = useEditor();
+  const editorTelemetry = useMemo(() => getTelemetryLogger('editor', 'AppContent'), []);
+  const editorExitTeardownRef = useRef<Promise<void> | null>(null);
+  const previousEditorEditingRef = useRef(editorState.isEditing);
 
   const [isMainWindowVisible, setIsMainWindowVisible] = useState(true);
   const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
@@ -208,6 +216,85 @@ function AppContent() {
     isMainWindowMinimized,
     isPageFrozen,
   });
+
+  const beginEditorExitTeardown = useCallback(() => {
+    if (!isTauri || editorExitTeardownRef.current) return;
+
+    exitEditMode();
+    setIsEditorAuxWindowFocused(false);
+    editorToolsRuntimeCapsule?.teardown('edit mode exited');
+    editorTelemetry.info('editor.exit.teardown.started');
+
+    const teardown = (async () => {
+      const governanceRun = memoryGovernance?.runOnce('editor-exit').catch((error) => {
+        editorTelemetry.warn('editor.exit.memory-governance.failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+
+      try {
+        const { ensureEditorWindowsClosed } = await import('./utils/editorWindows');
+        const result = await ensureEditorWindowsClosed();
+        const closeFailures = result.closeReport?.failures ?? [];
+        if (result.remainingWindows.length > 0 || closeFailures.length > 0) {
+          editorTelemetry.warn('editor.exit.teardown.incomplete', {
+            fields: {
+              verificationCount: result.verificationCount,
+              remainingWindowTypes: result.remainingWindows.map(
+                (windowState) => windowState.windowType
+              ),
+              closeFailureWindowTypes: closeFailures.map((failure) => failure.windowType),
+            },
+          });
+        } else {
+          editorTelemetry.info('editor.exit.teardown.completed', {
+            fields: {
+              verificationCount: result.verificationCount,
+            },
+          });
+        }
+      } catch (error) {
+        editorTelemetry.error('editor.exit.teardown.failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        await governanceRun;
+      }
+    })();
+
+    editorExitTeardownRef.current = teardown;
+    void teardown.finally(() => {
+      if (editorExitTeardownRef.current === teardown) {
+        editorExitTeardownRef.current = null;
+      }
+    });
+  }, [
+    editorTelemetry,
+    editorToolsRuntimeCapsule,
+    exitEditMode,
+    isTauri,
+    memoryGovernance,
+  ]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+
+    const cleanupPromise = setupTauriListener(
+      TAURI_EVENTS.EDITOR_EXIT,
+      beginEditorExitTeardown
+    );
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, [beginEditorExitTeardown, isTauri]);
+
+  useEffect(() => {
+    const wasEditing = previousEditorEditingRef.current;
+    previousEditorEditingRef.current = editorState.isEditing;
+    if (wasEditing && !editorState.isEditing) {
+      beginEditorExitTeardown();
+    }
+  }, [beginEditorExitTeardown, editorState.isEditing]);
 
   useEffect(() => {
     if (!editorToolsRuntimeCapsule) return;

@@ -40,7 +40,14 @@ function notifyRendererRegistryChanged(): void {
 
 function normalizePreview(preview?: ReactNode | (() => ReactNode)): ReactNode | undefined {
   if (typeof preview === 'function') {
-    return (preview as () => ReactNode)();
+    try {
+      return (preview as () => ReactNode)();
+    } catch (error) {
+      telemetry.warn('magnet_renderer.preview.failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
   return preview;
 }
@@ -93,7 +100,8 @@ export function getMagnetRenderer(id: string): MagnetRendererDefinition | null {
 export function getMagnetPreviewNode(magnet: Magnet): ReactNode | null {
   const rendererId = magnet.renderer ?? magnet.id;
   const entry =
-    getMagnetRenderer(rendererId) ?? (rendererId === magnet.id ? null : getMagnetRenderer(magnet.id));
+    getMagnetRenderer(rendererId) ??
+    (rendererId === magnet.id ? null : getMagnetRenderer(magnet.id));
   return normalizePreview(entry?.preview) ?? getMagnetPreviewText(magnet, t) ?? null;
 }
 
@@ -111,4 +119,3 @@ export function subscribeMagnetRenderers(listener: RendererListener): () => void
     rendererListeners.delete(listener);
   };
 }
-

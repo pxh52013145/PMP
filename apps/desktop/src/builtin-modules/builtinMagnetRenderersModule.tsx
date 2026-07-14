@@ -7,7 +7,7 @@ import {
   unregisterMagnetRenderer,
   type MagnetRendererDefinition,
 } from '../magnet-system/registry';
-import { clearMagnetVariants, registerMagnetVariant } from '../magnet-system/variantRegistry';
+import { clearMagnetVariants, replaceMagnetVariants } from '../magnet-system/variantRegistry';
 import { subscribeLocale, t } from '../i18n/core';
 import {
   toMagnetVariantDefinitions,
@@ -31,6 +31,7 @@ import { PROGRESS_BAR_VARIANT_PRESETS } from '../components/magnet/progressBar/p
 import { AUDIO_VISUALIZER_VARIANT_PRESETS } from '../components/magnet/audioVisualizerSkin';
 import { VOLUME_VARIANT_PRESETS } from '../components/magnet/volumeControl/volumeSkin';
 import { WINDOW_PIN_VARIANT_PRESETS } from '../components/magnet/windowPinButton/windowPinSkin';
+import { TRACK_INFO_VARIANT_PRESETS } from '../components/magnet/trackInfo/trackInfoSkin';
 
 const NavigationPageLazy = React.lazy(async () => ({
   default: (await import('../components/magnet/NavigationPage')).NavigationPage,
@@ -311,6 +312,7 @@ function getBuiltinVariantCatalog(): ReadonlyArray<readonly [string, readonly Ma
     ['process-perf-monitor', PROCESS_PERF_MONITOR_VARIANT_PRESETS],
     ['dsp-vst', DSP_VST_VARIANT_PRESETS],
     ['audio-visualizer', AUDIO_VISUALIZER_VARIANT_PRESETS],
+    ['track-info', TRACK_INFO_VARIANT_PRESETS],
   ];
 }
 
@@ -332,10 +334,7 @@ export function createBuiltinMagnetRenderersModule(): KernelModule<AppEvents> {
           if (existing && existing.source !== 'builtin') {
             continue;
           }
-          clearMagnetVariants(rendererId);
-          for (const variant of toMagnetVariantDefinitions(presets, t)) {
-            registerMagnetVariant(rendererId, variant, { overwrite: true });
-          }
+          replaceMagnetVariants(rendererId, toMagnetVariantDefinitions(presets, t));
         }
       };
 

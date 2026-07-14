@@ -22,9 +22,22 @@ export type PmpKnownPackageType =
 
 export type PmpPackageStatus = 'implemented' | 'draft' | 'legacy';
 
+export type PmpRegistrationTarget =
+  | 'extension'
+  | 'magnet'
+  | 'appearance'
+  | 'profile'
+  | 'resource'
+  | 'experience'
+  | 'development';
+
+export type PmpRegistrationMode = 'install' | 'register' | 'apply' | 'legacy';
+
 export interface PmpPackageBoundaryDescriptor {
   type: PmpKnownPackageType;
   status: PmpPackageStatus;
+  registrationTarget: PmpRegistrationTarget;
+  registrationMode: PmpRegistrationMode;
   extension: string | null;
   manifestFile: string | null;
   ownsRuntime: boolean;
@@ -37,36 +50,47 @@ export const PMP_PACKAGE_BOUNDARIES = [
   {
     type: 'manifest-v2-project',
     status: 'implemented',
+    registrationTarget: 'extension',
+    registrationMode: 'install',
     extension: null,
     manifestFile: 'manifest.v2.json',
     ownsRuntime: true,
     ownsUserProfileState: false,
     ownsSharedResources: false,
-    notes: 'Current extv2 install source. The desktop installer reads a directory or manifest.v2.json.',
+    notes:
+      'Current extv2 install source. The desktop installer reads a directory or manifest.v2.json.',
   },
   {
     type: 'extension-pack',
     status: 'implemented',
+    registrationTarget: 'extension',
+    registrationMode: 'install',
     extension: '.pmpe',
     manifestFile: 'manifest.json',
     ownsRuntime: false,
     ownsUserProfileState: false,
     ownsSharedResources: false,
-    notes: 'Single-plugin zip wrapper. It unwraps to a manifest-v2 project and does not define a new runtime.',
+    notes:
+      'Single-plugin zip wrapper. It unwraps to a manifest-v2 project and does not define a new runtime.',
   },
   {
     type: 'experience-pack',
     status: 'implemented',
+    registrationTarget: 'experience',
+    registrationMode: 'apply',
     extension: '.pmpex',
     manifestFile: 'manifest.json',
     ownsRuntime: false,
     ownsUserProfileState: true,
     ownsSharedResources: false,
-    notes: 'Local composition pack for plugins, resources, theme, profile, and space layout install plans.',
+    notes:
+      'Local composition pack for plugins, resources, theme, profile, and space layout install plans.',
   },
   {
     type: 'theme',
     status: 'implemented',
+    registrationTarget: 'appearance',
+    registrationMode: 'apply',
     extension: '.pmpt',
     manifestFile: null,
     ownsRuntime: false,
@@ -77,6 +101,8 @@ export const PMP_PACKAGE_BOUNDARIES = [
   {
     type: 'theme-pack',
     status: 'implemented',
+    registrationTarget: 'appearance',
+    registrationMode: 'register',
     extension: '.pmpk',
     manifestFile: 'manifest.json',
     ownsRuntime: false,
@@ -87,6 +113,8 @@ export const PMP_PACKAGE_BOUNDARIES = [
   {
     type: 'profile-pack',
     status: 'implemented',
+    registrationTarget: 'profile',
+    registrationMode: 'apply',
     extension: '.pmpk',
     manifestFile: 'manifest.json',
     ownsRuntime: false,
@@ -97,6 +125,8 @@ export const PMP_PACKAGE_BOUNDARIES = [
   {
     type: 'variant-preset',
     status: 'implemented',
+    registrationTarget: 'appearance',
+    registrationMode: 'register',
     extension: '.pmpv',
     manifestFile: null,
     ownsRuntime: false,
@@ -107,6 +137,8 @@ export const PMP_PACKAGE_BOUNDARIES = [
   {
     type: 'shader-pack',
     status: 'implemented',
+    registrationTarget: 'resource',
+    registrationMode: 'register',
     extension: '.pmps',
     manifestFile: 'manifest.json',
     ownsRuntime: false,
@@ -117,6 +149,8 @@ export const PMP_PACKAGE_BOUNDARIES = [
   {
     type: 'resource-pack',
     status: 'draft',
+    registrationTarget: 'resource',
+    registrationMode: 'register',
     extension: null,
     manifestFile: 'manifest.json',
     ownsRuntime: false,
@@ -127,6 +161,8 @@ export const PMP_PACKAGE_BOUNDARIES = [
   {
     type: 'platform-pack',
     status: 'implemented',
+    registrationTarget: 'development',
+    registrationMode: 'install',
     extension: null,
     manifestFile: 'manifest.json',
     ownsRuntime: true,
@@ -137,6 +173,8 @@ export const PMP_PACKAGE_BOUNDARIES = [
   {
     type: 'magnet-plugin',
     status: 'legacy',
+    registrationTarget: 'magnet',
+    registrationMode: 'legacy',
     extension: '.pmpm',
     manifestFile: 'manifest.json',
     ownsRuntime: true,

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { PixelMatrixRenderer } from '../../pixelEngine/PixelMatrixRenderer';
 import './PixelMatrixCanvas.css';
 import { STORAGE_KEYS, TAURI_EVENTS, setupTauriListener } from '../../utils/windowCommunication';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { useQuality } from '../../contexts/QualityContext';
 import type {

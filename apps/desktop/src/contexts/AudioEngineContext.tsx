@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from 'react';
 import { AUDIO_ENGINE_SERVICE_TOKEN, type IAudioService } from '../services/audio';
-import { useKernel } from './KernelContext';
+import { useKernel } from './KernelApiContext';
 
 export type AudioEngineType = 'native';
 

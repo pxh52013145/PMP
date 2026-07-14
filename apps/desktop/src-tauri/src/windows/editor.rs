@@ -28,7 +28,7 @@ pub enum EditorWindowType {
     Creator,
     Background,
     CustomBackground,
-    Theme,
+    Registration,
     Debug,
 }
 
@@ -47,7 +47,7 @@ impl EditorWindowType {
             "creator" => Some(Self::Creator),
             "background" => Some(Self::Background),
             "custom-background" => Some(Self::CustomBackground),
-            "theme" => Some(Self::Theme),
+            "registration" | "theme" => Some(Self::Registration),
             "debug" => Some(Self::Debug),
             _ => None,
         }
@@ -66,7 +66,7 @@ impl EditorWindowType {
             Self::Creator => "creator",
             Self::Background => "background",
             Self::CustomBackground => "custom-background",
-            Self::Theme => "theme",
+            Self::Registration => "registration",
             Self::Debug => "debug",
         }
     }
@@ -84,7 +84,7 @@ pub const ALL_EDITOR_WINDOWS: &[EditorWindowType] = &[
     EditorWindowType::Creator,
     EditorWindowType::Background,
     EditorWindowType::CustomBackground,
-    EditorWindowType::Theme,
+    EditorWindowType::Registration,
     EditorWindowType::Debug,
 ];
 
@@ -102,6 +102,23 @@ pub struct EditorWindowsDebugState {
     pub windows: Vec<EditorWindowDebugInfo>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorWindowCloseFailure {
+    pub window_type: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorWindowsCloseReport {
+    pub requested_window_types: Vec<String>,
+    pub close_requested_window_types: Vec<String>,
+    pub already_closed_window_types: Vec<String>,
+    pub failures: Vec<EditorWindowCloseFailure>,
+    pub remaining_windows: Vec<EditorWindowDebugInfo>,
+}
+
 pub const CONTROL_CLOSE_CHILD_WINDOWS: &[EditorWindowType] = &[
     EditorWindowType::Statistics,
     EditorWindowType::Library,
@@ -113,7 +130,7 @@ pub const CONTROL_CLOSE_CHILD_WINDOWS: &[EditorWindowType] = &[
     EditorWindowType::Creator,
     EditorWindowType::Background,
     EditorWindowType::CustomBackground,
-    EditorWindowType::Theme,
+    EditorWindowType::Registration,
     EditorWindowType::Debug,
 ];
 
@@ -130,7 +147,7 @@ pub fn label(window_type: EditorWindowType) -> &'static str {
         EditorWindowType::Creator => "editor-creator",
         EditorWindowType::Background => "editor-background",
         EditorWindowType::CustomBackground => "editor-custom-background",
-        EditorWindowType::Theme => "editor-theme",
+        EditorWindowType::Registration => "editor-registration",
         EditorWindowType::Debug => "editor-debug",
     }
 }
@@ -149,7 +166,7 @@ pub fn title(window_type: EditorWindowType) -> &'static str {
         EditorWindowType::Creator => "Magnet Editor",
         EditorWindowType::Background => "Background",
         EditorWindowType::CustomBackground => "Custom background",
-        EditorWindowType::Theme => "Theme",
+        EditorWindowType::Registration => "Registration Center",
         EditorWindowType::Debug => "Debug",
     }
 }
@@ -331,9 +348,9 @@ fn apply_always_on_top_preference(window: &tauri::Window, always_on_top: Option<
     }
 }
 
-fn request_force_close(app: &AppHandle, window_type: EditorWindowType) {
+fn request_force_close(app: &AppHandle, window_type: EditorWindowType) -> Result<(), String> {
     let Some(window) = app.get_window(label(window_type)) else {
-        return;
+        return Ok(());
     };
 
     {
@@ -344,18 +361,19 @@ fn request_force_close(app: &AppHandle, window_type: EditorWindowType) {
         set.insert(window_type);
     }
 
-    if window.close().is_err() {
+    if let Err(error) = window.close() {
         let mut set = match FORCE_CLOSE_WINDOWS.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
         set.remove(&window_type);
-        return;
+        return Err(error.to_string());
     }
 
     // Keep the JS side in sync even when we force-close (destroy) a window: the normal "CloseRequested"
     // handler is bypassed and therefore would not emit a hidden event.
     let _ = app.emit_all(EVENT_EDITOR_WINDOW_HIDDEN, window_type.as_str());
+    Ok(())
 }
 
 fn take_force_close(window_type: EditorWindowType) -> bool {
@@ -366,8 +384,8 @@ fn take_force_close(window_type: EditorWindowType) -> bool {
     set.remove(&window_type)
 }
 
-fn destroy_window(app: &AppHandle, window_type: EditorWindowType) {
-    request_force_close(app, window_type);
+fn destroy_window(app: &AppHandle, window_type: EditorWindowType) -> Result<(), String> {
+    request_force_close(app, window_type)
 }
 
 pub fn set_editor_windows_memory_first_enabled(
@@ -468,7 +486,6 @@ pub fn open_editor_window(
     let _ = app.emit_all(EVENT_EDITOR_WINDOW_SHOWN, window_type.as_str());
     // (Ornaments editor removed)
 
-    let window_for_events = window.clone();
     let app_handle = app.clone();
     window.on_window_event(move |event| match event {
         tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -481,14 +498,12 @@ pub fn open_editor_window(
             if window_type == EditorWindowType::Control {
                 let _ = app_handle.emit_all(EVENT_EDITOR_EXIT, ());
                 for wtype in CONTROL_CLOSE_CHILD_WINDOWS {
-                    destroy_window(&app_handle, *wtype);
+                    let _ = destroy_window(&app_handle, *wtype);
                 }
             }
 
-            // Destroy this window immediately (webview is freed, JS cleanup runs)
-            let _ = window_for_events.hide();
-            let _ = app_handle.emit_all(EVENT_EDITOR_WINDOW_HIDDEN, window_type.as_str());
-            request_force_close(&app_handle, window_type);
+            // Do not hide first: if close fails, a hidden WebView would remain alive and retain memory.
+            let _ = request_force_close(&app_handle, window_type);
         }
         tauri::WindowEvent::Moved(_) => {}
         _ => {}
@@ -543,24 +558,60 @@ pub fn close_editor_window(
 
         let _ = app.emit_all(EVENT_EDITOR_EXIT, ());
 
-        // Destroy all editor windows immediately
-        for wtype in CONTROL_CLOSE_CHILD_WINDOWS {
-            destroy_window(app, *wtype);
+        let report = close_all_editor_windows(app);
+        if !report.failures.is_empty() {
+            return Err(report
+                .failures
+                .iter()
+                .map(|failure| format!("{}: {}", failure.window_type, failure.message))
+                .collect::<Vec<_>>()
+                .join("; "));
         }
-        destroy_window(app, window_type);
 
         return Ok(());
     }
 
     // Non-control windows: destroy immediately
-    destroy_window(app, window_type);
+    destroy_window(app, window_type)?;
 
     Ok(())
 }
 
-pub fn close_all_editor_windows(app: &AppHandle) {
+pub fn close_all_editor_windows(app: &AppHandle) -> EditorWindowsCloseReport {
+    let mut close_requested_window_types = Vec::new();
+    let mut already_closed_window_types = Vec::new();
+    let mut failures = Vec::new();
+
     for window_type in ALL_EDITOR_WINDOWS {
-        request_force_close(app, *window_type);
+        if app.get_window(label(*window_type)).is_none() {
+            already_closed_window_types.push(window_type.as_str().to_string());
+            continue;
+        }
+
+        match request_force_close(app, *window_type) {
+            Ok(()) => close_requested_window_types.push(window_type.as_str().to_string()),
+            Err(message) => failures.push(EditorWindowCloseFailure {
+                window_type: window_type.as_str().to_string(),
+                message,
+            }),
+        }
+    }
+
+    let remaining_windows = debug_get_editor_windows_state(app)
+        .windows
+        .into_iter()
+        .filter(|window| window.exists)
+        .collect();
+
+    EditorWindowsCloseReport {
+        requested_window_types: ALL_EDITOR_WINDOWS
+            .iter()
+            .map(|window_type| window_type.as_str().to_string())
+            .collect(),
+        close_requested_window_types,
+        already_closed_window_types,
+        failures,
+        remaining_windows,
     }
 }
 
@@ -596,9 +647,46 @@ pub fn governance_destroy_hidden_editor_windows(app: &AppHandle) -> usize {
             continue;
         }
 
-        destroy_window(app, *window_type);
-        destroyed += 1;
+        if destroy_window(app, *window_type).is_ok() {
+            destroyed += 1;
+        }
     }
 
     destroyed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EditorWindowType, ALL_EDITOR_WINDOWS, CONTROL_CLOSE_CHILD_WINDOWS};
+
+    #[test]
+    fn registration_window_accepts_the_legacy_theme_route() {
+        assert_eq!(
+            EditorWindowType::from_str("registration"),
+            Some(EditorWindowType::Registration)
+        );
+        assert_eq!(
+            EditorWindowType::from_str("theme"),
+            Some(EditorWindowType::Registration)
+        );
+        assert_eq!(EditorWindowType::Registration.as_str(), "registration");
+    }
+
+    #[test]
+    fn control_teardown_covers_every_editor_child_window() {
+        assert_eq!(
+            CONTROL_CLOSE_CHILD_WINDOWS.len() + 1,
+            ALL_EDITOR_WINDOWS.len()
+        );
+        assert!(ALL_EDITOR_WINDOWS.contains(&EditorWindowType::Control));
+        for window_type in ALL_EDITOR_WINDOWS {
+            if *window_type != EditorWindowType::Control {
+                assert!(CONTROL_CLOSE_CHILD_WINDOWS.contains(window_type));
+            }
+        }
+        for window_type in CONTROL_CLOSE_CHILD_WINDOWS {
+            assert!(ALL_EDITOR_WINDOWS.contains(window_type));
+            assert_ne!(*window_type, EditorWindowType::Control);
+        }
+    }
 }

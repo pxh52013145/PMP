@@ -1,16 +1,29 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { createKernel, ModuleLoader, setKernelLogSink, type Kernel, type KernelModule } from '../kernel';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  createKernel,
+  ModuleLoader,
+  setKernelLogSink,
+  type Kernel,
+  type KernelModule,
+} from '../kernel';
 import type { AppEvents } from '../contracts/events';
 import { createLifecycleModule } from '../services/lifecycle';
 import { createNavigationModule } from '../services/navigation';
-import { createAudioAnalysisModule, createAudioModule, createCloudPlaybackQueueModule } from '../services/audio';
+import {
+  createAudioAnalysisModule,
+  createAudioModule,
+  createCloudPlaybackQueueModule,
+} from '../services/audio';
 import { createCommandsModule } from '../services/commands';
 import { createMediaSessionModule } from '../services/media-session';
 import { createBuiltinMagnetRenderersModule } from '../builtin-modules/builtinMagnetRenderersModule';
 import { createBuiltinCommandsModule } from '../builtin-modules/builtinCommandsModule';
 import { createBuiltinKeybindingsModule } from '../builtin-modules/builtinKeybindingsModule';
 import { createKeybindingsModule } from '../services/keybindings';
-import { createMemoryGovernanceModule, createSpaceRuntimeGovernanceModule } from '../services/governance';
+import {
+  createMemoryGovernanceModule,
+  createSpaceRuntimeGovernanceModule,
+} from '../services/governance';
 import { createQualityModule } from '../services/quality';
 import { createPerformanceControlModule } from '../services/performance-control';
 import {
@@ -23,6 +36,8 @@ import { STORAGE_KEYS } from '../utils/windowCommunication';
 import { PMP_STORAGE_CHANGE_EVENT } from '../modules/storage/localStorage';
 import { recordStartupMemoryCheckpoint } from '../modules/startup/startupMemoryTrace';
 import { createPlatformWorkspaceGovernanceModule } from '../modules/music-platform/platformWorkspaceGovernanceModule';
+import { KernelContext } from './KernelApiContext';
+import { resolveKernelWindowProfile } from './kernelWindowProfile';
 
 type DesktopKernel = Kernel<AppEvents>;
 
@@ -31,10 +46,9 @@ type KernelRuntime = {
   loader: ModuleLoader<AppEvents>;
   activatePluginModules: () => Promise<void>;
   shouldActivatePluginModules: () => boolean;
+  requiresPluginModulesBeforeRender: boolean;
   markDisposed: () => void;
 };
-
-const KernelContext = createContext<DesktopKernel | undefined>(undefined);
 
 let cachedRuntime: KernelRuntime | null = null;
 
@@ -106,20 +120,27 @@ function hasLikelyInstalledExtensionsV2(): boolean {
 
 async function loadPluginRuntimeModules(options: {
   enableShellSurfaceBackgroundSync: boolean;
+  autoStartBackgroundRuntimes: boolean;
 }): Promise<KernelModule<AppEvents>[]> {
-  const [shellSurfaceManagerModule, runtimeManagerModule, extensionContributionModule, extensionRendererModule] =
-    await Promise.all([
-      import('../magnet-system/plugins/shellSurfaceManagerModule'),
-      import('../magnet-system/plugins/installedExtensionRuntimeManagerModule'),
-      import('../magnet-system/plugins/extensionContributionsModule'),
-      import('../magnet-system/plugins/installedExtensionMagnetRenderersModule'),
-    ]);
+  const [
+    shellSurfaceManagerModule,
+    runtimeManagerModule,
+    extensionContributionModule,
+    extensionRendererModule,
+  ] = await Promise.all([
+    import('../magnet-system/plugins/shellSurfaceManagerModule'),
+    import('../magnet-system/plugins/installedExtensionRuntimeManagerModule'),
+    import('../magnet-system/plugins/extensionContributionsModule'),
+    import('../magnet-system/plugins/installedExtensionMagnetRenderersModule'),
+  ]);
 
   const modules: KernelModule<AppEvents>[] = [
     shellSurfaceManagerModule.createShellSurfaceManagerModule({
       enableBackgroundSync: options.enableShellSurfaceBackgroundSync,
     }),
-    runtimeManagerModule.createInstalledExtensionRuntimeManagerModule(),
+    runtimeManagerModule.createInstalledExtensionRuntimeManagerModule({
+      autoStartBackgroundRuntimes: options.autoStartBackgroundRuntimes,
+    }),
     extensionContributionModule.createInstalledExtensionContributionsModule(),
     extensionRendererModule.createInstalledExtensionMagnetRenderersModule(),
   ];
@@ -143,13 +164,8 @@ function createRuntime(): KernelRuntime {
   const loader = new ModuleLoader<AppEvents>(kernel.services, kernel.events, kernel.contributions);
 
   const hash = typeof window === 'undefined' ? '' : window.location.hash;
-  const isEditorWindow = hash.startsWith('#/editor/');
-  const isPluginWindow = hash.startsWith('#/plugin-window/');
-  const isPluginShellSurfaceWindow = hash.startsWith('#/plugin-shell-surface/');
-  const isVstManagerWindow = hash.startsWith('#/vst-manager');
-  const isAuxWindow =
-    isEditorWindow || isPluginWindow || isPluginShellSurfaceWindow || isVstManagerWindow;
-  const canUsePluginModules = !isEditorWindow;
+  const profile = resolveKernelWindowProfile(hash);
+  const { isEditorWindow, isRegistrationWindow, isAuxWindow, canUsePluginModules } = profile;
 
   let runtimeDisposed = false;
   let pluginModulesActivated = false;
@@ -168,6 +184,7 @@ function createRuntime(): KernelRuntime {
     pluginActivationPromise = (async () => {
       const modules = await loadPluginRuntimeModules({
         enableShellSurfaceBackgroundSync: !isAuxWindow,
+        autoStartBackgroundRuntimes: !isRegistrationWindow,
       });
       if (runtimeDisposed || pluginModulesActivated) return;
       loader.activate(modules);
@@ -211,27 +228,42 @@ function createRuntime(): KernelRuntime {
     return hasLikelyInstalledExtensionsV2();
   };
 
-  const modules = [
+  const modules: KernelModule<AppEvents>[] = [
     createLifecycleModule(),
     createTelemetryModule(),
     createQualityModule(),
-    createRuntimeCapsuleManagerModule(),
-    createEditorToolsRuntimeCapsuleModule(),
-    createPerformanceControlModule(),
+  ];
+
+  if (profile.needsRuntimeCapsuleManager) {
+    modules.push(createRuntimeCapsuleManagerModule());
+  }
+
+  if (profile.needsEditorRuntimeServices) {
+    modules.push(createEditorToolsRuntimeCapsuleModule());
+    modules.push(createPerformanceControlModule());
+  }
+
+  modules.push(
     createNavigationModule(),
     createAudioModule({
       mode: isEditorWindow ? 'noop' : 'real',
       enableTaskbarMediaControls: !isAuxWindow,
     }),
-    createAudioAnalysisModule({ enablePreheat: !isAuxWindow }),
-    createCloudPlaybackQueueModule(),
     createCommandsModule(),
     createKeybindingsModule(),
-    createMediaSessionModule({ enabled: !isAuxWindow }),
-    createBuiltinMagnetRenderersModule(),
     createBuiltinCommandsModule(),
-    createBuiltinKeybindingsModule(),
-  ];
+    createBuiltinKeybindingsModule()
+  );
+
+  if (profile.needsBuiltinMagnetRenderers) {
+    modules.push(createBuiltinMagnetRenderersModule());
+  }
+
+  if (!isEditorWindow) {
+    modules.push(createAudioAnalysisModule({ enablePreheat: !isAuxWindow }));
+    modules.push(createCloudPlaybackQueueModule());
+    modules.push(createMediaSessionModule({ enabled: !isAuxWindow }));
+  }
 
   if (!isAuxWindow) {
     modules.push(createPlatformWorkspaceGovernanceModule());
@@ -273,6 +305,7 @@ function createRuntime(): KernelRuntime {
     loader,
     activatePluginModules,
     shouldActivatePluginModules,
+    requiresPluginModulesBeforeRender: isRegistrationWindow,
     markDisposed: () => {
       runtimeDisposed = true;
     },
@@ -296,6 +329,34 @@ function disposeRuntime(runtime: KernelRuntime): void {
 export function KernelProvider({ children }: { children: ReactNode }) {
   const pendingDeactivate = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [runtime] = useState<KernelRuntime>(() => getOrCreateRuntime());
+  const [runtimeReady, setRuntimeReady] = useState(
+    () => !runtime.requiresPluginModulesBeforeRender
+  );
+
+  useEffect(() => {
+    if (!runtime.requiresPluginModulesBeforeRender) {
+      setRuntimeReady(true);
+      return;
+    }
+
+    let disposed = false;
+    void runtime
+      .activatePluginModules()
+      .then(() => {
+        if (!disposed) setRuntimeReady(true);
+      })
+      .catch((error) => {
+        getTelemetryLogger('kernel', 'KernelProvider').error(
+          'kernel.registration-plugin-modules.activate.failed',
+          {
+            message: error instanceof Error ? error.message : String(error),
+          }
+        );
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [runtime]);
 
   useEffect(() => {
     const tryActivate = () => {
@@ -340,13 +401,25 @@ export function KernelProvider({ children }: { children: ReactNode }) {
     };
   }, [runtime]);
 
-  return <KernelContext.Provider value={runtime.kernel}>{children}</KernelContext.Provider>;
+  useEffect(() => {
+    const disposeOnPageExit = () => {
+      if (pendingDeactivate.current) {
+        clearTimeout(pendingDeactivate.current);
+        pendingDeactivate.current = null;
+      }
+      disposeRuntime(runtime);
+    };
+
+    window.addEventListener('pagehide', disposeOnPageExit);
+    return () => window.removeEventListener('pagehide', disposeOnPageExit);
+  }, [runtime]);
+
+  return (
+    <KernelContext.Provider value={runtime.kernel}>
+      {runtimeReady ? children : null}
+    </KernelContext.Provider>
+  );
 }
 
-export function useKernel(): DesktopKernel {
-  const kernel = useContext(KernelContext);
-  if (!kernel) {
-    throw new Error('useKernel must be used within KernelProvider');
-  }
-  return kernel;
-}
+export { useKernel } from './KernelApiContext';
+export { resolveKernelWindowProfile } from './kernelWindowProfile';

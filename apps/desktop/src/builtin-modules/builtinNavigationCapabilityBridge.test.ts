@@ -93,7 +93,12 @@ describe('builtin navigation capability bridge', () => {
   it('routes builtin navigation commands through host.pmp.navigation', async () => {
     const navigation = createNavigationServiceStub();
 
-    await navigateBuiltinViaHostCapability(navigation, 'settings', undefined, 'app:navigate-settings');
+    await navigateBuiltinViaHostCapability(
+      navigation,
+      'settings',
+      undefined,
+      'app:navigate-settings'
+    );
     await navigateBuiltinViaHostCapability(
       navigation,
       'debug',
@@ -188,7 +193,7 @@ describe('builtin navigation capability bridge', () => {
     await openBuiltinWindowViaHostCapability(
       navigation,
       {
-        windowId: 'editor:theme',
+        windowId: 'editor:registration',
         x: 320,
         y: 180,
         width: 960,
@@ -221,7 +226,7 @@ describe('builtin navigation capability bridge', () => {
 
     expect(navigation.navigateTo).toHaveBeenCalledWith('keyboard-shortcuts', undefined);
     expect(mocks.openEditorWindowMock).toHaveBeenCalledWith({
-      type: 'theme',
+      type: 'registration',
       x: 320,
       y: 180,
       width: 960,
@@ -245,6 +250,20 @@ describe('builtin navigation capability bridge', () => {
       y: 34,
     });
     expect(mocks.calculateWindowPositionMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the legacy editor:theme id routed to the registration window', async () => {
+    const navigation = createNavigationServiceStub();
+
+    await openBuiltinWindowViaHostCapability(
+      navigation,
+      { windowId: 'editor:theme' },
+      'legacy-theme-editor-entry'
+    );
+
+    expect(mocks.openEditorWindowMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'registration' })
+    );
   });
 
   it('defaults shared plugin window bridge opens to extv2 when sourceKind is omitted', async () => {

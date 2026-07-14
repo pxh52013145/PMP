@@ -1,0 +1,351 @@
+.registration-center {
+  display: grid;
+  grid-template-rows: 48px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--color-text, #f4f7fb);
+  background: #0d1014;
+}
+
+.registration-center-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 0 10px 0 14px;
+  background: #12161b;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.registration-center-brand {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.registration-center-brand-icon {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: #65cbb6;
+  background: rgba(101, 203, 182, 0.1);
+  border: 1px solid rgba(101, 203, 182, 0.24);
+  border-radius: 5px;
+}
+
+.registration-center-brand .window-title {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.registration-center-close {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  justify-self: end;
+}
+
+.registration-center-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.registration-center-window-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  justify-self: end;
+}
+
+.registration-center-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.registration-center-content > .settings-plugin-studio {
+  min-height: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.registration-center-content > .editor-theme {
+  min-height: 100%;
+}
+
+.registration-center-loading {
+  width: 100%;
+  height: 2px;
+  background: rgba(71, 190, 168, 0.7);
+}
+
+/* The embedded plugin studio is an operational workspace, not a settings card. */
+.registration-center .settings-plugin-studio--embedded {
+  gap: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-inline-error {
+  margin: 12px 16px 0;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-header {
+  min-height: 58px;
+  padding: 10px 16px;
+  background: #101419;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-card-label {
+  margin: 0;
+  font-size: 14px;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-card-desc {
+  display: none;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-header-actions {
+  flex-wrap: nowrap;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-action-btn {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-primary-action {
+  color: #06110e;
+  background: #65cbb6;
+  border-color: #65cbb6;
+  font-weight: 700;
+}
+
+.registration-center
+  .settings-plugin-studio--embedded
+  .settings-plugin-studio-primary-action:hover:not(:disabled) {
+  background: #7bd7c5;
+  border-color: #7bd7c5;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-metrics {
+  display: flex;
+  gap: 0;
+  min-height: 38px;
+  padding: 0 16px;
+  align-items: center;
+  background: #0d1115;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-metric {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 12px;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.registration-center
+  .settings-plugin-studio--embedded
+  .settings-plugin-studio-metric:first-child {
+  padding-left: 0;
+}
+
+.registration-center
+  .settings-plugin-studio--embedded
+  .settings-plugin-studio-metric:last-child {
+  border-right: 0;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-metric span,
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-metric strong {
+  display: inline;
+  margin: 0;
+  font-size: 11px;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-metric strong {
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+}
+
+.registration-center .settings-plugin-studio--embedded > .settings-param-divider {
+  display: none;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-shell {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 188px minmax(0, 1fr);
+  gap: 0;
+  min-height: 0;
+  align-items: stretch;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-nav {
+  gap: 2px;
+  padding: 12px 8px;
+  background: #101419;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-nav-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 36px;
+  align-items: center;
+  padding: 0 9px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-nav-item:hover {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.registration-center
+  .settings-plugin-studio--embedded
+  .settings-plugin-studio-nav-item[data-active='true'] {
+  color: #e9fbf7;
+  background: rgba(101, 203, 182, 0.1);
+  border-color: rgba(101, 203, 182, 0.22);
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-nav-icon {
+  color: rgba(255, 255, 255, 0.48);
+}
+
+.registration-center
+  .settings-plugin-studio--embedded
+  .settings-plugin-studio-nav-item[data-active='true']
+  .settings-plugin-studio-nav-icon {
+  color: #65cbb6;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-nav-item span {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-nav-item small {
+  display: none;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-panel {
+  min-height: 0;
+  padding: 16px 18px 28px;
+  overflow: auto;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-panel-head {
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-content-meta {
+  display: none;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-panel-head h3 {
+  font-size: 16px;
+}
+
+.registration-center .settings-plugin-studio--embedded .settings-plugin-studio-panel-head p {
+  max-width: 720px;
+  line-height: 1.45;
+}
+
+.registration-center .settings-plugin-studio-empty {
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+  border: 1px dashed rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.registration-center .settings-plugin-studio-empty-copy {
+  display: flex;
+  max-width: 420px;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.registration-center .settings-plugin-studio-empty-copy strong {
+  font-size: 14px;
+}
+
+.registration-center .settings-plugin-studio-empty-copy p {
+  margin: 0 0 6px;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .registration-center-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .registration-center .settings-plugin-studio--embedded .settings-plugin-studio-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .registration-center .settings-plugin-studio--embedded .settings-plugin-studio-header-actions {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .registration-center .settings-plugin-studio--embedded .settings-plugin-studio-metrics {
+    overflow-x: auto;
+  }
+
+  .registration-center .settings-plugin-studio--embedded .settings-plugin-studio-shell {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+
+  .registration-center .settings-plugin-studio--embedded .settings-plugin-studio-nav-item {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding: 0;
+  }
+
+  .registration-center .settings-plugin-studio--embedded .settings-plugin-studio-nav-item span {
+    display: none;
+  }
+}

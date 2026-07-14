@@ -1,4 +1,5 @@
 use std::sync::atomic::Ordering;
+use tauri::Manager;
 
 use crate::{app_runtime, desktop_lyrics_fonts, windows};
 
@@ -47,9 +48,11 @@ pub async fn close_editor_window(
 }
 
 #[tauri::command]
-pub async fn close_all_editor_windows(app: tauri::AppHandle) -> Result<(), String> {
-    windows::editor::close_all_editor_windows(&app);
-    Ok(())
+pub async fn close_all_editor_windows(
+    app: tauri::AppHandle,
+) -> Result<windows::editor::EditorWindowsCloseReport, String> {
+    let _ = app.emit_all(windows::EVENT_EDITOR_EXIT, ());
+    Ok(windows::editor::close_all_editor_windows(&app))
 }
 
 #[tauri::command(rename_all = "camelCase")]

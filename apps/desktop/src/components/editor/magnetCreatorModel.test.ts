@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { Magnet } from '../../types/pixel';
 import {
   buildEditorMagnet,
+  buildMagnetGridFootprint,
   hasMagnetConfigChanges,
   normalizeMagnetVariant,
   parseMagnetSkinPropsDraft,
+  resolveMagnetAnchorDraftDimensions,
+  resolveMagnetAnchorOrigin,
+  resolvePreviewAnchorOrigin,
 } from './magnetCreatorModel';
 
 const baseBounds: Magnet['bounds'] = {
@@ -38,6 +42,59 @@ function createSeedMagnet(overrides: Partial<Magnet> = {}): Magnet {
 }
 
 describe('magnet creator model appearance fields', () => {
+  it('resolves empty-anchor magnets from their grid footprint', () => {
+    const magnet = createSeedMagnet({
+      anchorType: 'rectangular',
+      anchors: [],
+      gridFootprint: { width: 6, height: 8 },
+    });
+
+    expect(resolveMagnetAnchorOrigin(magnet)).toEqual({ x: 10, y: 10 });
+    expect(resolveMagnetAnchorDraftDimensions(magnet)).toEqual({
+      horizontalPixels: 6,
+      verticalPixels: 8,
+      rectWidth: 6,
+      rectHeight: 8,
+    });
+  });
+
+  it('derives dimensions without assuming a fixed anchor count', () => {
+    const magnet = createSeedMagnet({
+      anchorType: 'rectangular',
+      anchors: [
+        { id: 'start', gridX: 3, gridY: 4, role: 'anchor' },
+        { id: 'end', gridX: 7, gridY: 9, role: 'boundary' },
+      ],
+    });
+
+    expect(resolveMagnetAnchorDraftDimensions(magnet)).toMatchObject({
+      rectWidth: 5,
+      rectHeight: 6,
+    });
+  });
+
+  it('builds a footprint from editor anchor dimensions', () => {
+    expect(
+      buildMagnetGridFootprint('horizontal', {
+        horizontalPixels: 5,
+        verticalPixels: 2,
+        rectWidth: 3,
+        rectHeight: 4,
+      })
+    ).toEqual({ width: 5, height: 1 });
+  });
+
+  it('centers large footprints inside the preview grid', () => {
+    expect(
+      resolvePreviewAnchorOrigin('rectangular', {
+        horizontalPixels: 1,
+        verticalPixels: 1,
+        rectWidth: 27,
+        rectHeight: 17,
+      })
+    ).toEqual({ x: 1, y: 6 });
+  });
+
   it('normalizes and clears renderer variants', () => {
     expect(normalizeMagnetVariant('  neon ')).toBe('neon');
     expect(normalizeMagnetVariant('   ')).toBeNull();

@@ -9,7 +9,7 @@ import {
   invokeWithTelemetry,
   type TauriInvokeTelemetryOptions,
 } from '../../services/telemetry/tauriInvokeTelemetry';
-import { useKernel } from '../../contexts/KernelContext';
+import { useKernel } from '../../contexts/KernelApiContext';
 import { COMMANDS_SERVICE_TOKEN, dispatchCommandOrFallback } from '../../services/commands';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { ConfirmDialog } from './ConfirmDialog';

@@ -7,7 +7,7 @@ import {
   type MusicLibraryStatsChangeDetail,
   type MusicLibrarySourceMode,
 } from '../../../contracts/musicLibrarySource';
-import { useKernel } from '../../../contexts/KernelContext';
+import { useKernel } from '../../../contexts/KernelApiContext';
 import { useT } from '../../../i18n';
 import { getTelemetryLogger } from '../../../services/telemetry/TelemetryService';
 import { NavigationPageVariantProps } from './NavigationPageTypes';

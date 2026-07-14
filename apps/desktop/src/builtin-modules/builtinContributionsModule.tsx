@@ -35,7 +35,7 @@ const BUILTIN_EDITOR_WINDOW_OPEN_COMMAND_BY_TYPE: Record<PublicEditorWindowType,
   'style-border-effect': 'app:open-style-border-effect-editor-window',
   background: 'app:open-background-editor-window',
   'custom-background': 'app:open-custom-background-editor-window',
-  theme: 'app:open-theme-editor-window',
+  registration: 'app:open-registration-center-window',
   debug: 'app:open-debug-editor-window',
 };
 
@@ -46,12 +46,18 @@ function readWindowOpenArgs(value: unknown): Record<string, unknown> | undefined
   return value as Record<string, unknown>;
 }
 
-const HomePageLazy = React.lazy(async () => ({ default: (await import('../components/pages/HomePage')).HomePage }));
-const SettingsPageLazy = React.lazy(async () => ({ default: (await import('../components/pages/SettingsPage')).SettingsPage }));
+const HomePageLazy = React.lazy(async () => ({
+  default: (await import('../components/pages/HomePage')).HomePage,
+}));
+const SettingsPageLazy = React.lazy(async () => ({
+  default: (await import('../components/pages/SettingsPage')).SettingsPage,
+}));
 const KeyboardShortcutsPageLazy = React.lazy(async () => ({
   default: (await import('../components/pages/KeyboardShortcutsPage')).KeyboardShortcutsPage,
 }));
-const MusicLibraryLazy = React.lazy(async () => ({ default: (await import('../components/pages/MusicLibrary')).MusicLibrary }));
+const MusicLibraryLazy = React.lazy(async () => ({
+  default: (await import('../components/pages/MusicLibrary')).MusicLibrary,
+}));
 const MusicTagWorkbenchPageLazy = React.lazy(async () => ({
   default: (await import('../components/music-tag/MusicTagWorkbenchPage')).MusicTagWorkbenchPage,
 }));
@@ -73,49 +79,58 @@ const NativeDebugPageLazy = React.lazy(async () => ({
 const PerfMonitorPageLazy = React.lazy(async () => ({
   default: (await import('../components/pages/PerfMonitorPage')).PerfMonitorPage,
 }));
-const DebugPageLazy = React.lazy(async () => ({ default: (await import('../components/pages/DebugPage')).DebugPage }));
-const DspRackPageLazy = React.lazy(async () => ({ default: (await import('../components/pages/DspRackPage')).DspRackPage }));
+const DebugPageLazy = React.lazy(async () => ({
+  default: (await import('../components/pages/DebugPage')).DebugPage,
+}));
+const DspRackPageLazy = React.lazy(async () => ({
+  default: (await import('../components/pages/DspRackPage')).DspRackPage,
+}));
 const AudioComponentsSettingsPanelLazy = React.lazy(async () => ({
-  default: (await import('../components/settings-panels/AudioComponentsSettingsPanel')).AudioComponentsSettingsPanel,
+  default: (await import('../components/settings-panels/AudioComponentsSettingsPanel'))
+    .AudioComponentsSettingsPanel,
 }));
 const AudioBufferSettingsPanelLazy = React.lazy(async () => ({
-  default: (await import('../components/settings-panels/AudioBufferSettingsPanel')).AudioBufferSettingsPanel,
+  default: (await import('../components/settings-panels/AudioBufferSettingsPanel'))
+    .AudioBufferSettingsPanel,
 }));
 const AudioEngineAdvancedSettingsPanelLazy = React.lazy(async () => ({
-  default: (await import('../components/settings-panels/AudioEngineAdvancedSettingsPanel')).AudioEngineAdvancedSettingsPanel,
+  default: (await import('../components/settings-panels/AudioEngineAdvancedSettingsPanel'))
+    .AudioEngineAdvancedSettingsPanel,
 }));
 const AudioDspSettingsPanelLazy = React.lazy(async () => ({
-  default: (await import('../components/settings-panels/AudioDspSettingsPanel')).AudioDspSettingsPanel,
+  default: (await import('../components/settings-panels/AudioDspSettingsPanel'))
+    .AudioDspSettingsPanel,
 }));
 const LanguageSettingsPanelLazy = React.lazy(async () => ({
-  default: (await import('../components/settings-panels/LanguageSettingsPanel')).LanguageSettingsPanel,
+  default: (await import('../components/settings-panels/LanguageSettingsPanel'))
+    .LanguageSettingsPanel,
 }));
 const WindowCloseSettingsPanelLazy = React.lazy(async () => ({
-  default: (await import('../components/settings-panels/WindowCloseSettingsPanel')).WindowCloseSettingsPanel,
+  default: (await import('../components/settings-panels/WindowCloseSettingsPanel'))
+    .WindowCloseSettingsPanel,
 }));
 const SystemDemoSettingsPanelLazy = React.lazy(async () => ({
-  default: (await import('../components/settings-panels/SystemDemoSettingsPanel')).SystemDemoSettingsPanel,
+  default: (await import('../components/settings-panels/SystemDemoSettingsPanel'))
+    .SystemDemoSettingsPanel,
 }));
 const PerformanceSettingsPanelLazy = React.lazy(async () => ({
-  default: (await import('../components/settings-panels/PerformanceSettingsPanel')).PerformanceSettingsPanel,
-}));
-const ThemeToolsSettingsPanelLazy = React.lazy(async () => ({
-  default: (await import('../components/settings-panels/ThemeToolsSettingsPanel')).ThemeToolsSettingsPanel,
+  default: (await import('../components/settings-panels/PerformanceSettingsPanel'))
+    .PerformanceSettingsPanel,
 }));
 const DesktopLyricsFontSettingsPanelLazy = React.lazy(async () => ({
-  default: (await import('../components/settings-panels/DesktopLyricsFontSettingsPanel')).DesktopLyricsFontSettingsPanel,
-}));
-const PluginsSettingsPanelLazy = React.lazy(async () => ({
-  default: (await import('../components/settings-panels/PluginsSettingsPanel')).PluginsSettingsPanel,
+  default: (await import('../components/settings-panels/DesktopLyricsFontSettingsPanel'))
+    .DesktopLyricsFontSettingsPanel,
 }));
 const VisualizersSettingsPanelLazy = React.lazy(async () => ({
-  default: (await import('../components/settings-panels/VisualizersSettingsPanel')).VisualizersSettingsPanel,
+  default: (await import('../components/settings-panels/VisualizersSettingsPanel'))
+    .VisualizersSettingsPanel,
 }));
 const PluginPageHostLazy = React.lazy(async () => ({
   default: (await import('../magnet-system/plugins/ResolvedPluginHosts')).ResolvedPluginPageHost,
 }));
 const PluginVisualizerHostLazy = React.lazy(async () => ({
-  default: (await import('../magnet-system/plugins/ResolvedPluginHosts')).ResolvedPluginVisualizerHost,
+  default: (await import('../magnet-system/plugins/ResolvedPluginHosts'))
+    .ResolvedPluginVisualizerHost,
 }));
 
 function LazyLoadingFallback() {
@@ -239,18 +254,6 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
 
         register<SettingsPanelContribution>({
           kind: 'settings-panel',
-          id: 'theme-tools',
-          title: t('settings.panels.themeTools.title'),
-          description: t('settings.panels.themeTools.desc'),
-          render: () => renderWithLazyBoundary(<ThemeToolsSettingsPanelLazy />),
-          source: 'builtin',
-          order: 11,
-          group: 'core',
-          metadata: { settingsSection: 'system' },
-        });
-
-        register<SettingsPanelContribution>({
-          kind: 'settings-panel',
           id: 'desktop-lyrics-font',
           title: t('settings.panels.desktopLyricsFont.title'),
           description: t('settings.panels.desktopLyricsFont.desc'),
@@ -319,17 +322,6 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           order: 22,
           group: 'audio',
           metadata: { settingsSection: 'audio' },
-        });
-
-        register<SettingsPanelContribution>({
-          kind: 'settings-panel',
-          id: 'plugins',
-          title: t('settings.panels.plugins.title'),
-          render: () => renderWithLazyBoundary(<PluginsSettingsPanelLazy />),
-          source: 'builtin',
-          order: 30,
-          group: 'plugin',
-          metadata: { settingsSection: 'plugins' },
         });
 
         register<SettingsPanelContribution>({
@@ -451,7 +443,9 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'page',
           id: 'artist',
           title: t('pages.artist.title'),
-          render: () => <PlaceholderPage icon="?" text={t('pages.artist.placeholder')} cssClass="page-artist" />,
+          render: () => (
+            <PlaceholderPage icon="?" text={t('pages.artist.placeholder')} cssClass="page-artist" />
+          ),
           source: 'builtin',
           order: 80,
           group: 'details',
@@ -566,14 +560,15 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
             const params = parseNavigationParams('plugin-page', page.params);
             if (!params) {
               return (
-                <PlaceholderPage icon="?" text={t('pages.plugin-page.invalidParams')} cssClass="page-plugin" />
+                <PlaceholderPage
+                  icon="?"
+                  text={t('pages.plugin-page.invalidParams')}
+                  cssClass="page-plugin"
+                />
               );
             }
             return renderWithLazyBoundary(
-              <PluginPageHostLazy
-                pluginId={params.pluginId}
-                pageId={params.pageId}
-              />
+              <PluginPageHostLazy pluginId={params.pluginId} pageId={params.pageId} />
             );
           },
           source: 'builtin',
@@ -615,11 +610,14 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
         registerEditorWindow('style', t('windows.editor.style.title'));
         registerEditorWindow('style-pixel', t('windows.editor.style-pixel.title'));
         registerEditorWindow('style-cover-color', t('windows.editor.style-cover-color.title'));
-        registerEditorWindow('style-background-effect', t('windows.editor.style-background-effect.title'));
+        registerEditorWindow(
+          'style-background-effect',
+          t('windows.editor.style-background-effect.title')
+        );
         registerEditorWindow('style-border-effect', t('windows.editor.style-border-effect.title'));
         registerEditorWindow('background', t('windows.editor.background.title'));
         registerEditorWindow('custom-background', t('windows.editor.custom-background.title'));
-        registerEditorWindow('theme', t('windows.editor.theme.title'));
+        registerEditorWindow('registration', t('windows.editor.registration.title'));
         registerEditorWindow('debug', t('windows.editor.debug.title'));
       };
 

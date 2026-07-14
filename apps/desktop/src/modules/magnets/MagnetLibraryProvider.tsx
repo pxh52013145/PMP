@@ -1,4 +1,13 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import {
   BUILTIN_MAGNET_IDS,
   DEFAULT_ACTIVE_MAGNET_IDS,
@@ -92,9 +101,7 @@ export interface MagnetConfigContextValue {
 
 const MagnetConfigContext = createContext<MagnetConfigContextValue | null>(null);
 
-function resolveRuntimeDefaultActiveMagnetIds(
-  fallback: ReadonlySet<string>
-): ReadonlySet<string> {
+function resolveRuntimeDefaultActiveMagnetIds(fallback: ReadonlySet<string>): ReadonlySet<string> {
   const runtimeProfile = parsePerformanceRuntimeProfile(
     readJson<unknown>(STORAGE_KEYS.PERFORMANCE_RUNTIME_PROFILE, 'minimal'),
     'minimal'
@@ -221,7 +228,10 @@ export function MagnetLibraryProvider({
   const [magnetSpacesRaw] = usePersistentSetting(STORAGE_KEYS.MAGNET_SPACES, defaultSpacesState, {
     format: 'json',
   });
-  const magnetSpacesFromStorage = useMemo(() => sanitizeMagnetSpacesState(magnetSpacesRaw), [magnetSpacesRaw]);
+  const magnetSpacesFromStorage = useMemo(
+    () => sanitizeMagnetSpacesState(magnetSpacesRaw),
+    [magnetSpacesRaw]
+  );
   const magnetSpaces = useMemo(() => {
     if (isTauri && layoutStoreState) return layoutStoreState.spaces;
     return magnetSpacesFromStorage;
@@ -251,12 +261,15 @@ export function MagnetLibraryProvider({
   const loadedConfigKeyRef = useRef(magnetConfigStorageKey);
   const loadedLayoutKeyRef = useRef(magnetLayoutStorageKey);
 
-  const resolveDefaultActiveMagnetIdsForSpace = useCallback((spaceId: string): Set<string> => {
-    const seed = spaceId === 'space1' ? runtimeDefaultActiveMagnetIds : REQUIRED_MAGNET_IDS;
-    const next = new Set(seed);
-    for (const id of REQUIRED_MAGNET_IDS) next.add(id);
-    return next;
-  }, [runtimeDefaultActiveMagnetIds]);
+  const resolveDefaultActiveMagnetIdsForSpace = useCallback(
+    (spaceId: string): Set<string> => {
+      const seed = spaceId === 'space1' ? runtimeDefaultActiveMagnetIds : REQUIRED_MAGNET_IDS;
+      const next = new Set(seed);
+      for (const id of REQUIRED_MAGNET_IDS) next.add(id);
+      return next;
+    },
+    [runtimeDefaultActiveMagnetIds]
+  );
 
   const resolvedDefaultActiveMagnetIds = useMemo(
     () => resolveDefaultActiveMagnetIdsForSpace(activeSpaceId),
@@ -344,8 +357,12 @@ export function MagnetLibraryProvider({
     };
   }
 
-  const [magnetLibrary, setMagnetLibrary] = useState<Magnet[]>(() => initialRef.current!.magnetLibrary);
-  const [activeMagnetIds, setActiveMagnetIds] = useState<Set<string>>(() => initialRef.current!.activeMagnetIds);
+  const [magnetLibrary, setMagnetLibrary] = useState<Magnet[]>(
+    () => initialRef.current!.magnetLibrary
+  );
+  const [activeMagnetIds, setActiveMagnetIds] = useState<Set<string>>(
+    () => initialRef.current!.activeMagnetIds
+  );
 
   const activeMagnets = useMemo(() => {
     return magnetLibrary.filter((m) => activeMagnetIds.has(m.id));
@@ -373,10 +390,7 @@ export function MagnetLibraryProvider({
       }
 
       releases.push(
-        spaceRuntimeGovernance.retainSpaceAssociation(
-          association.spaceId,
-          association.resourceId
-        )
+        spaceRuntimeGovernance.retainSpaceAssociation(association.spaceId, association.resourceId)
       );
     }
 
@@ -493,8 +507,13 @@ export function MagnetLibraryProvider({
       const maxRetries = 2;
 
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        const attemptReason = attempt === 0 ? reason : `${reason}:retry${attempt === 1 ? '' : attempt}`;
-        const response = await magnetLayoutStoreApplyPatch({ expectedRevision, patches, reason: attemptReason });
+        const attemptReason =
+          attempt === 0 ? reason : `${reason}:retry${attempt === 1 ? '' : attempt}`;
+        const response = await magnetLayoutStoreApplyPatch({
+          expectedRevision,
+          patches,
+          reason: attemptReason,
+        });
         if (!response) return;
 
         layoutStoreRevisionRef.current = response.state.revision;
@@ -511,21 +530,25 @@ export function MagnetLibraryProvider({
     [isTauri]
   );
 
-  const loadTauriLayoutStoreState = useCallback(async (): Promise<MagnetLayoutStoreState | null> => {
-    if (!isTauri) return null;
-    const bootstrapped = await magnetLayoutStoreBootstrap(runtimeDefaultActiveMagnetIds);
-    const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
-    if (!store) return null;
+  const loadTauriLayoutStoreState =
+    useCallback(async (): Promise<MagnetLayoutStoreState | null> => {
+      if (!isTauri) return null;
+      const bootstrapped = await magnetLayoutStoreBootstrap(runtimeDefaultActiveMagnetIds);
+      const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
+      if (!store) return null;
 
-    layoutStoreRevisionRef.current = store.revision;
-    setLayoutStoreState(store);
-    return store;
-  }, [isTauri, runtimeDefaultActiveMagnetIds]);
+      layoutStoreRevisionRef.current = store.revision;
+      setLayoutStoreState(store);
+      return store;
+    }, [isTauri, runtimeDefaultActiveMagnetIds]);
 
   const buildLoadedSpaceSnapshot = useCallback(
     (args: { activeSpaceId: string; layout: MagnetSpaceLayout }): LoadedMagnetSpaceSnapshot => {
       const catalogMagnets = ensureMagnetCatalogState().state.magnets;
-      const normalizedLayout = normalizeSpaceLayoutWithSystemAnchors(args.activeSpaceId, args.layout).layout;
+      const normalizedLayout = normalizeSpaceLayoutWithSystemAnchors(
+        args.activeSpaceId,
+        args.layout
+      ).layout;
 
       const activeFromLayout = new Set(normalizedLayout.activeMagnetIds);
       for (const id of REQUIRED_MAGNET_IDS) activeFromLayout.add(id);
@@ -542,12 +565,13 @@ export function MagnetLibraryProvider({
           };
 
       const baseLibrary = [...defaultMagnetLibrary, ...catalogMagnets];
-      const patchedMagnets: Record<string, MagnetStateConfig> = patchMagnetStateConfigWithLayoutSnapshot({
-        magnets: baseLibrary,
-        currentStates: baseConfig.magnets,
-        anchorsByMagnetId: normalizedLayout.anchorsByMagnetId,
-        activeMagnetIds: activeFromLayout,
-      });
+      const patchedMagnets: Record<string, MagnetStateConfig> =
+        patchMagnetStateConfigWithLayoutSnapshot({
+          magnets: baseLibrary,
+          currentStates: baseConfig.magnets,
+          anchorsByMagnetId: normalizedLayout.anchorsByMagnetId,
+          activeMagnetIds: activeFromLayout,
+        });
 
       const baselineApplied = applyMagnetConfig(
         { ...baseConfig, gridSize, magnets: baseConfig.magnets },
@@ -564,7 +588,13 @@ export function MagnetLibraryProvider({
         JSON.stringify(baselineApplied.magnetLibrary) !== JSON.stringify(applied.magnetLibrary) ||
         JSON.stringify([...baselineActive].sort()) !== JSON.stringify([...ensuredActive].sort());
       if (shouldPersistNormalizedConfig) {
-        saveMagnetConfig(applied.magnetLibrary, ensuredActive, gridSize, defaultMagnetLibrary, configKey);
+        saveMagnetConfig(
+          applied.magnetLibrary,
+          ensuredActive,
+          gridSize,
+          defaultMagnetLibrary,
+          configKey
+        );
       }
 
       return {
@@ -605,7 +635,10 @@ export function MagnetLibraryProvider({
           defaultActiveMagnetIds: defaultActive,
           seedTemplateId,
         });
-        const normalized = normalizeSpaceLayoutWithSystemAnchors(normalizedSpaceId, layoutResult.layout);
+        const normalized = normalizeSpaceLayoutWithSystemAnchors(
+          normalizedSpaceId,
+          layoutResult.layout
+        );
         if (normalized.changed) {
           saveMagnetSpaceLayout(normalized.layout, layoutResult.storageKey);
         }
@@ -668,7 +701,10 @@ export function MagnetLibraryProvider({
   const stagedSwitchRequestRef = useRef(0);
   const stagedSwitchTargetRef = useRef<string | null>(null);
   const stagedSwitchToSpace = useCallback(
-    async (nextSpaceId: string, preloadedStore: MagnetLayoutStoreState | null = null): Promise<void> => {
+    async (
+      nextSpaceId: string,
+      preloadedStore: MagnetLayoutStoreState | null = null
+    ): Promise<void> => {
       const normalizedNextSpaceId = nextSpaceId.trim();
       if (!normalizedNextSpaceId || normalizedNextSpaceId === activeSpaceId) return;
       if (stagedSwitchTargetRef.current === normalizedNextSpaceId) return;
@@ -801,7 +837,10 @@ export function MagnetLibraryProvider({
     const layout = buildLayoutSnapshot(magnetLibrary, activeMagnetIds);
 
     if (isTauri) {
-      void applyLayoutStorePatch([{ kind: 'setSpaceLayout', spaceId: activeSpaceId, layout }], 'saveNow');
+      void applyLayoutStorePatch(
+        [{ kind: 'setSpaceLayout', spaceId: activeSpaceId, layout }],
+        'saveNow'
+      );
       return;
     }
 
@@ -818,38 +857,52 @@ export function MagnetLibraryProvider({
     magnetLibrary,
   ]);
 
-  const updateMagnetAnchors = useCallback((magnetId: string, newAnchors: PixelAnchor[]) => {
-    setMagnetLibrary((prev) => prev.map((m) => (m.id === magnetId ? { ...m, anchors: newAnchors } : m)));
-    if (!isTauri) return;
-    void applyLayoutStorePatch(
-      [{ kind: 'updateMagnetAnchors', spaceId: activeSpaceId, magnetId, anchors: newAnchors }],
-      'updateMagnetAnchors'
-    );
-  }, [activeSpaceId, applyLayoutStorePatch, isTauri]);
+  const updateMagnetAnchors = useCallback(
+    (magnetId: string, newAnchors: PixelAnchor[]) => {
+      setMagnetLibrary((prev) =>
+        prev.map((m) => (m.id === magnetId ? { ...m, anchors: newAnchors } : m))
+      );
+      if (!isTauri) return;
+      void applyLayoutStorePatch(
+        [{ kind: 'updateMagnetAnchors', spaceId: activeSpaceId, magnetId, anchors: newAnchors }],
+        'updateMagnetAnchors'
+      );
+    },
+    [activeSpaceId, applyLayoutStorePatch, isTauri]
+  );
 
-  const activateMagnet = useCallback((magnetId: string) => {
-    setActiveMagnetIds((prev) => {
-      const next = new Set(prev);
-      next.add(magnetId);
-      return next;
-    });
-    if (!isTauri) return;
-    void applyLayoutStorePatch([{ kind: 'setMagnetActive', spaceId: activeSpaceId, magnetId, active: true }], 'activateMagnet');
-  }, [activeSpaceId, applyLayoutStorePatch, isTauri]);
+  const activateMagnet = useCallback(
+    (magnetId: string) => {
+      setActiveMagnetIds((prev) => {
+        const next = new Set(prev);
+        next.add(magnetId);
+        return next;
+      });
+      if (!isTauri) return;
+      void applyLayoutStorePatch(
+        [{ kind: 'setMagnetActive', spaceId: activeSpaceId, magnetId, active: true }],
+        'activateMagnet'
+      );
+    },
+    [activeSpaceId, applyLayoutStorePatch, isTauri]
+  );
 
-  const deactivateMagnet = useCallback((magnetId: string) => {
-    if (REQUIRED_MAGNET_IDS.has(magnetId)) return;
-    setActiveMagnetIds((prev) => {
-      const next = new Set(prev);
-      next.delete(magnetId);
-      return next;
-    });
-    if (!isTauri) return;
-    void applyLayoutStorePatch(
-      [{ kind: 'setMagnetActive', spaceId: activeSpaceId, magnetId, active: false }],
-      'deactivateMagnet'
-    );
-  }, [activeSpaceId, applyLayoutStorePatch, isTauri]);
+  const deactivateMagnet = useCallback(
+    (magnetId: string) => {
+      if (REQUIRED_MAGNET_IDS.has(magnetId)) return;
+      setActiveMagnetIds((prev) => {
+        const next = new Set(prev);
+        next.delete(magnetId);
+        return next;
+      });
+      if (!isTauri) return;
+      void applyLayoutStorePatch(
+        [{ kind: 'setMagnetActive', spaceId: activeSpaceId, magnetId, active: false }],
+        'deactivateMagnet'
+      );
+    },
+    [activeSpaceId, applyLayoutStorePatch, isTauri]
+  );
 
   useEffect(() => {
     const missing: string[] = [];
@@ -953,7 +1006,12 @@ export function MagnetLibraryProvider({
 
   useEffect(() => {
     const cleanupPromise = setupConfigSync(
-      [STORAGE_KEYS.MAGNET_SPACES, STORAGE_KEYS.MAGNET_CATALOG, magnetConfigStorageKey, magnetLayoutStorageKey],
+      [
+        STORAGE_KEYS.MAGNET_SPACES,
+        STORAGE_KEYS.MAGNET_CATALOG,
+        magnetConfigStorageKey,
+        magnetLayoutStorageKey,
+      ],
       [
         TAURI_EVENTS.MAGNET_LIBRARY_UPDATED,
         TAURI_EVENTS.MAGNET_ACTIVATED,
@@ -992,4 +1050,8 @@ export function useMagnetConfig(): MagnetConfigContextValue {
     throw new Error('useMagnetConfig must be used within MagnetLibraryProvider');
   }
   return context;
+}
+
+export function useOptionalMagnetConfig(): MagnetConfigContextValue | null {
+  return useContext(MagnetConfigContext);
 }
