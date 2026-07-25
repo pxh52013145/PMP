@@ -844,6 +844,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   );
 
   const playlistCoverResolveTargetIds = useMemo(() => {
+    if (!isOpen) return [];
     const ids = new Set<string>();
     for (const playlist of virtualizedSidebarPlaylists) {
       ids.add(playlist.id);
@@ -852,7 +853,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       ids.add(selectedPlaylistId);
     }
     return Array.from(ids);
-  }, [selectedPlaylistId, virtualizedSidebarPlaylists]);
+  }, [isOpen, selectedPlaylistId, virtualizedSidebarPlaylists]);
 
   const playlistCoverResolveTargetIdSet = useMemo(
     () => new Set(playlistCoverResolveTargetIds),
@@ -938,6 +939,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   }, [showSortMenu]);
 
   useEffect(() => {
+    if (!isOpen) return;
     let cancelled = false;
 
     const clearResolvedPlaylistCover = (playlistId: string) => {
@@ -984,7 +986,12 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
             const resolvedPreviewCoverUrl =
               await resolveRenderablePlaylistPreviewCoverUrl(playlistId);
 
-            if (cancelled) continue;
+            if (cancelled) {
+              if (resolvedPreviewCoverUrl) {
+                musicLibraryService.discardCoverUrls([resolvedPreviewCoverUrl]);
+              }
+              continue;
+            }
 
             const normalizedPreviewCoverUrl =
               sanitizeRenderablePlaylistCoverUrl(resolvedPreviewCoverUrl);
@@ -1000,7 +1007,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
               clearResolvedPlaylistCover(playlistId);
             }
           } catch {
-            clearResolvedPlaylistCover(playlistId);
+            if (!cancelled) clearResolvedPlaylistCover(playlistId);
           } finally {
             pendingPlaylistCoverIdsRef.current.delete(playlistId);
           }
@@ -1093,7 +1100,12 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
             }
           }
 
-          if (cancelled) continue;
+          if (cancelled) {
+            if (resolvedCoverUrl) {
+              musicLibraryService.discardCoverUrls([resolvedCoverUrl]);
+            }
+            continue;
+          }
 
           const finalCoverUrl = sanitizeRenderablePlaylistCoverUrl(resolvedCoverUrl);
           if (finalCoverUrl) {
@@ -1120,10 +1132,10 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     return () => {
       cancelled = true;
     };
-  }, [playlistById, playlistCoverResolveTargetIds, resolveRenderablePlaylistPreviewCoverUrl]);
+  }, [isOpen, playlistById, playlistCoverResolveTargetIds, resolveRenderablePlaylistPreviewCoverUrl]);
 
   useEffect(() => {
-    if (!selectedPlaylist || isFixedRecentSmartPlaylist(selectedPlaylist)) {
+    if (!isOpen || !selectedPlaylist || isFixedRecentSmartPlaylist(selectedPlaylist)) {
       setSelectedPlaylistHeroCover((previous) =>
         previous.playlistId === null && previous.url.length === 0
           ? previous
@@ -1150,7 +1162,10 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     );
     void resolveRenderablePlaylistPreviewCoverUrl(selectedPlaylist.id, 'medium')
       .then((resolvedUrl) => {
-        if (cancelled) return;
+        if (cancelled) {
+          if (resolvedUrl) musicLibraryService.discardCoverUrls([resolvedUrl]);
+          return;
+        }
         const normalizedUrl = sanitizeRenderablePlaylistCoverUrl(resolvedUrl);
         setSelectedPlaylistHeroCover((previous) =>
           previous.playlistId === selectedPlaylist.id && previous.url === normalizedUrl
@@ -1170,7 +1185,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     return () => {
       cancelled = true;
     };
-  }, [resolveRenderablePlaylistPreviewCoverUrl, selectedPlaylist]);
+  }, [isOpen, resolveRenderablePlaylistPreviewCoverUrl, selectedPlaylist]);
 
   const handleCreatePlaylist = (name: string) => {
     audioService.createPlaylist(name);
@@ -1535,6 +1550,20 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     [recomputePlaylistCoverDecodedStats]
   );
 
+  const discardPlaylistCoverUrls = useCallback(
+    (urls: string[]) => {
+      if (!Array.isArray(urls) || urls.length === 0) return;
+      const { trackedUrls } = partitionPlaylistCoverUrlsForRelease(urls);
+      if (trackedUrls.length === 0) return;
+      for (const url of trackedUrls) {
+        playlistCoverDecodedBytesRef.current.delete(url);
+      }
+      recomputePlaylistCoverDecodedStats();
+      musicLibraryService.discardCoverUrls(trackedUrls);
+    },
+    [recomputePlaylistCoverDecodedStats]
+  );
+
   useEffect(() => {
     const { changed, nextMap, releasedUrls } = pruneResolvedPlaylistCoverMap(
       resolvedPlaylistCoverMap,
@@ -1546,13 +1575,13 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     if (releasedUrls.length > 0) {
       const safeReleasedUrls = releasedUrls.filter((url) => !activePlaylistCoverUrlSet.has(url));
       if (safeReleasedUrls.length > 0) {
-        releasePlaylistCoverUrls(safeReleasedUrls);
+        discardPlaylistCoverUrls(safeReleasedUrls);
       }
     }
   }, [
     activePlaylistCoverUrlSet,
+    discardPlaylistCoverUrls,
     playlistCoverResolveTargetIdSet,
-    releasePlaylistCoverUrls,
     resolvedPlaylistCoverMap,
   ]);
 
@@ -1643,7 +1672,14 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   useEffect(() => {
     const nextUrls = new Set(activePlaylistCoverUrls);
     const previousUrls = activePlaylistCoverUrlsRef.current;
+    const urlsToRetain: string[] = [];
     const urlsToRelease: string[] = [];
+
+    for (const url of nextUrls) {
+      if (!previousUrls.has(url)) {
+        urlsToRetain.push(url);
+      }
+    }
 
     for (const url of previousUrls) {
       if (!nextUrls.has(url)) {
@@ -1651,6 +1687,9 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       }
     }
 
+    if (urlsToRetain.length > 0) {
+      musicLibraryService.retainCoverUrls(urlsToRetain);
+    }
     if (urlsToRelease.length > 0) {
       releasePlaylistCoverUrls(urlsToRelease);
     }
@@ -1661,10 +1700,11 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const releasePlaylistOverlayRuntimeResources = useCallback(
     (options?: { resetState?: boolean }) => {
       const urlsToRelease = new Set<string>(activePlaylistCoverUrlsRef.current);
+      const urlsToDiscard = new Set<string>();
       for (const url of Object.values(resolvedPlaylistCoverMapRef.current)) {
         const normalizedUrl = toNonEmptyString(url);
-        if (normalizedUrl) {
-          urlsToRelease.add(normalizedUrl);
+        if (normalizedUrl && !urlsToRelease.has(normalizedUrl)) {
+          urlsToDiscard.add(normalizedUrl);
         }
       }
 
@@ -1705,12 +1745,15 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       if (urlsToRelease.size > 0) {
         releasePlaylistCoverUrls(Array.from(urlsToRelease));
       }
+      if (urlsToDiscard.size > 0) {
+        discardPlaylistCoverUrls(Array.from(urlsToDiscard));
+      }
       if (playlistCoverDecodedBytesRef.current.size > 0) {
         playlistCoverDecodedBytesRef.current.clear();
         setPlaylistCoverDecodedStats({ entryCount: 0, totalBytes: 0 });
       }
     },
-    [audioService, releasePlaylistCoverUrls]
+    [audioService, discardPlaylistCoverUrls, releasePlaylistCoverUrls]
   );
 
   useEffect(() => {

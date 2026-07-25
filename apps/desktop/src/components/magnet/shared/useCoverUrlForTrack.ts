@@ -88,6 +88,7 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
     () => typeof document === 'undefined' || !document.hidden
   );
   const recentCoverUrlsRef = useRef<string[]>([]);
+  const retainedCoverUrlsRef = useRef<Set<string>>(new Set());
   const pendingReleaseUrlsRef = useRef<Set<string>>(new Set());
   const releaseTimerRef = useRef<number | null>(null);
 
@@ -170,13 +171,17 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
     const currentKey = key;
 
     void loadMusicLibraryService()
-      .then((service) => {
-        if (cancelled) return undefined;
-        return service.getCoverUrlForTrack(lookupTrack, { coverSizeHint, bypassRuntimePolicy });
-      })
-      .then((url) => {
+      .then(async (service) => {
         if (cancelled) return;
+        const url = await service.getCoverUrlForTrack(lookupTrack, {
+          coverSizeHint,
+          bypassRuntimePolicy,
+        });
         if (!isNonEmptyString(url)) return;
+        if (cancelled) {
+          service.discardCoverUrls([url]);
+          return;
+        }
         setResolved({ key: currentKey, url });
       })
       .catch(() => undefined);
@@ -210,18 +215,12 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
     }
 
     const toRelease = new Set<string>();
-    for (const url of recentCoverUrlsRef.current) {
-      if (typeof url === 'string' && url.trim()) {
-        toRelease.add(url.trim());
-      }
-    }
-    for (const url of pendingReleaseUrlsRef.current) {
-      if (typeof url === 'string' && url.trim()) {
-        toRelease.add(url.trim());
-      }
+    for (const url of retainedCoverUrlsRef.current) {
+      if (typeof url === 'string' && url.trim()) toRelease.add(url.trim());
     }
 
     recentCoverUrlsRef.current = [];
+    retainedCoverUrlsRef.current.clear();
     pendingReleaseUrlsRef.current.clear();
 
     if (toRelease.size > 0) {
@@ -271,6 +270,17 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
 
     recentCoverUrlsRef.current = nextRecent;
 
+    if (currentUrl && !retainedCoverUrlsRef.current.has(currentUrl)) {
+      void loadMusicLibraryService()
+        .then((service) => {
+          if (!recentCoverUrlsRef.current.includes(currentUrl)) return;
+          if (retainedCoverUrlsRef.current.has(currentUrl)) return;
+          service.retainCoverUrls([currentUrl]);
+          retainedCoverUrlsRef.current.add(currentUrl);
+        })
+        .catch(() => undefined);
+    }
+
     if (pendingReleaseUrlsRef.current.size === 0) return;
 
     if (releaseTimerRef.current != null) {
@@ -283,10 +293,11 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
         (url) => !recentCoverUrlsRef.current.includes(url)
       );
       pendingReleaseUrlsRef.current.clear();
+      const retainedToRelease = toRelease.filter((url) => retainedCoverUrlsRef.current.delete(url));
 
-      if (toRelease.length > 0) {
+      if (retainedToRelease.length > 0) {
         void loadMusicLibraryService()
-          .then((service) => service.releaseCoverUrls(toRelease))
+          .then((service) => service.releaseCoverUrls(retainedToRelease))
           .catch(() => undefined);
       }
     }, coverReleaseDelayMs);

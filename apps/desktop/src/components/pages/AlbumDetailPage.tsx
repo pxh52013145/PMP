@@ -99,7 +99,7 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
     items: ContextMenuItem[];
   } | null>(null);
   const tracksListRef = useRef<HTMLDivElement | null>(null);
-  const albumCoverBlobUrlRef = useRef<string>('');
+  const retainedAlbumCoverUrlRef = useRef<string>('');
 
   useEffect(() => {
     let cancelled = false;
@@ -145,7 +145,11 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
       setAlbumCover(isDisplayable ? url : undefined);
 
       void musicLibraryService.getCoverUrlForTrack(candidate).then((coverUrl) => {
-        if (!cancelled && coverUrl) setAlbumCover(coverUrl);
+        if (cancelled) {
+          if (coverUrl) musicLibraryService.discardCoverUrls([coverUrl]);
+          return;
+        }
+        if (coverUrl) setAlbumCover(coverUrl);
       });
     })().catch((error) => {
       if (!cancelled) {
@@ -166,22 +170,23 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
 
   useEffect(() => {
     const nextCoverUrl = typeof albumCover === 'string' ? albumCover.trim() : '';
-    const nextBlobUrl = nextCoverUrl.startsWith('blob:') ? nextCoverUrl : '';
-    const previousBlobUrl = albumCoverBlobUrlRef.current;
+    const previousCoverUrl = retainedAlbumCoverUrlRef.current;
 
-    if (previousBlobUrl && previousBlobUrl !== nextBlobUrl) {
-      musicLibraryService.releaseCoverUrls([previousBlobUrl]);
+    if (nextCoverUrl && previousCoverUrl !== nextCoverUrl) {
+      musicLibraryService.retainCoverUrls([nextCoverUrl]);
     }
-
-    albumCoverBlobUrlRef.current = nextBlobUrl;
+    if (previousCoverUrl && previousCoverUrl !== nextCoverUrl) {
+      musicLibraryService.releaseCoverUrls([previousCoverUrl]);
+    }
+    retainedAlbumCoverUrlRef.current = nextCoverUrl;
   }, [albumCover]);
 
   useEffect(() => {
     return () => {
-      const previousBlobUrl = albumCoverBlobUrlRef.current;
-      albumCoverBlobUrlRef.current = '';
-      if (previousBlobUrl) {
-        musicLibraryService.releaseCoverUrls([previousBlobUrl]);
+      const previousCoverUrl = retainedAlbumCoverUrlRef.current;
+      retainedAlbumCoverUrlRef.current = '';
+      if (previousCoverUrl) {
+        musicLibraryService.releaseCoverUrls([previousCoverUrl]);
       }
     };
   }, []);

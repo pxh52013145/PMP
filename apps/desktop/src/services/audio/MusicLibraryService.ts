@@ -356,8 +356,14 @@ export class MusicLibraryService {
   private scanProgressListeners: Set<(progress: ScanProgress) => void> = new Set();
   private isScanning: boolean = false;
   private coverUrlCache: Map<string, string> = new Map();
-  private coverBlobUrlCache: Map<string, { url: string; bytes: number }> = new Map();
+  private coverBlobUrlCache: Map<string, { url: string; bytes: number; leaseKey?: string }> = new Map();
   private coverBlobUrlTotalBytes: number = 0;
+  private coverLeaseKeyByCacheKey: Map<string, string> = new Map();
+  private coverUrlRetainCounts: Map<string, number> = new Map();
+  private coverUrlHandoffProtectedUntil: Map<string, number> = new Map();
+  private coverRuntimeBudgetTimer: number | null = null;
+  private pendingCoverUrlReleases: Set<string> = new Set();
+  private coverUrlReleaseTimer: number | null = null;
   private coverDecodedEstimateBytes: Map<string, number> = new Map();
   private coverDecodedEstimateTotalBytes: number = 0;
   private coverUrlInflight: Map<string, Promise<string | undefined>> = new Map();
@@ -373,6 +379,8 @@ export class MusicLibraryService {
   private readonly DEFAULT_COVER_BLOB_CACHE_MAX_BYTES = 4 * 1024 * 1024;
   private readonly DEFAULT_COVER_DECODED_ESTIMATE_MAX_ENTRIES = 72;
   private readonly DEFAULT_COVER_DECODED_ESTIMATE_MAX_BYTES = 12 * 1024 * 1024;
+  private readonly COVER_URL_HANDOFF_GRACE_MS = 800;
+  private readonly COVER_URL_RELEASE_GRACE_MS = 120;
 
   private COVER_URL_CACHE_MAX_ENTRIES = this.DEFAULT_COVER_URL_CACHE_MAX_ENTRIES;
   private ALBUM_COVER_URL_CACHE_MAX_ENTRIES = this.DEFAULT_ALBUM_COVER_URL_CACHE_MAX_ENTRIES;
@@ -382,6 +390,8 @@ export class MusicLibraryService {
   private COVER_DECODED_ESTIMATE_MAX_BYTES = this.DEFAULT_COVER_DECODED_ESTIMATE_MAX_BYTES;
 
   private currentCoverRuntimeCachePolicy: CoverRuntimeCachePolicy = 'default';
+  private coverRuntimePolicyBeforeVisibilityHidden: CoverRuntimeCachePolicy = 'default';
+  private coverVisibilityForcedHidden = false;
   private coverRuntimeEpoch = 0;
   private coverMaxEdgePx: number = 128;
   private nativeSourceBootstrapScheduled = false;
@@ -549,8 +559,18 @@ export class MusicLibraryService {
     if (typeof window === 'undefined') return;
 
     const onVisibilityChange = () => {
-      if (!document.hidden) return;
-      this.applyCoverRuntimeCachePolicy('hidden');
+      if (document.hidden) {
+        if (!this.coverVisibilityForcedHidden) {
+          this.coverRuntimePolicyBeforeVisibilityHidden = this.currentCoverRuntimeCachePolicy;
+          this.coverVisibilityForcedHidden = true;
+        }
+        this.applyCoverRuntimeCachePolicy('hidden');
+        return;
+      }
+
+      if (!this.coverVisibilityForcedHidden) return;
+      this.coverVisibilityForcedHidden = false;
+      this.applyCoverRuntimeCachePolicy(this.coverRuntimePolicyBeforeVisibilityHidden);
     };
 
     window.addEventListener('visibilitychange', onVisibilityChange);
@@ -699,6 +719,76 @@ export class MusicLibraryService {
     }
   }
 
+  private protectCoverUrlForHandoff(url: string): void {
+    const normalizedUrl = String(url || '').trim();
+    if (!normalizedUrl) return;
+    this.coverUrlHandoffProtectedUntil.set(
+      normalizedUrl,
+      Date.now() + this.COVER_URL_HANDOFF_GRACE_MS
+    );
+    this.scheduleRuntimeCacheBudgetEnforcement(this.COVER_URL_HANDOFF_GRACE_MS + 20);
+  }
+
+  private isCoverUrlProtected(url: string, nowMs: number = Date.now()): boolean {
+    const normalizedUrl = String(url || '').trim();
+    if (!normalizedUrl) return false;
+    if ((this.coverUrlRetainCounts.get(normalizedUrl) ?? 0) > 0) return true;
+
+    const protectedUntil = this.coverUrlHandoffProtectedUntil.get(normalizedUrl) ?? 0;
+    if (protectedUntil > nowMs) return true;
+    if (protectedUntil > 0) {
+      this.coverUrlHandoffProtectedUntil.delete(normalizedUrl);
+    }
+    return false;
+  }
+
+  private scheduleRuntimeCacheBudgetEnforcement(delayMs: number): void {
+    if (typeof window === 'undefined') return;
+    if (this.coverRuntimeBudgetTimer !== null) return;
+    this.coverRuntimeBudgetTimer = window.setTimeout(() => {
+      this.coverRuntimeBudgetTimer = null;
+      this.enforceRuntimeCacheBudgets();
+    }, Math.max(0, Math.floor(delayMs)));
+  }
+
+  retainCoverUrls(urls: string[]): void {
+    if (!Array.isArray(urls) || urls.length === 0) return;
+    for (const rawUrl of new Set(urls)) {
+      const url = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+      if (!url) continue;
+      this.coverUrlRetainCounts.set(url, (this.coverUrlRetainCounts.get(url) ?? 0) + 1);
+      this.coverUrlHandoffProtectedUntil.delete(url);
+      this.pendingCoverUrlReleases.delete(url);
+    }
+  }
+
+  private scheduleCoverUrlRelease(url: string): void {
+    this.pendingCoverUrlReleases.add(url);
+    this.coverUrlHandoffProtectedUntil.set(
+      url,
+      Date.now() + this.COVER_URL_RELEASE_GRACE_MS
+    );
+    if (typeof window === 'undefined' || this.coverUrlReleaseTimer !== null) return;
+
+    this.coverUrlReleaseTimer = window.setTimeout(() => {
+      this.coverUrlReleaseTimer = null;
+      const pendingUrls = Array.from(this.pendingCoverUrlReleases);
+      this.pendingCoverUrlReleases.clear();
+      for (const pendingUrl of pendingUrls) {
+        if ((this.coverUrlRetainCounts.get(pendingUrl) ?? 0) > 0) continue;
+        this.coverUrlHandoffProtectedUntil.delete(pendingUrl);
+        const removed = this.evictCoverUrlFromRuntimeCaches(pendingUrl, true);
+        if (!removed) {
+          const leaseKey = this.parseCoverKeyFromPmpUrl(pendingUrl);
+          if (leaseKey) {
+            this.releaseDesktopCoverLeases([leaseKey]);
+          }
+        }
+      }
+      this.enforceRuntimeCacheBudgets();
+    }, this.COVER_URL_RELEASE_GRACE_MS);
+  }
+
   private enforceRuntimeCacheBudgets(): void {
     this.pruneUrlCaches();
 
@@ -706,9 +796,14 @@ export class MusicLibraryService {
       this.coverBlobUrlTotalBytes > this.COVER_BLOB_CACHE_MAX_BYTES &&
       this.coverBlobUrlCache.size > 0
     ) {
-      const oldestKey = this.coverBlobUrlCache.keys().next().value as string | undefined;
-      if (!oldestKey) break;
-      this.evictCoverBlobCacheEntry(oldestKey);
+      const evictionCandidate = Array.from(this.coverBlobUrlCache.entries()).find(
+        ([, entry]) => !this.isCoverUrlProtected(entry.url)
+      );
+      if (!evictionCandidate) {
+        this.scheduleRuntimeCacheBudgetEnforcement(this.COVER_URL_HANDOFF_GRACE_MS + 20);
+        break;
+      }
+      this.evictCoverBlobCacheEntry(evictionCandidate[0]);
     }
 
     this.pruneCoverDecodedEstimateCacheByPolicy();
@@ -2569,19 +2664,18 @@ export class MusicLibraryService {
   private addCoverBlobUrlToCache(
     normalizedAudioPath: string,
     url: string,
-    bytes: number
+    bytes: number,
+    leaseKey: string
   ): void {
     const existing = this.coverBlobUrlCache.get(normalizedAudioPath);
     if (existing) {
-      this.coverBlobUrlCache.delete(normalizedAudioPath);
-      this.coverBlobUrlTotalBytes = Math.max(0, this.coverBlobUrlTotalBytes - existing.bytes);
-      this.forgetCoverDecodedEstimate(existing.url);
-      this.removeAlbumCoverUrlCacheEntriesByUrl(existing.url);
-      this.revokeObjectUrlIfNeeded(existing.url);
+      this.evictCoverBlobCacheEntry(normalizedAudioPath, true);
     }
 
-    this.coverBlobUrlCache.set(normalizedAudioPath, { url, bytes });
+    this.coverBlobUrlCache.set(normalizedAudioPath, { url, bytes, leaseKey });
+    this.coverLeaseKeyByCacheKey.set(normalizedAudioPath, leaseKey);
     this.coverBlobUrlTotalBytes += bytes;
+    this.protectCoverUrlForHandoff(url);
 
     this.enforceRuntimeCacheBudgets();
   }
@@ -2604,10 +2698,20 @@ export class MusicLibraryService {
     }
   }
 
-  private evictCoverBlobCacheEntry(cacheKey: string): void {
+  private evictCoverBlobCacheEntry(cacheKey: string, force: boolean = false): boolean {
     const blobEntry = this.coverBlobUrlCache.get(cacheKey);
     const cachedUrl = this.coverUrlCache.get(cacheKey);
+    const entryUrl = blobEntry?.url || cachedUrl || '';
+    if (!force && entryUrl && this.isCoverUrlProtected(entryUrl)) {
+      return false;
+    }
+
+    const leaseKey =
+      this.coverLeaseKeyByCacheKey.get(cacheKey) ||
+      blobEntry?.leaseKey ||
+      (cachedUrl ? this.parseCoverKeyFromPmpUrl(cachedUrl) : undefined);
     this.coverUrlCache.delete(cacheKey);
+    this.coverLeaseKeyByCacheKey.delete(cacheKey);
 
     if (blobEntry) {
       this.coverBlobUrlCache.delete(cacheKey);
@@ -2615,57 +2719,72 @@ export class MusicLibraryService {
       this.forgetCoverDecodedEstimate(blobEntry.url);
       this.removeAlbumCoverUrlCacheEntriesByUrl(blobEntry.url);
       this.revokeObjectUrlIfNeeded(blobEntry.url);
+      recordCoverBlobUrlsReleased(1);
 
       if (cachedUrl && cachedUrl !== blobEntry.url) {
         this.forgetCoverDecodedEstimate(cachedUrl);
         this.removeAlbumCoverUrlCacheEntriesByUrl(cachedUrl);
         this.revokeObjectUrlIfNeeded(cachedUrl);
       }
-      return;
-    }
-
-    if (cachedUrl) {
+    } else if (cachedUrl) {
       this.forgetCoverDecodedEstimate(cachedUrl);
       this.removeAlbumCoverUrlCacheEntriesByUrl(cachedUrl);
       this.revokeObjectUrlIfNeeded(cachedUrl);
     }
+
+    if (entryUrl && (this.coverUrlRetainCounts.get(entryUrl) ?? 0) === 0) {
+      this.coverUrlHandoffProtectedUntil.delete(entryUrl);
+    }
+    if (leaseKey) {
+      this.releaseDesktopCoverLeases([leaseKey]);
+    }
+    return Boolean(blobEntry || cachedUrl || leaseKey);
   }
 
-  private evictCoverUrlFromRuntimeCaches(url: string): void {
-    if (!url) return;
+  private evictCoverUrlFromRuntimeCaches(url: string, force: boolean = false): boolean {
+    if (!url) return false;
+    if (!force && this.isCoverUrlProtected(url)) return false;
 
     let removed = false;
 
     for (const [cacheKey, entry] of Array.from(this.coverBlobUrlCache.entries())) {
       if (entry.url !== url) continue;
-      removed = true;
-      this.evictCoverBlobCacheEntry(cacheKey);
+      removed = this.evictCoverBlobCacheEntry(cacheKey, force) || removed;
     }
 
     for (const [cacheKey, cached] of Array.from(this.coverUrlCache.entries())) {
       if (cached !== url) continue;
-      removed = true;
-      this.evictCoverBlobCacheEntry(cacheKey);
+      removed = this.evictCoverBlobCacheEntry(cacheKey, force) || removed;
     }
 
-    if (removed) return;
+    if (removed) return true;
 
     this.removeAlbumCoverUrlCacheEntriesByUrl(url);
     this.forgetCoverDecodedEstimate(url);
-    this.revokeObjectUrlIfNeeded(url);
+    return false;
   }
 
   private pruneUrlCaches(): void {
     while (this.coverUrlCache.size > this.COVER_URL_CACHE_MAX_ENTRIES) {
-      const oldestKey = this.coverUrlCache.keys().next().value as string | undefined;
-      if (!oldestKey) break;
-      this.evictCoverBlobCacheEntry(oldestKey);
+      const evictionCandidate = Array.from(this.coverUrlCache.entries()).find(
+        ([, url]) => !this.isCoverUrlProtected(url)
+      );
+      if (!evictionCandidate) {
+        this.scheduleRuntimeCacheBudgetEnforcement(this.COVER_URL_HANDOFF_GRACE_MS + 20);
+        break;
+      }
+      this.evictCoverBlobCacheEntry(evictionCandidate[0]);
     }
 
     while (this.albumCoverUrlCache.size > this.ALBUM_COVER_URL_CACHE_MAX_ENTRIES) {
-      const oldestKey = this.albumCoverUrlCache.keys().next().value as string | undefined;
-      if (!oldestKey) break;
-      this.albumCoverUrlCache.delete(oldestKey);
+      const evictionCandidate = Array.from(this.albumCoverUrlCache.entries()).find(
+        ([, url]) => !this.isCoverUrlProtected(url)
+      );
+      if (!evictionCandidate) {
+        this.scheduleRuntimeCacheBudgetEnforcement(this.COVER_URL_HANDOFF_GRACE_MS + 20);
+        break;
+      }
+      this.albumCoverUrlCache.delete(evictionCandidate[0]);
     }
   }
 
@@ -2749,13 +2868,16 @@ export class MusicLibraryService {
         (this.isPmpCoverUrl(cached) && !allowPmpCoverUrl) ||
         (this.isSessionOnlyCoverUrl(cached) && !canReuseSessionOnlyCachedUrl)
       ) {
-        this.coverUrlCache.delete(effectiveCacheKey);
+        this.evictCoverBlobCacheEntry(effectiveCacheKey, true);
       } else {
-        const cachedLeaseKey = this.parseCoverKeyFromPmpUrl(cached);
+        const cachedLeaseKey =
+          this.coverLeaseKeyByCacheKey.get(effectiveCacheKey) ||
+          this.parseCoverKeyFromPmpUrl(cached);
         if (cachedLeaseKey) {
           void this.touchDesktopCoverLeases([cachedLeaseKey]);
         }
         this.touchCoverBlobCache(effectiveCacheKey);
+        this.protectCoverUrlForHandoff(cached);
         markCoverLookupHit();
         return cached;
       }
@@ -2775,46 +2897,68 @@ export class MusicLibraryService {
     markCoverLookupMiss();
 
     const promise = (async () => {
-      const result = await invokeWithTelemetry<DesktopCoverLeaseRecord | null>('music_library_cover_lease', {
-        path: audioPath,
-        maxBytes: this.COVER_MAX_IMAGE_BYTES,
-        maxEdgePx: requestedEdgePx > 0 ? requestedEdgePx : undefined,
-      }, {
-        moduleId: 'music-library',
-        component: 'MusicLibraryService',
-        event: 'music-library.cover.lease',
-      });
+      let acquiredLeaseKey = '';
+      let resolvedUrl = '';
+      let cacheOwnsLease = false;
+      try {
+        const result = await invokeWithTelemetry<DesktopCoverLeaseRecord | null>('music_library_cover_lease', {
+          path: audioPath,
+          maxBytes: this.COVER_MAX_IMAGE_BYTES,
+          maxEdgePx: requestedEdgePx > 0 ? requestedEdgePx : undefined,
+        }, {
+          moduleId: 'music-library',
+          component: 'MusicLibraryService',
+          event: 'music-library.cover.lease',
+        });
 
-      if (!result) return undefined;
+        if (!result) return undefined;
+        acquiredLeaseKey = String(result.key || '').trim();
 
-      const coverPath = String(result.path || '').trim();
-      if (!coverPath) return undefined;
+        const coverPath = String(result.path || '').trim();
+        if (!coverPath || !acquiredLeaseKey) return undefined;
 
-      const resolvedUrl = await this.buildResolvedCoverUrlForRuntime(
-        coverPath,
-        String(result.key || ''),
-        coverSizeHint,
-        typeof result.mediaType === 'string' ? result.mediaType : null
-      );
-      if (!resolvedUrl) return undefined;
-      if (coverRuntimeEpoch !== this.coverRuntimeEpoch) return undefined;
+        resolvedUrl =
+          (await this.buildResolvedCoverUrlForRuntime(
+            coverPath,
+            acquiredLeaseKey,
+            coverSizeHint,
+            typeof result.mediaType === 'string' ? result.mediaType : null
+          )) || '';
+        if (!resolvedUrl) return undefined;
+        if (coverRuntimeEpoch !== this.coverRuntimeEpoch) return undefined;
 
-      const url = resolvedUrl;
-      this.coverUrlCache.set(effectiveCacheKey, url);
-      if (url.startsWith('blob:')) {
-        this.addCoverBlobUrlToCache(effectiveCacheKey, url, result.size);
-      }
-      this.pruneUrlCaches();
-
-      const albumKey = this.albumKeyForTrack(track);
-      if (albumKey) {
-        this.albumCoverUrlCache.set(`${albumKey}|edge=${requestedEdgePx}`, url);
+        const url = resolvedUrl;
+        if (
+          this.coverUrlCache.has(effectiveCacheKey) ||
+          this.coverBlobUrlCache.has(effectiveCacheKey) ||
+          this.coverLeaseKeyByCacheKey.has(effectiveCacheKey)
+        ) {
+          this.evictCoverBlobCacheEntry(effectiveCacheKey, true);
+        }
+        this.coverUrlCache.set(effectiveCacheKey, url);
+        this.coverLeaseKeyByCacheKey.set(effectiveCacheKey, acquiredLeaseKey);
+        this.protectCoverUrlForHandoff(url);
+        if (url.startsWith('blob:')) {
+          this.addCoverBlobUrlToCache(effectiveCacheKey, url, result.size, acquiredLeaseKey);
+        }
+        cacheOwnsLease = true;
         this.pruneUrlCaches();
+
+        const albumKey = this.albumKeyForTrack(track);
+        if (albumKey) {
+          this.albumCoverUrlCache.set(`${albumKey}|edge=${requestedEdgePx}`, url);
+          this.pruneUrlCaches();
+        }
+
+        await this.maybeUpdateTrackCoverInDB(audioPath, url, acquiredLeaseKey);
+
+        return url;
+      } finally {
+        if (!cacheOwnsLease && acquiredLeaseKey) {
+          this.revokeObjectUrlIfNeeded(resolvedUrl);
+          this.releaseDesktopCoverLeases([acquiredLeaseKey]);
+        }
       }
-
-      await this.maybeUpdateTrackCoverInDB(audioPath, url, result.key);
-
-      return url;
     })()
       .catch((error) => {
         this.telemetry.warn('music-library.cover.lease.failed', {
@@ -2829,12 +2973,15 @@ export class MusicLibraryService {
         return undefined;
       })
       .finally(() => {
-        this.coverUrlInflight.delete(effectiveCacheKey);
+        if (this.coverUrlInflight.get(effectiveCacheKey) === promise) {
+          this.coverUrlInflight.delete(effectiveCacheKey);
+        }
       });
 
     this.coverUrlInflight.set(effectiveCacheKey, promise);
     const direct = await promise;
     if (direct) return direct;
+    if (coverRuntimeEpoch !== this.coverRuntimeEpoch) return undefined;
 
     const fallbackExistingUrl =
       normalizedExistingUrl && (!this.isPmpCoverUrl(normalizedExistingUrl) || allowPmpCoverUrl)
@@ -2860,6 +3007,7 @@ export class MusicLibraryService {
       if (albumLeaseKey) {
         void this.touchDesktopCoverLeases([albumLeaseKey]);
       }
+      this.protectCoverUrlForHandoff(cachedAlbum);
       return cachedAlbum;
     }
 
@@ -2872,12 +3020,14 @@ export class MusicLibraryService {
       const artist = String(track.artist || '').trim();
 
       const candidates = await this.getTracksByAlbum(album);
+      if (coverRuntimeEpoch !== this.coverRuntimeEpoch) return undefined;
       const filtered = candidates
         .filter((t) => t && (t.filePath || t.path))
         .filter((t) => (artist ? String(t.artist || '').trim() === artist : true))
         .slice(0, 12);
 
       for (const candidate of filtered) {
+        if (coverRuntimeEpoch !== this.coverRuntimeEpoch) return undefined;
         if (candidate.id === track.id) continue;
         const url = await this.getCoverUrlForTrack(candidate, {
           allowAlbumFallback: false,
@@ -2885,6 +3035,10 @@ export class MusicLibraryService {
           bypassRuntimePolicy,
         });
         if (url) {
+          if (coverRuntimeEpoch !== this.coverRuntimeEpoch) {
+            this.discardCoverUrls([url]);
+            return undefined;
+          }
           this.albumCoverUrlCache.set(albumCacheKey, url);
           this.pruneUrlCaches();
           return url;
@@ -2905,7 +3059,9 @@ export class MusicLibraryService {
         return undefined;
       })
       .finally(() => {
-        this.albumCoverUrlInflight.delete(albumCacheKey);
+        if (this.albumCoverUrlInflight.get(albumCacheKey) === albumPromise) {
+          this.albumCoverUrlInflight.delete(albumCacheKey);
+        }
       });
 
     this.albumCoverUrlInflight.set(albumCacheKey, albumPromise);
@@ -2949,34 +3105,31 @@ export class MusicLibraryService {
 
   clearCoverRuntimeCaches(): void {
     this.coverRuntimeEpoch += 1;
-    const releasableLeaseKeys = Array.from(
-      new Set(
-        [...this.coverUrlCache.values(), ...this.albumCoverUrlCache.values()]
-          .map((url) => this.parseCoverKeyFromPmpUrl(url))
-          .filter((key): key is string => Boolean(key))
-      )
-    );
+    this.coverUrlInflight.clear();
+    this.albumCoverUrlInflight.clear();
 
-    for (const entry of this.coverBlobUrlCache.values()) {
-      try {
-        URL.revokeObjectURL(entry.url);
-      } catch {
-        // best-effort
+    const cacheKeys = new Set([
+      ...this.coverUrlCache.keys(),
+      ...this.coverBlobUrlCache.keys(),
+      ...this.coverLeaseKeyByCacheKey.keys(),
+    ]);
+    for (const cacheKey of cacheKeys) {
+      this.evictCoverBlobCacheEntry(cacheKey);
+    }
+
+    for (const [albumKey, url] of Array.from(this.albumCoverUrlCache.entries())) {
+      if (!this.isCoverUrlProtected(url)) {
+        this.albumCoverUrlCache.delete(albumKey);
       }
     }
 
-    this.coverUrlCache.clear();
-    this.coverBlobUrlCache.clear();
-    this.coverUrlInflight.clear();
-    this.albumCoverUrlCache.clear();
-    this.albumCoverUrlInflight.clear();
-    this.coverBlobUrlTotalBytes = 0;
-    this.coverDecodedEstimateBytes.clear();
-    this.coverDecodedEstimateTotalBytes = 0;
-
-    if (releasableLeaseKeys.length > 0) {
-      this.releaseDesktopCoverLeases(releasableLeaseKeys);
+    for (const url of Array.from(this.coverDecodedEstimateBytes.keys())) {
+      if (!this.isCoverUrlProtected(url)) {
+        this.forgetCoverDecodedEstimate(url);
+      }
     }
+
+    this.enforceRuntimeCacheBudgets();
   }
 
   releaseLibraryViewRuntimeMemory(options?: {
@@ -3015,33 +3168,34 @@ export class MusicLibraryService {
     if (!Array.isArray(urls) || urls.length === 0) return;
 
     const uniqueUrls = new Set<string>();
-    const blobUrls = new Set<string>();
-    const leaseKeys = new Set<string>();
     for (const url of urls) {
       if (typeof url !== 'string') continue;
       const trimmed = url.trim();
       if (!trimmed) continue;
-      if (trimmed.startsWith('blob:')) {
-        blobUrls.add(trimmed);
-      }
-      const leaseKey = this.parseCoverKeyFromPmpUrl(trimmed);
-      if (leaseKey) {
-        leaseKeys.add(leaseKey);
-      }
       uniqueUrls.add(trimmed);
     }
 
     if (uniqueUrls.size === 0) return;
-    if (blobUrls.size > 0) {
-      recordCoverBlobUrlsReleased(blobUrls.size);
-    }
 
     for (const url of uniqueUrls) {
-      this.evictCoverUrlFromRuntimeCaches(url);
+      const retainedCount = this.coverUrlRetainCounts.get(url) ?? 0;
+      if (retainedCount > 1) {
+        this.coverUrlRetainCounts.set(url, retainedCount - 1);
+        continue;
+      }
+      if (retainedCount === 1) {
+        this.coverUrlRetainCounts.delete(url);
+      }
+      this.scheduleCoverUrlRelease(url);
     }
+  }
 
-    if (leaseKeys.size > 0) {
-      this.releaseDesktopCoverLeases(Array.from(leaseKeys));
+  discardCoverUrls(urls: string[]): void {
+    if (!Array.isArray(urls) || urls.length === 0) return;
+    for (const rawUrl of new Set(urls)) {
+      const url = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+      if (!url || (this.coverUrlRetainCounts.get(url) ?? 0) > 0) continue;
+      this.scheduleCoverUrlRelease(url);
     }
   }
 
