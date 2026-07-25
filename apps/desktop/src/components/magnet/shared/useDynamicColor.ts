@@ -55,9 +55,9 @@ function buildSamplingTarget(
   };
 }
 
-async function releaseMusicLibraryCoverUrls(urls: string[]): Promise<void> {
+async function discardUnretainedMusicLibraryCoverUrls(urls: string[]): Promise<void> {
   const { getMusicLibraryService } = await import('../../../services/audio/MusicLibraryService');
-  getMusicLibraryService().releaseCoverUrls(urls);
+  getMusicLibraryService().discardCoverUrls(urls);
 }
 
 export function useDynamicColor(
@@ -88,7 +88,7 @@ export function useDynamicColor(
       setColors(value);
 
       if (releaseAfterExtract && target.url.toLowerCase().startsWith('pmp://cover/')) {
-        void releaseMusicLibraryCoverUrls([target.url]).catch(() => undefined);
+        void discardUnretainedMusicLibraryCoverUrls([target.url]).catch(() => undefined);
       }
     });
 
