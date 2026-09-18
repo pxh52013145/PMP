@@ -2180,8 +2180,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       clearModuleCache();
       clearSharedVisibilityObservers();
-      currentCoverPolicyRef.current = 'hidden';
-      musicLibraryService.applyCoverRuntimeCachePolicy('hidden');
+      currentCoverPolicyRef.current = 'default';
       musicLibraryService.releaseLibraryViewRuntimeMemory({
         closeDatabase: options?.closeDatabase,
         resetSchemaCache: options?.resetSchemaCache,
@@ -3499,7 +3498,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     if (librarySourceMode !== 'stable') return;
 
-    updateCoverRuntimePolicy('hidden');
+    updateCoverRuntimePolicy('critical');
 
     void loadStableLibraryEntries();
 
@@ -3674,7 +3673,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     if (librarySourceMode !== 'local') {
 
-      updateCoverRuntimePolicy('hidden');
+      updateCoverRuntimePolicy('critical');
 
       return;
 
@@ -3684,7 +3683,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     if (baseView !== 'card') {
 
-      updateCoverRuntimePolicy('hidden');
+      updateCoverRuntimePolicy('critical');
 
       return;
 
