@@ -5,6 +5,7 @@ import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
 import { musicLibraryService } from '../../services/audio/MusicLibraryService';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
 import { useT } from '../../i18n';
+import { formatAlbumTrackNumber } from '../../modules/music-library/albumOrder';
 import './AlbumDetailPage.css';
 
 interface AlbumDetailPageProps {
@@ -421,7 +422,7 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
                 onContextMenu={(e) => handleTrackContextMenu(track, index, e)}
                 title={t('pages.album.trackItem.titleHint')}
               >
-                <div className="track-number">{index + 1}</div>
+                <div className="track-number">{formatAlbumTrackNumber(track, index)}</div>
                 <div className="track-title">{track.title}</div>
                 <div className="track-duration">{formatDuration(track.duration)}</div>
                 <div className="track-actions">

@@ -116,6 +116,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 68,
     maxWidthPx: 120,
     className: 'music-library-track-meta music-library-track-meta-number',
+    sortField: 'trackNumber',
   },
   discNumber: {
     headerKey: 'pages.music-library.columns.discNumber',
@@ -123,6 +124,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 68,
     maxWidthPx: 120,
     className: 'music-library-track-meta music-library-track-meta-number',
+    sortField: 'discNumber',
   },
   composer: {
     headerKey: 'pages.music-library.columns.composer',

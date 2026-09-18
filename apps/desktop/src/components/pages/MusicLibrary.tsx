@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef,
 import { createPortal } from 'react-dom';
 
 import { Track } from '../../services/audio';
+import { createAlbumSortRules, formatAlbumTrackNumber } from '../../modules/music-library/albumOrder';
 
 import {
 
@@ -255,6 +256,7 @@ import {
   clampNativeBaseWindowRequestToTotal,
   nativeBaseTrackWindowCoversRequest,
 } from '../../modules/music-library/nativeBaseWindow';
+import { useNativeBaseWindowLoader } from '../../modules/music-library/useNativeBaseWindowLoader';
 
 
 import {
@@ -1960,6 +1962,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   const [activeBaseFilterGroupId, setActiveBaseFilterGroupId] = useState<string | null>(null);
 
+  const [quickBaseQueryRestore, setQuickBaseQueryRestore] = useState<MusicLibraryBaseQuery | null>(null);
+
   const [baseGroupByRules, setBaseGroupByRules] = useState<MusicLibraryBaseGroupRule[]>([]);
 
   const [baseSortRules, setBaseSortRules] = useState<MusicLibraryBaseSortRule[]>([]);
@@ -1987,10 +1991,18 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     [baseQueryState]
   );
 
+  const activeBaseFilterCount = baseFilterGroups.reduce((count, group) => count + group.filters.length, 0);
+  const activeAlbumName = baseFilterGroups.length === 1 &&
+    baseFilterGroups[0].filters.length === 1 &&
+    baseFilterGroups[0].filters[0].field === 'album' &&
+    baseFilterGroups[0].filters[0].operator === 'equals'
+      ? baseFilterGroups[0].filters[0].value?.trim() ?? ''
+      : '';
+  const isAlbumView = activeAlbumName.length > 0;
+
   const shouldUseNativeBaseQuery =
     librarySourceMode === 'local' &&
-    isTauriRuntime() &&
-    hasActiveBaseQuery;
+    isTauriRuntime();
 
   const shouldUseWebFallbackBaseQuery =
 
@@ -2007,8 +2019,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     !isTauriRuntime();
 
   const shouldUseNativeBaseWindowedQuery =
-    shouldUseNativeBaseQuery &&
-    baseGroupByRules.length === 0;
+    shouldUseNativeBaseQuery && baseGroupByRules.length === 0;
 
   const [collapsedTrackGroupKeys, setCollapsedTrackGroupKeys] = useState<Set<string>>(() => new Set());
 
@@ -2054,7 +2065,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   const nativeBaseTrackLoadingRef = useRef(false);
 
-  const nativeBaseQueryKeyRef = useRef('');
+  const [nativeBaseQueryError, setNativeBaseQueryError] = useState<string | null>(null);
+  const nativeBaseQueryGenerationRef = useRef(0);
 
   const nativeBaseTracksRef = useRef<Track[] | null>(null);
 
@@ -2080,7 +2092,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     hasMoreTracksRef.current = false;
     nativeBaseTrackNextOffsetRef.current = 0;
     nativeBaseTrackLoadingRef.current = false;
-    nativeBaseQueryKeyRef.current = '';
+    nativeBaseQueryGenerationRef.current += 1;
+    setNativeBaseQueryError(null);
     nativeBaseTracksRef.current = null;
     nativeBaseTrackWindowOffsetRef.current = 0;
     hasMoreNativeBaseTracksRef.current = false;
@@ -2126,7 +2139,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const resetNativeBaseTrackPages = useCallback(() => {
     nativeBaseTrackNextOffsetRef.current = 0;
     nativeBaseTrackLoadingRef.current = false;
-    nativeBaseQueryKeyRef.current = '';
+    nativeBaseQueryGenerationRef.current += 1;
+    setNativeBaseQueryError(null);
     nativeBaseTracksRef.current = null;
     nativeBaseTrackWindowOffsetRef.current = 0;
     hasMoreNativeBaseTracksRef.current = false;
@@ -2409,7 +2423,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       const reset = options?.reset === true;
 
-      const requestKey = nativeBaseQueryKey;
+      const generation = nativeBaseQueryGenerationRef.current;
 
       const offset =
         typeof options?.offset === 'number' && Number.isFinite(options.offset)
@@ -2439,8 +2453,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       nativeBaseTrackLoadingRef.current = true;
 
-      nativeBaseQueryKeyRef.current = requestKey;
-
       setIsNativeBaseTracksLoading(true);
 
 
@@ -2465,7 +2477,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-        if (nativeBaseQueryKeyRef.current !== requestKey) {
+        if (nativeBaseQueryGenerationRef.current !== generation) {
 
           return false;
 
@@ -2473,7 +2485,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-        const rows = page?.tracks ?? [];
+        if (!page) {
+          setNativeBaseQueryError(t('pages.music-library.error.loadTracksFailed'));
+          return false;
+        }
+
+        setNativeBaseQueryError(null);
+
+        const rows = page.tracks;
 
         const nextTotal =
 
@@ -2522,7 +2541,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       } finally {
 
-        if (nativeBaseQueryKeyRef.current === requestKey) {
+        if (nativeBaseQueryGenerationRef.current === generation) {
 
           nativeBaseTrackLoadingRef.current = false;
 
@@ -2540,13 +2559,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       isOpen,
 
-      nativeBaseQueryKey,
-
       nativeBaseSearchQuery,
 
       shouldUseNativeBaseQuery,
 
       shouldUseNativeBaseWindowedQuery,
+
+      t,
 
     ]
 
@@ -2604,8 +2623,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     scheduleTrackChunkLoad,
     baseView,
-    shouldUseNativeBaseQuery,
-    shouldUseNativeBaseWindowedQuery,
+      shouldUseNativeBaseQuery,
+      shouldUseNativeBaseWindowedQuery,
 
   ]);
   const handleMainScroll = useCallback(() => {
@@ -3046,13 +3065,16 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       nativeBaseTrackLoadingRef.current = false;
 
-      nativeBaseQueryKeyRef.current = nativeBaseQueryKey;
+      nativeBaseQueryGenerationRef.current += 1;
+      setNativeBaseQueryError(null);
 
       nativeBaseTracksRef.current = [];
+      nativeBaseTrackWindowOffsetRef.current = 0;
 
       hasMoreNativeBaseTracksRef.current = false;
 
       setNativeBaseTracks([]);
+      setNativeBaseTrackWindowOffset(0);
 
       setNativeBaseTracksTotal(null);
 
@@ -3073,8 +3095,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     loadLibraryData,
 
     loadNativeBaseTrackChunk,
-
-    nativeBaseQueryKey,
 
     resetLoadedTrackPages,
 
@@ -3304,6 +3324,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       setSearchQuery('');
 
+      if (quickBaseQueryRestore) {
+        setBaseGroupByRules(quickBaseQueryRestore.groupByRules);
+        setBaseSortRules(quickBaseQueryRestore.sortRules);
+        setQuickBaseQueryRestore(null);
+      }
+
 
 
       if (searchDebounceTimerRef.current != null) {
@@ -3336,8 +3362,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         releaseMusicLibraryRuntimeResources();
 
         searchTokenRef.current += 1;
-
-        void resetLibraryDataFromStorage();
 
         return;
 
@@ -3393,7 +3417,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
  
       releaseStableLibraryViewState,
  
-      resetLibraryDataFromStorage,
+      quickBaseQueryRestore,
 
       viewMode,
 
@@ -3583,6 +3607,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       libraryLoadTokenRef.current += 1;
       stableLoadTokenRef.current += 1;
       searchTokenRef.current += 1;
+      nativeBaseQueryGenerationRef.current += 1;
       releaseMusicLibraryRuntimeResources({
         closeDatabase: true,
         resetSchemaCache: true,
@@ -4079,17 +4104,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     persistMusicLibraryBaseState<LocalTrackColumnConfig>({
 
-      query: {
-
-        filterOperator: baseFilterJoinOperator,
-
-        filterGroups: baseFilterGroups,
-
-        groupByRules: baseGroupByRules,
-
-        sortRules: baseSortRules,
-
-      },
+      query: quickBaseQueryRestore ?? baseQueryState,
 
       viewMode: baseView,
 
@@ -4101,13 +4116,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   }, [
 
-    baseFilterGroups,
-
-    baseFilterJoinOperator,
-
-    baseGroupByRules,
-
-    baseSortRules,
+    baseQueryState,
+    quickBaseQueryRestore,
 
     baseView,
 
@@ -5599,6 +5609,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   const handleClearBaseFilters = useCallback(() => {
 
+    if (quickBaseQueryRestore) {
+      setBaseGroupByRules(quickBaseQueryRestore.groupByRules);
+      setBaseSortRules(quickBaseQueryRestore.sortRules);
+      setQuickBaseQueryRestore(null);
+    }
+
     const emptyFilterState = createMusicLibraryBaseEmptyFilterState();
 
     setBaseFilterJoinOperator(emptyFilterState.filterJoinOperator);
@@ -5609,15 +5625,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     setBaseFilterValue('');
 
-  }, []);
-
-
+  }, [quickBaseQueryRestore]);
 
   const handleApplyQuickBaseFilter = useCallback((field: MusicLibraryBaseField, value: string) => {
 
     const quickFilterState = createMusicLibraryBaseQuickFilterState(field, value);
 
     if (!quickFilterState) return;
+
+    setQuickBaseQueryRestore((previous) => previous ?? baseQueryState);
 
 
 
@@ -5627,7 +5643,22 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     setActiveBaseFilterGroupId(quickFilterState.activeFilterGroupId);
 
-  }, []);
+    if (field === 'album') {
+      setBaseGroupByRules([]);
+      setBaseSortRules(createAlbumSortRules());
+    }
+
+  }, [baseQueryState]);
+
+  useEffect(() => {
+    if (isOpen || !quickBaseQueryRestore) return;
+    setBaseFilterJoinOperator(quickBaseQueryRestore.filterOperator);
+    setBaseFilterGroups(quickBaseQueryRestore.filterGroups);
+    setActiveBaseFilterGroupId(quickBaseQueryRestore.filterGroups[0]?.id ?? null);
+    setBaseGroupByRules(quickBaseQueryRestore.groupByRules);
+    setBaseSortRules(quickBaseQueryRestore.sortRules);
+    setQuickBaseQueryRestore(null);
+  }, [isOpen, quickBaseQueryRestore]);
   useEffect(() => {
 
     if (!isOpen || !shouldUseNativeBaseQuery) {
@@ -5637,6 +5668,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       return;
 
     }
+
+    if (!localTrackColumnsLoaded) return;
 
     libraryLoadTokenRef.current += 1;
 
@@ -5648,7 +5681,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     nativeBaseTrackLoadingRef.current = false;
 
-    nativeBaseQueryKeyRef.current = nativeBaseQueryKey;
+    nativeBaseQueryGenerationRef.current += 1;
+    setNativeBaseQueryError(null);
 
     nativeBaseTracksRef.current = [];
     nativeBaseTrackWindowOffsetRef.current = 0;
@@ -5677,6 +5711,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   }, [
 
     isOpen,
+
+    localTrackColumnsLoaded,
 
     loadNativeBaseTrackChunk,
 
@@ -5749,50 +5785,37 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   ]);
 
-  const nativeBaseTrackWindowMatchesRequest = useMemo(() => {
-    if (!shouldUseNativeBaseWindowedQuery || !nativeBaseWindowRequest) {
-      return true;
-    }
+  // A pending viewport request does not invalidate the loaded page. Keep its
+  // rows, total and actual offset together until the replacement arrives.
+  const hasUsableNativeBaseTracks =
+    shouldUseNativeBaseQuery &&
+    nativeBaseTracks !== null &&
+    (nativeBaseTracks.length > 0 || nativeBaseTracksTotal === 0);
 
-    return nativeBaseTrackWindowCoversRequest({
-      currentOffset: nativeBaseTrackWindowOffset,
-      currentLength: nativeBaseTracks?.length ?? 0,
-      request: nativeBaseWindowRequest,
-      total: nativeBaseTracksTotal,
-    });
-  }, [
-    nativeBaseTrackWindowOffset,
-    nativeBaseTracks,
-    nativeBaseTracksTotal,
-    nativeBaseWindowRequest,
-    shouldUseNativeBaseWindowedQuery,
-  ]);
-
-  const nativeBaseTrackDisplayOffset = shouldUseNativeBaseWindowedQuery
-    ? nativeBaseTrackWindowMatchesRequest
+  const nativeBaseTrackDisplayOffset =
+    shouldUseNativeBaseWindowedQuery && hasUsableNativeBaseTracks
       ? nativeBaseTrackWindowOffset
-      : (nativeBaseWindowRequest?.offset ?? nativeBaseTrackWindowOffset)
-    : 0;
-
-  const nativeBaseTracksForRender = useMemo(() => {
-    if (!nativeBaseTracks) return null;
-    if (!shouldUseNativeBaseWindowedQuery) return nativeBaseTracks;
-    return nativeBaseTrackWindowMatchesRequest ? nativeBaseTracks : [];
-  }, [nativeBaseTracks, nativeBaseTrackWindowMatchesRequest, shouldUseNativeBaseWindowedQuery]);
-
-
+      : 0;
 
   const filteredTracks = useMemo(() => {
 
-    if (nativeBaseTracksForRender) {
+    if (hasUsableNativeBaseTracks && nativeBaseTracks) {
 
-      return nativeBaseTracksForRender;
+      return nativeBaseTracks;
 
     }
 
-    return shouldUseWebFallbackBaseQuery ? applyMusicLibraryBaseQuery(tracks, baseQueryState) : tracks;
+    return hasActiveBaseQuery
+      ? applyMusicLibraryBaseQuery(tracks, baseQueryState)
+      : tracks;
 
-  }, [baseQueryState, nativeBaseTracksForRender, shouldUseWebFallbackBaseQuery, tracks]);
+  }, [
+    baseQueryState,
+    hasActiveBaseQuery,
+    hasUsableNativeBaseTracks,
+    nativeBaseTracks,
+    tracks,
+  ]);
   const sortedStableEntries = useMemo(() => {
 
     return [...stableEntries].sort((a, b) => {
@@ -5864,7 +5887,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-  const isUsingNativeBaseTracks = nativeBaseTracks != null;
+  const isUsingNativeBaseTracks = hasUsableNativeBaseTracks;
 
   const hasMoreVisibleTrackSource = isUsingNativeBaseTracks
 
@@ -5896,11 +5919,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
   const filteredTracksTotal =
-
-    shouldUseNativeBaseQuery && nativeBaseTracksTotal !== null
-
+    hasUsableNativeBaseTracks && nativeBaseTracksTotal !== null
       ? nativeBaseTracksTotal
-
       : filteredTracks.length;
 
 
@@ -6013,21 +6033,20 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     );
 
-    const end = Math.min(
-
+    const safeStart =
+      virtualizedTrackSourceRows.length > 0 && start >= virtualizedTrackSourceRows.length ? 0 : start;
+    const safeEnd = Math.min(
       virtualizedTrackSourceRows.length,
-
-      start + visibleRows + TRACK_WINDOW_OVERSCAN_ROWS * 2
-
+      safeStart + visibleRows + TRACK_WINDOW_OVERSCAN_ROWS * 2
     );
 
     const visibleWindow = sliceMusicLibraryGroupedRows({
 
       rows: virtualizedTrackSourceRows,
 
-      start,
+      start: safeStart,
 
-      end,
+      end: safeEnd,
 
     });
 
@@ -6061,56 +6080,17 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   ]);
 
-  useEffect(() => {
-
-    if (!isOpen || !shouldUseNativeBaseWindowedQuery || !nativeBaseWindowRequest) {
-
-      return;
-
-    }
-
-    if (nativeBaseTracksTotal === 0) {
-      return;
-    }
-
-    const currentOffset = nativeBaseTrackWindowOffsetRef.current;
-    const currentLength = nativeBaseTracksRef.current?.length ?? 0;
-    if (
-      nativeBaseTrackWindowCoversRequest({
-        currentOffset,
-        currentLength,
-        request: nativeBaseWindowRequest,
-        total: nativeBaseTracksTotal,
-      })
-    ) {
-
-      return;
-
-    }
-
-    void loadNativeBaseTrackChunk({
-      offset: nativeBaseWindowRequest.offset,
-      limit: nativeBaseWindowRequest.limit,
-      reset: currentLength === 0 && currentOffset === 0,
-    });
-
-  }, [
-
-    isOpen,
-
-    loadNativeBaseTrackChunk,
-
-    nativeBaseQueryKey,
-
-    nativeBaseWindowRequest,
-
-    nativeBaseTracksTotal,
-
-    shouldUseNativeBaseWindowedQuery,
-
-  ]);
-
-
+  useNativeBaseWindowLoader({
+    enabled: isOpen && localTrackColumnsLoaded && shouldUseNativeBaseWindowedQuery && !nativeBaseQueryError,
+    queryKey: nativeBaseQueryKey,
+    request: nativeBaseWindowRequest,
+    total: nativeBaseTracksTotal,
+    tracksRef: nativeBaseTracksRef,
+    offsetRef: nativeBaseTrackWindowOffsetRef,
+    loadingRef: nativeBaseTrackLoadingRef,
+    isLoading: isNativeBaseTracksLoading,
+    load: loadNativeBaseTrackChunk,
+  });
 
   const cardVirtualLayout = useMemo(
 
@@ -6183,11 +6163,16 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const isNativeBaseTrackWindowStale =
     shouldUseNativeBaseWindowedQuery &&
     nativeBaseWindowRequest !== null &&
-    !nativeBaseTrackWindowMatchesRequest;
+    !nativeBaseTrackWindowCoversRequest({
+      currentOffset: nativeBaseTrackWindowOffset,
+      currentLength: nativeBaseTracks?.length ?? 0,
+      request: nativeBaseWindowRequest,
+      total: nativeBaseTracksTotal,
+    });
 
-  const isVisibleTrackSourceLoading = isUsingNativeBaseTracks
+  const isVisibleTrackSourceLoading = shouldUseNativeBaseQuery
 
-    ? isNativeBaseTracksLoading || isNativeBaseTrackWindowStale
+    ? !nativeBaseQueryError && (isNativeBaseTracksLoading || isNativeBaseTrackWindowStale)
     : isTrackChunkLoading;
 
   const showTrackLoadHint = isUsingNativeBaseTracks
@@ -8691,13 +8676,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               <button
 
-                className={`music-library-btn ${showBaseFilterPanel ? 'is-active' : ''}`}
+                className={`music-library-btn ${showBaseFilterPanel || activeBaseFilterCount > 0 ? 'is-active' : ''}`}
 
                 onClick={() => toggleBaseControlPanel('filter')}
 
               >
 
                 {t('pages.music-library.base.filterButton')}
+                {activeBaseFilterCount > 0 && ` (${activeBaseFilterCount})`}
 
               </button>
 
@@ -9602,6 +9588,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
           </button>
 
+          {isAlbumView && (
+            <span className="music-library-current-album" title={activeAlbumName}>
+              {t('pages.music-library.currentAlbum', { album: activeAlbumName })}
+            </span>
+          )}
+
         </div>
 
       )}
@@ -9929,7 +9921,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           >
             <div className="music-library-main-scroll" ref={mainScrollRef}>
 
-            {isLibraryStatsLoaded && libraryStats.totalTracks === 0 ? (
+            {nativeBaseQueryError ? (
+              <div className="music-library-empty" role="alert">
+                <div className="music-library-empty-text">{nativeBaseQueryError}</div>
+                <button className="music-library-btn" onClick={() => void reloadCurrentLocalTrackSource()}>
+                  {t('common.action.refresh')}
+                </button>
+              </div>
+            ) : isLibraryStatsLoaded && libraryStats.totalTracks === 0 ? (
 
               <div className="music-library-empty">
 
@@ -9949,6 +9948,17 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               <>
 
+              {filteredTracks.length === 0 && !isVisibleTrackSourceLoading && (activeBaseFilterCount > 0 || searchQuery.trim()) && (
+                <div className="music-library-empty" role="status">
+                  <div className="music-library-empty-text">{t('pages.music-library.empty.noMatches')}</div>
+                  <div className="music-library-empty-subtext">{t('pages.music-library.empty.noMatchesHint')}</div>
+                  {activeBaseFilterCount > 0 && (
+                    <button className="music-library-btn" onClick={handleClearBaseFilters}>
+                      {t('pages.music-library.filter.clearButton')}
+                    </button>
+                  )}
+                </div>
+              )}
 
 
               {baseView === 'card' && (
@@ -10370,7 +10380,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                       >
 
-                        <div className="music-library-track-number">{absoluteIndex + 1}</div>
+                        <div className="music-library-track-number">
+                          {isAlbumView ? formatAlbumTrackNumber(track, absoluteIndex) : absoluteIndex + 1}
+                        </div>
 
                         {renderedLocalTrackColumns.map((column) => {
 

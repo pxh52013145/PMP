@@ -49,14 +49,24 @@ function isEmptyComparableValue(value: MusicLibraryFieldComparableValue): boolea
 }
 
 function resolveTrackFormatValue(track: Track): string | undefined {
-  const explicit = (track.format || track.codecName || '').trim();
+  const explicit = normalizeMusicLibraryFormatToken(track.format || track.codecName);
   if (explicit.length > 0) {
     return explicit;
   }
 
   const path = (track.path || track.originalPath || '').trim();
   const extension = path.includes('.') ? path.split('.').pop()?.trim() ?? '' : '';
-  return extension.length > 0 ? extension : undefined;
+  return normalizeMusicLibraryFormatToken(extension) || undefined;
+}
+
+function normalizeMusicLibraryFormatToken(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const separatorIndex = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+  return (separatorIndex >= 0 ? trimmed.slice(separatorIndex + 1) : trimmed)
+    .replace(/^\.+/, '')
+    .trim();
 }
 
 function stringifyNumber(value: number): string {

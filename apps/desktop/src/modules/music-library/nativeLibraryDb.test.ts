@@ -1,12 +1,35 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
+
+vi.mock('../../utils/tauriRuntime', () => ({ isTauriRuntime: () => true }));
+vi.mock('../../services/telemetry/tauriInvokeTelemetry', () => ({ invokeWithTelemetry: vi.fn() }));
 
 import {
   buildNativeLibraryTrackQueryPayload,
   parseNativeLibraryTrackPageResult,
+  queryNativeLibraryTracksPage,
   type NativeLibraryTrackQuery,
 } from './nativeLibraryDb';
 
 describe('native music library query facade', () => {
+  beforeEach(() => { vi.mocked(invokeWithTelemetry).mockReset(); });
+
+  it('preserves database errors instead of reporting a successful empty page', async () => {
+    vi.mocked(invokeWithTelemetry).mockRejectedValueOnce(new Error('Failed to query tracks'));
+    await expect(queryNativeLibraryTracksPage()).rejects.toThrow('Failed to query tracks');
+  });
+
+  it('rejects malformed pages and records without silently dropping tracks', async () => {
+    for (const response of [null, {}, { total: 1, items: [{ id: 'incomplete' }] }]) {
+      vi.mocked(invokeWithTelemetry).mockResolvedValueOnce(response);
+      await expect(queryNativeLibraryTracksPage()).rejects.toThrow('Invalid native music library track page');
+    }
+  });
+
+  it('accepts a genuine no-match result', async () => {
+    vi.mocked(invokeWithTelemetry).mockResolvedValueOnce({ total: 0, items: [] });
+    await expect(queryNativeLibraryTracksPage()).resolves.toMatchObject({ total: 0, items: [] });
+  });
   it('keeps grouped row window options in the typed native payload', () => {
     const query: NativeLibraryTrackQuery = {
       projection: 'list',

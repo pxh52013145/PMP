@@ -1,5 +1,6 @@
 import type { Track } from '../audio';
 import type { AlbumSummary, LibraryStats } from './MusicLibraryService';
+import { compareAlbumTracks } from '../../modules/music-library/albumOrder';
 
 export type NativeReadResult<T> =
   | { status: 'ok'; value: T }
@@ -394,8 +395,9 @@ export function createMusicLibraryReadGateway(
     searchTracks(query: string, limit?: number): Promise<Track[]> {
       return resolveGateway().searchTracks(query, limit);
     },
-    getTracksByAlbum(album: string): Promise<Track[]> {
-      return resolveGateway().getTracksByAlbum(album);
+    async getTracksByAlbum(album: string): Promise<Track[]> {
+      const tracks = await resolveGateway().getTracksByAlbum(album);
+      return tracks.sort(compareAlbumTracks);
     },
     getAllAlbums(options?: { includeStoredCover?: boolean }): Promise<AlbumSummary[]> {
       return resolveGateway().getAllAlbums(options);

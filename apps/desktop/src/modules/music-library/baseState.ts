@@ -178,7 +178,18 @@ export function toggleMusicLibraryBaseSortField(
   options?: { multi?: boolean }
 ): MusicLibraryBaseSortRule[] {
   const existingIndex = rules.findIndex((rule) => rule.field === field);
-  void options;
+  if (!options?.multi) {
+    // A regular header click starts a new primary order. Secondary rules (such
+    // as the title tie-breaker in album order) must not keep the old priority.
+    if (rules.length === 1 && existingIndex === 0) {
+      return rules[0].order === 'asc' ? [{ ...rules[0], order: 'desc' }] : [];
+    }
+    return [{
+      id: rules[existingIndex]?.id ?? createMusicLibraryBaseEntityId('sort'),
+      field,
+      order: 'asc',
+    }];
+  }
 
   if (existingIndex < 0) {
     return [

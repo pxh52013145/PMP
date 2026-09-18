@@ -17,7 +17,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-const DB_VERSION: i32 = 12;
+const DB_VERSION: i32 = 13;
 pub const EVENT_MUSIC_LIBRARY_SCHEMA_CHANGED: &str = "music-library-schema-changed";
 
 static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
@@ -192,6 +192,10 @@ pub struct LibraryTrackUpsertInput {
     pub album: Option<String>,
     pub genre: Option<String>,
     pub year: Option<i64>,
+    pub track_number: Option<i64>,
+    pub track_total: Option<i64>,
+    pub disc_number: Option<i64>,
+    pub disc_total: Option<i64>,
     pub format: Option<String>,
     pub duration: Option<f64>,
     pub sample_rate: Option<u32>,
@@ -2186,6 +2190,18 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         conn.execute_batch("PRAGMA user_version = 12;")
             .map_err(|error| format!("Failed to migrate music library schema to v12: {error}"))?;
         version = 12;
+    }
+
+    if version == 12 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS local_track_order_tag_reads (
+                track_id TEXT PRIMARY KEY NOT NULL REFERENCES local_tracks(id) ON DELETE CASCADE,
+                file_path TEXT NOT NULL,
+                mtime_ms INTEGER
+             );
+             PRAGMA user_version = 13;",
+        ).map_err(|error| format!("Failed to migrate music library schema to v13: {error}"))?;
+        version = 13;
     }
 
     if version != DB_VERSION {
@@ -5250,171 +5266,210 @@ pub fn sync_source_tracks(
     missing_track_ids: Vec<String>,
 ) -> Result<LibraryTrackSyncResult, String> {
     ensure_initialized(app)?;
-    with_conn(|conn| {
-        let now = now_ms();
-        let tx = conn
-            .transaction()
-            .map_err(|error| format!("Failed to start source track sync transaction: {error}"))?;
+    with_conn(|conn| sync_source_tracks_from_conn(conn, source_id, upserts, missing_track_ids))
+}
 
-        let mut upserted = 0usize;
-        for item in upserts {
-            let track_id = item.id.trim();
-            let file_path = item.file_path.trim();
-            if track_id.is_empty() || file_path.is_empty() {
-                continue;
-            }
+fn sync_source_tracks_from_conn(
+    conn: &mut Connection,
+    source_id: &str,
+    upserts: Vec<LibraryTrackUpsertInput>,
+    missing_track_ids: Vec<String>,
+) -> Result<LibraryTrackSyncResult, String> {
+    let now = now_ms();
+    let tx = conn
+        .transaction()
+        .map_err(|error| format!("Failed to start source track sync transaction: {error}"))?;
 
-            tx.execute(
-                r#"
-                INSERT INTO local_tracks(
-                  id,
-                  source_id,
-                  file_path,
-                  quick_fingerprint,
-                  title,
-                  artist,
-                  album,
-                  genre,
-                  year,
-                  format,
-                  duration_seconds,
-                  sample_rate,
-                  bit_depth,
-                  file_size,
-                  mtime_ms,
-                  replay_gain_track_db,
-                  replay_gain_album_db,
-                  status,
-                  created_at_ms,
-                  updated_at_ms,
-                  last_seen_at_ms
-                )
-                VALUES (
-                  ?1,
-                  ?2,
-                  ?3,
-                  ?4,
-                  ?5,
-                  ?6,
-                  ?7,
-                  ?8,
-                  ?9,
-                  ?10,
-                  ?11,
-                  ?12,
-                  ?13,
-                  ?14,
-                  ?15,
-                  ?16,
-                  ?17,
-                  'available',
-                  ?18,
-                  ?19,
-                  ?20
-                )
-                ON CONFLICT(id) DO UPDATE SET
-                  source_id = excluded.source_id,
-                  file_path = excluded.file_path,
-                  quick_fingerprint = excluded.quick_fingerprint,
-                  title = CASE
-                    WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"title"%'
-                    THEN local_tracks.title
-                    ELSE excluded.title
-                  END,
-                  artist = CASE
-                    WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"artist"%'
-                    THEN local_tracks.artist
-                    ELSE excluded.artist
-                  END,
-                  album = CASE
-                    WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"album"%'
-                    THEN local_tracks.album
-                    ELSE excluded.album
-                  END,
-                  genre = CASE
-                    WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"genre"%'
-                    THEN local_tracks.genre
-                    ELSE excluded.genre
-                  END,
-                  year = CASE
-                    WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"year"%'
-                    THEN local_tracks.year
-                    ELSE excluded.year
-                  END,
-                  format = excluded.format,
-                  duration_seconds = excluded.duration_seconds,
-                  sample_rate = excluded.sample_rate,
-                  bit_depth = excluded.bit_depth,
-                  file_size = excluded.file_size,
-                  mtime_ms = excluded.mtime_ms,
-                  replay_gain_track_db = excluded.replay_gain_track_db,
-                  replay_gain_album_db = excluded.replay_gain_album_db,
-                  status = 'available',
-                  updated_at_ms = excluded.updated_at_ms,
-                  last_seen_at_ms = excluded.last_seen_at_ms
-                "#,
-                params![
-                    track_id,
-                    source_id,
-                    file_path,
-                    normalize_quick_fingerprint(item.quick_fingerprint.as_deref()),
-                    normalize_text(item.title.as_deref()),
-                    normalize_text(item.artist.as_deref()),
-                    normalize_text(item.album.as_deref()),
-                    normalize_text(item.genre.as_deref()),
-                    item.year,
-                    normalize_text(item.format.as_deref()),
-                    item.duration,
-                    item.sample_rate.map(|value| value as i64),
-                    item.bit_depth.map(|value| value as i64),
-                    item.file_size.map(|value| value as i64),
-                    item.mtime_ms,
-                    item.replay_gain_track_db,
-                    item.replay_gain_album_db,
-                    now,
-                    now,
-                    now,
-                ],
-            )
-            .map_err(|error| format!("Failed to upsert source track: {error}"))?;
-            upserted += 1;
-        }
-
-        let mut marked_missing = 0usize;
-        for track_id in missing_track_ids {
-            let normalized = track_id.trim();
-            if normalized.is_empty() {
-                continue;
-            }
-
-            let affected = tx
-                .execute(
-                    r#"
-                    UPDATE local_tracks
-                    SET status = 'missing', updated_at_ms = ?3
-                    WHERE source_id = ?1 AND id = ?2
-                    "#,
-                    params![source_id, normalized, now],
-                )
-                .map_err(|error| format!("Failed to mark track as missing: {error}"))?;
-            marked_missing += affected as usize;
+    let mut upserted = 0usize;
+    for item in upserts {
+        let track_id = item.id.trim();
+        let file_path = item.file_path.trim();
+        if track_id.is_empty() || file_path.is_empty() {
+            continue;
         }
 
         tx.execute(
-            "UPDATE sources SET last_scanned_at_ms = ?2, updated_at_ms = ?2 WHERE id = ?1",
-            params![source_id, now],
+            r#"
+            INSERT INTO local_tracks(
+              id,
+              source_id,
+              file_path,
+              quick_fingerprint,
+              title,
+              artist,
+              album,
+              genre,
+              year,
+              track_number,
+              track_total,
+              disc_number,
+              disc_total,
+              format,
+              duration_seconds,
+              sample_rate,
+              bit_depth,
+              file_size,
+              mtime_ms,
+              replay_gain_track_db,
+              replay_gain_album_db,
+              status,
+              created_at_ms,
+              updated_at_ms,
+              last_seen_at_ms
+            )
+            VALUES (
+              ?1,
+              ?2,
+              ?3,
+              ?4,
+              ?5,
+              ?6,
+              ?7,
+              ?8,
+              ?9,
+              ?10,
+              ?11,
+              ?12,
+              ?13,
+              ?14,
+              ?15,
+              ?16,
+              ?17,
+              ?18,
+              ?19,
+              ?20,
+              ?21,
+              'available',
+              ?22,
+              ?23,
+              ?24
+            )
+            ON CONFLICT(id) DO UPDATE SET
+              source_id = excluded.source_id,
+              file_path = excluded.file_path,
+              quick_fingerprint = excluded.quick_fingerprint,
+              title = CASE
+                WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"title"%'
+                THEN local_tracks.title
+                ELSE excluded.title
+              END,
+              artist = CASE
+                WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"artist"%'
+                THEN local_tracks.artist
+                ELSE excluded.artist
+              END,
+              album = CASE
+                WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"album"%'
+                THEN local_tracks.album
+                ELSE excluded.album
+              END,
+              genre = CASE
+                WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"genre"%'
+                THEN local_tracks.genre
+                ELSE excluded.genre
+              END,
+              year = CASE
+                WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"year"%'
+                THEN local_tracks.year
+                ELSE excluded.year
+              END,
+              track_number = CASE
+                WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"trackNumber"%'
+                THEN local_tracks.track_number
+                ELSE COALESCE(excluded.track_number, local_tracks.track_number)
+              END,
+              track_total = CASE
+                WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"trackTotal"%'
+                THEN local_tracks.track_total
+                ELSE COALESCE(excluded.track_total, local_tracks.track_total)
+              END,
+              disc_number = CASE
+                WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"discNumber"%'
+                THEN local_tracks.disc_number
+                ELSE COALESCE(excluded.disc_number, local_tracks.disc_number)
+              END,
+              disc_total = CASE
+                WHEN COALESCE(local_tracks.tag_locked_fields_json, '') LIKE '%"discTotal"%'
+                THEN local_tracks.disc_total
+                ELSE COALESCE(excluded.disc_total, local_tracks.disc_total)
+              END,
+              format = excluded.format,
+              duration_seconds = excluded.duration_seconds,
+              sample_rate = excluded.sample_rate,
+              bit_depth = excluded.bit_depth,
+              file_size = excluded.file_size,
+              mtime_ms = excluded.mtime_ms,
+              replay_gain_track_db = excluded.replay_gain_track_db,
+              replay_gain_album_db = excluded.replay_gain_album_db,
+              status = 'available',
+              updated_at_ms = excluded.updated_at_ms,
+              last_seen_at_ms = excluded.last_seen_at_ms
+            "#,
+            params![
+                track_id,
+                source_id,
+                file_path,
+                normalize_quick_fingerprint(item.quick_fingerprint.as_deref()),
+                normalize_text(item.title.as_deref()),
+                normalize_text(item.artist.as_deref()),
+                normalize_text(item.album.as_deref()),
+                normalize_text(item.genre.as_deref()),
+                item.year,
+                item.track_number,
+                item.track_total,
+                item.disc_number,
+                item.disc_total,
+                normalize_text(item.format.as_deref()),
+                item.duration,
+                item.sample_rate.map(|value| value as i64),
+                item.bit_depth.map(|value| value as i64),
+                item.file_size.map(|value| value as i64),
+                item.mtime_ms,
+                item.replay_gain_track_db,
+                item.replay_gain_album_db,
+                now,
+                now,
+                now,
+            ],
         )
-        .map_err(|error| format!("Failed to update source scan metadata: {error}"))?;
+        .map_err(|error| format!("Failed to upsert source track: {error}"))?;
+        upserted += 1;
+    }
 
-        tx.commit()
-            .map_err(|error| format!("Failed to commit source track sync transaction: {error}"))?;
+    let mut marked_missing = 0usize;
+    for track_id in missing_track_ids {
+        let normalized = track_id.trim();
+        if normalized.is_empty() {
+            continue;
+        }
 
-        invalidate_track_query_count_cache();
+        let affected = tx
+            .execute(
+                r#"
+                UPDATE local_tracks
+                SET status = 'missing', updated_at_ms = ?3
+                WHERE source_id = ?1 AND id = ?2
+                "#,
+                params![source_id, normalized, now],
+            )
+            .map_err(|error| format!("Failed to mark track as missing: {error}"))?;
+        marked_missing += affected as usize;
+    }
 
-        Ok(LibraryTrackSyncResult {
-            upserted,
-            marked_missing,
-        })
+    tx.execute(
+        "UPDATE sources SET last_scanned_at_ms = ?2, updated_at_ms = ?2 WHERE id = ?1",
+        params![source_id, now],
+    )
+    .map_err(|error| format!("Failed to update source scan metadata: {error}"))?;
+
+    tx.commit()
+        .map_err(|error| format!("Failed to commit source track sync transaction: {error}"))?;
+
+    invalidate_track_query_count_cache();
+
+    Ok(LibraryTrackSyncResult {
+        upserted,
+        marked_missing,
     })
 }
 
@@ -7823,14 +7878,20 @@ fn build_numeric_filter_expression(column_name: &str) -> String {
 fn build_order_expression(descriptor: &LocalTrackFieldDescriptor) -> String {
     let column = quote_sqlite_identifier(descriptor.column_name.as_str());
     if descriptor.kind == "number" {
-        return format!("COALESCE(CAST(t.{column} AS REAL), 0)");
+        return format!("CAST(t.{column} AS REAL)");
     }
 
     if descriptor.column_name == "title" {
-        return format!("LOWER(COALESCE(t.{column}, t.\"file_path\"))");
+        return format!("LOWER(TRIM(COALESCE(NULLIF(t.{column}, ''), t.\"file_path\")))");
     }
 
-    format!("LOWER(COALESCE(CAST(t.{column} AS TEXT), ''))")
+    if descriptor.column_name == "format" {
+        return format!(
+            "LOWER(TRIM(COALESCE(NULLIF(TRIM(CAST(t.{column} AS TEXT)), ''), CASE\n                 WHEN LOWER(t.\"file_path\") LIKE '%.flac' THEN 'flac'\n                 WHEN LOWER(t.\"file_path\") LIKE '%.wav' THEN 'wav'\n                 WHEN LOWER(t.\"file_path\") LIKE '%.aiff' OR LOWER(t.\"file_path\") LIKE '%.aif' THEN 'aiff'\n                 WHEN LOWER(t.\"file_path\") LIKE '%.alac' THEN 'alac'\n                 WHEN LOWER(t.\"file_path\") LIKE '%.m4a' OR LOWER(t.\"file_path\") LIKE '%.mp4' THEN 'm4a'\n                 WHEN LOWER(t.\"file_path\") LIKE '%.mp3' THEN 'mp3'\n                 WHEN LOWER(t.\"file_path\") LIKE '%.ogg' OR LOWER(t.\"file_path\") LIKE '%.oga' THEN 'ogg'\n                 WHEN LOWER(t.\"file_path\") LIKE '%.opus' THEN 'opus'\n                 WHEN LOWER(t.\"file_path\") LIKE '%.wma' THEN 'wma'\n                 ELSE '' END)))"
+        );
+    }
+
+    format!("LOWER(TRIM(COALESCE(CAST(t.{column} AS TEXT), '')))")
 }
 
 fn sqlite_value_ref_to_json(value: ValueRef<'_>) -> JsonValue {
@@ -8555,6 +8616,9 @@ fn push_track_order_input(
     };
 
     order_fields.push(field);
+    order_clauses.push(format!(
+        "CASE WHEN {expr} IS NULL OR {expr} = '' THEN 1 ELSE 0 END ASC"
+    ));
     order_clauses.push(format!("{expr} {direction}"));
     Ok(())
 }
@@ -9056,11 +9120,98 @@ fn count_track_query(conn: &Connection, sql_parts: &TrackQuerySqlParts) -> Resul
     Ok(total)
 }
 
+fn album_for_order_backfill(query: &LibraryTrackQueryInput) -> Option<&str> {
+    if let Some(album) = query.album.as_deref().filter(|value| !value.trim().is_empty()) {
+        return Some(album);
+    }
+    // The View album action uses exactly one equality filter. Never scan the whole library
+    // as a side effect of an ordinary paged query or an unrelated sort.
+    let groups = query.base_query.as_ref()?.filter_groups.as_ref()?;
+    if groups.len() != 1 { return None; }
+    let filters = groups[0].filters.as_ref()?;
+    if filters.len() != 1 { return None; }
+    let filter = &filters[0];
+    if filter.field != "album" || filter.operator != "equals" { return None; }
+    filter.value.as_deref().filter(|value| !value.trim().is_empty())
+}
+
+struct AlbumOrderCandidate {
+    id: String,
+    path: String,
+    mtime_ms: Option<i64>,
+}
+
+fn album_order_candidates(
+    conn: &Connection, album: &str, visible_only: bool, after_id: &str,
+) -> Result<Vec<AlbumOrderCandidate>, String> {
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.file_path, t.mtime_ms FROM local_tracks t
+         JOIN sources s ON s.id = t.source_id
+         LEFT JOIN local_track_order_tag_reads r ON r.track_id = t.id
+         WHERE LOWER(TRIM(t.album)) = LOWER(TRIM(?1)) AND t.id > ?2
+           AND t.status = 'available' AND (?3 = 0 OR s.is_visible = 1)
+           AND (t.track_number IS NULL OR t.disc_number IS NULL)
+           AND (r.track_id IS NULL OR r.file_path <> t.file_path OR r.mtime_ms IS NOT t.mtime_ms)
+         ORDER BY t.id LIMIT 32"
+    ).map_err(|error| format!("Prepare album order backfill failed: {error}"))?;
+    let rows = stmt.query_map(params![album, after_id, visible_only], |row| Ok(AlbumOrderCandidate {
+        id: row.get(0)?, path: row.get(1)?, mtime_ms: row.get(2)?,
+    })).map_err(|error| format!("Query album order backfill failed: {error}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
+}
+
+fn cache_album_order_tags(
+    conn: &mut Connection, candidate: &AlbumOrderCandidate,
+    tags: &crate::music_tag::MusicTagCanonicalMetadata,
+) -> Result<(), String> {
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    let changed = tx.execute(
+        r#"UPDATE local_tracks SET
+            track_number = CASE WHEN COALESCE(tag_locked_fields_json, '') LIKE '%"trackNumber"%'
+              THEN track_number ELSE COALESCE(track_number, ?4) END,
+            disc_number = CASE WHEN COALESCE(tag_locked_fields_json, '') LIKE '%"discNumber"%'
+              THEN disc_number ELSE COALESCE(disc_number, ?5) END
+           WHERE id = ?1 AND file_path = ?2 AND mtime_ms IS ?3"#,
+        params![candidate.id, candidate.path, candidate.mtime_ms, tags.track_number, tags.disc_number],
+    ).map_err(|error| format!("Cache album order tags failed: {error}"))?;
+    if changed > 0 {
+        // Remember successful reads even when the file has no ordering tags.
+        tx.execute(
+            "INSERT INTO local_track_order_tag_reads(track_id, file_path, mtime_ms) VALUES (?1, ?2, ?3)
+             ON CONFLICT(track_id) DO UPDATE SET file_path = excluded.file_path, mtime_ms = excluded.mtime_ms",
+            params![candidate.id, candidate.path, candidate.mtime_ms],
+        ).map_err(|error| error.to_string())?;
+    }
+    tx.commit().map_err(|error| error.to_string())
+}
+
+fn backfill_album_order(query: Option<&LibraryTrackQueryInput>) -> Result<(), String> {
+    let Some(query) = query else { return Ok(()); };
+    let Some(album) = album_for_order_backfill(query) else { return Ok(()); };
+    let mut after_id = String::new();
+    loop {
+        let candidates = with_conn(|conn| album_order_candidates(
+            conn, album, query.visible_only.unwrap_or(true), &after_id,
+        ))?;
+        if candidates.is_empty() { break; }
+        for candidate in candidates {
+            after_id.clone_from(&candidate.id);
+            // File I/O runs outside the shared SQLite lock, with one tag result in memory.
+            // Unreadable files keep their cached metadata and remain retryable.
+            if let Ok(tags) = crate::music_tag::read_library_order_metadata(&candidate.path) {
+                with_conn(|conn| cache_album_order_tags(conn, &candidate, &tags))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn query_tracks(
     app: &AppHandle,
     query: Option<LibraryTrackQueryInput>,
 ) -> Result<Vec<LibraryTrackRecord>, String> {
     ensure_initialized(app)?;
+    backfill_album_order(query.as_ref())?;
     with_conn(|conn| query_tracks_from_conn(conn, query.as_ref()))
 }
 
@@ -9069,6 +9220,7 @@ pub fn query_tracks_page(
     query: Option<LibraryTrackQueryInput>,
 ) -> Result<LibraryTrackQueryPageResult, String> {
     ensure_initialized(app)?;
+    backfill_album_order(query.as_ref())?;
 
     with_conn(|conn| {
         let track_field_descriptors = list_local_track_field_descriptors(conn)?;
@@ -10723,6 +10875,94 @@ mod tests {
         time::Instant,
     };
 
+    fn album_order_test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute("INSERT INTO sources(id, path, category, is_visible, is_scanned, added_at_ms, updated_at_ms)
+                      VALUES ('source', 'C:/Music', 'music', 1, 1, 1, 1)", []).unwrap();
+        conn
+    }
+
+    fn album_test_track(id: &str, number: Option<i64>, disc: Option<i64>) -> LibraryTrackUpsertInput {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "filePath": format!("C:/Music/{id}.flac"), "title": id,
+            "album": "Album", "mtimeMs": 100, "trackNumber": number, "discNumber": disc,
+        })).unwrap()
+    }
+
+    #[test]
+    fn scanned_album_numbers_survive_sync_and_native_list_sort() {
+        let mut conn = album_order_test_db();
+        sync_source_tracks_from_conn(&mut conn, "source", vec![
+            album_test_track("a-disc-two", Some(1), Some(2)),
+            album_test_track("b-ten", Some(10), Some(1)),
+            album_test_track("c-two", Some(2), Some(1)),
+            album_test_track("z-one", Some(1), Some(1)),
+        ], vec![]).unwrap();
+        let query: LibraryTrackQueryInput = serde_json::from_value(serde_json::json!({
+            "album": "Album", "projection": "list", "sort": [
+                {"field": "discNumber", "order": "asc"},
+                {"field": "trackNumber", "order": "asc"},
+                {"field": "title", "order": "asc"},
+            ]
+        })).unwrap();
+        let tracks = query_tracks_from_conn(&conn, Some(&query)).unwrap();
+        assert_eq!(tracks.iter().map(|track| track.id.as_str()).collect::<Vec<_>>(),
+                   vec!["z-one", "c-two", "b-ten", "a-disc-two"]);
+        assert_eq!(tracks[2].track_number, Some(10));
+        conn.execute("UPDATE local_tracks SET tag_locked_fields_json = '[\"trackNumber\"]' WHERE id = 'z-one'", []).unwrap();
+        sync_source_tracks_from_conn(&mut conn, "source", vec![album_test_track("z-one", Some(9), Some(1))], vec![]).unwrap();
+        assert_eq!(query_tracks_from_conn(&conn, Some(&query)).unwrap()[0].track_number, Some(1));
+    }
+
+    #[test]
+    fn album_backfill_caches_absent_tags_and_respects_locked_values_and_file_changes() {
+        let mut conn = album_order_test_db();
+        sync_source_tracks_from_conn(&mut conn, "source", vec![
+            album_test_track("first", None, None),
+            album_test_track("locked", None, None),
+            album_test_track("no-tags", None, None),
+        ], vec![]).unwrap();
+        conn.execute("UPDATE local_tracks SET tag_locked_fields_json = '[\"trackNumber\"]' WHERE id = 'locked'", []).unwrap();
+        let candidates = album_order_candidates(&conn, "Album", true, "").unwrap();
+        assert_eq!(candidates.len(), 3);
+        let tags = crate::music_tag::MusicTagCanonicalMetadata { track_number: Some(7), ..Default::default() };
+        cache_album_order_tags(&mut conn, &candidates[0], &tags).unwrap();
+        cache_album_order_tags(&mut conn, &candidates[1], &tags).unwrap();
+        cache_album_order_tags(&mut conn, &candidates[2], &Default::default()).unwrap();
+        assert!(album_order_candidates(&conn, "Album", true, "").unwrap().is_empty());
+        let query: LibraryTrackQueryInput = serde_json::from_value(serde_json::json!({"album":"Album"})).unwrap();
+        let tracks = query_tracks_from_conn(&conn, Some(&query)).unwrap();
+        assert_eq!(tracks.iter().find(|t| t.id == "first").unwrap().track_number, Some(7));
+        assert_eq!(tracks.iter().find(|t| t.id == "locked").unwrap().track_number, None);
+        conn.execute("UPDATE local_tracks SET mtime_ms = 200 WHERE id = 'no-tags'", []).unwrap();
+        assert_eq!(album_order_candidates(&conn, "Album", true, "").unwrap().len(), 1);
+        // A read started before a concurrent scan must not update the newer file snapshot.
+        cache_album_order_tags(&mut conn, &candidates[2], &tags).unwrap();
+        assert_eq!(album_order_candidates(&conn, "Album", true, "").unwrap().len(), 1);
+        conn.execute("UPDATE sources SET is_visible = 0", []).unwrap();
+        assert!(album_order_candidates(&conn, "Album", true, "").unwrap().is_empty());
+        assert_eq!(album_order_candidates(&conn, "Album", false, "").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn album_order_backfill_is_scoped_and_windowed() {
+        let mut conn = album_order_test_db();
+        let tracks = (0..70).map(|i| album_test_track(&format!("track-{i:03}"), None, None)).collect();
+        sync_source_tracks_from_conn(&mut conn, "source", tracks, vec![]).unwrap();
+        let first = album_order_candidates(&conn, "Album", true, "").unwrap();
+        assert_eq!(first.len(), 32);
+        let second = album_order_candidates(&conn, "Album", true, &first.last().unwrap().id).unwrap();
+        assert_eq!(second.len(), 32);
+        assert!(album_order_candidates(&conn, "Other", true, "").unwrap().is_empty());
+        let query: LibraryTrackQueryInput = serde_json::from_value(serde_json::json!({
+            "baseQuery": {"filterGroups": [{"filters": [{"field":"album", "operator":"equals", "value":"Album"}]}]}
+        })).unwrap();
+        assert_eq!(album_for_order_backfill(&query), Some("Album"));
+        let default_query = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(album_for_order_backfill(&default_query), None);
+    }
+
     fn open_temp_db(prefix: &str) -> (Connection, PathBuf) {
         let mut path = std::env::temp_dir();
         let unique = format!(
@@ -11239,7 +11479,7 @@ mod tests {
         let (conn, path) = open_temp_db("music-library-migrate-empty");
         migrate(&conn).expect("migrate empty db");
 
-        assert_eq!(read_user_version(&conn), 12);
+        assert_eq!(read_user_version(&conn), DB_VERSION);
         assert!(has_table(&conn, "connectors"));
         assert!(has_table(&conn, "platform_instance_auth"));
         assert!(has_table(&conn, "stable_entry_sources"));
@@ -11313,7 +11553,7 @@ mod tests {
 
         migrate(&conn).expect("migrate v4 db");
 
-        assert_eq!(read_user_version(&conn), 12);
+        assert_eq!(read_user_version(&conn), DB_VERSION);
         assert!(has_table(&conn, "connector_accounts"));
         assert!(has_table(&conn, "platform_instance_auth"));
         assert!(has_table(&conn, "stable_entry_sources"));

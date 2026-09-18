@@ -429,6 +429,17 @@ pub fn read_local_tags_from_path(file_path: &str) -> Result<MusicTagReadLocalRes
     })
 }
 
+/// Metadata-only reads for scanning and repairing library ordering; skip audio properties and artwork.
+pub(crate) fn read_library_order_metadata(file_path: &str) -> Result<MusicTagCanonicalMetadata, String> {
+    let tagged_file = lofty::probe::Probe::open(file_path)
+        .and_then(|probe| probe.options(lofty::config::ParseOptions::new()
+            .read_properties(false)
+            .read_cover_art(false)).read())
+        .map_err(|error| format!("Read album ordering tags failed: {error}"))?;
+    Ok(extract_metadata_from_tags(tagged_file.tags()))
+}
+
+
 pub fn preview_db_patch(
     app: &AppHandle,
     request: MusicTagDbPatchRequest,

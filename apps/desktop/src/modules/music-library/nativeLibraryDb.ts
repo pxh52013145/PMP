@@ -359,6 +359,10 @@ export interface NativeLibraryTrackUpsertInput {
   album?: string;
   genre?: string;
   year?: number;
+  trackNumber?: number;
+  trackTotal?: number;
+  discNumber?: number;
+  discTotal?: number;
   format?: string;
   duration?: number;
   sampleRate?: number;
@@ -2187,7 +2191,7 @@ function ensureTrackPageResult(value: unknown): NativeLibraryTrackPageResult | n
   const items: NativeLibraryTrackRecord[] = [];
   for (const item of itemsRaw) {
     const parsed = ensureTrackRecord(item);
-    if (!parsed) continue;
+    if (!parsed) return null;
     items.push(parsed);
   }
 
@@ -4459,7 +4463,7 @@ export async function queryNativeLibraryTracks(
 export async function queryNativeLibraryTracksPage(
   query?: NativeLibraryTrackQuery
 ): Promise<NativeLibraryTrackPageResult> {
-  if (!isTauriRuntime()) return { items: [], total: 0 };
+  if (!isTauriRuntime()) throw new Error('Native music library is unavailable');
 
   const payload = buildNativeLibraryTrackQueryPayload(query);
   const raw = await invokeWithTelemetry<unknown>(
@@ -4473,10 +4477,10 @@ export async function queryNativeLibraryTracksPage(
       event: 'music-library.db.query-tracks.page',
       includeResultSize: true,
     }
-  ).catch(() => null);
+  );
 
   const parsed = ensureTrackPageResult(raw);
-  if (!parsed) return { items: [], total: 0 };
+  if (!parsed) throw new Error('Invalid native music library track page');
   return parsed;
 }
 

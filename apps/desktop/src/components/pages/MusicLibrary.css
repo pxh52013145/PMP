@@ -455,6 +455,16 @@
   background: var(--music-library-surface-subtle);
 }
 
+.music-library-current-album {
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--music-library-text-secondary);
+  font-size: 13px;
+}
+
 .music-library-btn {
   padding: 8px 16px;
   background: var(--music-library-accent-soft);

@@ -68,7 +68,9 @@ export interface Track {
   year?: number;
   genre?: string;
   trackNumber?: number;
+  trackTotal?: number;
   discNumber?: number;
+  discTotal?: number;
   composer?: string;
   bitrate?: number;
   sampleRate?: number;

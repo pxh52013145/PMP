@@ -989,6 +989,10 @@ export class MusicLibraryService {
       album: typeof track.album === 'string' ? track.album : undefined,
       genre: typeof track.genre === 'string' ? track.genre : undefined,
       year: typeof track.year === 'number' ? Math.floor(track.year) : undefined,
+      trackNumber: track.trackNumber,
+      trackTotal: track.trackTotal,
+      discNumber: track.discNumber,
+      discTotal: track.discTotal,
       format: typeof track.format === 'string' ? track.format : undefined,
       duration: typeof track.duration === 'number' ? track.duration : undefined,
       sampleRate: typeof track.sampleRate === 'number' ? track.sampleRate : undefined,
@@ -1127,6 +1131,10 @@ export class MusicLibraryService {
       album: record.album,
       genre: record.genre,
       year: record.year,
+      trackNumber: record.trackNumber,
+      trackTotal: record.trackTotal,
+      discNumber: record.discNumber,
+      discTotal: record.discTotal,
       format: record.format,
       duration: record.durationSeconds,
       sampleRate: record.sampleRate,
@@ -1405,6 +1413,8 @@ export class MusicLibraryService {
     query: LocalBaseTracksQuery
   ): Promise<LocalBaseTracksPageResult | null> {
     if (!isTauriRuntime()) return null;
+
+    await this.ensureNativeSchemaEnvelopeLoaded();
 
     const normalizedBaseQuery: MusicLibraryBaseQuery = {
       filterOperator: query.baseQuery.filterOperator === 'or' ? 'or' : 'and',
@@ -4267,6 +4277,10 @@ export class MusicLibraryService {
             title?: string | null;
             artist?: string | null;
             album?: string | null;
+            trackNumber?: number | null;
+            trackTotal?: number | null;
+            discNumber?: number | null;
+            discTotal?: number | null;
             replayGainTrackDb?: number | null;
             replay_gain_track_db?: number | null;
             replayGainAlbumDb?: number | null;
@@ -4300,6 +4314,10 @@ export class MusicLibraryService {
           if (title.length > 0) record.title = title;
           if (artist.length > 0) record.artist = artist;
           if (album.length > 0) record.album = album;
+          record.trackNumber = pickFiniteNumber(meta.trackNumber);
+          record.trackTotal = pickFiniteNumber(meta.trackTotal);
+          record.discNumber = pickFiniteNumber(meta.discNumber);
+          record.discTotal = pickFiniteNumber(meta.discTotal);
           const duration = pickFiniteNumber(meta.duration);
           const sampleRate = pickFiniteNumber(meta.sampleRate, meta.sample_rate);
           const replayGainTrackDb = pickFiniteNumber(

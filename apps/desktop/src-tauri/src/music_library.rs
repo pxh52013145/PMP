@@ -169,6 +169,10 @@ pub struct ScannedTrack {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
+    pub track_number: Option<u32>,
+    pub track_total: Option<u32>,
+    pub disc_number: Option<u32>,
+    pub disc_total: Option<u32>,
     pub replay_gain_track_db: Option<f32>,
     pub replay_gain_album_db: Option<f32>,
 }
@@ -2425,6 +2429,13 @@ pub fn scan_library_paths(
             (None, None, None, None, None, None, None, None)
         };
 
+        let tag_metadata = if include_metadata {
+            crate::music_tag::read_library_order_metadata(&path.to_string_lossy())
+                .ok()
+        } else {
+            None
+        };
+
         let path_str = path.to_string_lossy().to_string();
         results.push(ScannedTrack {
             path: path_str.clone(),
@@ -2438,6 +2449,10 @@ pub fn scan_library_paths(
             title,
             artist,
             album,
+            track_number: tag_metadata.as_ref().and_then(|value| value.track_number),
+            track_total: tag_metadata.as_ref().and_then(|value| value.track_total),
+            disc_number: tag_metadata.as_ref().and_then(|value| value.disc_number),
+            disc_total: tag_metadata.as_ref().and_then(|value| value.disc_total),
             replay_gain_track_db,
             replay_gain_album_db,
         });
