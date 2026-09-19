@@ -324,16 +324,12 @@ pub fn request_app_exit_with_code(app: &tauri::AppHandle, exit_code: i32) {
     crate::windows::vst_manager::close_all_vst_manager_windows(app);
     crate::vst_runtime::close_all();
 
-    let backend = match crate::audio::engine::ENGINE.lock() {
+    let backend = match crate::audio::engine::lock_engine() {
         Ok(mut engine) => {
             engine.stop();
             Some(engine.output_backend())
         }
-        Err(poisoned) => {
-            let mut engine = poisoned.into_inner();
-            engine.stop();
-            Some(engine.output_backend())
-        }
+        Err(_) => None,
     };
     if let Some(backend) = backend {
         backend.close_stream();

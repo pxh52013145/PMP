@@ -7,8 +7,8 @@ use std::{
 
 use super::{
     engine::{
-        self, CrossfadeOperation, LoadOperation, NativeAudioEngine, PlaybackState,
-        PreparedCrossfade, PreparedLoad, StreamingPrebufferKind, ENGINE,
+        self, lock_engine, CrossfadeOperation, LoadOperation, NativeAudioEngine, PlaybackState,
+        PreparedCrossfade, PreparedLoad, StreamingPrebufferKind,
     },
     events::NativeAudioStatePayload,
     input::{AudioInputDecodeMode, AudioInputKind, StreamingPlayback},
@@ -40,9 +40,7 @@ fn safe_stderr_log_line(message: impl AsRef<str>) {
 }
 
 fn with_engine_mut<T>(f: impl FnOnce(&mut NativeAudioEngine) -> T) -> Result<T, String> {
-    let mut engine = ENGINE
-        .lock()
-        .map_err(|_| "Audio engine is locked".to_string())?;
+    let mut engine = lock_engine()?;
     Ok(f(&mut engine))
 }
 
@@ -572,6 +570,7 @@ pub(crate) fn apply_engine_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::engine::ENGINE;
     use std::{
         sync::{Arc, Barrier},
         thread,

@@ -86,8 +86,9 @@ pub(super) fn rebuild_sink_on_new_device_impl(
             sample_rate,
         )
     } else {
-        let (source, meta) =
-            maybe_rodio_source.expect("rodio source prepared when no streaming/decoded samples");
+        let (source, meta) = maybe_rodio_source.ok_or_else(|| {
+            "Rodio source was not prepared while rebuilding the output sink".to_string()
+        })?;
         (source, meta.channels, meta.sample_rate)
     };
 
@@ -117,11 +118,7 @@ pub(super) fn rebuild_sink_on_new_device_impl(
                 StreamingPrebufferKind::StartOrSeek,
                 engine.streaming_prebuffer_start_or_seek_seconds,
             );
-            if streaming.render_queue.len_samples() < target_samples {
-                streaming
-                    .render_queue
-                    .wait_for_samples(target_samples, timeout);
-            }
+            let _ = (target_samples, timeout);
         }
 
         engine.play_sink_with_shared_guard(&sink);

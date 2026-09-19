@@ -3346,7 +3346,15 @@ export class NativeAudioService implements IAudioService {
 
   stop(): void {
     this.clearPendingSeek();
-    this.fireAndForgetCommand('native_audio_stop');
+    // A natural end already transitions the native transport to stopped. Avoid sending a
+    // second stop command from the end-of-track handler while the backend is retiring its sink.
+    const naturallyEnded =
+      this.state.playbackState === 'stopped' &&
+      this.state.duration > 0 &&
+      this.state.currentTime >= this.state.duration;
+    if (!naturallyEnded) {
+      this.fireAndForgetCommand('native_audio_stop');
+    }
     const nextState = this.updateState({ playbackState: 'stopped', currentTime: 0 });
     this.fallbackClockBaseTimeSec = 0;
     this.fallbackClockStartedAtMs = null;

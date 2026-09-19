@@ -5,7 +5,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard, TryLockError,
     },
     time::{Duration, Instant},
 };
@@ -28,8 +28,7 @@ use crate::audio::output::ASIO_BACKEND_ID;
 #[cfg(target_os = "windows")]
 use crate::audio::output::WASAPI_EXCLUSIVE_BACKEND_ID;
 use crate::audio::output::{
-    default_backend, shared_render_ahead_ready_snapshot, wait_for_shared_render_ahead_ready,
-    AudioOutputBackend, AudioOutputError, AudioSink, OutputStreamInfo,
+    default_backend, AudioOutputBackend, AudioOutputError, AudioSink, OutputStreamInfo,
 };
 use crate::audio::pipeline::{boxed_with_dsp, DspNodeConfig, DspRuntime, SpectrumTap};
 use crate::audio::policy::{
@@ -54,12 +53,51 @@ const RETIRE_INLINE_RELEASE_THRESHOLD_MAX_MIB: usize = 1024;
 const RETIRE_INLINE_PENDING_THRESHOLD_DEFAULT: u64 = 0;
 const RETIRE_INLINE_PENDING_THRESHOLD_MIN: u64 = 0;
 const RETIRE_INLINE_PENDING_THRESHOLD_MAX: u64 = 64;
-const EMPTY_QUEUE_RETIRE_DRAIN_TIMEOUT_MS_DEFAULT: u64 = 240;
-const EMPTY_QUEUE_RETIRE_DRAIN_TIMEOUT_MS_MIN: u64 = 0;
-const EMPTY_QUEUE_RETIRE_DRAIN_TIMEOUT_MS_MAX: u64 = 1_500;
 
-pub(crate) static ENGINE: Lazy<Mutex<NativeAudioEngine>> =
-    Lazy::new(|| Mutex::new(NativeAudioEngine::new()));
+pub(crate) struct EngineMutex(Mutex<NativeAudioEngine>);
+
+impl EngineMutex {
+    fn new(engine: NativeAudioEngine) -> Self {
+        Self(Mutex::new(engine))
+    }
+
+    pub(crate) fn lock(&self) -> Result<MutexGuard<'_, NativeAudioEngine>, String> {
+        match self.0.lock() {
+            Ok(guard) => Ok(guard),
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                guard.recover_from_poison();
+                Ok(guard)
+            }
+        }
+    }
+
+    pub(crate) fn try_lock(
+        &self,
+    ) -> Result<MutexGuard<'_, NativeAudioEngine>, TryLockError<MutexGuard<'_, NativeAudioEngine>>>
+    {
+        match self.0.try_lock() {
+            Ok(guard) => Ok(guard),
+            Err(TryLockError::WouldBlock) => Err(TryLockError::WouldBlock),
+            Err(TryLockError::Poisoned(poisoned)) => {
+                let mut guard = poisoned.into_inner();
+                guard.recover_from_poison();
+                Ok(guard)
+            }
+        }
+    }
+}
+
+pub(crate) static ENGINE: Lazy<EngineMutex> =
+    Lazy::new(|| EngineMutex::new(NativeAudioEngine::new()));
+
+pub(crate) fn lock_engine() -> Result<MutexGuard<'static, NativeAudioEngine>, String> {
+    ENGINE.lock()
+}
+
+pub(crate) fn try_lock_engine() -> Option<MutexGuard<'static, NativeAudioEngine>> {
+    ENGINE.try_lock().ok()
+}
 
 static STOP_RELEASE_BUFFER_THRESHOLD_BYTES: Lazy<usize> = Lazy::new(|| {
     let threshold_mib = std::env::var("PMP_AUDIO_STOP_RELEASE_THRESHOLD_MIB")
@@ -97,27 +135,6 @@ static NATIVE_AUDIO_INFO_LOG_ENABLED: Lazy<bool> = Lazy::new(|| {
         .unwrap_or(false)
 });
 
-static RETIRE_BACKPRESSURE_PENDING_THRESHOLD: Lazy<u64> =
-    Lazy::new(|| parse_env_u64("PMP_AUDIO_RETIRE_BACKPRESSURE_PENDING_THRESHOLD", 3, 0, 64));
-
-static RETIRE_BACKPRESSURE_TARGET_PENDING: Lazy<u64> =
-    Lazy::new(|| parse_env_u64("PMP_AUDIO_RETIRE_BACKPRESSURE_TARGET_PENDING", 1, 0, 32));
-
-static RETIRE_BACKPRESSURE_WAIT_TIMEOUT_MS: Lazy<u64> =
-    Lazy::new(|| parse_env_u64("PMP_AUDIO_RETIRE_BACKPRESSURE_WAIT_TIMEOUT_MS", 18, 0, 250));
-
-static RETIRE_RELOAD_WAIT_BUFFER_THRESHOLD_BYTES: Lazy<usize> = Lazy::new(|| {
-    let threshold_mib =
-        parse_env_u64("PMP_AUDIO_RETIRE_RELOAD_WAIT_THRESHOLD_MIB", 8, 0, 1024) as usize;
-    threshold_mib.saturating_mul(1024).saturating_mul(1024)
-});
-
-static RETIRE_RELOAD_WAIT_TARGET_PENDING: Lazy<u64> =
-    Lazy::new(|| parse_env_u64("PMP_AUDIO_RETIRE_RELOAD_WAIT_TARGET_PENDING", 0, 0, 8));
-
-static RETIRE_RELOAD_WAIT_TIMEOUT_MS: Lazy<u64> =
-    Lazy::new(|| parse_env_u64("PMP_AUDIO_RETIRE_RELOAD_WAIT_TIMEOUT_MS", 120, 0, 500));
-
 static RETIRE_INLINE_RELEASE_THRESHOLD_BYTES: Lazy<usize> = Lazy::new(|| {
     let threshold_mib = parse_env_u64(
         "PMP_AUDIO_RETIRE_INLINE_RELEASE_THRESHOLD_MIB",
@@ -135,15 +152,6 @@ static RETIRE_INLINE_PENDING_THRESHOLD: Lazy<u64> = Lazy::new(|| {
         RETIRE_INLINE_PENDING_THRESHOLD_DEFAULT,
         RETIRE_INLINE_PENDING_THRESHOLD_MIN,
         RETIRE_INLINE_PENDING_THRESHOLD_MAX,
-    )
-});
-
-static EMPTY_QUEUE_RETIRE_DRAIN_TIMEOUT_MS: Lazy<u64> = Lazy::new(|| {
-    parse_env_u64(
-        "PMP_AUDIO_EMPTY_QUEUE_RETIRE_DRAIN_TIMEOUT_MS",
-        EMPTY_QUEUE_RETIRE_DRAIN_TIMEOUT_MS_DEFAULT,
-        EMPTY_QUEUE_RETIRE_DRAIN_TIMEOUT_MS_MIN,
-        EMPTY_QUEUE_RETIRE_DRAIN_TIMEOUT_MS_MAX,
     )
 });
 
@@ -1667,6 +1675,19 @@ impl NativeAudioEngine {
         self.playback_state = PlaybackState::Error;
     }
 
+    fn recover_from_poison(&mut self) {
+        self.pending_operation_seq = 0;
+        self.buffering_started_at = None;
+        self.buffering_last_progress_at = None;
+        self.buffering_last_samples = 0;
+        self.buffering_resume_samples = 0;
+        self.record_error(
+            "NATIVE_AUDIO_ENGINE_RECOVERED",
+            "Audio engine recovered after an interrupted transport operation".to_string(),
+        );
+        self.playback_state = PlaybackState::Error;
+    }
+
     fn effective_volume(&self) -> f32 {
         if self.muted {
             0.0
@@ -1683,54 +1704,9 @@ impl NativeAudioEngine {
     }
 
     fn play_sink_with_shared_guard(&self, sink: &Arc<dyn AudioSink>) {
-        if let Some(streaming) = &self.streaming {
-            let channels = self.decoded_channels.max(1) as usize;
-            let sample_rate = self
-                .output_sample_rate
-                .or(if self.decoded_sample_rate > 0 {
-                    Some(self.decoded_sample_rate)
-                } else {
-                    None
-                })
-                .unwrap_or(48_000)
-                .max(1);
-            let (inner_resume_target, inner_resume_timeout) = self
-                .streaming_prebuffer_interactive_wait(
-                    sample_rate,
-                    channels,
-                    streaming.render_queue.capacity_samples(),
-                    self.duration,
-                    StreamingPrebufferKind::StartOrSeek,
-                    self.streaming_prebuffer_start_or_seek_seconds,
-                );
-            if inner_resume_target > 0 && inner_resume_timeout > Duration::ZERO {
-                if streaming.render_queue.len_samples() < inner_resume_target {
-                    streaming
-                        .render_queue
-                        .wait_for_samples(inner_resume_target, inner_resume_timeout);
-                }
-            }
-
-            if should_wrap_source_for_shared_backend(self.output_backend.id()) {
-                let guard_timeout_seconds =
-                    parse_env_f64("PMP_AUDIO_SHARED_RESUME_GUARD_SECONDS", 0.24, 0.0, 2.0);
-                let guard_min_seconds =
-                    parse_env_f64("PMP_AUDIO_SHARED_RESUME_GUARD_MIN_SECONDS", 0.08, 0.0, 0.8);
-                let guard_timeout = Duration::from_secs_f64(guard_timeout_seconds);
-                let guard_state = shared_render_ahead_ready_snapshot();
-
-                if guard_state.active_wrapper_id > 0 && guard_timeout > Duration::ZERO {
-                    let sample_rate = sample_rate as f64;
-                    let outer_resume_target = ((sample_rate * channels as f64 * guard_min_seconds)
-                        .ceil() as usize)
-                        .max(channels.saturating_mul(48));
-                    let seek_epoch = self.seek_epoch.load(Ordering::Acquire);
-                    let wait_target = outer_resume_target.max(guard_state.low_watermark_samples);
-                    let _ =
-                        wait_for_shared_render_ahead_ready(wait_target, seek_epoch, guard_timeout);
-                }
-            }
-        }
+        // Readiness is established by the command kernel before acquiring ENGINE. This method
+        // only changes the sink state, so transport commands never block while holding the
+        // global engine mutex.
         sink.play();
     }
 
@@ -1771,73 +1747,20 @@ impl NativeAudioEngine {
         release_sink_handle("engine.sink", sink, mode);
     }
 
-    fn maybe_wait_for_retire_backpressure_after_detach(&self) {
-        let timeout_ms = *RETIRE_BACKPRESSURE_WAIT_TIMEOUT_MS;
-        if timeout_ms == 0 {
-            return;
-        }
-
-        let pending_threshold = *RETIRE_BACKPRESSURE_PENDING_THRESHOLD;
-        let current_pending = crate::audio::retire_plane::pending_tasks();
-        if current_pending <= pending_threshold {
-            return;
-        }
-
-        let target_pending = (*RETIRE_BACKPRESSURE_TARGET_PENDING).min(pending_threshold);
-        let _ = crate::audio::retire_plane::wait_for_pending_tasks_at_most(
-            target_pending,
-            Duration::from_millis(timeout_ms),
-        );
-    }
-
-    fn maybe_wait_for_reload_retire_completion(&self, detached_audio_buffer_bytes: usize) {
-        let threshold_bytes = *RETIRE_RELOAD_WAIT_BUFFER_THRESHOLD_BYTES;
-        if threshold_bytes > 0 && detached_audio_buffer_bytes < threshold_bytes {
-            return;
-        }
-
-        let timeout_ms = *RETIRE_RELOAD_WAIT_TIMEOUT_MS;
-        if timeout_ms == 0 {
-            return;
-        }
-
-        let target_pending = *RETIRE_RELOAD_WAIT_TARGET_PENDING;
-        let current_pending = crate::audio::retire_plane::pending_tasks();
-        if current_pending <= target_pending {
-            return;
-        }
-
-        let _ = crate::audio::retire_plane::wait_for_pending_tasks_at_most(
-            target_pending,
-            Duration::from_millis(timeout_ms),
-        );
-    }
-
     fn detach_active_runtime_state_for_reload(&mut self) {
-        let mut detached_any = false;
         let detached_audio_buffer_bytes = self.estimated_audio_buffer_bytes();
         let release_mode = resolve_detached_runtime_release_mode(detached_audio_buffer_bytes);
 
         if let Some(old_sink) = self.sink.take() {
-            detached_any = true;
             self.stop_and_release_sink(old_sink, release_mode);
         }
         if self.streaming.is_some() {
-            detached_any = true;
             self.shutdown_streaming_with_mode(release_mode);
         }
         if self.decoded_samples.is_some() {
-            detached_any = true;
             self.retire_cached_decoded_samples_with_mode(release_mode);
         }
-        if self.mixer.take().is_some() {
-            detached_any = true;
-        }
-
-        if detached_any && matches!(release_mode, RuntimeReleaseMode::Deferred) {
-            self.maybe_wait_for_retire_backpressure_after_detach();
-            self.maybe_wait_for_reload_retire_completion(detached_audio_buffer_bytes);
-        }
+        self.mixer.take();
     }
 
     fn shutdown_and_release_streaming(
@@ -1925,25 +1848,8 @@ impl NativeAudioEngine {
         self.dsp_runtime.request_reset();
         self.reset_recovery_tracking();
 
-        let had_runtime = self.sink.is_some()
-            || self.mixer.is_some()
-            || self.streaming.is_some()
-            || self.decoded_samples.is_some();
-
         self.release_cached_audio_pipeline_with_mode(RuntimeReleaseMode::Inline);
         self.output_backend.close_stream();
-
-        if had_runtime {
-            self.maybe_wait_for_retire_backpressure_after_detach();
-        }
-        let drain_timeout_ms = *EMPTY_QUEUE_RETIRE_DRAIN_TIMEOUT_MS;
-        if drain_timeout_ms > 0 {
-            let _ = crate::audio::retire_plane::wait_for_pending_tasks_at_most(
-                0,
-                Duration::from_millis(drain_timeout_ms),
-            );
-        }
-
         self.current_track = None;
         self.active_input_id = None;
         self.current_position = 0.0;
@@ -2316,7 +2222,9 @@ impl NativeAudioEngine {
     }
 
     fn play_internal(&mut self, allow_prebuffer_wait: bool) -> Result<(), String> {
-        if self.sink.is_none() {
+        let stopped_sink_is_empty = matches!(self.playback_state, PlaybackState::Stopped)
+            && self.sink.as_ref().is_some_and(|sink| sink.empty());
+        if self.sink.is_none() || stopped_sink_is_empty {
             if let Some(track_path) = self.current_track.clone() {
                 self.reload_track_for_seek_recovery(track_path)?;
             }
@@ -2392,6 +2300,17 @@ impl NativeAudioEngine {
     }
 
     pub(crate) fn stop(&mut self) {
+        // The emitter marks a naturally completed track as stopped before the frontend's
+        // end-of-track handler can issue its cleanup stop command. Keep that command idempotent:
+        // rebuilding a Rodio source here can panic while the decoder is still initializing.
+        if matches!(self.playback_state, PlaybackState::Stopped) {
+            self.current_position = 0.0;
+            self.base_position = 0.0;
+            self.playback_started_at = None;
+            self.set_state(PlaybackState::Stopped);
+            return;
+        }
+
         self.cancel_crossfade();
         self.sync_clock();
         self.spectrum_pre_tap.clear();
@@ -2410,6 +2329,13 @@ impl NativeAudioEngine {
             let _ = streaming.command_tx.send(DecoderCommand::Seek(0.0));
             if let Some(sink) = &self.sink {
                 sink.pause();
+            }
+        } else if self.current_track.is_some() && self.decoded_samples.is_none() {
+            // Rodio-backed inputs cannot be rewound by replacing the source without reopening
+            // the decoder. Release the sink and let the next play command reload the track.
+            self.mixer = None;
+            if let Some(old) = self.sink.take() {
+                self.stop_and_release_sink(old, RuntimeReleaseMode::Deferred);
             }
         } else if self.current_track.is_some() && self.output_backend.is_stream_open() {
             let track_path = self.current_track.clone().expect("checked is_some");
@@ -2693,7 +2619,7 @@ impl NativeAudioEngine {
                     if let Some(sink) = &seek_sink {
                         sink.flush();
                     }
-                    let (seek_resume_samples, seek_resume_timeout) = if resume_playing {
+                    let (seek_resume_samples, _seek_resume_timeout) = if resume_playing {
                         self.seek_resume_wait_plan(seek_render_queue.capacity_samples())
                     } else {
                         (0, Duration::ZERO)
@@ -2707,14 +2633,6 @@ impl NativeAudioEngine {
                         seek_resume_samples,
                     );
                     if resume_playing {
-                        if available_samples < seek_resume_samples
-                            && seek_resume_samples > 0
-                            && seek_resume_timeout > Duration::ZERO
-                        {
-                            seek_render_queue
-                                .wait_for_samples(seek_resume_samples, seek_resume_timeout);
-                        }
-
                         let available_after_wait = seek_render_queue.len_samples();
                         let finished_after_wait =
                             seek_decode_buffer.is_finished() && seek_render_queue.is_finished();
@@ -2773,7 +2691,7 @@ impl NativeAudioEngine {
                         if let Some(sink) = &seek_sink {
                             sink.flush();
                         }
-                        let (seek_resume_samples, seek_resume_timeout) = if resume_playing {
+                        let (seek_resume_samples, _seek_resume_timeout) = if resume_playing {
                             self.seek_resume_wait_plan(seek_render_queue.capacity_samples())
                         } else {
                             (0, Duration::ZERO)
@@ -2787,14 +2705,6 @@ impl NativeAudioEngine {
                             seek_resume_samples,
                         );
                         if resume_playing {
-                            if available_samples < seek_resume_samples
-                                && seek_resume_samples > 0
-                                && seek_resume_timeout > Duration::ZERO
-                            {
-                                seek_render_queue
-                                    .wait_for_samples(seek_resume_samples, seek_resume_timeout);
-                            }
-
                             let available_after_wait = seek_render_queue.len_samples();
                             let finished_after_wait =
                                 seek_decode_buffer.is_finished() && seek_render_queue.is_finished();
@@ -3875,6 +3785,26 @@ mod tests {
             "playback should transition into active state after reload"
         );
         assert!(!matches!(engine.playback_state, PlaybackState::Error));
+    }
+
+    #[test]
+    fn stop_releases_rodio_source_without_reopening_decoder() {
+        let backend: Arc<dyn AudioOutputBackend> =
+            Arc::new(TransportModeBackend::new("rodio-cpal"));
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        engine.current_track = Some(PathBuf::from("missing-track.wav"));
+        engine.sink = Some(Arc::new(CallSink::default()));
+        engine.playback_state = PlaybackState::Playing;
+        engine.desired_playback_state = PlaybackState::Playing;
+
+        engine.stop();
+
+        assert!(
+            engine.sink.is_none(),
+            "non-seekable sources should be lazily reloaded on the next play"
+        );
+        assert!(matches!(engine.playback_state, PlaybackState::Stopped));
     }
 
     #[test]

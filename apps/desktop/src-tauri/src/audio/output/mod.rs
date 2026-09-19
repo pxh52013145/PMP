@@ -19,10 +19,7 @@ mod wasapi_exclusive;
 pub(crate) use asio::open_control_panel as open_asio_control_panel;
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
 pub use asio::{asio_backend, ASIO_BACKEND_ID};
-pub(crate) use render_ahead::{
-    shared_render_ahead_metrics, shared_render_ahead_ready_snapshot,
-    wait_for_shared_render_ahead_ready, wrap_source_for_shared_backend,
-};
+pub(crate) use render_ahead::{shared_render_ahead_metrics, wrap_source_for_shared_backend};
 pub use rodio_cpal::RODIO_CPAL_BACKEND_ID;
 #[cfg(target_os = "windows")]
 pub use wasapi::{wasapi_backend, WASAPI_BACKEND_ID};

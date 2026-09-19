@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-use crate::audio::engine::{PlaybackState, ENGINE};
+use crate::audio::engine::{try_lock_engine, PlaybackState};
 use crate::audio::events::{
     NativeAudioErrorPayload, NativeAudioSpectrumFramePayload, NativeAudioStatePayload,
     NATIVE_AUDIO_ERROR_EVENT, NATIVE_AUDIO_SPECTRUM_EVENT, NATIVE_AUDIO_STATE_EVENT,
@@ -93,7 +93,7 @@ fn emit_state_loop() {
 
         tick_counter = tick_counter.wrapping_add(1);
         let Some((state_payload, active_playback, cold_idle)) = (|| {
-            let mut engine = ENGINE.try_lock().ok()?;
+            let mut engine = try_lock_engine()?;
             let cold_idle = engine.is_cold_idle_runtime();
             let was_playing = engine.is_playing_or_rebuffering();
             if !engine.tick() {
@@ -201,7 +201,7 @@ fn emit_spectrum_loop() {
         }
 
         let Some(snapshot) = (|| {
-            let mut engine = ENGINE.try_lock().ok()?;
+            let mut engine = try_lock_engine()?;
             engine.snapshot_for_dual_spectrum_into(&mut pre_window, &mut post_window)
         })() else {
             std::thread::sleep(Duration::from_nanos(1_000_000_000 / 60));
