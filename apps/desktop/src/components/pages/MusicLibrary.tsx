@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import { LogOut, RotateCcw } from 'lucide-react';
+
 import { createPortal } from 'react-dom';
 
 import { Track } from '../../services/audio';
@@ -372,6 +374,34 @@ type MainScrollAnchor =
 type MainScrollRootKind = 'main' | 'navigation';
 
 type MainScrollMemory = { scrollTop: number; anchor?: MainScrollAnchor; rootKind?: MainScrollRootKind };
+
+type AlbumUndoSnapshot = {
+  albumQuery: MusicLibraryBaseQuery;
+  previousQuery: MusicLibraryBaseQuery;
+  albumScroll: MainScrollMemory | null;
+  entryScroll: MainScrollMemory | null;
+};
+
+function cloneMusicLibraryBaseQuery(query: MusicLibraryBaseQuery): MusicLibraryBaseQuery {
+  return {
+    filterOperator: query.filterOperator,
+    filterGroups: query.filterGroups.map((group) => ({
+      ...group,
+      filters: group.filters.map((filter) => ({ ...filter })),
+    })),
+    groupByRules: query.groupByRules.map((rule) => ({ ...rule })),
+    sortRules: query.sortRules.map((rule) => ({ ...rule })),
+  };
+}
+
+function cloneMainScrollMemory(memory: MainScrollMemory | null): MainScrollMemory | null {
+  return memory
+    ? {
+        ...memory,
+        anchor: memory.anchor ? { ...memory.anchor } : undefined,
+      }
+    : null;
+}
 
 
 
@@ -1593,6 +1623,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   });
 
+  const albumEntryScrollMemoryRef = useRef<MainScrollMemory | null>(null);
+
 
 
   const escapeCssSelector = useCallback((value: string): string => {
@@ -1817,6 +1849,35 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   );
 
+  const rememberAlbumEntryScroll = useCallback(
+    (mode: MusicLibraryViewMode) => {
+      captureMainScrollMemory(mode);
+      const memory = moduleScrollMemory[mode];
+      albumEntryScrollMemoryRef.current = memory
+        ? {
+            ...memory,
+            anchor: memory.anchor ? { ...memory.anchor } : undefined,
+          }
+        : null;
+    },
+    [captureMainScrollMemory]
+  );
+
+  const restoreAlbumEntryScroll = useCallback((mode: MusicLibraryViewMode) => {
+    if (albumEntryScrollMemoryRef.current) {
+      moduleScrollMemory[mode] = albumEntryScrollMemoryRef.current;
+    }
+    albumEntryScrollMemoryRef.current = null;
+    mainScrollUserDirtyRef.current = false;
+    mainScrollRestoreStateRef.current = { viewMode: mode, done: false };
+  }, []);
+
+  const restoreAlbumScroll = useCallback((mode: MusicLibraryViewMode, memory: MainScrollMemory | null) => {
+    if (memory) moduleScrollMemory[mode] = cloneMainScrollMemory(memory)!;
+    mainScrollUserDirtyRef.current = false;
+    mainScrollRestoreStateRef.current = { viewMode: mode, done: false };
+  }, []);
+
 
 
   const scheduleMainScrollAnchorUpdate = useCallback(
@@ -1964,6 +2025,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   const [quickBaseQueryRestore, setQuickBaseQueryRestore] = useState<MusicLibraryBaseQuery | null>(null);
 
+  const albumUndoSnapshotRef = useRef<AlbumUndoSnapshot | null>(null);
+
   const [baseGroupByRules, setBaseGroupByRules] = useState<MusicLibraryBaseGroupRule[]>([]);
 
   const [baseSortRules, setBaseSortRules] = useState<MusicLibraryBaseSortRule[]>([]);
@@ -1992,6 +2055,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   );
 
   const activeBaseFilterCount = baseFilterGroups.reduce((count, group) => count + group.filters.length, 0);
+  const hasActiveBaseSort = baseGroupByRules.length > 0 || baseSortRules.length > 0;
   const activeAlbumName = baseFilterGroups.length === 1 &&
     baseFilterGroups[0].filters.length === 1 &&
     baseFilterGroups[0].filters[0].field === 'album' &&
@@ -5607,6 +5671,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
   const handleClearBaseFilters = useCallback(() => {
+    const wasAlbumView = Boolean(quickBaseQueryRestore);
 
     if (quickBaseQueryRestore) {
       setBaseGroupByRules(quickBaseQueryRestore.groupByRules);
@@ -5624,7 +5689,47 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     setBaseFilterValue('');
 
-  }, [quickBaseQueryRestore]);
+    if (wasAlbumView) restoreAlbumEntryScroll(viewMode);
+
+  }, [quickBaseQueryRestore, restoreAlbumEntryScroll, viewMode]);
+
+  const handleRestoreQuickBaseQuery = useCallback(() => {
+    const undoSnapshot = albumUndoSnapshotRef.current;
+    if (!undoSnapshot) return;
+
+    setBaseFilterJoinOperator(undoSnapshot.albumQuery.filterOperator);
+    setBaseFilterGroups(undoSnapshot.albumQuery.filterGroups);
+    setActiveBaseFilterGroupId(undoSnapshot.albumQuery.filterGroups[0]?.id ?? null);
+    setBaseGroupByRules(undoSnapshot.albumQuery.groupByRules);
+    setBaseSortRules(undoSnapshot.albumQuery.sortRules);
+    setQuickBaseQueryRestore(cloneMusicLibraryBaseQuery(undoSnapshot.previousQuery));
+    albumEntryScrollMemoryRef.current = cloneMainScrollMemory(undoSnapshot.entryScroll);
+    albumUndoSnapshotRef.current = null;
+    setBaseFilterValue('');
+    restoreAlbumScroll(viewMode, undoSnapshot.albumScroll);
+  }, [restoreAlbumScroll, viewMode]);
+
+  const handleExitAlbum = useCallback(() => {
+    if (!isAlbumView) return;
+    captureMainScrollMemory(viewMode);
+    const albumQuery = cloneMusicLibraryBaseQuery(baseQueryState);
+    const previousQuery = quickBaseQueryRestore
+      ? cloneMusicLibraryBaseQuery(quickBaseQueryRestore)
+      : {
+          filterOperator: 'and' as const,
+          filterGroups: [],
+          groupByRules: [],
+          sortRules: [],
+        };
+    albumUndoSnapshotRef.current = {
+      albumQuery,
+      previousQuery,
+      albumScroll: cloneMainScrollMemory(moduleScrollMemory[viewMode] ?? null),
+      entryScroll: cloneMainScrollMemory(albumEntryScrollMemoryRef.current),
+    };
+    handleClearBaseFilters();
+    restoreAlbumEntryScroll(viewMode);
+  }, [baseQueryState, captureMainScrollMemory, handleClearBaseFilters, isAlbumView, quickBaseQueryRestore, restoreAlbumEntryScroll, viewMode]);
 
   const handleApplyQuickBaseFilter = useCallback((field: MusicLibraryBaseField, value: string) => {
 
@@ -5643,21 +5748,24 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     setActiveBaseFilterGroupId(quickFilterState.activeFilterGroupId);
 
     if (field === 'album') {
+      if (!quickBaseQueryRestore) rememberAlbumEntryScroll(viewMode);
+      albumUndoSnapshotRef.current = null;
       setBaseGroupByRules([]);
       setBaseSortRules(createAlbumSortRules());
     }
 
-  }, [baseQueryState]);
+  }, [baseQueryState, quickBaseQueryRestore, rememberAlbumEntryScroll, viewMode]);
 
   useEffect(() => {
     if (isOpen || !quickBaseQueryRestore) return;
+    restoreAlbumEntryScroll(viewMode);
     setBaseFilterJoinOperator(quickBaseQueryRestore.filterOperator);
     setBaseFilterGroups(quickBaseQueryRestore.filterGroups);
     setActiveBaseFilterGroupId(quickBaseQueryRestore.filterGroups[0]?.id ?? null);
     setBaseGroupByRules(quickBaseQueryRestore.groupByRules);
     setBaseSortRules(quickBaseQueryRestore.sortRules);
     setQuickBaseQueryRestore(null);
-  }, [isOpen, quickBaseQueryRestore]);
+  }, [isOpen, quickBaseQueryRestore, restoreAlbumEntryScroll, viewMode]);
   useEffect(() => {
 
     if (!isOpen || !shouldUseNativeBaseQuery) {
@@ -8663,9 +8771,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               <button
 
-                className={`music-library-btn ${showBaseSortPanel ? 'is-active' : ''}`}
+                className={`music-library-btn ${showBaseSortPanel ? 'is-open' : ''} ${hasActiveBaseSort ? 'is-applied' : ''}`}
 
                 onClick={() => toggleBaseControlPanel('sort')}
+                aria-pressed={showBaseSortPanel || hasActiveBaseSort}
 
               >
 
@@ -8675,14 +8784,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               <button
 
-                className={`music-library-btn ${showBaseFilterPanel || activeBaseFilterCount > 0 ? 'is-active' : ''}`}
+                className={`music-library-btn ${showBaseFilterPanel ? 'is-open' : ''} ${activeBaseFilterCount > 0 ? 'is-applied' : ''}`}
 
                 onClick={() => toggleBaseControlPanel('filter')}
+                aria-pressed={showBaseFilterPanel || activeBaseFilterCount > 0}
 
               >
 
                 {t('pages.music-library.base.filterButton')}
-                {activeBaseFilterCount > 0 && ` (${activeBaseFilterCount})`}
 
               </button>
 
@@ -9585,6 +9694,26 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
             {t('common.action.clear')}
 
+          </button>
+
+          <button
+            className="music-library-btn music-library-local-op-icon-btn"
+            onClick={handleExitAlbum}
+            disabled={!isAlbumView}
+            title={t('pages.music-library.exitAlbum')}
+            aria-label={t('pages.music-library.exitAlbum')}
+          >
+            <LogOut size={17} strokeWidth={2.1} aria-hidden="true" />
+          </button>
+
+          <button
+            className="music-library-btn music-library-local-op-icon-btn"
+            onClick={handleRestoreQuickBaseQuery}
+            disabled={!albumUndoSnapshotRef.current}
+            title={t('pages.music-library.restoreQueryTitle')}
+            aria-label={t('pages.music-library.restoreQuery')}
+          >
+            <RotateCcw size={17} strokeWidth={2.1} aria-hidden="true" />
           </button>
 
           {isAlbumView && (

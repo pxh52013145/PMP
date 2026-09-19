@@ -147,6 +147,32 @@ describe('music library loading and persisted filters', () => {
     expect(mocks.readPage.mock.calls.at(-1)![0].baseQuery.sortRules.map((rule: { field: string }) => rule.field)).toEqual(['discNumber', 'trackNumber']);
   });
 
+  it('undoes exiting the album and restores the album view', async () => {
+    await act(async () => root.render(<MusicLibrary embedded />));
+    expect((container.querySelector('.music-library-local-ops button[aria-label="退出专辑"]') as HTMLButtonElement).disabled).toBe(true);
+    expect((container.querySelector('.music-library-local-ops button[aria-label="恢复"]') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => container.querySelector('[data-track-id]')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })));
+    await act(async () => mocks.contextMenu.mock.calls[0][0].onViewAlbum());
+
+    const exit = container.querySelector(
+      '.music-library-local-ops button[aria-label="退出专辑"]'
+    ) as HTMLButtonElement | null;
+    expect(exit).toBeDefined();
+
+    await act(async () => exit!.click());
+    expect(container.querySelector('.music-library-current-album')).toBeNull();
+    expect(mocks.readPage.mock.calls.at(-1)![0].baseQuery.filterGroups).toEqual([]);
+    expect(mocks.readPage.mock.calls.at(-1)![0].baseQuery.sortRules).toEqual([]);
+
+    const restore = container.querySelector(
+      '.music-library-local-ops button[aria-label="恢复"]'
+    ) as HTMLButtonElement | null;
+    expect(restore?.disabled).toBe(false);
+    await act(async () => restore!.click());
+    expect(container.querySelector('.music-library-current-album')?.textContent).toContain('Visible album');
+    expect(restore!.disabled).toBe(true);
+  });
+
   it('lets header sorting replace album order, supports Shift, and clears the album label with the filter', async () => {
     const albumTracks: Track[] = [
       { id: 'first', title: 'Z', album: 'Visible album', trackNumber: 1, duration: 30 },
@@ -164,6 +190,15 @@ describe('music library loading and persisted filters', () => {
     await act(async () => mocks.contextMenu.mock.calls[0][0].onViewAlbum());
     expect(rowIds()).toEqual(['first', 'second', 'third']);
     expect(container.querySelector('.music-library-local-ops .music-library-current-album')?.textContent).toBe('当前专辑：Visible album');
+    expect(container.querySelector('.music-library-local-ops button[aria-label="退出专辑"]')).toBeTruthy();
+    expect(container.querySelector('.music-library-local-ops button[aria-label="恢复"]')).toBeTruthy();
+    expect(container.querySelector('.music-library-local-ops button[aria-label="退出专辑"] svg')).toBeTruthy();
+    expect(container.querySelector('.music-library-local-ops button[aria-label="恢复"] svg')).toBeTruthy();
+    expect((container.querySelector('.music-library-local-ops button[aria-label="退出专辑"]') as HTMLButtonElement).disabled).toBe(false);
+    expect((container.querySelector('.music-library-local-ops button[aria-label="恢复"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(container.querySelector('.music-library-base-toolbar-actions .music-library-btn:nth-child(1)')?.className).toContain('is-applied');
+    expect(container.querySelector('.music-library-base-toolbar-actions .music-library-btn:nth-child(2)')?.className).toContain('is-applied');
+    expect(Array.from(container.querySelectorAll('.music-library-base-toolbar-actions .music-library-btn'))[1]?.textContent?.trim()).toBe('筛选');
 
     await act(async () => header('title').click());
     expect(rowIds()).toEqual(['second', 'third', 'first']);

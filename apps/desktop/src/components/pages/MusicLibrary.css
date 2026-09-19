@@ -345,13 +345,35 @@
   transform: none;
 }
 
-.music-library-base-toolbar-actions .music-library-btn.is-active {
-  background: var(--music-library-accent-gradient);
+.music-library-base-toolbar-actions .music-library-btn.is-open {
+  background: var(--music-library-surface-subtle);
   border-color: var(--music-library-accent-border);
+  color: var(--music-library-text-primary);
+  box-shadow:
+    inset 0 -2px 0 var(--music-library-accent-border),
+    0 0 0 1px color-mix(in srgb, var(--music-library-accent-glow) 34%, transparent);
+}
+
+.music-library-base-toolbar-actions .music-library-btn.is-applied {
+  background: var(--music-library-surface-subtle-strong);
+  border-color: var(--music-library-accent-border-strong);
   color: var(--music-library-text-inverse);
   box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--music-library-accent-border-strong) 28%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--music-library-accent-glow) 58%, transparent);
+    inset 0 0 0 1px color-mix(in srgb, var(--music-library-accent-border-strong) 48%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--music-library-accent-glow) 72%, transparent);
+}
+
+.music-library-base-toolbar-actions .music-library-btn.is-applied:hover {
+  background: var(--music-library-accent-soft-strong);
+}
+
+.music-library-base-toolbar-actions .music-library-btn.is-open.is-applied {
+  background: var(--music-library-accent-gradient);
+  border-color: var(--music-library-accent-border-strong);
+  color: var(--music-library-text-inverse);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--music-library-accent-border-strong) 64%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--music-library-accent-glow) 86%, transparent);
 }
 
 .music-library-base-popover-region {
@@ -453,6 +475,20 @@
   align-items: center;
   gap: 8px;
   background: var(--music-library-surface-subtle);
+}
+
+.music-library-local-op-icon-btn {
+  width: 34px;
+  height: 34px;
+  padding: 7px;
+  justify-content: center;
+}
+
+.music-library-local-op-icon-btn svg {
+  display: block;
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
 }
 
 .music-library-current-album {
