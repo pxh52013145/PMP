@@ -48,6 +48,7 @@ pub(crate) struct SharedRenderAheadMetricsSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+#[cfg(test)]
 pub(crate) struct SharedRenderAheadReadySnapshot {
     pub active_wrapper_id: u64,
     pub ready_wrapper_id: u64,
@@ -69,6 +70,7 @@ pub(crate) fn shared_render_ahead_metrics() -> SharedRenderAheadMetricsSnapshot 
     }
 }
 
+#[cfg(test)]
 pub(crate) fn shared_render_ahead_ready_snapshot() -> SharedRenderAheadReadySnapshot {
     SharedRenderAheadReadySnapshot {
         active_wrapper_id: SHARED_RENDER_ACTIVE_WRAPPER_ID.load(Ordering::Acquire),
@@ -79,6 +81,7 @@ pub(crate) fn shared_render_ahead_ready_snapshot() -> SharedRenderAheadReadySnap
     }
 }
 
+#[cfg(test)]
 pub(crate) fn wait_for_shared_render_ahead_ready(
     min_samples: usize,
     seek_epoch: u64,
@@ -116,6 +119,7 @@ pub(crate) fn wait_for_shared_render_ahead_ready(
     }
 }
 
+#[cfg(test)]
 fn shared_render_ahead_ready_for(min_samples: usize, seek_epoch: u64) -> bool {
     let snapshot = shared_render_ahead_ready_snapshot();
     if snapshot.active_wrapper_id == 0 {
