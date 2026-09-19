@@ -1096,7 +1096,13 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
               coverUrl: resolvedCoverUrl,
             });
             if (typeof cachedBilibiliCover === 'string' && cachedBilibiliCover.trim().length > 0) {
-              resolvedCoverUrl = sanitizeRenderablePlaylistCoverUrl(cachedBilibiliCover);
+              const normalizedCachedBilibiliCover = sanitizeRenderablePlaylistCoverUrl(cachedBilibiliCover);
+              if (normalizedCachedBilibiliCover && normalizedCachedBilibiliCover !== resolvedCoverUrl) {
+                // The library result may own a Blob URL/cover lease. Release it when the
+                // platform cache supplies the URL that will actually be rendered.
+                musicLibraryService.discardCoverUrls([resolvedCoverUrl]);
+              }
+              resolvedCoverUrl = normalizedCachedBilibiliCover;
             }
           }
 
