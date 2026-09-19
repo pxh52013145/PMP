@@ -42,7 +42,7 @@ export function createBuiltinKeybindingsModule(): KernelModule<AppEvents> {
       register({
         kind: 'keybinding',
         id: 'builtin:keyboardShortcuts:open',
-        key: isMac ? 'meta+k meta+s' : 'ctrl+k ctrl+s',
+        key: isMac ? 'meta+s meta+k' : 'ctrl+s ctrl+k',
         command: 'app:open-keyboard-shortcuts-window',
         source: 'builtin',
         weight: 200,

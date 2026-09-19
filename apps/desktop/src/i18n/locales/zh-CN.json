@@ -2229,6 +2229,7 @@
   "debug.center.overview.status.windowCommDetail": "storage/broadcast 诊断开关",
   "debug.center.shortcuts.title": "常用操作",
   "debug.center.shortcuts.desc": "按日常排障顺序进入 telemetry、性能、内存和底层运行时工具。",
+  "debug.center.shortcuts.keyboardShortcuts": "快捷键管理",
   "debug.center.shortcuts.telemetry": "Telemetry",
   "debug.center.shortcuts.memory": "内存诊断",
   "debug.center.shortcuts.runtime": "运行时开关",

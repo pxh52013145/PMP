@@ -2424,6 +2424,7 @@
   "debug.center.overview.status.windowCommDetail": "storage/broadcast diagnostics",
   "debug.center.shortcuts.title": "Common Actions",
   "debug.center.shortcuts.desc": "Open telemetry, performance, memory, and low-level runtime tools in the usual triage order.",
+  "debug.center.shortcuts.keyboardShortcuts": "Keyboard Shortcuts",
   "debug.center.shortcuts.telemetry": "Telemetry",
   "debug.center.shortcuts.memory": "Memory diagnostics",
   "debug.center.shortcuts.runtime": "Runtime switches",

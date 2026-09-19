@@ -739,7 +739,7 @@ export function DebugCenter({
   const kernel = useKernel();
   const commands = kernel.services.getOptional(COMMANDS_SERVICE_TOKEN);
   const t = useT();
-  const { history } = useNavigation();
+  const { history, navigateTo } = useNavigation();
   const isTauri = useMemo(() => isTauriRuntime(), []);
   const { isVisible, renderMode } = useWindowActivity();
   const debugPollingAllowed = isVisible && renderMode !== 'pause';
@@ -2170,6 +2170,9 @@ export function DebugCenter({
               </div>
 
               <div className="debug-center-actions debug-center-actions--start debug-center-actions--cluster">
+                <SettingsActionButton type="button" onClick={() => navigateTo('keyboard-shortcuts')}>
+                  {t('debug.center.shortcuts.keyboardShortcuts')}
+                </SettingsActionButton>
                 <SettingsActionButton type="button" onClick={() => setActiveWorkspace('telemetry')}>
                   {t('debug.center.shortcuts.telemetry')}
                 </SettingsActionButton>

@@ -110,7 +110,7 @@ export function ThemeToolsSettingsPanel() {
   const keyboardShortcutsUnavailableReason = !keyboardShortcutsCommand
     ? t('settings.tools.keyboardShortcuts.error.windowMissing')
     : null;
-  const keyboardShortcutsBadge = isMac ? 'Cmd+K Cmd+S' : 'Ctrl+K Ctrl+S';
+  const keyboardShortcutsBadge = isMac ? 'Cmd+S Cmd+K' : 'Ctrl+S Ctrl+K';
 
   const openTool = useCallback(
     async ({
