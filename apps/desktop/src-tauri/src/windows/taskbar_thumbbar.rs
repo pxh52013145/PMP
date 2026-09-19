@@ -23,14 +23,7 @@ mod windows_impl {
     use crate::windows::EVENT_MOUSE_SIDE_BUTTON;
     use crate::windows::EVENT_TASKBAR_MEDIA_CONTROL;
     use once_cell::sync::{Lazy, OnceCell};
-    use std::{
-        collections::HashMap,
-        mem,
-        sync::{
-            atomic::{AtomicBool, Ordering},
-            Mutex,
-        },
-    };
+    use std::sync::atomic::{AtomicBool, Ordering};
     use tauri::{AppHandle, Manager};
     use windows::{
         core::w,
@@ -41,13 +34,12 @@ mod windows_impl {
             },
             UI::{
                 Shell::{
-                    ITaskbarList3, TaskbarList, THBF_ENABLED, THB_FLAGS, THB_ICON, THB_TOOLTIP,
-                    THUMBBUTTON,
+                    DefSubclassProc, ITaskbarList3, SetWindowSubclass, TaskbarList, THBF_ENABLED,
+                    THB_FLAGS, THB_ICON, THB_TOOLTIP, THUMBBUTTON,
                 },
                 WindowsAndMessaging::{
-                    CallWindowProcW, CreateIcon, DefWindowProcW, GetWindowLongPtrW,
-                    RegisterWindowMessageW, SetWindowLongPtrW, GWLP_WNDPROC, HICON, WM_APPCOMMAND,
-                    WM_COMMAND, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDPROC,
+                    CreateIcon, RegisterWindowMessageW, HICON, WM_APPCOMMAND, WM_COMMAND,
+                    WM_XBUTTONDOWN, WM_XBUTTONUP,
                 },
             },
         },
@@ -100,13 +92,7 @@ mod windows_impl {
         }
     }
 
-    #[derive(Default)]
-    struct WndProcRegistry {
-        original: HashMap<isize, isize>,
-    }
-
-    static WNDPROCS: Lazy<Mutex<WndProcRegistry>> =
-        Lazy::new(|| Mutex::new(WndProcRegistry::default()));
+    const TASKBAR_SUBCLASS_ID: usize = 0x504D_5054;
 
     fn utf16_tip(text: &str) -> [u16; 260] {
         let mut tip = [0u16; 260];
@@ -321,11 +307,13 @@ mod windows_impl {
         let _ = app.emit_all(EVENT_MOUSE_SIDE_BUTTON, MouseSideButtonPayload { button });
     }
 
-    unsafe extern "system" fn wnd_proc(
+    unsafe extern "system" fn taskbar_subclass_proc(
         hwnd: HWND,
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
+        _subclass_id: usize,
+        _ref_data: usize,
     ) -> LRESULT {
         if msg == *TASKBAR_BUTTON_CREATED_MSG {
             let _ = add_buttons(hwnd);
@@ -406,22 +394,7 @@ mod windows_impl {
             }
         }
 
-        let original = {
-            let registry = WNDPROCS.lock().ok();
-            registry
-                .and_then(|r| r.original.get(&(hwnd.0 as isize)).copied())
-                .unwrap_or(0)
-        };
-        if original == 0 {
-            return DefWindowProcW(hwnd, msg, wparam, lparam);
-        }
-        CallWindowProcW(
-            mem::transmute::<isize, WNDPROC>(original),
-            hwnd,
-            msg,
-            wparam,
-            lparam,
-        )
+        DefSubclassProc(hwnd, msg, wparam, lparam)
     }
 
     pub fn init_main_window(app: &AppHandle) {
@@ -436,21 +409,12 @@ mod windows_impl {
 
         unsafe {
             let hwnd_raw = HWND(hwnd.0 as isize);
-            let mut registry = match WNDPROCS.lock() {
-                Ok(r) => r,
-                Err(_) => return,
-            };
-
-            if registry.original.contains_key(&(hwnd_raw.0 as isize)) {
-                let _ = add_buttons(hwnd_raw);
-                return;
-            }
-
-            let original = GetWindowLongPtrW(hwnd_raw, GWLP_WNDPROC);
-            registry.original.insert(hwnd_raw.0 as isize, original);
-            drop(registry);
-
-            let _ = SetWindowLongPtrW(hwnd_raw, GWLP_WNDPROC, wnd_proc as isize);
+            let _ = SetWindowSubclass(
+                hwnd_raw,
+                Some(taskbar_subclass_proc),
+                TASKBAR_SUBCLASS_ID,
+                0,
+            );
 
             let _ = add_buttons(hwnd_raw);
         }

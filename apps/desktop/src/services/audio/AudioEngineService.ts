@@ -1,6 +1,7 @@
 import type { ScopedEventBus } from '../../kernel';
 import { createServiceToken } from '../../kernel';
 import type { AppEvents } from '../../contracts/events';
+import { listen } from '@tauri-apps/api/event';
 import { getTelemetryLogger } from '../telemetry/TelemetryService';
 import { invokeWithTelemetry } from '../telemetry/tauriInvokeTelemetry';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
@@ -358,9 +359,7 @@ export class DefaultAudioEngineService implements AudioEngineService {
 
     type Payload = { action?: string };
 
-    void import('@tauri-apps/api/event')
-      .then(({ listen }) =>
-        listen<Payload>('taskbar-media-control', (event) => {
+    void listen<Payload>('taskbar-media-control', (event) => {
           const action = event.payload?.action;
           if (!action) return;
 
@@ -463,7 +462,6 @@ export class DefaultAudioEngineService implements AudioEngineService {
             });
           }
         })
-      )
       .then((fn) => {
         if (disposed) {
           fn();
