@@ -3,7 +3,7 @@ import type { MusicLibraryBaseSortRule } from './baseQuery';
 import { compareMusicLibraryFieldValues } from './fieldValue';
 
 export function createAlbumSortRules(): MusicLibraryBaseSortRule[] {
-  return ['discNumber', 'trackNumber', 'title'].map((field) => ({
+  return ['discNumber', 'trackNumber'].map((field) => ({
     id: `album-order-${field}`,
     field,
     order: 'asc',

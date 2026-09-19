@@ -144,7 +144,7 @@ describe('music library loading and persisted filters', () => {
     const lastSaved = mocks.persist.mock.calls.at(-1)![0];
     expect(lastSaved.query.filterGroups).toEqual([]);
     expect(lastSaved.query.sortRules).toEqual([]);
-    expect(mocks.readPage.mock.calls.at(-1)![0].baseQuery.sortRules.map((rule: { field: string }) => rule.field)).toEqual(['discNumber', 'trackNumber', 'title']);
+    expect(mocks.readPage.mock.calls.at(-1)![0].baseQuery.sortRules.map((rule: { field: string }) => rule.field)).toEqual(['discNumber', 'trackNumber']);
   });
 
   it('lets header sorting replace album order, supports Shift, and clears the album label with the filter', async () => {
