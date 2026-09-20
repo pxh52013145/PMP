@@ -20,6 +20,7 @@ pub fn init_main_window(_app: &AppHandle) {}
 mod windows_impl {
     use super::MouseSideButtonPayload;
     use super::TaskbarMediaControlPayload;
+    use crate::backend_telemetry::{self, BackendTelemetryOptions};
     use crate::windows::EVENT_MOUSE_SIDE_BUTTON;
     use crate::windows::EVENT_TASKBAR_MEDIA_CONTROL;
     use once_cell::sync::{Lazy, OnceCell};
@@ -34,12 +35,13 @@ mod windows_impl {
             },
             UI::{
                 Shell::{
-                    DefSubclassProc, ITaskbarList3, SetWindowSubclass, TaskbarList, THBF_ENABLED,
-                    THB_FLAGS, THB_ICON, THB_TOOLTIP, THUMBBUTTON,
+                    DefSubclassProc, ITaskbarList3, RemoveWindowSubclass, SetWindowSubclass,
+                    TaskbarList, THBF_ENABLED, THB_FLAGS, THB_ICON, THB_TOOLTIP, THUMBBUTTON,
                 },
                 WindowsAndMessaging::{
-                    CreateIcon, RegisterWindowMessageW, HICON, WM_APPCOMMAND, WM_COMMAND,
-                    WM_XBUTTONDOWN, WM_XBUTTONUP,
+                    ChangeWindowMessageFilterEx, CreateIcon, RegisterWindowMessageW, HICON,
+                    MSGFLT_ALLOW, WM_APPCOMMAND, WM_COMMAND, WM_NCDESTROY, WM_XBUTTONDOWN,
+                    WM_XBUTTONUP,
                 },
             },
         },
@@ -294,10 +296,69 @@ mod windows_impl {
         let Some(app) = APP_HANDLE.get() else {
             return;
         };
-        let _ = app.emit_all(
+        backend_telemetry::debug(
+            app,
+            "windowing",
+            "window.taskbar.media-control.received",
+            BackendTelemetryOptions::new()
+                .component("taskbar_thumbbar")
+                .field("action", serde_json::json!(action)),
+        );
+        if let Err(error) = app.emit_all(
             EVENT_TASKBAR_MEDIA_CONTROL,
             TaskbarMediaControlPayload { action },
-        );
+        ) {
+            report_failure(
+                "window.taskbar.media-control.emit.failed",
+                error.to_string(),
+            );
+        }
+    }
+
+    fn report_failure(event: &str, error: String) {
+        if let Some(app) = APP_HANDLE.get() {
+            backend_telemetry::warn(
+                app,
+                "windowing",
+                event,
+                BackendTelemetryOptions::new()
+                    .component("taskbar_thumbbar")
+                    .message(error),
+            );
+        }
+    }
+
+    fn thumbbar_action(wparam: WPARAM) -> Option<&'static str> {
+        let raw = wparam.0 as u32;
+        if (raw >> 16) & 0xFFFF != THBN_CLICKED {
+            return None;
+        }
+        match raw & 0xFFFF {
+            BUTTON_ID_PREV => Some("previous"),
+            BUTTON_ID_PLAY_PAUSE => Some("playPause"),
+            BUTTON_ID_NEXT => Some("next"),
+            _ => None,
+        }
+    }
+
+    // Must run on the thread that owns hwnd (SetWindowSubclass is not cross-thread).
+    unsafe fn install_message_handler(hwnd: HWND) -> Result<(), String> {
+        let created_message = *TASKBAR_BUTTON_CREATED_MSG;
+        if created_message == 0 {
+            return Err("RegisterWindowMessageW(TaskbarButtonCreated) failed".into());
+        }
+
+        // Explorer normally runs at medium integrity. When the player is elevated,
+        // UIPI otherwise blocks THBN_CLICKED before our subclass can see WM_COMMAND.
+        // Scope the exceptions to this window and the two taskbar message types.
+        for message in [WM_COMMAND, created_message] {
+            ChangeWindowMessageFilterEx(hwnd, message, MSGFLT_ALLOW, None)
+                .map_err(|error| format!("Allow taskbar message {message:#x} failed: {error}"))?;
+        }
+        if !SetWindowSubclass(hwnd, Some(taskbar_subclass_proc), TASKBAR_SUBCLASS_ID, 0).as_bool() {
+            return Err("SetWindowSubclass(taskbar) failed".into());
+        }
+        Ok(())
     }
 
     fn emit_mouse_side_button(button: &'static str) {
@@ -316,19 +377,16 @@ mod windows_impl {
         _ref_data: usize,
     ) -> LRESULT {
         if msg == *TASKBAR_BUTTON_CREATED_MSG {
-            let _ = add_buttons(hwnd);
-        } else if msg == WM_COMMAND {
-            let raw = wparam.0 as u32;
-            let id = raw & 0xFFFF;
-            let code = (raw >> 16) & 0xFFFF;
-            if code == THBN_CLICKED {
-                match id {
-                    BUTTON_ID_PREV => emit_action("previous"),
-                    BUTTON_ID_PLAY_PAUSE => emit_action("playPause"),
-                    BUTTON_ID_NEXT => emit_action("next"),
-                    _ => {}
-                }
+            if let Err(error) = add_buttons(hwnd) {
+                report_failure("window.taskbar.buttons.add.failed", error);
             }
+        } else if msg == WM_COMMAND {
+            if let Some(action) = thumbbar_action(wparam) {
+                emit_action(action);
+                return LRESULT(0);
+            }
+        } else if msg == WM_NCDESTROY {
+            let _ = RemoveWindowSubclass(hwnd, Some(taskbar_subclass_proc), TASKBAR_SUBCLASS_ID);
         } else if msg == WM_XBUTTONDOWN {
             // HIWORD(wparam) == XBUTTON1(1) / XBUTTON2(2)
             let raw = wparam.0 as u32;
@@ -407,16 +465,20 @@ mod windows_impl {
             return;
         };
 
-        unsafe {
-            let hwnd_raw = HWND(hwnd.0 as isize);
-            let _ = SetWindowSubclass(
-                hwnd_raw,
-                Some(taskbar_subclass_proc),
-                TASKBAR_SUBCLASS_ID,
-                0,
+        let hwnd_raw = hwnd.0 as isize;
+        if let Err(error) = window.run_on_main_thread(move || unsafe {
+            let hwnd = HWND(hwnd_raw);
+            if let Err(error) = install_message_handler(hwnd) {
+                report_failure("window.taskbar.message-handler.install.failed", error);
+                return;
+            }
+            // The shell may not be ready yet; TaskbarButtonCreated retries registration.
+            let _ = add_buttons(hwnd);
+        }) {
+            report_failure(
+                "window.taskbar.message-handler.schedule.failed",
+                error.to_string(),
             );
-
-            let _ = add_buttons(hwnd_raw);
         }
     }
 
@@ -445,6 +507,71 @@ mod windows_impl {
     #[cfg(test)]
     mod tests {
         use super::{taskbar_icon_shape_contains, TaskbarIconKind};
+
+        #[test]
+        fn only_known_thumbnail_clicks_are_consumed() {
+            use super::*;
+            for (id, action) in [
+                (BUTTON_ID_PREV, "previous"),
+                (BUTTON_ID_PLAY_PAUSE, "playPause"),
+                (BUTTON_ID_NEXT, "next"),
+            ] {
+                assert_eq!(
+                    thumbbar_action(WPARAM(((THBN_CLICKED << 16) | id) as usize)),
+                    Some(action)
+                );
+                // Menus (0) and accelerators (1) can reuse the low-word ID.
+                assert_eq!(thumbbar_action(WPARAM(id as usize)), None);
+                assert_eq!(thumbbar_action(WPARAM(((1 << 16) | id) as usize)), None);
+            }
+            assert_eq!(thumbbar_action(WPARAM((THBN_CLICKED << 16) as usize)), None);
+        }
+
+        #[test]
+        fn installs_handler_on_a_real_window_and_rejects_invalid_handles() {
+            use super::*;
+            use windows::Win32::UI::{
+                Shell::GetWindowSubclass,
+                WindowsAndMessaging::{CreateWindowExW, DestroyWindow},
+            };
+
+            unsafe {
+                let hwnd = CreateWindowExW(
+                    Default::default(),
+                    w!("STATIC"),
+                    w!("Taskbar handler test"),
+                    Default::default(),
+                    0,
+                    0,
+                    1,
+                    1,
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+                assert_ne!(hwnd.0, 0);
+                struct TestWindow(HWND);
+                impl Drop for TestWindow {
+                    fn drop(&mut self) {
+                        unsafe {
+                            let _ = DestroyWindow(self.0);
+                        }
+                    }
+                }
+                let _window = TestWindow(hwnd);
+                install_message_handler(hwnd).unwrap();
+                install_message_handler(hwnd).unwrap();
+                assert!(GetWindowSubclass(
+                    hwnd,
+                    Some(taskbar_subclass_proc),
+                    TASKBAR_SUBCLASS_ID,
+                    None,
+                )
+                .as_bool());
+                assert!(install_message_handler(HWND(0)).is_err());
+            }
+        }
 
         #[test]
         fn play_and_pause_icons_are_distinct() {
