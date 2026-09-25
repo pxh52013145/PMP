@@ -6,6 +6,8 @@ import { readJson, tryWriteJson } from '../../modules/storage';
 import { useT } from '../../i18n';
 import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from '../../services/commands';
 import { getTelemetryLogger } from '../../services/telemetry/TelemetryService';
+import { collectReferencedOrnamentMedia } from '../../modules/background/mediaCleanup';
+import { hydrateOrnamentsConfig } from '../../modules/ornaments-v2/store';
 import './BackgroundManager.css';
 
 const telemetry = getTelemetryLogger('editor', 'BackgroundManager');
@@ -498,6 +500,7 @@ export const BackgroundManager = memo(function BackgroundManager({
     setMaintenanceMessage(t('editor.background-manager.maintenance.gcRunning'));
 
     try {
+      await hydrateOrnamentsConfig();
       const fs = await import('@tauri-apps/api/fs');
 
       const referenced = new Set<string>();
@@ -509,6 +512,9 @@ export const BackgroundManager = memo(function BackgroundManager({
       if (currentMax) referenced.add(currentMax);
       const currentWin = getConfigMediaRelPath(settingsRef.current.windowed);
       if (currentWin) referenced.add(currentWin);
+      for (const rel of collectReferencedOrnamentMedia()) {
+        referenced.add(rel);
+      }
 
       const allowDelete = referenced.size > 0;
       let removed = 0;

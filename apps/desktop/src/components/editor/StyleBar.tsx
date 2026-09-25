@@ -12,7 +12,11 @@ import {
   releaseOrnamentsDialogPinOverride,
   startOrnamentsEditSession,
 } from '../../modules/ornaments-v2/session';
-import { createOrnamentItem, readOrnamentsConfig, persistOrnamentsConfig } from '../../modules/ornaments-v2/store';
+import {
+  createOrnamentItem,
+  nextOrnamentLayerOrder,
+  updateOrnamentsConfig,
+} from '../../modules/ornaments-v2/store';
 import { importOrnamentImage } from '../../modules/ornaments-v2/import';
 import { StyleOrnamentsPage } from './style/StyleOrnamentsPage';
 import './StyleBar.css';
@@ -168,14 +172,15 @@ export const StyleBar = memo(function StyleBar() {
       dialogPinOverrideAcquired = true;
       const imported = await importOrnamentImage();
       if (!imported) return;
-      const config = readOrnamentsConfig();
-      const item = createOrnamentItem({
-        ...imported,
-        order: config.items.reduce((max, candidate) => Math.max(max, candidate.layer.order), 0) + 1,
-      });
-      await persistOrnamentsConfig({
-        ...config,
-        items: [...config.items, item],
+      await updateOrnamentsConfig((config) => {
+        const item = createOrnamentItem({
+          ...imported,
+          order: nextOrnamentLayerOrder(config.items, 1),
+        });
+        return {
+          ...config,
+          items: [...config.items, item],
+        };
       });
     } catch (error) {
       telemetry.error('editor.style-ornaments.add.failed', {

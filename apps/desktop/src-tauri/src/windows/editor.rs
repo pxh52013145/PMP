@@ -497,6 +497,7 @@ pub fn open_editor_window(
 
             if window_type == EditorWindowType::Control {
                 let _ = app_handle.emit_all(EVENT_EDITOR_EXIT, ());
+                let _ = super::ornaments_editor_overlay::close(&app_handle);
                 for wtype in CONTROL_CLOSE_CHILD_WINDOWS {
                     let _ = destroy_window(&app_handle, *wtype);
                 }
@@ -581,6 +582,13 @@ pub fn close_all_editor_windows(app: &AppHandle) -> EditorWindowsCloseReport {
     let mut close_requested_window_types = Vec::new();
     let mut already_closed_window_types = Vec::new();
     let mut failures = Vec::new();
+
+    if let Err(message) = super::ornaments_editor_overlay::close(app) {
+        failures.push(EditorWindowCloseFailure {
+            window_type: "ornaments-editor-overlay".to_string(),
+            message,
+        });
+    }
 
     for window_type in ALL_EDITOR_WINDOWS {
         if app.get_window(label(*window_type)).is_none() {

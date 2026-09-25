@@ -292,6 +292,29 @@ pub async fn ornaments_overlay_sync_geometry(app: tauri::AppHandle) -> Result<()
     windows::ornaments_editor_overlay::sync_geometry(&app)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub async fn ornaments_overlay_sync_visibility(
+    app: tauri::AppHandle,
+    visible: bool,
+) -> Result<(), String> {
+    windows::ornaments_editor_overlay::sync_main_visibility(&app, visible);
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn ornaments_overlay_mark_ready(
+    app: tauri::AppHandle,
+    kind: String,
+    generation: u64,
+) -> Result<(), String> {
+    windows::ornaments_editor_overlay::mark_ready(&app, kind.as_str(), generation)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn ornaments_overlay_get_generation(kind: String) -> Result<u64, String> {
+    windows::ornaments_editor_overlay::overlay_generation(kind.as_str())
+}
+
 #[tauri::command]
 pub async fn ornaments_drag_main_window(app: tauri::AppHandle) -> Result<(), String> {
     windows::ornaments_editor_overlay::drag_main_window(&app)

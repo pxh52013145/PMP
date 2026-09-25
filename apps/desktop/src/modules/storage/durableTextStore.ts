@@ -7,7 +7,8 @@ export type DurableTextNamespace =
   | 'migration-backup'
   | 'profile-pack-backup'
   | 'install-plan-backup'
-  | 'plugin-data';
+  | 'plugin-data'
+  | 'ornaments';
 
 const IDB_DB_NAME = 'pixel-matrix-player';
 const IDB_STORE_NAME = 'durableText';

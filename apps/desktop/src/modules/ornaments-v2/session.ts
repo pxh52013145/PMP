@@ -16,6 +16,8 @@ const ORNAMENTS_DIALOG_PIN_OVERRIDE = {
   editorWindowsPinned: false,
 } as const;
 
+export type OrnamentsOverlayKind = 'editor' | 'behind' | 'above';
+
 export async function startOrnamentsEditSession(): Promise<void> {
   await acquireWindowPinOverride(ORNAMENTS_EDIT_PIN_OVERRIDE_SOURCE, ORNAMENTS_EDIT_PIN_OVERRIDE);
 
@@ -54,4 +56,33 @@ export async function endOrnamentsEditSession(): Promise<void> {
 
   await broadcastSignal(TAURI_EVENTS.ORNAMENTS_EDIT_SESSION_ENDED);
   await releaseWindowPinOverride(ORNAMENTS_EDIT_PIN_OVERRIDE_SOURCE);
+}
+
+export async function getOrnamentsOverlayGeneration(kind: OrnamentsOverlayKind): Promise<number> {
+  if (!isTauriRuntime()) return 0;
+
+  return invokeWithTelemetry<number>('ornaments_overlay_get_generation', { kind }, {
+    moduleId: 'ornaments',
+    component: 'overlay',
+    event: 'ornaments.overlay.generation-read',
+    successLevel: 'debug',
+  });
+}
+
+export async function markOrnamentsOverlayReady(
+  kind: OrnamentsOverlayKind,
+  generation: number
+): Promise<void> {
+  if (!isTauriRuntime()) return;
+
+  await invokeWithTelemetry(
+    'ornaments_overlay_mark_ready',
+    { kind, generation },
+    {
+      moduleId: 'ornaments',
+      component: 'overlay',
+      event: 'ornaments.overlay.ready',
+      successLevel: 'debug',
+    }
+  );
 }

@@ -19,6 +19,8 @@
           "assetScope": [
             "$APPDATA/background-media/*",
             "$APPDATA/background-media/**",
+            "$APPDATA/ornaments-media/*",
+            "$APPDATA/ornaments-media/**",
             "$APPDATA/music-covers/*",
             "$APPDATA/music-covers/**",
             "$APPDATA/pmp-durable/extensions-v2/*",

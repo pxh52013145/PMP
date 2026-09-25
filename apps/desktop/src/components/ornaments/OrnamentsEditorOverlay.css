@@ -32,6 +32,47 @@ body,
   cursor: grab;
 }
 
+.ornaments-editor-overlay__layer-indicator {
+  position: absolute;
+  left: 50%;
+  bottom: -34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 18px;
+  padding: 2px 6px;
+  box-sizing: border-box;
+  transform: translateX(-50%);
+  border: 1px solid rgba(225, 240, 255, 0.34);
+  background: rgba(8, 18, 32, 0.82);
+  color: rgba(238, 248, 255, 0.96);
+  font: 600 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  pointer-events: auto;
+  cursor: default;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.24);
+}
+
+.ornaments-editor-overlay__layer-indicator.is-selected {
+  gap: 4px;
+  min-width: 52px;
+  padding: 3px 6px;
+  border-color: rgba(120, 220, 255, 0.58);
+  box-shadow: 0 0 14px rgba(0, 210, 255, 0.16);
+}
+
+.ornaments-editor-overlay__layer-label {
+  color: rgba(188, 214, 232, 0.78);
+  font: 500 10px/1.1 system-ui, sans-serif;
+}
+
+.ornaments-editor-overlay__layer-value {
+  min-width: 12px;
+  color: #f4fbff;
+  font: 700 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-align: center;
+}
+
 .ornaments-editor-overlay__item-shell.selected {
   outline: 1px solid rgba(245, 250, 255, 0.95);
   box-shadow:
@@ -45,6 +86,12 @@ body,
   object-fit: contain;
   display: block;
   pointer-events: auto;
+}
+
+/* The native behind overlay is already below the main HWND. Keep this copy as
+   an invisible hit target so editing does not create a false foreground preview. */
+.ornaments-editor-overlay__item-shell[data-plane='behind'] > .ornaments-editor-overlay__item {
+  opacity: 0;
 }
 
 .ornaments-editor-overlay__resize {
@@ -158,8 +205,9 @@ body,
 }
 
 .ornaments-editor-overlay__toolbar-icon {
-  font-size: 16px;
-  opacity: 0.94;
+  flex: 0 0 auto;
+  opacity: 0.96;
+  shape-rendering: geometricPrecision;
 }
 
 .ornaments-editor-overlay__toolbar-label {

@@ -17,6 +17,7 @@ pub struct BackgroundImportResult {
 
 struct KindConfig {
     label: &'static str,
+    storage_dir: &'static str,
     allowed_exts: &'static [&'static str],
     default_ext: &'static str,
 }
@@ -25,11 +26,19 @@ fn kind_config(kind: &str) -> Option<KindConfig> {
     match kind {
         "image" => Some(KindConfig {
             label: "image",
+            storage_dir: "background-media",
+            allowed_exts: &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"],
+            default_ext: "png",
+        }),
+        "ornament" => Some(KindConfig {
+            label: "ornament image",
+            storage_dir: "ornaments-media",
             allowed_exts: &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"],
             default_ext: "png",
         }),
         "video" => Some(KindConfig {
             label: "video",
+            storage_dir: "background-media",
             allowed_exts: &["mp4", "webm", "ogg", "mov"],
             default_ext: "mp4",
         }),
@@ -123,9 +132,9 @@ pub fn import_background_media(
         .path_resolver()
         .app_data_dir()
         .ok_or_else(|| "Unable to resolve app data directory".to_string())?;
-    let dest_dir = app_data_dir.join("background-media");
+    let dest_dir = app_data_dir.join(config.storage_dir);
     std::fs::create_dir_all(&dest_dir)
-        .map_err(|e| format!("Failed to create background-media directory: {}", e))?;
+        .map_err(|e| format!("Failed to create {} directory: {}", config.storage_dir, e))?;
 
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)

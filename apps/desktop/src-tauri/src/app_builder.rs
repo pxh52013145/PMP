@@ -152,6 +152,16 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
 fn bind_main_window_events(app: &tauri::App, window: &tauri::Window) {
     let app_handle = app.handle();
     let exit_flag = app.state::<crate::app_runtime::ExitFlag>().0.clone();
+    let main_window = window.clone();
+
+    fn sync_ornaments_with_main_window(app: &tauri::AppHandle, main: &tauri::Window) {
+        let visible = main.is_visible().unwrap_or(false);
+        let minimized = main.is_minimized().unwrap_or(false);
+        crate::windows::ornaments_editor_overlay::sync_main_visibility(app, visible && !minimized);
+        if !visible || minimized {
+            crate::windows::ornaments_editor_overlay::schedule_main_visibility_reconcile(app);
+        }
+    }
 
     window.on_window_event(move |event| match event {
         tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -162,20 +172,43 @@ fn bind_main_window_events(app: &tauri::App, window: &tauri::Window) {
             let _ = app_handle.emit_all(crate::windows::EVENT_MAIN_WINDOW_CLOSE_REQUESTED, ());
         }
         tauri::WindowEvent::Focused(true) => {
+            // Reconcile overlay geometry and visibility synchronously when Windows
+            // restores the main window. Waiting for the frontend animation frame
+            // leaves the previous overlay position visible briefly.
+            // A taskbar restore can report Focused before is_visible() has settled,
+            // so use the native visibility state captured at this event boundary.
+            let visible = main_window.is_visible().unwrap_or(false);
+            crate::windows::ornaments_editor_overlay::sync_main_visibility(&app_handle, visible);
+            crate::windows::ornaments_editor_overlay::schedule_main_visibility_reconcile(
+                &app_handle,
+            );
             let app_handle = app_handle.clone();
             tauri::async_runtime::spawn_blocking(move || {
                 std::thread::sleep(Duration::from_millis(80));
                 let _ = crate::vst_runtime::raise_visible_editors_above_main(&app_handle);
             });
         }
+        tauri::WindowEvent::Focused(false) => {
+            // Losing focus to another application must not hide overlays. A
+            // minimized main window is the one focus transition that also makes
+            // the overlay non-presentable, so clear its presented state here.
+            if main_window.is_minimized().unwrap_or(false) {
+                crate::windows::ornaments_editor_overlay::sync_main_visibility(&app_handle, false);
+            }
+        }
         tauri::WindowEvent::Moved(_) => {
             crate::windows::editor::sync_style_bar_window(&app_handle);
+            let _ = crate::windows::ornaments_editor_overlay::sync_geometry(&app_handle);
         }
         tauri::WindowEvent::Resized(_) => {
             crate::windows::editor::sync_style_bar_window(&app_handle);
+            if let Some(main) = app_handle.get_window(crate::windows::MAIN_WINDOW_LABEL) {
+                sync_ornaments_with_main_window(&app_handle, &main);
+            }
         }
         tauri::WindowEvent::ScaleFactorChanged { .. } => {
             crate::windows::editor::sync_style_bar_window(&app_handle);
+            let _ = crate::windows::ornaments_editor_overlay::sync_geometry(&app_handle);
         }
         _ => {}
     });
@@ -234,10 +267,13 @@ fn toggle_main_window_visibility(app: &tauri::AppHandle) {
     if let Some(window) = app.get_window(crate::windows::MAIN_WINDOW_LABEL) {
         if window.is_visible().unwrap_or(false) {
             let _ = window.hide();
+            crate::windows::ornaments_editor_overlay::sync_main_visibility(app, false);
             let _ = app.emit_all(crate::windows::EVENT_MAIN_WINDOW_HIDDEN, ());
         } else {
             let _ = window.show();
             let _ = window.set_focus();
+            crate::windows::ornaments_editor_overlay::sync_main_visibility(app, true);
+            crate::windows::ornaments_editor_overlay::schedule_main_visibility_reconcile(app);
             let _ = app.emit_all(crate::windows::EVENT_MAIN_WINDOW_SHOWN, ());
         }
     }
@@ -247,6 +283,8 @@ fn show_and_focus_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_window(crate::windows::MAIN_WINDOW_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();
+        crate::windows::ornaments_editor_overlay::sync_main_visibility(app, true);
+        crate::windows::ornaments_editor_overlay::schedule_main_visibility_reconcile(app);
         let _ = app.emit_all(crate::windows::EVENT_MAIN_WINDOW_SHOWN, ());
     }
 }
@@ -254,6 +292,7 @@ fn show_and_focus_main_window(app: &tauri::AppHandle) {
 fn hide_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_window(crate::windows::MAIN_WINDOW_LABEL) {
         let _ = window.hide();
+        crate::windows::ornaments_editor_overlay::sync_main_visibility(app, false);
         let _ = app.emit_all(crate::windows::EVENT_MAIN_WINDOW_HIDDEN, ());
     }
 }

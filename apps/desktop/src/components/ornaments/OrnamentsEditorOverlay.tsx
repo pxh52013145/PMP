@@ -1,7 +1,15 @@
-﻿import { memo, useCallback, useMemo, useState } from 'react';
+﻿import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { useRef } from 'react';
 import { invokeWithTelemetry } from '../../services/telemetry/tauriInvokeTelemetry';
+import { useT } from '../../i18n';
+import {
+  getOrnamentsOverlayGeneration,
+  markOrnamentsOverlayReady,
+} from '../../modules/ornaments-v2/session';
 import {
   ornamentMediaUrl,
+  normalizeOrnamentLayerOrder,
+  nextOrnamentLayerOrder,
   type OrnamentItem,
   type OrnamentsConfigV2,
   useOrnamentsConfig,
@@ -51,14 +59,98 @@ function updateItem(config: OrnamentsConfigV2, itemId: string, updater: (item: O
   };
 }
 
-function maxOrder(items: readonly OrnamentItem[], plane: number): number {
-  return items.reduce((max, item) => (item.layer.plane === plane ? Math.max(max, item.layer.order) : max), 0);
-}
-
 function editorZIndex(item: OrnamentItem, selectedId: string | null): number {
   const planeRank = item.layer.plane === -1 ? 0 : 1;
-  const base = planeRank * 10_000 + item.layer.order;
+  const base = planeRank * 10_000 + normalizeOrnamentLayerOrder(item.layer.order);
   return item.id === selectedId ? 1_000_000 + base : 10_000 + base;
+}
+
+type TechLineIconName = 'front' | 'behind' | 'raise' | 'lower' | 'delete';
+
+function TechLineIcon({ name }: { name: TechLineIconName }) {
+  const common = {
+    className: 'ornaments-editor-overlay__toolbar-icon',
+    viewBox: '0 0 24 24',
+    width: 18,
+    height: 18,
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.45,
+    strokeLinecap: 'square' as const,
+    strokeLinejoin: 'miter' as const,
+    'aria-hidden': true,
+  };
+
+  if (name === 'front') {
+    return (
+      <svg {...common}>
+        <path d="M6 5h12l2 2v10l-2 2H6l-2-2V7l2-2Z" />
+        <path d="M8 11h8l2 2-2 2H8l-2-2 2-2Z" />
+        <path d="M12 9V3m-3 3 3-3 3 3" />
+      </svg>
+    );
+  }
+
+  if (name === 'behind') {
+    return (
+      <svg {...common}>
+        <path d="M6 5h12l2 2v10l-2 2H6l-2-2V7l2-2Z" />
+        <path d="M8 11h8l2 2-2 2H8l-2-2 2-2Z" />
+        <path d="M12 15v6m-3-3 3 3 3-3" />
+        <path d="M4 13h4m8 0h4" />
+      </svg>
+    );
+  }
+
+  if (name === 'raise' || name === 'lower') {
+    const isRaise = name === 'raise';
+    return (
+      <svg {...common}>
+        <path d={isRaise ? 'M5 18.5h14M12 18.5V5.5M7.5 10 12 5.5l4.5 4.5' : 'M5 5.5h14M12 5.5v13M7.5 14 12 18.5l4.5-4.5'} />
+        <path d={isRaise ? 'M5 3.5h4M5 3.5v4' : 'M19 20.5h-4M19 20.5v-4'} />
+      </svg>
+    );
+  }
+
+  return (
+    <svg {...common}>
+      <path d="M6 8.5h12v11H6zM4 5.5h16M9 3.5h6M9.5 11.5v5M14.5 11.5v5" />
+      <path d="m4 5.5 1.5-2h3M20 5.5l-1.5-2h-3" />
+    </svg>
+  );
+}
+
+function adjustItemOrderWithinPlane(
+  config: OrnamentsConfigV2,
+  itemId: string,
+  direction: -1 | 1
+): OrnamentsConfigV2 {
+  const item = config.items.find((candidate) => candidate.id === itemId);
+  if (!item) return config;
+
+  const currentOrder = normalizeOrnamentLayerOrder(item.layer.order);
+  const nextOrder = Math.max(1, currentOrder + direction);
+  if (nextOrder === currentOrder) return config;
+  const conflicting = config.items.find(
+    (candidate) =>
+      candidate.id !== itemId &&
+      candidate.enabled &&
+      candidate.layer.plane === item.layer.plane &&
+      normalizeOrnamentLayerOrder(candidate.layer.order) === nextOrder
+  );
+
+  return {
+    ...config,
+    items: config.items.map((candidate) => {
+      if (candidate.id === itemId) {
+        return { ...candidate, layer: { ...candidate.layer, order: nextOrder } };
+      }
+      if (conflicting && candidate.id === conflicting.id) {
+        return { ...candidate, layer: { ...candidate.layer, order: currentOrder } };
+      }
+      return candidate;
+    }),
+  };
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -157,9 +249,11 @@ function constrainResizeRect(rect: OrnamentRect, bounds: OrnamentRect, handle: s
 }
 
 export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
+  const t = useT();
   const [config, setConfig] = useOrnamentsConfig();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
+  const latestDragRectRef = useRef<{ itemId: string; rect: OrnamentRect } | null>(null);
   const viewportWidth = Math.max(1, window.innerWidth - EDIT_MARGIN * 2);
   const viewportHeight = Math.max(1, window.innerHeight - EDIT_MARGIN * 2);
   const bounds = useMemo(() => editorBounds(window.innerWidth, window.innerHeight), []);
@@ -167,37 +261,58 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
 
   const orderedItems = useMemo(() => sortedOrnaments(config.items), [config.items]);
 
+  useEffect(() => {
+    let disposed = false;
+    const images = Array.from(
+      document.querySelectorAll<HTMLImageElement>('.ornaments-editor-overlay__item')
+    );
+    const waitForImages = Promise.all(
+      images.map(async (image) => {
+        if (!image.complete) {
+          await new Promise<void>((resolve) => {
+            const resolveOnce = () => resolve();
+            image.addEventListener('load', resolveOnce, { once: true });
+            image.addEventListener('error', resolveOnce, { once: true });
+          });
+        }
+        if (typeof image.decode === 'function') {
+          await image.decode().catch(() => undefined);
+        }
+      })
+    );
+
+    void Promise.all([getOrnamentsOverlayGeneration('editor'), waitForImages]).then(
+      ([generation]) => {
+        if (disposed) return;
+        window.requestAnimationFrame(() => {
+          window.setTimeout(() => {
+            if (disposed) return;
+            void markOrnamentsOverlayReady('editor', generation).catch(() => {
+              // The native window may have been closed while the image was loading.
+            });
+          });
+        });
+      }
+    );
+
+    return () => {
+      disposed = true;
+    };
+  }, [orderedItems]);
+
   const persistItemRect = useCallback(
     async (itemId: string, rect: OrnamentRect) => {
-      const item = config.items.find((candidate) => candidate.id === itemId);
-      if (!item) return;
-      const offset = offsetFromRect(item, toMainRect(rect), viewportWidth, viewportHeight);
-      await setConfig(updateItem(config, itemId, (current) => ({
-        ...current,
+      await setConfig((current) => updateItem(current, itemId, (currentItem) => ({
+        ...currentItem,
         placement: {
-          ...current.placement,
-          ...offset,
+          ...currentItem.placement,
+          ...offsetFromRect(currentItem, toMainRect(rect), viewportWidth, viewportHeight),
           width: Math.round(rect.width),
           height: Math.round(rect.height),
         },
       })));
     },
-    [config, setConfig, viewportHeight, viewportWidth]
-  );
-
-  const bringForwardInPlane = useCallback(
-    async (itemId: string) => {
-      const item = config.items.find((candidate) => candidate.id === itemId);
-      if (!item) return;
-      await setConfig(updateItem(config, itemId, (current) => ({
-        ...current,
-        layer: {
-          ...current.layer,
-          order: maxOrder(config.items, current.layer.plane) + 1,
-        },
-      })));
-    },
-    [config, setConfig]
+    [setConfig, viewportHeight, viewportWidth]
   );
 
   const handleItemPointerDown = useCallback(
@@ -206,8 +321,8 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
       event.stopPropagation();
       const rect = toEditorRect(ornamentRect(item, viewportWidth, viewportHeight));
       setSelectedId(item.id);
-      void bringForwardInPlane(item.id);
       event.currentTarget.setPointerCapture(event.pointerId);
+      latestDragRectRef.current = { itemId: item.id, rect };
       setDragState({
         kind: 'move',
         itemId: item.id,
@@ -217,7 +332,7 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
         startRect: rect,
       });
     },
-    [bringForwardInPlane, viewportHeight, viewportWidth]
+    [viewportHeight, viewportWidth]
   );
 
   const handleResizePointerDown = useCallback(
@@ -226,6 +341,7 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
       event.stopPropagation();
       const rect = toEditorRect(ornamentRect(selected, viewportWidth, viewportHeight));
       event.currentTarget.setPointerCapture(event.pointerId);
+      latestDragRectRef.current = { itemId: selected.id, rect };
       setDragState({
         kind: 'resize',
         itemId: selected.id,
@@ -244,8 +360,6 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
       if (!dragState || event.pointerId !== dragState.pointerId) return;
       const dx = event.clientX - dragState.startX;
       const dy = event.clientY - dragState.startY;
-      const item = config.items.find((candidate) => candidate.id === dragState.itemId);
-      if (!item) return;
 
       let rect: OrnamentRect = { ...dragState.startRect };
       if (dragState.kind === 'move') {
@@ -266,30 +380,31 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
         rect = constrainResizeRect(rect, bounds, dragState.handle);
       }
 
-      const offset = offsetFromRect(item, toMainRect(rect), viewportWidth, viewportHeight);
-      void setConfig(updateItem(config, item.id, (current) => ({
-        ...current,
+      latestDragRectRef.current = { itemId: dragState.itemId, rect };
+      void setConfig((current) => updateItem(current, dragState.itemId, (currentItem) => ({
+        ...currentItem,
         placement: {
-          ...current.placement,
-          ...offset,
+          ...currentItem.placement,
+          ...offsetFromRect(currentItem, toMainRect(rect), viewportWidth, viewportHeight),
           width: Math.round(rect.width),
           height: Math.round(rect.height),
         },
       })));
     },
-    [bounds, config, dragState, setConfig, viewportHeight, viewportWidth]
+    [bounds, dragState, setConfig, viewportHeight, viewportWidth]
   );
 
   const handlePointerUp = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       if (!dragState || event.pointerId !== dragState.pointerId) return;
       setDragState(null);
-      const item = config.items.find((candidate) => candidate.id === dragState.itemId);
-      if (item) {
-        void persistItemRect(item.id, toEditorRect(ornamentRect(item, viewportWidth, viewportHeight)));
+      const latest = latestDragRectRef.current;
+      latestDragRectRef.current = null;
+      if (latest?.itemId === dragState.itemId) {
+        void persistItemRect(latest.itemId, latest.rect);
       }
     },
-    [config.items, dragState, persistItemRect, viewportHeight, viewportWidth]
+    [dragState, persistItemRect]
   );
 
   const handleOverlayPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
@@ -306,31 +421,34 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
 
   const changePlane = useCallback(async (plane: -1 | 1) => {
     if (!selected) return;
-    await setConfig(updateItem(config, selected.id, (current) => ({
-      ...current,
-      layer: {
-        plane,
-        order: maxOrder(config.items, plane) + 1,
-      },
-    })));
-  }, [config, selected, setConfig]);
+    if (selected.layer.plane === plane) return;
+    await setConfig((current) => {
+      const currentItem = current.items.find((item) => item.id === selected.id);
+      if (!currentItem || currentItem.layer.plane === plane) return current;
+      return updateItem(current, selected.id, (item) => ({
+        ...item,
+        layer: {
+          plane,
+          order: nextOrnamentLayerOrder(current.items, plane),
+        },
+      }));
+    });
+  }, [selected, setConfig]);
 
   const nudgeOrder = useCallback(async (direction: -1 | 1) => {
     if (!selected) return;
-    await setConfig(updateItem(config, selected.id, (current) => ({
-      ...current,
-      layer: {
-        ...current.layer,
-        order: current.layer.order + direction,
-      },
-    })));
-  }, [config, selected, setConfig]);
+    await setConfig((current) => adjustItemOrderWithinPlane(current, selected.id, direction));
+  }, [selected, setConfig]);
 
   const deleteSelected = useCallback(async () => {
     if (!selected) return;
-    await setConfig({ ...config, items: config.items.filter((item) => item.id !== selected.id) });
+    const deletedId = selected.id;
+    await setConfig((current) => ({
+      ...current,
+      items: current.items.filter((item) => item.id !== deletedId),
+    }));
     setSelectedId(null);
-  }, [config, selected, setConfig]);
+  }, [selected, setConfig]);
 
   return (
     <div
@@ -345,10 +463,12 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
         const rect = toEditorRect(ornamentRect(item, viewportWidth, viewportHeight));
         const isSelected = item.id === selectedId;
         const toolbar = toolbarPlacement(rect, window.innerWidth, window.innerHeight);
+        const layerOrder = normalizeOrnamentLayerOrder(item.layer.order);
         return (
           <div
             key={item.id}
             className={`ornaments-editor-overlay__item-shell ${isSelected ? 'selected' : ''}`}
+            data-plane={item.layer.plane === -1 ? 'behind' : 'above'}
             style={{
               left: rect.left,
               top: rect.top,
@@ -378,41 +498,81 @@ export const OrnamentsEditorOverlay = memo(function OrnamentsEditorOverlay() {
                 <div className={toolbar.className} style={toolbar.style}>
                   <button
                     type="button"
-                    title="置于窗前"
+                    title={t('editor.style-bar.ornaments.bringToFront')}
                     className={item.layer.plane === 1 ? 'active' : ''}
+                    onPointerDown={(event) => event.stopPropagation()}
                     onClick={() => void changePlane(1)}
                   >
-                    <span className="ornaments-editor-overlay__toolbar-icon" aria-hidden="true">△</span>
-                    <span className="ornaments-editor-overlay__toolbar-label">置于窗前</span>
+                    <TechLineIcon name="front" />
+                    <span className="ornaments-editor-overlay__toolbar-label">{t('editor.style-bar.ornaments.bringToFront')}</span>
                   </button>
                   <button
                     type="button"
-                    title="置于窗后"
+                    title={t('editor.style-bar.ornaments.sendToBack')}
                     className={item.layer.plane === -1 ? 'active' : ''}
+                    onPointerDown={(event) => event.stopPropagation()}
                     onClick={() => void changePlane(-1)}
                   >
-                    <span className="ornaments-editor-overlay__toolbar-icon" aria-hidden="true">◇</span>
-                    <span className="ornaments-editor-overlay__toolbar-label">置于窗后</span>
+                    <TechLineIcon name="behind" />
+                    <span className="ornaments-editor-overlay__toolbar-label">{t('editor.style-bar.ornaments.sendToBack')}</span>
                   </button>
-                  <button type="button" title="同层上移" onClick={() => void nudgeOrder(1)}>
-                    <span className="ornaments-editor-overlay__toolbar-icon" aria-hidden="true">⬡</span>
-                    <span className="ornaments-editor-overlay__toolbar-label">同层上移</span>
+                  <button
+                    type="button"
+                    title={t('editor.style-bar.ornaments.raiseLayer')}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={() => void nudgeOrder(1)}
+                  >
+                    <TechLineIcon name="raise" />
+                    <span className="ornaments-editor-overlay__toolbar-label">{t('editor.style-bar.ornaments.raiseLayer')}</span>
                   </button>
-                  <button type="button" title="同层下移" onClick={() => void nudgeOrder(-1)}>
-                    <span className="ornaments-editor-overlay__toolbar-icon" aria-hidden="true">⬢</span>
-                    <span className="ornaments-editor-overlay__toolbar-label">同层下移</span>
+                  <button
+                    type="button"
+                    title={t('editor.style-bar.ornaments.lowerLayer')}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={() => void nudgeOrder(-1)}
+                  >
+                    <TechLineIcon name="lower" />
+                    <span className="ornaments-editor-overlay__toolbar-label">{t('editor.style-bar.ornaments.lowerLayer')}</span>
                   </button>
-                  <button type="button" title="删除挂件" className="danger" onClick={() => void deleteSelected()}>
-                    <span className="ornaments-editor-overlay__toolbar-icon" aria-hidden="true">⌫</span>
-                    <span className="ornaments-editor-overlay__toolbar-label">删除挂件</span>
+                  <button
+                    type="button"
+                    title={t('editor.style-bar.ornaments.delete')}
+                    className="danger"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={() => void deleteSelected()}
+                  >
+                    <TechLineIcon name="delete" />
+                    <span className="ornaments-editor-overlay__toolbar-label">{t('editor.style-bar.ornaments.delete')}</span>
                   </button>
                 </div>
               </>
             )}
+            <div
+              className={`ornaments-editor-overlay__layer-indicator${isSelected ? ' is-selected' : ''}`}
+              title={t('editor.style-bar.ornaments.layerHint')}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                if (!isSelected) setSelectedId(item.id);
+              }}
+            >
+              {isSelected ? (
+                <>
+                  <span className="ornaments-editor-overlay__layer-label">{t('editor.style-bar.ornaments.layer')}</span>
+                  <span className="ornaments-editor-overlay__layer-value">{layerOrder}</span>
+                </>
+              ) : (
+                <span
+                  className="ornaments-editor-overlay__layer-value"
+                  aria-label={`${t('editor.style-bar.ornaments.layer')}: ${layerOrder}`}
+                >
+                  {layerOrder}
+                </span>
+              )}
+            </div>
           </div>
         );
       })}
-      <div className="ornaments-editor-overlay__hint">窗口挂件编辑中 · 拖拽空白区域移动主窗口</div>
+      <div className="ornaments-editor-overlay__hint">{t('editor.style-bar.ornaments.editingDesc')}</div>
     </div>
   );
 });

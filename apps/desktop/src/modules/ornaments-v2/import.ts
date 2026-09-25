@@ -46,7 +46,7 @@ export async function importOrnamentImage(): Promise<{
 
   const importResult = await invokeWithTelemetry<BackgroundImportResult>('background_import_media', {
     sourcePath: selected,
-    kind: 'image',
+    kind: 'ornament',
     gifMaxFps: 30,
   }, {
     moduleId: 'ornaments',

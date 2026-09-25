@@ -1,5 +1,6 @@
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { readString } from '../storage';
+import { hydrateOrnamentsConfig, readOrnamentsConfig } from '../ornaments-v2/store';
 
 type BackgroundMode = 'maximized' | 'windowed';
 
@@ -73,6 +74,46 @@ function getConfigMediaRelPath(config: BackgroundConfig): string | null {
   return null;
 }
 
+function tryGetManagedOrnamentMediaRelPath(path: string | undefined): string | null {
+  if (!path || path.startsWith('data:')) return null;
+
+  const candidates = [path];
+  try {
+    candidates.push(decodeURIComponent(path));
+  } catch {
+    // ignore
+  }
+
+  for (const candidate of candidates) {
+    const normalized = candidate.split('\\').join('/');
+    for (const directory of ['ornaments-media', 'background-media']) {
+      const marker = `/${directory}/`;
+      const markerIndex = normalized.lastIndexOf(marker);
+      const tail = markerIndex >= 0
+        ? normalized.slice(markerIndex + marker.length)
+        : normalized.startsWith(`${directory}/`)
+          ? normalized.slice(directory.length + 1)
+          : null;
+      if (tail === null) continue;
+
+      const fileName = tail.split('?')[0].split('#')[0].split('/')[0];
+      if (!fileName || !fileName.startsWith('background-')) continue;
+      return `${directory}/${fileName}`;
+    }
+  }
+
+  return null;
+}
+
+export function collectReferencedOrnamentMedia(): Set<string> {
+  const referenced = new Set<string>();
+  for (const item of readOrnamentsConfig().items) {
+    const rel = tryGetManagedOrnamentMediaRelPath(item.media.path);
+    if (rel) referenced.add(rel);
+  }
+  return referenced;
+}
+
 export function collectReferencedBackgroundMedia(): Set<string> {
   const referenced = new Set<string>();
 
@@ -96,6 +137,11 @@ export function collectReferencedBackgroundMedia(): Set<string> {
 export async function gcOrphanBackgroundMedia(): Promise<{ scanned: number; removed: number }> {
   const fs = await import('@tauri-apps/api/fs');
 
+  // Recover the latest ornament manifest before collecting references. This
+  // protects legacy ornament files in background-media during startup before
+  // the editor or render overlay has mounted.
+  await hydrateOrnamentsConfig();
+
   // Safety: only delete files when we have a stable view of background storage.
   // In Tauri startup we may restore settings/history from AppData snapshots asynchronously.
   // If we GC before that restore finishes, we'd treat everything as "orphan" and delete user media.
@@ -103,6 +149,9 @@ export async function gcOrphanBackgroundMedia(): Promise<{ scanned: number; remo
   const hasHistory = Boolean(readString(STORAGE_KEYS.BACKGROUND_HISTORY));
 
   const referenced = collectReferencedBackgroundMedia();
+  for (const rel of collectReferencedOrnamentMedia()) {
+    referenced.add(rel);
+  }
   const allowDelete = hasSettings && hasHistory && referenced.size > 0;
   let entries: Array<import('@tauri-apps/api/fs').FileEntry> = [];
   try {

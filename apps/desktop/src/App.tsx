@@ -1,5 +1,4 @@
 import { Suspense, lazy, useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
 import { appWindow, getAll } from '@tauri-apps/api/window';
 import {
   setupConfigSync,
@@ -56,11 +55,12 @@ import {
   shouldRunDurableStorageMigrations,
   shouldRunPmpsDurableMigration,
 } from './modules/startup/durableMigrationGuards';
-import { onStartupIdle } from './modules/startup/startupReady';
-import { readOrnamentsConfig } from './modules/ornaments-v2/store';
+import { onStartupReady } from './modules/startup/startupReady';
+import { hydrateOrnamentsConfig, readOrnamentsConfig } from './modules/ornaments-v2/store';
 import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
 import { applyWindowPinPolicy } from './utils/windowPinRuntime';
 import { readWindowPinState, writeWindowPinState } from './utils/windowPinState';
+import { endOrnamentsEditSession } from './modules/ornaments-v2/session';
 import { MatrixWorkbench } from './workbenches/matrix/MatrixWorkbench';
 import { getTelemetryLogger } from './services/telemetry/TelemetryService';
 import { invokeWithTelemetry } from './services/telemetry/tauriInvokeTelemetry';
@@ -74,7 +74,6 @@ import './App.css';
 let coverDecodeReporter: ((src: string, width: number, height: number) => void) | null = null;
 let coverDecodeReporterLoading: Promise<void> | null = null;
 
-const ORNAMENTS_RENDER_OVERLAY_STARTUP_DELAY_MS = 6_000;
 const DESKTOP_LYRICS_AUDIO_CONTROL_REQUEST_EVENT = 'desktop-lyrics-audio-control-requested';
 
 type DesktopLyricsAudioControlAction = 'previous' | 'toggle-play-pause' | 'next';
@@ -233,6 +232,7 @@ function AppContent() {
       });
 
       try {
+        await endOrnamentsEditSession();
         const { ensureEditorWindowsClosed } = await import('./utils/editorWindows');
         const result = await ensureEditorWindowsClosed();
         const closeFailures = result.closeReport?.failures ?? [];
@@ -342,11 +342,6 @@ function AppContent() {
   useEffect(() => {
     if (!isTauri) return;
     let cancelled = false;
-    let syncFrame: number | null = null;
-    let syncInFlight = false;
-    let syncQueued = false;
-    let unlistenMove: (() => void) | null = null;
-    let unlistenResize: (() => void) | null = null;
     let ornamentsOverlayLeaseId: string | null = null;
 
     const releaseOrnamentsOverlayLease = (detail: string) => {
@@ -374,73 +369,13 @@ function AppContent() {
       ornamentsOverlayLeaseId = lease?.id ?? null;
     };
 
-    const runGeometrySync = () => {
+    const openRenderOverlays = async () => {
+      await hydrateOrnamentsConfig();
       if (cancelled) return;
-      if (syncInFlight) {
-        syncQueued = true;
-        return;
-      }
-
-      syncInFlight = true;
-      void invoke('ornaments_overlay_sync_geometry')
-        .catch(() => {
-          // High-frequency window geometry sync intentionally bypasses invoke telemetry.
-        })
-        .finally(() => {
-          syncInFlight = false;
-          if (cancelled || !syncQueued) return;
-          syncQueued = false;
-          scheduleGeometrySync();
-        });
-    };
-
-    const scheduleGeometrySync = () => {
-      if (cancelled) return;
-      if (syncFrame !== null) return;
-      syncFrame = window.requestAnimationFrame(() => {
-        syncFrame = null;
-        runGeometrySync();
-      });
-    };
-
-    const detachGeometryListeners = () => {
-      if (unlistenMove) {
-        unlistenMove();
-        unlistenMove = null;
-      }
-      if (unlistenResize) {
-        unlistenResize();
-        unlistenResize = null;
-      }
-    };
-
-    const attachGeometryListeners = async () => {
-      try {
-        detachGeometryListeners();
-        const [moveCleanup, resizeCleanup] = await Promise.all([
-          appWindow.onMoved(scheduleGeometrySync),
-          appWindow.onResized(scheduleGeometrySync),
-        ]);
-
-        if (cancelled) {
-          moveCleanup();
-          resizeCleanup();
-          return;
-        }
-
-        unlistenMove = moveCleanup;
-        unlistenResize = resizeCleanup;
-      } catch {
-        // best-effort: ornaments overlays should not block main window interaction
-      }
-    };
-
-    const openRenderOverlays = () => {
       const plan = readOrnamentsRenderPlan();
       if (plan.enabledCount === 0) {
         telemetry.info('ornaments.render-overlay.skip-empty');
         releaseOrnamentsOverlayLease('ornaments overlay plan is empty');
-        detachGeometryListeners();
         void invokeWithTelemetry('ornaments_render_overlay_sync_planes', {
           behind: false,
           above: false,
@@ -455,12 +390,32 @@ function AppContent() {
         return;
       }
 
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
-          if (cancelled) return;
+      if (cancelled) return;
 
-          setStartupMemoryTraceFlag('ornamentsOverlayRequested');
-          recordStartupMemoryCheckpoint('ornaments.overlay.open.requested', {
+      setStartupMemoryTraceFlag('ornamentsOverlayRequested');
+      recordStartupMemoryCheckpoint('ornaments.overlay.open.requested', {
+        fields: {
+          enabledCount: plan.enabledCount,
+          behind: plan.behind,
+          above: plan.above,
+          animatedCount: plan.animatedCount,
+          totalPlacementAreaPx: plan.totalPlacementAreaPx,
+          totalSourcePixels: plan.totalSourcePixels,
+        },
+      });
+      void invokeWithTelemetry('ornaments_render_overlay_sync_planes', {
+        behind: plan.behind,
+        above: plan.above,
+      }, {
+        moduleId: 'ornaments',
+        component: 'AppContent',
+        event: 'ornaments.render-overlay.sync-planes',
+        successLevel: 'info',
+      })
+        .then(() => {
+          if (cancelled) return;
+          setStartupMemoryTraceFlag('ornamentsOverlayOpened');
+          recordStartupMemoryCheckpoint('ornaments.overlay.opened', {
             fields: {
               enabledCount: plan.enabledCount,
               behind: plan.behind,
@@ -470,46 +425,19 @@ function AppContent() {
               totalSourcePixels: plan.totalSourcePixels,
             },
           });
-          void invokeWithTelemetry('ornaments_render_overlay_sync_planes', {
-            behind: plan.behind,
-            above: plan.above,
-          }, {
-            moduleId: 'ornaments',
-            component: 'AppContent',
-            event: 'ornaments.render-overlay.sync-planes',
-            successLevel: 'info',
-          })
-            .then(() => {
-              if (cancelled) return;
-              setStartupMemoryTraceFlag('ornamentsOverlayOpened');
-              recordStartupMemoryCheckpoint('ornaments.overlay.opened', {
-                fields: {
-                  enabledCount: plan.enabledCount,
-                  behind: plan.behind,
-                  above: plan.above,
-                  animatedCount: plan.animatedCount,
-                  totalPlacementAreaPx: plan.totalPlacementAreaPx,
-                  totalSourcePixels: plan.totalSourcePixels,
-                },
-              });
-              acquireOrnamentsOverlayLease(plan);
-              scheduleGeometrySync();
-              void attachGeometryListeners();
-            })
-            .catch(() => {
-              // best-effort: ornaments overlays should never block main window boot
-            });
+          acquireOrnamentsOverlayLease(plan);
+        })
+        .catch(() => {
+          // best-effort: ornaments overlays should never block main window boot
         });
-      });
     };
 
-    const cleanupStartupIdle = onStartupIdle(openRenderOverlays, {
-      delayMs: ORNAMENTS_RENDER_OVERLAY_STARTUP_DELAY_MS,
-      timeoutMs: 2_000,
+    const cleanupStartupReady = onStartupReady(() => {
+      void openRenderOverlays();
     });
     let cleanupOrnamentsUpdated: (() => void) | null = null;
     const cleanupOrnamentsUpdatedPromise = setupTauriListener(TAURI_EVENTS.ORNAMENTS_UPDATED, () => {
-      if (!cancelled) openRenderOverlays();
+      if (!cancelled) void openRenderOverlays();
     })
       .then((cleanup) => {
         if (cancelled) {
@@ -523,15 +451,11 @@ function AppContent() {
 
     return () => {
       cancelled = true;
-      cleanupStartupIdle();
+      cleanupStartupReady();
       if (cleanupOrnamentsUpdated) cleanupOrnamentsUpdated();
       void cleanupOrnamentsUpdatedPromise.then((cleanup) => {
         if (cleanup && cleanup !== cleanupOrnamentsUpdated) cleanup();
       });
-      if (syncFrame !== null) {
-        window.cancelAnimationFrame(syncFrame);
-      }
-      detachGeometryListeners();
       releaseOrnamentsOverlayLease('ornaments overlay app content cleanup');
     };
   }, [isTauri, runtimeCapsuleManager, telemetry]);
@@ -700,6 +624,9 @@ function AppContent() {
 
       if (focused) {
         setIsMainWindowFocused(true);
+        if (isTauri) {
+          void appWindow.isMinimized().then(setIsMainWindowMinimized).catch(() => {});
+        }
         return;
       }
 
@@ -942,16 +869,16 @@ function AppContent() {
         // ignore
       }
 
-      const unlistenHidden = await setupTauriListener(TAURI_EVENTS.MAIN_WINDOW_HIDDEN, () => {
-        setIsMainWindowVisible(false);
-      });
-      const unlistenShown = await setupTauriListener(TAURI_EVENTS.MAIN_WINDOW_SHOWN, () => {
-        setIsMainWindowVisible(true);
-      });
+      const cleanupVisibility = await setupConfigSync(
+        [],
+        [TAURI_EVENTS.MAIN_WINDOW_HIDDEN, TAURI_EVENTS.MAIN_WINDOW_SHOWN],
+        () => {
+          void appWindow.isVisible().then(setIsMainWindowVisible).catch(() => {});
+        }
+      );
 
       return () => {
-        unlistenHidden();
-        unlistenShown();
+        cleanupVisibility();
       };
     };
 

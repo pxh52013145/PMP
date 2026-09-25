@@ -55,6 +55,7 @@ import { QUALITY_SERVICE_TOKEN, type QualityService } from './services/quality';
 import { COMMANDS_SERVICE_TOKEN, dispatchRequiredCommand } from './services/commands';
 import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
 import { getTelemetryLogger } from './services/telemetry/TelemetryService';
+import { endOrnamentsEditSession } from './modules/ornaments-v2/session';
 import {
   createEditorWindowMagnetConfigReloader,
   loadEditorMagnetConfigSnapshot,
@@ -1133,12 +1134,27 @@ export function EditorWindowApp() {
   const handleExitEditMode = async () => {
     try {
       await broadcastSignal(TAURI_EVENTS.EDITOR_STYLE_APPLY);
+    } catch (error) {
+      editorWindowTelemetry.error('editor.exit-edit-mode.style-apply.failed', {
+        message: getErrorMessage(error),
+      });
+    }
 
-      // 关闭所有编辑器窗口
+    try {
+      await endOrnamentsEditSession();
+    } catch (error) {
+      // The native overlay teardown is best effort. Always continue to the control
+      // window close so a failed sync cannot leave the editor session alive.
+      editorWindowTelemetry.error('editor.exit-edit-mode.ornaments-teardown.failed', {
+        message: getErrorMessage(error),
+      });
+    }
+
+    try {
       const { closeEditorWindow } = await import('./utils/editorWindows');
       await closeEditorWindow('control');
     } catch (error) {
-      editorWindowTelemetry.error('editor.exit-edit-mode.failed', {
+      editorWindowTelemetry.error('editor.exit-edit-mode.window-close.failed', {
         message: getErrorMessage(error),
       });
     }
